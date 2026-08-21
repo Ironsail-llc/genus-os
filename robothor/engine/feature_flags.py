@@ -431,6 +431,64 @@ def completion_contract_mode() -> EnforcementMode:
     )
 
 
+def benchmark_decontamination_mode() -> EnforcementMode:
+    """Rollout mode for keeping benchmark-harness traffic out of production metrics.
+
+    Gated on ``ROBOTHOR_BENCHMARK_DECONTAMINATION_ENABLED`` +
+    ``ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE``.
+
+    - ``observe`` (default once enabled): analytics still reports the legacy
+      numbers, but measures how much of each surface is benchmark traffic and
+      returns it separately (``benchmark_runs`` / ``benchmark_cost_usd``).
+    - ``alert``: observe + notify the operator that production metrics are
+      contaminated.
+    - ``enforce``: exclude benchmark runs from every production surface, and
+      spawn benchmark sub-runs with a parent linkage so they stop looking like
+      top-level production runs in the first place.
+
+    Default off — the merge posture is a pure no-op.
+    """
+    return _enforcement_mode(
+        "ROBOTHOR_BENCHMARK_DECONTAMINATION_ENABLED",
+        "ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE",
+    )
+
+
+def run_verification_mode() -> EnforcementMode:
+    """Rollout mode for verifying a finished run's claims against its tool trace.
+
+    Gated on ``ROBOTHOR_RUN_VERIFICATION_ENABLED`` + ``ROBOTHOR_RUN_VERIFICATION_MODE``.
+    ``observe`` computes the verdict, stamps ``agent_runs.verified_status`` /
+    ``verification`` and records a guardrail event — nothing else changes;
+    ``alert`` additionally notifies the operator; ``enforce`` is reserved for
+    the follow-up that gates delivery/task resolution on the verdict and today
+    records exactly as ``alert`` does. Default off.
+
+    Unlike ``completion_contract_mode`` this needs no session goal and is not
+    limited to "task complete" phrasings — see ``run_verification`` for the
+    production run that motivated it.
+    """
+    return _enforcement_mode("ROBOTHOR_RUN_VERIFICATION_ENABLED", "ROBOTHOR_RUN_VERIFICATION_MODE")
+
+
+def tool_verify_mode() -> EnforcementMode:
+    """Rollout mode for tool-level post-condition checks.
+
+    Gated on ``ROBOTHOR_TOOL_VERIFY_ENABLED`` + ``ROBOTHOR_TOOL_VERIFY_MODE``.
+    After a side-effectful tool reports success, an independent read-back of
+    the environment decides whether the write actually landed (see
+    ``robothor.engine.tools.verification``).
+
+    ``observe`` (default) records the verdict in the ``agent_run_evidence``
+    ledger and changes nothing the model sees; ``alert`` also pages the
+    operator on a failed read-back; ``enforce`` injects ``verification_failed``
+    plus an actionable message INTO the tool result, so the agent learns
+    in-loop that its action did not take effect instead of reporting it as
+    done. Default off — flipping ``_ENABLED`` on lands in observe.
+    """
+    return _enforcement_mode("ROBOTHOR_TOOL_VERIFY_ENABLED", "ROBOTHOR_TOOL_VERIFY_MODE")
+
+
 def injection_scan_mode() -> EnforcementMode:
     """Rollout mode for prompt-injection scanning of assembled system-run prompts.
 
@@ -445,13 +503,20 @@ def injection_scan_mode() -> EnforcementMode:
 def _post_telegram(text: str) -> bool:
     """Deliver to the operator's actual channel. Best-effort, never raises.
 
-    The DB notification is an audit *record*, not delivery: the agent-to-agent
-    surface is write-only in practice — ``send_notification``/``ack_notification``
-    are registered handlers but are not in ``tools/schemas.py`` (so no agent is
-    even offered them), there is no read/list tool, and nothing in warmup or the
-    heartbeat reads ``crm_agent_notifications``. A row alone reaches nobody.
-    Telegram is the channel the operator actually watches — the same one the
-    failure pager and the soak nags use.
+    The DB notification is an audit *record*; delivery is a separate question.
+    ``warmup.py`` now reads ``crm_agent_notifications`` and surfaces unread
+    ``alert_digest``/``alert_fallback`` rows to the operator-facing agent (see
+    ``_build_unread_alerts_section``), so a row is no longer write-only — but it
+    only reaches the operator on that agent's *next* run. A guardrail breach is
+    not a next-run matter, so it also goes straight to Telegram: the channel the
+    operator actually watches, the same one the failure pager and the soak nags
+    use.
+
+    (Schema note, since the older version of this comment got it wrong: the
+    notification tools are registered — ``send_notification``/``get_inbox``/
+    ``ack_notification`` come from ``robothor/api/mcp.py::get_tool_definitions``,
+    which ``ToolRegistry._register_all`` folds in alongside ``tools/schemas.py``.
+    ``test_alert_digest_reader.py`` pins that parity.)
     """
     import urllib.parse
     import urllib.request

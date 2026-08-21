@@ -41,16 +41,12 @@ def test_every_ladder_consumer_honors_alert():
 class TestAlertIsActuallyDelivered:
     """A row in a table nobody reads is not a notification.
 
-    The agent-to-agent notification surface is effectively write-only:
-    `send_notification`/`ack_notification` are registered as handlers but are
-    NOT in tools/schemas.py (so no agent is even offered them), there is no
-    read/list tool at all, and nothing in warmup or the heartbeat reads
-    crm_agent_notifications. Only judge.py reads subjects, and the bridge API
-    exposes them to the dashboard.
-
-    So the DB row is an audit record, not delivery. An alert must also reach
-    the operator on the channel they actually watch — the same Telegram path
-    the failure pager and the soak nags already use.
+    Since `warmup.py` grew an unread-alert reader (see
+    test_alert_digest_reader.py) a `crm_agent_notifications` row does eventually
+    reach the operator — but only on the operator agent's NEXT run. A guardrail
+    breach cannot wait for the next heartbeat, so it must ALSO reach the channel
+    the operator actually watches: the same Telegram path the failure pager and
+    the soak nags already use.
     """
 
     def test_alert_reaches_telegram(self, monkeypatch):

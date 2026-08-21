@@ -171,3 +171,54 @@ flags:
     owner: ops
     mode: "on"
     soak: goal-judge observe since May; compare against benchmark_pass_rate before weighting grades
+
+  - name: ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-08-28"
+    soak: >
+      Benchmark sub-runs recorded parent_run_id NULL, so `parent_run_id IS NULL`
+      — the predicate twelve analytics queries used to mean "top-level
+      production run" — counted them as production work: 2,685 of 4,267 runs
+      (63%) and $29.93 of $78.03 spend over 30 days. agent-architect read as
+      189 runs / 44 timeouts against 19 real production runs and zero real
+      timeouts; email-analyst, auto-researcher and auto-agent have ZERO
+      production runs and were graded entirely on benchmark traffic.
+      observe reports contamination per surface (benchmark_runs /
+      benchmark_cost_usd) without moving any headline number, so the reported
+      figure can be checked against a hand-run query on agent_runs before the
+      numbers change. Promote per docs/runbooks/BENCHMARK_DECONTAMINATION.md.
+
+  - name: ROBOTHOR_RUN_VERIFICATION_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-09-05"
+    soak: >
+      NEW 2026-08-21. Checks a run's final claims against its own tool trace —
+      the control that would have caught run 6cb7e492 ("✅ Payment confirmed —
+      $270 sent to Colt via Venmo") whose entire trace was one write_file to
+      /tmp. Observe records verified_status/verification on agent_runs and one
+      guardrail event per non-no_claims verdict; it changes NO delivery and NO
+      task resolution. Promotion evidence required before alert: >=5 days of
+      verdicts, a false-positive rate under 10% on a 10-run/week operator
+      spot-check, and the Venmo-style probe caught in production data — not a
+      green test. Do NOT promote to enforce until the acting-on-verdict PR
+      (honest-failure banner + auto-resolve gating) has landed and soaked.
+
+  - name: ROBOTHOR_TOOL_VERIFY_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-09-20"
+    soak: >
+      Tool post-condition checks: after a side-effectful tool reports success,
+      read the write back out of the environment (Gmail message id, calendar
+      event id, CRM row) and record the verdict in agent_run_evidence.
+
+      DO NOT promote on a quiet table. Zero rows here means the control is
+      inert, not that agents are honest — the evidence ledger ships in the
+      run-verification PR, and until that migration is applied every write is
+      skipped. Gate on: (1) verified=true rows exist for real sends and CRM
+      writes (the mechanism is proven), (2) every verified=false row triaged as
+      either a real claim-vs-reality gap or a checker bug, (3) verify_error
+      count ~0, (4) tool-call latency unchanged. Promoting past observe changes
+      what the model sees mid-run, so it is a behavior change, not bookkeeping.

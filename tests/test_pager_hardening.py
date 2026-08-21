@@ -275,7 +275,21 @@ class TestAlertUnitRetriesItself:
         text = unit_text("robothor-alert@.service")
         assert "Restart=on-failure" in text
         assert "RestartSec=60" in text
-        assert "StartLimitBurst=5" in text
+
+    def test_systemd_start_limit_is_disabled(self):
+        """The bounded retry budget this test used to pin (5 starts/hour) was
+        itself a silencer: on 2026-08-20 the alert unit hit 'start-limit-hit'
+        60 times while two services crash-looped, so the crash loop muted its
+        own pager for an hour. The sender dedups per unit on its own
+        (ROBOTHOR_ALERT_COOLDOWN_SECONDS); the systemd limit only removed
+        pages. See tests/test_liveness_watchdog.py."""
+        lines = [
+            line
+            for line in unit_text("robothor-alert@.service").splitlines()
+            if not line.lstrip().startswith(("#", ";"))
+        ]
+        assert "StartLimitIntervalSec=0" in lines
+        assert not [line for line in lines if line.startswith("StartLimitBurst=")]
 
     def test_not_oneshot_because_oneshot_forbids_restart(self):
         # systemd rejects Restart= (other than no) on Type=oneshot units.

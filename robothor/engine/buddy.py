@@ -319,27 +319,32 @@ class BuddyEngine:
     def _tasks_completed_24h(self, agent_id: str | None) -> int:
         try:
             from robothor.db.connection import get_connection
+            from robothor.engine.analytics import production_run_filter
+
+            # Benchmark sub-runs used to inflate this stat — see
+            # docs/runbooks/BENCHMARK_DECONTAMINATION.md.
+            prod_filter = production_run_filter()
 
             with get_connection() as conn, conn.cursor() as cur:
                 if agent_id:
                     cur.execute(
-                        """
+                        f"""
                         SELECT COUNT(*) FROM agent_runs
                         WHERE agent_id = %s
-                          AND parent_run_id IS NULL
+                          AND {prod_filter}
                           AND started_at > NOW() - INTERVAL '24 hours'
                           AND status = 'completed'
-                        """,
+                        """,  # noqa: S608 — prod_filter is a literal
                         (agent_id,),
                     )
                 else:
                     cur.execute(
-                        """
+                        f"""
                         SELECT COUNT(*) FROM agent_runs
-                        WHERE parent_run_id IS NULL
+                        WHERE {prod_filter}
                           AND started_at > NOW() - INTERVAL '24 hours'
                           AND status = 'completed'
-                        """
+                        """  # noqa: S608
                     )
                 row = cur.fetchone()
                 return int(row[0] or 0) if row else 0

@@ -123,6 +123,16 @@ immediately.
 | `ROBOTHOR_TELEGRAM_BOT_TOKEN` | *(empty)* | Telegram bot token for alerts |
 | `ROBOTHOR_TELEGRAM_CHAT_ID` | *(empty)* | Telegram chat ID for notifications |
 
+## Failure-mode detectors
+
+See [Observability](OBSERVABILITY.md#failure-mode-detectors) for what each
+detector watches.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ROBOTHOR_DETECTORS_ENABLED` | `1` | `0` disables every detector |
+| `ROBOTHOR_DECLARED_TOOL_OUTAGES` | *(empty)* | `tool:reason,tool:reason` — tool outages the operator has already decided about, so `tool_outage_detector` stops alerting about them |
+
 ## Service URL Overrides
 
 The service registry supports environment variable overrides for any service:

@@ -29,6 +29,7 @@ from robothor.db.connection import DatabaseGuardError
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from robothor.engine.models import SpawnContext
     from robothor.engine.tools.dispatch import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -171,6 +172,52 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         return fn
 
     return decorator
+
+
+def _benchmark_spawn_context(ctx: ToolContext | None) -> SpawnContext | None:
+    """Build the ``SpawnContext`` that links a benchmark sub-run to its parent.
+
+    Benchmark tasks ARE sub-agent runs, but they were handed to
+    ``runner.execute`` with no spawn context, so every one recorded
+    ``parent_run_id = NULL`` — the shape ``analytics.py`` reads as "top-level
+    production run". 2,685 such rows in 30 days on this instance; the fleet's
+    grades, timeout counts and spend were computed over them.
+
+    Mirrors ``spawn.py``: prefer the ambient context the runner installs (it
+    already encodes an untracked parent as an empty ``parent_run_id``), else
+    derive one from the calling run. Deliberately carries NO budget cascade,
+    identity, person or parent task — a benchmark child gets its own budget and
+    must not attribute work to a person or write back to a CRM task.
+
+    Args:
+        ctx: the calling tool context, or None.
+
+    Returns:
+        A ``SpawnContext``, or None to keep the legacy (unlinked) shape —
+        which is what happens until the decontamination flag reaches
+        ``enforce``, or when there is no parent run id to link to.
+    """
+    from robothor.engine.analytics import decontamination_enforced
+    from robothor.engine.models import SpawnContext
+    from robothor.engine.tools.handlers.spawn import _current_spawn_context
+
+    if not decontamination_enforced():
+        return None
+
+    ambient = _current_spawn_context.get()
+    parent_run_id = ambient.parent_run_id if ambient else ""
+    if not parent_run_id and ctx is not None:
+        parent_run_id = ctx.run_id
+    if not parent_run_id:
+        return None
+
+    return SpawnContext(
+        parent_run_id=parent_run_id,
+        parent_agent_id=ctx.agent_id if ctx else "",
+        correlation_id=(ambient.correlation_id if ambient else "") or parent_run_id,
+        nesting_depth=(ambient.nesting_depth + 1) if ambient else 0,
+        max_nesting_depth=ambient.max_nesting_depth if ambient else 2,
+    )
 
 
 def _suite_block(agent_id: str, suite_id: str) -> str:
@@ -558,6 +605,9 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     from robothor.engine.config import load_agent_config
     from robothor.engine.models import DeliveryMode, TriggerType
 
+    # Parent linkage for every task in this suite — see _benchmark_spawn_context.
+    benchmark_spawn_ctx = _benchmark_spawn_context(ctx)
+
     results: list[dict[str, Any]] = []
     total_cost = 0.0
     suite_max_cost = suite.get("max_cost_usd", _DEFAULT_SUITE_MAX_COST)
@@ -633,6 +683,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                     trigger_type=TriggerType.SUB_AGENT,
                     trigger_detail=f"benchmark:{suite_id}:{task['id']}",
                     agent_config=child_config,
+                    spawn_context=benchmark_spawn_ctx,
                 )
 
             output = run.output_text or ""

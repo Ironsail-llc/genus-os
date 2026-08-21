@@ -1019,6 +1019,8 @@ def create_health_app(
 
             total_cost = 0.0
             total_runs = 0
+            benchmark_cost = 0.0
+            benchmark_runs = 0
             breakdown = {}
 
             for agent_id in agent_ids:
@@ -1027,6 +1029,8 @@ def create_health_app(
                 cost = float(stats.get("total_cost_usd", 0) or 0)
                 total_runs += runs
                 total_cost += cost
+                benchmark_runs += int(stats.get("benchmark_runs", 0) or 0)
+                benchmark_cost += float(stats.get("benchmark_cost_usd", 0) or 0)
                 if runs > 0:
                     breakdown[agent_id] = {
                         "runs": runs,
@@ -1037,12 +1041,20 @@ def create_health_app(
                         "total_input_tokens": int(stats.get("total_input_tokens", 0) or 0),
                         "total_output_tokens": int(stats.get("total_output_tokens", 0) or 0),
                         "total_cost_usd": round(cost, 6),
+                        "benchmark_runs": int(stats.get("benchmark_runs", 0) or 0),
+                        "benchmark_cost_usd": round(
+                            float(stats.get("benchmark_cost_usd", 0) or 0), 6
+                        ),
                     }
 
             return {
                 "hours": hours,
                 "total_runs": total_runs,
                 "total_cost_usd": round(total_cost, 6),
+                # Benchmark spend is real money but it is not agent cost —
+                # reported alongside, never folded into the agent's number.
+                "benchmark_runs": benchmark_runs,
+                "benchmark_cost_usd": round(benchmark_cost, 6),
                 "agents": breakdown,
             }
         except Exception:

@@ -127,8 +127,15 @@ def update_run(
     budget_exhausted: bool | None = None,
     outcome_assessment: str | None = None,
     outcome_notes: str | None = None,
+    verified_status: str | None = None,
+    verification: dict[str, Any] | None = None,
 ) -> bool:
-    """Update an existing run with new fields."""
+    """Update an existing run with new fields.
+
+    ``verified_status`` / ``verification`` are the migration-100 claim
+    verification columns (see ``robothor.engine.run_verification``); the
+    latter is a dict serialised into the ``jsonb`` column.
+    """
     updates: list[str] = []
     values: list[Any] = []
 
@@ -154,6 +161,8 @@ def update_run(
         "budget_exhausted": budget_exhausted,
         "outcome_assessment": outcome_assessment,
         "outcome_notes": outcome_notes,
+        "verified_status": verified_status,
+        "verification": json.dumps(verification, default=str) if verification else None,
     }
 
     for col, val in field_map.items():
@@ -663,11 +672,23 @@ def get_agent_stats(
     hours: int = 24,
     tenant_id: str = DEFAULT_TENANT,
 ) -> dict[str, Any]:
-    """Get aggregated stats for an agent over the last N hours."""
+    """Get aggregated stats for an agent over the last N hours.
+
+    Sub-agent runs stay counted here — this is the ``/costs`` surface and
+    their spend is real money. Benchmark-harness spend is broken out into
+    ``benchmark_runs`` / ``benchmark_cost_usd`` instead of being billed to the
+    agent, so a fleet benchmark sweep can no longer read as an agent going
+    expensive overnight ($29.93 of $78.03 over 30 days on this instance).
+    """
+    from robothor.engine.analytics import benchmark_run_filter, exclude_benchmark_filter
+
+    no_bench = exclude_benchmark_filter()
+    bench_only = benchmark_run_filter()
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) as total_runs,
                 COUNT(*) FILTER (WHERE status = 'completed') as completed,
@@ -680,9 +701,34 @@ def get_agent_stats(
             FROM agent_runs
             WHERE agent_id = %s
               AND tenant_id = %s
+              AND {no_bench}
               AND created_at > NOW() - INTERVAL '%s hours'
-            """,
+            """,  # noqa: S608 — no_bench is a literal, not user input
             (agent_id, tenant_id, hours),
         )
         row = cur.fetchone()
-        return dict(row) if row else {}
+        stats = dict(row) if row else {}
+
+        stats["benchmark_runs"] = 0
+        stats["benchmark_cost_usd"] = 0.0
+        try:
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) as benchmark_runs,
+                    COALESCE(SUM(total_cost_usd), 0) as benchmark_cost_usd
+                FROM agent_runs
+                WHERE agent_id = %s
+                  AND tenant_id = %s
+                  AND {bench_only}
+                  AND created_at > NOW() - INTERVAL '%s hours'
+                """,  # noqa: S608
+                (agent_id, tenant_id, hours),
+            )
+            brow = cur.fetchone() or {}
+            stats["benchmark_runs"] = int(brow.get("benchmark_runs") or 0)
+            stats["benchmark_cost_usd"] = float(brow.get("benchmark_cost_usd") or 0.0)
+        except Exception as e:
+            logger.warning("benchmark spend query failed: %s", e)
+
+        return stats

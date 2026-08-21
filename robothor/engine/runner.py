@@ -344,6 +344,26 @@ def _agent_holds_exec(config: AgentConfig) -> bool:
     return "exec" in allowed or not allowed
 
 
+def should_create_auto_task(config: AgentConfig, spawn_context: SpawnContext | None) -> bool:
+    """True when this run should file its operator-facing ``auto_task`` CRM row.
+
+    Three conditions, all necessary:
+
+    - the agent asked for it (``auto_task``);
+    - it is not a sub-agent run (children never file their own task);
+    - it is not a benchmark run.
+
+    The benchmark clause plugs a hole in the existing ``is_benchmark`` sandbox:
+    ``tools/handlers/crm.py`` already refuses every task-mutating *tool* when
+    ``ctx.is_benchmark``, but this write goes straight to the DAL and so never
+    met that guard. 6,887 "<Agent>: sub_agent run" rows reached the operator's
+    task queue that way, and the failed/timed-out ones sat there as TODO.
+    """
+    if not config.auto_task or spawn_context is not None:
+        return False
+    return not getattr(config, "is_benchmark", False)
+
+
 def _resolve_sandbox_decision(config: AgentConfig, mode: str) -> str:
     """Decide sandboxing for a run. Returns 'docker' | 'observe' | 'host'.
 
@@ -1311,7 +1331,7 @@ class AgentRunner:
                     logger.warning("Failed to record run start: %s", _sanitize(e))
 
                 # Auto-create CRM task if configured (skip for sub-agent runs)
-                if agent_config.auto_task and not spawn_context:
+                if should_create_auto_task(agent_config, spawn_context):
                     try:
                         from robothor.crm.dal import create_task as dal_create_task
 
@@ -4081,6 +4101,13 @@ class AgentRunner:
         except Exception as e:
             logger.warning("AGENT_END hook error: %s", _sanitize(e))
 
+        # ── [VERIFICATION] Check the run's claims against its own tool trace ──
+        # Must run BEFORE persistence: _assess_outcome executes inside
+        # _persist_run_sync and the persisted agent_runs row carries the
+        # verdict columns. Flag-gated and exception-suppressed — verification
+        # is bookkeeping and must never break the agent's actual work.
+        self._verify_run_claims(run)
+
         # Spawn DB persistence as a background task so the caller gets the run back immediately.
         try:
             asyncio.get_running_loop()
@@ -4095,6 +4122,67 @@ class AgentRunner:
             self._persist_run_sync(run)
 
         return run
+
+    def _verify_run_claims(self, run: AgentRun) -> None:
+        """Stamp the run with a claim-verification verdict (flag-gated, never raises).
+
+        An agent's own account of what it did is not evidence: production run
+        ``6cb7e492-…`` reported "✅ Payment confirmed — $270 sent … via Venmo"
+        on a trace consisting of one ``write_file`` to ``/tmp``, and no control
+        noticed. ``run_verification`` compares the run's claims against the
+        tools that actually succeeded.
+
+        Ladder (``ROBOTHOR_RUN_VERIFICATION_ENABLED`` / ``_MODE``):
+        ``observe`` records the verdict on the run and in
+        ``agent_guardrail_events``; ``alert`` additionally notifies the
+        operator; ``enforce`` records identically for now — acting on the
+        verdict (delivery gating, task resolution) belongs to the follow-up.
+        No rung mutates delivery, tasks or the outcome grade here.
+        """
+        from robothor.engine.feature_flags import run_verification_mode
+
+        mode = run_verification_mode()
+        if mode == "off":
+            return
+        try:
+            from robothor.engine.run_verification import verify_run
+
+            verdict = verify_run(run.output_text, run.steps)
+            run.verified_status = verdict.status
+            run.verification = verdict.to_payload()
+        except Exception as exc:  # noqa: BLE001 — never block run finalization
+            logger.debug("run verification raised: %s", _sanitize(exc))
+            return
+
+        if verdict.status == "no_claims":
+            return
+
+        reason = verdict.summary()
+        try:
+            from robothor.engine.tracking import log_guardrail_event
+
+            log_guardrail_event(
+                run_id=run.id,
+                guardrail_name="run_verification",
+                action="allowed" if verdict.status == "verified" else "observed",
+                reason=reason[:500],
+                mode=mode,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("run verification event log failed: %s", _sanitize(exc))
+
+        if mode in ("alert", "enforce") and verdict.status != "verified":
+            # Middle rung made real: the claim stands, but the operator hears
+            # about it (see feature_flags._enforcement_mode's ladder contract).
+            with contextlib.suppress(Exception):
+                from robothor.engine.feature_flags import notify_guardrail_alert
+
+                notify_guardrail_alert(
+                    guardrail_name="run_verification",
+                    agent_id=run.agent_id,
+                    reason=reason,
+                    tenant_id=getattr(run, "tenant_id", "") or "",
+                )
 
     async def _persist_run(self, run: AgentRun) -> None:
         """Persist run state and steps to the database in a background thread."""
@@ -4157,6 +4245,24 @@ class AgentRunner:
                 run.outcome_assessment = "successful"
                 run.outcome_notes = None
 
+        # Claim verification is RECORDED here, never graded on: this note makes
+        # an unverified run visible to anyone reading outcome_notes, but the
+        # assessment itself is untouched so no existing consumer shifts under
+        # the flag. Acting on the verdict belongs to the follow-up PR.
+        AgentRunner._note_verification(run)
+
+    @staticmethod
+    def _note_verification(run: AgentRun) -> None:
+        """Append the claim-verification verdict to ``outcome_notes``, if any."""
+        status = getattr(run, "verified_status", None)
+        if status not in ("unverified_claims", "failed_verification"):
+            return
+        payload = getattr(run, "verification", None) or {}
+        kinds = payload.get("unsupported") or []
+        label = "Unverified" if status == "unverified_claims" else "Failed verification for"
+        note = f"{label} claims: {', '.join(str(k) for k in kinds) or 'unknown'}"
+        run.outcome_notes = f"{run.outcome_notes} | {note}" if run.outcome_notes else note
+
     def _persist_run_sync(self, run: AgentRun) -> None:
         """Synchronous DB persistence — update run + batch-insert steps + CRM task."""
         # Assess outcome for interactive runs before persisting
@@ -4186,6 +4292,8 @@ class AgentRunner:
                 budget_exhausted=run.budget_exhausted or None,
                 outcome_assessment=run.outcome_assessment,
                 outcome_notes=run.outcome_notes,
+                verified_status=getattr(run, "verified_status", None),
+                verification=getattr(run, "verification", None),
             )
             # Flush only steps the session hasn't already committed —
             # per-iteration flushes (see AgentSession.flush_new_steps_sync)
