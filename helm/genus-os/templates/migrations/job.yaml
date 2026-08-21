@@ -7,12 +7,48 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "genus-os.migrationJobName" . }}
+  {{- if not .Values.migrations.ttlSecondsAfterFinished }}
+  annotations:
+    # kube-linter's job-ttl-seconds-after-finished check requires a TTL on
+    # standalone Jobs, to stop completed Job objects accumulating. That is a
+    # sensible default and the wrong call here, so it is suppressed
+    # deliberately rather than satisfied.
+    #
+    # The check assumes nothing depends on the Job outliving its completion.
+    # For this chart the opposite is true: every app pod's
+    # wait-for-migrations initContainer polls this exact Job by name, for the
+    # life of the release. A TTL deletes the object out from under them, and
+    # any pod created afterwards -- node rotation, reschedule, scale-up --
+    # waits forever on something that no longer exists. That is not
+    # hypothetical: it stranded every genus-os pod in ironsail-staging for
+    # 20+ days and blocked a Kubernetes 1.35 node rotation (RD-1466).
+    #
+    # The cleanup the check is protecting against does not apply either. The
+    # Job name is content-addressed on global.imageTag, so Helm/ArgoCD prunes
+    # the previous release's Job on the next sync. Jobs do not accumulate.
+    #
+    # Set migrations.ttlSecondsAfterFinished to re-enable the TTL, and this
+    # annotation disappears with it.
+    ignore-check.kube-linter.io/job-ttl-seconds-after-finished: >-
+      App pods poll this Job by name for the life of the release; a TTL
+      deletes it and strands every pod created afterwards. Cleanup is handled
+      by Helm/ArgoCD pruning, since the Job name is content-addressed on the
+      image tag.
+  {{- end }}
   labels:
     {{- include "genus-os.labels" (dict "root" . "component" "migrations") | nindent 4 }}
 spec:
   backoffLimit: {{ .Values.migrations.backoffLimit }}
   activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
-  ttlSecondsAfterFinished: 86400
+  {{- with .Values.migrations.ttlSecondsAfterFinished }}
+  # OFF by default. The Job name is content-addressed on global.imageTag, so
+  # Helm/ArgoCD already prunes the previous release's Job on the next sync --
+  # a TTL adds no cleanup value, but it DOES delete the object that every app
+  # pod's wait-for-migrations initContainer polls. Any pod (re)created after
+  # the TTL fires -- a node rotation, a reschedule, a scale-up -- then blocks
+  # forever on a Job that no longer exists.
+  ttlSecondsAfterFinished: {{ . }}
+  {{- end }}
   template:
     metadata:
       labels:

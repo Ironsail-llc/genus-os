@@ -503,6 +503,16 @@ migrations:
   secretRefs: [database]
   backoffLimit: 3
   activeDeadlineSeconds: 600
+  # Leave null. See the comment in templates/migrations/job.yaml -- a TTL on the
+  # migration Job strands every app pod created after it fires.
+  ttlSecondsAfterFinished: null
+  # Bounds on the wait-for-migrations initContainer so a pod can never hang
+  # indefinitely. missingJobGraceSeconds covers the legitimate window where the
+  # Job object is not readable yet (ArgoCD applying resources out of order, or
+  # the RoleBinding not yet propagated); past it, an unreadable Job is treated
+  # as fatal rather than as "still running".
+  waitTimeoutSeconds: 1800
+  missingJobGraceSeconds: 300
   resources:
     requests:
       cpu: 250m
