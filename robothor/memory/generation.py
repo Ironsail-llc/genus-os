@@ -37,6 +37,21 @@ Failure policy (audit lesson: silent fallbacks hide primary-model death):
   ERROR containing ``MEMORY_GENERATION_REMOTE_MISCONFIGURED`` once per
   process and use local.
 
+Alerting (incident 2026-08-21: fact extraction failed continuously for days
+behind ~729 HTTP-429 + ~93 HTTP-503 events, and every signal was a log line
+nobody read):
+
+- Fallback streak past ``FALLBACK_STREAK_THRESHOLD`` → one **warning**
+  alert (digest, not a page): remote is down, the load is back on the GPU.
+- Local leg fails too → one **critical** alert: no generation path is left,
+  so memory writes are being dropped. Callers swallow this exception
+  (``extract_facts`` logs "failed after N attempts" and returns ``[]``), so
+  this seam is the last place that can still tell the operator.
+
+Both alerts are latched (``ALERT_RELATCH_SECONDS``) and released by a
+success on the corresponding leg, so a storm produces one alert, not
+thousands.
+
 Parity notes: memory prompts were written for local qwen3 via Ollama, which
 returns reasoning in a separate ``thinking`` field and enforces JSON schemas
 via the ``format`` parameter. The remote path maps ``format`` to an
@@ -53,11 +68,14 @@ import os
 import random
 import re
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from robothor.llm import ollama
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +138,22 @@ remote_fallback_count: int = 0
 FALLBACK_STREAK_THRESHOLD = 5
 FALLBACK_STREAK_MARKER = "MEMORY_GENERATION_REMOTE_FALLBACK_STREAK"
 _consecutive_fallbacks: int = 0
+
+# ── Alert latches ───────────────────────────────────────────────────────
+#
+# A degraded provider produces hundreds of events an hour, so each alert
+# condition fires at most once per ``ALERT_RELATCH_SECONDS`` and re-arms
+# immediately on the matching recovery (remote success releases the streak
+# latch; any successful generation releases the down latch). In-process
+# state, like robothor.engine.detectors._dedup: a restart clears it, which
+# is fine — an ongoing condition re-fires on the next call.
+ALERT_RELATCH_SECONDS = 3600.0
+FALLBACK_STREAK_ALERT_KEY = "memory_generation_fallback_streak"
+GENERATION_DOWN_ALERT_KEY = "memory_generation_down"
+_alert_latched_at: dict[str, float] = {}
+
+# Alert bodies quote the provoking error; keep them readable in a page.
+_ALERT_ERROR_CHARS = 200
 
 # Log the missing-key ERROR once per process, not once per memory write.
 _missing_key_logged: bool = False
@@ -270,6 +304,130 @@ def _record_fallback(error: Exception) -> None:
 def _record_remote_success() -> None:
     global _consecutive_fallbacks
     _consecutive_fallbacks = 0
+    _release_latch(FALLBACK_STREAK_ALERT_KEY)
+    _release_latch(GENERATION_DOWN_ALERT_KEY)
+
+
+def _latch(key: str) -> bool:
+    """True when ``key`` may fire now; marks it latched until it re-arms."""
+    now = time.monotonic()
+    last = _alert_latched_at.get(key)
+    if last is not None and now - last < ALERT_RELATCH_SECONDS:
+        return False
+    _alert_latched_at[key] = now
+    return True
+
+
+def _release_latch(key: str) -> None:
+    """Re-arm ``key`` after the condition it describes has recovered."""
+    _alert_latched_at.pop(key, None)
+
+
+def _describe(error: Exception) -> str:
+    return f"{type(error).__name__}: {str(error)[:_ALERT_ERROR_CHARS]}"
+
+
+async def _fire_alert(
+    key: str,
+    level: str,
+    title: str,
+    body: str,
+    metadata: dict[str, Any],
+) -> None:
+    """Raise a latched alert through the engine's alert path.
+
+    ``robothor.engine.alerts`` is imported lazily inside the function: the
+    engine imports the memory package, so a module-level import here would
+    point the dependency both ways and close an import cycle.
+
+    Alerting is strictly best-effort — a broken alert channel must never
+    turn a degraded memory write into a raised exception.
+    """
+    if not _latch(key):
+        return
+    try:
+        from robothor.engine.alerts import alert
+
+        delivered = await alert(level, title, body, metadata=metadata)
+        if not delivered:
+            logger.warning("memory generation alert not delivered (%s): %s", level, title)
+    except Exception as e:
+        logger.warning("memory generation alert dispatch failed (%s): %s", title, e)
+
+
+async def _note_fallback(error: Exception) -> None:
+    """Record a remote→local fallback and alert once a streak is established.
+
+    One fallback is business as usual — local absorbs it. A streak means the
+    remote provider is effectively down: warning level, so it lands in the
+    digest the briefing reads instead of paging at 3am for something that
+    still produces memories, just slowly.
+    """
+    _record_fallback(error)
+    if _consecutive_fallbacks < FALLBACK_STREAK_THRESHOLD:
+        return
+    remote_model = _remote_model()
+    await _fire_alert(
+        FALLBACK_STREAK_ALERT_KEY,
+        "warning",
+        "Memory generation: remote provider down",
+        (
+            f"{_consecutive_fallbacks} consecutive remote→local fallbacks.\n"
+            f"remote: {remote_model} (provider={_provider()}) — {_describe(error)}\n"
+            f"local: ollama {ollama.GENERATION_MODEL} is absorbing every memory write.\n"
+            f"Check the provider's rate limits/quota and {REMOTE_MODEL_ENV}; "
+            f"grep the journal for {FALLBACK_MARKER}."
+        ),
+        {
+            "consecutive_fallbacks": _consecutive_fallbacks,
+            "remote_fallback_count": remote_fallback_count,
+            "remote_model": remote_model,
+            "local_model": ollama.GENERATION_MODEL,
+            "error_type": type(error).__name__,
+        },
+    )
+
+
+async def _local_leg(call: Awaitable[str], remote_error: Exception | None) -> str:
+    """Await the local Ollama leg, paging when it fails too.
+
+    A remote failure alone is survivable — local absorbs it. When local
+    fails as well there is no generation path left and the memory write is
+    dropped: every caller swallows this exception, so the alert raised here
+    is the only thing that reaches the operator.
+    """
+    try:
+        result: str = await call
+    except Exception as local_error:
+        remote_line = (
+            f"remote: {_remote_model()} — {_describe(remote_error)}"
+            if remote_error is not None
+            else f"remote: not attempted (provider={_provider()})"
+        )
+        await _fire_alert(
+            GENERATION_DOWN_ALERT_KEY,
+            "critical",
+            "Memory generation is down",
+            (
+                "Both memory generation legs failed — fact extraction, episode "
+                "summaries and insight discovery are being dropped on the floor.\n"
+                f"{remote_line}\n"
+                f"local: ollama {ollama.GENERATION_MODEL} — {_describe(local_error)}\n"
+                "Check the Ollama service and the remote provider; until one "
+                "recovers nothing is being written to memory."
+            ),
+            {
+                "remote_model": _remote_model(),
+                "local_model": ollama.GENERATION_MODEL,
+                "remote_error_type": (
+                    type(remote_error).__name__ if remote_error is not None else None
+                ),
+                "local_error_type": type(local_error).__name__,
+            },
+        )
+        raise
+    _release_latch(GENERATION_DOWN_ALERT_KEY)
+    return result
 
 
 async def _openrouter_chat(
@@ -404,6 +562,7 @@ async def chat(
     meaningless to the remote provider, whose model comes from
     ``ROBOTHOR_MEMORY_GENERATION_REMOTE_MODEL``).
     """
+    remote_error: Exception | None = None
     if _remote_enabled():
         try:
             result = await _openrouter_chat_with_retry(
@@ -414,17 +573,21 @@ async def chat(
                 think=think,
             )
         except Exception as e:
-            _record_fallback(e)
+            remote_error = e
+            await _note_fallback(e)
         else:
             _record_remote_success()
             return result
-    return await ollama.chat(
-        messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        model=model,
-        think=think,
-        format=format,
+    return await _local_leg(
+        ollama.chat(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model=model,
+            think=think,
+            format=format,
+        ),
+        remote_error,
     )
 
 
@@ -438,6 +601,7 @@ async def generate(
     format: Any | None = None,  # noqa: A002 — parity with ollama.generate
 ) -> str:
     """Prompt-style generation for memory. Same contract as ollama.generate."""
+    remote_error: Exception | None = None
     if _remote_enabled():
         messages: list[dict[str, str]] = []
         if system:
@@ -452,16 +616,20 @@ async def generate(
                 think=think,
             )
         except Exception as e:
-            _record_fallback(e)
+            remote_error = e
+            await _note_fallback(e)
         else:
             _record_remote_success()
             return result
-    return await ollama.generate(
-        prompt=prompt,
-        system=system,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        model=model,
-        think=think,
-        format=format,
+    return await _local_leg(
+        ollama.generate(
+            prompt=prompt,
+            system=system,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model=model,
+            think=think,
+            format=format,
+        ),
+        remote_error,
     )
