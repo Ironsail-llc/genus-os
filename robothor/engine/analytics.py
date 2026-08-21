@@ -26,6 +26,136 @@ from robothor.db.connection import get_connection
 
 logger = logging.getLogger(__name__)
 
+# ─── The production-run filter (one definition, every call site) ──────
+#
+# A null parent_run_id alone used to mean "top-level production run". It
+# stopped meaning that the day the benchmark harness began spawning sub-runs
+# without a SpawnContext: 2,685 of 4,267 runs in the last 30 days on this box
+# are benchmark tasks that record parent_run_id NULL. They were counted as
+# production work in twelve hand-copied clauses in this file — agent-architect
+# read as 189 runs with 44 timeouts when its real production traffic was 19
+# runs with zero timeouts.
+#
+# The trigger_detail clause is what cleans the *historical* rows: linking new
+# benchmark sub-runs to their parent (see tools/handlers/benchmark.py) cannot
+# retroactively fix rows already written with a NULL parent.
+#
+# NOTE: the LIKE pattern doubles its `%` because these queries are executed
+# WITH a parameter tuple, so psycopg2 does `%`-interpolation on the SQL text
+# and `%%` collapses to `%`. A caller that passes no params is also safe:
+# `LIKE 'benchmark:%%'` is two consecutive SQL wildcards, which matches exactly
+# the same strings as one (verified against PostgreSQL).
+BENCHMARK_TRIGGER_PREFIX = "benchmark:"
+_BENCHMARK_TRIGGER_LIKE = "benchmark:%%"
+
+
+def decontamination_enforced() -> bool:
+    """True when benchmark traffic is actually excluded from production metrics.
+
+    Surfaces report it (``benchmark_excluded``) so a consumer can tell a clean
+    number from a legacy contaminated one instead of guessing.
+    """
+    from robothor.engine.feature_flags import benchmark_decontamination_mode
+
+    return benchmark_decontamination_mode() == "enforce"
+
+
+def benchmark_run_filter(alias: str = "") -> str:
+    """Return the SQL predicate matching benchmark-harness traffic.
+
+    Args:
+        alias: table alias to qualify the column with (e.g. ``"r"``), or ""
+            for an unqualified query.
+
+    Returns:
+        A SQL boolean expression, safe to interpolate (no user input).
+    """
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}trigger_detail LIKE '{_BENCHMARK_TRIGGER_LIKE}'"
+
+
+def exclude_benchmark_filter(alias: str = "") -> str:
+    """Return the SQL predicate that removes benchmark traffic from a surface.
+
+    Returns the no-op ``TRUE`` unless the decontamination flag is at
+    ``enforce`` — observe/alert measure contamination without changing any
+    headline number.
+
+    Args:
+        alias: table alias to qualify the column with, or "" for none.
+
+    Returns:
+        A SQL boolean expression, safe to interpolate (no user input).
+    """
+    if not decontamination_enforced():
+        return "TRUE"
+    prefix = f"{alias}." if alias else ""
+    return f"({prefix}trigger_detail IS NULL OR NOT {benchmark_run_filter(alias)})"
+
+
+def production_run_filter(alias: str = "") -> str:
+    """Return THE predicate every operator-facing ``agent_runs`` metric uses.
+
+    A production run is a top-level run (no parent) that is not benchmark
+    traffic. Every query in this module interpolates this helper — a
+    hand-written copy is what let benchmark runs into the fleet's grades, and
+    ``test_benchmark_decontamination.TestAnalyticsFilterParity`` fails the
+    build if one reappears.
+
+    Args:
+        alias: table alias to qualify columns with (e.g. ``"r"`` when joining
+            ``agent_run_steps``), or "" for an unqualified query.
+
+    Returns:
+        A SQL boolean expression, safe to interpolate (no user input).
+    """
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}parent_run_id IS NULL AND {exclude_benchmark_filter(alias)}"
+
+
+def _report_contamination(agent_id: str, benchmark_runs: int, tenant_id: str) -> None:
+    """Record (and at the ``alert`` rung, escalate) benchmark contamination.
+
+    Bookkeeping only: never raises, never changes a metric. At ``alert`` the
+    operator is notified at most once an hour per process so a nightly
+    fleet-wide stats sweep cannot become a pager storm.
+    """
+    from robothor.engine.feature_flags import benchmark_decontamination_mode
+
+    try:
+        mode = benchmark_decontamination_mode()
+        if mode not in ("observe", "alert") or benchmark_runs <= 0:
+            return
+        reason = (
+            f"{benchmark_runs} benchmark-harness runs are being counted as "
+            f"production runs for {agent_id}. Promote "
+            "ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE to enforce to exclude them."
+        )
+        logger.warning("benchmark contamination (mode=%s): %s", mode, reason)
+        if mode != "alert":
+            return
+        import time
+
+        global _last_contamination_alert_at
+        now = time.monotonic()
+        if now - _last_contamination_alert_at < _CONTAMINATION_ALERT_INTERVAL_S:
+            return
+        _last_contamination_alert_at = now
+        from robothor.engine.feature_flags import notify_guardrail_alert
+
+        notify_guardrail_alert(
+            guardrail_name="benchmark_decontamination",
+            agent_id=agent_id,
+            reason=reason,
+            tenant_id=tenant_id,
+        )
+    except Exception as e:  # pragma: no cover — bookkeeping must never break stats
+        logger.warning("benchmark contamination reporting failed: %s", e)
+
+
+_CONTAMINATION_ALERT_INTERVAL_S = 3600.0
+_last_contamination_alert_at = -_CONTAMINATION_ALERT_INTERVAL_S
+
 
 def get_agent_stats(
     agent_id: str,
@@ -54,6 +184,12 @@ def get_agent_stats(
         )
         window_params = (as_of, days, as_of)
 
+    # Shared filters — see production_run_filter. Bound once so every query
+    # below is provably the same predicate.
+    prod_filter = production_run_filter()
+    prod_filter_r = production_run_filter("r")
+    bench_only = benchmark_run_filter()
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -76,7 +212,7 @@ def get_agent_stats(
             WHERE agent_id = %s
               AND tenant_id = %s
               AND {window_sql}
-              AND parent_run_id IS NULL
+              AND {prod_filter}
             """,  # noqa: S608 — window_sql is a literal, not user input
             (agent_id, tenant_id, *window_params),
         )
@@ -115,7 +251,7 @@ def get_agent_stats(
               AND tenant_id = %s
               AND status IN ('failed', 'timeout')
               AND {window_sql}
-              AND parent_run_id IS NULL
+              AND {prod_filter}
             GROUP BY error_type
             ORDER BY count DESC
             LIMIT 5
@@ -134,7 +270,7 @@ def get_agent_stats(
             WHERE agent_id = %s
               AND tenant_id = %s
               AND {window_sql}
-              AND parent_run_id IS NULL
+              AND {prod_filter}
               AND outcome_assessment IS NOT NULL
             GROUP BY outcome_assessment
             ORDER BY count DESC
@@ -165,7 +301,7 @@ def get_agent_stats(
               AND tenant_id = %s
               AND status = 'completed'
               AND {window_sql}
-              AND parent_run_id IS NULL
+              AND {prod_filter}
             """,  # noqa: S608
             (agent_id, tenant_id, *window_params),
         )
@@ -191,7 +327,7 @@ def get_agent_stats(
             WHERE agent_id = %s
               AND tenant_id = %s
               AND {window_sql}
-              AND parent_run_id IS NULL
+              AND {prod_filter}
             """,  # noqa: S608
             (agent_id, tenant_id, *window_params),
         )
@@ -215,7 +351,7 @@ def get_agent_stats(
               AND status = 'completed'
               AND output_text IS NOT NULL
               AND {window_sql}
-              AND parent_run_id IS NULL
+              AND {prod_filter}
             """,  # noqa: S608
             (agent_id, tenant_id, *window_params),
         )
@@ -273,7 +409,7 @@ def get_agent_stats(
                 JOIN agent_runs r ON r.id = s.run_id
                 WHERE r.agent_id = %s
                   AND r.tenant_id = %s
-                  AND r.parent_run_id IS NULL
+                  AND {prod_filter_r}
                   AND {r_window_sql}
                 """,  # noqa: S608 — r_window_sql is a literal
                 (agent_id, tenant_id, *window_params),
@@ -301,7 +437,7 @@ def get_agent_stats(
                     JOIN agent_runs r ON r.id = s.run_id
                     WHERE r.agent_id = %s
                       AND r.tenant_id = %s
-                      AND r.parent_run_id IS NULL
+                      AND {prod_filter_r}
                       AND {r_window_sql}
                       AND s.step_type = 'error'
                     GROUP BY s.run_id
@@ -334,6 +470,35 @@ def get_agent_stats(
             with contextlib.suppress(Exception):
                 conn.rollback()
 
+        # Benchmark traffic, reported SEPARATELY — never as this agent's work.
+        # Runs last so the query order every existing caller relies on is
+        # unchanged. A failure here must not cost the caller its stats.
+        stats["benchmark_runs"] = 0
+        stats["benchmark_cost_usd"] = 0.0
+        stats["benchmark_excluded"] = decontamination_enforced()
+        try:
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) as benchmark_runs,
+                    COALESCE(SUM(total_cost_usd), 0) as benchmark_cost_usd
+                FROM agent_runs
+                WHERE agent_id = %s
+                  AND tenant_id = %s
+                  AND {window_sql}
+                  AND {bench_only}
+                """,  # noqa: S608
+                (agent_id, tenant_id, *window_params),
+            )
+            brow = cur.fetchone() or {}
+            stats["benchmark_runs"] = int(brow.get("benchmark_runs") or 0)
+            stats["benchmark_cost_usd"] = float(brow.get("benchmark_cost_usd") or 0.0)
+        except Exception as e:
+            logger.warning("benchmark contamination query failed: %s", e)
+            with contextlib.suppress(Exception):
+                conn.rollback()
+
+    _report_contamination(agent_id, stats["benchmark_runs"], tenant_id)
     return stats
 
 
@@ -344,13 +509,18 @@ def get_fleet_health(
     """Get health summary for all agents in the fleet.
 
     Returns per-agent: total_runs, success_rate, avg_cost, last_run_status.
+    Benchmark-harness traffic is reported separately (``benchmark_runs`` /
+    ``benchmark_cost_usd``) instead of being billed to the agent.
     Plus fleet-wide totals.
     """
+    prod_filter = production_run_filter()
+    bench_only = benchmark_run_filter()
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         cur.execute(
-            """
+            f"""
             SELECT
                 agent_id,
                 COUNT(*) as total_runs,
@@ -363,13 +533,36 @@ def get_fleet_health(
             FROM agent_runs
             WHERE tenant_id = %s
               AND created_at > NOW() - make_interval(days := %s)
-              AND parent_run_id IS NULL
+              AND {prod_filter}
             GROUP BY agent_id
             ORDER BY agent_id
-            """,
+            """,  # noqa: S608 — prod_filter is a literal, not user input
             (tenant_id, days),
         )
         rows = cur.fetchall()
+
+        # Benchmark spend, per agent, kept OUT of the cost columns above.
+        benchmarks: dict[str, dict[str, Any]] = {}
+        try:
+            cur.execute(
+                f"""
+                SELECT
+                    agent_id,
+                    COUNT(*) as benchmark_runs,
+                    COALESCE(SUM(total_cost_usd), 0) as benchmark_cost_usd
+                FROM agent_runs
+                WHERE tenant_id = %s
+                  AND created_at > NOW() - make_interval(days := %s)
+                  AND {bench_only}
+                GROUP BY agent_id
+                """,  # noqa: S608
+                (tenant_id, days),
+            )
+            benchmarks = {r["agent_id"]: dict(r) for r in cur.fetchall()}
+        except Exception as e:
+            logger.warning("fleet benchmark spend query failed: %s", e)
+            with contextlib.suppress(Exception):
+                conn.rollback()
 
     agents = []
     fleet_total = 0
@@ -377,16 +570,26 @@ def get_fleet_health(
     fleet_failed = 0
     fleet_cost = 0.0
 
+    fleet_benchmark_runs = 0
+    fleet_benchmark_cost = 0.0
+
+    def _benchmark_of(agent_id: str) -> tuple[int, float]:
+        b = benchmarks.get(agent_id) or {}
+        return int(b.get("benchmark_runs") or 0), float(b.get("benchmark_cost_usd") or 0.0)
+
     for row in rows:
         row = dict(row)
         total = row["total_runs"] or 0
         completed = row["completed"] or 0
         failed = row["failed"] or 0
+        bench_runs, bench_cost = _benchmark_of(row["agent_id"])
 
         fleet_total += total
         fleet_completed += completed
         fleet_failed += failed
         fleet_cost += float(row["total_cost_usd"] or 0)
+        fleet_benchmark_runs += bench_runs
+        fleet_benchmark_cost += bench_cost
 
         agents.append(
             {
@@ -401,8 +604,39 @@ def get_fleet_health(
                 if row.get("total_cost_usd")
                 else None,
                 "last_run_at": str(row["last_run_at"]) if row.get("last_run_at") else None,
+                "benchmark_runs": bench_runs,
+                "benchmark_cost_usd": round(bench_cost, 6),
             }
         )
+
+    # Agents whose ENTIRE footprint is benchmark traffic (three on this box)
+    # would otherwise vanish from fleet health the moment the filter lands.
+    # Dropping them silently is how "graded on nothing" stays invisible — list
+    # them with zero production runs instead.
+    seen = {a["agent_id"] for a in agents}
+    for agent_id, b in sorted(benchmarks.items()):
+        if agent_id in seen:
+            continue
+        bench_runs = int(b.get("benchmark_runs") or 0)
+        bench_cost = float(b.get("benchmark_cost_usd") or 0.0)
+        fleet_benchmark_runs += bench_runs
+        fleet_benchmark_cost += bench_cost
+        agents.append(
+            {
+                "agent_id": agent_id,
+                "total_runs": 0,
+                "completed": 0,
+                "failed": 0,
+                "timeouts": 0,
+                "success_rate": None,
+                "avg_cost_usd": None,
+                "total_cost_usd": None,
+                "last_run_at": None,
+                "benchmark_runs": bench_runs,
+                "benchmark_cost_usd": round(bench_cost, 6),
+            }
+        )
+    agents.sort(key=lambda a: a["agent_id"])
 
     return {
         "agents": agents,
@@ -412,7 +646,10 @@ def get_fleet_health(
             "failed": fleet_failed,
             "success_rate": round(fleet_completed / fleet_total, 4) if fleet_total > 0 else None,
             "total_cost_usd": round(fleet_cost, 4),
+            "benchmark_runs": fleet_benchmark_runs,
+            "benchmark_cost_usd": round(fleet_benchmark_cost, 4),
         },
+        "benchmark_excluded": decontamination_enforced(),
         "period_days": days,
     }
 
@@ -431,12 +668,14 @@ def detect_anomalies(
 
     Returns: anomalies list (metric, baseline_mean, baseline_stddev, recent_value, sigma_deviation).
     """
+    prod_filter = production_run_filter()
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         # Baseline: daily aggregates over baseline_days
         cur.execute(
-            """
+            f"""
             SELECT
                 DATE(created_at) as day,
                 COUNT(*) as total_runs,
@@ -450,17 +689,17 @@ def detect_anomalies(
               AND tenant_id = %s
               AND created_at > NOW() - make_interval(days := %s)
               AND created_at <= NOW() - make_interval(hours := %s)
-              AND parent_run_id IS NULL
+              AND {prod_filter}
             GROUP BY DATE(created_at)
             ORDER BY day
-            """,
+            """,  # noqa: S608 — prod_filter is a literal, not user input
             (agent_id, tenant_id, baseline_days, recent_hours),
         )
         baseline_rows = [dict(r) for r in cur.fetchall()]
 
         # Recent: aggregate over recent_hours
         cur.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) as total_runs,
                 COUNT(*) FILTER (WHERE status = 'completed') as completed,
@@ -472,8 +711,8 @@ def detect_anomalies(
             WHERE agent_id = %s
               AND tenant_id = %s
               AND created_at > NOW() - make_interval(hours := %s)
-              AND parent_run_id IS NULL
-            """,
+              AND {prod_filter}
+            """,  # noqa: S608
             (agent_id, tenant_id, recent_hours),
         )
         recent = dict(cur.fetchone() or {})
@@ -548,11 +787,13 @@ def get_failure_patterns(
     Returns failure clusters with counts — used by Failure Analyzer to
     prioritize which failures to investigate.
     """
+    prod_filter = production_run_filter()
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
         cur.execute(
-            """
+            f"""
             SELECT
                 agent_id,
                 COALESCE(
@@ -577,11 +818,11 @@ def get_failure_patterns(
             WHERE tenant_id = %s
               AND status IN ('failed', 'timeout')
               AND created_at > NOW() - make_interval(hours := %s)
-              AND parent_run_id IS NULL
+              AND {prod_filter}
             GROUP BY agent_id, error_type
             ORDER BY count DESC
             LIMIT 20
-            """,
+            """,  # noqa: S608 — prod_filter is a literal, not user input
             (tenant_id, hours),
         )
         patterns = []
@@ -625,6 +866,10 @@ def thread_pool_metrics(tenant_id: str = DEFAULT_TENANT, window_days: int = 7) -
         "planner_override_rate": 0.0,
         "window_days": window_days,
     }
+    # threads_advanced_per_beat counts sub_agent runs, which is exactly the
+    # shape benchmark tasks take — 2,685 of them in 30 days would read as
+    # thread advances. Exclude them (no_bench is TRUE until enforce).
+    no_bench = exclude_benchmark_filter()
     try:
         with get_connection() as conn:
             cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -710,11 +955,12 @@ def thread_pool_metrics(tenant_id: str = DEFAULT_TENANT, window_days: int = 7) -
             # threads_advanced_per_beat — spawn runs with a parent_task_id
             # recorded in agent_runs.trigger_detail in the window.
             cur.execute(
-                """SELECT COUNT(*) AS n
+                f"""SELECT COUNT(*) AS n
                    FROM agent_runs
                    WHERE tenant_id = %s
                      AND trigger_type = 'sub_agent'
-                     AND created_at >= NOW() - (%s || ' days')::interval""",
+                     AND {no_bench}
+                     AND created_at >= NOW() - (%s || ' days')::interval""",  # noqa: S608
                 (tenant_id, str(window_days)),
             )
             out["threads_advanced_per_beat"] = int((cur.fetchone() or {}).get("n") or 0)

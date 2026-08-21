@@ -344,6 +344,26 @@ def _agent_holds_exec(config: AgentConfig) -> bool:
     return "exec" in allowed or not allowed
 
 
+def should_create_auto_task(config: AgentConfig, spawn_context: SpawnContext | None) -> bool:
+    """True when this run should file its operator-facing ``auto_task`` CRM row.
+
+    Three conditions, all necessary:
+
+    - the agent asked for it (``auto_task``);
+    - it is not a sub-agent run (children never file their own task);
+    - it is not a benchmark run.
+
+    The benchmark clause plugs a hole in the existing ``is_benchmark`` sandbox:
+    ``tools/handlers/crm.py`` already refuses every task-mutating *tool* when
+    ``ctx.is_benchmark``, but this write goes straight to the DAL and so never
+    met that guard. 6,887 "<Agent>: sub_agent run" rows reached the operator's
+    task queue that way, and the failed/timed-out ones sat there as TODO.
+    """
+    if not config.auto_task or spawn_context is not None:
+        return False
+    return not getattr(config, "is_benchmark", False)
+
+
 def _resolve_sandbox_decision(config: AgentConfig, mode: str) -> str:
     """Decide sandboxing for a run. Returns 'docker' | 'observe' | 'host'.
 
@@ -1311,7 +1331,7 @@ class AgentRunner:
                     logger.warning("Failed to record run start: %s", _sanitize(e))
 
                 # Auto-create CRM task if configured (skip for sub-agent runs)
-                if agent_config.auto_task and not spawn_context:
+                if should_create_auto_task(agent_config, spawn_context):
                     try:
                         from robothor.crm.dal import create_task as dal_create_task
 

@@ -255,20 +255,26 @@ def sample_runs_to_review(
     """Pick up to `n` recent top-level runs for review.
 
     Biases toward: failed/timeout runs, runs with error steps, long-duration runs.
-    Excludes sub-agent runs and already-reviewed runs.
+    Excludes sub-agent runs, benchmark-harness runs, and already-reviewed runs.
+    (Biasing toward timeouts meant this spent review budget critiquing
+    benchmark timeouts as if they were production failures — 44 of
+    agent-architect's 44 timeouts in 30 days were benchmark tasks.)
     """
     from robothor.db.connection import get_connection
+    from robothor.engine.analytics import production_run_filter
+
+    prod_filter_r = production_run_filter("r")
 
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT r.id, r.status, r.duration_ms, r.error_message,
                    (SELECT COUNT(*) FROM agent_run_steps s
                       WHERE s.run_id = r.id AND s.step_type = 'error') AS error_steps
             FROM agent_runs r
             WHERE r.agent_id = %s
               AND r.tenant_id = %s
-              AND r.parent_run_id IS NULL
+              AND {prod_filter_r}
               AND r.status IN ('completed', 'failed', 'timeout')
               AND r.started_at > NOW() - (%s || ' hours')::interval
               AND NOT EXISTS (
@@ -281,7 +287,7 @@ def sample_runs_to_review(
                       WHERE s.run_id = r.id AND s.step_type = 'error') DESC,
                 r.duration_ms DESC NULLS LAST
             LIMIT %s
-            """,
+            """,  # noqa: S608 — prod_filter_r is a literal, not user input
             (agent_id, tenant_id, hours, n),
         )
         return [str(row[0]) for row in cur.fetchall()]

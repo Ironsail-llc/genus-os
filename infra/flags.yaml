@@ -171,3 +171,20 @@ flags:
     owner: ops
     mode: "on"
     soak: goal-judge observe since May; compare against benchmark_pass_rate before weighting grades
+
+  - name: ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-08-28"
+    soak: >
+      Benchmark sub-runs recorded parent_run_id NULL, so `parent_run_id IS NULL`
+      — the predicate twelve analytics queries used to mean "top-level
+      production run" — counted them as production work: 2,685 of 4,267 runs
+      (63%) and $29.93 of $78.03 spend over 30 days. agent-architect read as
+      189 runs / 44 timeouts against 19 real production runs and zero real
+      timeouts; email-analyst, auto-researcher and auto-agent have ZERO
+      production runs and were graded entirely on benchmark traffic.
+      observe reports contamination per surface (benchmark_runs /
+      benchmark_cost_usd) without moving any headline number, so the reported
+      figure can be checked against a hand-run query on agent_runs before the
+      numbers change. Promote per docs/runbooks/BENCHMARK_DECONTAMINATION.md.
