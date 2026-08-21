@@ -37,3 +37,17 @@ pnpm@10.34.5
 
 # Systemd service paths (template uses hardcoded paths by design)
 /home/philip/robothor
+
+# systemd template unit instances (robothor-alert@<unit>.service) — the email
+# regex reads "name@host" in them. They are unit names, not addresses.
+robothor-alert@
+
+# The canonical service-home PLACEHOLDER in the unit templates
+# (infra/systemd/README.md): templates must spell the service user's home
+# /home/robothor, which scripts/render-unit.sh substitutes at install time.
+# Any other /home/<user> path still trips the check.
+/home/robothor
+
+# The fictional example number in infra/systemd/robothor.env.example's
+# ROBOTHOR_AI_PHONE comment (555 is the reserved not-in-service block).
++1 (555) 123-4567

@@ -1,0 +1,55 @@
+# Independent engine liveness watchdog — the pager path that survives a hard
+# kill (scripts/liveness_probe.sh).
+#
+# OnFailure= is a single, best-effort, in-band hook, and it produced silence
+# three times in two days. On 2026-08-19 13:50 the engine was SIGKILLed during
+# a shutdown transaction and systemd logged:
+#
+#   robothor-engine.service: Failed to enqueue OnFailure= job, ignoring:
+#   Transaction for robothor-alert@robothor-engine.service.service/start is
+#   destructive (systemd-tmpfiles-setup-dev.service has 'stop' job queued...)
+#
+# No page was sent, and OnFailure fires exactly once — that page is gone. A
+# wedged-but-running engine never "fails" at all, so nothing fires. This timer
+# probes the engine from outside every few minutes and pages after N
+# consecutive failures, which covers all three cases.
+#
+# Enable with: sudo systemctl enable --now robothor-liveness.timer
+#
+# Template — instance values use the canonical placeholder spellings
+# (see infra/systemd/README.md) and are substituted by scripts/render-unit.sh
+# at install time.
+[Unit]
+Description=Robothor engine liveness watchdog
+# Deliberately NOT ordered after or bound to robothor-engine.service: a
+# watchdog that depends on its target stops watching the moment the target
+# stops, which is the only moment it matters. The pager needs DNS, so wait for
+# the network at boot.
+After=network-online.target
+Wants=network-online.target
+# The probe itself failing (e.g. the page could not be delivered) is also
+# operator-visible news.
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+# No User= — this runs as root, like robothor-alert@.service. The sender it
+# calls recovers /run/robothor/secrets.env via the root-readable age key when
+# the secrets have not been decrypted yet, and reads the watched unit's
+# journal for the page body. Both need root; nothing else here does.
+EnvironmentFile=/etc/robothor/robothor.env
+# Optional '-': /run is tmpfs, so this file does not exist on a cold boot and a
+# non-optional EnvironmentFile would fail the unit outright (tests/test_cold_boot.py).
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/usr/bin/bash /opt/robothor/scripts/liveness_probe.sh
+# The sender retries a page for ~5 minutes to ride out the boot DNS/secrets
+# window. systemd's default TimeoutStartSec (90s) would SIGTERM it mid-retry
+# and lose the page — the exact failure this unit exists to prevent.
+TimeoutStartSec=600
+
+# Containment: the probe needs curl, journalctl, and /run/robothor. It never
+# needs to raise privileges. Filesystem protections are deliberately NOT set —
+# the workspace legitimately lives under the service user's home on some
+# instances, and ProtectHome= would break the ExecStart path itself.
+NoNewPrivileges=yes
+PrivateTmp=yes
