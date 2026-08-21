@@ -16,5 +16,11 @@
     "package": "ip-address",
     "reason": "bundled inside the npm CLI package (dep of @semantic-release/npm, unused by our release config); no published npm ships patched bundles as of 2026-08-17 — remove when one does",
     "added": "2026-08-17"
+  },
+  {
+    "id": "GHSA-r292-9mhp-454m",
+    "package": "tar",
+    "reason": "bundled inside the npm CLI package (node_modules/npm/node_modules/tar, dep of @semantic-release/npm — release tooling, not product runtime); npm's only offered fix is a semver-major DOWNGRADE of semantic-release 25 to 24.2.9, trading a dev-only DoS for a release-tooling regression — remove when a published npm ships a patched bundle",
+    "added": "2026-08-21"
   }
 ]
