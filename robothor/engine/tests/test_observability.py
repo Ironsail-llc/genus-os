@@ -13,6 +13,13 @@ from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode, RunStatu
 # ─── Helpers ────────────────────────────────────────────────────────
 
 
+class _FakeMessage:
+    """Stand-in for an aiogram Message returned by a successful send."""
+
+    def __init__(self, message_id: int) -> None:
+        self.message_id = message_id
+
+
 def _make_run(**kwargs: object) -> AgentRun:
     defaults: dict[str, object] = {
         "id": "run-1",
@@ -41,7 +48,10 @@ def _make_config(**kwargs: object) -> AgentConfig:
 class TestDeliveryStatus:
     @pytest.fixture(autouse=True)
     def _setup_sender(self):
-        sender = AsyncMock()
+        # A bare AsyncMock returns a truthy MagicMock that iterates empty —
+        # i.e. "nothing was sent". Return a real one-message list so these
+        # tests exercise a genuine single-chunk delivery.
+        sender = AsyncMock(return_value=[_FakeMessage(1)])
         set_telegram_sender(sender)
         yield sender
         set_telegram_sender(None)  # type: ignore[arg-type]
@@ -199,7 +209,9 @@ class TestHeartbeatHasNoBuddyAppendix:
 
     @pytest.fixture(autouse=True)
     def _setup_sender(self):
-        sender = AsyncMock()
+        # One acknowledged message per chunk — a bare AsyncMock iterates
+        # empty, which delivery correctly reads as "nothing was sent".
+        sender = AsyncMock(return_value=[_FakeMessage(1)])
         set_telegram_sender(sender)
         yield sender
         set_telegram_sender(None)  # type: ignore[arg-type]

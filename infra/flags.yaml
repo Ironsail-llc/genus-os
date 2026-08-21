@@ -188,3 +188,21 @@ flags:
       benchmark_cost_usd) without moving any headline number, so the reported
       figure can be checked against a hand-run query on agent_runs before the
       numbers change. Promote per docs/runbooks/BENCHMARK_DECONTAMINATION.md.
+
+  - name: ROBOTHOR_TOOL_VERIFY_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-09-20"
+    soak: >
+      Tool post-condition checks: after a side-effectful tool reports success,
+      read the write back out of the environment (Gmail message id, calendar
+      event id, CRM row) and record the verdict in agent_run_evidence.
+
+      DO NOT promote on a quiet table. Zero rows here means the control is
+      inert, not that agents are honest — the evidence ledger ships in the
+      run-verification PR, and until that migration is applied every write is
+      skipped. Gate on: (1) verified=true rows exist for real sends and CRM
+      writes (the mechanism is proven), (2) every verified=false row triaged as
+      either a real claim-vs-reality gap or a checker bug, (3) verify_error
+      count ~0, (4) tool-call latency unchanged. Promoting past observe changes
+      what the model sees mid-run, so it is a behavior change, not bookkeeping.

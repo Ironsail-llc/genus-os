@@ -14,6 +14,7 @@ import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.chunking import split_telegram_message
 from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode
 
 if TYPE_CHECKING:
@@ -477,51 +478,146 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
     return False
 
 
+def _mark_delivery_failed(run: AgentRun, channel: str, status: str) -> None:
+    """Record a delivery failure on the run so it is never mistaken for a send.
+
+    Args:
+        run: The run whose delivery failed.
+        channel: The channel that was attempted (``telegram``, ``event_bus``).
+        status: The ``delivery_status`` value to record; always prefixed
+            ``failed:`` so consumers can match it.
+    """
+    run.delivery_status = status
+    run.delivery_channel = channel
+    run.delivered_at = None
+
+
+def _acknowledged_messages(sent: Any) -> tuple[int, list[str]]:
+    """Count the chunks the platform actually acknowledged.
+
+    ``TelegramBot.send_message`` returns one entry per chunk it managed to
+    send — a chunk that failed both the HTML and the plain-text attempt is
+    simply absent from the list, so the length of the result is the only
+    evidence of what landed.
+
+    Args:
+        sent: Whatever the registered sender returned.
+
+    Returns:
+        ``(acknowledged_count, platform_message_ids)``. The id list can be
+        shorter than the count if the platform returned an object without a
+        ``message_id``; the count, not the ids, decides delivery.
+    """
+    if not sent:
+        return 0, []
+    try:
+        messages = list(sent)
+    except TypeError:  # a single message object, not a sequence
+        messages = [sent]
+
+    count = 0
+    message_ids: list[str] = []
+    for msg in messages:
+        if msg is None:
+            continue
+        count += 1
+        mid = getattr(msg, "message_id", None)
+        if mid is not None:
+            message_ids.append(str(mid))
+    return count, message_ids
+
+
 async def _deliver_telegram(config: AgentConfig, text: str, run: AgentRun) -> bool:
-    """Send output to Telegram (uses platform registry)."""
+    """Send output to Telegram and record what actually happened.
+
+    ``TelegramBot.send_message`` never raises: it retries a failed chunk as
+    plain text and, when that fails too, logs the error and returns a list
+    that is simply *missing* that chunk (empty if every chunk failed). The
+    returned list is therefore the only evidence of delivery, so the status
+    is derived from it rather than assumed — the same discipline
+    ``alerts.py`` adopted after the arity bug sent 432+ pages nowhere:
+
+    - every chunk acknowledged: ``delivered``, with ``delivered_at`` set
+    - some chunks acknowledged: ``partial:<sent>/<expected>``
+    - nothing acknowledged: ``failed:telegram_send``
+
+    ``delivered_at`` is set only on a complete send — a truncated briefing
+    is not a delivered briefing.
+
+    Args:
+        config: The agent config supplying the chat id and display name.
+        text: The already-processed body to deliver.
+        run: The run to stamp with the delivery outcome.
+
+    Returns:
+        True only if every chunk was acknowledged by the platform.
+    """
     sender = get_platform_sender("telegram")
     if sender is None:
         logger.warning("Telegram sender not initialized, can't deliver for %s", config.id)
+        _mark_delivery_failed(run, "telegram", "failed:telegram_no_sender")
         return False
 
     chat_id = config.delivery_to
     if not chat_id:
         logger.warning("No delivery_to chat ID for %s", config.id)
+        _mark_delivery_failed(run, "telegram", "failed:telegram_no_chat_id")
         return False
     if "${" in chat_id:
         logger.error("Unexpanded env var in delivery_to for %s: %s", config.id, chat_id)
+        _mark_delivery_failed(run, "telegram", "failed:telegram_unexpanded_chat_id")
         return False
+
+    header = f"*{config.name}*\n\n"
+    full_text = header + text
+    expected_chunks = len(split_telegram_message(full_text))
 
     try:
-        header = f"*{config.name}*\n\n"
-        full_text = header + text
-
         sent = await sender(chat_id, full_text)
-
-        run.delivery_status = "delivered"
-        run.delivered_at = datetime.now(UTC)
-        run.delivery_channel = "telegram"
-
-        platform_message_ids: list[str] = []
-        if sent:
-            for msg in sent:
-                mid = getattr(msg, "message_id", None)
-                if mid is not None:
-                    platform_message_ids.append(str(mid))
-
-        await _dispatch_post_delivery(
-            config=config,
-            run=run,
-            text=full_text,
-            channel="telegram",
-            chat_id=chat_id,
-            platform_message_ids=platform_message_ids,
-        )
-        return True
     except Exception as e:
         logger.error("Telegram delivery failed for %s: %s", config.id, e)
-        run.delivery_status = f"failed: {e}"
+        _mark_delivery_failed(run, "telegram", f"failed:telegram_exception: {e}")
         return False
+
+    acknowledged, platform_message_ids = _acknowledged_messages(sent)
+
+    if acknowledged == 0:
+        logger.error(
+            "Telegram delivery for %s acknowledged 0 of %d chunk(s) — "
+            "the operator saw nothing (run=%s)",
+            config.id,
+            expected_chunks,
+            run.id,
+        )
+        _mark_delivery_failed(run, "telegram", "failed:telegram_send")
+        return False
+
+    complete = acknowledged >= expected_chunks
+    run.delivery_channel = "telegram"
+    if complete:
+        run.delivery_status = "delivered"
+        run.delivered_at = datetime.now(UTC)
+    else:
+        run.delivery_status = f"partial:{acknowledged}/{expected_chunks}"
+        run.delivered_at = None
+        logger.error(
+            "Telegram delivery for %s was truncated: %d of %d chunk(s) landed (run=%s)",
+            config.id,
+            acknowledged,
+            expected_chunks,
+            run.id,
+        )
+
+    # Map the chunks that DID land so reply-to resolution still works for them.
+    await _dispatch_post_delivery(
+        config=config,
+        run=run,
+        text=full_text,
+        channel="telegram",
+        chat_id=chat_id,
+        platform_message_ids=platform_message_ids,
+    )
+    return complete
 
 
 async def _dispatch_post_delivery(
@@ -572,11 +668,34 @@ async def _dispatch_post_delivery(
 
 
 async def _deliver_event_bus(config: AgentConfig, text: str, run: AgentRun) -> bool:
-    """Publish output to the Redis event bus."""
-    try:
-        from robothor.events.bus import publish
+    """Publish output to the Redis event bus and record the real outcome.
 
-        publish(
+    ``events.bus.publish`` returns the stream message id, or ``None`` when
+    the bus is disabled, Redis is unreachable, or the write was refused — it
+    never raises. Writing ``published`` without checking that id is a guess,
+    so the id decides the status.
+
+    Args:
+        config: The agent config (supplies the agent id in the payload).
+        text: The already-processed body to publish.
+        run: The run to stamp with the delivery outcome.
+
+    Returns:
+        True only if the bus returned a stream message id.
+    """
+    try:
+        from robothor.events import bus
+
+        if not bus.EVENT_BUS_ENABLED:
+            logger.warning(
+                "Event bus disabled — output for %s was not published (run=%s)",
+                config.id,
+                run.id,
+            )
+            _mark_delivery_failed(run, "event_bus", "failed:event_bus_disabled")
+            return False
+
+        msg_id = bus.publish(
             stream="agent",
             event_type="agent.run.output",
             payload={
@@ -586,10 +705,20 @@ async def _deliver_event_bus(config: AgentConfig, text: str, run: AgentRun) -> b
                 "status": run.status.value,
             },
         )
-        run.delivery_status = "published"
-        run.delivery_channel = "event_bus"
-        return True
     except Exception as e:
         logger.warning("Event bus delivery failed for %s: %s", config.id, e)
-        run.delivery_status = f"failed: {e}"
+        _mark_delivery_failed(run, "event_bus", f"failed:event_bus_exception: {e}")
         return False
+
+    if not msg_id:
+        logger.error(
+            "Event bus publish for %s returned no message id — output was not published (run=%s)",
+            config.id,
+            run.id,
+        )
+        _mark_delivery_failed(run, "event_bus", "failed:event_bus_publish")
+        return False
+
+    run.delivery_status = "published"
+    run.delivery_channel = "event_bus"
+    return True

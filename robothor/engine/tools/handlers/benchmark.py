@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 import yaml
 
+from robothor.db.connection import DatabaseGuardError
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -788,9 +790,18 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     experiment_id_arg = (args.get("experiment_id") or "").strip() or None
     suite_path_arg = (args.get("config_file") or "").strip() or None
     try:
-        from robothor.db.connection import get_connection
+        from robothor.db.connection import (
+            assert_test_database_write,
+            connection_database_name,
+            get_connection,
+        )
 
         with get_connection() as conn:
+            # Belt-and-braces with the pool-creation guard: a warm pool is
+            # reused without re-checking, and this handler's own unit tests
+            # once patched the wrong module and put 709 synthetic rows into
+            # production. Raises DatabaseGuardError, re-raised below.
+            assert_test_database_write(connection_database_name(conn), "benchmark_results")
             cur = conn.cursor()
             cur.execute(
                 """
@@ -816,6 +827,9 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 ),
             )
             conn.commit()
+    except DatabaseGuardError:
+        # Never downgrade "this row is landing in production" to a log line.
+        raise
     except Exception as exc:
         logger.warning(
             "benchmark_run: failed to write benchmark_results row for %s/%s: %s",

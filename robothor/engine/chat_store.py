@@ -666,6 +666,12 @@ def cleanup_stale_chat_turns(days: int = 90, tenant_id: str | None = None) -> in
     pass it explicitly so multi-tenant instances don't delete every tenant's
     data on every run. When ``None`` (manual one-off GC), sweeps globally.
 
+    ``chat_messages`` carries no tenant column of its own — tenancy lives on
+    ``chat_sessions`` and is reached through ``session_id``. Filtering the
+    messages table directly on ``tenant_id`` raised UndefinedColumn on every
+    run, and the nightly caller logged it as a warning, so this TTL pruned
+    nothing at all. Keep the join; there is no column to short-circuit to.
+
     The NOT EXISTS filter is bounded by tenant + a min-length guard so the
     O(N·M) LIKE scan only fires on substantive messages and stays inside
     the current tenant's fact pool.
@@ -692,7 +698,9 @@ def cleanup_stale_chat_turns(days: int = 90, tenant_id: str | None = None) -> in
             cur.execute(
                 """
                 DELETE FROM chat_messages
-                WHERE tenant_id = %s
+                WHERE session_id IN (
+                          SELECT id FROM chat_sessions WHERE tenant_id = %s
+                      )
                   AND created_at < NOW() - make_interval(days := %s)
                   AND pinned = FALSE
                   AND length(message->>'content') > 0

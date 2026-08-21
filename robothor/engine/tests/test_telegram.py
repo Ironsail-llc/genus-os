@@ -128,6 +128,28 @@ class TestMessageSplitting:
         for chunk in chunks:
             assert len(chunk) <= MAX_MESSAGE_LENGTH
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Hello world",
+            "",
+            "x" * MAX_MESSAGE_LENGTH,
+            "x" * (MAX_MESSAGE_LENGTH * 3 + 500),
+            ("a" * 100 + "\n") * 50,
+            "*Agent*\n\n" + "y" * (MAX_MESSAGE_LENGTH * 2 + 7),
+        ],
+    )
+    def test_matches_shared_chunker(self, bot, text):
+        """The bot's splitter and the shared chunker must never drift.
+
+        ``delivery.py`` predicts the chunk count with
+        ``split_telegram_message`` to tell a complete send from a partial
+        one; if the two disagree, delivery reports confident nonsense.
+        """
+        from robothor.engine.chunking import split_telegram_message
+
+        assert bot._split_message(text) == split_telegram_message(text)
+
 
 class TestSendMessage:
     @pytest.mark.asyncio

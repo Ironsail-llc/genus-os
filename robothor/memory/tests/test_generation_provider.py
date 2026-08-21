@@ -29,6 +29,11 @@ def _reset_state(monkeypatch):
     # pacing tests set their own interval.
     monkeypatch.setenv(generation.MIN_INTERVAL_ENV, "0")
     generation.remote_fallback_count = 0
+    # Streak + alert latches are module state too: leaking them across tests
+    # would let an unrelated test cross the streak threshold and dispatch a
+    # real alert (Telegram/DB) from the unit suite.
+    generation._consecutive_fallbacks = 0
+    generation._alert_latched_at = {}
     generation._missing_key_logged = False
     generation._last_remote_call_at = 0.0
     generation._pacing_lock = None  # never reuse a lock across event loops
