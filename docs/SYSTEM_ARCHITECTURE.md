@@ -818,6 +818,30 @@ pages Telegram immediately; `warning`/`info` become `alert_digest`
 notification rows the morning briefing and heartbeat surface without paging
 (see `docs/runbooks/PAGING.md`).
 
+#### Delivery status vocabulary
+
+`agent_runs.delivery_status` is written by `robothor/engine/delivery.py` and is
+derived from what the sender actually returned — never from the fact that a
+send was attempted. `TelegramBot.send_message` swallows per-chunk exceptions
+and returns one entry per chunk it managed to send (empty if all of them
+failed), so the length of that list is the only evidence of delivery.
+
+| Status | Meaning |
+|--------|---------|
+| `delivered` | Every chunk was acknowledged. Only this value sets `delivered_at`. |
+| `partial:<sent>/<expected>` | Some chunks landed, the rest were lost — a truncated briefing, not a delivered one. |
+| `published` | Event-bus mode; the bus returned a stream message id. |
+| `failed:telegram_send` | The sender returned nothing: the operator saw none of it. |
+| `failed:telegram_exception: <err>` | The send raised. |
+| `failed:telegram_no_sender` / `failed:telegram_no_chat_id` / `failed:telegram_unexpanded_chat_id` | Misconfiguration caught before the send. |
+| `failed:event_bus_publish` / `failed:event_bus_disabled` / `failed:event_bus_exception: <err>` | The publish did not happen. |
+| `no_output`, `silent`, `suppressed_trivial`, `suppressed_sub_agent`, `blocked_by_hook:<reason>` | Nothing was meant to be sent. |
+
+Consumers must treat *only* `delivered` as reach: `analytics.py` counts it for
+the delivery success rate, and `scheduler._maybe_emit_heartbeat_status_ping`
+fires a fallback ping for everything else, so a `partial:` or `failed:` beat
+still reaches the operator as a one-line health signal.
+
 ### Voice & SMS (Twilio)
 
 | Service | Port | Number |
