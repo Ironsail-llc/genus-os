@@ -305,8 +305,22 @@ info = await get_all_about("Alice")
 
 # Auto-extract from text
 stats = await extract_and_store_entities("Alice at Acme uses FastAPI", fact_id=42)
-# {"entities_stored": 3, "relations_stored": 2}
+# {"entities_stored": 3, "relations_stored": 2}  # counts what was STORED
 ```
+
+### Junk names and batch safety
+
+`upsert_entity` returns `int | None`. It returns `None` — never a numeric
+sentinel — for a name that cannot be a real entity: a bare UUID (the extractor
+occasionally echoes a row id back as a name) or fewer than two characters after
+stripping. Callers must test `is not None`, not truthiness: entity id `0` is a
+valid id, and a truthy sentinel like `-1` would pass an `if entity_id:` guard
+and then be rejected by the `memory_relations` foreign key.
+
+`add_relations_batch` is hardened to match. Rows whose endpoints are not valid
+entity ids are dropped before the insert, and a chunk Postgres still rejects is
+retried row by row inside a savepoint, so one bad row costs one relation instead
+of the whole batch. Every drop is logged at WARNING with a count.
 
 ## Ingestion Pipeline
 
