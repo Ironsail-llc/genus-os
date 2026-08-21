@@ -20,7 +20,7 @@ Logs: `journalctl -u <unit> -f`
 | robothor-crm.service | 3010, 8880 | crm/ | Docker Compose: Uptime Kuma, Kokoro TTS (2 containers) |
 | robothor-bridge.service | 9100 | crm/bridge | Bridge: contact resolution, webhooks, CRM integration |
 | bridge-watchdog.timer | — | scripts/ | Self-healing watchdog: checks bridge every 5min, auto-restarts on 2 failures |
-| engine-watchdog.timer | — | scripts/ | Self-healing watchdog: checks engine every 2min, direct Telegram alert + auto-restart on 2 failures |
+| robothor-liveness.timer | — | scripts/ | Independent engine liveness watchdog: probes `/live` every 5min, pages via `send_failure_alert.sh` after 3 consecutive failures (covers SIGKILL, where OnFailure= never fires) |
 | robothor-app.service | 3004 | app/ | Helm: Next.js 16 + Dockview live dashboard (app.${INSTANCE_DOMAIN}) |
 | smbd.service | 445 | — | Samba file sharing (local network + Tailscale only) |
 | nmbd.service | 137-138 | — | NetBIOS name service for Samba |

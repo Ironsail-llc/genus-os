@@ -10,11 +10,31 @@
 # (DNS not up; secrets not yet decrypted). The sender script retries internally
 # (~5min budget) and this unit additionally restarts itself on failure so
 # systemd keeps retrying a page that exhausted the script's own budget.
+#
+# OnFailure= alone is not enough: it never fires on a SIGKILL, on a destructive
+# systemd transaction, or on a wedged-but-running process. robothor-liveness.timer
+# is the independent second path that covers those.
 [Unit]
 Description=Robothor failure alert for %i
-# Bound the systemd-level retries: 5 starts per hour, then give up loudly.
-StartLimitIntervalSec=3600
-StartLimitBurst=5
+# NO systemd start limit — deliberately, and against the usual advice. Do not
+# "fix" this back.
+#
+# This unit carried StartLimitIntervalSec=3600 / StartLimitBurst=5. On
+# 2026-08-20 two crash-looping services tripped that limit 60 times:
+#   robothor-alert@robothor-orchestrator.service.service: Failed with result
+#   'start-limit-hit'.                                              (31x)
+#   robothor-alert@robothor-bridge.service.service: Failed with result
+#   'start-limit-hit'.                                              (29x)
+# A flapping service therefore SILENCED ITS OWN PAGER FOR AN HOUR — precisely
+# the case this unit exists for, and precisely when nobody is watching the
+# journal that would have said so.
+#
+# Rate limiting belongs in the sender, which already dedups per unit for an
+# hour (ROBOTHOR_ALERT_COOLDOWN_SECONDS in scripts/send_failure_alert.sh) and
+# only stamps that cooldown AFTER a delivered send. The systemd start limit
+# added no protection on top of it, only silence.
+# tests/test_liveness_watchdog.py fails if the start limit comes back.
+StartLimitIntervalSec=0
 
 [Service]
 # Type=exec (not oneshot): systemd forbids Restart= on oneshot units, and

@@ -253,6 +253,8 @@ EXPECTED_INSTALLED = [
     "robothor-restart.path",
     "robothor-backup-local.timer",
     "robothor-alert@.service",
+    "robothor-liveness.service",
+    "robothor-liveness.timer",
     "robothor-engine.service.d/hardening.conf",
     "robothor-engine.service.d/upgrade-rip-flags.conf",
 ]
