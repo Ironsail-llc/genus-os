@@ -172,6 +172,10 @@ def record_benchmark_row(row: dict[str, Any]) -> bool:
     reporting failure must not turn a passing eval into a failing process. The
     fleet's staleness check is what notices a persistently missing row.
 
+    The one exception is ``DatabaseGuardError``: a row about to land in a
+    non-test database from inside pytest is not a reporting failure, it is the
+    defect that put 709 synthetic rows into production, and it propagates.
+
     Note benchmark_results carries a tenant_id defaulting to the primary tenant
     and sits inside migration 081's RLS loop, so this insert must run on a
     connection scoped to that tenant — not the eval's memory-eval scope.
@@ -179,10 +183,16 @@ def record_benchmark_row(row: dict[str, Any]) -> bool:
     import json
 
     from robothor.constants import DEFAULT_TENANT
-    from robothor.db.connection import get_connection
+    from robothor.db.connection import (
+        DatabaseGuardError,
+        assert_test_database_write,
+        connection_database_name,
+        get_connection,
+    )
 
     try:
         with get_connection() as conn:
+            assert_test_database_write(connection_database_name(conn), "benchmark_results")
             cur = conn.cursor()
             cur.execute("SELECT set_config('app.tenant_id', %s, false)", (DEFAULT_TENANT,))
             cur.execute(
@@ -211,6 +221,8 @@ def record_benchmark_row(row: dict[str, Any]) -> bool:
             )
             conn.commit()
         return True
+    except DatabaseGuardError:
+        raise
     except Exception as e:
         logger.warning("could not record benchmark_results row: %s", e)
         return False

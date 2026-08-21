@@ -111,6 +111,7 @@ If the leak checker flags your code, move the personal data to `brain/CLAUDE.md`
 - **Use `test_prefix` fixture** for database isolation in integration tests.
 - **Mock LLMs in unit tests.** Only use real LLM calls in `@pytest.mark.llm` tests.
 - **Tests only ever talk to a `*_test` database.** The root `conftest.py` pins `ROBOTHOR_DB_NAME=robothor_test`, and `robothor.db.connection` refuses to open any non-`*_test` database from inside pytest (`ROBOTHOR_TEST_DB_ALLOW` is the explicit escape hatch, used by the release gate). Never hardcode a production database name in a test — use `ROBOTHOR_TEST_DB_DSN` for integration DSNs.
+- **Patch the module the code imports *from*, not a re-export.** `robothor.crm.dal` re-exports `get_connection` from `robothor.db.connection`; rebinding the re-export leaves the original untouched, so a handler that does `from robothor.db.connection import get_connection` writes for real. That exact mistake put 709 synthetic rows into the production `benchmark_results` table. `benchmark_results` writers now also call `assert_test_database_write()` immediately before the INSERT — it raises `DatabaseGuardError` (re-raised through the best-effort `except Exception` handlers) naming the offending database and the escape hatch.
 
 ### Running Tests
 

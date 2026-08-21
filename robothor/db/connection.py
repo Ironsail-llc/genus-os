@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 from contextlib import contextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import psycopg2
 import psycopg2.pool
@@ -35,6 +36,92 @@ _pool_lock = threading.Lock()
 
 
 _POOL_GETCONN_TIMEOUT = 10  # seconds to wait for a connection before raising
+
+
+class DatabaseGuardError(RuntimeError):
+    """Raised when pytest is about to touch a non-test database.
+
+    A distinct type, deliberately: both benchmark writers wrap their INSERT in
+    ``except Exception: logger.warning(...)`` so that a reporting hiccup cannot
+    fail a passing run. That best-effort handler would swallow a plain
+    ``RuntimeError`` and downgrade "this row is landing in production" to a log
+    line nobody reads. Those call sites re-raise *this* type specifically.
+
+    Subclasses ``RuntimeError`` so existing ``pytest.raises(RuntimeError)``
+    call sites keep working.
+    """
+
+
+def in_pytest() -> bool:
+    """Whether this process is running under pytest.
+
+    Broader than the ``PYTEST_CURRENT_TEST`` check in
+    :func:`assert_test_database`, which is set only during a test's
+    setup/call/teardown — it is absent during collection, during
+    session-scoped fixture setup, and in threads that outlive a test. Those
+    are exactly the windows a stray module-level write slips through.
+
+    ``PYTEST_VERSION`` (pytest >= 8.1) covers the whole session; the
+    ``sys.modules`` probe covers older pytest and any exotic invocation. No
+    production entry point imports pytest, so the probe cannot fire live.
+    """
+    return (
+        "PYTEST_CURRENT_TEST" in os.environ
+        or "PYTEST_VERSION" in os.environ
+        or "pytest" in sys.modules
+    )
+
+
+def connection_database_name(conn: Any) -> str:
+    """The database a live connection would actually write to.
+
+    Authoritative in a way the resolved config is not: ``get_pool()`` checks
+    the configured name only when it *creates* the pool, so a pool warmed
+    before the guard was in force is reused forever pointing wherever it was
+    built. Asking the connection itself closes that hole. Falls back to the
+    configured name when the object cannot report a DSN — an unknown
+    destination must never read as safe.
+    """
+    try:
+        name = conn.get_dsn_parameters().get("dbname")
+    except Exception:
+        name = None
+    if name:
+        return str(name)
+    return get_config().db.name
+
+
+def assert_test_database_write(name: str, table: str) -> None:
+    """Refuse to write ``table`` into a non-test database from inside pytest.
+
+    Belt-and-braces with :func:`assert_test_database`, applied at the moment of
+    the write rather than at pool creation, and using the broader
+    :func:`in_pytest` detection.
+
+    This exists because 709 synthetic ``benchmark_results`` rows accumulated in
+    the production table between 2026-05-11 and 2026-08-19 — written by the
+    benchmark unit tests, whose isolation fixture patched the wrong module. The
+    goal metric and the Telegram ``/goals`` command read the *latest* row for an
+    agent with no suite filter, so a test row set an agent's displayed score to
+    100% against a real 64% for about 15 hours.
+
+    Outside pytest this is a no-op. A non-``*_test`` name can be explicitly
+    allowed via ``ROBOTHOR_TEST_DB_ALLOW`` (the release gate legitimately runs
+    integration tests against ``robothor_release_gate``).
+    """
+    if not in_pytest():
+        return
+    if name.endswith("_test") or name == os.environ.get("ROBOTHOR_TEST_DB_ALLOW", ""):
+        return
+    raise DatabaseGuardError(
+        f"Refusing to INSERT into {table} on database {name!r} from inside pytest — "
+        f"{name!r} is not a *_test database, and synthetic rows written there are "
+        "indistinguishable from real ones to every reader downstream. Point "
+        "ROBOTHOR_DB_NAME at a *_test database, patch "
+        "robothor.db.connection.get_connection in your test (patching a re-export "
+        "such as robothor.crm.dal.get_connection does NOT intercept it), or set "
+        f"ROBOTHOR_TEST_DB_ALLOW={name} to explicitly allow this exact database."
+    )
 
 
 def assert_test_database(name: str) -> None:
@@ -55,7 +142,7 @@ def assert_test_database(name: str) -> None:
         return
     if name.endswith("_test") or name == os.environ.get("ROBOTHOR_TEST_DB_ALLOW", ""):
         return
-    raise RuntimeError(
+    raise DatabaseGuardError(
         f"Refusing to open a database connection to {name!r} from inside pytest — "
         "tests must never touch a production database. Set ROBOTHOR_DB_NAME to a "
         "*_test database, or set ROBOTHOR_TEST_DB_ALLOW to this exact name to "
