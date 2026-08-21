@@ -14,6 +14,7 @@ from robothor.engine.feature_flags import (
     approval_mode,
     completion_contract_mode,
     rbac_enforcement_mode,
+    run_verification_mode,
     sandbox_default_mode,
 )
 
@@ -26,6 +27,11 @@ MODE_FLAGS = [
         completion_contract_mode,
         "ROBOTHOR_COMPLETION_CONTRACTS_ENABLED",
         "ROBOTHOR_COMPLETION_CONTRACTS_MODE",
+    ),
+    (
+        run_verification_mode,
+        "ROBOTHOR_RUN_VERIFICATION_ENABLED",
+        "ROBOTHOR_RUN_VERIFICATION_MODE",
     ),
 ]
 

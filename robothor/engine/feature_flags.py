@@ -431,6 +431,23 @@ def completion_contract_mode() -> EnforcementMode:
     )
 
 
+def run_verification_mode() -> EnforcementMode:
+    """Rollout mode for verifying a finished run's claims against its tool trace.
+
+    Gated on ``ROBOTHOR_RUN_VERIFICATION_ENABLED`` + ``ROBOTHOR_RUN_VERIFICATION_MODE``.
+    ``observe`` computes the verdict, stamps ``agent_runs.verified_status`` /
+    ``verification`` and records a guardrail event — nothing else changes;
+    ``alert`` additionally notifies the operator; ``enforce`` is reserved for
+    the follow-up that gates delivery/task resolution on the verdict and today
+    records exactly as ``alert`` does. Default off.
+
+    Unlike ``completion_contract_mode`` this needs no session goal and is not
+    limited to "task complete" phrasings — see ``run_verification`` for the
+    production run that motivated it.
+    """
+    return _enforcement_mode("ROBOTHOR_RUN_VERIFICATION_ENABLED", "ROBOTHOR_RUN_VERIFICATION_MODE")
+
+
 def injection_scan_mode() -> EnforcementMode:
     """Rollout mode for prompt-injection scanning of assembled system-run prompts.
 
