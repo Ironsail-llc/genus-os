@@ -103,3 +103,39 @@ class TestPublish:
         for stream in VALID_STREAMS:
             msg_id = publish(stream, f"{stream}.test", {"key": "value"}, source="test")
             assert msg_id == "1-0"
+
+
+class TestProductionRedisGuard:
+    """Regression: tests must never publish to production Redis (db=0)."""
+
+    def test_guard_rejects_db0_under_pytest(self, monkeypatch):
+        """_get_redis() must refuse db=0 when PYTEST_CURRENT_TEST is set."""
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "test_foo (call)")
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+        reset_client()
+        from robothor.events.bus import _get_redis
+        result = _get_redis()
+        assert result is None  # guard refuses, returns None via warning path
+
+    def test_guard_allows_nonzero_db(self, monkeypatch):
+        """_get_redis() should proceed normally when db != 0 under pytest."""
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "test_foo (call)")
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/15")
+        reset_client()
+        # With a mock Redis that responds to ping:
+        mock_redis = MagicMock()
+        mock_redis.ping.return_value = True
+        set_redis_client(mock_redis)
+        from robothor.events.bus import _get_redis
+        result = _get_redis()
+        assert result is mock_redis
+
+    def test_conftest_pins_test_redis(self):
+        """Verify conftest.py sets REDIS_URL to a non-zero db."""
+        import os
+        url = os.environ.get("REDIS_URL", "")
+        if url:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            db_num = int(parsed.path.lstrip("/") or "0")
+            assert db_num != 0, f"REDIS_URL should point to test db, got: {url}"

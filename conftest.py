@@ -17,6 +17,12 @@ import os as _os
 
 _os.environ["ROBOTHOR_DEFAULT_TENANT"] = "default"
 
+# Pin event-bus Redis to a test namespace (db=15) so tests never XADD to
+# production streams.  Mirrors the ROBOTHOR_TEST_DB_DSN guard in
+# conftest_integration.py.  bus.py additionally refuses db=0 under pytest.
+if "REDIS_URL" not in _os.environ:
+    _os.environ["REDIS_URL"] = "redis://localhost:6379/15"
+
 # Pin the database to the test DB before any robothor import resolves config.
 # The platform default is the PRODUCTION name (robothor_memory), so a plain
 # `pytest` run used to write chat sessions, audit rows, and guardrail

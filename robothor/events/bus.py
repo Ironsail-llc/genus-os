@@ -75,7 +75,13 @@ _redis_client = None
 
 
 def _get_redis() -> Any:
-    """Get or create Redis connection. Returns None on failure."""
+    """Get or create Redis connection. Returns None on failure.
+
+    Production Redis guard: when running under pytest, refuses to connect
+    to db=0 (production). Tests must set REDIS_URL to a test namespace
+    (e.g. redis://localhost:6379/15).  Mirrors the DB guard pattern in
+    conftest_integration.py.
+    """
     global _redis_client
     if _redis_client is not None:
         try:
@@ -88,6 +94,19 @@ def _get_redis() -> Any:
         import redis
 
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+        # Production Redis guard — refuse db=0 under pytest
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            from urllib.parse import urlparse
+            parsed = urlparse(redis_url)
+            db_num = int(parsed.path.lstrip("/") or "0")
+            if db_num == 0:
+                raise RuntimeError(
+                    f"Event bus guard: REDIS_URL points to production db=0 "
+                    f"({redis_url}). Set REDIS_URL to a test namespace "
+                    f"(e.g. redis://localhost:6379/15) when running under pytest."
+                )
+
         _redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
         _redis_client.ping()
         return _redis_client
