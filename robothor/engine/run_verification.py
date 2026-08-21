@@ -514,6 +514,10 @@ def resolve_tool_name(step: Any) -> str | None:
     unwrapped too.
     """
     name = _get(step, "tool_name")
+    # Narrow explicitly: _get is untyped, and mypy must see a concrete str
+    # before any of the returns below can satisfy the str | None contract.
+    if not isinstance(name, str):
+        return None
     if name != "tool_call":
         return name
     payload = _get(step, "tool_input")
