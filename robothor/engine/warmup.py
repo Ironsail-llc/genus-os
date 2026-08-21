@@ -37,6 +37,28 @@ MAX_WARMTH_CHARS = 4000
 MAX_BLOCK_CHARS = 800
 MAX_FILE_CHARS = 600
 
+# ── Unread alert digest ───────────────────────────────────────────
+# ``robothor/engine/alerts.py`` pages Telegram only for level='critical';
+# 'warning'/'info' become ``alert_digest`` rows in ``crm_agent_notifications``
+# addressed to the operator-facing agent. Nothing used to read that table, so
+# every warning-level alert the platform ever raised went to a write-only
+# surface. These constants bound the reader below.
+
+#: Agent the engine addresses operator-facing notifications to. Must match
+#: ``alerts.py::_write_notification``'s ``to_agent`` and the digest is only
+#: surfaced to this agent — workers do not get the operator's inbox.
+OPERATOR_INBOX_AGENT_ID = "main"
+
+#: Notification types written by the alert router (see ``alerts.py``).
+#: ``alert_fallback`` is a *critical* page that failed to deliver, so it is
+#: surfaced alongside the digest rather than lost.
+ALERT_DIGEST_TYPES: tuple[str, ...] = ("alert_digest", "alert_fallback")
+
+ALERT_SECTION_HEADER = "--- UNREAD ALERTS"
+MAX_ALERT_ROWS = 8
+MAX_ALERT_SECTION_CHARS = 900
+MAX_ALERT_SUBJECT_CHARS = 120
+
 # ── Warmup kind (cron | interactive) ──────────────────────────────
 # Runner sets this around the warmup call so hooks can discriminate
 # between scheduled heartbeat runs and interactive chat turns. ContextVars
@@ -132,6 +154,18 @@ def build_warmth_preamble(
         if result:
             sections.append(result)
 
+    # Unread alert digest first: it is the only section carrying alerts that
+    # deliberately did not page, and it must survive MAX_WARMTH_CHARS.
+    _surfaced_alert_ids: list[str] = []
+
+    def _unread_alerts() -> str | None:
+        if config.id != OPERATOR_INBOX_AGENT_ID:
+            return None
+        text, ids = _build_unread_alerts_section(tenant_id)
+        _surfaced_alert_ids.extend(ids)
+        return text or None
+
+    _run_section("unread_alerts", _unread_alerts)
     _run_section("history", lambda: _build_history_section(config.id))
     _run_section(
         "memory_blocks",
@@ -235,6 +269,8 @@ def build_warmth_preamble(
     preamble = "\n\n".join(sections)
     if len(preamble) > MAX_WARMTH_CHARS:
         preamble = preamble[:MAX_WARMTH_CHARS] + "\n[warmup truncated]"
+
+    _ack_surfaced_alerts(_surfaced_alert_ids, preamble, tenant_id)
 
     return preamble, _section_timings
 
@@ -384,6 +420,151 @@ def _build_context_files_section(file_paths: list[str], workspace: Path) -> str:
             logger.debug("Failed to read context file %s: %s", rel_path, e)
 
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _alert_age_label(created_at: Any) -> str:
+    """Render a compact age label ('2h ago') for a notification timestamp."""
+    try:
+        if isinstance(created_at, str):
+            created = datetime.fromisoformat(created_at)
+        elif isinstance(created_at, datetime):
+            created = created_at
+        else:
+            return "?"
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=UTC)
+        minutes = (datetime.now(UTC) - created).total_seconds() / 60
+    except (ValueError, TypeError):
+        return "?"
+    if minutes < 60:
+        return f"{max(int(minutes), 0)}m ago"
+    if minutes < 60 * 48:
+        return f"{int(minutes // 60)}h ago"
+    return f"{int(minutes // 1440)}d ago"
+
+
+def _fetch_unread_alerts(tenant_id: str, limit: int = MAX_ALERT_ROWS) -> list[dict[str, Any]]:
+    """Read unread ``alert_digest``/``alert_fallback`` rows for the operator agent.
+
+    Returns up to ``limit + 1`` rows (newest first) — the extra row is how the
+    caller detects "there are more pending" without a second count query.
+    """
+    from robothor.crm.dal import get_agent_inbox
+
+    rows: list[dict[str, Any]] = []
+    for notification_type in ALERT_DIGEST_TYPES:
+        rows.extend(
+            get_agent_inbox(
+                agent_id=OPERATOR_INBOX_AGENT_ID,
+                unread_only=True,
+                type_filter=notification_type,
+                limit=limit + 1,
+                tenant_id=tenant_id,
+            )
+        )
+    rows.sort(key=lambda r: str(r.get("createdAt") or ""), reverse=True)
+    return rows[: limit + 1]
+
+
+def _build_unread_alerts_section(
+    tenant_id: str,
+    limit: int = MAX_ALERT_ROWS,
+    max_chars: int = MAX_ALERT_SECTION_CHARS,
+) -> tuple[str, list[str]]:
+    """Render the operator's unread alert digest, plus the ids actually rendered.
+
+    Every ``warning``/``info`` alert is written to ``crm_agent_notifications``
+    instead of paging Telegram. Without this section a row reaches nobody.
+
+    Args:
+        tenant_id: Tenant whose operator inbox to read.
+        limit: Maximum digest rows to render.
+        max_chars: Hard character cap for the whole section, header included.
+
+    Returns:
+        ``(section_text, rendered_ids)``. ``("", [])`` when there is nothing
+        unread — an empty inbox must add no noise to the preamble. Only ids
+        whose line survived the caps appear in ``rendered_ids``, so the caller
+        never acknowledges a row it did not actually show.
+    """
+    rows = _fetch_unread_alerts(tenant_id, limit=limit)
+    if not rows:
+        return "", []
+
+    more_pending = len(rows) > limit
+    rows = rows[:limit]
+
+    header = f"{ALERT_SECTION_HEADER} ({len(rows)}) ---"
+    hint = (
+        "Warning/info alerts that did NOT page. Act on them, then clear each "
+        "with ack_notification(notificationId=...)."
+    )
+    lines = [header, hint]
+    chars_used = len(header) + len(hint) + 1
+    rendered_ids: list[str] = []
+
+    for row in rows:
+        row_id = str(row.get("id") or "")
+        if not row_id:
+            continue
+        subject = str(row.get("subject") or "(no subject)").replace("\n", " ")
+        if len(subject) > MAX_ALERT_SUBJECT_CHARS:
+            subject = subject[:MAX_ALERT_SUBJECT_CHARS] + "…"
+        line = f"• {_alert_age_label(row.get('createdAt'))} — {subject} — id={row_id}"
+        if chars_used + len(line) + 1 > max_chars:
+            break
+        lines.append(line)
+        chars_used += len(line) + 1
+        rendered_ids.append(row_id)
+
+    if not rendered_ids:
+        return "", []
+
+    hidden = len(rows) - len(rendered_ids)
+    if hidden or more_pending:
+        note = f"({hidden}+ older alerts not shown — read them with get_inbox)"
+        if chars_used + len(note) + 1 <= max_chars:
+            lines.append(note)
+
+    return "\n".join(lines), rendered_ids
+
+
+def _ack_surfaced_alerts(ids: list[str], delivered: str, tenant_id: str) -> int:
+    """Acknowledge digest rows whose text verifiably reached the delivered preamble.
+
+    The preamble is hard-truncated at ``MAX_WARMTH_CHARS`` *after* the sections
+    are assembled, so "the section was built" is not "the operator saw it".
+    This mirrors ``alerts.py``'s ``delivered = bool(sent)``: check, don't
+    assume — the Telegram arity bug hid behind exactly that assumption while
+    432+ alerts went nowhere. A row whose id is absent from ``delivered`` stays
+    unread and is surfaced again on the next run.
+
+    Args:
+        ids: Notification ids the section rendered.
+        delivered: The final preamble text, post-truncation.
+        tenant_id: Tenant the notifications belong to.
+
+    Returns:
+        Number of rows acknowledged. Never raises.
+    """
+    if not ids or not delivered:
+        return 0
+    acked = 0
+    try:
+        from robothor.crm.dal import acknowledge_notification
+
+        for row_id in ids:
+            if row_id not in delivered:
+                logger.debug("Alert %s truncated out of preamble; leaving unread", row_id)
+                continue
+            try:
+                if acknowledge_notification(row_id, tenant_id=tenant_id):
+                    acked += 1
+            except Exception as e:
+                logger.debug("Acking surfaced alert %s failed: %s", row_id, e)
+    except Exception as e:
+        logger.debug("Alert acknowledgement pass failed: %s", e)
+    return acked
 
 
 def _open_tasks_section(
@@ -555,6 +736,19 @@ def build_interactive_preamble(
     sections: list[str] = []
     exclude_name = sender_name
 
+    # Unread alert digest — FIRST, deliberately. These are the alerts that did
+    # not page, and the preamble is hard-truncated at MAX_WARMTH_CHARS; memory
+    # blocks and entity recall alone can exhaust that budget, so anything added
+    # after them is not reliably delivered. Capped at MAX_ALERT_SECTION_CHARS.
+    _surfaced_alert_ids: list[str] = []
+    if agent_id == OPERATOR_INBOX_AGENT_ID:
+        try:
+            alerts_section, _surfaced_alert_ids = _build_unread_alerts_section(tenant_id)
+            if alerts_section:
+                sections.append(alerts_section)
+        except Exception as e:
+            logger.debug("Interactive warmup unread-alerts section failed: %s", e)
+
     # "Own data + shared" row scoping (Task 5 / final-review Fix 1) — a
     # restricted (non-privileged) identity's FIRST message has no prior tool
     # call to filter through, so this pipeline is the one place scoping must
@@ -661,7 +855,7 @@ def build_interactive_preamble(
 
     # Main-only panoramic sections: open task queue + recent fleet surfaces.
     # These let the supervisor answer "what's going on?" from context alone.
-    if agent_id == "main":
+    if agent_id == OPERATOR_INBOX_AGENT_ID:
         tasks_section = _open_tasks_section(
             tenant_id=tenant_id,
             scope=_enforce_scope,
@@ -695,6 +889,9 @@ def build_interactive_preamble(
     preamble = "\n\n".join(sections)
     if len(preamble) > MAX_WARMTH_CHARS:
         preamble = preamble[:MAX_WARMTH_CHARS] + "\n[warmup truncated]"
+
+    _ack_surfaced_alerts(_surfaced_alert_ids, preamble, tenant_id)
+
     return preamble
 
 
