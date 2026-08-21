@@ -1659,3 +1659,233 @@ class TestSchedulerLeadershipGate:
 
         await s._run_scheduled("agent-1", "agent-1", MagicMock(), "cron")
         acquire.assert_called_once()  # gate passed, reached dedup
+
+
+class TestWorkflowCronParity:
+    """Workflow cron registration is loud and parity-checked.
+
+    A workflow whose cron never registers has NO trigger at all — it simply
+    never runs again. The only prior evidence was the gap between two log
+    lines ("Loaded 5 workflows" vs "Loaded 4 workflow cron jobs"), which
+    named nothing and paged nobody.
+    """
+
+    @staticmethod
+    def _scheduler(tmp_path, workflows):
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.scheduler import CronScheduler
+
+        config = EngineConfig(manifest_dir=tmp_path, workspace=tmp_path)
+        wf_engine = MagicMock()
+        wf_engine.get_workflows_for_cron.return_value = [(wf, wf.triggers[0]) for wf in workflows]
+        scheduler = CronScheduler(config, MagicMock(), workflow_engine=wf_engine)
+        scheduler.scheduler = MagicMock()
+        return scheduler
+
+    @staticmethod
+    def _wf(wf_id: str, cron: str, timezone: str = "UTC"):
+        from robothor.engine.models import WorkflowDef, WorkflowTriggerDef
+
+        return WorkflowDef(
+            id=wf_id,
+            name=wf_id,
+            triggers=[WorkflowTriggerDef(type="cron", cron=cron, timezone=timezone)],
+        )
+
+    async def test_add_job_failure_named_in_error_and_alert(self, tmp_path, caplog):
+        """A workflow whose add_job raises is named in the ERROR and the alert."""
+        import logging
+
+        scheduler = self._scheduler(
+            tmp_path,
+            [
+                self._wf("vision-pipeline", "12 6-22/6 * * *"),
+                self._wf("email-pipeline", "*/5 * * * *"),
+            ],
+        )
+
+        def _add_job(*args, **kwargs):
+            if kwargs.get("id") == "workflow:vision-pipeline":
+                raise RuntimeError("jobstore rejected the job")
+
+        scheduler.scheduler.add_job.side_effect = _add_job
+
+        with (
+            patch("robothor.engine.alerts.alert", new=AsyncMock()) as mock_alert,
+            caplog.at_level(logging.INFO, logger="robothor.engine.scheduler"),
+        ):
+            registered = await scheduler._register_workflow_cron_jobs()
+
+        # The healthy workflow still registered — one failure must not abort the loop.
+        assert registered == 1
+        registered_ids = {
+            call.kwargs.get("id") for call in scheduler.scheduler.add_job.call_args_list
+        }
+        assert "workflow:email-pipeline" in registered_ids
+
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any("vision-pipeline" in m for m in errors), errors
+        assert any("jobstore rejected the job" in m for m in errors), errors
+
+        mock_alert.assert_awaited()
+        level, title, body = mock_alert.await_args.args[:3]
+        assert level == "warning"
+        assert "vision-pipeline" in f"{title} {body}"
+
+    async def test_invalid_cron_named_in_error_and_alert(self, tmp_path, caplog):
+        """An uninterpretable cron expression is reported by workflow id."""
+        import logging
+
+        scheduler = self._scheduler(
+            tmp_path,
+            [
+                self._wf("vision-pipeline", "not a cron"),
+                self._wf("email-pipeline", "*/5 * * * *"),
+            ],
+        )
+
+        with (
+            patch("robothor.engine.alerts.alert", new=AsyncMock()) as mock_alert,
+            caplog.at_level(logging.INFO, logger="robothor.engine.scheduler"),
+        ):
+            registered = await scheduler._register_workflow_cron_jobs()
+
+        assert registered == 1
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any("vision-pipeline" in m for m in errors), errors
+        mock_alert.assert_awaited()
+        assert "vision-pipeline" in " ".join(str(a) for a in mock_alert.await_args.args)
+
+    async def test_happy_path_emits_no_parity_error(self, tmp_path, caplog):
+        """All crons registering means no ERROR and no alert."""
+        import logging
+
+        scheduler = self._scheduler(
+            tmp_path,
+            [
+                self._wf("vision-pipeline", "12 6-22/6 * * *"),
+                self._wf("email-pipeline", "*/5 * * * *"),
+            ],
+        )
+
+        with (
+            patch("robothor.engine.alerts.alert", new=AsyncMock()) as mock_alert,
+            caplog.at_level(logging.INFO, logger="robothor.engine.scheduler"),
+        ):
+            registered = await scheduler._register_workflow_cron_jobs()
+
+        assert registered == 2
+        assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+        mock_alert.assert_not_awaited()
+
+    async def test_per_workflow_info_line_has_id_cron_and_next_fire(self, tmp_path, caplog):
+        """One INFO line per registered workflow: id, cron expression, next fire."""
+        import logging
+
+        scheduler = self._scheduler(
+            tmp_path,
+            [
+                self._wf("vision-pipeline", "12 6-22/6 * * *"),
+                self._wf("email-pipeline", "*/5 * * * *"),
+            ],
+        )
+
+        with (
+            patch("robothor.engine.alerts.alert", new=AsyncMock()),
+            caplog.at_level(logging.INFO, logger="robothor.engine.scheduler"),
+        ):
+            await scheduler._register_workflow_cron_jobs()
+
+        infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+        vision = [m for m in infos if "vision-pipeline" in m and "12 6-22/6 * * *" in m]
+        email = [m for m in infos if "email-pipeline" in m and "*/5 * * * *" in m]
+        assert len(vision) == 1, infos
+        assert len(email) == 1, infos
+        # Next fire time is on the line, not left to the operator to compute.
+        assert "next_fire=20" in vision[0], vision[0]
+
+    async def test_no_workflow_engine_is_a_noop(self, tmp_path):
+        """No workflow engine configured — nothing registered, nothing alerted."""
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.scheduler import CronScheduler
+
+        config = EngineConfig(manifest_dir=tmp_path, workspace=tmp_path)
+        scheduler = CronScheduler(config, MagicMock())
+        scheduler.scheduler = MagicMock()
+
+        with patch("robothor.engine.alerts.alert", new=AsyncMock()) as mock_alert:
+            assert await scheduler._register_workflow_cron_jobs() == 0
+        mock_alert.assert_not_awaited()
+        scheduler.scheduler.add_job.assert_not_called()
+
+    async def test_enumeration_failure_alerts_instead_of_crashing_boot(self, tmp_path, caplog):
+        """If the workflow engine cannot be enumerated, alert — don't boot silently."""
+        import logging
+
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.scheduler import CronScheduler
+
+        config = EngineConfig(manifest_dir=tmp_path, workspace=tmp_path)
+        wf_engine = MagicMock()
+        wf_engine.get_workflows_for_cron.side_effect = RuntimeError("workflow store unreadable")
+        scheduler = CronScheduler(config, MagicMock(), workflow_engine=wf_engine)
+        scheduler.scheduler = MagicMock()
+
+        with (
+            patch("robothor.engine.alerts.alert", new=AsyncMock()) as mock_alert,
+            caplog.at_level(logging.INFO, logger="robothor.engine.scheduler"),
+        ):
+            assert await scheduler._register_workflow_cron_jobs() == 0
+
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any("workflow store unreadable" in m for m in errors), errors
+        mock_alert.assert_awaited()
+        assert mock_alert.await_args.args[0] == "warning"
+
+    async def test_partially_registered_workflow_still_reported(self, tmp_path, caplog):
+        """A workflow whose *second* cron trigger fails is still reported.
+
+        The job id is per-workflow, so the first trigger to register claims it
+        and a later failure leaves the workflow present but short a trigger —
+        a lost run window that the set-level parity check alone would miss.
+        """
+        import logging
+
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.models import WorkflowDef, WorkflowTriggerDef
+        from robothor.engine.scheduler import CronScheduler
+
+        wf = WorkflowDef(
+            id="vision-pipeline",
+            name="vision-pipeline",
+            triggers=[
+                WorkflowTriggerDef(type="cron", cron="12 6-22/6 * * *", timezone="UTC"),
+                WorkflowTriggerDef(type="cron", cron="0 3 * * *", timezone="UTC"),
+            ],
+        )
+        config = EngineConfig(manifest_dir=tmp_path, workspace=tmp_path)
+        wf_engine = MagicMock()
+        wf_engine.get_workflows_for_cron.return_value = [(wf, t) for t in wf.triggers]
+        scheduler = CronScheduler(config, MagicMock(), workflow_engine=wf_engine)
+        scheduler.scheduler = MagicMock()
+
+        seen: set[str] = set()
+
+        def _add_job(*args, **kwargs):
+            job_id = kwargs.get("id")
+            if job_id in seen:
+                raise ValueError(f"Job identifier ({job_id}) conflicts with an existing job")
+            seen.add(job_id)
+
+        scheduler.scheduler.add_job.side_effect = _add_job
+
+        with (
+            patch("robothor.engine.alerts.alert", new=AsyncMock()) as mock_alert,
+            caplog.at_level(logging.INFO, logger="robothor.engine.scheduler"),
+        ):
+            await scheduler._register_workflow_cron_jobs()
+
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any("vision-pipeline" in m and "0 3 * * *" in m for m in errors), errors
+        mock_alert.assert_awaited()
+        assert "vision-pipeline" in " ".join(str(a) for a in mock_alert.await_args.args)
