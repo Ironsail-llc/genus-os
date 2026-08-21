@@ -395,10 +395,24 @@ def _isolate_benchmark_results_db(monkeypatch):
     Added 2026-05-06: the new write-through to the canonical DB table is
     fired by every _benchmark_run call. In unit tests we don't want those
     writes hitting the dev DB. Patch get_connection to a no-op fake.
+
+    Fixed 2026-08-21: this patched ``robothor.crm.dal.get_connection``, which
+    is only a re-export — ``_benchmark_run`` imports
+    ``robothor.db.connection.get_connection`` inside the function body, so
+    rebinding the re-export intercepted nothing. Every run of this module
+    wrote real rows, and 709 of them accumulated in the production
+    ``benchmark_results`` table (suites ``s1`` / ``s2`` / ``test-suite``,
+    agent ``main``) between 2026-05-11 and 2026-08-19, where the unfiltered
+    "latest row" goal metric read them as main's real score. Patch the module
+    the handler actually imports from. ``test_benchmark_db_guard.py`` pins the
+    guard that now backstops this fixture.
     """
 
     class _FakeCursor:
         def execute(self, *a, **kw):
+            return None
+
+        def fetchone(self):
             return None
 
         def __enter__(self):
@@ -408,6 +422,9 @@ def _isolate_benchmark_results_db(monkeypatch):
             return False
 
     class _FakeConn:
+        def get_dsn_parameters(self):
+            return {"dbname": "robothor_test"}
+
         def cursor(self):
             return _FakeCursor()
 
@@ -420,9 +437,9 @@ def _isolate_benchmark_results_db(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-    import robothor.crm.dal as _dal
+    import robothor.db.connection as _conn_mod
 
-    monkeypatch.setattr(_dal, "get_connection", lambda: _FakeConn())
+    monkeypatch.setattr(_conn_mod, "get_connection", lambda *a, **kw: _FakeConn())
 
 
 class TestBenchmarkRun:
