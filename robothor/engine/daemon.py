@@ -735,6 +735,10 @@ def _record_watchdog_event(event_type: str, detail: str) -> None:
 # retention silently starved.
 _DAILY_MAINTENANCE_INTERVAL_SECONDS = 24 * 3600
 
+# Sustained-outage detectors read 7–14 day windows; running them more often
+# than this just re-derives the same verdict.
+_OUTAGE_DETECTOR_INTERVAL_SECONDS = 2 * 3600
+
 # Matches the entry format written by _record_watchdog_event, e.g.
 # a line of the form ``[<YYYY-MM-DD HH:MM> UTC] <event_type>: <detail>``.
 _WATCHDOG_EVENT_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC\] ([a-z_]+):")
@@ -784,6 +788,9 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
     pg_failures = 0
     redis_failures = 0
     tick_count = 0
+    # 0.0 = "never run this process", so the first eligible tick after boot
+    # runs the sustained-outage detectors instead of waiting out the interval.
+    outage_detectors_last = 0.0
 
     # Wall-clock gate for daily maintenance — persisted via the watchdog_log
     # block so restarts don't reset the clock. Legacy retention_* event names
@@ -924,6 +931,33 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
                     logger.info("Detectors: %d workflow-failure-streak alerts fired", fired)
             except Exception as e:
                 logger.debug("Detectors: workflow health checks failed: %s", e)
+
+        # Sustained outages (dead tool dependency, primary model unreached):
+        # every 2h on wall-clock, first pass ~10 min after boot. These read
+        # multi-day windows, so a faster cadence would only re-derive the same
+        # answer (their alerts dedup for 24h) — but a plain `tick_count % 240`
+        # gate would need two hours of *continuous* uptime, so a daemon
+        # restarting more often than that would never run them at all. That is
+        # the starvation the daily-maintenance gate above was rewritten to fix.
+        if (
+            tick_count % 20 == 0
+            and (time.time() - outage_detectors_last) >= _OUTAGE_DETECTOR_INTERVAL_SECONDS
+        ):
+            outage_detectors_last = time.time()
+            try:
+                from robothor.engine.detectors import (
+                    primary_model_unreached_detector,
+                    tool_outage_detector,
+                )
+
+                fired = await tool_outage_detector()
+                if fired:
+                    logger.info("Detectors: %d tool-outage alerts fired", fired)
+                fired = await primary_model_unreached_detector(tenant_id=config.tenant_id)
+                if fired:
+                    logger.info("Detectors: %d primary-model-unreached alerts fired", fired)
+            except Exception as e:
+                logger.debug("Detectors: outage checks failed: %s", e)
 
         # Daily maintenance: chat-session TTL cleanup + data retention.
         # Wall-clock gated (>=24h since the persisted last run, checked every
