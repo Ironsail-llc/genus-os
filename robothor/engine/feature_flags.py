@@ -463,13 +463,20 @@ def injection_scan_mode() -> EnforcementMode:
 def _post_telegram(text: str) -> bool:
     """Deliver to the operator's actual channel. Best-effort, never raises.
 
-    The DB notification is an audit *record*, not delivery: the agent-to-agent
-    surface is write-only in practice — ``send_notification``/``ack_notification``
-    are registered handlers but are not in ``tools/schemas.py`` (so no agent is
-    even offered them), there is no read/list tool, and nothing in warmup or the
-    heartbeat reads ``crm_agent_notifications``. A row alone reaches nobody.
-    Telegram is the channel the operator actually watches — the same one the
-    failure pager and the soak nags use.
+    The DB notification is an audit *record*; delivery is a separate question.
+    ``warmup.py`` now reads ``crm_agent_notifications`` and surfaces unread
+    ``alert_digest``/``alert_fallback`` rows to the operator-facing agent (see
+    ``_build_unread_alerts_section``), so a row is no longer write-only — but it
+    only reaches the operator on that agent's *next* run. A guardrail breach is
+    not a next-run matter, so it also goes straight to Telegram: the channel the
+    operator actually watches, the same one the failure pager and the soak nags
+    use.
+
+    (Schema note, since the older version of this comment got it wrong: the
+    notification tools are registered — ``send_notification``/``get_inbox``/
+    ``ack_notification`` come from ``robothor/api/mcp.py::get_tool_definitions``,
+    which ``ToolRegistry._register_all`` folds in alongside ``tools/schemas.py``.
+    ``test_alert_digest_reader.py`` pins that parity.)
     """
     import urllib.parse
     import urllib.request

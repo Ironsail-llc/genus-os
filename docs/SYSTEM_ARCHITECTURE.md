@@ -815,7 +815,10 @@ Single daemon handling agent orchestration, Telegram delivery, and cron scheduli
 
 Engine alerts (`robothor/engine/alerts.py`) route by severity: `critical`
 pages Telegram immediately; `warning`/`info` become `alert_digest`
-notification rows the morning briefing and heartbeat surface without paging
+notification rows in `crm_agent_notifications` addressed to the operator-facing
+agent. `robothor/engine/warmup.py` is the reader: both the heartbeat preamble
+and the operator's first interactive turn render an `UNREAD ALERTS (N)` section
+and acknowledge only the rows whose text survived into the delivered preamble
 (see `docs/runbooks/PAGING.md`).
 
 #### Delivery status vocabulary
