@@ -85,12 +85,14 @@ import asyncio
 from robothor.memory.entities import upsert_entity, add_relation, get_entity
 
 async def main():
-    # Create entities
+    # Create entities. upsert_entity returns None for an unusable name
+    # (a bare UUID, or under two characters) -- check `is not None`.
     pg_id = await upsert_entity("PostgreSQL", "technology")
     proj_id = await upsert_entity("Robothor", "project")
 
     # Add a relationship
-    await add_relation(proj_id, pg_id, "uses", confidence=0.95)
+    if pg_id is not None and proj_id is not None:
+        await add_relation(proj_id, pg_id, "uses", confidence=0.95)
 
     # Query the graph
     info = await get_entity("Robothor")
