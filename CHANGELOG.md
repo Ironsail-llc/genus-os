@@ -1,3 +1,9 @@
+## [1.33.7](https://github.com/Ironsail-llc/genus-os/compare/v1.33.6...v1.33.7) (2026-08-21)
+
+### Bug Fixes
+
+* **helm:** stop migration Job TTL from stranding app pods forever ([#296](https://github.com/Ironsail-llc/genus-os/issues/296)) ([473e9f3](https://github.com/Ironsail-llc/genus-os/commit/473e9f35135f06e538db5f14c73a548ed642d5b8))
+
 ## [1.33.6](https://github.com/Ironsail-llc/genus-os/compare/v1.33.5...v1.33.6) (2026-08-20)
 
 ### Bug Fixes
