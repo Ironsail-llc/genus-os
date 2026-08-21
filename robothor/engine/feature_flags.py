@@ -431,6 +431,29 @@ def completion_contract_mode() -> EnforcementMode:
     )
 
 
+def benchmark_decontamination_mode() -> EnforcementMode:
+    """Rollout mode for keeping benchmark-harness traffic out of production metrics.
+
+    Gated on ``ROBOTHOR_BENCHMARK_DECONTAMINATION_ENABLED`` +
+    ``ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE``.
+
+    - ``observe`` (default once enabled): analytics still reports the legacy
+      numbers, but measures how much of each surface is benchmark traffic and
+      returns it separately (``benchmark_runs`` / ``benchmark_cost_usd``).
+    - ``alert``: observe + notify the operator that production metrics are
+      contaminated.
+    - ``enforce``: exclude benchmark runs from every production surface, and
+      spawn benchmark sub-runs with a parent linkage so they stop looking like
+      top-level production runs in the first place.
+
+    Default off — the merge posture is a pure no-op.
+    """
+    return _enforcement_mode(
+        "ROBOTHOR_BENCHMARK_DECONTAMINATION_ENABLED",
+        "ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE",
+    )
+
+
 def run_verification_mode() -> EnforcementMode:
     """Rollout mode for verifying a finished run's claims against its tool trace.
 
