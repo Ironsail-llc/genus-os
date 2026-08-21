@@ -41,9 +41,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -73,14 +75,177 @@ MAXLEN = int(os.environ.get("EVENT_BUS_MAXLEN", "10000"))
 # Redis connection singleton
 _redis_client = None
 
+# The destination when nothing is configured — production.
+DEFAULT_REDIS_URL = "redis://localhost:6379/0"
+
+# The one namespace tests may publish onto. Same default as the ``redis_url``
+# fixture in tests/conftest_integration.py, so integration tests that take a
+# real Redis and unit tests that go through the bus agree on where "test" is.
+TEST_REDIS_URL_ENV = "ROBOTHOR_TEST_REDIS_URL"
+DEFAULT_TEST_REDIS_URL = "redis://localhost:6379/15"
+
+# Escape hatch, mirroring ROBOTHOR_TEST_DB_ALLOW in robothor/db/connection.py:
+# a comma-separated list of namespaces (``host:port/db``, or a full redis URL)
+# that this run may publish onto despite not being the test namespace.
+EVENT_BUS_ALLOW_ENV = "ROBOTHOR_EVENT_BUS_ALLOW"
+
+
+class EventBusGuardError(BaseException):
+    """Raised when pytest is about to publish onto a non-test event bus.
+
+    Derived from ``BaseException`` rather than ``Exception``, deliberately.
+    Every producer in this codebase wraps its publish in a best-effort
+    ``except Exception: logger.warning(...)`` so that a Redis outage cannot
+    fail an otherwise good run — ``robothor/crm/dal.py``,
+    ``robothor/vision/service.py``, ``robothor/engine/autodream.py``,
+    ``channel_bus.py``, ``delivery.py`` and the bridge routers all do. Those
+    handlers swallow an ``Exception``-derived guard and downgrade "this test is
+    writing to production" to a log line nobody reads, which is exactly how the
+    first pass at this guard came to be inert. Verified, not assumed: with an
+    ``Exception``-derived guard, aiming tests/test_operator_identity.py at
+    production Redis logged ``dal.py:2364 Failed to publish task.resolved
+    event`` twice and the run still reported ``20 passed``.
+
+    Sitting outside the ``Exception`` hierarchy means no handler that exists
+    today — and none written tomorrow — can catch it by accident, so the check
+    does not depend on every call site remembering to re-raise. That is the
+    difference between this and
+    :class:`robothor.db.connection.DatabaseGuardError`, which stays an
+    ``Exception`` because it has to remain catchable by pre-existing
+    ``pytest.raises(RuntimeError)`` call sites; it pays for that with two
+    hand-written re-raises that a third writer would have to remember.
+
+    :func:`assert_test_event_bus` is a no-op outside pytest, so this type is
+    never raised in production and cannot destabilise a live run.
+    """
+
+
+def _in_pytest() -> bool:
+    """Whether this process is running under pytest.
+
+    Broader than a bare ``PYTEST_CURRENT_TEST`` check, which is set only during
+    a test's setup/call/teardown — it is absent during collection, during
+    session-scoped fixture setup, and in threads that outlive a test. Those are
+    exactly the windows a stray module-level publish slips through.
+
+    Duplicated rather than imported from :func:`robothor.db.connection.in_pytest`
+    (and from ``robothor.engine.model_breaker._in_pytest``, which does the same)
+    to keep the event bus free of a psycopg2 import. No production entry point
+    imports pytest, so the ``sys.modules`` probe cannot fire live.
+    """
+    return (
+        "PYTEST_CURRENT_TEST" in os.environ
+        or "PYTEST_VERSION" in os.environ
+        or "pytest" in sys.modules
+    )
+
+
+def _namespace(host: str | None, port: Any, db: Any) -> str:
+    """Render a Redis destination as a comparable ``host:port/db`` string."""
+    return f"{host or 'localhost'}:{port or 6379}/{db if db is not None else 0}"
+
+
+def _namespace_from_url(url: str) -> str:
+    """The Redis destination a URL points at, as ``host:port/db``.
+
+    Anything that is not a ``redis://``/``rediss://`` URL is returned verbatim:
+    a destination this function cannot parse must never normalise into a string
+    that happens to match the allowlist.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return url
+    if parsed.scheme not in ("redis", "rediss"):
+        return url
+    try:
+        port = parsed.port
+    except ValueError:
+        return url
+    return _namespace(parsed.hostname, port, (parsed.path or "").lstrip("/") or "0")
+
+
+def event_bus_namespace(client: Any = None) -> str:
+    """The Redis destination that would actually receive a write.
+
+    Authoritative in a way ``REDIS_URL`` is not: :func:`set_redis_client` is
+    public, so a caller can inject a client built from any DSN and the
+    environment variable then describes nothing. Asking the live client closes
+    that hole — the same reason
+    :func:`robothor.db.connection.connection_database_name` interrogates the
+    connection instead of trusting the resolved config.
+
+    Test doubles have no real connection pool and write nowhere, so they fall
+    back to ``REDIS_URL``, which is then the only real destination in play.
+    """
+    pool = getattr(client, "connection_pool", None)
+    kwargs = getattr(pool, "connection_kwargs", None)
+    if isinstance(kwargs, dict):
+        path = kwargs.get("path")
+        if path:
+            return f"unix:{path}/{kwargs.get('db', 0)}"
+        return _namespace(kwargs.get("host"), kwargs.get("port"), kwargs.get("db", 0))
+    return _namespace_from_url(os.environ.get("REDIS_URL", DEFAULT_REDIS_URL))
+
+
+def _allowed_namespaces() -> set[str]:
+    """Namespaces this run may publish onto — a positive allowlist.
+
+    Deliberately not a blocklist of ``db == 0``: a production Redis on another
+    host, or any non-zero production database, would sail straight through one.
+    """
+    allowed = {_namespace_from_url(os.environ.get(TEST_REDIS_URL_ENV, DEFAULT_TEST_REDIS_URL))}
+    for entry in os.environ.get(EVENT_BUS_ALLOW_ENV, "").split(","):
+        entry = entry.strip()
+        if entry:
+            allowed.add(_namespace_from_url(entry) if "://" in entry else entry)
+    return allowed
+
+
+def assert_test_event_bus(namespace: str) -> None:
+    """Refuse to emit an event onto a non-test Redis from inside pytest.
+
+    Synthetic events published onto a live stream are indistinguishable from
+    real ones to every consumer downstream, and the engine's hook pipeline
+    treats them as genuine. Between 2026-03-02 and 2026-08-21 the suite put 601
+    synthetic ``camera="test-camera"`` payloads into ``robothor:events:vision``
+    (44.7% of the stream; 99.6% of everything written to it since June) and
+    polluted ``robothor:events:crm`` from tests/test_operator_identity.py.
+
+    Outside pytest this is a no-op. A namespace can be explicitly allowed via
+    ``ROBOTHOR_EVENT_BUS_ALLOW``, mirroring ``ROBOTHOR_TEST_DB_ALLOW``.
+
+    Raises:
+        EventBusGuardError: under pytest, when ``namespace`` is not allowed.
+    """
+    if not _in_pytest():
+        return
+    allowed = _allowed_namespaces()
+    if namespace in allowed:
+        return
+    raise EventBusGuardError(
+        f"Refusing to publish an event onto Redis {namespace!r} from inside pytest — "
+        f"only {sorted(allowed)} may be published to, and synthetic events written "
+        "anywhere else are indistinguishable from real ones to every consumer "
+        "downstream (the live engine reads them as genuine hooks). Point REDIS_URL at "
+        f"the test namespace ({DEFAULT_TEST_REDIS_URL}), or set "
+        f"{EVENT_BUS_ALLOW_ENV}={namespace} to explicitly allow this exact destination."
+    )
+
 
 def _get_redis() -> Any:
     """Get or create Redis connection. Returns None on failure.
 
-    Production Redis guard: when running under pytest, refuses to connect
-    to db=0 (production). Tests must set REDIS_URL to a test namespace
-    (e.g. redis://localhost:6379/15).  Mirrors the DB guard pattern in
-    conftest_integration.py.
+    Raises:
+        EventBusGuardError: under pytest, when ``REDIS_URL`` names a namespace
+            that is not on the test allowlist. The check sits deliberately
+            *outside* the ``try`` below, so that no Redis client is ever built
+            for an off-allowlist destination — the handler below exists to
+            downgrade "Redis is down" to a warning and a ``None`` return, and
+            a guard inside it read as indistinguishable from an outage. The
+            error's base class makes that placement belt-and-braces rather than
+            load-bearing. This is the client-construction half of the guard;
+            :func:`publish` checks again at the moment of the write.
     """
     global _redis_client
     if _redis_client is not None:
@@ -90,22 +255,11 @@ def _get_redis() -> Any:
         except Exception:
             _redis_client = None
 
+    redis_url = os.environ.get("REDIS_URL", DEFAULT_REDIS_URL)
+    assert_test_event_bus(_namespace_from_url(redis_url))
+
     try:
         import redis
-
-        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-
-        # Production Redis guard — refuse db=0 under pytest
-        if "PYTEST_CURRENT_TEST" in os.environ:
-            from urllib.parse import urlparse
-            parsed = urlparse(redis_url)
-            db_num = int(parsed.path.lstrip("/") or "0")
-            if db_num == 0:
-                raise RuntimeError(
-                    f"Event bus guard: REDIS_URL points to production db=0 "
-                    f"({redis_url}). Set REDIS_URL to a test namespace "
-                    f"(e.g. redis://localhost:6379/15) when running under pytest."
-                )
 
         _redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
         _redis_client.ping()
@@ -179,7 +333,11 @@ def publish(
 
     Returns:
         Stream message ID on success, None on failure.
-        Never raises — failures are logged but non-fatal.
+        Never raises in production — failures are logged but non-fatal.
+
+    Raises:
+        EventBusGuardError: under pytest only, when the event would land on a
+            namespace that is not on the test allowlist.
     """
     if not EVENT_BUS_ENABLED:
         return None
@@ -210,6 +368,15 @@ def publish(
         r = _get_redis()
         if r is None:
             return None
+
+        # The emit boundary, and the check that matters. _get_redis() vetted
+        # REDIS_URL, but set_redis_client() is public: a test can inject a
+        # client built from any DSN and never touch the env var. Vet the
+        # destination that would actually receive the XADD. Every producer in
+        # the codebase reaches Redis through this function, so covering it
+        # covers them all — including robothor.crm.dal, whose crm.* events
+        # tests/test_operator_identity.py was publishing onto production.
+        assert_test_event_bus(event_bus_namespace(r))
 
         envelope = _make_envelope(
             event_type,

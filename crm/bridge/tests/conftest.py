@@ -22,6 +22,13 @@ from httpx import ASGITransport
 # setdefault keeps an explicit CI/dev ROBOTHOR_DB_NAME authoritative.
 os.environ.setdefault("ROBOTHOR_DB_NAME", "robothor_test")
 
+# Same reasoning for the event bus: the platform default is production Redis
+# (db 0), and every bridge router publishes crm.* / agent.* events that the
+# live engine consumes as genuine hooks. robothor/events/bus.py hard-fails
+# rather than publishing off-allowlist under pytest; this pin means the
+# well-behaved case never has to rely on that backstop.
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
+
 # Add bridge source directory to path so imports resolve
 BRIDGE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BRIDGE_DIR))
