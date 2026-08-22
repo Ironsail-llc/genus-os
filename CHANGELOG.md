@@ -1,3 +1,11 @@
+## [1.36.2](https://github.com/Ironsail-llc/genus-os/compare/v1.36.1...v1.36.2) (2026-08-22)
+
+### Bug Fixes
+
+* **bench:** give each suite's full-procedure task a real time budget ([#327](https://github.com/Ironsail-llc/genus-os/issues/327)) ([394cfba](https://github.com/Ironsail-llc/genus-os/commit/394cfba828a4e9f696c6837e7d6347c0361750cb)), closes [#322](https://github.com/Ironsail-llc/genus-os/issues/322) [#322](https://github.com/Ironsail-llc/genus-os/issues/322)
+* **bench:** retry the judge on transient failures ([#326](https://github.com/Ironsail-llc/genus-os/issues/326)) ([f10ab60](https://github.com/Ironsail-llc/genus-os/commit/f10ab607de1b05aa9404475c2b46fe09b6bdae24)), closes [#314](https://github.com/Ironsail-llc/genus-os/issues/314)
+* **bench:** scope agent-architect's write cases to the sandbox ([#325](https://github.com/Ironsail-llc/genus-os/issues/325)) ([c9ff873](https://github.com/Ironsail-llc/genus-os/commit/c9ff873353a8e0c90b1be8c1e4d29a52fddf6b26))
+
 ## [1.36.1](https://github.com/Ironsail-llc/genus-os/compare/v1.36.0...v1.36.1) (2026-08-22)
 
 ### Bug Fixes
