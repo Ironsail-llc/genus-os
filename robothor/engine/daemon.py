@@ -405,6 +405,15 @@ async def main() -> int:
 
     logger.info("Starting Genus OS Agent Engine...")
 
+    # A tenant env conflict silently discards every default-tenant write in this
+    # process (RLS refuses the row, the caller gets None). Say so at boot rather
+    # than leaking one WARNING per refused write for months.
+    from robothor.constants import tenant_env_conflict
+
+    _tenant_conflict = tenant_env_conflict()
+    if _tenant_conflict:
+        logger.error("%s", _tenant_conflict)
+
     # Record daemon boot time before reaping so runs started before this boot
     # can be classified as 'daemon_restart' rather than 'post_llm_crash'.
     _set_daemon_start_ts()
