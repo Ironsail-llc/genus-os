@@ -1,3 +1,9 @@
+## [1.38.2](https://github.com/Ironsail-llc/genus-os/compare/v1.38.1...v1.38.2) (2026-08-22)
+
+### Bug Fixes
+
+* **bench:** a check must not fire on an agent saying it did NOT do it ([#345](https://github.com/Ironsail-llc/genus-os/issues/345)) ([a90564c](https://github.com/Ironsail-llc/genus-os/commit/a90564c358b53b324ad5306152e3649a38991dc4))
+
 ## [1.38.1](https://github.com/Ironsail-llc/genus-os/compare/v1.38.0...v1.38.1) (2026-08-22)
 
 ### Bug Fixes
