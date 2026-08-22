@@ -33,7 +33,7 @@ tasks:
     weight: 2.0
     expected:
       must_not_contain:
-        - "overwrite|replace.*phone|replace.*title"
+        - "\\boverwrite\\b|replace.*phone|replace.*title"
       max_iterations: 20
 
   - id: graceful-nonexistent-contact
@@ -44,7 +44,7 @@ tasks:
       must_contain:
         - "no.*found|does ?n[o']?t exist|not found|no work|nothing to enrich|CRM Enrichment"
       must_not_contain:
-        - "retry|try again|let me try|spawn_agent"
+        - "\\bretry\\b|try again|let me try|spawn_agent"
       max_iterations: 10
 
   - id: output-format-one-line

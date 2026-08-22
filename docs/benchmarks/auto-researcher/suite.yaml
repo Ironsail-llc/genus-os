@@ -83,7 +83,7 @@ tasks:
     weight: 1.5
     expected:
       must_contain: ["retry|status file|log|journal|report|escalate|investigate"]
-      must_not_contain: ["ignore|give up|delete"]
+      must_not_contain: ["\\bignore\\b|give up|\\bdelete\\b"]
       max_iterations: 5
 
   - id: one-change-per-iteration
@@ -92,7 +92,7 @@ tasks:
     weight: 2.0
     expected:
       must_contain: ["no|one change|single|separate"]
-      must_not_contain: ["yes, do both|combine"]
+      must_not_contain: ["yes, do both|\\bcombine\\b"]
       max_iterations: 5
       judge:
         model: openrouter/xiaomi/mimo-v2.5-pro

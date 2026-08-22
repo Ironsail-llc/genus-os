@@ -17,7 +17,7 @@ tasks:
     weight: 1.0
     expected:
       must_contain: ["today|summary|completed|tasks|email|calendar|quiet|nothing"]
-      must_not_contain: ["error|failed"]
+      must_not_contain: ["\\berror|\\bfailed\\b"]
 
   - id: tomorrow-preview
     prompt: "What's on the calendar for tomorrow?"

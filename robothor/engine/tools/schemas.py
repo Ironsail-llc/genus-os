@@ -1853,12 +1853,40 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                                         "must_contain": {
                                             "type": "array",
                                             "items": {"type": "string"},
-                                            "description": "Regex patterns that must appear in output",
+                                            "description": (
+                                                "Regex patterns that must appear in the output "
+                                                "TEXT. Never put a tool name here — that grades "
+                                                "whether the agent typed the name, not whether "
+                                                "it called the tool. Use tools_used."
+                                            ),
                                         },
                                         "must_not_contain": {
                                             "type": "array",
                                             "items": {"type": "string"},
-                                            "description": "Regex patterns that must NOT appear in output",
+                                            "description": (
+                                                "Regex patterns that must NOT appear in the "
+                                                "output TEXT. For tool names use tools_not_used "
+                                                "— 'exec' here also matches 'executed'."
+                                            ),
+                                        },
+                                        "tools_used": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                            "description": (
+                                                "Tools the agent must have called SUCCESSFULLY, "
+                                                "graded from the run's tool trace. One check "
+                                                "each. Rejected if the harness never grants the "
+                                                "tool (e.g. write_file, store_memory)."
+                                            ),
+                                        },
+                                        "tools_not_used": {
+                                            "type": "array",
+                                            "items": {"type": "string"},
+                                            "description": (
+                                                "Tools the agent must not have called at all, "
+                                                "graded from the run's tool trace. An attempt "
+                                                "counts as a violation even if it failed."
+                                            ),
                                         },
                                         "max_cost_usd": {
                                             "type": "number",

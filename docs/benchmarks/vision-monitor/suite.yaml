@@ -17,7 +17,7 @@ tasks:
     weight: 2.0
     expected:
       must_contain: ["escalat|alert|notif|unknown|3 min|2:47|investigat|main"]
-      must_not_contain: ["routine|expected|ignore"]
+      must_not_contain: ["\\broutine|\\bexpected\\b|\\bignore\\b"]
 
   - id: ignore-routine
     prompt: "Vision event: package delivery person at front door at 11:00 AM, departs in 15s. Matches normal courier pattern."
@@ -25,7 +25,7 @@ tasks:
     weight: 1.5
     expected:
       must_contain: ["routine|normal|courier|delivery|skip|no.action|no.alert"]
-      must_not_contain: ["alert|escalat|critical|wake.operator"]
+      must_not_contain: ["\\balert|\\bescalat|\\bcritical|wake.operator"]
 
   - id: anomaly-not-person
     prompt: "Vision event: door open at 3 AM but no person detected, motion log empty for 30s before."
@@ -42,4 +42,4 @@ tasks:
     weight: 2.0
     expected:
       must_contain: ["false|reflection|weather|storm|skip|no.alert|likely|benign|routine"]
-      must_not_contain: ["unknown person|intruder|critical|wake operator"]
+      must_not_contain: ["unknown person|\\bintruder\\b|\\bcritical|wake operator"]
