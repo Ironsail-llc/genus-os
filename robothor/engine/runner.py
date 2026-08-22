@@ -79,6 +79,53 @@ from robothor.engine.stall_watchdog import (
 from robothor.engine.tools import get_registry
 from robothor.engine.tracking import create_run, create_step, create_steps_batch, update_run
 
+#: Tools whose work is several sub-agent runs, so the agent-level per-tool cap
+#: (120s by default) is far too short. Kept at a 600s floor.
+_LONG_RUNNING_TOOLS = frozenset(
+    {
+        "benchmark_run",
+        "benchmark_run_fleet",
+        "benchmark_run_for_agent",
+        "benchmark_compare",
+        "experiment_measure",
+        "spawn_agent",
+        "spawn_agents",
+    }
+)
+
+#: Of those, the tools that already enforce their OWN per-task budget: the
+#: benchmark harness caps each case at the suite's ``timeout_seconds:`` (or 900s
+#: by default) and records an overrun as a timeout rather than a grade. A second,
+#: smaller cap out here can only cut a case short *below* the budget its suite
+#: declared, and the run is then filed against the agent.
+#:
+#: This list previously named ``benchmark_run`` only, while the tools the fleet
+#: grader actually calls are ``benchmark_run_fleet`` and
+#: ``benchmark_run_for_agent`` -- so the two tools that run every benchmark
+#: inherited the 120s default. Measured 2026-08-22: agent-architect
+#: ``fleet-analysis`` had never once completed above 120.0s across 91 completed
+#: runs, against a 512s production mean with zero production timeouts.
+_HARNESS_BUDGETED_TOOLS = frozenset(
+    {
+        "benchmark_run",
+        "benchmark_run_fleet",
+        "benchmark_run_for_agent",
+    }
+)
+
+
+def _resolve_tool_timeout(tool_name: str, configured: int) -> int:
+    """Per-tool wall-clock cap, in seconds. 0 means unlimited.
+
+    One owner per budget: where the callee already bounds its own work, this
+    layer must not impose a second, smaller bound.
+    """
+    if tool_name in _HARNESS_BUDGETED_TOOLS:
+        return 0
+    if tool_name in _LONG_RUNNING_TOOLS:
+        return max(configured, 600)
+    return configured
+
 
 def _normalize_model_id(model: str) -> str:
     """Collapse a model id to a provider/format-agnostic core for comparison.
@@ -2707,20 +2754,9 @@ class AgentRunner:
 
                 # ── [TELEMETRY] Tool span ──
                 tool_start = time.monotonic()
-                _tool_timeout = getattr(agent_config, "tool_timeout_seconds", 120)
-                # Benchmark and experiment tools legitimately run 5+ sub-agents;
-                # raise their timeout floor to 600s regardless of agent-level setting.
-                _LONG_RUNNING_TOOLS = frozenset(  # noqa: N806 — module-internal constant kept here for locality
-                    {
-                        "benchmark_run",
-                        "experiment_measure",
-                        "benchmark_compare",
-                        "spawn_agent",
-                        "spawn_agents",
-                    }
+                _tool_timeout = _resolve_tool_timeout(
+                    tool_name, getattr(agent_config, "tool_timeout_seconds", 120)
                 )
-                if tool_name in _LONG_RUNNING_TOOLS:
-                    _tool_timeout = max(_tool_timeout, 600)
                 if trace:
                     with trace.span("tool_call", tool=tool_name) as _span:
                         result = await self.registry.execute(
