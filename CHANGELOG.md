@@ -1,3 +1,9 @@
+## [1.34.2](https://github.com/Ironsail-llc/genus-os/compare/v1.34.1...v1.34.2) (2026-08-22)
+
+### Bug Fixes
+
+* **engine:** gate task auto-resolve on the run's verification verdict ([#313](https://github.com/Ironsail-llc/genus-os/issues/313)) ([d699020](https://github.com/Ironsail-llc/genus-os/commit/d699020d3f2e78ec0d78cc90127760e3797ec800)), closes [#310](https://github.com/Ironsail-llc/genus-os/issues/310)
+
 ## [1.34.1](https://github.com/Ironsail-llc/genus-os/compare/v1.34.0...v1.34.1) (2026-08-21)
 
 ### Bug Fixes

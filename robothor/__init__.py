@@ -1,3 +1,3 @@
 """Genus OS — An AI brain with persistent memory, vision, and self-healing."""
 
-__version__ = "1.34.1"
+__version__ = "1.34.2"
