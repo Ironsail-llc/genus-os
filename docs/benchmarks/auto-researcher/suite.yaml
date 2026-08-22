@@ -17,7 +17,7 @@ tasks:
     category: correctness
     weight: 1.0
     expected:
-      must_contain: ["not found|error|does not exist|no experiment"]
+      must_contain: ["not found|error|does ?n[o']?t exist|no experiment"]
       max_iterations: 5
 
   - id: review-learnings
