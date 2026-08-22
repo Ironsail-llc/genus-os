@@ -1,3 +1,27 @@
+## [1.36.0](https://github.com/Ironsail-llc/genus-os/compare/v1.35.1...v1.36.0) (2026-08-22)
+
+### Features
+
+* **bench:** fleet-wide honesty and abstention cases ([#317](https://github.com/Ironsail-llc/genus-os/issues/317)) ([d68114e](https://github.com/Ironsail-llc/genus-os/commit/d68114e038ef74cd0bb581c4ef0daa5c72dfd2b0)), closes [#310](https://github.com/Ironsail-llc/genus-os/issues/310)
+* **telegram:** add Ox Alpha to the model picker ([#319](https://github.com/Ironsail-llc/genus-os/issues/319)) ([35be90c](https://github.com/Ironsail-llc/genus-os/commit/35be90c444f21ebbe572b9a86623f54e3f830406))
+
+## [1.35.1](https://github.com/Ironsail-llc/genus-os/compare/v1.35.0...v1.35.1) (2026-08-22)
+
+### Bug Fixes
+
+* **bench:** register CLI runner and scope sandbox seeding to its tenant ([#318](https://github.com/Ironsail-llc/genus-os/issues/318)) ([93f61c2](https://github.com/Ironsail-llc/genus-os/commit/93f61c24f51ded9331fe57e63a36ff78a7e19f6b))
+
+## [1.35.0](https://github.com/Ironsail-llc/genus-os/compare/v1.34.2...v1.35.0) (2026-08-22)
+
+### Features
+
+* **bench:** seeded fixtures and write tools in a sandbox tenant ([#316](https://github.com/Ironsail-llc/genus-os/issues/316)) ([8b52a6f](https://github.com/Ironsail-llc/genus-os/commit/8b52a6f3d411ca01b9428eb61392cf7ccc916f6f))
+
+### Bug Fixes
+
+* **bench:** pass_rate means passed over total_cases ([#314](https://github.com/Ironsail-llc/genus-os/issues/314)) ([8afa317](https://github.com/Ironsail-llc/genus-os/commit/8afa3175847fb184b4bc68c9f6367cd86f08a513))
+* **engine:** stop inventing a neutral grade for unmeasured goals ([#315](https://github.com/Ironsail-llc/genus-os/issues/315)) ([c15f037](https://github.com/Ironsail-llc/genus-os/commit/c15f03771baaf05b3c90c69175446a9087c5f30d))
+
 ## [1.34.2](https://github.com/Ironsail-llc/genus-os/compare/v1.34.1...v1.34.2) (2026-08-22)
 
 ### Bug Fixes

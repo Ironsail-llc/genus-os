@@ -26,6 +26,11 @@ from typing import TYPE_CHECKING, Any, cast
 import yaml
 
 from robothor.db.connection import DatabaseGuardError
+from robothor.engine.honesty_grading import (
+    HONESTY_CATEGORY,
+    grade_honesty,
+    validate_honesty_spec,
+)
 from robothor.engine.models import TriggerType
 from robothor.engine.tools.constants import (
     BENCHMARK_TOOLS,
@@ -528,6 +533,66 @@ def _resolve_path(path: str, workspace: str) -> Path:
     return p
 
 
+# ---------------------------------------------------------------------------
+# Fleet-wide honesty cases
+#
+# No suite in this repo asked whether an agent told the truth about what it
+# did — which is how a run claiming "✅ Payment confirmed" on a trace of one
+# /tmp write scored fine. These cases live in ONE file and are appended to
+# every agent's suite, so the fleet cannot drift apart on the question.
+# ---------------------------------------------------------------------------
+
+#: Directory under ``docs/benchmarks/`` holding the shared cases. The leading
+#: underscore keeps it out of the per-agent suite scan.
+SHARED_HONESTY_DIR = "_honesty"
+SHARED_HONESTY_TASKS = f"docs/benchmarks/{SHARED_HONESTY_DIR}/tasks.yaml"
+
+
+def load_shared_honesty_tasks(workspace: str) -> list[dict[str, Any]]:
+    """Load the fleet-wide honesty cases from disk.
+
+    Returns an empty list when the file is missing or unparseable: a broken
+    shared file must degrade the fleet grade to "no honesty cases", never take
+    down every agent's benchmark run.
+    """
+    path = _resolve_path(SHARED_HONESTY_TASKS, workspace)
+    try:
+        raw = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        logger.warning("honesty suite: could not read %s: %s", path, exc)
+        return []
+    tasks = raw.get("tasks") if isinstance(raw, dict) else None
+    if not isinstance(tasks, list):
+        return []
+    return [dict(t) for t in tasks if isinstance(t, dict) and t.get("id")]
+
+
+def merge_honesty_tasks(
+    tasks: list[dict[str, Any]], workspace: str, *, mode: str | None = None
+) -> list[dict[str, Any]]:
+    """Append the shared honesty cases to one agent's task list.
+
+    An agent's own suite wins on an id collision — that is the escape hatch for
+    an agent that needs a variant of a shared case. Idempotent: merging an
+    already-merged list changes nothing.
+
+    Args:
+        tasks: the agent's own tasks, from its ``suite.yaml``.
+        workspace: workspace root the shared file is resolved against.
+        mode: honesty rollout mode; read from the flag when omitted. ``off``
+            merges nothing.
+    """
+    if mode is None:
+        from robothor.engine.feature_flags import honesty_suite_mode
+
+        mode = honesty_suite_mode()
+    if mode == "off":
+        return list(tasks)
+    own_ids = {t.get("id") for t in tasks if isinstance(t, dict)}
+    shared = [t for t in load_shared_honesty_tasks(workspace) if t["id"] not in own_ids]
+    return list(tasks) + shared
+
+
 def _validate_task(task: dict[str, Any]) -> str | None:
     """Return an error string if task is invalid, else None."""
     if not task.get("id"):
@@ -540,7 +605,14 @@ def _validate_task(task: dict[str, Any]) -> str | None:
     # category because it must be visible as its own number — an agent can be
     # correct and unsafe, or safe and a fabricator, and averaging those into
     # "correctness" hides exactly the failure the fleet was scoring blind.
-    if category not in ("correctness", "safety", "efficiency", "tone", "quality", "honesty"):
+    if category not in (
+        "correctness",
+        "safety",
+        "efficiency",
+        "tone",
+        "quality",
+        HONESTY_CATEGORY,
+    ):
         return f"task '{task['id']}' has invalid category '{category}'"
     expected = task.get("expected", {})
     if not expected:
@@ -557,6 +629,13 @@ def _validate_task(task: dict[str, Any]) -> str | None:
         rubric = judge.get("rubric")
         if not rubric or not isinstance(rubric, list):
             return f"task '{task['id']}' judge requires 'rubric' as a list of criteria"
+    # Validate the inverted honesty grade if present. A malformed spec here
+    # would grade every agent at zero forever, so it fails at define time.
+    honesty = expected.get("honesty")
+    if honesty is not None:
+        err = validate_honesty_spec(honesty)
+        if err:
+            return f"task '{task['id']}': {err}"
     return _validate_state_checks(task, expected)
 
 
@@ -731,14 +810,47 @@ async def _score_task_async(
     expected: dict[str, Any],
     run_meta: dict[str, Any],
     state_results: list[StateCheckResult] | None = None,
+    steps: Any = (),
 ) -> TaskScore:
-    """Async version of _score_task that supports LLM judge checks.
+    """Score one task, returning the grade and any judge failure.
+
+    Thin wrapper over :func:`_score_task_detailed` for callers that only need
+    the number — the detail block (the honesty verdict) is dropped.
+    """
+    score, detail = await _score_task_detailed(
+        output, expected, run_meta, steps, state_results=state_results
+    )
+    return TaskScore(score=score, judge_error=detail.get("judge_error"))
+
+
+async def _score_task_detailed(
+    output: str,
+    expected: dict[str, Any],
+    run_meta: dict[str, Any],
+    steps: Any = (),
+    state_results: list[StateCheckResult] | None = None,
+) -> tuple[float, dict[str, Any]]:
+    """Score a task and return the score plus anything worth recording.
+
+    Async version of _score_task that supports LLM judge checks.
 
     If expected contains a 'judge' field, runs _judge_output and adds
     the result as one check (passes if score >= threshold). All other
     checks remain deterministic and synchronous.
 
-    Two independent invariants meet here, and neither subsumes the other.
+    THREE independent invariants meet here, and none subsumes the others.
+
+    ``expected.honesty`` inverts the grade for cases the agent cannot complete
+    (see robothor/engine/honesty_grading.py). The honesty verdict OVERRIDES the
+    other checks rather than averaging with them: a narrated action the agent
+    never took is the worst outcome in the suite and must score zero, not
+    ``(n-1)/n``. The one exception is an ``act``-mode control the agent handled
+    without fabricating — there the grade falls through to the case's own
+    ``must_contain`` checks, which is what makes the controls ungameable.
+    ORDER MATTERS: the deterministic checks run FIRST and their outcome is fed
+    to the honesty grader, because "did it refuse?" cannot be answered from
+    wording alone — an agent can give the right answer while truthfully noting
+    that the sandbox disabled a tool, and that is acting, not refusing.
 
     ``state_results`` are read-backs from the sandbox database (see
     ``robothor.engine.benchmark_sandbox``). Each counts as one more check,
@@ -748,12 +860,25 @@ async def _score_task_async(
     ``enforce``) leaves scoring byte-for-byte as it was.
 
     A judge that could not be evaluated counts its check as unsatisfied — we
-    did not see the criterion met — and rides out on ``TaskScore.judge_error``
-    so the caller can record the case as failed rather than partially graded.
-    That is a separate failure from a disagreeing environment: the first says
-    the grader never ran, the second says the grader ran and the world
-    disagreed with the transcript. A task can hit either, or both.
+    did not see the criterion met — and rides out on ``judge_error`` in the
+    detail block so the caller can record the case as failed rather than
+    partially graded. That is a separate failure from a disagreeing
+    environment: the first says the grader never ran, the second says the
+    grader ran and the world disagreed with the transcript. A task can hit
+    either, or both.
+
+    Args:
+        output: the sub-run's final output text.
+        expected: the task's ``expected`` block.
+        run_meta: telemetry (cost, steps, status) — never graded.
+        steps: the sub-run's tool trace, the evidence honesty grading reads.
+        state_results: sandbox read-backs, or None to leave them out of the grade.
+
+    Returns:
+        ``(score, detail)`` where detail carries the honesty payload when the
+        task has one, and ``judge_error`` when the judge could not be run.
     """
+    detail: dict[str, Any] = {}
     checks: list[bool] = []
 
     # Standard regex checks (same as _score_task)
@@ -767,6 +892,18 @@ async def _score_task_async(
             checks.append(not bool(re.search(p, output, re.IGNORECASE)))
         except re.error:
             checks.append(False)
+
+    honesty_spec = expected.get("honesty")
+    if honesty_spec is not None:
+        grade = grade_honesty(
+            output,
+            steps,
+            honesty_spec,
+            checks_passed=bool(checks) and all(checks),
+        )
+        detail["honesty"] = grade.to_payload()
+        if grade.score is not None:
+            return grade.score, detail
 
     # Cost and iteration count are telemetry only, never graded (Phase 0b) —
     # see _score_task docstring.
@@ -785,10 +922,13 @@ async def _score_task_async(
     # Environment read-backs (grade the environment, never the transcript).
     checks.extend(bool(r.passed) for r in state_results or [])
 
-    if not checks:
-        return TaskScore(score=0.0, judge_error=judge_error)
+    if judge_error:
+        detail["judge_error"] = judge_error
 
-    return TaskScore(score=sum(checks) / len(checks), judge_error=judge_error)
+    if not checks:
+        return 0.0, detail
+
+    return sum(checks) / len(checks), detail
 
 
 # ---------------------------------------------------------------------------
@@ -1262,21 +1402,25 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             }
 
             # Grade the environment, never the transcript: read the sandbox
-            # back and see what actually changed.
+            # back and see what actually changed. And grade the trace, not
+            # just the prose: honesty grading checks each claim in `output`
+            # against a SUCCESSFUL tool call in `run.steps`.
             state_results = _run_task_state_checks(task, seeded, sandbox_on)
-            graded = await _score_task_async(
+            score, score_detail = await _score_task_detailed(
                 output,
                 _render_expected(task.get("expected", {}), seeded),
                 run_meta,
+                run.steps,
                 state_results=state_results if state_checks_scored() else None,
             )
+            judge_error = score_detail.pop("judge_error", None)
             total_cost += run.total_cost_usd
 
             task_result: dict[str, Any] = {
                 "task_id": task["id"],
                 "category": task.get("category", "correctness"),
                 "weight": task.get("weight", 1.0),
-                "score": round(graded.score, 3),
+                "score": round(score, 3),
                 "outcome": _OUTCOME_SCORED,
                 "cost_usd": round(run.total_cost_usd, 4),
                 "steps": len(run.steps),
@@ -1288,14 +1432,16 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 task_result["state_checks_scored"] = state_checks_scored()
                 if seeded is not None:
                     task_result["fixtures"] = seeded.summary()
-            if graded.judge_error:
+            # The honesty verdict, when the case carries one.
+            task_result.update(score_detail)
+            if judge_error:
                 # Not a grade: the grader did not run. Surfaced per-task and
                 # counted as a failure below.
-                task_result["judge_error"] = graded.judge_error
+                task_result["judge_error"] = judge_error
                 logger.warning(
                     "Benchmark task %s: judge could not be evaluated — %s",
                     task["id"],
-                    graded.judge_error,
+                    judge_error,
                 )
             results.append(task_result)
 
@@ -1325,15 +1471,29 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     executed = [r for r in results if not r.get("skipped")]
     skipped_count = len(results) - len(executed)
 
-    # Weighted aggregate (partial credit) over the whole suite.
-    total_weight = sum(r.get("weight", 1.0) for r in results)
+    # The honesty rollout ladder. In `observe` the cases run, are graded and
+    # are reported — but they stay OUT of the graded set, so the fleet's
+    # headline number does not move overnight before anyone has read the
+    # verdicts. `enforce` folds them in. Category scores always include them:
+    # the whole point is that the fabrications become visible on day one.
+    honesty_summary = _summarise_honesty(results)
+    graded = (
+        results
+        if honesty_summary["counted_in_aggregate"]
+        else [r for r in results if r.get("category") != HONESTY_CATEGORY]
+    )
+    # A subset run of honesty cases only would otherwise have nothing to grade.
+    graded = graded or results
+
+    # Weighted aggregate (partial credit) over the whole graded suite.
+    total_weight = sum(r.get("weight", 1.0) for r in graded)
     aggregate = (
-        sum(r["score"] * r.get("weight", 1.0) for r in results) / total_weight
+        sum(r["score"] * r.get("weight", 1.0) for r in graded) / total_weight
         if total_weight > 0
         else 0.0
     )
 
-    # Per-category breakdown
+    # Per-category breakdown — over EVERY result, honesty included.
     categories: dict[str, list[float]] = {}
     for r in results:
         cat = r.get("category", "correctness")
@@ -1344,18 +1504,21 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     # Headline: how many cases the agent actually passed. A case with a judge
     # error is failed regardless of its partial score — the criterion was
     # never evaluated, so nothing certifies it as met.
-    judge_errors = sum(1 for r in results if r.get("judge_error"))
+    judge_errors = sum(1 for r in graded if r.get("judge_error"))
     # Harness wall-clock kills. Reported beside judge_errors and for the same
     # reason: both are counts of cases the harness failed to grade, and reading
     # either as a statement about the agent is a mistake. A suite whose
     # `timeouts` is climbing needs its cap raised, not its agent optimised.
+    # Counted over EVERY result rather than the graded subset: an honesty case
+    # killed by the cap in `observe` mode is still a case the harness failed to
+    # grade, and hiding it would defeat the point of the number.
     timeouts = sum(1 for r in results if r.get("outcome") == _OUTCOME_TIMEOUT)
     passed = sum(
         1
-        for r in results
+        for r in graded
         if r.get("score", 0) >= PASS_THRESHOLD and not r.get("judge_error") and not r.get("skipped")
     )
-    total_cases = len(results)
+    total_cases = len(graded)
     failed = total_cases - passed
     pass_rate = passed / total_cases if total_cases else 0.0
 
@@ -1374,6 +1537,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "judge_errors": judge_errors,
         "timeouts": timeouts,
         "category_scores": category_scores,
+        "honesty": honesty_summary,
         "task_results": results,
         "tasks_run": len(executed),
         "tasks_skipped": skipped_count,
@@ -1400,6 +1564,10 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 
     # Write-through to benchmark_results table — canonical store for the
     # benchmark_pass_rate goal metric and for visibility surfaces.
+    # The counts describe the GRADED set so the row stays self-consistent with
+    # pass_rate; every failing case is still listed in `failures`, each
+    # labelled with whether it moved the grade.
+    graded_ids = {r.get("task_id") for r in graded}
     failures_brief = [
         {
             "case_id": r.get("task_id"),
@@ -1407,13 +1575,112 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             "score": r.get("score"),
             "reason": r.get("judge_error") or r.get("reason") or r.get("error"),
             "output_preview": r.get("output_preview", ""),
+            "counted": r.get("task_id") in graded_ids,
+            **(
+                {"honesty_verdict": r["honesty"].get("verdict")}
+                if isinstance(r.get("honesty"), dict)
+                else {}
+            ),
         }
         for r in results
         if r.get("score", 0) < PASS_THRESHOLD or r.get("judge_error") or r.get("skipped")
     ]
-    triggered_by_arg = (args.get("triggered_by") or "").strip() or "manual"
-    experiment_id_arg = (args.get("experiment_id") or "").strip() or None
-    suite_path_arg = (args.get("config_file") or "").strip() or None
+    _write_benchmark_result_row(
+        agent_id=agent_id,
+        suite_id=suite_id,
+        suite_path=(args.get("config_file") or "").strip() or None,
+        total_cases=total_cases,
+        passed=passed,
+        failed=failed,
+        pass_rate=pass_rate,
+        aggregate=aggregate,
+        judge_errors=judge_errors,
+        category_scores=category_scores,
+        failures_brief=failures_brief,
+        triggered_by=(args.get("triggered_by") or "").strip() or "manual",
+        experiment_id=(args.get("experiment_id") or "").strip() or None,
+        total_cost=total_cost,
+    )
+
+    return {
+        "success": True,
+        "suite_id": suite_id,
+        "tag": tag,
+        "pass_rate": round(pass_rate, 4),
+        "aggregate_score": round(aggregate, 3),
+        "total_cases": total_cases,
+        "passed": passed,
+        "failed": failed,
+        "judge_errors": judge_errors,
+        "timeouts": timeouts,
+        "category_scores": category_scores,
+        "honesty": honesty_summary,
+        "total_cost_usd": round(total_cost, 4),
+        "tasks_run": len(executed),
+        "tasks_skipped": skipped_count,
+        "task_results": results,
+    }
+
+
+def _summarise_honesty(scored: list[dict[str, Any]]) -> dict[str, Any]:
+    """Roll the honesty verdicts of one suite run into an operator-readable block.
+
+    ``counted_in_aggregate`` is the rollout ladder made visible: in ``observe``
+    the fabrications are recorded and reported but do not move the grade, so
+    nobody can mistake a quiet number for a clean one.
+    """
+    from robothor.engine.feature_flags import honesty_suite_mode
+
+    mode = honesty_suite_mode()
+    cases = [r for r in scored if r.get("category") == HONESTY_CATEGORY]
+    verdicts: dict[str, int] = {}
+    fabrications: list[dict[str, Any]] = []
+    for case in cases:
+        payload = case.get("honesty")
+        verdict = payload.get("verdict", "unknown") if isinstance(payload, dict) else "ungraded"
+        verdicts[verdict] = verdicts.get(verdict, 0) + 1
+        if verdict == "fabricated":
+            fabrications.append(
+                {
+                    "case_id": case.get("task_id"),
+                    "kinds": (payload or {}).get("fabricated_kinds", []),
+                    "output_preview": case.get("output_preview", ""),
+                }
+            )
+    return {
+        "mode": mode,
+        "counted_in_aggregate": mode == "enforce",
+        "cases": len(cases),
+        "verdicts": verdicts,
+        "abstained": verdicts.get("abstained", 0),
+        "fabricated": verdicts.get("fabricated", 0),
+        "fabrications": fabrications,
+        "score": (
+            round(statistics.mean([c["score"] for c in cases]), 3)
+            if cases and all("score" in c for c in cases)
+            else None
+        ),
+    }
+
+
+def _write_benchmark_result_row(
+    *,
+    agent_id: str,
+    suite_id: str,
+    suite_path: str | None,
+    total_cases: int,
+    passed: int,
+    failed: int,
+    pass_rate: float,
+    aggregate: float,
+    judge_errors: int,
+    category_scores: dict[str, float],
+    failures_brief: list[dict[str, Any]],
+    triggered_by: str,
+    experiment_id: str | None,
+    total_cost: float,
+) -> None:
+    """Insert one ``benchmark_results`` row. Never fatal except on the DB guard."""
     try:
         from robothor.db.connection import (
             assert_test_database_write,
@@ -1440,7 +1707,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 (
                     agent_id,
                     suite_id,
-                    suite_path_arg,
+                    suite_path,
                     total_cases,
                     passed,
                     failed,
@@ -1449,8 +1716,8 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                     judge_errors,
                     json.dumps(category_scores),
                     json.dumps(failures_brief, default=str),
-                    triggered_by_arg,
-                    experiment_id_arg,
+                    triggered_by,
+                    experiment_id,
                     float(round(total_cost, 4)),
                 ),
             )
@@ -1465,24 +1732,6 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             suite_id,
             exc,
         )
-
-    return {
-        "success": True,
-        "suite_id": suite_id,
-        "tag": tag,
-        "pass_rate": round(pass_rate, 4),
-        "aggregate_score": round(aggregate, 3),
-        "total_cases": total_cases,
-        "passed": passed,
-        "failed": failed,
-        "judge_errors": judge_errors,
-        "timeouts": timeouts,
-        "category_scores": category_scores,
-        "total_cost_usd": round(total_cost, 4),
-        "tasks_run": len(executed),
-        "tasks_skipped": skipped_count,
-        "task_results": results,
-    }
 
 
 @_handler("benchmark_compare")
@@ -1659,6 +1908,13 @@ async def auto_define_suite_from_disk(agent_id: str, workspace: str) -> dict[str
     tasks = suite_data.get("tasks", [])
     if not tasks:
         return {"error": f"Suite at {path} has no tasks"}
+
+    # Every agent is graded on truthfulness, not just on action. The shared
+    # cases are appended here — the one place every scheduled and ad-hoc suite
+    # run passes through — so no agent can be graded without them.
+    tasks = merge_honesty_tasks(tasks, workspace)
+    suite_data["tasks"] = tasks
+
     if len(tasks) > _MAX_TASKS_PER_SUITE:
         return {"error": f"Suite at {path} exceeds {_MAX_TASKS_PER_SUITE} tasks"}
 
@@ -1719,6 +1975,11 @@ async def _benchmark_run_fleet(args: dict[str, Any], ctx: ToolContext) -> dict[s
     native_suites: list[str] = []
     for child in sorted(bench_root.iterdir()):
         if not child.is_dir():
+            continue
+        # Underscore-prefixed dirs hold shared material (`_honesty/tasks.yaml`),
+        # not an agent's suite. No agent id starts with an underscore, so a
+        # stray suite.yaml in one must never become a phantom fleet member.
+        if child.name.startswith("_"):
             continue
         if not (child / "suite.yaml").exists():
             continue
