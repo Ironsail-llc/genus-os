@@ -481,13 +481,24 @@ async def stuck_workflow_detector() -> int:
 
 def check_workflow_failure_streaks(
     threshold: int = 3,
+    window_days: int | None = None,
 ) -> list[dict[str, Any]]:
     """Workflows whose last ``threshold`` terminal runs all failed/timed out.
+
+    Only runs started within the recency window count: a workflow whose last
+    failure is older than the window is dormant (retired or paused), not
+    failing, and re-alerting forever on a frozen streak is noise. Window is
+    configurable via ROBOTHOR_WORKFLOW_STREAK_WINDOW_DAYS (default 14).
 
     'cancelled' and 'skipped' rows are excluded from the window — a shutdown
     mid-run says nothing about the workflow's health either way.
     """
     from robothor.db.connection import get_connection
+
+    if window_days is None:
+        window_days = int(
+            os.environ.get("ROBOTHOR_WORKFLOW_STREAK_WINDOW_DAYS", "14")
+        )
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -503,6 +514,7 @@ def check_workflow_failure_streaks(
                        ) AS rn
                 FROM workflow_runs
                 WHERE status IN ('completed', 'failed', 'timeout')
+                  AND started_at >= NOW() - (%s || ' days')::interval
             ) recent
             WHERE rn <= %s
             GROUP BY workflow_id
@@ -510,7 +522,7 @@ def check_workflow_failure_streaks(
                AND BOOL_AND(status IN ('failed', 'timeout'))
             LIMIT 10
             """,
-            (threshold, threshold),
+            (window_days, threshold, threshold),
         )
         return [dict(r) for r in cur.fetchall()]
 
