@@ -47,14 +47,22 @@ from robothor.engine.completion_contract import (
 )
 
 __all__ = [
+    "RESOLUTION_BLOCKING_STATUSES",
+    "RESOLUTION_PREFIX_CLAIMED",
+    "RESOLUTION_PREFIX_VERIFIED",
     "VERIFICATION_STATUSES",
     "Claim",
     "ClaimCheck",
     "Verdict",
+    "blocks_resolution",
+    "describe_unsupported",
     "extract_claims",
     "match_claims_to_trace",
+    "next_action_for_unverified",
+    "resolution_prefix",
     "resolve_tool_input",
     "resolve_tool_name",
+    "unsupported_claim_phrases",
     "verify_run",
 ]
 
@@ -290,9 +298,16 @@ _PAYMENT_PATTERNS = [
     ),
     # Past tense only. "Venmo $270 to the organiser due Sep 10" is a TODO the
     # agent is reporting, not a payment it made.
+    #
+    # A CURRENCY MARKER IS REQUIRED and the match may not cross a line break.
+    # Without both, this fired on "…sent — confirmed in SENT labels\n2. ✅ Task
+    # resolved": a bare digit four words later, which happened to be the next
+    # numbered list item. That was one of the only two runs the whole control
+    # would have blocked in the 7 days to 2026-08-21, and it was wrong.
     re.compile(
-        r"\b(?:sent|paid|transferred|wired|reimbursed|venmo(?:ed|['’]d)|zelled)\s+"
-        r"(?:\w+\s+){0,4}?\$?\d",
+        r"\b(?:sent|paid|transferred|wired|reimbursed|venmo(?:ed|['’]d)|zelled)"
+        r"(?:[ \t]+\w+){0,4}[ \t]+"
+        r"(?:\$\d|\d[\d,.]*[ \t]*(?:dollars|usd|eur|euros|gbp|pounds|bucks)\b)",
         re.IGNORECASE,
     ),
     re.compile(
@@ -347,10 +362,28 @@ def _mask_quoted(text: str) -> str:
     return "".join(chars)
 
 
+# A claim needs an agent DOING something. These words mark the clause as
+# wanted, asked for or conditional instead: "If you need a conversation marked
+# as resolved, the Resolver handles it" is a pointer, not a record. That
+# sentence — inside an output whose first word was "**Neither.**", an explicit
+# refusal — was the second of the only two runs this control would have
+# blocked in the 7 days to 2026-08-21, and it was also wrong. Suppressing a
+# real claim here costs a false negative, which is the safe failure.
+_HYPOTHETICAL_RE = re.compile(
+    r"\b(?:if|when|whenever|unless|should|would|could|"
+    r"needs?|needed|wants?|wanted|wish|please|asks?|asked|requires?|required)\b",
+    re.IGNORECASE,
+)
+
+
 def _is_negated(text: str, start: int) -> bool:
-    """True when a negation/abstention word sits just before ``start``."""
+    """True when a negation, abstention or hypothetical word precedes ``start``."""
     window = text[max(0, start - _NEGATION_WINDOW) : start]
-    return bool(_NEGATION_RE.search(window) or _ABSTENTION_RE.search(window))
+    return bool(
+        _NEGATION_RE.search(window)
+        or _ABSTENTION_RE.search(window)
+        or _HYPOTHETICAL_RE.search(window)
+    )
 
 
 def extract_claims(text: str | None) -> list[Claim]:
@@ -694,3 +727,99 @@ def verify_run(output_text: str | None, steps: Any) -> Verdict:
     verification is bookkeeping and must never break the agent's work.
     """
     return match_claims_to_trace(extract_claims(output_text), steps)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Acting on the verdict
+#
+# The verdict alone changed nothing: `_persist_run_sync` still closed the
+# originating CRM task with `f"Run completed: {output_text[:200]}"`, so the
+# agent's own claim became the permanent record. 300 of the 571 tasks closed
+# in the last 7 days on this box carry that string. The helpers below are the
+# vocabulary the runner and delivery use to act on a verdict — kept here, and
+# kept pure, so both call sites agree on what "unverified" means and on the
+# words the operator reads.
+# ──────────────────────────────────────────────────────────────────────
+
+#: Verdicts that must NOT close a task: the work was claimed, not shown.
+RESOLUTION_BLOCKING_STATUSES: tuple[str, ...] = ("unverified_claims", "failed_verification")
+
+#: Ledger labels. Every resolution written under an active rung carries one,
+#: so a reader can tell a shown completion from an asserted one forever.
+RESOLUTION_PREFIX_VERIFIED = "[verified]"
+RESOLUTION_PREFIX_CLAIMED = "[claimed]"
+
+#: What each claim class asserts the agent DID, phrased to follow "I claimed
+#: to …" in a banner and "the run claimed to …" in a next_action.
+_CLAIM_ACTION_PHRASE: dict[str, str] = {
+    "sent_email": "send an email",
+    "sent_message": "send a message",
+    "record_update": "record this somewhere durable",
+    "crm_write": "write to the CRM",
+    "calendar_event": "create a calendar event",
+    "file_written": "write a file",
+    "scheduled": "schedule it",
+    "task_completed": "complete the task",
+    "payment": "make a payment",
+}
+
+
+def blocks_resolution(status: str | None) -> bool:
+    """True when a verdict must keep the originating task open."""
+    return status in RESOLUTION_BLOCKING_STATUSES
+
+
+def resolution_prefix(status: str | None) -> str:
+    """Return the ledger label for a resolution written under this verdict."""
+    return RESOLUTION_PREFIX_CLAIMED if blocks_resolution(status) else RESOLUTION_PREFIX_VERIFIED
+
+
+def unsupported_claim_phrases(verification: Any) -> tuple[str, ...]:
+    """Human phrases for the unsupported claims in a ``Verdict.to_payload()``.
+
+    Reads the per-claim list first (it carries the order the agent made the
+    claims in) and falls back to the flat ``unsupported`` kind list. Unknown
+    kinds pass through verbatim rather than being dropped — a claim class
+    added later must still reach the operator.
+    """
+    if not isinstance(verification, dict):
+        return ()
+    kinds: list[str] = []
+    claims = verification.get("claims")
+    if isinstance(claims, list):
+        kinds = [
+            str(c.get("kind"))
+            for c in claims
+            if isinstance(c, dict) and not c.get("supported") and c.get("kind")
+        ]
+    if not kinds:
+        raw = verification.get("unsupported")
+        if isinstance(raw, list):
+            kinds = [str(k) for k in raw if k]
+    phrases = [_CLAIM_ACTION_PHRASE.get(k, k.replace("_", " ")) for k in dict.fromkeys(kinds)]
+    return tuple(phrases)
+
+
+def describe_unsupported(verification: Any) -> str:
+    """Join the unsupported claim phrases into one readable clause."""
+    phrases = unsupported_claim_phrases(verification)
+    if not phrases:
+        return ""
+    if len(phrases) == 1:
+        return phrases[0]
+    return f"{', '.join(phrases[:-1])} and {phrases[-1]}"
+
+
+def next_action_for_unverified(verification: Any) -> str:
+    """The forward step written on a task whose run only *claimed* the work.
+
+    The task stays open and carries the reason, so the next beat's planner
+    picks it up instead of the operator discovering months later that a DONE
+    row meant "an agent said something".
+    """
+    described = describe_unsupported(verification) or "do the work"
+    return (
+        f"Not closed — the run claimed to {described}, but no successful tool "
+        "call in that run shows it happened. Redo the work and confirm it from "
+        "a tool result before closing."
+    )[:500]
