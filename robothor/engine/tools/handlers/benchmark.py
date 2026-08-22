@@ -14,6 +14,7 @@ State is persisted in memory blocks:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -54,6 +55,10 @@ HANDLERS: dict[str, Any] = {}
 # headline pass rate is the count of such tasks over every task in the suite —
 # NOT the mean of the scores, which is `aggregate_score`.
 PASS_THRESHOLD = 0.7
+
+# The judge gets more than one shot at a transient failure. See _judge_output.
+JUDGE_ATTEMPTS = 3
+JUDGE_RETRY_DELAY_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -924,35 +929,61 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
         + '\n\nRespond with ONLY a JSON object: {"scores": [1, 0, 1, ...]}'
     )
 
-    try:
-        response = await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=200,
-            response_format={"type": "json_object"},
-            timeout=30,
-        )
-        content = response.choices[0].message.content
-        if not content:
-            return JudgeOutcome(score=None, error="judge returned an empty completion")
-        data = json.loads(content)
-        scores = data.get("scores")
-        if not isinstance(scores, list) or not scores:
-            return JudgeOutcome(score=None, error="judge response carried no 'scores' list")
-        if len(scores) != len(rubric):
-            # Dividing a mismatched count by len(rubric) produced grades above
-            # 1.0. There is no honest way to map 4 scores onto a 2-item rubric,
-            # so this is an error, not a number.
-            return JudgeOutcome(
-                score=None,
-                error=f"judge returned {len(scores)} scores for {len(rubric)} rubric items",
+    # An empty completion or a rate-limit is the grader having a bad moment, not
+    # the agent being wrong. Measured 2026-08-22: a single attempt cost two cases
+    # across two agents in one evening (agent-architect structural-detection,
+    # curiosity-engine dedup-prior-findings), both "judge returned an empty
+    # completion". Retry the transient shapes only.
+    #
+    # A rubric-count mismatch is deliberately NOT retried: the model answered,
+    # its answer just cannot be mapped onto the rubric, and asking again only
+    # burns tokens. Nor does retrying soften failure — after the last attempt
+    # this still returns JudgeOutcome(score=None, error=...), because a judge
+    # that cannot grade must never be mistaken for a mediocre agent.
+    last_error = "judge returned an empty completion"
+    for attempt in range(JUDGE_ATTEMPTS):
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=200,
+                response_format={"type": "json_object"},
+                timeout=30,
             )
-        return JudgeOutcome(score=sum(1 for s in scores if s) / len(rubric))
-    except Exception as e:
-        detail = str(e).replace("\n", "\\n")
-        logger.warning("Judge LLM call failed: %s", detail)
-        return JudgeOutcome(score=None, error=f"judge call failed: {detail}")
+            content = response.choices[0].message.content
+            if not content:
+                last_error = "judge returned an empty completion"
+                if attempt + 1 < JUDGE_ATTEMPTS:
+                    await asyncio.sleep(JUDGE_RETRY_DELAY_S * (attempt + 1))
+                continue
+            data = json.loads(content)
+            scores = data.get("scores")
+            if not isinstance(scores, list) or not scores:
+                last_error = "judge response carried no 'scores' list"
+                if attempt + 1 < JUDGE_ATTEMPTS:
+                    await asyncio.sleep(JUDGE_RETRY_DELAY_S * (attempt + 1))
+                continue
+            if len(scores) != len(rubric):
+                # Dividing a mismatched count by len(rubric) produced grades
+                # above 1.0. There is no honest way to map 4 scores onto a
+                # 2-item rubric, so this is an error, not a number — and it is
+                # the model's actual answer, so it is not retried.
+                return JudgeOutcome(
+                    score=None,
+                    error=f"judge returned {len(scores)} scores for {len(rubric)} rubric items",
+                )
+            return JudgeOutcome(score=sum(1 for s in scores if s) / len(rubric))
+        except Exception as e:
+            detail = str(e).replace("\n", "\\n")
+            last_error = f"judge call failed: {detail}"
+            logger.warning(
+                "Judge LLM call failed (attempt %d/%d): %s", attempt + 1, JUDGE_ATTEMPTS, detail
+            )
+            if attempt + 1 < JUDGE_ATTEMPTS:
+                await asyncio.sleep(JUDGE_RETRY_DELAY_S * (attempt + 1))
+
+    return JudgeOutcome(score=None, error=last_error)
 
 
 async def _score_task_async(
