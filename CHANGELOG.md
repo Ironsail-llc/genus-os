@@ -1,3 +1,9 @@
+## [1.35.1](https://github.com/Ironsail-llc/genus-os/compare/v1.35.0...v1.35.1) (2026-08-22)
+
+### Bug Fixes
+
+* **bench:** register CLI runner and scope sandbox seeding to its tenant ([#318](https://github.com/Ironsail-llc/genus-os/issues/318)) ([93f61c2](https://github.com/Ironsail-llc/genus-os/commit/93f61c24f51ded9331fe57e63a36ff78a7e19f6b))
+
 ## [1.35.0](https://github.com/Ironsail-llc/genus-os/compare/v1.34.2...v1.35.0) (2026-08-22)
 
 ### Features
