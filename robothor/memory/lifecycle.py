@@ -667,7 +667,11 @@ Return up to 3 insights. Each insight must:
         raw = await generation.generate(
             prompt=prompt,
             system="Find cross-domain connections between these facts.",
-            max_tokens=512,
+            # 512 truncated this the same way 1024 truncated extraction: the
+            # parse errors are all at the ceiling ("Unterminated string ...
+            # char 1482/1587", ~512 tokens of JSON), which is truncation
+            # mid-object, not a model that answered badly.
+            max_tokens=generation.INSIGHT_MAX_TOKENS,
             format=INSIGHT_SCHEMA,
             think=False,
         )
