@@ -196,14 +196,40 @@ flags:
     soak: >
       NEW 2026-08-21. Checks a run's final claims against its own tool trace —
       the control that would have caught run 6cb7e492 ("✅ Payment confirmed —
-      $270 sent to Colt via Venmo") whose entire trace was one write_file to
-      /tmp. Observe records verified_status/verification on agent_runs and one
-      guardrail event per non-no_claims verdict; it changes NO delivery and NO
-      task resolution. Promotion evidence required before alert: >=5 days of
-      verdicts, a false-positive rate under 10% on a 10-run/week operator
-      spot-check, and the Venmo-style probe caught in production data — not a
-      green test. Do NOT promote to enforce until the acting-on-verdict PR
-      (honest-failure banner + auto-resolve gating) has landed and soaked.
+      $270 sent via Venmo") whose entire trace was one write_file to /tmp.
+      OBSERVE records verified_status/verification on agent_runs and one
+      guardrail event per non-no_claims verdict; it changes NO delivery, NO
+      prompt and NO task resolution.
+      ALERT adds the operator-facing half: an honest-failure banner appended to
+      the delivered message for an unverified_claims verdict (agent_runs.
+      output_text keeps the raw claim as evidence), the honest-claims prompt
+      rule, and a [verified]/[claimed] label on every auto-written resolution.
+      Task state still closes exactly as today.
+      ENFORCE acts: an unverified_claims / failed_verification run no longer
+      resolves its originating CRM task at all — dal.set_next_action names the
+      unsupported claims and the task stays open — and a benchmark-triggered
+      run (trigger_detail LIKE 'benchmark:%') never resolves a production task
+      whatever the verdict. This is the rung that turns the fleet's success
+      rate from a claim rate into a completion rate: 300 of the 571 tasks
+      closed in the 7 days to 2026-08-21 (53%) carry a bare "Run completed: …"
+      auto-resolution, and email-analyst holds 1,692 DONE tasks with no
+      production run since 2026-06-14 (all closed by benchmark runs).
+      MEASURED 2026-08-21 by replaying the verdict over the week's runs:
+      889 completed runs, 343 of them production; 13 unverified_claims (3
+      production), 11 verified, 97% no_claims. Of the 300 auto-resolved
+      closures, 299 could be relinked to their run and ZERO would be blocked
+      by the verdict — 251 (84%) would be blocked by the benchmark rule alone.
+      Promotion evidence required before ALERT: >=5 days of verdicts, a
+      false-positive rate under 10% on a 10-run/week operator spot-check, and
+      the Venmo-style probe caught in production data — not a green test. (The
+      2026-08-21 replay found the real run 6cb7e492 among the 3 production
+      catches, and fixed the two regex false positives it also found.)
+      Before ENFORCE, additionally: >=7 days at alert with the banner reviewed
+      on real deliveries, and a hand-audit of one week of would-be-blocked
+      closures confirming they are genuinely unfinished work. The known open
+      item is the record_update class firing on narration — "I noted it in the
+      output", "Documented that …" mean SAID, not STORED, and were 2 of the 3
+      production catches in the replay. Triage those before enforce.
 
   - name: ROBOTHOR_TOOL_VERIFY_MODE
     owner: ops
@@ -257,3 +283,35 @@ flags:
       proves the suite cannot be gamed by refusing everything; (4) the
       aggregate delta at enforce computed in advance, since these cases are
       ~30% of the added weight on a small suite.
+
+  - name: ROBOTHOR_BENCHMARK_SANDBOX_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-09-10"
+    soak: >
+      NEW 2026-08-21. Seeded CRM fixtures in an isolated tenant, so write-heavy
+      agents can be graded on what they DID instead of what they narrated. The
+      crm-hygiene suite scored 0.326 on a suite it could not pass: its rubrics
+      demanded a scrub/flag action while the harness denied update_person,
+      create_task, update_task and resolve_task, and the records it named
+      (p-9999, p-1234, "200 stale TODOs") did not exist.
+
+      Read the ladder carefully, it is not the usual one. OBSERVE already
+      changes what a benchmark sub-agent can DO — it seeds real rows in the
+      `benchmark-sandbox` tenant and re-allows the sandbox-safe CRM writes
+      there — because that is the defect being fixed. What observe does NOT
+      change is the GRADE: state checks are recorded on each task result and
+      excluded from the score. ENFORCE folds them in.
+
+      Nothing that reaches outside this database becomes allowed in any mode:
+      exec, invoke_skill, write_file, gmail/calendar writes, notifications,
+      spawn, browser and every delete/merge stay denied (2026-05-28: a
+      benchmark agent shelled out through invoke_skill and emailed a real
+      contact). Promotion evidence before enforce: (1) one full fleet night
+      with state_checks recorded, hand-compared against the transcripts —
+      specifically that a task the agent genuinely completed shows passing
+      read-backs, so the checks are not inert; (2) crm_people/crm_tasks row
+      counts in `benchmark-sandbox` back at zero after each run, proving
+      teardown; (3) zero rows written to any other tenant by a benchmark run.
+      Full ladder, evidence and rollback: docs/runbooks/BENCHMARK_SANDBOX.md.
+

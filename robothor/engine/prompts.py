@@ -24,6 +24,34 @@ BEHAVIORAL_RULES = """\
 13. **Be explicit over implicit** — when in doubt, state your reasoning and assumptions. If you're unsure about intent, ask rather than guess.
 14. **Consult memory for current state** — before answering about a person, project, alert, or open item, check memory (`search_memory` / `get_entity`) for the freshest facts. The latest confirmation or resolution is the source of truth — don't rely on a stale assumption or an earlier framing of the same thing."""
 
+# ─── Honest-claims rule (flag-gated on ROBOTHOR_RUN_VERIFICATION_MODE) ───
+# The behavioral half of run verification. The control catches a false claim
+# after the fact; this rule is the cheapest way to stop one being made. It
+# ships behind the same ladder as the check so prompt and enforcement promote
+# together — an agent told "abstention is fine" while its abstentions are
+# still auto-resolved as completions would be learning the wrong lesson.
+HONEST_CLAIMS_RULE = """
+15. **Never state an action occurred unless a tool result in THIS run shows it** — "I sent it", "I filed it", "payment confirmed", "added to your calendar" each require a successful tool call in this run's trace. Echoing something the user told you is not doing it, and a note in /tmp is not a record. If you could not do something, say so plainly ("I could not send the email — the tool returned an error"). Abstention is always acceptable and is never penalised; a false claim of success is the one unrecoverable error."""
+
+
+def behavioral_rules() -> str:
+    """Return the fleet-wide behavioral rules for the current flag state.
+
+    Appends ``HONEST_CLAIMS_RULE`` when ``ROBOTHOR_RUN_VERIFICATION_MODE`` is
+    at ``alert`` or ``enforce``; returns ``BEHAVIORAL_RULES`` unchanged at
+    ``off`` and ``observe``, so the merge posture leaves every system prompt
+    byte-identical. The import is local because ``feature_flags`` is resolved
+    per call — the caller caches the assembled prompt by source-file mtime, so
+    a flag change takes effect on the next engine restart (which is how the
+    systemd drop-in delivers one anyway).
+    """
+    from robothor.engine.feature_flags import run_verification_mode
+
+    if run_verification_mode() in ("alert", "enforce"):
+        return BEHAVIORAL_RULES + HONEST_CLAIMS_RULE
+    return BEHAVIORAL_RULES
+
+
 # ─── Plan Mode Instructions (sandwich pattern) ──────────────────────
 # Preamble goes BEFORE the system prompt so the LLM reads constraints first,
 # before SOUL.md's action-oriented identity locks in.

@@ -826,10 +826,11 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
         total_chars += len(SECURITY_PREAMBLE)
 
         # Behavioral rules — fleet-wide invariants injected after security preamble
-        from robothor.engine.prompts import BEHAVIORAL_RULES
+        from robothor.engine.prompts import behavioral_rules
 
-        parts.append(BEHAVIORAL_RULES)
-        total_chars += len(BEHAVIORAL_RULES)
+        rules = behavioral_rules()
+        parts.append(rules)
+        total_chars += len(rules)
 
         # Load instruction file first (primary)
         if config.instruction_file:

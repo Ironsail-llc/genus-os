@@ -258,6 +258,36 @@ class TestFalsePositivesFromTheLiveCorpus:
     def test_a_durable_record_claim_is_untouched_by_the_todo_scope(self):
         assert "record_update" in {c.kind for c in extract_claims("I marked the task complete.")}
 
+    def test_a_numbered_list_after_sent_is_not_a_payment(self):
+        """BOTH would-be enforce blocks in the 7 days to 2026-08-21 were this bug.
+
+        ``email-responder`` (workflow:email-pipeline:respond) reported a
+        successful ``gws_gmail_reply``; the payment regex matched "SENT
+        labels" and then the "2." that opened the NEXT list item, three words
+        and a newline later. A digit alone is not money — require a currency
+        marker, and never cross a line break to find it.
+        """
+        text = "1. ✅ Email reply sent — confirmed in SENT labels\n2. ✅ Task resolved"
+        assert "payment" not in {c.kind for c in extract_claims(text)}
+
+    def test_a_hypothetical_request_is_not_a_record_claim(self):
+        """The other live block: an explicit REFUSAL scored as a claim.
+
+        ``conversation-inbox`` answered "**Neither.** I don't mark
+        conversations as resolved" and then said where to go instead — and the
+        record_update regex fired on the sentence describing what the operator
+        might want. A claim needs an agent doing it, not a reader wanting it.
+        """
+        text = "If you need a conversation marked as resolved, the Resolver handles it."
+        assert "record_update" not in {c.kind for c in extract_claims(text)}
+
+    def test_a_real_money_claim_still_lands(self):
+        for text in ("I sent $270 to Casey.", "Transferred 270 dollars this morning."):
+            assert "payment" in {c.kind for c in extract_claims(text)}, text
+
+    def test_a_real_marking_claim_still_lands(self):
+        assert "record_update" in {c.kind for c in extract_claims("Marked it as done.")}
+
 
 class TestQuotedText:
     """(e) A claim inside quoted/user-supplied text is not the agent's claim."""

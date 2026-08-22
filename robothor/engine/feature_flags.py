@@ -465,10 +465,15 @@ def run_verification_mode() -> EnforcementMode:
 
     Gated on ``ROBOTHOR_RUN_VERIFICATION_ENABLED`` + ``ROBOTHOR_RUN_VERIFICATION_MODE``.
     ``observe`` computes the verdict, stamps ``agent_runs.verified_status`` /
-    ``verification`` and records a guardrail event — nothing else changes;
-    ``alert`` additionally notifies the operator; ``enforce`` is reserved for
-    the follow-up that gates delivery/task resolution on the verdict and today
-    records exactly as ``alert`` does. Default off.
+    ``verification`` and records a guardrail event — nothing else changes.
+    ``alert`` tells the truth to the operator without changing task state: it
+    notifies, appends the honest-failure banner to the delivered message
+    (``delivery._verification_banner``), injects the honest-claims prompt rule
+    (``prompts.behavioral_rules``) and labels every auto-written resolution
+    ``[verified]`` / ``[claimed]``. ``enforce`` acts: an unverified run does
+    not resolve its CRM task at all (``runner._update_task_for_run`` writes a
+    ``next_action`` naming the unsupported claims instead), and a benchmark
+    run never resolves a production task. Default off.
 
     Unlike ``completion_contract_mode`` this needs no session goal and is not
     limited to "task complete" phrasings — see ``run_verification`` for the
@@ -501,6 +506,28 @@ def honesty_suite_mode() -> HonestySuiteMode:
     if raw in _VALID_HONESTY_SUITE_MODES:
         return raw  # type: ignore[return-value]
     return "observe"
+
+
+def benchmark_sandbox_mode() -> EnforcementMode:
+    """Rollout mode for seeded benchmark fixtures + sandbox CRM writes.
+
+    Gated on ``ROBOTHOR_BENCHMARK_SANDBOX_ENABLED`` +
+    ``ROBOTHOR_BENCHMARK_SANDBOX_MODE``. ``off`` (default) is today's harness
+    exactly: benchmark sub-runs stay read-only, no fixtures are seeded, and no
+    state check runs. ``observe`` seeds each task's fixtures into the dedicated
+    ``benchmark-sandbox`` tenant, scopes the sub-run to it, re-allows the
+    sandbox-safe CRM writes (see ``robothor.engine.benchmark_sandbox``) and
+    RECORDS every read-back on the task result without folding it into the
+    score. ``alert`` is observe plus an error log per failed read-back.
+    ``enforce`` folds the read-backs into the task score.
+
+    Said plainly, because the ladder is unusual here: ``observe`` changes what a
+    benchmark sub-agent can *do* — that is the point, since the rubrics grade
+    actions the harness denied — but not how the run is *graded*.
+    """
+    return _enforcement_mode(
+        "ROBOTHOR_BENCHMARK_SANDBOX_ENABLED", "ROBOTHOR_BENCHMARK_SANDBOX_MODE"
+    )
 
 
 def tool_verify_mode() -> EnforcementMode:

@@ -73,6 +73,20 @@ class TestAgentScore:
         assert s.overall_score == 72  # back-compat alias
 
 
+class TestFormatAchievement:
+    """Operator surfaces must render 'unmeasured' as such, not as 0/100."""
+
+    def test_measured_score_renders_as_fraction(self):
+        from robothor.engine.buddy import format_achievement
+
+        assert format_achievement(72) == "72/100"
+
+    def test_unmeasured_score_renders_as_na(self):
+        from robothor.engine.buddy import format_achievement
+
+        assert format_achievement(None) == "n/a (unmeasured)"
+
+
 class TestComputeAgentScore:
     @patch("robothor.engine.buddy.compute_achievement_score")
     @patch("robothor.engine.buddy.compose_goals")
@@ -102,8 +116,13 @@ class TestComputeAgentScore:
     @patch("robothor.engine.buddy.compute_achievement_score")
     @patch("robothor.engine.buddy.compose_goals")
     def test_handles_none_score(self, mock_parse, mock_compute):
-        """When every goal is unmeasured, compute_achievement_score returns
-        score=None — compute_agent_score must not crash on the int() cast."""
+        """When every goal is unmeasured there is no grade to report.
+
+        This used to return achievement_score=0 / rating=1 — the worst
+        possible grade, invented from an absence of evidence, and
+        indistinguishable from an agent that genuinely breached everything.
+        Unmeasured now means None all the way through.
+        """
         from robothor.engine.buddy import BuddyEngine
 
         mock_parse.return_value = [object()]
@@ -120,8 +139,9 @@ class TestComputeAgentScore:
             manifest={"id": "unmeasured-agent", "goals": {"quality": [{"id": "g"}]}},
             target_date=date(2026, 4, 18),
         )
-        assert result.achievement_score == 0
-        assert result.rating == 1
+        assert result.achievement_score is None
+        assert result.rating is None
+        assert result.measured is False
 
     @patch("robothor.engine.buddy.compose_goals")
     def test_no_goals_returns_zero(self, mock_parse):
@@ -188,6 +208,37 @@ class TestComputeFleetScores:
         scores = BuddyEngine().compute_fleet_scores()
         assert scores == []
 
+    @patch("robothor.engine.buddy.compute_achievement_score")
+    @patch("robothor.engine.buddy.compose_goals")
+    @patch("robothor.engine.buddy._load_manifests")
+    def test_unmeasured_agents_sort_last_without_crashing(
+        self, mock_load, mock_parse, mock_compute
+    ):
+        """Ranking must survive a None score — it used to negate it."""
+        from robothor.engine.buddy import BuddyEngine
+
+        mock_load.return_value = [
+            ("dark", {"id": "dark"}),
+            ("bright", {"id": "bright"}),
+        ]
+        mock_parse.side_effect = lambda **_: [object()]
+
+        def fake_compute(agent_id, goals, tenant_id=None):
+            score = None if agent_id == "dark" else 0.9
+            return {
+                "score": score,
+                "rating": None if score is None else 4,
+                "satisfied_goals": [],
+                "breached_goals": [],
+                "per_goal": [],
+            }
+
+        mock_compute.side_effect = fake_compute
+
+        scores = BuddyEngine().compute_fleet_scores()
+        assert [s.agent_id for s in scores] == ["bright", "dark"]
+        assert scores[1].achievement_score is None
+
 
 class TestComputeDailyStats:
     @patch("robothor.engine.buddy.BuddyEngine._tasks_completed_24h", return_value=42)
@@ -219,6 +270,64 @@ class TestComputeDailyStats:
         assert fleet.fleet_achievement_score == 70  # (60 + 80) / 2
         assert fleet.tasks_completed == 42
         assert len(fleet.per_agent) == 2
+        assert fleet.agents_measured == 2
+        assert fleet.agents_total == 2
+
+    @patch("robothor.engine.buddy.BuddyEngine._tasks_completed_24h", return_value=0)
+    @patch("robothor.engine.buddy.compute_achievement_score")
+    @patch("robothor.engine.buddy.compose_goals")
+    @patch("robothor.engine.buddy._load_manifests")
+    def test_fleet_average_excludes_unmeasured_agents(
+        self, mock_load, mock_parse, mock_compute, _mock_tasks
+    ):
+        """An unmeasured agent used to enter the mean as a 0 and drag the
+        fleet number down. It must be reported as uncovered, not as a zero."""
+        from robothor.engine.buddy import BuddyEngine
+
+        mock_load.return_value = [("a", {"id": "a"}), ("dark", {"id": "dark"})]
+        mock_parse.return_value = [object()]
+        mock_compute.side_effect = [
+            {
+                "score": 0.8,
+                "rating": 4,
+                "satisfied_goals": [],
+                "breached_goals": [],
+                "per_goal": [],
+            },
+            {
+                "score": None,
+                "rating": None,
+                "satisfied_goals": [],
+                "breached_goals": [],
+                "per_goal": [],
+            },
+        ]
+        fleet = BuddyEngine().compute_daily_stats()
+        assert fleet.fleet_achievement_score == 80  # not 40
+        assert fleet.agents_measured == 1
+        assert fleet.agents_total == 2
+
+    @patch("robothor.engine.buddy.BuddyEngine._tasks_completed_24h", return_value=0)
+    @patch("robothor.engine.buddy.compute_achievement_score")
+    @patch("robothor.engine.buddy.compose_goals")
+    @patch("robothor.engine.buddy._load_manifests")
+    def test_fleet_average_is_none_when_nothing_measured(
+        self, mock_load, mock_parse, mock_compute, _mock_tasks
+    ):
+        from robothor.engine.buddy import BuddyEngine
+
+        mock_load.return_value = [("dark", {"id": "dark"})]
+        mock_parse.return_value = [object()]
+        mock_compute.return_value = {
+            "score": None,
+            "rating": None,
+            "satisfied_goals": [],
+            "breached_goals": [],
+            "per_goal": [],
+        }
+        fleet = BuddyEngine().compute_daily_stats()
+        assert fleet.fleet_achievement_score is None
+        assert fleet.agents_measured == 0
 
     @patch("robothor.engine.buddy.BuddyEngine._tasks_completed_24h", return_value=5)
     @patch("robothor.engine.buddy.compute_achievement_score")

@@ -13,22 +13,64 @@ if TYPE_CHECKING:
 
 HANDLERS: dict[str, Any] = {}
 
-# Task-mutating / operator-facing CRM tools — refused when ctx.is_benchmark.
-# Mirrors _GWS_MUTATING_TOOLS (handlers/gws.py): a benchmark run otherwise
-# materializes fixture text as real crm_tasks and notifications, which the
-# briefing then reports as genuine events. Reads (get_task, list_tasks,
-# search_records, …) stay allowed so benchmark prompts can inspect state.
+# Every CRM mutator — refused when ctx.is_benchmark, unless the run is scoped
+# to the benchmark sandbox tenant AND the tool is sandbox-safe (see
+# _sandbox_write_allowed). Mirrors _GWS_MUTATING_TOOLS (handlers/gws.py): a
+# benchmark run otherwise materializes fixture text as real crm_tasks and
+# notifications, which the briefing then reports as genuine events. Reads
+# (get_task, list_tasks, search_records, …) stay allowed so benchmark prompts
+# can inspect state.
+#
+# The people/company/note writers were added 2026-08-21. Until then the gate
+# covered only the task tools, so `create_person` and `update_person` had no
+# handler-level guard at all — they were kept out of benchmark runs purely by
+# the harness deny-list, which is computed once per suite. A task that seeded
+# no fixtures therefore ran with the sandbox write tools while NOT being scoped
+# to the sandbox tenant, and could have written people rows straight into the
+# production tenant. Belt and braces, both fastened.
 _CRM_MUTATING_TOOLS: frozenset[str] = frozenset(
     {
+        # People / companies / notes.
+        "create_person",
+        "update_person",
+        "delete_person",
+        "create_company",
+        "update_company",
+        "delete_company",
+        "create_note",
+        "update_note",
+        "delete_note",
+        "merge_people",
+        "merge_contacts",
+        "merge_companies",
+        # Tasks.
         "create_task",
         "update_task",
         "resolve_task",
         "delete_task",
         "approve_task",
         "reject_task",
+        # Operator-facing / conversational.
         "send_notification",
+        "ack_notification",
+        "create_message",
+        "toggle_conversation_status",
     }
 )
+
+
+def _sandbox_write_allowed(name: str, ctx: ToolContext) -> bool:
+    """Whether a benchmark run may perform this CRM write.
+
+    Only in the dedicated sandbox tenant, and only for the tools listed in
+    ``benchmark_sandbox.SANDBOX_WRITE_TOOLS``. A benchmark run in ANY other
+    tenant is refused exactly as before — the tenant is what makes the write
+    safe, not the fact that it is a benchmark. ``send_notification`` reaches a
+    human and so is never in that set, whatever tenant it is called from.
+    """
+    from robothor.engine.benchmark_sandbox import SANDBOX_WRITE_TOOLS, sandbox_tenant_id
+
+    return name in SANDBOX_WRITE_TOOLS and ctx.tenant_id == sandbox_tenant_id()
 
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -41,7 +83,7 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
                 _fn: Callable[..., Any] = fn,
                 _name: str = name,
             ) -> dict[str, Any]:
-                if ctx.is_benchmark:
+                if ctx.is_benchmark and not _sandbox_write_allowed(_name, ctx):
                     return {
                         "error": f"benchmark sandbox: {_name} writes are disabled",
                         "guard": "is_benchmark",

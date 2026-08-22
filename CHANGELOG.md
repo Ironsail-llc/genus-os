@@ -1,3 +1,26 @@
+## [1.35.0](https://github.com/Ironsail-llc/genus-os/compare/v1.34.2...v1.35.0) (2026-08-22)
+
+### Features
+
+* **bench:** seeded fixtures and write tools in a sandbox tenant ([#316](https://github.com/Ironsail-llc/genus-os/issues/316)) ([8b52a6f](https://github.com/Ironsail-llc/genus-os/commit/8b52a6f3d411ca01b9428eb61392cf7ccc916f6f))
+
+### Bug Fixes
+
+* **bench:** pass_rate means passed over total_cases ([#314](https://github.com/Ironsail-llc/genus-os/issues/314)) ([8afa317](https://github.com/Ironsail-llc/genus-os/commit/8afa3175847fb184b4bc68c9f6367cd86f08a513))
+* **engine:** stop inventing a neutral grade for unmeasured goals ([#315](https://github.com/Ironsail-llc/genus-os/issues/315)) ([c15f037](https://github.com/Ironsail-llc/genus-os/commit/c15f03771baaf05b3c90c69175446a9087c5f30d))
+
+## [1.34.2](https://github.com/Ironsail-llc/genus-os/compare/v1.34.1...v1.34.2) (2026-08-22)
+
+### Bug Fixes
+
+* **engine:** gate task auto-resolve on the run's verification verdict ([#313](https://github.com/Ironsail-llc/genus-os/issues/313)) ([d699020](https://github.com/Ironsail-llc/genus-os/commit/d699020d3f2e78ec0d78cc90127760e3797ec800)), closes [#310](https://github.com/Ironsail-llc/genus-os/issues/310)
+
+## [1.34.1](https://github.com/Ironsail-llc/genus-os/compare/v1.34.0...v1.34.1) (2026-08-21)
+
+### Bug Fixes
+
+* **events:** stop the test suite publishing to production Redis ([#312](https://github.com/Ironsail-llc/genus-os/issues/312)) ([f14e789](https://github.com/Ironsail-llc/genus-os/commit/f14e789fe4f73faf73edcf3caeb07c4ddf9e7782))
+
 ## [1.34.0](https://github.com/Ironsail-llc/genus-os/compare/v1.33.8...v1.34.0) (2026-08-21)
 
 ### Features

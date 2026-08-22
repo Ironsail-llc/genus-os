@@ -60,6 +60,25 @@ def decontamination_enforced() -> bool:
     return benchmark_decontamination_mode() == "enforce"
 
 
+def is_benchmark_run(trigger_detail: str | None) -> bool:
+    """True when a run row is benchmark-harness traffic.
+
+    The Python-row twin of :func:`benchmark_run_filter`, sharing the one
+    ``BENCHMARK_TRIGGER_PREFIX`` definition. Callers outside this module (the
+    runner's task-closure path) need the same judgement about a single run
+    that the SQL surfaces make about a whole table — and a second hand-written
+    ``startswith("benchmark:")`` is precisely how the twelve copies of the
+    production-run predicate drifted apart in the first place.
+
+    Args:
+        trigger_detail: the run's ``agent_runs.trigger_detail`` (may be None).
+
+    Returns:
+        True when the run was spawned by the benchmark harness.
+    """
+    return bool(trigger_detail) and str(trigger_detail).startswith(BENCHMARK_TRIGGER_PREFIX)
+
+
 def benchmark_run_filter(alias: str = "") -> str:
     """Return the SQL predicate matching benchmark-harness traffic.
 

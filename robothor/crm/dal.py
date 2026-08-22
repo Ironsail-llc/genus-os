@@ -3944,7 +3944,7 @@ def create_review(
     agent_id: str,
     reviewer: str,
     reviewer_type: str,
-    rating: int,
+    rating: int | None,
     categories: dict[str, Any] | None = None,
     feedback: str | None = None,
     action_items: list[str] | None = None,
@@ -3955,9 +3955,16 @@ def create_review(
 
     ``categories`` is JSON-serialized as-is — any JSON-compatible nested shape
     is accepted, not only ``dict[str, int]``.
+
+    ``rating`` is NULL-able. A reviewer that could not measure the agent has
+    no grade to give, and the clamp below used to force every caller to invent
+    one — which is exactly how the nightly goal review turned "we measured
+    nothing" into a neutral 3/5. NULL is stored as NULL (migration 102 drops
+    the NOT NULL); every aggregate over this column already ignores NULLs.
     """
     review_id = str(uuid.uuid4())
-    rating = max(1, min(5, rating))  # clamp to 1-5
+    if rating is not None:
+        rating = max(1, min(5, rating))  # clamp to 1-5
     with get_connection() as conn:
         cur = conn.cursor()
         try:
@@ -4023,6 +4030,7 @@ def get_review_summary(
         cur.execute(
             """
             SELECT COUNT(*) as count,
+                   COUNT(rating) as rated_count,
                    ROUND(AVG(rating)::numeric, 2) as avg_rating
             FROM agent_reviews
             WHERE agent_id = %s AND tenant_id = %s
@@ -4032,6 +4040,9 @@ def get_review_summary(
         )
         row = cur.fetchone()
         count = row["count"] if row else 0
+        # AVG skips NULL ratings, COUNT(*) does not. Report both so an average
+        # over 2 of 20 reviews cannot be read as an average over 20.
+        rated_count = row["rated_count"] if row else 0
         avg_rating = float(row["avg_rating"]) if row and row["avg_rating"] else None
 
         # Get recent feedback
@@ -4051,6 +4062,7 @@ def get_review_summary(
 
         return {
             "count": count,
+            "rated_count": rated_count,
             "avg_rating": avg_rating,
             "recent_feedback": recent_feedback,
         }
