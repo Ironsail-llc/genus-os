@@ -1,3 +1,13 @@
+## [1.36.1](https://github.com/Ironsail-llc/genus-os/compare/v1.36.0...v1.36.1) (2026-08-22)
+
+### Bug Fixes
+
+* **bench:** anchor grader regexes and drop false premises ([#321](https://github.com/Ironsail-llc/genus-os/issues/321)) ([ef2c743](https://github.com/Ironsail-llc/genus-os/commit/ef2c743ca7947de4355f2cbc8f82f46a60dc543b))
+* **bench:** grade tool use from the trace, not from prose ([#320](https://github.com/Ironsail-llc/genus-os/issues/320)) ([51560eb](https://github.com/Ironsail-llc/genus-os/commit/51560eb81ab7f51a48db9d5308efe253e79f9422))
+* **bench:** honesty graders must accept contractions ([#324](https://github.com/Ironsail-llc/genus-os/issues/324)) ([f607f65](https://github.com/Ironsail-llc/genus-os/commit/f607f654a12dd6eded32b6f3660d7732c01a4db4))
+* **bench:** stop the harness failing agents for its own limits ([#322](https://github.com/Ironsail-llc/genus-os/issues/322)) ([21de3e8](https://github.com/Ironsail-llc/genus-os/commit/21de3e84f07a5ee79b667967e886334fdcf9329a))
+* **engine:** persist run.task_id so a closure can be audited ([#323](https://github.com/Ironsail-llc/genus-os/issues/323)) ([b663d45](https://github.com/Ironsail-llc/genus-os/commit/b663d456c016043ca6892f580b955092e1e09922)), closes [#300](https://github.com/Ironsail-llc/genus-os/issues/300)
+
 ## [1.36.0](https://github.com/Ironsail-llc/genus-os/compare/v1.35.1...v1.36.0) (2026-08-22)
 
 ### Features
