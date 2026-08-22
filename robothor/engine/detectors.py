@@ -496,9 +496,7 @@ def check_workflow_failure_streaks(
     from robothor.db.connection import get_connection
 
     if window_days is None:
-        window_days = int(
-            os.environ.get("ROBOTHOR_WORKFLOW_STREAK_WINDOW_DAYS", "14")
-        )
+        window_days = int(os.environ.get("ROBOTHOR_WORKFLOW_STREAK_WINDOW_DAYS", "14"))
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
