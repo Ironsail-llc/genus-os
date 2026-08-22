@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 import litellm
 
+from robothor.db.connection import current_tenant_scope
 from robothor.engine.config import (
     EngineConfig,
     _prompt_cache,
@@ -722,7 +723,11 @@ class AgentRunner:
                 trigger_type is SUB_AGENT, not an interactive one).
         Returns the completed AgentRun with full metadata.
         """
-        resolved_tenant = tenant_id or self.config.tenant_id
+        # A run created inside a ``tenant_scope`` must record under that tenant.
+        # Falling through to the config default writes a row the connection's RLS
+        # binding refuses, and the refusal arrives as an opaque
+        # InsufficientPrivilege at INSERT time. See test_nested_run_tenant.py.
+        resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
 
         # Load agent config from manifest if not provided
         if agent_config is None:
@@ -1338,8 +1343,10 @@ class AgentRunner:
 
                 try:
                     await asyncio.get_running_loop().run_in_executor(None, create_run, session.run)
-                except psycopg2.IntegrityError as e:
-                    # Deterministic rejection (CHECK/FK/unique violation) —
+                except (psycopg2.IntegrityError, psycopg2.errors.InsufficientPrivilege) as e:
+                    # Deterministic rejection (CHECK/FK/unique violation, or an RLS
+                    # WITH CHECK refusal when the row's tenant disagrees with the
+                    # connection's binding) —
                     # retries would fail identically forever, e.g. a TriggerType
                     # enum member missing from agent_runs_trigger_type_check.
                     # Never break the run over tracking, but this is not a blip:
@@ -1794,7 +1801,11 @@ class AgentRunner:
         from robothor.engine.session import AgentSession
 
         agent_id = "main"
-        resolved_tenant = tenant_id or self.config.tenant_id
+        # A run created inside a ``tenant_scope`` must record under that tenant.
+        # Falling through to the config default writes a row the connection's RLS
+        # binding refuses, and the refusal arrives as an opaque
+        # InsufficientPrivilege at INSERT time. See test_nested_run_tenant.py.
+        resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
         if not user_id or not user_role:
             from robothor.auth.runtime import auth_required
 

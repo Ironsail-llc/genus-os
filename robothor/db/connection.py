@@ -238,6 +238,17 @@ def tenant_scope(tenant_id: str) -> Generator[None, None, None]:
         _tenant_override.reset(token)
 
 
+def current_tenant_scope() -> str | None:
+    """The tenant bound by an enclosing :func:`tenant_scope`, or None.
+
+    Callers that create a record inside a scope need this: writing a row under a
+    different tenant than the connection is bound to is refused by the RLS
+    ``WITH CHECK``, and the refusal surfaces as an opaque InsufficientPrivilege
+    at INSERT time rather than at the point the wrong tenant was chosen.
+    """
+    return _tenant_override.get()
+
+
 def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
     """Bind this connection to the current tenant for RLS.
 
