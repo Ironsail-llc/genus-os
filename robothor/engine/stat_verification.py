@@ -35,13 +35,21 @@ DELTA_TOLERANCE = 0.25
 #: ``Label: 12.3% (↓0.5pp WoW)`` — the label must be a short leading phrase on
 #: its own, so ordinary prose containing a percentage is not mistaken for a
 #: published metric.
+#: Written to be unambiguous, not merely correct. An earlier draft used
+#: ``\s*\**\s*`` around the label, which CodeQL flagged as polynomial
+#: backtracking (high severity) and was right to: two ``\s*`` quantifiers
+#: separated by an optional group let an all-whitespace prefix be split many
+#: ways, and the label class contained a space sitting adjacent to ``\s*``.
+#: Both ambiguities are gone: separators are ONE character class with ONE
+#: quantifier, and the label is space-separated words that cannot end in a
+#: space.
 _METRIC = re.compile(
     r"""
-    (?:^|\n)\s*\**\s*
-    (?P<label>[A-Za-z][A-Za-z /-]{2,40}?)
-    \s*\**\s*:\s*\**\s*
-    (?P<value>\d+(?:\.\d+)?)\s*%
-    (?P<trend>\s*\(\s*[^)]{0,60}\))?
+    (?:^|\n)[\s*]*
+    (?P<label>[A-Za-z][A-Za-z/-]*(?:[ ][A-Za-z/-]+){0,5})
+    [\s*]*:[\s*]*
+    (?P<value>\d+(?:\.\d+)?)[ ]*%
+    (?P<trend>[ ]*\([^)]{0,60}\))?
     """,
     re.VERBOSE,
 )
