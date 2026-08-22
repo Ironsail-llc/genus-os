@@ -758,4 +758,8 @@ class TestCrmHygieneSuiteOnDisk:
         emails = [w for w in text.replace('"', " ").replace("'", " ").split() if "@" in w]
         assert emails, "fixtures define no contacts"
         for email in emails:
-            assert email.endswith(".example") or email.endswith("example.com"), email
+            # Match the DOMAIN exactly, not a suffix: `endswith("example.com")`
+            # also accepts `alice@notexample.com`, which is a real address and
+            # exactly the kind of instance data this guard exists to keep out.
+            domain = email.rpartition("@")[2].rstrip(".,;:)\"'").lower()
+            assert domain == "example.com" or domain.endswith(".example"), email
