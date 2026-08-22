@@ -1,3 +1,13 @@
+## [1.38.0](https://github.com/Ironsail-llc/genus-os/compare/v1.37.1...v1.38.0) (2026-08-22)
+
+### Features
+
+* **engine:** report a tenant env conflict at boot ([#339](https://github.com/Ironsail-llc/genus-os/issues/339)) ([4fba051](https://github.com/Ironsail-llc/genus-os/commit/4fba051f56fa2e49f84f1d93a84eaaf977dfd2b2))
+
+### Bug Fixes
+
+* **crm:** send_message actually writes a row ([#338](https://github.com/Ironsail-llc/genus-os/issues/338)) ([7888cc0](https://github.com/Ironsail-llc/genus-os/commit/7888cc07b56496a64dbce12152035cfcc4393767)), closes [#4](https://github.com/Ironsail-llc/genus-os/issues/4)
+
 ## [1.37.1](https://github.com/Ironsail-llc/genus-os/compare/v1.37.0...v1.37.1) (2026-08-22)
 
 ### Bug Fixes
