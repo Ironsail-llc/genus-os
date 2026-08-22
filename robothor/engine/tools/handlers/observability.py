@@ -565,10 +565,11 @@ async def _buddy_audit(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
 async def _get_agent_performance_summary(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Per-agent grade-card from the most recent benchmark_results row.
 
-    Source of truth for the morning briefing "Agent Performance" section,
-    the Telegram /goals command, and the daily summary script. One row
-    per agent with: latest pass_rate, last failing case IDs, run timestamp,
-    and trend (vs the same agent's prior run).
+    Source of truth for the morning briefing "Agent Performance" section and
+    the daily summary script. One row per agent with: latest pass_rate
+    (passed/total_cases), the partial-credit aggregate_score beside it,
+    judge_errors, last failing case IDs, run timestamp, and trend (vs the same
+    agent's prior run *on the same suite*).
 
     Args (all optional):
       agent_id  — filter to a single agent
@@ -591,7 +592,8 @@ async def _get_agent_performance_summary(args: dict[str, Any], ctx: ToolContext)
                 f"""
                 SELECT DISTINCT ON (agent_id)
                   agent_id, suite_id, run_at, total_cases, passed, failed,
-                  pass_rate, category_scores, failures, triggered_by, cost_usd
+                  pass_rate, aggregate_score, judge_errors, category_scores,
+                  failures, triggered_by, cost_usd
                 FROM benchmark_results
                 WHERE tenant_id = %s
                   AND run_at >= NOW() - (%s || ' hours')::interval
@@ -606,18 +608,21 @@ async def _get_agent_performance_summary(args: dict[str, Any], ctx: ToolContext)
             agents: list[dict[str, Any]] = []
             for row in latest_rows:
                 latest = dict(zip(colnames, row, strict=False))
-                # Find the prior row for trend.
+                # Prior row for trend — same suite only. Comparing a run of
+                # `<agent>-v1` against a run of `<agent>-default` is two
+                # different graders, and the delta is noise.
                 cur.execute(
                     """
                     SELECT pass_rate
                     FROM benchmark_results
                     WHERE tenant_id = %s
                       AND agent_id = %s
+                      AND suite_id = %s
                       AND run_at < %s
                     ORDER BY run_at DESC
                     LIMIT 1
                     """,
-                    (ctx.tenant_id, latest["agent_id"], latest["run_at"]),
+                    (ctx.tenant_id, latest["agent_id"], latest["suite_id"], latest["run_at"]),
                 )
                 prior_row = cur.fetchone()
                 prior = float(prior_row[0]) if prior_row else None
@@ -651,6 +656,14 @@ async def _get_agent_performance_summary(args: dict[str, Any], ctx: ToolContext)
                         "passed": int(latest["passed"]),
                         "failed": int(latest["failed"]),
                         "pass_rate": round(pass_rate, 3),
+                        # Partial credit, kept separate so it can never be read
+                        # as the pass rate again (migration 103).
+                        "aggregate_score": (
+                            round(float(latest["aggregate_score"]), 3)
+                            if latest.get("aggregate_score") is not None
+                            else None
+                        ),
+                        "judge_errors": int(latest.get("judge_errors") or 0),
                         "prior_pass_rate": round(prior, 3) if prior is not None else None,
                         "delta": delta,
                         "trend": trend,

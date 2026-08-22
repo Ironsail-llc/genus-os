@@ -107,9 +107,27 @@ The `buddy` agent (docs/agents/buddy.yaml) runs this loop. Previously split betw
 5. **Verify** — 48h after the task moves to DONE, `buddy-grader` re-computes the metric. Pass → tag `verified_resolved`. Fail → tag `verify_failed`, re-open at `escalation:N`. At escalation:2 the task routes to `auto-researcher`; at escalation:3 it is marked `requires_human=true` and auto-escalation stops.
 6. **Hold-check** — 7 days after `verified_resolved`, the grader re-checks again and tags `held_7d=true|false`. The weekly `buddy-auditor` reads the hold-rate and auto-pauses the loop if fixes aren't sticking.
 
+## Measurement coverage
+
+A goal whose metric has no data this window is *unmeasured* — neither satisfied nor breached — and drops out of the weighted denominator. That is correct for scoring and dangerous for reporting: an agent satisfying 2 of its 7 goals scored a perfect 5/5.
+
+So the review states coverage first (`Measurement coverage: N of M goals measured`), and below `MIN_MEASUREMENT_COVERAGE` (0.5 of declared goal *weight*) it emits **no rating at all** — `agent_reviews.rating` is NULL and `categories.rating_reason` is `"insufficient measurement"`, with `categories.partial_score` still reporting what the measured slice scored. A NULL rating means "no grade", never "average": do not COALESCE it to a number.
+
+Practical consequence for manifest authors: a goal whose metric is never populated is not free. It silently eats coverage and can push the whole agent below the gate. Drop the goal or implement the metric.
+
+### Synthetic session goals
+
+`session-goal-alignment` and `session-goal-progress` are injected at runtime from the agent's goal task, not declared in any manifest (`GoalSpec.synthetic = True`). They are scored, but breach accounting — the path that opens self-improve tasks — skips them unless the manifest opts in:
+
+```yaml
+session_goals:
+  enforce: true
+```
+
 ## Anti-patterns to avoid
 
 - **Goal gaming**: if an agent is hitting all goals but the operator is dissatisfied, the goals are wrong. Run the monthly goal-review (P3.6) to correct.
+- **Grading an absence**: never convert "not measured" into a number. A neutral 3 and a zero are both fabrications, and both were shipped before 2026-08-21.
 - **Vanity metrics**: don't use metrics that always hit target (e.g. `error_rate < 1.0` is meaningless).
 - **Orphan metrics**: don't add a metric that no corrective-action template knows how to fix — the loop can't use it.
 - **Window mismatch**: a 7-day window on a once-a-month event produces noise. Match window to signal frequency.

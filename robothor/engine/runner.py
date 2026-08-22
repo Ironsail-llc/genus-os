@@ -4135,9 +4135,11 @@ class AgentRunner:
         Ladder (``ROBOTHOR_RUN_VERIFICATION_ENABLED`` / ``_MODE``):
         ``observe`` records the verdict on the run and in
         ``agent_guardrail_events``; ``alert`` additionally notifies the
-        operator; ``enforce`` records identically for now — acting on the
-        verdict (delivery gating, task resolution) belongs to the follow-up.
-        No rung mutates delivery, tasks or the outcome grade here.
+        operator; ``enforce`` records identically here. Nothing in THIS method
+        mutates delivery, tasks or the outcome grade — acting on the verdict
+        happens downstream in ``_update_task_for_run`` (task closure) and
+        ``delivery._verification_banner`` (the operator-facing banner), which
+        read the verdict this method stamped.
         """
         from robothor.engine.feature_flags import run_verification_mode
 
@@ -4315,23 +4317,105 @@ class AgentRunner:
         except Exception as e:
             logger.warning("Failed to update run in database: %s", _sanitize(e))
 
-        if run.task_id:
-            try:
-                from robothor.crm.dal import resolve_task as dal_resolve_task
-                from robothor.crm.dal import update_task as dal_update_task
-                from robothor.engine.models import RunStatus
+        self._update_task_for_run(run)
 
-                if run.status == RunStatus.COMPLETED:
-                    dal_resolve_task(
-                        run.task_id,
-                        resolution=f"Run completed: {(run.output_text or '')[:200]}",
-                        agent_id=run.agent_id,
-                    )
-                elif run.status in (RunStatus.FAILED, RunStatus.TIMEOUT):
-                    dal_update_task(
-                        run.task_id,
-                        status="TODO",
-                        tags=[run.agent_id, "failed", run.status.value],
-                    )
-            except Exception as e:
-                logger.warning("Auto-task update failed: %s", _sanitize(e))
+    @staticmethod
+    def _update_task_for_run(run: AgentRun) -> None:
+        """Close, label or re-open the CRM task this run came from.
+
+        THE DEFECT THIS GATES. A COMPLETED run used to close its originating
+        task with ``f"Run completed: {output_text[:200]}"`` unconditionally:
+        the agent's own claim became the permanent record and nothing checked
+        it. 300 of the 571 tasks closed in the last 7 days on this box carry
+        that string, and ``email-analyst`` holds 1,692 DONE tasks while having
+        had no production run since 2026-06-14 — every one of those closures
+        came from a benchmark run and carries benchmark fixture text as its
+        resolution. "DONE" meant "an agent said something", not "work
+        happened".
+
+        Ladder (``ROBOTHOR_RUN_VERIFICATION_ENABLED`` / ``_MODE``):
+          - ``off`` / ``observe``: byte-identical to the legacy behavior. The
+            merge posture is observe, so merging this changes nothing.
+          - ``alert``: the close still happens, but the resolution is labelled
+            ``[verified]`` or ``[claimed]`` so the ledger distinguishes a shown
+            completion from an asserted one. Task state is untouched.
+          - ``enforce``: an ``unverified_claims`` / ``failed_verification``
+            verdict does NOT close the task — a ``next_action`` naming the
+            unsupported claims is written instead, leaving the task open and
+            visible with a reason. Benchmark runs never close a production
+            task at all, whatever the verdict.
+
+        Never raises: task bookkeeping must not fail a finished run.
+        """
+        if not run.task_id:
+            return
+        try:
+            from robothor.crm.dal import resolve_task as dal_resolve_task
+            from robothor.crm.dal import update_task as dal_update_task
+            from robothor.engine.feature_flags import run_verification_mode
+            from robothor.engine.models import RunStatus
+
+            if run.status in (RunStatus.FAILED, RunStatus.TIMEOUT):
+                dal_update_task(
+                    run.task_id,
+                    status="TODO",
+                    tags=[run.agent_id, "failed", run.status.value],
+                )
+                return
+            if run.status != RunStatus.COMPLETED:
+                return
+
+            mode = run_verification_mode()
+            if mode in ("off", "observe"):
+                # The pin: nothing below runs until the flag is promoted.
+                dal_resolve_task(
+                    run.task_id,
+                    resolution=f"Run completed: {(run.output_text or '')[:200]}",
+                    agent_id=run.agent_id,
+                )
+                return
+
+            from robothor.engine.analytics import is_benchmark_run
+            from robothor.engine.run_verification import (
+                blocks_resolution,
+                next_action_for_unverified,
+                resolution_prefix,
+            )
+
+            status = getattr(run, "verified_status", None)
+            verification = getattr(run, "verification", None)
+
+            if mode == "enforce" and is_benchmark_run(run.trigger_detail):
+                logger.info(
+                    "benchmark run %s left task %s open (benchmark work is not production work)",
+                    _sanitize(run.id),
+                    _sanitize(run.task_id),
+                )
+                return
+
+            if mode == "enforce" and blocks_resolution(status):
+                from robothor.constants import DEFAULT_TENANT
+                from robothor.crm import dal
+
+                dal.set_next_action(
+                    task_id=run.task_id,
+                    next_action=next_action_for_unverified(verification),
+                    agent=run.agent_id,
+                    by="run_verification",
+                    tenant_id=getattr(run, "tenant_id", "") or DEFAULT_TENANT,
+                )
+                logger.info(
+                    "run %s claimed work it cannot show — task %s stays open",
+                    _sanitize(run.id),
+                    _sanitize(run.task_id),
+                )
+                return
+
+            prefix = resolution_prefix(status)
+            dal_resolve_task(
+                run.task_id,
+                resolution=f"{prefix} Run completed: {(run.output_text or '')[:200]}",
+                agent_id=run.agent_id,
+            )
+        except Exception as e:
+            logger.warning("Auto-task update failed: %s", _sanitize(e))

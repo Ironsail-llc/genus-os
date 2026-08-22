@@ -18,6 +18,7 @@ import json
 import logging
 import re
 import statistics
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -37,6 +38,32 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {}
+
+# A task counts as "passed" when its partial-credit score reaches this. The
+# headline pass rate is the count of such tasks over every task in the suite —
+# NOT the mean of the scores, which is `aggregate_score`.
+PASS_THRESHOLD = 0.7
+
+
+@dataclass(frozen=True)
+class JudgeOutcome:
+    """Result of one LLM-judge call: a score, or the reason there isn't one.
+
+    ``score`` is None exactly when ``error`` is set. There is deliberately no
+    neutral fallback value — see ``_judge_output``.
+    """
+
+    score: float | None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class TaskScore:
+    """A graded task: its partial-credit score plus any judge failure."""
+
+    score: float
+    judge_error: str | None = None
+
 
 # Hard caps
 _MAX_TASKS_PER_SUITE = 50
@@ -467,13 +494,22 @@ def _score_task(output: str, expected: dict[str, Any], run_meta: dict[str, Any])
     return sum(checks) / len(checks)
 
 
-async def _judge_output(output: str, rubric: list[str], model: str) -> float:
-    """Score output against a rubric using an LLM judge. Returns 0.0-1.0.
+async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutcome:
+    """Score output against a rubric using an LLM judge.
 
-    Each rubric item is scored 0 or 1 by the judge. The returned score is the
-    fraction of items that passed. On LLM failure, returns 0.5 (non-fatal).
+    Each rubric item is scored 0 or 1 by the judge; the score is the fraction
+    of items that passed, always in [0.0, 1.0] because a response whose score
+    count does not match the rubric is rejected rather than divided.
+
+    Every failure path returns ``JudgeOutcome(score=None, error=...)``. This
+    used to return 0.5 — so a rate-limited judge, a blank completion and a
+    genuinely middling agent were the same number, and the suite reported a
+    mediocre grade for a grader that never ran.
     """
     import litellm
+
+    if not rubric:
+        return JudgeOutcome(score=None, error="judge configured with an empty rubric")
 
     prompt = (
         "You are a benchmark judge. Score the following agent output against each rubric item.\n"
@@ -495,15 +531,24 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> float:
         )
         content = response.choices[0].message.content
         if not content:
-            return 0.5
+            return JudgeOutcome(score=None, error="judge returned an empty completion")
         data = json.loads(content)
-        scores = data.get("scores", [])
-        if not scores:
-            return 0.5
-        return sum(1 for s in scores if s) / len(rubric)
+        scores = data.get("scores")
+        if not isinstance(scores, list) or not scores:
+            return JudgeOutcome(score=None, error="judge response carried no 'scores' list")
+        if len(scores) != len(rubric):
+            # Dividing a mismatched count by len(rubric) produced grades above
+            # 1.0. There is no honest way to map 4 scores onto a 2-item rubric,
+            # so this is an error, not a number.
+            return JudgeOutcome(
+                score=None,
+                error=f"judge returned {len(scores)} scores for {len(rubric)} rubric items",
+            )
+        return JudgeOutcome(score=sum(1 for s in scores if s) / len(rubric))
     except Exception as e:
-        logger.debug("Judge LLM call failed: %s", str(e).replace("\n", "\\n"))
-        return 0.5
+        detail = str(e).replace("\n", "\\n")
+        logger.warning("Judge LLM call failed: %s", detail)
+        return JudgeOutcome(score=None, error=f"judge call failed: {detail}")
 
 
 async def _score_task_async(
@@ -511,12 +556,14 @@ async def _score_task_async(
     expected: dict[str, Any],
     run_meta: dict[str, Any],
     state_results: list[StateCheckResult] | None = None,
-) -> float:
+) -> TaskScore:
     """Async version of _score_task that supports LLM judge checks.
 
     If expected contains a 'judge' field, runs _judge_output and adds
     the result as one check (passes if score >= threshold). All other
     checks remain deterministic and synchronous.
+
+    Two independent invariants meet here, and neither subsumes the other.
 
     ``state_results`` are read-backs from the sandbox database (see
     ``robothor.engine.benchmark_sandbox``). Each counts as one more check,
@@ -524,6 +571,13 @@ async def _score_task_async(
     every rubric item cannot reach the 0.70 pass threshold while the environment
     says nothing happened. Passing ``None`` (the caller's choice below
     ``enforce``) leaves scoring byte-for-byte as it was.
+
+    A judge that could not be evaluated counts its check as unsatisfied — we
+    did not see the criterion met — and rides out on ``TaskScore.judge_error``
+    so the caller can record the case as failed rather than partially graded.
+    That is a separate failure from a disagreeing environment: the first says
+    the grader never ran, the second says the grader ran and the world
+    disagreed with the transcript. A task can hit either, or both.
     """
     checks: list[bool] = []
 
@@ -543,21 +597,23 @@ async def _score_task_async(
     # see _score_task docstring.
 
     # LLM judge check
+    judge_error: str | None = None
     judge = expected.get("judge")
     if judge:
         rubric = judge.get("rubric", [])
         threshold = float(judge.get("threshold", 0.7))
         model = judge.get("model", "openrouter/xiaomi/mimo-v2-pro")
-        judge_score = await _judge_output(output, rubric, model)
-        checks.append(judge_score >= threshold)
+        outcome = await _judge_output(output, rubric, model)
+        judge_error = outcome.error
+        checks.append(outcome.score is not None and outcome.score >= threshold)
 
     # Environment read-backs (grade the environment, never the transcript).
     checks.extend(bool(r.passed) for r in state_results or [])
 
     if not checks:
-        return 0.0
+        return TaskScore(score=0.0, judge_error=judge_error)
 
-    return sum(checks) / len(checks)
+    return TaskScore(score=sum(checks) / len(checks), judge_error=judge_error)
 
 
 # ---------------------------------------------------------------------------
@@ -855,12 +911,16 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     suite_max_cost = suite.get("max_cost_usd", _DEFAULT_SUITE_MAX_COST)
 
     for task in tasks:
-        # Cost guard
+        # Cost guard. A skipped task keeps its weight and stays in every
+        # denominator: it is a case the agent did not complete, not a case
+        # that does not exist. Filtering these out let a suite that died
+        # after task 1 record 1/1 = 100%.
         if total_cost >= suite_max_cost:
             results.append(
                 {
                     "task_id": task["id"],
                     "category": task.get("category", "correctness"),
+                    "weight": task.get("weight", 1.0),
                     "score": 0.0,
                     "skipped": True,
                     "reason": "suite cost budget exhausted",
@@ -955,7 +1015,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             # Grade the environment, never the transcript: read the sandbox
             # back and see what actually changed.
             state_results = _run_task_state_checks(task, seeded, sandbox_on)
-            score = await _score_task_async(
+            graded = await _score_task_async(
                 output,
                 _render_expected(task.get("expected", {}), seeded),
                 run_meta,
@@ -963,22 +1023,31 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             )
             total_cost += run.total_cost_usd
 
-            result_row: dict[str, Any] = {
+            task_result: dict[str, Any] = {
                 "task_id": task["id"],
                 "category": task.get("category", "correctness"),
                 "weight": task.get("weight", 1.0),
-                "score": round(score, 3),
+                "score": round(graded.score, 3),
                 "cost_usd": round(run.total_cost_usd, 4),
                 "steps": len(run.steps),
                 "status": run.status.value,
                 "output_preview": output[:200] if output else "",
             }
             if seeded is not None or state_results:
-                result_row["state_checks"] = [r.as_dict() for r in state_results]
-                result_row["state_checks_scored"] = state_checks_scored()
+                task_result["state_checks"] = [r.as_dict() for r in state_results]
+                task_result["state_checks_scored"] = state_checks_scored()
                 if seeded is not None:
-                    result_row["fixtures"] = seeded.summary()
-            results.append(result_row)
+                    task_result["fixtures"] = seeded.summary()
+            if graded.judge_error:
+                # Not a grade: the grader did not run. Surfaced per-task and
+                # counted as a failure below.
+                task_result["judge_error"] = graded.judge_error
+                logger.warning(
+                    "Benchmark task %s: judge could not be evaluated — %s",
+                    task["id"],
+                    graded.judge_error,
+                )
+            results.append(task_result)
 
         except Exception as e:
             logger.warning("Benchmark task %s failed: %s", task["id"], e)
@@ -997,26 +1066,42 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             # benchmark that grades yesterday's leftovers is worse than none.
             _teardown_task_fixtures(seeded)
 
-    # Calculate aggregate scores
-    scored = [r for r in results if not r.get("skipped")]
-    if not scored:
-        return {"error": "No tasks were scored"}
+    # Every task in the suite is a case, whether or not it got to run. The
+    # only thing `skipped` changes is telemetry — never the denominator.
+    if not results:
+        return {"error": "No tasks were run"}
 
-    # Weighted aggregate
-    total_weight = sum(r.get("weight", 1.0) for r in scored)
+    executed = [r for r in results if not r.get("skipped")]
+    skipped_count = len(results) - len(executed)
+
+    # Weighted aggregate (partial credit) over the whole suite.
+    total_weight = sum(r.get("weight", 1.0) for r in results)
     aggregate = (
-        sum(r["score"] * r.get("weight", 1.0) for r in scored) / total_weight
+        sum(r["score"] * r.get("weight", 1.0) for r in results) / total_weight
         if total_weight > 0
         else 0.0
     )
 
     # Per-category breakdown
     categories: dict[str, list[float]] = {}
-    for r in scored:
+    for r in results:
         cat = r.get("category", "correctness")
         categories.setdefault(cat, []).append(r["score"])
 
     category_scores = {cat: round(statistics.mean(scores), 3) for cat, scores in categories.items()}
+
+    # Headline: how many cases the agent actually passed. A case with a judge
+    # error is failed regardless of its partial score — the criterion was
+    # never evaluated, so nothing certifies it as met.
+    judge_errors = sum(1 for r in results if r.get("judge_error"))
+    passed = sum(
+        1
+        for r in results
+        if r.get("score", 0) >= PASS_THRESHOLD and not r.get("judge_error") and not r.get("skipped")
+    )
+    total_cases = len(results)
+    failed = total_cases - passed
+    pass_rate = passed / total_cases if total_cases else 0.0
 
     # Build run record
     run_record: dict[str, Any] = {
@@ -1025,11 +1110,16 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "tag": tag,
         "timestamp": datetime.now(UTC).isoformat(),
         "total_cost_usd": round(total_cost, 4),
+        "pass_rate": round(pass_rate, 4),
         "aggregate_score": round(aggregate, 3),
+        "total_cases": total_cases,
+        "passed": passed,
+        "failed": failed,
+        "judge_errors": judge_errors,
         "category_scores": category_scores,
         "task_results": results,
-        "tasks_run": len(scored),
-        "tasks_skipped": len(results) - len(scored),
+        "tasks_run": len(executed),
+        "tasks_skipped": skipped_count,
     }
 
     _save_block(_run_block(suite_id, tag), run_record)
@@ -1041,26 +1131,27 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             "agent_id": agent_id,
             "suite_id": suite_id,
             "tag": tag,
+            "pass_rate": round(pass_rate, 4),
             "aggregate_score": round(aggregate, 3),
+            "passed": passed,
+            "total_cases": total_cases,
+            "judge_errors": judge_errors,
             "timestamp": datetime.now(UTC).isoformat(),
         },
     )
 
     # Write-through to benchmark_results table — canonical store for the
     # benchmark_pass_rate goal metric and for visibility surfaces.
-    # Pass threshold: a task counts as "passed" when its score >= 0.7.
-    pass_threshold = 0.7
-    passed = sum(1 for r in scored if r.get("score", 0) >= pass_threshold)
-    failed = len(scored) - passed
     failures_brief = [
         {
             "case_id": r.get("task_id"),
             "category": r.get("category"),
             "score": r.get("score"),
+            "reason": r.get("judge_error") or r.get("reason") or r.get("error"),
             "output_preview": r.get("output_preview", ""),
         }
-        for r in scored
-        if r.get("score", 0) < pass_threshold
+        for r in results
+        if r.get("score", 0) < PASS_THRESHOLD or r.get("judge_error") or r.get("skipped")
     ]
     triggered_by_arg = (args.get("triggered_by") or "").strip() or "manual"
     experiment_id_arg = (args.get("experiment_id") or "").strip() or None
@@ -1083,18 +1174,21 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 """
                 INSERT INTO benchmark_results
                   (agent_id, suite_id, suite_path, total_cases, passed, failed,
-                   pass_rate, category_scores, failures, triggered_by,
-                   experiment_id, cost_usd)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
+                   pass_rate, aggregate_score, judge_errors, category_scores,
+                   failures, triggered_by, experiment_id, cost_usd)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb,
+                        %s, %s, %s)
                 """,
                 (
                     agent_id,
                     suite_id,
                     suite_path_arg,
-                    len(scored),
+                    total_cases,
                     passed,
                     failed,
+                    float(round(pass_rate, 4)),
                     float(round(aggregate, 4)),
+                    judge_errors,
                     json.dumps(category_scores),
                     json.dumps(failures_brief, default=str),
                     triggered_by_arg,
@@ -1118,11 +1212,16 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "success": True,
         "suite_id": suite_id,
         "tag": tag,
+        "pass_rate": round(pass_rate, 4),
         "aggregate_score": round(aggregate, 3),
+        "total_cases": total_cases,
+        "passed": passed,
+        "failed": failed,
+        "judge_errors": judge_errors,
         "category_scores": category_scores,
         "total_cost_usd": round(total_cost, 4),
-        "tasks_run": len(scored),
-        "tasks_skipped": len(results) - len(scored),
+        "tasks_run": len(executed),
+        "tasks_skipped": skipped_count,
         "task_results": results,
     }
 
@@ -1243,6 +1342,30 @@ def _load_suite_fixtures(suite_path: Path) -> dict[str, Any] | None:
 
 def _suite_yaml_path(agent_id: str, workspace: str) -> Path:
     return _resolve_path(f"docs/benchmarks/{agent_id}/suite.yaml", workspace)
+
+
+def canonical_suite_id(agent_id: str, workspace: str) -> str | None:
+    """The suite id an agent is graded against, from its on-disk suite.yaml.
+
+    Consumers of ``benchmark_results`` need this to scope "the agent's latest
+    row" to the agent's *own* grader. Without it, ``DISTINCT ON (agent_id)``
+    hands the grade to whichever suite wrote last — which is how 709 synthetic
+    rows under suites ``s1``/``s2``/``test-suite`` became agent ``main``'s
+    score for three months.
+
+    Returns None when there is no readable suite, so callers fall back to the
+    unfiltered read rather than silently reporting "never benchmarked".
+    """
+    path = _suite_yaml_path(agent_id, workspace)
+    try:
+        raw = yaml.safe_load(path.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    # Both keys are in use across the fleet — see auto_define_suite_from_disk.
+    suite_id = raw.get("id") or raw.get("suite_id")
+    return str(suite_id) if suite_id else None
 
 
 async def auto_define_suite_from_disk(agent_id: str, workspace: str) -> dict[str, Any]:

@@ -119,18 +119,21 @@ def main() -> int:
         achievement = compute_achievement_score(agent_id, goals, tenant_id=DEFAULT_TENANT)
         legacy_overall, legacy_date = legacy.get(agent_id, (None, None))
         total, ok = run_activity(agent_id)
+        # score/rating are None when too little of the agent's goal contract
+        # could be measured to grade it — report the gap, don't multiply None.
+        score = achievement["score"]
         rows.append(
             {
                 "agent_id": agent_id,
                 "legacy": legacy_overall,
                 "legacy_date": legacy_date,
-                "goals_score_0_100": int(round(achievement["score"] * 100)),
+                "goals_score_0_100": None if score is None else int(round(score * 100)),
                 "goals_rating_1_5": achievement["rating"],
                 "satisfied": len(achievement["satisfied_goals"]),
                 "breached": len(achievement["breached_goals"]),
                 "runs_7d": total,
                 "ok_7d": ok,
-                "note": "",
+                "note": "" if score is not None else str(achievement["rating_reason"]),
             }
         )
 

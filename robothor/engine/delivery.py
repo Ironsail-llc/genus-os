@@ -346,6 +346,44 @@ def _reframe_beat_output(run: AgentRun) -> str:
     return "\n".join(lines)
 
 
+def _verification_banner(run: AgentRun) -> str:
+    """Return an honest-failure banner when the run claimed work it can't show.
+
+    Delivery-time only, exactly like ``_reframe_beat_output`` and
+    ``_strip_cot_prefix`` above: ``agent_runs.output_text`` keeps the raw claim
+    because the raw claim IS the evidence. What changes is that the operator
+    reading "✅ Payment confirmed" also reads that nothing in the run's tool
+    trace backs it.
+
+    Only the ``unverified_claims`` class earns a banner — that is the "nothing
+    was even attempted" verdict (the Venmo shape). ``failed_verification``
+    means a real tool call was made and failed, which the agent's own output
+    and the error path already surface.
+
+    Flag-gated on ``ROBOTHOR_RUN_VERIFICATION_MODE``: silent at ``off`` and
+    ``observe``, present at ``alert`` and ``enforce``. Never raises.
+    """
+    try:
+        from robothor.engine.feature_flags import run_verification_mode
+
+        if run_verification_mode() not in ("alert", "enforce"):
+            return ""
+        if getattr(run, "verified_status", None) != "unverified_claims":
+            return ""
+        from robothor.engine.run_verification import describe_unsupported
+
+        described = describe_unsupported(getattr(run, "verification", None))
+        if not described:
+            return ""
+        return (
+            f"⚠️ Unverified: I claimed to {described}, but no tool "
+            "call in this run shows it happened."
+        )
+    except Exception as e:  # noqa: BLE001 — a banner must never block delivery
+        logger.debug("verification banner skipped: %s", e)
+        return ""
+
+
 async def deliver(config: AgentConfig, run: AgentRun) -> bool:
     """Deliver agent output based on the delivery mode.
 
@@ -453,6 +491,13 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
         run.delivery_status = "suppressed_trivial"
         await _persist_delivery_status(run)
         return True
+
+    # Honest-failure banner. Appended AFTER the trivial-output check so it can
+    # never resurrect a beat that was meant to stay silent, and to the
+    # delivered body only — run.output_text keeps the raw claim as evidence.
+    banner = _verification_banner(run)
+    if banner:
+        text = f"{text}\n\n{banner}" if text else banner
 
     mode = config.delivery_mode
 

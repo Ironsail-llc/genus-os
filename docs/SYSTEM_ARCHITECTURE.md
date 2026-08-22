@@ -512,6 +512,15 @@ Migrations: `065_session_goal_meta.sql` (column), `066_session_goal_meta_v2.sql`
 - A synthetic `session-goal-alignment` GoalSpec (metric `session_goal_alignment_score`, target from the task's `alignment_target`, weight 5.0) when an objective is set.
 - A synthetic `session-goal-progress` GoalSpec (validated_evidence / criteria_count, target `>=1.0`) when criteria exist.
 
+Both synthetic specs carry `GoalSpec.synthetic = True`. They exist in no manifest, so **breach accounting skips them unless the agent opts in** — `detect_goal_breach(..., include_synthetic=...)`, driven by `session_goals_enforced(manifest)`, which reads:
+
+```yaml
+session_goals:
+  enforce: true
+```
+
+They are still *scored* (the metrics behind them are real), but the nightly review reports `categories.breached_manifest` and `categories.breached_synthetic` separately so a runtime-injected goal is never read as a declared contract.
+
 `buddy.py`, `buddy_critic.py::aggregate_findings`, the nightly self-improvement sweep, and the audit CLI all switched to `compose_goals` — the manifest-only path is gone.
 
 **Buddy alignment dimension.** When `build_evidence` finds an active goal for the run's agent, it includes `objective` + `success_criteria` in the LLM review prompt. The LLM rates `session_goal_alignment` 0.0-1.0 alongside its primary dimension. `persist_review` writes a second `agent_reviews` row with `categories.dimension = 'session_goal_alignment'` and `rating` mapped 1-5 from the alignment score. `_get_session_goal_alignment_score` reverses the map for `compute_goal_metrics`.
@@ -563,6 +572,20 @@ Rebuilt 2026-04-19 from a gamification scoreboard into an active reviewer + grad
 ### Scoring — `robothor/engine/goals.py`
 
 Every agent declares a `goals:` block in its manifest (see `docs/agents/GOAL_TAXONOMY.md`). `compute_achievement_score(agent_id)` returns a weighted 0.0-1.0 score over the agent's goals, scaled to 0-100 and persisted to `agent_buddy_stats.achievement_score` by `BuddyEngine.refresh_daily()`. Legacy RPG columns (xp, level, debugging_score, patience_score, chaos_score, wisdom_score, …) were removed — migration 034 added `achievement_score`; migration 035 drops the legacy columns after a 30-day soak.
+
+**A grade requires measurement.** A goal whose metric has no data this window is neither satisfaction nor breach, so it leaves the weighted denominator — which used to mean an agent satisfying 2 of its 7 goals reported a flawless 5/5, indistinguishable from an agent measured end to end. `compute_achievement_score` therefore also returns `coverage` (measured goal weight ÷ declared goal weight), `measured_goals` / `unmeasured_goals`, and `partial_score`. Below `MIN_MEASUREMENT_COVERAGE` (0.5) **no rating is emitted at all**: `score` and `rating` are `None`, `rating_reason` is `"insufficient measurement"`, and `partial_score` still reports what the measured slice scored so nothing is hidden.
+
+`None` is carried all the way down — it is never coerced to a number:
+
+| Surface | Unmeasured value |
+|---------|------------------|
+| `agent_reviews.rating` | `NULL` (migration 102 dropped the NOT NULL; the `BETWEEN 1 AND 5` CHECK still binds every non-NULL rating) |
+| `AgentScore.achievement_score` / `.rating` | `None`, with `.measured == False` |
+| `agent_buddy_stats.achievement_score` | `NULL` — every reader already filters `IS NOT NULL` |
+| `FleetStatus.fleet_achievement_score` | mean over **measured** agents only, `None` when nothing was measured; `agents_measured` / `agents_total` carry the coverage |
+| `/api/buddy/stats`, `/stats`, `/buddy` | `null` / `n/a (unmeasured)` — never `0/100` |
+
+The nightly review (`run_nightly_auto_review`) opens every feedback body with `Measurement coverage: N of M goals measured`. It used to write `rating=achievement["rating"] or 3`, converting "we measured nothing" into a mid-range pass — on 2026-08-21 that produced 20 of 20 rows at 3/5 with `categories.score = null`.
 
 ### Review — `robothor/engine/buddy_critic.py`
 
