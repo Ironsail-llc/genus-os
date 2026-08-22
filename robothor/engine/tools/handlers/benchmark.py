@@ -1284,6 +1284,7 @@ def _timeout_result(
     *,
     cost_usd: float | None = None,
     error_message: str | None = None,
+    elapsed_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Record a harness wall-clock kill as its own outcome, not as a grade.
 
@@ -1292,14 +1293,27 @@ def _timeout_result(
     it is labelled so nobody mistakes it for a wrong answer. Score is a hard
     0.0 rather than whatever the vacuous checks happened to award an empty
     string.
+
+    ``elapsed_seconds`` is what the run ACTUALLY took. Reporting the configured
+    cap instead hides a smaller cap firing first: `fleet-analysis` was killed at
+    119.96s by an outer per-tool timeout and filed as "harness timeout after
+    1800s", which is why raising the suite budget in #327 looked like it should
+    have worked and did not. A diagnostic that names the wrong number sends the
+    next reader to the wrong layer.
     """
+    actual = elapsed_seconds if elapsed_seconds is not None else cap_seconds
+    detail = (
+        f"after {actual:.0f}s"
+        if elapsed_seconds is None or abs(actual - cap_seconds) < 1.0
+        else f"after {actual:.0f}s, well under its {cap_seconds:.0f}s budget — "
+        "a smaller cap fired first"
+    )
     logger.warning(
-        "Benchmark task %s (%s/%s): harness timeout after %.0fs — recorded as "
-        "a timeout, not a grade%s",
+        "Benchmark task %s (%s/%s): timed out %s — recorded as a timeout, not a grade%s",
         task["id"],
         agent_id,
         suite_id,
-        cap_seconds,
+        detail,
         f" ({error_message})" if error_message else "",
     )
     result: dict[str, Any] = {
@@ -1311,7 +1325,8 @@ def _timeout_result(
         "timed_out": True,
         "timeout_seconds": cap_seconds,
         "status": _OUTCOME_TIMEOUT,
-        "reason": f"harness timeout after {cap_seconds:.0f}s (no answer to grade)",
+        "elapsed_seconds": round(actual, 1),
+        "reason": f"timed out {detail} (no answer to grade)",
         "output_preview": "",
     }
     if cost_usd is not None:
@@ -1591,6 +1606,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                         suite_id,
                         cost_usd=run.total_cost_usd,
                         error_message=getattr(run, "error_message", None),
+                        elapsed_seconds=(getattr(run, "duration_ms", None) or 0) / 1000.0 or None,
                     )
                 )
                 continue
