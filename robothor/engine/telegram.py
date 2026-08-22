@@ -199,6 +199,7 @@ AVAILABLE_MODELS: dict[str, str] = {
     "DeepSeek V4 Pro": "openrouter/deepseek/deepseek-v4-pro",
     "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4.6",
     "Claude Opus 4.7": "openrouter/anthropic/claude-opus-4.7",
+    "Ox Alpha": "openrouter/stealth/ox-alpha",
 }
 
 # Reverse lookup: model id → display name

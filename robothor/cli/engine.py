@@ -44,8 +44,15 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     async def _run() -> Any:
         from robothor.engine.runner import AgentRunner
+        from robothor.engine.tools import set_runner
 
         runner = AgentRunner(config)
+        # Register for sub-agent spawning, exactly as daemon.py does at startup.
+        # Without this, get_runner() returns None and every spawning tool fails
+        # with "Runner not available" — which silently made benchmarks
+        # un-runnable outside the daemon, so a grader fix could not be verified
+        # until the next nightly cron.
+        set_runner(runner, config)
         return await runner.execute(
             agent_id=agent_id,
             message=message,
@@ -219,8 +226,15 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
 
     async def _run() -> Any:
         from robothor.engine.runner import AgentRunner
+        from robothor.engine.tools import set_runner
 
         runner = AgentRunner(config)
+        # Register for sub-agent spawning, exactly as daemon.py does at startup.
+        # Without this, get_runner() returns None and every spawning tool fails
+        # with "Runner not available" — which silently made benchmarks
+        # un-runnable outside the daemon, so a grader fix could not be verified
+        # until the next nightly cron.
+        set_runner(runner, config)
         return await runner.execute(
             agent_id=agent_id,
             message=message,
@@ -267,8 +281,15 @@ def _cmd_engine_run_deep(args: argparse.Namespace, config: Any) -> int:
 
     async def _run() -> Any:
         from robothor.engine.runner import AgentRunner
+        from robothor.engine.tools import set_runner
 
         runner = AgentRunner(config)
+        # Register for sub-agent spawning, exactly as daemon.py does at startup.
+        # Without this, get_runner() returns None and every spawning tool fails
+        # with "Runner not available" — which silently made benchmarks
+        # un-runnable outside the daemon, so a grader fix could not be verified
+        # until the next nightly cron.
+        set_runner(runner, config)
 
         async def on_progress(progress: dict[str, Any]) -> None:
             elapsed = progress.get("elapsed_s", 0)
