@@ -2833,13 +2833,17 @@ def send_message(
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         try:
-            msg_id = str(uuid.uuid4())
+            # `id` is deliberately NOT supplied: crm_messages.id is an INTEGER
+            # with a sequence default. Passing str(uuid.uuid4()) raised on every
+            # call, the exception was swallowed, and callers got HTTP 200 — the
+            # table received no rows between 2026-04-08 and 2026-08-22. The
+            # bridge's own DAL (crm/bridge/crm_dal.py) has always omitted it.
             cur.execute(
                 """
-                INSERT INTO crm_messages (id, conversation_id, content, message_type, private, tenant_id)
-                VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
+                INSERT INTO crm_messages (conversation_id, content, message_type, private, tenant_id)
+                VALUES (%s, %s, %s, %s, %s) RETURNING *
             """,
-                (msg_id, conversation_id, content, message_type, private, tenant_id),
+                (conversation_id, content, message_type, private, tenant_id),
             )
             msg = cur.fetchone()
 
