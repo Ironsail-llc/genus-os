@@ -24,7 +24,17 @@ def fake_curl(tmp_path: Path) -> Path:
     log = tmp_path / "curl-args.txt"
     curl = tmp_path / "bin" / "curl"
     curl.parent.mkdir(parents=True, exist_ok=True)
-    curl.write_text(f'#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" >> "{log}"\n')
+    # Real curl with -w '%{http_code}' always prints a status; a silent double
+    # makes a status-checking caller look broken. See TestHttpErrorIsNotDelivery
+    # in test_pager_hardening.py for the defect this hid.
+    curl.write_text(
+        f'#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" >> "{log}"\n'
+        "for a in \"$@\"; do [ \"$a\" = '%{http_code}' ] && printf '200'; done\n"
+        # Explicit success: the loop's last `[ ... ] && printf` returns 1 when
+        # the final arg is not the -w format, and that would become the script's
+        # exit status.
+        "exit 0\n"
+    )
     curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
     return log
 

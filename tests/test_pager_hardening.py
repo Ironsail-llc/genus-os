@@ -64,6 +64,11 @@ def install_fake_curl(tmp_path: Path, fail_first: int = 0) -> Path:
         f'n=$(cat "{count}" 2>/dev/null || echo 0)\n'
         f'echo $((n + 1)) > "{count}"\n'
         f"[ $((n + 1)) -le {fail_first} ] && exit 1\n"
+        # Real curl with -w '%{http_code}' ALWAYS prints a status. A double that
+        # stays silent lets a caller which checks the status look broken, and
+        # lets one which ignores it look correct -- which is how the HTTP-401
+        # blind spot survived. Emit 200 on the success path.
+        "for a in \"$@\"; do [ \"$a\" = '%{http_code}' ] && printf '200'; done\n"
         "exit 0\n"
     )
     curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
@@ -364,3 +369,79 @@ def test_changed_scripts_are_shellcheck_clean(script: Path):
         timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ── send_failure_alert.sh: an HTTP error is not a delivered page ─────────────
+
+
+def install_http_error_curl(tmp_path: Path, status: str = "401") -> Path:
+    """Install a curl that TRANSFERS FINE but returns an HTTP error status.
+
+    This is what a revoked bot token or a wrong chat_id actually looks like.
+    curl exits 0 — it fetched the response body successfully; the body just
+    happens to say ``{"ok":false,"error_code":401}``. Without ``--fail`` (or an
+    explicit status check) the caller cannot tell this from a delivered page.
+
+    The pre-existing fake curl only ever varied the EXIT CODE, which is why
+    this whole class of failure had no coverage.
+    """
+    log = tmp_path / "curl-args.txt"
+    curl = tmp_path / "bin" / "curl"
+    curl.parent.mkdir(parents=True, exist_ok=True)
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf \'%s\\n\' "$@" >> "{log}"\n'
+        "# Honour -w so a caller that asks for the status code gets it.\n"
+        "want_code=0\n"
+        'for a in "$@"; do [ "$a" = \'%{http_code}\' ] && want_code=1; done\n'
+        f"[ \"$want_code\" = 1 ] && printf '{status}'\n"
+        f'[ "$want_code" = 0 ] && printf \'{{"ok":false,"error_code":{status}}}\'\n'
+        "exit 0\n"  # transport succeeded; the HTTP status is the failure
+    )
+    curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
+    return log
+
+
+class TestHttpErrorIsNotDelivery:
+    def test_http_401_is_not_treated_as_a_delivered_page(self, tmp_path: Path):
+        """A revoked token must fail loudly, not report success."""
+        install_http_error_curl(tmp_path, "401")
+        env = base_env(tmp_path, **FAKE_TOKEN_ENV)
+        result = run_send(tmp_path, env)
+        assert result.returncode != 0, (
+            "the pager exited 0 on HTTP 401 — systemd's Restart=on-failure will "
+            "never retry, and this is the only paging path for 8 units"
+        )
+
+    def test_http_401_does_not_arm_the_cooldown_stamp(self, tmp_path: Path):
+        """Arming the 1h cooldown on an undelivered page suppresses the next one."""
+        install_http_error_curl(tmp_path, "401")
+        state = tmp_path / "alert-cooldown"
+        env = base_env(tmp_path, **FAKE_TOKEN_ENV)
+        run_send(tmp_path, env)
+        stamps = list(state.glob("*")) if state.exists() else []
+        assert not stamps, f"cooldown armed on an undelivered page: {stamps}"
+
+    def test_http_500_is_also_not_delivery(self, tmp_path: Path):
+        install_http_error_curl(tmp_path, "500")
+        env = base_env(tmp_path, **FAKE_TOKEN_ENV)
+        assert run_send(tmp_path, env).returncode != 0
+
+    def test_the_failure_names_the_http_status(self, tmp_path: Path):
+        """'attempt failed' is not actionable; '401' tells the operator to rotate."""
+        install_http_error_curl(tmp_path, "401")
+        env = base_env(tmp_path, **FAKE_TOKEN_ENV)
+        result = run_send(tmp_path, env)
+        assert "401" in (result.stderr + result.stdout), (
+            "the HTTP status must appear in the log, or a dead token is "
+            "indistinguishable from a network blip"
+        )
+
+    def test_a_real_2xx_still_succeeds_and_arms_the_cooldown(self, tmp_path: Path):
+        """The happy path must be unchanged."""
+        install_http_error_curl(tmp_path, "200")
+        state = tmp_path / "alert-cooldown"
+        env = base_env(tmp_path, **FAKE_TOKEN_ENV)
+        result = run_send(tmp_path, env)
+        assert result.returncode == 0
+        assert state.exists() and list(state.glob("*")), "cooldown not armed on a real send"
