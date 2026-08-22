@@ -68,8 +68,13 @@ def test_empty_cron_cannot_run(agents_dir: Path) -> None:
     assert buddy_critic._agent_can_run("ghost") is False
 
 
-def test_missing_manifest_cannot_run(agents_dir: Path) -> None:
-    assert buddy_critic._agent_can_run("does-not-exist") is False
+def test_missing_manifest_is_unknown_not_disabled(agents_dir: Path) -> None:
+    """docs/agents/ is gitignored instance-land -- it may not exist at all.
+
+    Treating "no manifest" as "cannot run" refuses every finding on a clean
+    checkout, which is how the first version of this fix broke CI.
+    """
+    assert buddy_critic._agent_can_run("does-not-exist") is None
 
 
 def test_scheduled_agent_can_run(agents_dir: Path) -> None:
@@ -174,3 +179,29 @@ def test_finding_about_the_only_executor_is_refused(
     finding.agent_id = "agent-architect"
     assert buddy_critic.open_task_for_finding(finding) is None
     assert created == [], "the executor was assigned to fix itself"
+
+
+def test_no_manifests_at_all_still_files_the_finding(
+    agents_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A clean checkout has no docs/agents/ -- the loop must still work.
+
+    This is the case that broke CI on the first version: every candidate read
+    as "cannot run", so `open_task_for_finding` refused every finding.
+    """
+    created: list[dict] = []
+    monkeypatch.setattr("robothor.crm.dal.list_tasks", lambda **kw: [], raising=False)
+    monkeypatch.setattr(
+        "robothor.crm.dal.create_task",
+        lambda **kw: created.append(kw) or "task-id",
+        raising=False,
+    )
+    assert buddy_critic.resolve_self_improve_executor() == "auto-agent"
+    assert buddy_critic.open_task_for_finding(_finding()) == "task-id"
+    assert len(created) == 1
+
+
+def test_a_known_runnable_agent_beats_an_unknown_one(agents_dir: Path) -> None:
+    """auto-agent has no manifest here; agent-architect is known-scheduled."""
+    _write_manifest(agents_dir, "agent-architect", {"cron": "0 3 * * *"})
+    assert buddy_critic.resolve_self_improve_executor() == "agent-architect"

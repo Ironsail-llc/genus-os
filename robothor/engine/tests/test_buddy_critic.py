@@ -364,7 +364,7 @@ class TestOpenTaskForFinding:
         # See test_self_improve_executor.py -- auto-agent has been unschedulable
         # since before 2026-08-17 and collected 35 unreachable tasks.
         assert kwargs["assigned_to_agent"] == resolve_self_improve_executor()
-        assert _agent_can_run(kwargs["assigned_to_agent"])
+        assert _agent_can_run(kwargs["assigned_to_agent"]) is not False
         assert kwargs["created_by_agent"] == "buddy"
         assert "self-improve" in kwargs["tags"]
         mock_journal.assert_called_once()

@@ -775,15 +775,23 @@ def _recent_buddy_reviews(agent_id: str, window_hours: int, tenant_id: str) -> l
 _SELF_IMPROVE_EXECUTORS: tuple[str, ...] = ("auto-agent", "agent-architect")
 
 
-def _agent_can_run(agent_id: str) -> bool:
-    """True when this agent's manifest actually schedules it to run."""
+def _agent_can_run(agent_id: str) -> bool | None:
+    """Whether this agent's manifest schedules it to run.
+
+    Returns None when there is no manifest to read. ``docs/agents/`` is
+    instance-land and gitignored, so platform code must behave sanely where it
+    is absent entirely (a fresh install, or CI). Absence of a manifest is not
+    evidence that an agent is disabled, and treating it as such refuses every
+    finding on a clean checkout.
+    """
     try:
-        data = yaml.safe_load((AGENTS_DIR / f"{agent_id}.yaml").read_text()) or {}
+        text = (AGENTS_DIR / f"{agent_id}.yaml").read_text()
+        data = yaml.safe_load(text) or {}
     except (OSError, yaml.YAMLError):
-        return False
+        return None
     schedule = data.get("schedule") or (data.get("v2") or {}).get("schedule") or {}
     if not isinstance(schedule, dict):
-        return False
+        return None
     if schedule.get("enabled") is False:
         return False
     return bool(str(schedule.get("cron") or "").strip())
@@ -792,17 +800,25 @@ def _agent_can_run(agent_id: str) -> bool:
 def resolve_self_improve_executor(*, exclude: str | None = None) -> str | None:
     """The first preferred executor that can actually run, or None.
 
-    ``exclude`` drops a candidate that is itself the subject of the finding.
-    An executor assigned to fix its own harness is the pipeline editing its own
-    guardrails -- the same invariant that keeps meta-agents out of
-    ``EXCLUDED_FROM_SELF_IMPROVE``.
+    Prefers an agent the manifests confirm is scheduled. Where no manifest is
+    readable the state is unknown, and an unknown candidate is used only as a
+    fallback -- never in preference to one known to run, and never over a
+    positive "this agent is disabled".
+
+    ``exclude`` drops a candidate that is itself the subject of the finding. An
+    executor assigned to fix its own harness is the pipeline editing its own
+    guardrails -- the invariant `test_skips_meta_agents` states.
     """
+    unknown: str | None = None
     for candidate in _SELF_IMPROVE_EXECUTORS:
         if candidate == exclude:
             continue
-        if _agent_can_run(candidate):
+        state = _agent_can_run(candidate)
+        if state is True:
             return candidate
-    return None
+        if state is None and unknown is None:
+            unknown = candidate
+    return unknown
 
 
 def open_task_for_finding(finding: Finding, *, tenant_id: str = DEFAULT_TENANT) -> str | None:
