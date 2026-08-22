@@ -1,3 +1,9 @@
+## [1.36.6](https://github.com/Ironsail-llc/genus-os/compare/v1.36.5...v1.36.6) (2026-08-22)
+
+### Bug Fixes
+
+* **bench:** the judge was starved of tokens, and scored as a weak agent ([#335](https://github.com/Ironsail-llc/genus-os/issues/335)) ([a572fbf](https://github.com/Ironsail-llc/genus-os/commit/a572fbf3ee9a7c5a9e6e5f38c2d3b1bcd34f8977)), closes [#326](https://github.com/Ironsail-llc/genus-os/issues/326)
+
 ## [1.36.5](https://github.com/Ironsail-llc/genus-os/compare/v1.36.4...v1.36.5) (2026-08-22)
 
 ### Bug Fixes
