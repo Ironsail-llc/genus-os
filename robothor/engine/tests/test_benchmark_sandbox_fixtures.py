@@ -791,9 +791,7 @@ class TestSeedingSurvivesProductionRlsBinding:
 
         source = inspect.getsource(module)
         unscoped = [
-            line.strip()
-            for line in source.splitlines()
-            if "with get_connection() as conn:" in line
+            line.strip() for line in source.splitlines() if "with get_connection() as conn:" in line
         ]
         assert not unscoped, (
             "these sandbox DB helpers take an unscoped connection, so seeding and "
