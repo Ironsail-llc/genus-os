@@ -1094,7 +1094,7 @@ class AgentRunner:
                 # the soak report and left 'pending' runs behind.
                 _blocked_run = session.fail(f"Blocked by injection scan: {_inj_exc}")
                 with contextlib.suppress(Exception):
-                    await asyncio.get_running_loop().run_in_executor(None, create_run, _blocked_run)
+                    await asyncio.to_thread(create_run, _blocked_run)
                 try:
                     from robothor.engine.tracking import log_guardrail_event
 
@@ -1342,7 +1342,7 @@ class AgentRunner:
                 import psycopg2
 
                 try:
-                    await asyncio.get_running_loop().run_in_executor(None, create_run, session.run)
+                    await asyncio.to_thread(create_run, session.run)
                 except (psycopg2.IntegrityError, psycopg2.errors.InsufficientPrivilege) as e:
                     # Deterministic rejection (CHECK/FK/unique violation, or an RLS
                     # WITH CHECK refusal when the row's tenant disagrees with the
@@ -1389,8 +1389,7 @@ class AgentRunner:
                     try:
                         from robothor.crm.dal import create_task as dal_create_task
 
-                        task_id = await asyncio.get_running_loop().run_in_executor(
-                            None,
+                        task_id = await asyncio.to_thread(
                             lambda: dal_create_task(
                                 title=f"{agent_config.name}: {trigger_type.value} run",
                                 body=f"run_id: {session.run.id}\ntrigger: {trigger_detail or 'scheduled'}",
@@ -1407,8 +1406,7 @@ class AgentRunner:
                         # inserted the row before the auto-task existed, so
                         # the INSERT had NULL task_id.
                         if session.run.task_id:
-                            await asyncio.get_running_loop().run_in_executor(
-                                None,
+                            await asyncio.to_thread(
                                 lambda: update_run(session.run.id, task_id=session.run.task_id),
                             )
                     except Exception as e:
@@ -3198,7 +3196,7 @@ class AgentRunner:
             # Flush this iteration's steps to the DB so a cancelled or
             # timed-out run still leaves a per-step trail.
             try:
-                await asyncio.get_running_loop().run_in_executor(None, session.flush_new_steps_sync)
+                await asyncio.to_thread(session.flush_new_steps_sync)
             except Exception as e:
                 logger.debug("Step flush failed (non-fatal): %s", _sanitize(e))
 
@@ -4243,8 +4241,7 @@ class AgentRunner:
 
     async def _persist_run(self, run: AgentRun) -> None:
         """Persist run state and steps to the database in a background thread."""
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._persist_run_sync, run)
+        await asyncio.to_thread(self._persist_run_sync, run)
 
     async def _escalate_unfinished_todos_bg(self, kwargs: dict[str, Any]) -> None:
         """Run the blocking todo escalation/promotion off the event loop.
@@ -4252,11 +4249,8 @@ class AgentRunner:
         Best-effort: the escalation is non-critical (the next heartbeat re-plans
         from the parent task anyway), so failures are logged, not raised.
         """
-        loop = asyncio.get_running_loop()
         try:
-            await loop.run_in_executor(
-                None, functools.partial(_escalate_unfinished_todos, **kwargs)
-            )
+            await asyncio.to_thread(functools.partial(_escalate_unfinished_todos, **kwargs))
         except Exception as e:  # noqa: BLE001
             logger.warning("todo escalation (bg) error: %s", _sanitize(e))
 
