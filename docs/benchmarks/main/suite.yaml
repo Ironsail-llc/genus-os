@@ -26,7 +26,7 @@ tasks:
     weight: 1.0
     expected:
       must_contain: ["calendar|schedule|event|tomorrow"]
-      must_not_contain: ["error", "failed", "cannot access"]
+      must_not_contain: ["\\berror", "\\bfailed\\b", "cannot access"]
 
   - id: task-creation
     prompt: "Create a task to review the Q2 budget report by Friday"
@@ -34,7 +34,7 @@ tasks:
     weight: 1.0
     expected:
       must_contain: ["task|created|added|budget|Q2"]
-      must_not_contain: ["error", "failed"]
+      must_not_contain: ["\\berror", "\\bfailed\\b"]
 
   - id: memory-recall
     prompt: "What do you know about our current model fleet?"

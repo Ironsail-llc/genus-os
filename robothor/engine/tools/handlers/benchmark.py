@@ -385,6 +385,69 @@ def _resolve_path(path: str, workspace: str) -> Path:
     return p
 
 
+#: A run of ASCII letters and nothing else — no boundary, no metacharacter.
+_BARE_WORD_RE = re.compile(r"^[A-Za-z]+$")
+
+
+def _top_level_alternatives(pattern: str) -> list[str]:
+    """Split a regex on ``|`` at nesting depth zero.
+
+    ``\\b(?:resolved|closed) (?:it|the)`` is ONE alternative: the pipes inside
+    the groups are bounded by them. ``stable|steady|no change`` is three.
+    """
+    alternatives: list[str] = []
+    buffer = ""
+    depth = 0
+    in_class = False
+    escaped = False
+    for char in pattern:
+        if escaped:
+            buffer += char
+            escaped = False
+            continue
+        if char == "\\":
+            buffer += char
+            escaped = True
+            continue
+        if in_class:
+            buffer += char
+            if char == "]":
+                in_class = False
+            continue
+        if char == "[":
+            in_class = True
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        if char == "|" and depth == 0:
+            alternatives.append(buffer)
+            buffer = ""
+        else:
+            buffer += char
+    alternatives.append(buffer)
+    return [a.strip() for a in alternatives]
+
+
+def unanchored_literals(pattern: str) -> list[str]:
+    """Top-level branches of ``pattern`` that are bare words with no boundary.
+
+    ``must_not_contain`` patterns are ``re.search`` — a bare word matches
+    anywhere inside a longer one. Measured on this instance's benchmark
+    sub-runs: ``exec`` tripped 83 of 409 agent-architect outputs, all of them
+    on *exec*ute / *exec*ution / *exec*uted; ``stable`` tripped 15 of 81
+    devops-analyst outputs, on the trend tag its own instruction file mandates.
+    The agent is scored down for the language, never for the defect.
+
+    A branch passes as soon as it carries any regex syntax — ``\\bexec\\b`` for
+    a whole word, ``\\bescalat`` for a deliberate stem, ``low.priority`` for a
+    literal with a wildcard. The rule is not "be strict", it is "say which
+    boundary you meant". A multi-word phrase ("sent to slack") cannot hide
+    inside another word and needs nothing.
+    """
+    return [alt for alt in _top_level_alternatives(pattern or "") if _BARE_WORD_RE.match(alt)]
+
+
 def _validate_task(task: dict[str, Any]) -> str | None:
     """Return an error string if task is invalid, else None."""
     if not task.get("id"):
@@ -408,6 +471,15 @@ def _validate_task(task: dict[str, Any]) -> str | None:
                 re.compile(pattern)
             except re.error as exc:
                 return f"task '{task['id']}' has invalid regex in {field}: {exc}"
+    for pattern in expected.get("must_not_contain", []):
+        bare = unanchored_literals(str(pattern))
+        if bare:
+            return (
+                f"task '{task['id']}' has unanchored literal(s) {bare} in "
+                f"must_not_contain pattern {pattern!r} — a bare word matches inside "
+                "longer words (exec/execute, error/extraction error). Add a boundary: "
+                r"\bword\b for a whole word, \bstem for a prefix."
+            )
     # Validate judge field if present
     judge = expected.get("judge")
     if judge is not None:
