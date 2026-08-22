@@ -4304,6 +4304,10 @@ class AgentRunner:
                 outcome_notes=run.outcome_notes,
                 verified_status=getattr(run, "verified_status", None),
                 verification=getattr(run, "verification", None),
+                # Re-assert task_id at run end: the write after auto-task
+                # creation can fail or be lost to a crash mid-run. update_run
+                # skips None fields, so taskless runs are unaffected.
+                task_id=run.task_id,
             )
             # Flush only steps the session hasn't already committed —
             # per-iteration flushes (see AgentSession.flush_new_steps_sync)
