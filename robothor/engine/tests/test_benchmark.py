@@ -442,7 +442,16 @@ def _isolate_benchmark_results_db(monkeypatch):
 
     import robothor.db.connection as _conn_mod
 
-    monkeypatch.setattr(_conn_mod, "get_connection", lambda *a, **kw: _FakeConn())
+    def _fake_get_connection(*a, **kw):
+        return _FakeConn()
+
+    # Claim the real function's module identity. ``tests/conftest_integration``
+    # sweeps ``sys.modules`` by ``__module__`` and rebinds stragglers to its
+    # proxy; without this, a module importing ``get_connection`` for the first
+    # time DURING one of these tests keeps the fake for the rest of the session
+    # and unrelated integration tests fail on a fake cursor.
+    _fake_get_connection.__module__ = "robothor.db.connection"
+    monkeypatch.setattr(_conn_mod, "get_connection", _fake_get_connection)
 
 
 class TestBenchmarkRun:
