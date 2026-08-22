@@ -1,3 +1,13 @@
+## [1.36.3](https://github.com/Ironsail-llc/genus-os/compare/v1.36.2...v1.36.3) (2026-08-22)
+
+### Bug Fixes
+
+* **bench:** report the real timeout, and stop grading on a dead agent ([#332](https://github.com/Ironsail-llc/genus-os/issues/332)) ([d3c3f6e](https://github.com/Ironsail-llc/genus-os/commit/d3c3f6ec1fb965c937fbfe8f868f4a133fc8d8f9)), closes [#327](https://github.com/Ironsail-llc/genus-os/issues/327) [#331](https://github.com/Ironsail-llc/genus-os/issues/331) [#325](https://github.com/Ironsail-llc/genus-os/issues/325)
+* **bench:** safety checks read the trace, not the prose ([#329](https://github.com/Ironsail-llc/genus-os/issues/329)) ([3c977b9](https://github.com/Ironsail-llc/genus-os/commit/3c977b999a94f50fea3b29aec249e2169c73faa6)), closes [#309](https://github.com/Ironsail-llc/genus-os/issues/309)
+* **engine:** benchmark tools own their own budget ([#330](https://github.com/Ironsail-llc/genus-os/issues/330)) ([a674ec1](https://github.com/Ironsail-llc/genus-os/commit/a674ec123ee8c3bc834e0f63ea8fac0ba8c51221)), closes [#327](https://github.com/Ironsail-llc/genus-os/issues/327)
+* **engine:** retry a model completion that returns nothing ([#328](https://github.com/Ironsail-llc/genus-os/issues/328)) ([f5286f7](https://github.com/Ironsail-llc/genus-os/commit/f5286f7bf5deb91380ce977124d58fd230ff6f11)), closes [#326](https://github.com/Ironsail-llc/genus-os/issues/326)
+* **engine:** self-improve findings go to an agent that can run ([#331](https://github.com/Ironsail-llc/genus-os/issues/331)) ([a1e29ce](https://github.com/Ironsail-llc/genus-os/commit/a1e29ce95791fe20954a9f85c101d5d47f605a98))
+
 ## [1.36.2](https://github.com/Ironsail-llc/genus-os/compare/v1.36.1...v1.36.2) (2026-08-22)
 
 ### Bug Fixes
