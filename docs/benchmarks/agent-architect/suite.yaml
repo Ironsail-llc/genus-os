@@ -4,6 +4,22 @@ description: "Agent Architect benchmark: fleet analysis, dispatch routing, cross
 # Recalibrated 2026-05-14 for MiMo V2.5 Pro fleet: open-ended tasks moved to judge
 # rubrics, brittle keyword lists dropped, per-task cost caps now auto-derived.
 #
+# 2026-08-21: tool-use assertions moved off prose onto the run's own trace
+# (`tools_used` / `tools_not_used`). They had been `must_contain` regexes over
+# `output_text`, which grades whether the agent TYPED a tool's name. Measured
+# over the recorded sub-runs on this box: `list_tasks` named in 7 of 74
+# dedup-check outputs while it was called 359 times with zero failures;
+# `get_agent_stats` named in 3 of 76 fleet-analysis outputs against 364
+# successful calls. In the other direction, `must_not_contain: ["exec"]` is a
+# substring match that fires on "executed"/"execution" — 20 of 72
+# status-file-write outputs matched it, and `exec` is denied to benchmark
+# sub-agents in every mode, so the true violation count is zero.
+#
+# `create_task` is only callable when ROBOTHOR_BENCHMARK_SANDBOX_ENABLED is on
+# (it is in benchmark_sandbox.SANDBOX_WRITE_TOOLS). With the flag off, the two
+# dispatch cases fail on the harness, not on the agent — which is the honest
+# reading, and the reason the sandbox was built.
+#
 # 2026-08-21: `must_not_contain: ["exec"]` was an unanchored substring. Across
 # 409 benchmark sub-runs of the four cases that carried it, it fired 83 times —
 # every one of them on *exec*ute / *exec*ution / *exec*uted, or on the agent
@@ -23,9 +39,9 @@ tasks:
     category: correctness
     weight: 1.0
     expected:
-      must_contain:
+      tools_used:
         - "get_agent_stats"
-      must_not_contain:
+      tools_not_used:
         - "experiment_create"
         - "benchmark_run"
       judge:
@@ -44,12 +60,13 @@ tasks:
     weight: 2.0
     expected:
       must_contain:
-        - "create_task"
         - "auto-agent"
         - "email-analyst"
         - "timeout|min_output|hypothesis"
-      must_not_contain:
-        - "\\bexec[:(]"   # invocation, not the English word "execute"
+      tools_used:
+        - "create_task"
+      tools_not_used:
+        - "exec"
         - "experiment_create"
       max_iterations: 8
 
@@ -59,10 +76,11 @@ tasks:
     weight: 1.0
     expected:
       must_contain:
-        - "list_tasks"
         - "email-classifier"
-      must_not_contain:
-        - "\\bexec[:(]"   # invocation, not the English word "execute"
+      tools_used:
+        - "list_tasks"
+      tools_not_used:
+        - "exec"
       max_iterations: 10
 
   - id: cross-pollination
@@ -70,11 +88,14 @@ tasks:
     category: correctness
     weight: 1.0
     expected:
+      # autoagent_learnings stays a prose check: it asserts the agent NAMED the
+      # block it reasoned from, which is a content claim, not a tool call.
       must_contain:
         - "autoagent_learnings"
+      tools_used:
         - "create_task"
-      must_not_contain:
-        - "\\bexec[:(]"   # invocation, not the English word "execute"
+      tools_not_used:
+        - "exec"
         - "experiment_create"
       judge:
         model: openrouter/xiaomi/mimo-v2.5-pro
@@ -91,7 +112,7 @@ tasks:
     category: correctness
     weight: 1.0
     expected:
-      must_not_contain:
+      tools_not_used:
         - "experiment_create"
         - "benchmark_run"
       judge:
@@ -127,10 +148,14 @@ tasks:
     category: correctness
     weight: 1.0
     expected:
+      # write_file stays a prose check on purpose. It is in
+      # benchmark_sandbox.EXTERNAL_SIDE_EFFECT_TOOLS — denied in EVERY
+      # benchmark mode after the 2026-05-28 incident — so `tools_used` would be
+      # a check that can never pass. This case grades the plan, not the write.
       must_contain:
         - "write_file"
         - "agent-architect-status"
         - "fleet|health|dispatched"
-      must_not_contain:
-        - "\\bexec[:(]"   # invocation, not the English word "execute"
+      tools_not_used:
+        - "exec"
       max_iterations: 10

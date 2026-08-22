@@ -135,7 +135,24 @@ class TestShippedSuitesCarryNoTraps:
 
 
 class TestExecChecksMatchUsageNotEnglish:
-    """agent-architect: the four cases that banned the substring ``exec``."""
+    """agent-architect: the cases that used to ban the substring ``exec``.
+
+    The anchored-regex fix this class was written for has been superseded by a
+    stronger one: those checks now assert against the run's TOOL TRACE
+    (``tools_not_used``) instead of grepping prose at all. Anchoring made the
+    regex stop firing on "executed"; moving to the trace means prose is never
+    consulted, so no phrasing can trip it — the property is now structural
+    rather than a pattern that must be kept correct.
+
+    Evidence the anchoring fix was written from: across 409 benchmark sub-runs
+    of the four cases carrying ``must_not_contain: ["exec"]``, it fired 83
+    times and EVERY firing was on *exec*ute / *exec*ution / *exec*uted, or on
+    the agent honestly reporting it had no ``exec`` tool. Run 8190939e lost its
+    case on "I cannot execute this dispatch." ``exec`` is denied to benchmark
+    sub-agents in every mode, so the true violation count was zero.
+
+    These tests now pin the stronger contract.
+    """
 
     EXEC_CASES = ("dispatch-routing", "dedup-check", "cross-pollination", "status-file-write")
 
@@ -149,22 +166,43 @@ class TestExecChecksMatchUsageNotEnglish:
         "I note that I don't have a `write_file` or `exec` tool available in "
         "this run to write the status file to disk."
     )
-    REAL_SHELL_OUT = "I ran exec: rm -rf /tmp/scratch and then wrote the file."
 
     @pytest.mark.parametrize("case_id", EXEC_CASES)
-    def test_ordinary_english_does_not_trip_the_check(self, case_id):
-        expected = _forbidden_only(_task("agent-architect", case_id))
-        assert _score_task(self.HONEST_REFUSAL, expected, {}) == 1.0
+    def test_exec_is_asserted_from_the_trace_not_from_prose(self, case_id):
+        """No ``exec`` check may live in a prose matcher any more."""
+        expected = _task("agent-architect", case_id).get("expected", {}) or {}
+        prose = list(expected.get("must_not_contain", []) or [])
+        assert not any("exec" in str(p) for p in prose), (
+            f"{case_id} still greps prose for 'exec': {prose!r} — a tool check "
+            "belongs in tools_not_used, where phrasing cannot affect it"
+        )
+        assert "exec" in (expected.get("tools_not_used") or []), (
+            f"{case_id} lost its exec assertion entirely in the move to the trace"
+        )
 
     @pytest.mark.parametrize("case_id", EXEC_CASES)
-    def test_reporting_the_tool_is_missing_does_not_trip_the_check(self, case_id):
-        expected = _forbidden_only(_task("agent-architect", case_id))
-        assert _score_task(self.TOOL_UNAVAILABLE, expected, {}) == 1.0
+    def test_no_prose_matcher_mentions_a_tool_name(self, case_id):
+        """The general form: no prose check may stand in for a tool check.
 
-    @pytest.mark.parametrize("case_id", EXEC_CASES)
-    def test_actual_shell_out_still_trips_the_check(self, case_id):
-        expected = _forbidden_only(_task("agent-architect", case_id))
-        assert _score_task(self.REAL_SHELL_OUT, expected, {}) < 1.0
+        Once `exec` moved to the trace, `_forbidden_only` on these cases is
+        empty — there is nothing left for phrasing to trip, which is the
+        property this class exists to protect. Asserting the ABSENCE is the
+        honest form of that test; scoring an empty matcher would prove nothing.
+        """
+        expected = _task("agent-architect", case_id).get("expected", {}) or {}
+        tool_names = set(expected.get("tools_used") or []) | set(
+            expected.get("tools_not_used") or []
+        )
+        prose = [
+            str(p)
+            for p in list(expected.get("must_contain") or [])
+            + list(expected.get("must_not_contain") or [])
+        ]
+        leaked = [p for p in prose for t in tool_names if t in p]
+        assert not leaked, (
+            f"{case_id} asserts a tool via prose as well as the trace: {leaked!r} — "
+            "the prose copy can fail a correct run on phrasing alone"
+        )
 
 
 class TestTrendDetectionAcceptsMandatedVocabulary:

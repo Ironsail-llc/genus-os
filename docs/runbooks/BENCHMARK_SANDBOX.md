@@ -122,6 +122,37 @@ fixtures:
       - {kind: field_changed, fixture: blocklisted_contact, field: email}
 ```
 
+### Asserting tool use
+
+Never assert a tool was used with a `must_contain` regex. Those patterns are
+matched against `run.output_text` and nothing else, so they grade whether the
+agent *typed* the tool's name — an agent that correctly calls the tool without
+narrating it fails, and one that narrates without calling it passes. Measured
+on this box before the fix: `list_tasks` appeared in 7 of 74 `dedup-check`
+outputs while it was called 359 times with zero failures.
+
+```yaml
+expected:
+  tools_used:      [list_tasks]        # graded from the run's own trace
+  tools_not_used:  [exec, write_file]  # an ATTEMPT is a violation
+```
+
+* `tools_used` counts only **successful** calls — a call that errored is not
+  evidence the action happened. Each entry is one check, same weight as one
+  `must_contain`, so `PASS_THRESHOLD` keeps meaning what it meant.
+* `tools_not_used` counts **attempts**, successful or not: reaching for a
+  forbidden tool is the failure, whether or not the harness let it through. It
+  also replaces substring traps — `must_not_contain: ["exec"]` fires on
+  "executed" and "execution".
+* A `tools_used` entry naming a tool no benchmark sub-agent can ever call
+  (anything outside `benchmark_allowed_tools(sandbox=True)` — `write_file`,
+  `store_memory`) is **rejected at define time**. A check that can never pass
+  is as broken as one that pays for narration; grade that outcome with
+  `state_checks` or a judge rubric instead.
+* Tools in `SANDBOX_WRITE_TOOLS` (`create_task`, `update_person`, …) are only
+  callable while this flag is on. A suite asserting one of them fails on the
+  harness, not on the agent, until the ladder reaches `observe`.
+
 Two rules learned the hard way while building this:
 
 * **Assert in both directions.** An agent that does nothing passes every

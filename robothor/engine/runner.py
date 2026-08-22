@@ -1349,6 +1349,14 @@ class AgentRunner:
                             ),
                         )
                         session.run.task_id = task_id if isinstance(task_id, str) else None
+                        # Persist the task_id back to the DB — create_run
+                        # inserted the row before the auto-task existed, so
+                        # the INSERT had NULL task_id.
+                        if session.run.task_id:
+                            await asyncio.get_running_loop().run_in_executor(
+                                None,
+                                lambda: update_run(session.run.id, task_id=session.run.task_id),
+                            )
                     except Exception as e:
                         logger.warning("Auto-task creation failed: %s", _sanitize(e))
 
