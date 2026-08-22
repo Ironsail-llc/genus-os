@@ -617,6 +617,14 @@ class TestIdentityThreading:
             patch("robothor.engine.runner.create_step"),
             patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch("robothor.identity.enrich_identity", return_value=None) as mock_enrich,
+            # A rapid follow-up: the previous interactive turn was seconds ago,
+            # so warmup is skipped and the mini-preamble path runs. The gate
+            # used to be "history is non-empty", but that never fired on a
+            # persistent session, so it is now a staleness clock.
+            patch(
+                "robothor.engine.runner._seconds_since_last_interactive_run",
+                return_value=5.0,
+            ),
             patch.object(
                 _asyncio.base_events.BaseEventLoop,
                 "run_in_executor",
