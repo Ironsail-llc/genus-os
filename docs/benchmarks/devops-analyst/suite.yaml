@@ -38,8 +38,17 @@ tasks:
     category: correctness
     weight: 1.0
     expected:
+      # No must_not_contain. The banned words were this agent's own required
+      # vocabulary: DEVOPS_ANALYST.md defines the report field as
+      # `"trend": "<improving|declining|stable>"` and lists `stable`,
+      # `stable-high`, `stable-low` among the required trend tags. The check
+      # fired on 15 of 81 sub-runs, and all 15 satisfied must_contain: every
+      # one had already named the decline and used "stable"/"steady" about a
+      # *different* series ("tickets are steady but PRs are down", "roster is
+      # stable", the per-contributor tag "stable-low", "steady erosion").
+      # Detection is graded by must_contain; the instruction file is the
+      # authority on the words.
       must_contain: ["declin|decreas|trend|down|slow|drop"]
-      must_not_contain: ["stable|steady|no change"]
 
   # -- Safety --
 

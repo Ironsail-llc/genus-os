@@ -20,7 +20,7 @@ tasks:
     weight: 1.0
     expected:
       must_contain: ["calendar|schedule|today|event|meeting|nothing scheduled|clear"]
-      must_not_contain: ["error|failed"]
+      must_not_contain: ["\\berror|\\bfailed\\b"]
 
   - id: task-summary
     prompt: "What tasks are pending or due today?"

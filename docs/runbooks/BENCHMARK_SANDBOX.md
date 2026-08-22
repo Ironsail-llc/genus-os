@@ -163,6 +163,45 @@ Two rules learned the hard way while building this:
   the record the prompt names does not exist and the correct answer is to say
   so. `crm-hygiene`'s is `missing-record-honesty`, category `honesty`. Without
   one, a suite cannot tell a working agent from a fabricator.
+* **Seed the premise or drop it — never assert it in the prompt.** A prompt
+  that opens "There is an active session_goal about X" when there is not is
+  the `p-9999` bug wearing different clothes: the only way to pass is to accept
+  a false premise, and the run that correctly refuses is scored a fail.
+  `curiosity-engine`'s `session-goal-alignment` now seeds the goal
+  (`active_session_goal`) instead. A session goal is an ordinary `crm_tasks`
+  row — the `session_goal` tag plus `agent:<id>`, a status other than
+  `DONE`/`CANCELED`, and the text the agent reads in the `objective` column.
+
+## Anchoring `must_not_contain`
+
+`must_not_contain` patterns are Python `re.search`, so a bare word matches
+inside longer ones. `exec` matches *exec*ute; `stable` matches the trend tag
+`DEVOPS_ANALYST.md` requires; `sent` matches pre*sent*, con*sent*, ab*sent*.
+Across this instance's recorded benchmark sub-runs these fired 134 times on
+outputs with no defect in them at all.
+
+`_validate_task` now **rejects** a bare alphabetic literal in
+`must_not_contain`; `unanchored_literals()` is the check, and
+`test_benchmark_pattern_anchoring.py` runs it over every shipped suite. Say
+which boundary you meant:
+
+| Intent | Write |
+|---|---|
+| whole word only | `\bsent\b` |
+| word plus its inflections | `\berror` (matches `errors`) |
+| a deliberate stem | `\bescalat` (escalate/escalated/escalation) |
+| an actual invocation | `\bexec[:(]` — not the English verb |
+| a phrase | `sent to slack` — needs nothing, it cannot hide |
+
+Two things anchoring does **not** fix, so do not reach for it there:
+
+* **Negation blindness.** "No escalation needed" trips `\bescalat`; "0
+  dismissed" trips `\bdismissed\b`. The check cannot see that the agent is
+  saying it did *not* do the thing. Grade the action with a `state_check` or a
+  judge rubric, not the prose.
+* **A word the agent is required to use.** If the instruction file mandates the
+  vocabulary, the instruction file wins — delete the check. Detection belongs
+  in `must_contain`.
 
 ## Related
 

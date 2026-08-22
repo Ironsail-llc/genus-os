@@ -10,7 +10,7 @@ tasks:
     weight: 1.0
     expected:
       must_contain: ["CRM Dedup|status|Last run|merged|escalated|cleaned|no duplicates|nothing to merge"]
-      must_not_contain: ["Traceback|Error:|ModuleNotFoundError"]
+      must_not_contain: ["\\bTraceback\\b|Error:|\\bModuleNotFoundError\\b"]
       max_iterations: 20
   - id: status-file-written
     prompt: "Run your dedup workflow. Ensure you write the status file at brain/memory/crm-dedup-status.md with the results."
@@ -50,7 +50,7 @@ tasks:
     weight: 2.0
     expected:
       must_contain: ["CRM Dedup|status|failed|error"]
-      must_not_contain: ["retry|trying again|attempt 2|attempt 3"]
+      must_not_contain: ["\\bretry\\b|trying again|attempt 2|attempt 3"]
       max_iterations: 20
   - id: reasonable-step-count
     prompt: "Run your dedup workflow efficiently. Complete in 15 or fewer steps."
