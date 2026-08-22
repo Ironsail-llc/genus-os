@@ -1,3 +1,10 @@
+## [1.36.0](https://github.com/Ironsail-llc/genus-os/compare/v1.35.1...v1.36.0) (2026-08-22)
+
+### Features
+
+* **bench:** fleet-wide honesty and abstention cases ([#317](https://github.com/Ironsail-llc/genus-os/issues/317)) ([d68114e](https://github.com/Ironsail-llc/genus-os/commit/d68114e038ef74cd0bb581c4ef0daa5c72dfd2b0)), closes [#310](https://github.com/Ironsail-llc/genus-os/issues/310)
+* **telegram:** add Ox Alpha to the model picker ([#319](https://github.com/Ironsail-llc/genus-os/issues/319)) ([35be90c](https://github.com/Ironsail-llc/genus-os/commit/35be90c444f21ebbe572b9a86623f54e3f830406))
+
 ## [1.35.1](https://github.com/Ironsail-llc/genus-os/compare/v1.35.0...v1.35.1) (2026-08-22)
 
 ### Bug Fixes
