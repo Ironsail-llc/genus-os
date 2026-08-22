@@ -55,10 +55,10 @@ def collect_summary() -> dict:
     prior_rows: dict[str, float] = {}
     in_flight_experiments: list[str] = []
 
-    # NOTE: the `pass_rate` column stores the partial-credit aggregate score
-    # (a task only needs 0.70 to "pass"). The honest grade — and what the
-    # benchmark_pass_rate goal metric now uses — is passed / total_cases.
-    # We compute that here so the 6 PM summary matches the goal scoring.
+    # Migration 103 made the `pass_rate` column agree with this — for history
+    # too — and moved the partial-credit aggregate to `aggregate_score`. The
+    # rate is still derived from the counts here because they are the two
+    # numbers on the row that cannot drift apart.
     def _true_pass_rate(passed: int, total: int) -> float:
         return (passed / total) if total else 0.0
 

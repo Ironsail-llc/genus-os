@@ -3133,11 +3133,13 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             "name": "get_agent_performance_summary",
             "description": (
                 "Per-agent grade card from the latest benchmark_results row. "
-                "Returns each agent's job pass_rate (0.0-1.0), pass/fail counts, "
-                "trend vs prior run, failing case IDs, and category breakdown. "
-                "This is the canonical 'did the agent do its job?' read — used by "
-                "the morning briefing Agent Performance section, the /goals "
-                "Telegram command, and the end-of-day summary."
+                "Returns each agent's job pass_rate (passed/total_cases, 0.0-1.0), "
+                "the separate partial-credit aggregate_score, judge_errors, "
+                "pass/fail counts, trend vs the prior run on the same suite, "
+                "failing case IDs, and category breakdown. pass_rate is the "
+                "canonical 'did the agent do its job?' read; aggregate_score moves "
+                "before it does and is never the grade. Used by the morning briefing "
+                "Agent Performance section and the end-of-day summary."
             ),
             "parameters": {
                 "type": "object",

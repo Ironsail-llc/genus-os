@@ -192,13 +192,17 @@ class TestBenchmarkRunForAgent:
         assert len(captured_inserts) == 1, "should have written one benchmark_results row"
         params = captured_inserts[0]
         # params order: agent_id, suite_id, suite_path, total_cases, passed,
-        #               failed, pass_rate, category_scores_json, failures_json,
-        #               triggered_by, experiment_id, cost_usd
+        #               failed, pass_rate, aggregate_score, judge_errors,
+        #               category_scores_json, failures_json, triggered_by,
+        #               experiment_id, cost_usd
         assert params[0] == "main"
         assert params[3] == 1  # total_cases
         assert params[4] == 1  # passed
         assert params[5] == 0  # failed
-        assert params[9] == "manual"  # triggered_by
+        assert params[6] == 1.0  # pass_rate == passed / total_cases
+        assert params[7] == 1.0  # aggregate_score (partial credit)
+        assert params[8] == 0  # judge_errors
+        assert params[11] == "manual"  # triggered_by
 
 
 # ─── benchmark_run_fleet ─────────────────────────────────────────────
