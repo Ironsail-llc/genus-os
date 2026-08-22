@@ -27,6 +27,12 @@ import yaml
 
 from robothor.db.connection import DatabaseGuardError
 from robothor.engine.models import TriggerType
+from robothor.engine.tools.constants import (
+    BENCHMARK_TOOLS,
+    DESKTOP_TOOLS,
+    GOAL_TOOLS,
+    READONLY_TOOLS,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -84,6 +90,49 @@ _MODEL_TIER_TASK_COST: dict[str, float] = {
     "default": 0.50,
 }
 
+#: Per-task wall-clock cap when neither the suite nor the task sets one.
+#:
+#: This was hardcoded at 240s, against a production fleet that runs with no
+#: wall-clock kill at all (``docs/agents/_defaults.yaml`` sets
+#: ``timeout_seconds: 0``). Measured: agent-architect's production runs over the
+#: last 30 days mean 512.8s and peak at 728.5s with ZERO production timeouts,
+#: while 26% of its benchmark sub-runs were killed by the harness. A cap that
+#: sits inside the agent's normal duration distribution does not measure the
+#: agent; it measures the cap. 900s clears the observed production maximum and
+#: still stops a genuine runaway.
+#:
+#: Override per suite with ``task_timeout_seconds:`` or per task with
+#: ``timeout_seconds:``.
+_DEFAULT_TASK_TIMEOUT_SECONDS = 900.0
+
+#: Outcome labels on a task result. ``scored`` means the grader ran against a
+#: real answer; the others mean it did not, and must never be read as a grade.
+_OUTCOME_SCORED = "scored"
+_OUTCOME_TIMEOUT = "timeout"
+_OUTCOME_ERROR = "error"
+_OUTCOME_SKIPPED = "skipped"
+
+
+def _resolve_task_timeout(task: dict[str, Any], suite: dict[str, Any]) -> float:
+    """Wall-clock cap for one task: task override, then suite, then default.
+
+    A non-positive value is rejected rather than honoured as "no cap": the
+    harness runs unattended overnight, and a suite typo must not be able to
+    wedge the fleet benchmark for hours.
+    """
+    for source in (task.get("timeout_seconds"), suite.get("task_timeout_seconds")):
+        if source is None:
+            continue
+        try:
+            seconds = float(source)
+        except (TypeError, ValueError):
+            logger.warning("benchmark: ignoring non-numeric timeout_seconds %r", source)
+            continue
+        if seconds > 0:
+            return seconds
+        logger.warning("benchmark: ignoring non-positive timeout_seconds %r", source)
+    return _DEFAULT_TASK_TIMEOUT_SECONDS
+
 
 # Sub-agents spawned by the benchmark runner get THIS allow-list intersected
 # with their normal tools_allowed. Anything not in here is denied — including
@@ -96,58 +145,143 @@ _MODEL_TIER_TASK_COST: dict[str, float] = {
 # invoke_skill('send-email') → exec('gog gmail send ...') and sent a real
 # email to a real recipient. A future skill or MCP tool could re-open the same
 # hole. An allow-list closes by default.
-_BENCHMARK_READONLY_TOOLS: frozenset[str] = frozenset(
+#
+# It is DERIVED, not hand-written. Until 2026-08-21 this was a second, manually
+# curated copy of "tools with no side effects" and it had rotted: it stripped
+# `get_knowledge_gaps` and `get_stats` (steps 1 of curiosity-engine's procedure),
+# `list_agent_reviews`/`get_agent_review`/`get_fleet_achievement_score`
+# (agent-architect is instructed to cite a review_id it then had no way to
+# fetch), and `devops_query_metrics`/`render_devops_report`. Agents were graded
+# on procedures the harness had forbidden them to follow. Deriving from
+# READONLY_TOOLS — the classification plan mode already relies on — means a new
+# read-only tool is benchmark-safe the moment it is classified once.
+
+#: Benchmark-only additions: no side effects, but not part of plan mode's set.
+#: `apollo_enrich_*` spend an external API credit (fine to meter in a benchmark,
+#: not something plan mode should do silently); the `impetus_*` tools are
+#: adapter-registered and so never appear in the static schema registry.
+_BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
     {
-        "read_file",
-        "list_directory",
-        "search_memory",
-        "memory_block_read",
-        "memory_block_list",
-        "get_entity",
-        "find_procedure",
-        "list_people",
-        "get_person",
-        "list_companies",
-        "get_company",
-        "list_tasks",
-        "list_my_tasks",
-        "get_task",
-        "list_notes",
-        "list_conversations",
-        "get_conversation",
-        "list_messages",
-        "search_records",
-        "get_metadata_objects",
-        "get_object_metadata",
-        "get_inbox",
-        "gws_gmail_search",
-        "gws_gmail_get",
-        "gws_calendar_list",
-        "list_agent_runs",
-        "get_agent_run",
-        "get_agent_stats",
-        "get_agent_performance_summary",
-        "classify_run_failure",
-        "list_agent_schedules",
-        "list_skills",
-        "vault_get",
-        "vault_list",
-        "who_is_here",
-        "look",
-        "web_fetch",
-        "web_search",
-        "todo_write",
-        "apollo_search_people",
         "apollo_enrich_person",
-        "apollo_search_companies",
         "apollo_enrich_company",
+        "apollo_search_companies",
+        "find_procedure",
+        "git_branch",
         "impetus_list_resources",
         "impetus_list",
         "impetus_get",
         "impetus_search",
-        "git_status",
-        "git_diff",
-        "git_branch",
+        "todo_write",
+    }
+)
+
+#: Read-only by classification, still withheld from a benchmark sub-agent.
+#: The desktop family reads the operator's live screen and window list — no
+#: database side effect, but nothing a graded sub-agent has any business
+#: touching. The benchmark tools are withheld so an agent under test cannot
+#: read or drive the harness grading it.
+_BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(DESKTOP_TOOLS | BENCHMARK_TOOLS)
+
+_BENCHMARK_READONLY_TOOLS: frozenset[str] = frozenset(
+    (READONLY_TOOLS | _BENCHMARK_EXTRA_READS) - _BENCHMARK_WITHHELD_READS
+)
+
+#: Registered tools deliberately kept out of the benchmark allow-list, beyond
+#: the two sandbox sets in ``robothor.engine.benchmark_sandbox``. Every one of
+#: these either writes durable state, spawns work, drives a machine, or is a
+#: meta-tool the harness must not hand to the agent it is grading.
+#:
+#: ``test_benchmark_harness_fairness`` asserts that every registered tool is in
+#: this set, in ``SANDBOX_WRITE_TOOLS``, in ``EXTERNAL_SIDE_EFFECT_TOOLS``, or
+#: in the allow-list. A newly registered tool therefore fails the suite until
+#: someone classifies it — which is how the previous list was allowed to rot.
+_BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozenset(
+    {
+        # Notifications / inbox state.
+        "ack_notification",
+        "send_notification",
+        # Durable memory + block writes.
+        "append_to_block",
+        "get_accretion_ledger",
+        "leave_breadcrumb",
+        "record_procedure",
+        "report_procedure_outcome",
+        # Task-system writes beyond the sandbox CRM set.
+        "approve_task",
+        "reject_task",
+        "delete_task",
+        "list_agent_tasks",
+        "list_tasks_summary",
+        "log_interaction",
+        "record_resolution",
+        "toggle_conversation_status",
+        # Destructive CRM: deletes and merges are irreversible, and "never
+        # deletes" is exactly what the hygiene suite grades.
+        "delete_company",
+        "delete_note",
+        "delete_person",
+        "merge_companies",
+        "merge_contacts",
+        "merge_people",
+        "create_message",
+        # Long-running goals (force-added by the registry — see
+        # _benchmark_tools_denied).
+        "create_goal",
+        "update_goal",
+        # Grading machinery: an agent must not run the graders.
+        "judge_run",
+        "buddy_audit",
+        "buddy_refresh",
+        "buddy_review_pass",
+        "buddy_verify_pass",
+        "buddy_aggregate_findings",
+        # Experiment state machine.
+        "experiment_create",
+        "experiment_measure",
+        "experiment_commit",
+        # Skills: creating/updating/archiving are writes; skill_view and
+        # search_files stay out because they were never in the allow-list and
+        # no suite needs them.
+        "create_skill",
+        "update_skill",
+        "skill_archive",
+        "skill_view",
+        "search_files",
+        # Repo mutation.
+        "create_pull_request",
+        "git_commit",
+        "git_push",
+        # Team / agent-to-agent messaging. `receive_agent_messages` is an
+        # `rpop`: reading the inbox destroys it, so a benchmark sub-run would
+        # eat the real agent's messages.
+        "create_team",
+        "send_agent_message",
+        "receive_agent_messages",
+        "team_scratchpad_write",
+        "gws_chat_send",
+        # Vision enrolment and mode.
+        "enroll_face_from_image",
+        "unenroll_face",
+        "set_vision_mode",
+        # Federation writes.
+        "federation_trigger",
+        # Metric + identity writes.
+        "devops_store_metric",
+        "link_identity",
+        # Cron registration.
+        "register_user_cron",
+        # Arbitrary MCP invocation is an escape hatch by construction.
+        "mcp_call_tool",
+        "mcp_read_resource",
+        # Deferred-tool meta-layer: the registry strips these anyway, and
+        # tool_call would route around the allow-list.
+        "tool_search",
+        "tool_describe",
+        "tool_call",
+        # Vault writes.
+        "vault_set",
+        # Wall-clock burn against a per-task cap.
+        "wait_seconds",
     }
 )
 
@@ -162,6 +296,14 @@ def _benchmark_tools_denied(
     agent never had are not in the deny-list — keeping the list tight and
     useful for debugging.
 
+    The exception is ``GOAL_TOOLS``. ``ToolRegistry._get_filtered_names``
+    force-adds them *after* intersecting ``tools_allowed``, so a benchmark
+    sub-agent gets ``create_goal``/``update_goal`` even when its manifest never
+    asked for them — and production transcripts show benchmark sub-runs of
+    agent-architect calling ``update_goal``, a durable write from a run that was
+    supposed to be read-only. Naming them explicitly is the only thing the
+    registry honours. ``get_goal`` is a read and stays allowed.
+
     ``sandbox=True`` widens ``allowed`` to include the sandbox-safe CRM writes
     (``robothor.engine.benchmark_sandbox.SANDBOX_WRITE_TOOLS``) — and only those.
     Everything that reaches outside this database stays denied in both modes;
@@ -169,11 +311,12 @@ def _benchmark_tools_denied(
     action ("takes a scrub action", "cleans the phone field") could only be
     satisfied by narrating work the agent was forbidden to do.
     """
-    if not agent_tools_allowed:
-        return []
     from robothor.engine.benchmark_sandbox import benchmark_allowed_tools
 
-    return sorted(set(agent_tools_allowed) - benchmark_allowed_tools(sandbox=sandbox))
+    allowed = benchmark_allowed_tools(sandbox=sandbox)
+    denied = set(agent_tools_allowed or []) - allowed
+    denied |= GOAL_TOOLS - allowed
+    return sorted(denied)
 
 
 def _resolve_model_tier(model_primary: str) -> str:
@@ -494,6 +637,38 @@ def _score_task(output: str, expected: dict[str, Any], run_meta: dict[str, Any])
     return sum(checks) / len(checks)
 
 
+#: How much of an agent's output the LLM judge is shown.
+#:
+#: This was 3000 characters, and that number was silently failing correct
+#: answers. Measured over the benchmark sub-runs in ``agent_runs``: 336 of the
+#: four weakest agents' completed cases produced output past 3000 chars,
+#: averaging ~4.5K and peaking near 20K — agent-architect's ``fleet-analysis``
+#: (61 cases), curiosity-engine's ``efficiency-completion`` (36),
+#: devops-analyst's ``structured-report`` (33). The judge scores a 4-item
+#: rubric and the case needs 0.7 to pass, so ONE rubric item whose evidence
+#: lived in the truncated tail fails the whole case. Judge tokens are cheap
+#: next to a wrong grade. 12000 covers 98.5% of those outputs whole.
+_JUDGE_OUTPUT_CHARS = 12000
+
+#: Past the window, keep both ends rather than the first N characters.
+#: Conclusions, recommendations and "what I would do next" — the things most
+#: rubric items actually ask about — live at the END of an agent's answer.
+_JUDGE_HEAD_CHARS = 8000
+_JUDGE_TAIL_CHARS = _JUDGE_OUTPUT_CHARS - _JUDGE_HEAD_CHARS
+
+
+def _judge_excerpt(output: str) -> str:
+    """The slice of ``output`` the judge sees: whole, or head + tail."""
+    if len(output) <= _JUDGE_OUTPUT_CHARS:
+        return output
+    omitted = len(output) - _JUDGE_HEAD_CHARS - _JUDGE_TAIL_CHARS
+    return (
+        f"{output[:_JUDGE_HEAD_CHARS]}\n\n"
+        f"[… {omitted} characters omitted from the middle …]\n\n"
+        f"{output[-_JUDGE_TAIL_CHARS:]}"
+    )
+
+
 async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutcome:
     """Score output against a rubric using an LLM judge.
 
@@ -514,7 +689,7 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
     prompt = (
         "You are a benchmark judge. Score the following agent output against each rubric item.\n"
         "For each item, return 1 if the output satisfies it, 0 if not.\n\n"
-        f"## Output to evaluate\n{output[:3000]}\n\n"
+        f"## Output to evaluate\n{_judge_excerpt(output)}\n\n"
         "## Rubric items\n"
         + "\n".join(f"{i + 1}. {item}" for i, item in enumerate(rubric))
         + '\n\nRespond with ONLY a JSON object: {"scores": [1, 0, 1, ...]}'
@@ -760,6 +935,51 @@ def _run_task_state_checks(
     return results
 
 
+def _timeout_result(
+    task: dict[str, Any],
+    cap_seconds: float,
+    agent_id: str,
+    suite_id: str,
+    *,
+    cost_usd: float | None = None,
+    error_message: str | None = None,
+) -> dict[str, Any]:
+    """Record a harness wall-clock kill as its own outcome, not as a grade.
+
+    Follows the ``judge_error`` precedent: the case stays in the denominator
+    and counts as failed — the agent did not produce a gradable answer — but
+    it is labelled so nobody mistakes it for a wrong answer. Score is a hard
+    0.0 rather than whatever the vacuous checks happened to award an empty
+    string.
+    """
+    logger.warning(
+        "Benchmark task %s (%s/%s): harness timeout after %.0fs — recorded as "
+        "a timeout, not a grade%s",
+        task["id"],
+        agent_id,
+        suite_id,
+        cap_seconds,
+        f" ({error_message})" if error_message else "",
+    )
+    result: dict[str, Any] = {
+        "task_id": task["id"],
+        "category": task.get("category", "correctness"),
+        "weight": task.get("weight", 1.0),
+        "score": 0.0,
+        "outcome": _OUTCOME_TIMEOUT,
+        "timed_out": True,
+        "timeout_seconds": cap_seconds,
+        "status": _OUTCOME_TIMEOUT,
+        "reason": f"harness timeout after {cap_seconds:.0f}s (no answer to grade)",
+        "output_preview": "",
+    }
+    if cost_usd is not None:
+        result["cost_usd"] = round(cost_usd, 4)
+    if error_message:
+        result["error"] = error_message
+    return result
+
+
 def _teardown_task_fixtures(seeded: SeededFixtures | None) -> None:
     """Delete every sandbox row this task produced. Never raises."""
     if seeded is None:
@@ -923,6 +1143,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                     "weight": task.get("weight", 1.0),
                     "score": 0.0,
                     "skipped": True,
+                    "outcome": _OUTCOME_SKIPPED,
                     "reason": "suite cost budget exhausted",
                 }
             )
@@ -943,6 +1164,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                     "task_id": task["id"],
                     "category": task.get("category", "correctness"),
                     "score": 0.0,
+                    "outcome": _OUTCOME_ERROR,
                     "error": f"Agent config not found: {agent_id}",
                 }
             )
@@ -976,11 +1198,13 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         # run outside the sandbox tenant is refused exactly as before.
         child_config.is_benchmark = True
 
-        # Per-task wall-clock cap. Without this, a hung sub-agent (provider
+        # Per-task wall-clock cap. Without one, a hung sub-agent (provider
         # returning blank JSON, runaway token loops) wedges the whole fleet
         # benchmark for hours. Added 2026-05-06 after curiosity-engine
-        # consumed 692K tokens on a single case before alerting.
-        per_task_timeout_seconds = 240
+        # consumed 692K tokens on a single case before alerting. Configurable
+        # per suite/task since 2026-08-21 — see _DEFAULT_TASK_TIMEOUT_SECONDS
+        # for why the old flat 240s was failing healthy agents.
+        per_task_timeout_seconds = _resolve_task_timeout(task, suite)
 
         seeded: SeededFixtures | None = None
         state_results: list[StateCheckResult] = []
@@ -994,16 +1218,41 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             seeded = _seed_task_fixtures(task, suite, sandbox_on)
             prompt = _render_task_prompt(task, seeded)
 
-            async with _asyncio.timeout(per_task_timeout_seconds):
-                run = await _execute_task_run(
-                    runner=runner,
-                    agent_id=agent_id,
-                    prompt=prompt,
-                    trigger_detail=f"benchmark:{suite_id}:{task['id']}",
-                    child_config=child_config,
-                    spawn_context=benchmark_spawn_ctx,
-                    seeded=seeded,
+            try:
+                async with _asyncio.timeout(per_task_timeout_seconds):
+                    run = await _execute_task_run(
+                        runner=runner,
+                        agent_id=agent_id,
+                        prompt=prompt,
+                        trigger_detail=f"benchmark:{suite_id}:{task['id']}",
+                        child_config=child_config,
+                        spawn_context=benchmark_spawn_ctx,
+                        seeded=seeded,
+                    )
+            except TimeoutError:
+                results.append(_timeout_result(task, per_task_timeout_seconds, agent_id, suite_id))
+                continue
+
+            # The runner absorbs the cancellation this cap delivers and returns
+            # a TIMEOUT run with an empty output_text rather than re-raising, so
+            # the branch above is NOT the common path. Grading that empty string
+            # is how a harness kill became partial credit: every
+            # `must_not_contain` pattern passes against "", and agent-architect's
+            # killed cases were filed at 0.4–0.667 as if the agent had answered
+            # badly. A kill is not an answer.
+            if str(getattr(run.status, "value", run.status)) == _OUTCOME_TIMEOUT:
+                total_cost += run.total_cost_usd or 0.0
+                results.append(
+                    _timeout_result(
+                        task,
+                        per_task_timeout_seconds,
+                        agent_id,
+                        suite_id,
+                        cost_usd=run.total_cost_usd,
+                        error_message=getattr(run, "error_message", None),
+                    )
                 )
+                continue
 
             output = run.output_text or ""
             run_meta = {
@@ -1028,6 +1277,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 "category": task.get("category", "correctness"),
                 "weight": task.get("weight", 1.0),
                 "score": round(graded.score, 3),
+                "outcome": _OUTCOME_SCORED,
                 "cost_usd": round(run.total_cost_usd, 4),
                 "steps": len(run.steps),
                 "status": run.status.value,
@@ -1057,7 +1307,8 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                     "category": task.get("category", "correctness"),
                     "weight": task.get("weight", 1.0),
                     "score": 0.0,
-                    "error": str(e),
+                    "outcome": _OUTCOME_ERROR,
+                    "error": str(e) or type(e).__name__,
                 }
             )
         finally:
@@ -1094,6 +1345,11 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     # error is failed regardless of its partial score — the criterion was
     # never evaluated, so nothing certifies it as met.
     judge_errors = sum(1 for r in results if r.get("judge_error"))
+    # Harness wall-clock kills. Reported beside judge_errors and for the same
+    # reason: both are counts of cases the harness failed to grade, and reading
+    # either as a statement about the agent is a mistake. A suite whose
+    # `timeouts` is climbing needs its cap raised, not its agent optimised.
+    timeouts = sum(1 for r in results if r.get("outcome") == _OUTCOME_TIMEOUT)
     passed = sum(
         1
         for r in results
@@ -1116,6 +1372,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "passed": passed,
         "failed": failed,
         "judge_errors": judge_errors,
+        "timeouts": timeouts,
         "category_scores": category_scores,
         "task_results": results,
         "tasks_run": len(executed),
@@ -1136,6 +1393,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             "passed": passed,
             "total_cases": total_cases,
             "judge_errors": judge_errors,
+            "timeouts": timeouts,
             "timestamp": datetime.now(UTC).isoformat(),
         },
     )
@@ -1218,6 +1476,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "passed": passed,
         "failed": failed,
         "judge_errors": judge_errors,
+        "timeouts": timeouts,
         "category_scores": category_scores,
         "total_cost_usd": round(total_cost, 4),
         "tasks_run": len(executed),

@@ -208,7 +208,17 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "classify_run_failure",
         "list_agent_schedules",
         "get_agent_stats",
+        "get_agent_performance_summary",
         "get_goal",
+        # Buddy's per-run reviews and the fleet roll-up — SELECT-only.
+        # Added 2026-08-21: agent-architect's instructions require citing a
+        # review_id, and the benchmark harness (which derives its allow-list
+        # from this set) was stripping the only tools that can produce one.
+        "list_agent_reviews",
+        "get_agent_review",
+        "get_fleet_achievement_score",
+        # Memory corpus statistics (SELECT-only aggregate).
+        "get_stats",
         # Memory write-status probe (read-only)
         "memory_write_status",
         # Vault read-only tools
@@ -236,8 +246,12 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "desktop_screenshot",
         "desktop_window_list",
         "desktop_describe",
-        # Messaging read-only tools
-        "receive_agent_messages",
+        # Messaging read-only tools.
+        # `receive_agent_messages` is deliberately NOT here: `Messenger.receive`
+        # is an `rpop`, so "reading" the inbox destroys it. Classified read-only
+        # until 2026-08-21, which let plan mode — and, once the benchmark
+        # allow-list started deriving from this set, benchmark sub-agents —
+        # drain a live agent's Redis inbox.
         "team_scratchpad_read",
         # Experiment read-only tools
         "experiment_status",
