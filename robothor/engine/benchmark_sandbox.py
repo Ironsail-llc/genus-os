@@ -214,6 +214,11 @@ SEEDABLE_COLUMNS: dict[str, frozenset[str]] = {
         {
             "title",
             "body",
+            # A session goal is a crm_task; the text the agent reads through
+            # get_goal comes from this column, not from `title`. Without it a
+            # seeded goal reads back with an empty objective, which is how a
+            # suite ends up asserting a goal that says nothing.
+            "objective",
             "status",
             "priority",
             "tags",
