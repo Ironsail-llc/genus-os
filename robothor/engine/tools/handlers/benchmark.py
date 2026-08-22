@@ -414,7 +414,45 @@ def _validate_task(task: dict[str, Any]) -> str | None:
         rubric = judge.get("rubric")
         if not rubric or not isinstance(rubric, list):
             return f"task '{task['id']}' judge requires 'rubric' as a list of criteria"
+    err = _validate_tool_assertions(task, expected)
+    if err:
+        return err
     return _validate_state_checks(task, expected)
+
+
+def _validate_tool_assertions(task: dict[str, Any], expected: dict[str, Any]) -> str | None:
+    """Validate ``expected.tools_used`` / ``expected.tools_not_used``.
+
+    ``tools_used`` is additionally checked against the widest allow-list a
+    benchmark sub-agent can ever be given (``benchmark_allowed_tools`` with the
+    sandbox on). Naming anything outside it — ``write_file``, ``store_memory``
+    — writes a check that can never pass no matter how well the agent behaves,
+    and a grader that can never award a point is broken in the same direction
+    as one that awards points for narration. Rejecting it at define time is the
+    only moment anyone is looking.
+
+    ``tools_not_used`` is deliberately unrestricted: asserting that a *denied*
+    tool was never reached for is exactly what it is for.
+    """
+    from robothor.engine.benchmark_sandbox import benchmark_allowed_tools
+
+    satisfiable = benchmark_allowed_tools(sandbox=True)
+    for field in ("tools_used", "tools_not_used"):
+        names = expected.get(field)
+        if names is None:
+            continue
+        if not isinstance(names, list):
+            return f"task '{task['id']}' {field} must be a list of tool names"
+        for name in names:
+            if not isinstance(name, str) or not name.strip():
+                return f"task '{task['id']}' {field} entries must be non-empty tool names"
+            if field == "tools_used" and name not in satisfiable:
+                return (
+                    f"task '{task['id']}' asserts tools_used {name!r}, which no benchmark "
+                    "sub-agent is ever allowed to call — the check could never pass. Grade "
+                    "the outcome with state_checks or a judge rubric instead."
+                )
+    return None
 
 
 #: State-check kinds the grader knows how to evaluate. An unrecognised kind is
@@ -461,6 +499,46 @@ def _validate_state_checks(task: dict[str, Any], expected: dict[str, Any]) -> st
         if kind == "rows_match" and not check.get("table"):
             return f"task '{task['id']}' rows_match state_check needs a 'table'"
     return None
+
+
+def _trace_tool_calls(steps: Any) -> tuple[frozenset[str], frozenset[str]]:
+    """Return ``(attempted, succeeded)`` tool names from a sub-run's trace.
+
+    This is what ``expected.tools_used`` / ``expected.tools_not_used`` grade
+    against, and it exists because ``must_contain`` cannot: those patterns see
+    ``run.output_text`` and nothing else, so a suite that wrote
+    ``must_contain: ["list_tasks"]`` was grading whether the agent *typed* the
+    tool's name. Measured on this box: over 74 recorded ``dedup-check``
+    sub-runs the literal appeared in 7 outputs while ``list_tasks`` was called
+    359 times with zero failures. The check rewarded narration and punished
+    the action — the same fabrication-trainer pathology the crm-hygiene suite
+    was rebuilt to remove.
+
+    Two sets, because the two assertions need different evidence:
+
+    * ``succeeded`` — a call is evidence of an action only if it worked.
+    * ``attempted`` — reaching for a forbidden tool is the violation whether
+      or not the harness let it through, so ``tools_not_used`` uses this one.
+
+    Name resolution and success are delegated to ``run_verification`` rather
+    than re-derived: RIP-16 defers most tools behind a ``tool_call`` meta-tool
+    (the real name lives at ``tool_input['name']``, and the meta-tool sometimes
+    wraps itself), and failure is recorded three different ways.
+    """
+    from robothor.engine.run_verification import is_tool_step, resolve_tool_name, step_succeeded
+
+    attempted: set[str] = set()
+    succeeded: set[str] = set()
+    for step in steps or []:
+        if not is_tool_step(step):
+            continue
+        name = resolve_tool_name(step)
+        if not name:
+            continue
+        attempted.add(name)
+        if step_succeeded(step):
+            succeeded.add(name)
+    return frozenset(attempted), frozenset(succeeded)
 
 
 def _score_task(output: str, expected: dict[str, Any], run_meta: dict[str, Any]) -> float:
@@ -556,6 +634,7 @@ async def _score_task_async(
     expected: dict[str, Any],
     run_meta: dict[str, Any],
     state_results: list[StateCheckResult] | None = None,
+    steps: Any = None,
 ) -> TaskScore:
     """Async version of _score_task that supports LLM judge checks.
 
@@ -571,6 +650,15 @@ async def _score_task_async(
     every rubric item cannot reach the 0.70 pass threshold while the environment
     says nothing happened. Passing ``None`` (the caller's choice below
     ``enforce``) leaves scoring byte-for-byte as it was.
+
+    ``steps`` is the sub-run's own tool trace, and it is the third independent
+    source of truth here: prose says what the agent claimed, ``state_results``
+    say what the database looks like afterwards, and the trace says what the
+    agent actually did. ``tools_used`` / ``tools_not_used`` grade only the
+    third — see ``_trace_tool_calls`` for why a regex over the transcript
+    cannot. Passing ``None`` (no trace available) fails every ``tools_used``
+    entry rather than waiving it: an assertion nobody could evaluate has not
+    been met.
 
     A judge that could not be evaluated counts its check as unsatisfied — we
     did not see the criterion met — and rides out on ``TaskScore.judge_error``
@@ -592,6 +680,13 @@ async def _score_task_async(
             checks.append(not bool(re.search(p, output, re.IGNORECASE)))
         except re.error:
             checks.append(False)
+
+    # Trace checks: what the agent DID, one check per named tool so a
+    # threshold means the same thing it did before.
+    if expected.get("tools_used") or expected.get("tools_not_used"):
+        attempted, succeeded = _trace_tool_calls(steps)
+        checks.extend(name in succeeded for name in expected.get("tools_used", []))
+        checks.extend(name not in attempted for name in expected.get("tools_not_used", []))
 
     # Cost and iteration count are telemetry only, never graded (Phase 0b) —
     # see _score_task docstring.
@@ -1020,6 +1115,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 _render_expected(task.get("expected", {}), seeded),
                 run_meta,
                 state_results=state_results if state_checks_scored() else None,
+                steps=run.steps,
             )
             total_cost += run.total_cost_usd
 

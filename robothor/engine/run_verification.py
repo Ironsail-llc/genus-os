@@ -57,11 +57,13 @@ __all__ = [
     "blocks_resolution",
     "describe_unsupported",
     "extract_claims",
+    "is_tool_step",
     "match_claims_to_trace",
     "next_action_for_unverified",
     "resolution_prefix",
     "resolve_tool_input",
     "resolve_tool_name",
+    "step_succeeded",
     "unsupported_claim_phrases",
     "verify_run",
 ]
@@ -630,13 +632,17 @@ def _tool_families(name: str | None, args: dict[str, Any]) -> frozenset[str]:
     return frozenset(families)
 
 
-def _step_succeeded(step: Any) -> bool:
+def step_succeeded(step: Any) -> bool:
     """True only when the tool call actually worked.
 
     A tool call supports a claim only if it SUCCEEDED. Failure shows up two
     ways in ``agent_run_steps``: ``error_message`` is set, and/or
     ``tool_output`` carries an ``error`` key (1,698 of 26,933 tool steps on
     this box) or ``success: false``.
+
+    Public because the benchmark grader asks the same question of the same
+    rows (``expected.tools_used``). One definition of "the call worked", or
+    the two controls will eventually disagree about the same trace.
     """
     if _get(step, "error_message"):
         return False
@@ -649,7 +655,15 @@ def _step_succeeded(step: Any) -> bool:
     return True
 
 
-def _is_tool_step(step: Any) -> bool:
+def is_tool_step(step: Any) -> bool:
+    """True for a step that represents a tool invocation.
+
+    Steps carrying a ``tool_name`` are not all tool calls: the runner also
+    records bookkeeping under other step types (``system_prompt_build``,
+    ``tools_built``, ``warmup_preamble_build``). Counting those as calls would
+    let a suite's ``tools_not_used`` assertion fire on the harness's own
+    telemetry.
+    """
     step_type = _get(step, "step_type")
     value = getattr(step_type, "value", step_type)
     return value in (None, "tool_call")
@@ -672,7 +686,7 @@ def match_claims_to_trace(claims: list[Claim], steps: Any) -> Verdict:
 
     resolved: list[tuple[int, frozenset[str], bool]] = []
     for index, step in enumerate(steps or []):
-        if not _is_tool_step(step):
+        if not is_tool_step(step):
             continue
         name = resolve_tool_name(step)
         families = _tool_families(name, resolve_tool_input(step))
@@ -680,7 +694,7 @@ def match_claims_to_trace(claims: list[Claim], steps: Any) -> Verdict:
             continue
         number = _get(step, "step_number")
         resolved.append(
-            (number if isinstance(number, int) else index, families, _step_succeeded(step))
+            (number if isinstance(number, int) else index, families, step_succeeded(step))
         )
 
     checks: list[ClaimCheck] = []
