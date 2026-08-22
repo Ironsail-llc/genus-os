@@ -39,6 +39,7 @@ from aiogram.types import (
     PhotoSize,
 )
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.chat import (
     _extract_plan_text,
     _plan_is_expired,
@@ -283,6 +284,104 @@ async def _analyze_photo_bytes(
             return resp.json()["message"]["content"]  # type: ignore[no-any-return]
     except Exception as e:
         return f"[Vision analysis failed: {e}]"
+
+
+def fetch_agent_grades(tenant_id: str, workspace: str | Path) -> list[dict[str, Any]]:
+    """Latest benchmark row per agent, scoped to that agent's own suite.
+
+    ``DISTINCT ON (agent_id)`` alone hands the grade to whichever suite wrote
+    last under this agent_id. Rows are matched against the agent's on-disk
+    suite id where one exists (``canonical_suite_id``); an agent whose suite
+    cannot be read keeps its unfiltered latest row rather than vanishing from
+    the report.
+    """
+    from robothor.db.connection import get_connection
+    from robothor.engine.tools.handlers.benchmark import canonical_suite_id
+
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ON (agent_id, suite_id)
+              agent_id, suite_id, run_at, total_cases, passed,
+              aggregate_score, judge_errors, failures
+            FROM benchmark_results
+            WHERE tenant_id = %s
+              AND run_at >= NOW() - INTERVAL '48 hours'
+            ORDER BY agent_id, suite_id, run_at DESC
+            """,
+            (tenant_id,),
+        )
+        rows = cur.fetchall()
+
+    by_agent: dict[str, dict[str, Any]] = {}
+    for agent_id, suite_id, run_at, total, passed, aggregate, judge_errors, failures in rows:
+        canonical = canonical_suite_id(agent_id, str(workspace))
+        if canonical and suite_id != canonical:
+            continue
+        failures_payload = failures or []
+        if isinstance(failures_payload, str):
+            import json as _json
+
+            failures_payload = _json.loads(failures_payload)
+        current = by_agent.get(agent_id)
+        if current is not None and current["run_at"] >= run_at:
+            continue
+        by_agent[agent_id] = {
+            "agent_id": agent_id,
+            "suite_id": suite_id,
+            "run_at": run_at,
+            "total_cases": int(total or 0),
+            "passed": int(passed or 0),
+            "aggregate_score": float(aggregate) if aggregate is not None else None,
+            "judge_errors": int(judge_errors or 0),
+            "failing_case_ids": [
+                f.get("case_id")
+                for f in failures_payload
+                if isinstance(f, dict) and f.get("case_id")
+            ],
+        }
+    return list(by_agent.values())
+
+
+def format_agent_grades(grades: list[dict[str, Any]]) -> str:
+    """Render agent grade rows for /goals. Pure — the percentage is derived.
+
+    The fraction and the percentage come from the same two numbers. They used
+    to come from different columns: ``{passed}/{total}`` from the counts and
+    ``({pct}%)`` from ``pass_rate``, which held the partial-credit aggregate.
+    crm-hygiene printed as ``0/4 (18%)`` — zero cases passed, an 18% grade.
+    """
+
+    def _rate(g: dict[str, Any]) -> float:
+        total = int(g.get("total_cases") or 0)
+        return (int(g.get("passed") or 0) / total) if total else 0.0
+
+    lines = ["<b>Agent Performance — job pass rate</b>", ""]
+    for g in sorted(grades, key=_rate):
+        total = int(g.get("total_cases") or 0)
+        passed = int(g.get("passed") or 0)
+        pct = int(round(_rate(g) * 100))
+        agent_id = str(g.get("agent_id", "?"))
+        lines.append(f"  {agent_id:<22s}{passed}/{total} ({pct}%)")
+
+        aggregate = g.get("aggregate_score")
+        if aggregate is not None:
+            lines.append(f"  ↳ {float(aggregate) * 100:.0f}% partial credit")
+        judge_errors = int(g.get("judge_errors") or 0)
+        if judge_errors:
+            plural = "s" if judge_errors != 1 else ""
+            lines.append(f"  ↳ {judge_errors} judge error{plural} — graded as failures")
+        failing = [str(c) for c in (g.get("failing_case_ids") or [])][:3]
+        if failing:
+            lines.append(f"  ↳ failing: {', '.join(failing)}")
+    lines.append("")
+    lines.append(
+        "<i>Each line is the agent's grade on its docs/benchmarks/&lt;agent&gt;/suite.yaml: "
+        "cases passed over cases in the suite. Partial credit is the weighted mean of "
+        "per-case scores — it moves before the pass rate does, and is never the grade. "
+        "Cost is observed, never optimized.</i>"
+    )
+    return "\n".join(lines)
 
 
 class TelegramBot:
@@ -686,56 +785,15 @@ class TelegramBot:
         async def cmd_goals(message: Message) -> None:
             """Show each agent's job grade — pass rate on its benchmark suite."""
             try:
-                from robothor.constants import DEFAULT_TENANT
-                from robothor.db.connection import get_connection
-
                 tenant_id = os.environ.get("ROBOTHOR_TENANT_ID", DEFAULT_TENANT)
-                with get_connection() as conn, conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT DISTINCT ON (agent_id)
-                          agent_id, suite_id, run_at, total_cases, passed,
-                          pass_rate, failures
-                        FROM benchmark_results
-                        WHERE tenant_id = %s
-                          AND run_at >= NOW() - INTERVAL '48 hours'
-                        ORDER BY agent_id, run_at DESC
-                        """,
-                        (tenant_id,),
-                    )
-                    rows = cur.fetchall()
-
-                if not rows:
+                grades = fetch_agent_grades(tenant_id, self.config.workspace)
+                if not grades:
                     await message.answer(
                         "<b>Agent Performance</b>\n\nBenchmark cron hasn't run yet — "
                         "check back after 4 AM ET tomorrow, or trigger benchmark-runner manually."
                     )
                     return
-
-                # Sort worst → best for prominence
-                rows = sorted(rows, key=lambda r: r[5])
-                lines = ["<b>Agent Performance — job pass rate</b>", ""]
-                for r in rows:
-                    agent_id, _suite_id, _run_at, total, passed, pass_rate, failures = r
-                    pct = int(round(float(pass_rate) * 100))
-                    failures_payload = failures or []
-                    if isinstance(failures_payload, str):
-                        import json as _json
-
-                        failures_payload = _json.loads(failures_payload)
-                    failing_ids = [f.get("case_id") for f in failures_payload if f.get("case_id")][
-                        :3
-                    ]
-                    tail = f"  ↳ failing: {', '.join(failing_ids)}" if failing_ids else ""
-                    lines.append(f"  {agent_id:<22s}{passed}/{total} ({pct}%)")
-                    if tail:
-                        lines.append(tail)
-                lines.append("")
-                lines.append(
-                    "<i>Each line is the agent's grade on its docs/benchmarks/&lt;agent&gt;/suite.yaml. "
-                    "Cost is observed, never optimized.</i>"
-                )
-                await message.answer("\n".join(lines))
+                await message.answer(format_agent_grades(grades))
             except Exception as e:
                 await message.answer(f"Goals unavailable: {html.escape(str(e))}")
 
