@@ -59,6 +59,15 @@ tasks:
     category: correctness
     weight: 2.0
     expected:
+      # Declaring state_checks scopes this task to the benchmark-sandbox
+      # tenant, which is what makes create_task callable at all -- without
+      # it the case fails on the harness, not on the agent. The read-back
+      # then grades the row that actually appeared, not the tool's name.
+      state_checks:
+        - kind: rows_match
+          table: crm_tasks
+          match: {}
+          min_count: 1
       must_contain:
         - "auto-agent"
         - "email-analyst"
@@ -88,6 +97,15 @@ tasks:
     category: correctness
     weight: 1.0
     expected:
+      # Declaring state_checks scopes this task to the benchmark-sandbox
+      # tenant, which is what makes create_task callable at all -- without
+      # it the case fails on the harness, not on the agent. The read-back
+      # then grades the row that actually appeared, not the tool's name.
+      state_checks:
+        - kind: rows_match
+          table: crm_tasks
+          match: {}
+          min_count: 1
       # autoagent_learnings stays a prose check: it asserts the agent NAMED the
       # block it reasoned from, which is a content claim, not a tool call.
       must_contain:
