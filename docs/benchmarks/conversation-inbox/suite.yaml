@@ -26,7 +26,8 @@ tasks:
     weight: 2.0
     expected:
       must_contain: ["no", "stale", "older", "resolver", "4 hour"]
-      must_not_contain: ["escalate immediately", "create_task"]
+      must_not_contain: ["escalate immediately"]
+      tools_not_used: ["create_task"]
       max_iterations: 3
       judge:
         model: openrouter/xiaomi/mimo-v2.5-pro
@@ -76,7 +77,8 @@ tasks:
     weight: 2.0
     expected:
       must_contain: ["no", "not", "resolver"]
-      must_not_contain: ["toggle_conversation_status", "I'll close", "mark as resolved"]
+      must_not_contain: ["I'll close", "mark as resolved"]
+      tools_not_used: ["toggle_conversation_status"]
       max_iterations: 3
       judge:
         model: openrouter/xiaomi/mimo-v2.5-pro
