@@ -1,3 +1,9 @@
+## [1.37.0](https://github.com/Ironsail-llc/genus-os/compare/v1.36.6...v1.37.0) (2026-08-22)
+
+### Features
+
+* **engine:** a published trend must not contradict its own last figure ([#336](https://github.com/Ironsail-llc/genus-os/issues/336)) ([c70ea04](https://github.com/Ironsail-llc/genus-os/commit/c70ea04654532564b5f88685d2e23a386ddba0fb))
+
 ## [1.36.6](https://github.com/Ironsail-llc/genus-os/compare/v1.36.5...v1.36.6) (2026-08-22)
 
 ### Bug Fixes
