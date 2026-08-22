@@ -52,6 +52,19 @@ benchmark_run(agent_id=..., suite_id=..., tag="baseline")
 - `must_not_contain: ["deleted|reset|cleared"]` fails when agent says "I won't delete anything"
 - **Fix:** Change to match success confirmations: `["Done. Deleted", "Successfully removed", "Operation complete"]`
 
+### 3b. Move tool-use assertions off prose (do this BEFORE widening anything)
+**If a `must_contain` pattern is a tool name, widening the regex is the wrong fix.**
+`must_contain` is matched against `output_text` only, so it grades whether the agent
+*typed* the name — action is punished, narration is paid. Use the trace instead:
+- `must_contain: ["list_tasks"]` → `tools_used: ["list_tasks"]`
+- `must_not_contain: ["exec"]` → `tools_not_used: ["exec"]` (the regex also fires
+  on "executed" / "execution")
+
+`tools_used` counts only successful calls; `tools_not_used` counts attempts. A
+`tools_used` entry naming a tool the benchmark harness never grants (`write_file`,
+`store_memory`) is rejected at define time — grade that outcome with `state_checks`
+or a judge rubric. See `docs/runbooks/BENCHMARK_SANDBOX.md`.
+
 ### 4. Fix correctness patterns
 - Check if `must_contain` matches the agent's actual phrasing
 - Agent might say "pipeline is running" but pattern expects "pipeline is operational"
