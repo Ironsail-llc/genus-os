@@ -102,6 +102,31 @@ class TestCreateReview:
         # Find the rating param (should be clamped to 1)
         assert 1 in params
 
+    @patch("robothor.crm.dal.get_connection")
+    def test_create_review_passes_null_rating_through(self, mock_get_conn):
+        """A review with nothing measured has no rating.
+
+        The clamp used to coerce every value into 1-5, so a caller with no
+        grade had to invent one. NULL must survive to the INSERT instead.
+        """
+        mock_conn, mock_cur = _make_mock_conn()
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import create_review
+
+        review_id = create_review(
+            agent_id="never-graded",
+            reviewer="auto-review",
+            reviewer_type="system",
+            rating=None,
+            feedback="Goal achievement: not measured.",
+        )
+
+        assert review_id is not None
+        params = mock_cur.execute.call_args[0][1]
+        # The rating slot is the 7th column in the INSERT.
+        assert params[6] is None
+
 
 class TestGetReviews:
     @patch("robothor.crm.dal.get_connection")
@@ -161,6 +186,7 @@ class TestGetReviewSummary:
         # Second query: recent feedback
         mock_cur.fetchone.return_value = {
             "count": 5,
+            "rated_count": 5,
             "avg_rating": 3.8,
         }
         mock_cur.fetchall.return_value = [
@@ -173,13 +199,34 @@ class TestGetReviewSummary:
 
         summary = get_review_summary("email-classifier", days=30)
         assert summary["count"] == 5
+        assert summary["rated_count"] == 5
         assert summary["avg_rating"] == 3.8
         assert len(summary["recent_feedback"]) == 2
 
     @patch("robothor.crm.dal.get_connection")
+    def test_summary_reports_how_many_reviews_carried_a_rating(self, mock_get_conn):
+        """AVG skips NULL ratings; COUNT(*) does not. An average over 2 of 20
+        reviews must not be presentable as an average over 20."""
+        mock_conn, mock_cur = _make_mock_conn()
+        mock_cur.fetchone.return_value = {
+            "count": 20,
+            "rated_count": 2,
+            "avg_rating": 5.0,
+        }
+        mock_cur.fetchall.return_value = []
+        mock_get_conn.return_value = mock_conn
+
+        from robothor.crm.dal import get_review_summary
+
+        summary = get_review_summary("mostly-unmeasured")
+        assert summary["count"] == 20
+        assert summary["rated_count"] == 2
+        assert summary["avg_rating"] == 5.0
+
+    @patch("robothor.crm.dal.get_connection")
     def test_summary_no_reviews(self, mock_get_conn):
         mock_conn, mock_cur = _make_mock_conn()
-        mock_cur.fetchone.return_value = {"count": 0, "avg_rating": None}
+        mock_cur.fetchone.return_value = {"count": 0, "rated_count": 0, "avg_rating": None}
         mock_cur.fetchall.return_value = []
         mock_get_conn.return_value = mock_conn
 
@@ -187,4 +234,5 @@ class TestGetReviewSummary:
 
         summary = get_review_summary("new-agent")
         assert summary["count"] == 0
+        assert summary["rated_count"] == 0
         assert summary["avg_rating"] is None

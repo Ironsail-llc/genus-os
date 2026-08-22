@@ -32,6 +32,7 @@ from robothor.engine.goals import (
     compose_goals,
     compute_goal_metrics,
     detect_goal_breach,
+    session_goals_enforced,
     suggest_corrective_actions,
 )
 
@@ -638,7 +639,16 @@ def aggregate_findings(
         goals = compose_goals(agent_id=agent_id, manifest=manifest, tenant_id=tenant_id)
         if not goals:
             continue
-        breaches = detect_goal_breach(agent_id, goals, tenant_id=tenant_id)
+        # Synthetic session goals are excluded unless the manifest opts in:
+        # they are injected from the live goal task, appear in no manifest,
+        # and opening a self-improve task against one holds an agent to a
+        # contract its author never declared.
+        breaches = detect_goal_breach(
+            agent_id,
+            goals,
+            tenant_id=tenant_id,
+            include_synthetic=session_goals_enforced(manifest),
+        )
         if not breaches:
             continue
 
@@ -657,7 +667,12 @@ def aggregate_findings(
                 continue
             # Pull up to 3 worst reviews whose dimension matches this breach's category
             relevant = [r for r in reviews_for_agent if r.get("dimension") == breach.category]
-            relevant.sort(key=lambda r: int(r.get("rating", 5)))  # lowest rating first
+            # Lowest rating first. `rating` is NULL-able (a reviewer that could
+            # not measure the agent has no grade), and `.get(k, 5)` returns
+            # None — not the default — for a present-but-NULL column, so an
+            # ungraded review used to crash the int() cast. Ungraded reviews
+            # sort last: they are not evidence of a bad run.
+            relevant.sort(key=lambda r: int(r["rating"]) if r.get("rating") is not None else 6)
             repr_runs: list[str] = []
             repr_feedback: list[str] = []
             for r in relevant[:3]:

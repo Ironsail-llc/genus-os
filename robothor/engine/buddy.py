@@ -34,32 +34,88 @@ logger = logging.getLogger(__name__)
 AGENTS_DIR = Path(__file__).resolve().parent.parent.parent / "docs" / "agents"
 
 
+UNMEASURED_LABEL = "n/a (unmeasured)"
+
+
 @dataclass
 class AgentScore:
-    """One agent's achievement snapshot for a given day."""
+    """One agent's achievement snapshot for a given day.
+
+    ``achievement_score`` and ``rating`` are None when the agent's goals could
+    not be measured well enough to grade. They used to be 0 and 1 — the worst
+    grade on the scale, invented out of an absence of evidence and
+    indistinguishable from an agent that genuinely breached every goal.
+    """
 
     agent_id: str
-    achievement_score: int  # 0-100
-    rating: int  # 1-5
+    achievement_score: int | None  # 0-100, or None when unmeasured
+    rating: int | None  # 1-5, or None when unmeasured
     satisfied_goals: int
     breached_goals: int
     stat_date: date
     rank: int = 0
 
     @property
-    def overall_score(self) -> int:
+    def overall_score(self) -> int | None:
         """Back-compat alias used by older surfaces. Same value as achievement_score."""
         return self.achievement_score
+
+    @property
+    def measured(self) -> bool:
+        """Whether this snapshot carries a real grade."""
+        return self.achievement_score is not None
 
 
 @dataclass
 class FleetStatus:
-    """Fleet-level snapshot for a given day."""
+    """Fleet-level snapshot for a given day.
+
+    ``fleet_achievement_score`` is the mean over *measured* agents only, and
+    None when nothing was measured. ``agents_measured`` / ``agents_total``
+    carry the coverage so the mean is never read as speaking for agents it
+    never saw.
+    """
 
     stat_date: date
-    fleet_achievement_score: int  # 0-100, mean of per-agent scores
+    fleet_achievement_score: int | None  # 0-100 mean over measured agents
     tasks_completed: int  # total completed runs in the trailing 24h (cosmetic)
     per_agent: list[AgentScore] = field(default_factory=list)
+    agents_measured: int = 0
+    agents_total: int = 0
+
+
+def format_achievement(score: int | None) -> str:
+    """Render an achievement score for an operator-facing surface.
+
+    Keeps "0/100" (a measured, total failure) and "unmeasured" distinguishable
+    on Telegram and the dashboard, where an f-string would print "None/100".
+    """
+    return UNMEASURED_LABEL if score is None else f"{score}/100"
+
+
+def _mean_measured(scores: list[AgentScore]) -> int | None:
+    """Mean achievement over the agents that actually have a score.
+
+    Unmeasured agents are left out of the mean rather than entering it as a
+    zero — averaging in a fabricated 0 understates the fleet exactly as badly
+    as averaging in a fabricated 100 would overstate it. Returns None when no
+    agent was measured; ``FleetStatus.agents_measured`` carries the coverage.
+    """
+    measured = [s.achievement_score for s in scores if s.achievement_score is not None]
+    if not measured:
+        return None
+    return int(round(sum(measured) / len(measured)))
+
+
+def achievement_sort_key(score: AgentScore) -> tuple[int, float, str]:
+    """Rank key: best measured score first, unmeasured agents last.
+
+    Sorting on ``-achievement_score`` raised TypeError once the score could be
+    None; unmeasured agents also must not silently rank as the worst agents.
+    """
+    if score.achievement_score is None:
+        return (1, 0.0, score.agent_id)
+    return (0, -float(score.achievement_score), score.agent_id)
 
 
 def _load_manifests() -> list[tuple[str, dict[str, Any]]]:
@@ -126,23 +182,24 @@ class BuddyEngine:
 
         result = compute_achievement_score(agent_id, goals, tenant_id=self.tenant_id)
         raw_score = result["score"]
-        if raw_score is None:
-            # Every goal is unmeasured — no signal. Treat as 0/neutral for the
-            # fleet snapshot rather than crashing the int() cast. This does not
-            # reintroduce the None-as-breach bug: the *partial* unmeasured case
-            # (some goals measured) now scores only the measured goals.
+        raw_rating = result["rating"]
+        if raw_score is None or raw_rating is None:
+            # Not enough of this agent's goal contract could be measured to
+            # state a grade. Report the absence — 0/100 and 1/5 were an
+            # invented worst-case verdict, and the columns behind them are
+            # NULL-able precisely so this stays visible as "no data".
             return AgentScore(
                 agent_id=agent_id,
-                achievement_score=0,
-                rating=1,
-                satisfied_goals=0,
-                breached_goals=0,
+                achievement_score=None,
+                rating=None,
+                satisfied_goals=len(result.get("satisfied_goals", [])),
+                breached_goals=len(result.get("breached_goals", [])),
                 stat_date=target_date or datetime.now(UTC).date(),
             )
         return AgentScore(
             agent_id=agent_id,
             achievement_score=int(round(float(raw_score) * 100)),
-            rating=int(result["rating"]),
+            rating=int(raw_rating),
             satisfied_goals=len(result.get("satisfied_goals", [])),
             breached_goals=len(result.get("breached_goals", [])),
             stat_date=target_date or datetime.now(UTC).date(),
@@ -155,7 +212,7 @@ class BuddyEngine:
             if not compose_goals(agent_id=agent_id, manifest=manifest, tenant_id=self.tenant_id):
                 continue
             scores.append(self.compute_agent_score(agent_id, manifest, target_date))
-        scores.sort(key=lambda s: (-s.achievement_score, s.agent_id))
+        scores.sort(key=achievement_sort_key)
         for i, s in enumerate(scores, start=1):
             s.rank = i
         return scores
@@ -172,16 +229,17 @@ class BuddyEngine:
                 fleet_achievement_score=one.achievement_score,
                 tasks_completed=self._tasks_completed_24h(agent_id),
                 per_agent=[one],
+                agents_measured=1 if one.measured else 0,
+                agents_total=1,
             )
         scores = self.compute_fleet_scores(today)
-        fleet_avg = (
-            int(round(sum(s.achievement_score for s in scores) / len(scores))) if scores else 0
-        )
         return FleetStatus(
             stat_date=today,
-            fleet_achievement_score=fleet_avg,
+            fleet_achievement_score=_mean_measured(scores),
             tasks_completed=self._tasks_completed_24h(None),
             per_agent=scores,
+            agents_measured=sum(1 for s in scores if s.measured),
+            agents_total=len(scores),
         )
 
     def refresh_daily(self) -> dict[str, Any]:
@@ -192,9 +250,11 @@ class BuddyEngine:
         """
         today = datetime.now(UTC).date()
         scores = self.compute_fleet_scores(today)
-        fleet_avg = (
-            int(round(sum(s.achievement_score for s in scores) / len(scores))) if scores else 0
-        )
+        # None for both columns when unmeasured — agent_buddy_stats and
+        # buddy_stats already treat NULL achievement_score as "no snapshot"
+        # (every reader filters IS NOT NULL), so nothing needs to invent a 0.
+        fleet_avg = _mean_measured(scores)
+        agents_measured = sum(1 for s in scores if s.measured)
 
         from robothor.db.connection import get_connection
 
@@ -227,6 +287,7 @@ class BuddyEngine:
             "stat_date": today.isoformat(),
             "fleet_achievement_score": fleet_avg,
             "agents_scored": agent_rows,
+            "agents_measured": agents_measured,
         }
 
     def increment_task_count(self, agent_id: str | None = None) -> None:

@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 # considered "persistently breached" and enters the improvement backlog.
 PERSISTENT_BREACH_DAYS = 3
 
+# Fraction of an agent's declared goal *weight* that must actually be measured
+# before any rating is emitted. Below this the review says "insufficient
+# measurement" and persists a NULL rating: a 5/5 computed over 29% of an
+# agent's contract is not a grade, it is a sampling artefact, and every
+# consumer downstream treated it as identical to a fully-measured 5/5.
+MIN_MEASUREMENT_COVERAGE = 0.5
+
+# The single reason string attached to a withheld rating. Consumers match on
+# it, so it is a constant rather than a literal sprinkled through f-strings.
+UNMEASURED_REASON = "insufficient measurement"
+
 # Agents that drive the self-improvement loop itself. They still get scored
 # and reviewed so you can see them breaching, but no self-improve CRM task
 # is ever opened against them — that would let auto-agent silently edit its
@@ -47,6 +58,13 @@ class GoalSpec:
     weight: float = 1.0
     window_days: int = 7
     extras: dict[str, Any] = field(default_factory=dict)
+    # True for goals injected at runtime rather than declared in a manifest
+    # (the `session-goal-*` pair). An agent can be *scored* on one — the
+    # metric behind it is real — but it is not a contract the agent's author
+    # ever signed, so it is kept out of manifest-breach accounting unless the
+    # manifest opts in. Declared last so existing positional construction and
+    # every `GoalSpec(...)` keyword call site keep working unchanged.
+    synthetic: bool = False
 
 
 @dataclass(frozen=True)
@@ -270,6 +288,7 @@ def compose_goals(
                 weight=SESSION_GOAL_SYNTHETIC_WEIGHT,
                 window_days=7,
                 extras={"source": "session_goal"},
+                synthetic=True,
             )
         )
         if criteria:
@@ -282,9 +301,33 @@ def compose_goals(
                     weight=2.0,
                     window_days=7,
                     extras={"source": "session_goal"},
+                    synthetic=True,
                 )
             )
     return synthetic + target_specs
+
+
+def session_goals_enforced(manifest: dict[str, Any] | None) -> bool:
+    """Whether this agent opts into breach accounting on synthetic goals.
+
+    The ``session-goal-alignment`` / ``session-goal-progress`` specs are
+    injected from the live goal task's objective; they appear in no manifest,
+    yet agents were being reported as breaching them and self-improve tasks
+    were opened against contracts nobody declared. Enforcement is therefore
+    opt-in, per manifest::
+
+        session_goals:
+          enforce: true
+
+    Defaults to False — the safe direction, since the failure mode being
+    fixed is over-reporting breaches, not under-reporting them.
+    """
+    if not isinstance(manifest, dict):
+        return False
+    block = manifest.get("session_goals")
+    if not isinstance(block, dict):
+        return False
+    return bool(block.get("enforce", False))
 
 
 # ─── Metric computation ───────────────────────────────────────────────
@@ -374,6 +417,7 @@ def _get_session_goal_alignment_score(
                   AND tenant_id = %s
                   AND created_at >= %s
                   AND created_at <= %s
+                  AND rating IS NOT NULL
                   AND categories ->> 'dimension' = 'session_goal_alignment'
                 """,
                 (agent_id, tenant_id, start, end),
@@ -427,6 +471,7 @@ def _get_goal_achievement_judgment(
                   AND tenant_id = %s
                   AND created_at >= %s
                   AND created_at <= %s
+                  AND rating IS NOT NULL
                   AND reviewer_type = 'judge'
                   AND categories ->> 'dimension' = 'goal_achievement'
                 """,
@@ -551,10 +596,21 @@ def detect_goal_breach(
     agent_id: str,
     goals: list[GoalSpec],
     tenant_id: str = DEFAULT_TENANT,
+    *,
+    include_synthetic: bool = False,
 ) -> list[GoalBreach]:
-    """Return goals that have been in breach for PERSISTENT_BREACH_DAYS or more."""
+    """Return goals that have been in breach for PERSISTENT_BREACH_DAYS or more.
+
+    Synthetic goals (``GoalSpec.synthetic``) are skipped unless
+    ``include_synthetic`` is set — see :func:`session_goals_enforced`. They are
+    injected from the live goal task, exist in no manifest, and reporting them
+    as breaches made agents look like they were failing contracts they never
+    declared.
+    """
     breaches: list[GoalBreach] = []
     for goal in goals:
+        if goal.synthetic and not include_synthetic:
+            continue
         history = _get_daily_metric_history(
             agent_id, goal.metric, goal.window_days, tenant_id=tenant_id
         )
@@ -686,7 +742,7 @@ def suggest_corrective_actions(breach: GoalBreach) -> list[str]:
 
 def register_review(
     agent_id: str,
-    rating: int,
+    rating: int | None,
     categories: dict[str, Any],
     feedback: str,
     action_items: list[str],
@@ -701,6 +757,10 @@ def register_review(
     Thin wrapper around `robothor.crm.dal.create_review` — kept so the goal
     module can offer a focused signature, but the DB logic (UUID generation,
     rating clamping, SQL) lives in the DAL to avoid the dual-path anti-pattern.
+
+    ``rating`` may be None: a review of an agent whose goals could not be
+    measured has no grade, and inventing one is the defect this signature
+    exists to prevent. NULL is persisted as NULL.
     """
     from robothor.crm.dal import create_review
 
@@ -749,11 +809,37 @@ def compute_achievement_score(
     agent_id: str,
     goals: list[GoalSpec],
     tenant_id: str = DEFAULT_TENANT,
+    *,
+    min_coverage: float = MIN_MEASUREMENT_COVERAGE,
 ) -> dict[str, Any]:
     """Compute weighted goal-achievement score [0.0, 1.0] for an agent.
 
-    Returns dict with: score, rating (1-5), satisfied_goals, breached_goals,
-    per_goal (list of {id, metric, target, actual, satisfied}).
+    Returns a dict with:
+
+    ``score`` / ``rating``
+        The grade, or ``None`` when it cannot be honestly stated.
+    ``partial_score``
+        The weighted score over the measured goals only — always populated
+        when anything was measured, even when ``score`` is withheld, so a
+        withheld rating never hides the number behind it.
+    ``coverage`` / ``measured_weight`` / ``total_weight``
+        How much of the agent's declared goal weight was actually measured.
+        ``coverage`` is weight-based, not count-based: a weight-5 goal going
+        dark matters more than a weight-1 goal going dark.
+    ``measured_goals`` / ``unmeasured_goals`` / ``synthetic_goals``
+        Goal ids, so the caller can report "N of M goals measured" instead of
+        silently dropping the unmeasured ones out of the denominator.
+    ``measured`` / ``rating_reason``
+        ``measured`` is False whenever the rating is withheld;
+        ``rating_reason`` is then :data:`UNMEASURED_REASON`.
+    ``per_goal``
+        ``{id, category, metric, target, actual, satisfied, weight, synthetic}``
+        per goal, with ``actual``/``satisfied`` None for unmeasured goals.
+
+    Unmeasured goals are excluded from ``total_weight`` for scoring purposes —
+    they are neither satisfaction nor breach — but that exclusion is exactly
+    what let an agent satisfying 2 of 7 goals report a perfect 5/5. So below
+    ``min_coverage`` no rating is emitted at all.
 
     Each goal is evaluated against its own ``window_days`` — groups goals by
     window and issues one ``compute_goal_metrics`` call per distinct window so
@@ -767,12 +853,18 @@ def compute_achievement_score(
 
     total_weight = 0.0
     weighted_satisfied = 0.0
+    declared_weight = 0.0
     per_goal: list[dict[str, Any]] = []
     satisfied_ids: list[str] = []
     breached_ids: list[str] = []
+    measured_ids: list[str] = []
     unmeasured_ids: list[str] = []
+    synthetic_ids: list[str] = []
 
     for goal in goals:
+        declared_weight += goal.weight
+        if goal.synthetic:
+            synthetic_ids.append(goal.id)
         metric_value = snapshots[goal.window_days].get(goal.metric)
 
         # None = "not measured this window" = neutral, NOT a breach. Mirrors
@@ -793,12 +885,14 @@ def compute_achievement_score(
                     "actual": None,
                     "satisfied": None,
                     "weight": goal.weight,
+                    "synthetic": goal.synthetic,
                 }
             )
             continue
 
         is_satisfied = _evaluate_target(metric_value, goal.target)
         total_weight += goal.weight
+        measured_ids.append(goal.id)
         if is_satisfied:
             weighted_satisfied += goal.weight
             satisfied_ids.append(goal.id)
@@ -813,16 +907,30 @@ def compute_achievement_score(
                 "actual": metric_value,
                 "satisfied": is_satisfied,
                 "weight": goal.weight,
+                "synthetic": goal.synthetic,
             }
         )
 
-    # Edge case: every goal is unmeasured. There is no evidence either way, so
-    # a numeric score would be a fabrication — return None. 0.0 is what caused
-    # the false fleet-score crash (indistinguishable from "all goals breached").
+    coverage = round(total_weight / declared_weight, 4) if declared_weight > 0 else 0.0
+
+    # The number over the measured slice. Always reported — withholding the
+    # rating must not hide what was actually seen, only refuse to call it a
+    # grade. None only when literally nothing was measured.
+    partial_score: float | None = (
+        round(weighted_satisfied / total_weight, 4) if total_weight > 0 else None
+    )
+
+    # Two ways to have no grade, one honest answer for both:
+    #   - nothing measured at all (a numeric score would be pure fabrication;
+    #     0.0 is indistinguishable from "all goals breached"), and
+    #   - too little measured to speak for the whole contract, which is how a
+    #     2-of-7 agent used to report a flawless 5/5.
     score: float | None
     rating: int | None
-    if total_weight > 0:
-        score = round(weighted_satisfied / total_weight, 4)
+    rating_reason: str | None
+    if partial_score is not None and coverage >= min_coverage:
+        score = partial_score
+        rating_reason = None
         # Map [0, 1] → rating [1, 5]
         if score >= 0.95:
             rating = 5
@@ -837,13 +945,23 @@ def compute_achievement_score(
     else:
         score = None
         rating = None
+        rating_reason = UNMEASURED_REASON
 
     return {
         "score": score,
         "rating": rating,
+        "rating_reason": rating_reason,
+        "measured": rating is not None,
+        "partial_score": partial_score,
+        "coverage": coverage,
+        "measured_weight": total_weight,
+        "total_weight": declared_weight,
+        "total_goals": len(goals),
         "satisfied_goals": satisfied_ids,
         "breached_goals": breached_ids,
+        "measured_goals": measured_ids,
         "unmeasured_goals": unmeasured_ids,
+        "synthetic_goals": synthetic_ids,
         "per_goal": per_goal,
     }
 
@@ -854,7 +972,12 @@ def run_nightly_auto_review(
 ) -> list[dict[str, Any]]:
     """Write an auto-review row for every agent with goals.
 
-    Returns a list of {agent_id, review_id, rating, score} summaries.
+    Returns a list of summaries: ``{agent_id, review_id, rating, score,
+    coverage, measured, rating_reason, unmeasured, total_goals, breaches}``.
+
+    ``rating`` is None — and is persisted as NULL — whenever the agent's goals
+    could not be measured well enough to grade. It used to be coerced to a
+    neutral 3, which turned "we measured nothing" into a mid-range pass.
     """
     results: list[dict[str, Any]] = []
     for manifest in manifests:
@@ -866,26 +989,62 @@ def run_nightly_auto_review(
             continue
 
         achievement = compute_achievement_score(agent_id, goals, tenant_id=tenant_id)
-        breaches = detect_goal_breach(agent_id, goals, tenant_id=tenant_id)
+        breaches = detect_goal_breach(
+            agent_id,
+            goals,
+            tenant_id=tenant_id,
+            include_synthetic=session_goals_enforced(manifest),
+        )
 
-        # Build feedback text + action items from breaches. ``score`` is None
-        # when every goal is unmeasured this window — emit an honest "not
-        # measured" line rather than crashing the f-string format.
+        # Coverage first, always — "5/5" and "we could only measure 29% of
+        # this agent" must never again render identically.
+        measured_ids = achievement["measured_goals"]
+        unmeasured_ids = achievement["unmeasured_goals"]
+        total_goals = achievement["total_goals"]
+        feedback_lines = [
+            f"Measurement coverage: {len(measured_ids)} of {total_goals} goals measured "
+            f"(weighted {achievement['coverage']:.2f})."
+        ]
+        if unmeasured_ids:
+            feedback_lines.append(
+                f"{len(unmeasured_ids)} unmeasured: " + ", ".join(unmeasured_ids) + "."
+            )
+
         score = achievement["score"]
         if score is None:
-            feedback_lines = [
-                "Goal achievement: not measured "
-                f"({len(achievement.get('unmeasured_goals', []))} goal(s) have "
-                "no data this window)."
-            ]
+            partial = achievement["partial_score"]
+            seen = (
+                "nothing was measured this window"
+                if partial is None
+                else f"only the measured slice scored {partial:.2f}"
+            )
+            feedback_lines.append(
+                f"Goal achievement: no rating — {UNMEASURED_REASON} "
+                f"(coverage {achievement['coverage']:.2f} < "
+                f"{MIN_MEASUREMENT_COVERAGE:.2f}; {seen})."
+            )
         else:
-            total_goals = len(achievement["satisfied_goals"]) + len(achievement["breached_goals"])
-            feedback_lines = [
+            feedback_lines.append(
                 f"Goal achievement: {score:.2f} "
-                f"({len(achievement['satisfied_goals'])}/{total_goals} goals satisfied)."
-            ]
-        if achievement["breached_goals"]:
-            feedback_lines.append("Breached: " + ", ".join(achievement["breached_goals"]) + ".")
+                f"({len(achievement['satisfied_goals'])}/{len(measured_ids)} "
+                "measured goals satisfied)."
+            )
+        # Split the breach list. A synthetic session goal is injected from the
+        # live goal task and appears in no manifest; reporting it in the same
+        # undifferentiated list made agents look like they were failing
+        # contracts their author never wrote.
+        synthetic_ids = set(achievement["synthetic_goals"])
+        breached_manifest = [g for g in achievement["breached_goals"] if g not in synthetic_ids]
+        breached_synthetic = [g for g in achievement["breached_goals"] if g in synthetic_ids]
+        if breached_manifest:
+            feedback_lines.append("Breached: " + ", ".join(breached_manifest) + ".")
+        if breached_synthetic:
+            enforced = "enforced" if session_goals_enforced(manifest) else "not enforced"
+            feedback_lines.append(
+                f"Breached synthetic session goals ({enforced}, not manifest contracts): "
+                + ", ".join(breached_synthetic)
+                + "."
+            )
 
         action_items: list[str] = []
         for breach in breaches[:3]:  # cap at top-3 priority breaches
@@ -901,16 +1060,26 @@ def run_nightly_auto_review(
 
         categories = {
             "score": achievement["score"],
+            "partial_score": achievement["partial_score"],
+            "measured": achievement["measured"],
+            "rating_reason": achievement["rating_reason"],
+            "coverage": achievement["coverage"],
+            "total_goals": total_goals,
             "satisfied": achievement["satisfied_goals"],
             "breached": achievement["breached_goals"],
+            "breached_manifest": breached_manifest,
+            "breached_synthetic": breached_synthetic,
+            "unmeasured": unmeasured_ids,
+            "synthetic": achievement["synthetic_goals"],
             "persistent_breaches": [b.goal_id for b in breaches],
         }
 
         review_id = register_review(
             agent_id=agent_id,
-            # rating is None when score is None — create_review clamps to
-            # 1-5 and would crash on None; 3 (neutral) is the honest default.
-            rating=achievement["rating"] or 3,
+            # None when the goals could not be measured well enough to grade.
+            # It is persisted as NULL: "no grade" is a fact worth recording,
+            # and a fabricated 3 is not a cheaper way of saying it.
+            rating=achievement["rating"],
             categories=categories,
             feedback="\n".join(feedback_lines),
             action_items=action_items,
@@ -924,6 +1093,12 @@ def run_nightly_auto_review(
                 "review_id": review_id,
                 "rating": achievement["rating"],
                 "score": achievement["score"],
+                "partial_score": achievement["partial_score"],
+                "measured": achievement["measured"],
+                "rating_reason": achievement["rating_reason"],
+                "coverage": achievement["coverage"],
+                "total_goals": total_goals,
+                "unmeasured": len(unmeasured_ids),
                 "breaches": len(breaches),
             }
         )
@@ -958,12 +1133,18 @@ def _main() -> None:
 
     if args.cmd == "nightly-review":
         results = run_nightly_auto_review(manifests)
+        unrated = 0
         for r in results:
             score_str = "  n/a" if r["score"] is None else f"{r['score']:.2f}"
             rating_str = "-" if r["rating"] is None else str(r["rating"])
+            if r["rating"] is None:
+                unrated += 1
+            measured = r["total_goals"] - r["unmeasured"]
             print(
-                f"{r['agent_id']:22} rating={rating_str} score={score_str} breaches={r['breaches']}"
+                f"{r['agent_id']:22} rating={rating_str} score={score_str} "
+                f"coverage={measured}/{r['total_goals']} breaches={r['breaches']}"
             )
+        print(f"\n{unrated} of {len(results)} agents unrated ({UNMEASURED_REASON}).")
         return
 
     if args.cmd == "audit":

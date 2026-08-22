@@ -615,15 +615,16 @@ class TelegramBot:
         async def cmd_stats(message: Message) -> None:
             """Show fleet achievement snapshot — goal satisfaction by agent."""
             try:
-                from robothor.engine.buddy import BuddyEngine
+                from robothor.engine.buddy import BuddyEngine, format_achievement
 
                 engine = BuddyEngine()
                 fleet = engine.compute_daily_stats()
                 current_streak, longest_streak = engine.get_streak()
 
-                score = fleet.fleet_achievement_score
                 lines = [
-                    f"<b>Fleet achievement</b>: {score}/100",
+                    f"<b>Fleet achievement</b>: "
+                    f"{format_achievement(fleet.fleet_achievement_score)}",
+                    f"\U0001f4d0 Measured: {fleet.agents_measured}/{fleet.agents_total} agents",
                     f"\U0001f525 Streak: {current_streak} days (best: {longest_streak})",
                     f"\U0001f4ca Today: {fleet.tasks_completed} tasks completed",
                     "",
@@ -631,7 +632,8 @@ class TelegramBot:
                 ]
                 for s in fleet.per_agent[:15]:
                     lines.append(
-                        f"  {s.agent_id:<22s} {s.satisfied_goals}/{s.breached_goals} · {s.achievement_score}/100"
+                        f"  {s.agent_id:<22s} {s.satisfied_goals}/{s.breached_goals} · "
+                        f"{format_achievement(s.achievement_score)}"
                     )
                 if len(fleet.per_agent) > 15:
                     lines.append(f"  … and {len(fleet.per_agent) - 15} more")
@@ -643,18 +645,27 @@ class TelegramBot:
         async def cmd_buddy(message: Message) -> None:
             """Show fleet achievement + the three biggest breaches."""
             try:
-                from robothor.engine.buddy import BuddyEngine
+                from robothor.engine.buddy import BuddyEngine, format_achievement
 
                 engine = BuddyEngine()
                 fleet = engine.compute_daily_stats()
                 current_streak, longest_streak = engine.get_streak()
 
-                # Biggest breaches = lowest scores among agents with >0 breached goals.
-                breached = [s for s in fleet.per_agent if s.breached_goals > 0]
-                breached.sort(key=lambda s: s.achievement_score)
+                # Biggest breaches = lowest scores among agents with >0 breached
+                # goals. Only agents carrying a real score can be ranked \u2014 an
+                # unmeasured agent is not "the worst agent", and sorting on a
+                # None score raised TypeError.
+                breached = [
+                    s
+                    for s in fleet.per_agent
+                    if s.breached_goals > 0 and s.achievement_score is not None
+                ]
+                breached.sort(key=lambda s: s.achievement_score or 0)
 
                 lines = [
-                    f"\u26a1 <b>Fleet achievement</b>: {fleet.fleet_achievement_score}/100",
+                    "\u26a1 <b>Fleet achievement</b>: "
+                    f"{format_achievement(fleet.fleet_achievement_score)}",
+                    f"\U0001f4d0 Measured: {fleet.agents_measured}/{fleet.agents_total} agents",
                     f"\U0001f525 Streak: {current_streak} days (best: {longest_streak})",
                     f"\U0001f4ca Tasks today: {fleet.tasks_completed}",
                     "",

@@ -214,10 +214,15 @@ class TestComputeAchievementScore:
             result = compute_achievement_score("some-agent", goals)
 
         # Only the measured goal counts: 1.0/1.0, not 1.0/6.0.
-        assert result["score"] == 1.0
+        assert result["partial_score"] == 1.0
         assert result["satisfied_goals"] == ["g-measured"]
         assert result["breached_goals"] == []
         assert result["unmeasured_goals"] == ["g-unmeasured"]
+        # ...but 1 of 6 weight measured is far too thin to call a grade, so no
+        # rating is published from it. See test_goal_review_honesty.py.
+        assert result["coverage"] == round(1.0 / 6.0, 4)
+        assert result["score"] is None
+        assert result["rating"] is None
 
     def test_partial_unmeasured_scores_only_measured_goals(self):
         goals = [
@@ -253,8 +258,13 @@ class TestComputeAchievementScore:
         with patch("robothor.engine.goals.compute_goal_metrics", side_effect=fake_compute):
             result = compute_achievement_score("some-agent", goals)
 
-        assert result["score"] == 1.0  # 4.0/4.0 — the weight-5 goal is excluded
+        assert result["partial_score"] == 1.0  # 4.0/4.0 — the weight-5 goal is excluded
         assert result["unmeasured_goals"] == ["big"]
+        # That exclusion is exactly why a coverage gate exists: 4 of 9 weight
+        # measured cannot speak for the agent, so no rating is emitted.
+        assert result["coverage"] == round(4.0 / 9.0, 4)
+        assert result["rating"] is None
+        assert result["rating_reason"] == "insufficient measurement"
 
     def test_all_goals_unmeasured_returns_none_score(self):
         """Zero measured goals = zero signal. Score None, not 0.0 — 0.0 is
@@ -404,7 +414,10 @@ class TestRunNightlyAutoReviewNoneScore:
             results = run_nightly_auto_review([{"id": "never-graded"}])
 
         assert results[0]["score"] is None
-        assert "not measured" in captured["feedback"].lower()
+        assert captured["rating"] is None  # never a fabricated neutral 3
+        feedback = captured["feedback"].lower()
+        assert "0 of 1 goals measured" in feedback
+        assert "insufficient measurement" in feedback
 
 
 # ─── compute_goal_metrics + detect_goal_breach ────────────────────────
