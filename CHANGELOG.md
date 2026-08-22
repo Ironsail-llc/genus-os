@@ -1,3 +1,9 @@
+## [1.36.5](https://github.com/Ironsail-llc/genus-os/compare/v1.36.4...v1.36.5) (2026-08-22)
+
+### Bug Fixes
+
+* **engine:** the tenant binding survives the recording thread ([#334](https://github.com/Ironsail-llc/genus-os/issues/334)) ([d98ee42](https://github.com/Ironsail-llc/genus-os/commit/d98ee42a2540092e0bad3d586cc28db2cc76a0db)), closes [#333](https://github.com/Ironsail-llc/genus-os/issues/333) [#333](https://github.com/Ironsail-llc/genus-os/issues/333)
+
 ## [1.36.4](https://github.com/Ironsail-llc/genus-os/compare/v1.36.3...v1.36.4) (2026-08-22)
 
 ### Bug Fixes
