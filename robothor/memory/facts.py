@@ -265,7 +265,10 @@ async def _extract_facts_inner(
             raw = await generation.generate(
                 prompt=prompt,
                 system="Extract facts from the content as a JSON array.",
-                max_tokens=1024,
+                # Named constant, not a literal: 1024 truncated 59% of
+                # production extractions mid-JSON, and the caller scored the
+                # unparseable body as "no facts in this conversation".
+                max_tokens=generation.EXTRACTION_MAX_TOKENS,
                 format=FACT_EXTRACTION_SCHEMA,
                 think=False,
             )

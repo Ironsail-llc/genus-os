@@ -476,14 +476,45 @@ async def _openrouter_chat(
         resp.raise_for_status()
         data = resp.json()
 
-    content = strip_think_blocks(data["choices"][0]["message"]["content"] or "")
+    return content_from_response(data, model=payload["model"])
+
+
+#: Token budget for one fact extraction. Was a bare 1024 at facts.py:268, which
+#: truncated 59% of production extractions (72 of 122 over 7 days parsed zero
+#: facts). The two populations barely overlap: zero-fact responses ran
+#: 2654-3863 chars against a ~3.5-4k ceiling, while successful ones ran
+#: 491-3394. The failures were not short conversations — they were cut off
+#: mid-JSON. Same shape as the starved benchmark judge in #335.
+EXTRACTION_MAX_TOKENS = 4096
+
+#: Same failure at a smaller ceiling: insight discovery ran at 512 and its parse
+#: errors cluster at char ~1480-1590 ("Unterminated string", "Expecting ','"),
+#: which is a JSON object cut in half rather than a bad answer.
+INSIGHT_MAX_TOKENS = 2048
+
+
+def content_from_response(data: dict[str, Any], *, model: str) -> str:
+    """Text from a chat completion, refusing anything that was cut short.
+
+    A ``finish_reason`` of ``length`` means the model ran out of budget partway
+    through. The body that comes back is long and unparseable, and treating it
+    as an answer is how "the conversation contained no facts" got recorded 72
+    times in a week. Raise instead, so the retry path sees a failure.
+    """
+    choice = (data.get("choices") or [{}])[0]
+    content = strip_think_blocks((choice.get("message") or {}).get("content") or "")
+    finish_reason = choice.get("finish_reason")
+
+    if finish_reason == "length":
+        raise RuntimeError(
+            f"truncated response from remote model {model}: finish_reason=length "
+            f"after {len(content)} chars — raise max_tokens (currently "
+            f"{EXTRACTION_MAX_TOKENS} for extraction)"
+        )
     if not content:
-        raise RuntimeError(f"empty content from remote model {payload['model']}")
-    logger.info(
-        "remote memory generation: %d content chars via %s",
-        len(content),
-        payload["model"],
-    )
+        raise RuntimeError(f"empty content from remote model {model}")
+
+    logger.info("remote memory generation: %d content chars via %s", len(content), model)
     return content
 
 
