@@ -766,6 +766,60 @@ def _recent_buddy_reviews(agent_id: str, window_hours: int, tenant_id: str) -> l
 
 # ─── Finding → CRM task ──────────────────────────────────────────────
 
+#: Agents that may execute a self-improve finding, in preference order.
+#: Resolved against the manifests at call time rather than hardcoded: this
+#: previously named ``auto-agent`` alone, whose manifest carries
+#: ``schedule.enabled: False`` and an empty cron. It had not run in production
+#: once in 30 days, yet 35 findings were filed to it between 2026-08-17 and
+#: 2026-08-21 -- delegated work no agent could ever pick up.
+_SELF_IMPROVE_EXECUTORS: tuple[str, ...] = ("auto-agent", "agent-architect")
+
+
+def _agent_can_run(agent_id: str) -> bool | None:
+    """Whether this agent's manifest schedules it to run.
+
+    Returns None when there is no manifest to read. ``docs/agents/`` is
+    instance-land and gitignored, so platform code must behave sanely where it
+    is absent entirely (a fresh install, or CI). Absence of a manifest is not
+    evidence that an agent is disabled, and treating it as such refuses every
+    finding on a clean checkout.
+    """
+    try:
+        text = (AGENTS_DIR / f"{agent_id}.yaml").read_text()
+        data = yaml.safe_load(text) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    schedule = data.get("schedule") or (data.get("v2") or {}).get("schedule") or {}
+    if not isinstance(schedule, dict):
+        return None
+    if schedule.get("enabled") is False:
+        return False
+    return bool(str(schedule.get("cron") or "").strip())
+
+
+def resolve_self_improve_executor(*, exclude: str | None = None) -> str | None:
+    """The first preferred executor that can actually run, or None.
+
+    Prefers an agent the manifests confirm is scheduled. Where no manifest is
+    readable the state is unknown, and an unknown candidate is used only as a
+    fallback -- never in preference to one known to run, and never over a
+    positive "this agent is disabled".
+
+    ``exclude`` drops a candidate that is itself the subject of the finding. An
+    executor assigned to fix its own harness is the pipeline editing its own
+    guardrails -- the invariant `test_skips_meta_agents` states.
+    """
+    unknown: str | None = None
+    for candidate in _SELF_IMPROVE_EXECUTORS:
+        if candidate == exclude:
+            continue
+        state = _agent_can_run(candidate)
+        if state is True:
+            return candidate
+        if state is None and unknown is None:
+            unknown = candidate
+    return unknown
+
 
 def open_task_for_finding(finding: Finding, *, tenant_id: str = DEFAULT_TENANT) -> str | None:
     """Create a nightwatch+self-improve task for this finding.
@@ -779,6 +833,21 @@ def open_task_for_finding(finding: Finding, *, tenant_id: str = DEFAULT_TENANT) 
     if finding.agent_id in EXCLUDED_FROM_SELF_IMPROVE:
         logger.info(
             "Refusing to open self-improve task on meta-agent %s (%s)",
+            finding.agent_id,
+            finding.metric,
+        )
+        return None
+
+    executor = resolve_self_improve_executor(exclude=finding.agent_id)
+    if executor is None:
+        # Filing to an agent that cannot run makes the finding look handled
+        # while nothing is handling it. Refuse loudly instead: a warning is
+        # read by the alert digest, an unreachable task is read by nobody.
+        logger.warning(
+            "No schedulable self-improve executor among %s (excluding the subject "
+            "%s) — finding %s/%s NOT filed",
+            ", ".join(_SELF_IMPROVE_EXECUTORS),
+            finding.agent_id,
             finding.agent_id,
             finding.metric,
         )
@@ -800,7 +869,7 @@ def open_task_for_finding(finding: Finding, *, tenant_id: str = DEFAULT_TENANT) 
     result = create_task(
         title=finding.task_title(),
         body=finding.task_body(),
-        assigned_to_agent="auto-agent",
+        assigned_to_agent=executor,
         tags=finding.task_tags(),
         priority="high" if finding.severity >= 6.0 else "normal",
         created_by_agent="buddy",

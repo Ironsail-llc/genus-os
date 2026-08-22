@@ -12,11 +12,13 @@ from robothor.engine.buddy_critic import (
     Evidence,
     Finding,
     Review,
+    _agent_can_run,
     _extract_json,
     aggregate_findings,
     build_evidence,
     open_task_for_finding,
     persist_review,
+    resolve_self_improve_executor,
     review_run,
     sample_runs_to_review,
 )
@@ -357,7 +359,12 @@ class TestOpenTaskForFinding:
 
         assert task_id == "task-new-1"
         kwargs = mock_create.call_args.kwargs
-        assert kwargs["assigned_to_agent"] == "auto-agent"
+        # The executor is resolved from the manifests, not hardcoded: whoever
+        # it is, the finding must go to an agent that is actually scheduled.
+        # See test_self_improve_executor.py -- auto-agent has been unschedulable
+        # since before 2026-08-17 and collected 35 unreachable tasks.
+        assert kwargs["assigned_to_agent"] == resolve_self_improve_executor()
+        assert _agent_can_run(kwargs["assigned_to_agent"]) is not False
         assert kwargs["created_by_agent"] == "buddy"
         assert "self-improve" in kwargs["tags"]
         mock_journal.assert_called_once()
