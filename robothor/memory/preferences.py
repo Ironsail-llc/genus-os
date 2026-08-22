@@ -45,12 +45,32 @@ def _load_preferences(tenant_id: str) -> list[dict[str, Any]]:
         return []
     try:
         data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        # Legacy blocks written before 2026-08-22 carry a plain-text summary
+        # ahead of the JSON. Recover them in place rather than discarding the
+        # operator's preferences and waiting for the next write to heal it.
+        data = _parse_legacy_block(content)
+        if data is None:
+            logger.warning("preferences block is not valid JSON; starting fresh")
+            return []
+    try:
         if isinstance(data, dict):
             data = data.get("preferences", [])
         return [p for p in data if isinstance(p, dict) and p.get("preference")]
-    except (json.JSONDecodeError, TypeError):
-        logger.warning("preferences block is not valid JSON; starting fresh")
+    except TypeError:
+        logger.warning("preferences block has an unexpected shape; starting fresh")
         return []
+
+
+def _parse_legacy_block(content: str) -> Any | None:
+    """Recover a pre-2026-08-22 block: summary text, blank line, then JSON."""
+    start = content.find("\n{")
+    if start == -1:
+        return None
+    try:
+        return json.loads(content[start + 1 :])
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 def _save_preferences(prefs: list[dict[str, Any]], tenant_id: str) -> None:
@@ -59,11 +79,18 @@ def _save_preferences(prefs: list[dict[str, Any]], tenant_id: str) -> None:
         "updated_at": datetime.now(UTC).isoformat(),
         "preferences": prefs,
     }
-    content = json.dumps(payload, indent=2, default=str)
-    # Append a one-liner summary for warmup injection convenience.
-    summary = _format_summary(prefs)
-    combined = f"{summary}\n\n{content}" if summary else content
-    write_block(_PREFERENCE_BLOCK, combined, tenant_id=tenant_id)
+    # The summary goes INSIDE the payload. It used to be prepended as plain text
+    # ahead of the JSON, which made the block unparseable by _load_preferences'
+    # own json.loads() — every read threw, logged "starting fresh", and returned
+    # [], discarding the operator's preferences. Measured 2026-08-22: 115 times
+    # in 24 hours, on both tenants. It is still human-readable here, which was
+    # the only reason it was prepended.
+    payload["summary"] = _format_summary(prefs)
+    write_block(
+        _PREFERENCE_BLOCK,
+        json.dumps(payload, indent=2, default=str),
+        tenant_id=tenant_id,
+    )
 
 
 def _format_summary(prefs: list[dict[str, Any]]) -> str:

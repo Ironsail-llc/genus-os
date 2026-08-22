@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
+from robothor.memory import preferences
 from robothor.memory.preferences import (
     _format_summary,
     _match_existing,
@@ -81,3 +82,71 @@ class TestPersistenceRoundtrip:
             return_value={"content": "not json"},
         ):
             assert _load_preferences("test") == []
+
+
+class TestSaveLoadRoundTrip:
+    """What the writer produces, the reader must accept.
+
+    Every other test in this file hands `_load_preferences` a fake block
+    containing clean JSON. None of them has ever fed it what `_save_preferences`
+    actually writes — and that writer prepends a plain-text summary before the
+    JSON, so `json.loads()` on the whole string throws every single time and the
+    handler logs "starting fresh" and returns [].
+
+    Measured on production 2026-08-22: 115 occurrences in 24 hours, on both
+    tenants. The one preference being tracked was
+    "Prefers 'ox alpha' in the model list and Telegram model picker" — the
+    operator's own request, learned and then discarded on every read.
+
+    A double that only ever supplies well-formed input cannot catch a writer
+    that emits ill-formed output.
+    """
+
+    @staticmethod
+    def _roundtrip(prefs):
+        """Save, then load, through a real in-memory block store."""
+        store: dict[str, str] = {}
+
+        def _write(name, content, tenant_id=None):
+            store[name] = content
+
+        def _read(name, tenant_id=None):
+            return {"content": store.get(name, "")}
+
+        with (
+            patch("robothor.memory.preferences.write_block", _write),
+            patch("robothor.memory.preferences.read_block", _read),
+        ):
+            preferences._save_preferences(prefs, tenant_id="t")
+            return preferences._load_preferences(tenant_id="t"), store
+
+    def test_what_is_saved_can_be_loaded(self):
+        prefs = [{"preference": "Prefers ox alpha in the model picker", "confidence": 0.55}]
+        loaded, _ = self._roundtrip(prefs)
+        assert loaded, "the writer's own output did not survive a read"
+        assert loaded[0]["preference"] == prefs[0]["preference"]
+
+    def test_the_block_is_valid_json(self):
+        """It is parsed with json.loads, so it must be JSON — all of it."""
+        _, store = self._roundtrip([{"preference": "p", "confidence": 0.9}])
+        json.loads(store["preferences"])
+
+    def test_confidence_survives(self):
+        loaded, _ = self._roundtrip([{"preference": "p", "confidence": 0.42}])
+        assert loaded[0]["confidence"] == 0.42
+
+    def test_several_preferences_survive(self):
+        prefs = [{"preference": f"p{i}", "confidence": 0.5} for i in range(4)]
+        loaded, _ = self._roundtrip(prefs)
+        assert len(loaded) == 4
+
+    def test_a_preference_containing_braces_survives(self):
+        """Operator text is arbitrary; a brace must not break the parse."""
+        prefs = [{"preference": 'Use {"model": "ox-alpha"} in config', "confidence": 0.5}]
+        loaded, _ = self._roundtrip(prefs)
+        assert loaded and loaded[0]["preference"] == prefs[0]["preference"]
+
+    def test_the_summary_is_still_available(self):
+        """The human-readable rollup was the point of the prepend — keep it."""
+        _, store = self._roundtrip([{"preference": "readable", "confidence": 0.7}])
+        assert "readable" in store["preferences"]
