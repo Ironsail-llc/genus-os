@@ -1,3 +1,9 @@
+## [1.37.1](https://github.com/Ironsail-llc/genus-os/compare/v1.37.0...v1.37.1) (2026-08-22)
+
+### Bug Fixes
+
+* **infra:** an HTTP error is not a delivered page ([#337](https://github.com/Ironsail-llc/genus-os/issues/337)) ([6b41d9a](https://github.com/Ironsail-llc/genus-os/commit/6b41d9a07b7fc92efa2b0f699ad8797094ae32a3)), closes [#2](https://github.com/Ironsail-llc/genus-os/issues/2)
+
 ## [1.37.0](https://github.com/Ironsail-llc/genus-os/compare/v1.36.6...v1.37.0) (2026-08-22)
 
 ### Features
