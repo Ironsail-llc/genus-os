@@ -479,6 +479,66 @@ async def stuck_workflow_detector() -> int:
 # ── 6. Workflow failure streaks ─────────────────────────────────────────
 
 
+#: How close to the cap counts as "died at the cap". A run killed by a 120s
+#: budget lands at 119.9-120.4s depending on where the check fell; exact
+#: equality would miss every one of them.
+_CAP_JITTER_MS = 600
+
+#: Below this, a cluster is chance. buddy_review_pass showed 8 of 10.
+_MIN_CAPPED_CALLS = 3
+
+
+def find_tools_capped_at_timeout(
+    calls: list[dict[str, Any]],
+    cap_seconds: int,
+    *,
+    min_capped: int = _MIN_CAPPED_CALLS,
+) -> list[dict[str, Any]]:
+    """Tools whose calls pile up at exactly the timeout cap.
+
+    When a tool's durations cluster at the cap and NONE exceed it, the cap is
+    what is failing, not the tool. `_LONG_RUNNING_TOOLS` in runner.py is a
+    hand-maintained set and has been wrong three times: benchmark_run_fleet and
+    benchmark_run_for_agent (#330), then buddy_review_pass, deep_reason and look
+    -- measured 2026-08-22, with buddy_review_pass dying at 120s on 8 of its
+    last 10 calls and never once completing above it.
+
+    Adding names fixes today; this reports the next drift on its own. A tool
+    whose calls DO exceed the cap is not being capped by it, so it is silent.
+    """
+    cap_ms = cap_seconds * 1000
+    by_tool: dict[str, list[int]] = {}
+    for call in calls:
+        tool = (call.get("tool") or "").strip()
+        duration = call.get("duration_ms")
+        if not tool or not isinstance(duration, int | float):
+            continue
+        by_tool.setdefault(tool, []).append(int(duration))
+
+    findings: list[dict[str, Any]] = []
+    for tool, durations in by_tool.items():
+        capped = [d for d in durations if abs(d - cap_ms) <= _CAP_JITTER_MS]
+        if len(capped) < min_capped:
+            continue
+        # Anything meaningfully past the cap means this cap is not the killer.
+        if any(d > cap_ms + _CAP_JITTER_MS for d in durations):
+            continue
+        findings.append(
+            {
+                "tool": tool,
+                "capped_calls": len(capped),
+                "total_calls": len(durations),
+                "cap_seconds": cap_seconds,
+                "detail": (
+                    f"{tool}: {len(capped)} of {len(durations)} calls died at the "
+                    f"{cap_seconds}s cap and none exceeded it — the cap is too low, "
+                    "not the tool too slow"
+                ),
+            }
+        )
+    return sorted(findings, key=lambda f: -f["capped_calls"])
+
+
 def check_workflow_failure_streaks(
     threshold: int = 3,
     window_days: int | None = None,

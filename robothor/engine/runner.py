@@ -91,6 +91,14 @@ _LONG_RUNNING_TOOLS = frozenset(
         "experiment_measure",
         "spawn_agent",
         "spawn_agents",
+        # Measured 2026-08-22 against 14 days of real calls: each of these died
+        # at exactly the 120s default and NONE ever completed above it.
+        # buddy_review_pass 8 of 10 (main had no buddy review since 08-19,
+        # vision-monitor since 08-17), deep_reason 4 of 18, look 3 of 70.
+        # detectors.find_tools_capped_at_timeout reports the next one.
+        "buddy_review_pass",
+        "deep_reason",
+        "look",
     }
 )
 
