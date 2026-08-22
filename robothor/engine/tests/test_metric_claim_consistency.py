@@ -69,7 +69,9 @@ class TestExtraction:
 class TestTrendConsistency:
     def test_the_real_case_is_caught(self) -> None:
         """48.6 -> 52.8 is +4.2pp. The briefing claimed a 0.5pp DECREASE."""
-        bad = check_trend_consistency(extract_metric_claims(TODAY), extract_metric_claims(YESTERDAY))
+        bad = check_trend_consistency(
+            extract_metric_claims(TODAY), extract_metric_claims(YESTERDAY)
+        )
         assert len(bad) == 1
         assert bad[0].label == "fleet health"
         assert "+4.2" in bad[0].detail and "-0.5" in bad[0].detail
@@ -109,7 +111,9 @@ class TestTrendConsistency:
 
 class TestPayload:
     def test_violation_is_json_safe(self) -> None:
-        bad = check_trend_consistency(extract_metric_claims(TODAY), extract_metric_claims(YESTERDAY))
+        bad = check_trend_consistency(
+            extract_metric_claims(TODAY), extract_metric_claims(YESTERDAY)
+        )
         payload = bad[0].to_payload()
         assert payload["label"] == "fleet health"
         assert isinstance(payload["claimed_delta"], float)
