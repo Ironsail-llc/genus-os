@@ -767,3 +767,35 @@ class TestCrmHygieneSuiteOnDisk:
             # exactly the kind of instance data this guard exists to keep out.
             domain = email.rpartition("@")[2].rstrip(".,;:)\"'").lower()
             assert domain == "example.com" or domain.endswith(".example"), email
+
+
+class TestSeedingSurvivesProductionRlsBinding:
+    """Seeding must bind the connection to the sandbox tenant, not just set the column.
+
+    Found live 2026-08-21: the first on-demand benchmark run failed all four
+    write tasks with `new row violates row-level security policy for table
+    "crm_people"`, and `output_preview` was empty — the failure happened during
+    fixture SEEDING, before the agent ran at all. The seed helpers set
+    `tenant_id` as a column value but took an unscoped connection, so under a
+    production tenant binding Postgres refused the insert.
+
+    Note the trap this test exists to avoid: a probe run as a superuser passes
+    whether or not the fix is present, because superusers bypass RLS
+    unconditionally. The assertion below is structural for that reason.
+    """
+
+    def test_every_sandbox_db_helper_binds_the_tenant(self) -> None:
+        import inspect
+
+        from robothor.engine import benchmark_sandbox as module
+
+        source = inspect.getsource(module)
+        unscoped = [
+            line.strip()
+            for line in source.splitlines()
+            if "with get_connection() as conn:" in line
+        ]
+        assert not unscoped, (
+            "these sandbox DB helpers take an unscoped connection, so seeding and "
+            "read-back are rejected by production RLS: " + repr(unscoped)
+        )
