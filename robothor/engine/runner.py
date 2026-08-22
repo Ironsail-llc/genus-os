@@ -4160,6 +4160,7 @@ class AgentRunner:
         # verdict columns. Flag-gated and exception-suppressed — verification
         # is bookkeeping and must never break the agent's actual work.
         self._verify_run_claims(run)
+        self._verify_metric_trends(run)
 
         # Spawn DB persistence as a background task so the caller gets the run back immediately.
         try:
@@ -4238,6 +4239,112 @@ class AgentRunner:
                     reason=reason,
                     tenant_id=getattr(run, "tenant_id", "") or "",
                 )
+
+    def _verify_metric_trends(self, run: AgentRun) -> None:
+        """Flag a published trend that contradicts this agent's own last figure.
+
+        The 2026-08-22 morning briefing closed with ``Fleet health: 52.8%
+        (↓0.5pp WoW)``. Its own previous briefing had published 48.6%, so the
+        real change was +4.2pp and the delivered claim was a half-point fall.
+        Neither the value nor the trend had a source — the run's tool output
+        carried no fleet-health field and was truncated — and no control
+        noticed, because the claim-verification spine checks claimed ACTIONS
+        against the trace and says nothing about claimed NUMBERS.
+
+        Deliberately narrow. A broader "is this number present in the run's tool
+        outputs" check was built first and rejected on measurement: it missed
+        this case and flagged 15 of 21 legitimate numbers on other days. This
+        one needs no trace at all — only the agent's own words, twice — and
+        replayed over 30 days of real briefings it fired once, on exactly the
+        real defect, with no false positives.
+
+        Silence is the default: no previous publication, or no claimed
+        direction, means no finding.
+        """
+        from robothor.engine.feature_flags import run_verification_mode
+
+        mode = run_verification_mode()
+        if mode == "off" or not run.output_text:
+            return
+        try:
+            from robothor.engine.stat_verification import (
+                check_trend_consistency,
+                extract_metric_claims,
+            )
+
+            claims = extract_metric_claims(run.output_text)
+            if not any(c.delta is not None for c in claims):
+                return
+            previous = self._previous_delivered_output(run)
+            violations = check_trend_consistency(claims, extract_metric_claims(previous))
+        except Exception as exc:  # noqa: BLE001 — never block run finalization
+            logger.debug("metric trend check raised: %s", _sanitize(exc))
+            return
+
+        if not violations:
+            return
+
+        reason = "; ".join(f"{v.label}: {v.detail}" for v in violations)
+        logger.warning(
+            "Agent %s published a trend contradicting its own last figure: %s",
+            _sanitize(run.agent_id),
+            _sanitize(reason),
+        )
+        try:
+            from robothor.engine.tracking import log_guardrail_event
+
+            log_guardrail_event(
+                run_id=run.id,
+                guardrail_name="metric_trend_consistency",
+                action="observed",
+                reason=reason[:500],
+                mode=mode,
+            )
+        except Exception as exc:  # noqa: BLE001 — never block run finalization
+            # Not suppressed: a guardrail event that fails to record leaves the
+            # control firing with no trace, and the soak then reads "clean".
+            logger.error(
+                "metric trend guardrail event write FAILED (run=%s): %s",
+                run.id,
+                _sanitize(exc),
+            )
+        if mode in ("alert", "enforce"):
+            with contextlib.suppress(Exception):
+                from robothor.engine.feature_flags import notify_guardrail_alert
+
+                notify_guardrail_alert(
+                    guardrail_name="metric_trend_consistency",
+                    agent_id=run.agent_id,
+                    reason=reason,
+                    tenant_id=getattr(run, "tenant_id", "") or "",
+                )
+
+    @staticmethod
+    def _previous_delivered_output(run: AgentRun) -> str | None:
+        """The last output this agent actually delivered before this run."""
+        try:
+            from robothor.db.connection import get_connection
+
+            with get_connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT output_text FROM agent_runs
+                    WHERE agent_id = %s AND id <> %s
+                      AND output_text IS NOT NULL
+                      AND trigger_type = %s
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (
+                        run.agent_id,
+                        str(run.id),
+                        getattr(run.trigger_type, "value", run.trigger_type),
+                    ),
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("previous-output lookup failed: %s", _sanitize(exc))
+            return None
 
     async def _persist_run(self, run: AgentRun) -> None:
         """Persist run state and steps to the database in a background thread."""
