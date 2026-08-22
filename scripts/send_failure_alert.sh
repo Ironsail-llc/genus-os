@@ -131,17 +131,31 @@ Check: systemctl status ${UNIT}"
 
     # --retry inside curl covers transient blips within an attempt; the outer
     # loop covers the minutes-long boot-DNS window.
-    if curl -sS --max-time 15 --retry 3 --retry-all-errors --retry-delay 2 \
+    #
+    # The HTTP STATUS is checked explicitly, not just curl's exit code. curl
+    # exits 0 on an HTTP 401 -- it fetched the response body just fine, the body
+    # simply says {"ok":false,"error_code":401}. A revoked bot token or a wrong
+    # chat_id therefore read as a DELIVERED page: the stamp was touched, arming
+    # a 1h cooldown on a page nobody received, and the script exited 0 so
+    # systemd's Restart=on-failure never spent a retry. This is the only paging
+    # path for 8 units, including the engine watchdog and offsite backup.
+    http_code=$(curl -sS --max-time 15 --retry 3 --retry-all-errors --retry-delay 2 \
+        -o /dev/null -w '%{http_code}' \
         --data-urlencode "chat_id=${ROBOTHOR_TELEGRAM_CHAT_ID}" \
         --data-urlencode "text=${TEXT}" \
-        "${API_BASE}/bot${ROBOTHOR_TELEGRAM_BOT_TOKEN}/sendMessage" >/dev/null; then
+        "${API_BASE}/bot${ROBOTHOR_TELEGRAM_BOT_TOKEN}/sendMessage" 2>/dev/null)
+    curl_rc=$?
+    if [ "$curl_rc" -eq 0 ] && [ "${http_code:-0}" -ge 200 ] && [ "${http_code:-0}" -lt 300 ]; then
         # Touch the stamp only AFTER a successful send, so a failed send (e.g.
         # Telegram is down) does not suppress the retry on the next failure.
         mkdir -p "$STATE_DIR" 2>/dev/null || true
         touch "$STAMP_FILE" 2>/dev/null || true
         exit 0
     fi
-    echo "send_failure_alert: send attempt ${attempt}/${MAX_ATTEMPTS} failed" >&2
+    # Name the status: a 401 means rotate the token, a 000 means the network is
+    # down. "attempt failed" alone sends the operator looking in the wrong place.
+    echo "send_failure_alert: send attempt ${attempt}/${MAX_ATTEMPTS} failed" \
+         "(curl_rc=${curl_rc} http_status=${http_code:-none})" >&2
 done
 
 echo "send_failure_alert: failed to send Telegram message after ${MAX_ATTEMPTS} attempts" >&2

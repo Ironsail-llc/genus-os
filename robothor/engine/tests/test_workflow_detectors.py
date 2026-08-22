@@ -173,3 +173,56 @@ class TestCheckQueries:
         sql = executed[0]
         assert "workflow_runs" in sql
         assert "failed" in sql
+
+    def test_check_workflow_failure_streaks_has_recency_window(self) -> None:
+        """Frozen streaks (retired/paused workflows) must not re-fire forever."""
+        executed: list[tuple[str, tuple]] = []
+
+        class _Cur:
+            def execute(self, sql, params=None):
+                executed.append((sql, params))
+
+            def fetchall(self):
+                return []
+
+        class _Conn:
+            def cursor(self, **kw):
+                return _Cur()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        with patch("robothor.db.connection.get_connection", return_value=_Conn()):
+            detectors.check_workflow_failure_streaks()
+        sql, params = executed[0]
+        assert "started_at >=" in sql
+        # default window: 14 days
+        assert params[0] == 14
+
+    def test_check_workflow_failure_streaks_window_env_override(self, monkeypatch) -> None:
+        monkeypatch.setenv("ROBOTHOR_WORKFLOW_STREAK_WINDOW_DAYS", "35")
+        executed: list[tuple[str, tuple]] = []
+
+        class _Cur:
+            def execute(self, sql, params=None):
+                executed.append((sql, params))
+
+            def fetchall(self):
+                return []
+
+        class _Conn:
+            def cursor(self, **kw):
+                return _Cur()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        with patch("robothor.db.connection.get_connection", return_value=_Conn()):
+            detectors.check_workflow_failure_streaks()
+        assert executed[0][1][0] == 35

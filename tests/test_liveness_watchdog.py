@@ -78,12 +78,28 @@ def install_fake_curl(tmp_path: Path) -> Path:
     curl.write_text(
         "#!/usr/bin/env bash\n"
         f'printf \'%s\\n\' "$@" >> "{log}"\n'
+        # Real curl with -w '%{http_code}' always prints a status, and the pager
+        # now checks it (an HTTP 401 exits 0 but is NOT a delivered page). A
+        # silent double makes the status read as 0 and every send look failed.
+        # Map the simulated exit code onto a plausible status so both the exit
+        # code and the status agree, the way they do in production.
+        'send_rc="${FAKE_CURL_SEND_RC:-0}"\n'
+        'probe_rc="${FAKE_CURL_PROBE_RC:-0}"\n'
+        "want_code=0\n"
+        'for a in "$@"; do [ "$a" = \'%{http_code}\' ] && want_code=1; done\n'
         'for a in "$@"; do\n'
         '    case "$a" in\n'
-        '        *sendMessage*) exit "${FAKE_CURL_SEND_RC:-0}" ;;\n'
+        "        *sendMessage*)\n"
+        '            if [ "$want_code" = 1 ]; then\n'
+        "                [ \"$send_rc\" = 0 ] && printf '200' || printf '000'\n"
+        "            fi\n"
+        '            exit "$send_rc" ;;\n'
         "    esac\n"
         "done\n"
-        'exit "${FAKE_CURL_PROBE_RC:-0}"\n'
+        'if [ "$want_code" = 1 ]; then\n'
+        "    [ \"$probe_rc\" = 0 ] && printf '200' || printf '000'\n"
+        "fi\n"
+        'exit "$probe_rc"\n'
     )
     curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
     return log
