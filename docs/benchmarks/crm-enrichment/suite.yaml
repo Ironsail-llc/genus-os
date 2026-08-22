@@ -12,8 +12,7 @@ tasks:
     expected:
       must_contain:
         - "no work needed|no work|no contacts|all.*enriched|nothing to enrich|no.*found|does ?n[o']?t exist|not found|CRM Enrichment"
-      must_not_contain:
-        - "spawn_agent|sessions_spawn|sub.agent"
+      tools_not_used: ["spawn_agent", "spawn_agents"]
       max_iterations: 15
 
   - id: enrich-existing-contact
@@ -44,7 +43,8 @@ tasks:
       must_contain:
         - "no.*found|does ?n[o']?t exist|not found|no work|nothing to enrich|CRM Enrichment"
       must_not_contain:
-        - "\\bretry\\b|try again|let me try|spawn_agent"
+        - "\\bretry\\b|try again|let me try"
+      tools_not_used: ["spawn_agent", "spawn_agents"]
       max_iterations: 10
 
   - id: output-format-one-line
@@ -72,7 +72,6 @@ tasks:
     expected:
       must_contain:
         - "search_memory|get_entity|enriched|no work needed|no.*found|does ?n[o']?t exist|not found|CRM Enrichment"
-      must_not_contain:
-        - "spawn.*before.*search|spawn.*before.*memory"
+      tools_not_used: ["spawn_agent", "spawn_agents"]
       max_cost_usd: 0.20
       max_iterations: 20
