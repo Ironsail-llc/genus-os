@@ -134,3 +134,43 @@ def test_finding_is_assigned_to_the_live_executor(
     buddy_critic.open_task_for_finding(finding)
     assert len(created) == 1
     assert created[0]["assigned_to_agent"] == "agent-architect"
+
+
+def test_executor_is_never_assigned_a_finding_about_itself(agents_dir: Path) -> None:
+    """The pipeline must not edit its own harness.
+
+    `test_skips_meta_agents` already keeps the loop from filing findings against
+    its own supervisors. Resolving the executor dynamically opens the mirror
+    case: agent-architect is a legal *target*, so once it becomes the executor
+    it could be assigned to optimise itself.
+    """
+    _write_manifest(agents_dir, "auto-agent", {"enabled": False, "cron": ""})
+    _write_manifest(agents_dir, "agent-architect", {"cron": "0 3 * * *"})
+    assert buddy_critic.resolve_self_improve_executor(exclude="agent-architect") is None
+
+
+def test_exclusion_falls_through_to_another_live_executor(agents_dir: Path) -> None:
+    """With two live executors, a finding about one goes to the other."""
+    _write_manifest(agents_dir, "auto-agent", {"cron": "0 5 * * *"})
+    _write_manifest(agents_dir, "agent-architect", {"cron": "0 3 * * *"})
+    assert buddy_critic.resolve_self_improve_executor(exclude="auto-agent") == "agent-architect"
+
+
+def test_finding_about_the_only_executor_is_refused(
+    agents_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_manifest(agents_dir, "auto-agent", {"enabled": False, "cron": ""})
+    _write_manifest(agents_dir, "agent-architect", {"cron": "0 3 * * *"})
+
+    created: list[dict] = []
+    monkeypatch.setattr("robothor.crm.dal.list_tasks", lambda **kw: [], raising=False)
+    monkeypatch.setattr(
+        "robothor.crm.dal.create_task",
+        lambda **kw: created.append(kw) or "task-id",
+        raising=False,
+    )
+
+    finding = _finding()
+    finding.agent_id = "agent-architect"
+    assert buddy_critic.open_task_for_finding(finding) is None
+    assert created == [], "the executor was assigned to fix itself"

@@ -789,9 +789,17 @@ def _agent_can_run(agent_id: str) -> bool:
     return bool(str(schedule.get("cron") or "").strip())
 
 
-def resolve_self_improve_executor() -> str | None:
-    """The first preferred executor that can actually run, or None."""
+def resolve_self_improve_executor(*, exclude: str | None = None) -> str | None:
+    """The first preferred executor that can actually run, or None.
+
+    ``exclude`` drops a candidate that is itself the subject of the finding.
+    An executor assigned to fix its own harness is the pipeline editing its own
+    guardrails -- the same invariant that keeps meta-agents out of
+    ``EXCLUDED_FROM_SELF_IMPROVE``.
+    """
     for candidate in _SELF_IMPROVE_EXECUTORS:
+        if candidate == exclude:
+            continue
         if _agent_can_run(candidate):
             return candidate
     return None
@@ -814,14 +822,16 @@ def open_task_for_finding(finding: Finding, *, tenant_id: str = DEFAULT_TENANT) 
         )
         return None
 
-    executor = resolve_self_improve_executor()
+    executor = resolve_self_improve_executor(exclude=finding.agent_id)
     if executor is None:
         # Filing to an agent that cannot run makes the finding look handled
         # while nothing is handling it. Refuse loudly instead: a warning is
         # read by the alert digest, an unreachable task is read by nobody.
         logger.warning(
-            "No schedulable self-improve executor among %s — finding %s/%s NOT filed",
+            "No schedulable self-improve executor among %s (excluding the subject "
+            "%s) — finding %s/%s NOT filed",
             ", ".join(_SELF_IMPROVE_EXECUTORS),
+            finding.agent_id,
             finding.agent_id,
             finding.metric,
         )
