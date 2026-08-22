@@ -49,3 +49,16 @@ def test_a_timeout_is_never_a_grade() -> None:
     assert r["score"] == 0.0
     assert r["timed_out"] is True
     assert r["output_preview"] == ""
+
+
+def test_a_non_numeric_elapsed_is_ignored_not_arithmetic() -> None:
+    """Callers pass a duration straight off the run record.
+
+    That is None on a run that never started and a mock under test; doing
+    arithmetic on it raised inside the timeout path, turning a timeout into an
+    'error' outcome and losing the timeout accounting entirely.
+    """
+    for bogus in (None, object(), "900"):
+        r = _timeout_result(_TASK, 900.0, "a", "s", elapsed_seconds=bogus)  # type: ignore[arg-type]
+        assert r["timed_out"] is True
+        assert "900s" in r["reason"]

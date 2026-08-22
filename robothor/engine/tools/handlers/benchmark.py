@@ -1301,10 +1301,13 @@ def _timeout_result(
     have worked and did not. A diagnostic that names the wrong number sends the
     next reader to the wrong layer.
     """
-    actual = elapsed_seconds if elapsed_seconds is not None else cap_seconds
+    # Only trust a real number. Callers pass a duration straight off the run
+    # record, which is None on a run that never started and a mock under test.
+    measured = elapsed_seconds if isinstance(elapsed_seconds, int | float) else None
+    actual = float(measured) if measured is not None else cap_seconds
     detail = (
         f"after {actual:.0f}s"
-        if elapsed_seconds is None or abs(actual - cap_seconds) < 1.0
+        if measured is None or abs(actual - cap_seconds) < 1.0
         else f"after {actual:.0f}s, well under its {cap_seconds:.0f}s budget — "
         "a smaller cap fired first"
     )
