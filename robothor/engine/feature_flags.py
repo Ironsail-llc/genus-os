@@ -459,10 +459,15 @@ def run_verification_mode() -> EnforcementMode:
 
     Gated on ``ROBOTHOR_RUN_VERIFICATION_ENABLED`` + ``ROBOTHOR_RUN_VERIFICATION_MODE``.
     ``observe`` computes the verdict, stamps ``agent_runs.verified_status`` /
-    ``verification`` and records a guardrail event — nothing else changes;
-    ``alert`` additionally notifies the operator; ``enforce`` is reserved for
-    the follow-up that gates delivery/task resolution on the verdict and today
-    records exactly as ``alert`` does. Default off.
+    ``verification`` and records a guardrail event — nothing else changes.
+    ``alert`` tells the truth to the operator without changing task state: it
+    notifies, appends the honest-failure banner to the delivered message
+    (``delivery._verification_banner``), injects the honest-claims prompt rule
+    (``prompts.behavioral_rules``) and labels every auto-written resolution
+    ``[verified]`` / ``[claimed]``. ``enforce`` acts: an unverified run does
+    not resolve its CRM task at all (``runner._update_task_for_run`` writes a
+    ``next_action`` naming the unsupported claims instead), and a benchmark
+    run never resolves a production task. Default off.
 
     Unlike ``completion_contract_mode`` this needs no session goal and is not
     limited to "task complete" phrasings — see ``run_verification`` for the
