@@ -222,3 +222,35 @@ flags:
       either a real claim-vs-reality gap or a checker bug, (3) verify_error
       count ~0, (4) tool-call latency unchanged. Promoting past observe changes
       what the model sees mid-run, so it is a behavior change, not bookkeeping.
+
+  - name: ROBOTHOR_BENCHMARK_SANDBOX_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-09-10"
+    soak: >
+      NEW 2026-08-21. Seeded CRM fixtures in an isolated tenant, so write-heavy
+      agents can be graded on what they DID instead of what they narrated. The
+      crm-hygiene suite scored 0.326 on a suite it could not pass: its rubrics
+      demanded a scrub/flag action while the harness denied update_person,
+      create_task, update_task and resolve_task, and the records it named
+      (p-9999, p-1234, "200 stale TODOs") did not exist.
+
+      Read the ladder carefully, it is not the usual one. OBSERVE already
+      changes what a benchmark sub-agent can DO — it seeds real rows in the
+      `benchmark-sandbox` tenant and re-allows the sandbox-safe CRM writes
+      there — because that is the defect being fixed. What observe does NOT
+      change is the GRADE: state checks are recorded on each task result and
+      excluded from the score. ENFORCE folds them in.
+
+      Nothing that reaches outside this database becomes allowed in any mode:
+      exec, invoke_skill, write_file, gmail/calendar writes, notifications,
+      spawn, browser and every delete/merge stay denied (2026-05-28: a
+      benchmark agent shelled out through invoke_skill and emailed a real
+      contact). Promotion evidence before enforce: (1) one full fleet night
+      with state_checks recorded, hand-compared against the transcripts —
+      specifically that a task the agent genuinely completed shows passing
+      read-backs, so the checks are not inert; (2) crm_people/crm_tasks row
+      counts in `benchmark-sandbox` back at zero after each run, proving
+      teardown; (3) zero rows written to any other tenant by a benchmark run.
+      Full ladder, evidence and rollback: docs/runbooks/BENCHMARK_SANDBOX.md.
+
