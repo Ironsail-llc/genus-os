@@ -129,6 +129,7 @@ def update_run(
     outcome_notes: str | None = None,
     verified_status: str | None = None,
     verification: dict[str, Any] | None = None,
+    task_id: str | None = None,
 ) -> bool:
     """Update an existing run with new fields.
 
@@ -163,6 +164,7 @@ def update_run(
         "outcome_notes": outcome_notes,
         "verified_status": verified_status,
         "verification": json.dumps(verification, default=str) if verification else None,
+        "task_id": task_id,
     }
 
     for col, val in field_map.items():
