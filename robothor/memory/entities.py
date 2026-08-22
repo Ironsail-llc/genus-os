@@ -24,6 +24,13 @@ from robothor.memory import generation
 
 logger = logging.getLogger(__name__)
 
+#: Relations returned per direction by get_entity. The payload reaches the model
+#: in full — tracking.py's 4000-char cap is persistence-only — and the operator's
+#: own node carries 5,207 edges. Fixing resolution without bounding the result
+#: would trade a uselessly small answer for one that blows out the context
+#: window on 211 calls a day.
+MAX_RELATIONS_RETURNED = 50
+
 # Junk-entity guard. Deliberately conservative: it must reject only names that
 # cannot be a real entity in any language, because a false positive silently
 # drops a real node out of the graph. Two rules, nothing more:
@@ -373,8 +380,24 @@ async def get_entity(name: str, *, tenant_id: str = "") -> dict[str, Any] | None
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
+        # `memory_entities` is unique on (tenant_id, name, entity_type), so one
+        # name can be several rows. Without ORDER BY, fetchone() took whichever
+        # Postgres offered: "Philip D'Agostino" resolved to a 1-relation `event`
+        # node while the operator's real 5,207-relation `person` node sat beside
+        # it. Among rows sharing a name, the one carrying the relationships is
+        # the one the caller means.
         cur.execute(
-            "SELECT * FROM memory_entities WHERE lower(name) = lower(%s) AND tenant_id = %s",
+            """
+            SELECT e.*,
+                   (SELECT count(*) FROM memory_relations r
+                     WHERE r.tenant_id = e.tenant_id
+                       AND (r.source_entity_id = e.id OR r.target_entity_id = e.id)
+                   ) AS _degree
+            FROM memory_entities e
+            WHERE lower(e.name) = lower(%s) AND e.tenant_id = %s
+            ORDER BY _degree DESC, e.id ASC
+            LIMIT 1
+            """,
             (name, _tenant),
         )
         entity = cur.fetchone()
@@ -391,8 +414,10 @@ async def get_entity(name: str, *, tenant_id: str = "") -> dict[str, Any] | None
             FROM memory_relations r
             JOIN memory_entities e ON r.target_entity_id = e.id
             WHERE r.source_entity_id = %s AND r.tenant_id = %s
+            ORDER BY r.id DESC
+            LIMIT %s
             """,
-            (entity["id"], _tenant),
+            (entity["id"], _tenant, MAX_RELATIONS_RETURNED),
         )
         outgoing = [dict(r) for r in cur.fetchall()]
 
@@ -403,8 +428,10 @@ async def get_entity(name: str, *, tenant_id: str = "") -> dict[str, Any] | None
             FROM memory_relations r
             JOIN memory_entities e ON r.source_entity_id = e.id
             WHERE r.target_entity_id = %s AND r.tenant_id = %s
+            ORDER BY r.id DESC
+            LIMIT %s
             """,
-            (entity["id"], _tenant),
+            (entity["id"], _tenant, MAX_RELATIONS_RETURNED),
         )
         incoming = [dict(r) for r in cur.fetchall()]
 
