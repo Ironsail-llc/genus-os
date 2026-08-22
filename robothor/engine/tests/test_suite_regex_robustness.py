@@ -24,7 +24,9 @@ SUITES = sorted((Path(__file__).resolve().parents[3] / "docs" / "benchmarks").gl
 
 # Verbs whose negated form an agent will write as a contraction at least as
 # often as expanded. A pattern offering the expanded form must offer both.
-_EXPANDED = re.compile(r"\b(does|do|did|is|are|was|were|could|can|will|has|have) not\b", re.IGNORECASE)
+_EXPANDED = re.compile(
+    r"\b(does|do|did|is|are|was|were|could|can|will|has|have) not\b", re.IGNORECASE
+)
 
 
 def _cases(suite: Path):
