@@ -1,3 +1,9 @@
+## [1.36.4](https://github.com/Ironsail-llc/genus-os/compare/v1.36.3...v1.36.4) (2026-08-22)
+
+### Bug Fixes
+
+* **engine:** a run inside a tenant_scope records under that tenant ([#333](https://github.com/Ironsail-llc/genus-os/issues/333)) ([1ac135c](https://github.com/Ironsail-llc/genus-os/commit/1ac135cb964e09dd3634f9fa93a7105da6ac1130)), closes [#325](https://github.com/Ironsail-llc/genus-os/issues/325) [#332](https://github.com/Ironsail-llc/genus-os/issues/332)
+
 ## [1.36.3](https://github.com/Ironsail-llc/genus-os/compare/v1.36.2...v1.36.3) (2026-08-22)
 
 ### Bug Fixes
