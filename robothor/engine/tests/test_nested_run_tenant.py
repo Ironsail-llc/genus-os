@@ -245,3 +245,43 @@ def _spawn_registry_mock():
 
     registry.spawn.side_effect = _spawn
     return registry
+
+
+class TestTheRecordingThreadKeepsTheBinding:
+    @pytest.mark.asyncio
+    async def test_create_run_runs_with_the_tenant_override_intact(
+        self, runner, basic_agent_config
+    ) -> None:
+        """`run_in_executor` does not copy ContextVars; `asyncio.to_thread` does.
+
+        `create_run` runs off the event loop. If the tenant override does not
+        travel with it, `_apply_tenant_scope` binds that thread's connection to
+        the DEFAULT tenant while the row carries the scope's tenant, and the RLS
+        WITH CHECK refuses it. Measured 2026-08-22 inside
+        `tenant_scope("benchmark-sandbox")`:
+
+            in the coroutine        -> override=benchmark-sandbox, binding=benchmark-sandbox
+            through run_in_executor -> override=None,              binding=robothor-primary
+
+        So the row tenant was right all along and the *connection binding* was
+        wrong. This asserts the override reaches the recording thread.
+        """
+        seen: list[str | None] = []
+
+        def _capture(run):
+            seen.append(current_tenant_scope())
+            return str(run.id)
+
+        with (
+            patch("robothor.engine.runner.create_run", side_effect=_capture),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.runner.create_steps_batch"),
+            patch("robothor.engine.runner.create_step"),
+            patch("litellm.acompletion", side_effect=[_make_response("done")]),
+            tenant_scope("benchmark-sandbox"),
+        ):
+            await runner.execute("basic-agent", "hello", agent_config=basic_agent_config)
+
+        assert seen == ["benchmark-sandbox"], (
+            "the tenant override did not reach the thread that records the run"
+        )
