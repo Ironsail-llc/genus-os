@@ -106,7 +106,12 @@ def create_health_app(
         current_streak, longest_streak = engine.get_streak()
         return {
             "stat_date": fleet.stat_date.isoformat(),
+            # null when nothing could be measured — never a fabricated 0.
             "fleet_achievement_score": fleet.fleet_achievement_score,
+            "coverage": {
+                "agents_measured": fleet.agents_measured,
+                "agents_total": fleet.agents_total,
+            },
             "streak": {"current": current_streak, "longest": longest_streak},
             "today": {"tasks": fleet.tasks_completed},
             "agents": [
@@ -114,6 +119,7 @@ def create_health_app(
                     "agent_id": s.agent_id,
                     "achievement_score": s.achievement_score,
                     "rating": s.rating,
+                    "measured": s.measured,
                     "satisfied_goals": s.satisfied_goals,
                     "breached_goals": s.breached_goals,
                     "rank": s.rank,
@@ -167,6 +173,7 @@ def create_health_app(
                         "agentId": s.agent_id,
                         "achievementScore": s.achievement_score,
                         "rating": s.rating,
+                        "measured": s.measured,
                         "satisfiedGoals": s.satisfied_goals,
                         "breachedGoals": s.breached_goals,
                         "statDate": s.stat_date.isoformat(),
