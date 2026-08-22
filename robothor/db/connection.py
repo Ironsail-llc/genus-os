@@ -19,6 +19,7 @@ import os
 import sys
 import threading
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 import psycopg2
@@ -204,12 +205,52 @@ def _rls_enabled() -> bool:
 _warned_superuser = False
 
 
+# Per-context tenant override. The process-level ``ROBOTHOR_TENANT_ID`` is the
+# right shape for a whole service (the memory eval unit sets it), but the
+# benchmark harness needs to run ONE sub-agent against the sandbox tenant
+# inside the engine process, while everything else keeps the instance's tenant.
+# A ContextVar is per-asyncio-task and survives ``asyncio.to_thread`` (which
+# copies the calling context), so a scoped sub-run cannot bleed into a
+# concurrent production run.
+_tenant_override: ContextVar[str | None] = ContextVar("db_tenant_override", default=None)
+
+
+def effective_tenant() -> str:
+    """The tenant this context's connections bind to. Override, then env."""
+    override = _tenant_override.get()
+    if override:
+        return override
+    return os.environ.get("ROBOTHOR_TENANT_ID", "") or os.environ.get("ROBOTHOR_DEFAULT_TENANT", "")
+
+
+@contextmanager
+def tenant_scope(tenant_id: str) -> Generator[None, None, None]:
+    """Bind connections taken inside this block to ``tenant_id`` for RLS.
+
+    Only affects connections checked out *inside* the block: ``get_connection``
+    applies the scope at checkout. A connection already held stays on its
+    original binding.
+    """
+    token = _tenant_override.set(tenant_id or None)
+    try:
+        yield
+    finally:
+        _tenant_override.reset(token)
+
+
 def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
-    """Bind this connection to the instance's tenant for RLS.
+    """Bind this connection to the current tenant for RLS.
 
     Postgres then refuses to serve another tenant's rows *at the database*, so a
     DAL that forgets its WHERE clause — the bridge's crm_dal.py has zero tenant
     predicates — cannot leak across tenants.
+
+    The scope is applied on EVERY checkout, including when there is no tenant to
+    bind: ``set_config`` is session-level, so a pooled connection that was last
+    used inside a ``tenant_scope`` block would otherwise carry that binding into
+    the next borrower and silently empty its result set. Writing an empty string
+    restores the policy's permissive branch, which is exactly the pre-scope
+    behaviour.
 
     Inert while the app connects as a SUPERUSER: superusers bypass RLS
     unconditionally. Migration 082 creates the non-superuser ``robothor_app``
@@ -217,11 +258,7 @@ def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
     """
     if not _rls_enabled():
         return
-    tenant = os.environ.get("ROBOTHOR_TENANT_ID", "") or os.environ.get(
-        "ROBOTHOR_DEFAULT_TENANT", ""
-    )
-    if not tenant:
-        return
+    tenant = effective_tenant()
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT set_config('app.tenant_id', %s, false)", (tenant,))

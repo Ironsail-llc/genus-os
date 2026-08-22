@@ -476,6 +476,28 @@ def run_verification_mode() -> EnforcementMode:
     return _enforcement_mode("ROBOTHOR_RUN_VERIFICATION_ENABLED", "ROBOTHOR_RUN_VERIFICATION_MODE")
 
 
+def benchmark_sandbox_mode() -> EnforcementMode:
+    """Rollout mode for seeded benchmark fixtures + sandbox CRM writes.
+
+    Gated on ``ROBOTHOR_BENCHMARK_SANDBOX_ENABLED`` +
+    ``ROBOTHOR_BENCHMARK_SANDBOX_MODE``. ``off`` (default) is today's harness
+    exactly: benchmark sub-runs stay read-only, no fixtures are seeded, and no
+    state check runs. ``observe`` seeds each task's fixtures into the dedicated
+    ``benchmark-sandbox`` tenant, scopes the sub-run to it, re-allows the
+    sandbox-safe CRM writes (see ``robothor.engine.benchmark_sandbox``) and
+    RECORDS every read-back on the task result without folding it into the
+    score. ``alert`` is observe plus an error log per failed read-back.
+    ``enforce`` folds the read-backs into the task score.
+
+    Said plainly, because the ladder is unusual here: ``observe`` changes what a
+    benchmark sub-agent can *do* — that is the point, since the rubrics grade
+    actions the harness denied — but not how the run is *graded*.
+    """
+    return _enforcement_mode(
+        "ROBOTHOR_BENCHMARK_SANDBOX_ENABLED", "ROBOTHOR_BENCHMARK_SANDBOX_MODE"
+    )
+
+
 def tool_verify_mode() -> EnforcementMode:
     """Rollout mode for tool-level post-condition checks.
 

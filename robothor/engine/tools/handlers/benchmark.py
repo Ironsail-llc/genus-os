@@ -26,10 +26,12 @@ from typing import TYPE_CHECKING, Any, cast
 import yaml
 
 from robothor.db.connection import DatabaseGuardError
+from robothor.engine.models import TriggerType
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from robothor.engine.benchmark_sandbox import SeededFixtures, StateCheckResult
     from robothor.engine.models import SpawnContext
     from robothor.engine.tools.dispatch import ToolContext
 
@@ -150,17 +152,28 @@ _BENCHMARK_READONLY_TOOLS: frozenset[str] = frozenset(
 )
 
 
-def _benchmark_tools_denied(agent_tools_allowed: list[str] | None) -> list[str]:
+def _benchmark_tools_denied(
+    agent_tools_allowed: list[str] | None, *, sandbox: bool = False
+) -> list[str]:
     """Return the deny-list for a benchmark sub-agent.
 
-    Computed as ``agent.tools_allowed - _BENCHMARK_READONLY_TOOLS``, so each
-    agent only sees the intersection of what it normally has and what is
-    benchmark-safe. Tools the agent never had are not in the deny-list —
-    keeping the list tight and useful for debugging.
+    Computed as ``agent.tools_allowed - allowed``, so each agent only sees the
+    intersection of what it normally has and what is benchmark-safe. Tools the
+    agent never had are not in the deny-list — keeping the list tight and
+    useful for debugging.
+
+    ``sandbox=True`` widens ``allowed`` to include the sandbox-safe CRM writes
+    (``robothor.engine.benchmark_sandbox.SANDBOX_WRITE_TOOLS``) — and only those.
+    Everything that reaches outside this database stays denied in both modes;
+    see ``EXTERNAL_SIDE_EFFECT_TOOLS``. Without this, every rubric that grades an
+    action ("takes a scrub action", "cleans the phone field") could only be
+    satisfied by narrating work the agent was forbidden to do.
     """
     if not agent_tools_allowed:
         return []
-    return sorted(set(agent_tools_allowed) - _BENCHMARK_READONLY_TOOLS)
+    from robothor.engine.benchmark_sandbox import benchmark_allowed_tools
+
+    return sorted(set(agent_tools_allowed) - benchmark_allowed_tools(sandbox=sandbox))
 
 
 def _resolve_model_tier(model_primary: str) -> str:
@@ -379,7 +392,12 @@ def _validate_task(task: dict[str, Any]) -> str | None:
     if not task.get("prompt"):
         return f"task '{task['id']}' missing 'prompt'"
     category = task.get("category", "correctness")
-    if category not in ("correctness", "safety", "efficiency", "tone", "quality"):
+    # "honesty" (2026-08-21): abstention cases, where the record the prompt
+    # names does not exist and the correct answer is to say so. It is its own
+    # category because it must be visible as its own number — an agent can be
+    # correct and unsafe, or safe and a fabricator, and averaging those into
+    # "correctness" hides exactly the failure the fleet was scoring blind.
+    if category not in ("correctness", "safety", "efficiency", "tone", "quality", "honesty"):
         return f"task '{task['id']}' has invalid category '{category}'"
     expected = task.get("expected", {})
     if not expected:
@@ -396,6 +414,52 @@ def _validate_task(task: dict[str, Any]) -> str | None:
         rubric = judge.get("rubric")
         if not rubric or not isinstance(rubric, list):
             return f"task '{task['id']}' judge requires 'rubric' as a list of criteria"
+    return _validate_state_checks(task, expected)
+
+
+#: State-check kinds the grader knows how to evaluate. An unrecognised kind is
+#: rejected at define time and, if one ever reaches the grader, scored as a
+#: failure — never as a pass. A control that cannot be evaluated is not a
+#: control that passed.
+_STATE_CHECK_KINDS: frozenset[str] = frozenset(
+    {
+        "row_present",
+        "field_equals",
+        "field_changed",
+        "field_matches",
+        "field_not_matches",
+        "rows_match",
+    }
+)
+
+
+def _validate_state_checks(task: dict[str, Any], expected: dict[str, Any]) -> str | None:
+    """Validate ``expected.state_checks`` and the task's fixture references."""
+    declared = task.get("fixtures") or []
+    if not isinstance(declared, list):
+        return f"task '{task['id']}' fixtures must be a list of fixture keys"
+
+    checks = expected.get("state_checks")
+    if checks is None:
+        return None
+    if not isinstance(checks, list):
+        return f"task '{task['id']}' state_checks must be a list"
+    for check in checks:
+        if not isinstance(check, dict):
+            return f"task '{task['id']}' state_check entries must be mappings"
+        kind = check.get("kind")
+        if kind not in _STATE_CHECK_KINDS:
+            return f"task '{task['id']}' has unknown state_check kind {kind!r}"
+        reference = check.get("fixture") or check.get("group")
+        if reference and reference not in declared:
+            return (
+                f"task '{task['id']}' state_check references fixture {reference!r} "
+                "which the task does not declare"
+            )
+        if str(kind).startswith("field_") and not check.get("field"):
+            return f"task '{task['id']}' {kind} state_check needs a 'field'"
+        if kind == "rows_match" and not check.get("table"):
+            return f"task '{task['id']}' rows_match state_check needs a 'table'"
     return None
 
 
@@ -488,7 +552,10 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
 
 
 async def _score_task_async(
-    output: str, expected: dict[str, Any], run_meta: dict[str, Any]
+    output: str,
+    expected: dict[str, Any],
+    run_meta: dict[str, Any],
+    state_results: list[StateCheckResult] | None = None,
 ) -> TaskScore:
     """Async version of _score_task that supports LLM judge checks.
 
@@ -496,9 +563,21 @@ async def _score_task_async(
     the result as one check (passes if score >= threshold). All other
     checks remain deterministic and synchronous.
 
+    Two independent invariants meet here, and neither subsumes the other.
+
+    ``state_results`` are read-backs from the sandbox database (see
+    ``robothor.engine.benchmark_sandbox``). Each counts as one more check,
+    exactly like a regex — which is the whole point: a transcript that flatters
+    every rubric item cannot reach the 0.70 pass threshold while the environment
+    says nothing happened. Passing ``None`` (the caller's choice below
+    ``enforce``) leaves scoring byte-for-byte as it was.
+
     A judge that could not be evaluated counts its check as unsatisfied — we
     did not see the criterion met — and rides out on ``TaskScore.judge_error``
     so the caller can record the case as failed rather than partially graded.
+    That is a separate failure from a disagreeing environment: the first says
+    the grader never ran, the second says the grader ran and the world
+    disagreed with the transcript. A task can hit either, or both.
     """
     checks: list[bool] = []
 
@@ -528,10 +607,169 @@ async def _score_task_async(
         judge_error = outcome.error
         checks.append(outcome.score is not None and outcome.score >= threshold)
 
+    # Environment read-backs (grade the environment, never the transcript).
+    checks.extend(bool(r.passed) for r in state_results or [])
+
     if not checks:
         return TaskScore(score=0.0, judge_error=judge_error)
 
     return TaskScore(score=sum(checks) / len(checks), judge_error=judge_error)
+
+
+# ---------------------------------------------------------------------------
+# Sandbox fixtures: seed → render → run scoped → read back → tear down
+# ---------------------------------------------------------------------------
+
+
+def sandbox_active() -> bool:
+    """Whether this run seeds fixtures and executes against the sandbox tenant."""
+    from robothor.engine.benchmark_sandbox import sandbox_active as _active
+
+    return _active()
+
+
+def state_checks_scored() -> bool:
+    """Whether environment read-backs count toward the task score."""
+    from robothor.engine.benchmark_sandbox import state_checks_scored as _scored
+
+    return _scored()
+
+
+def _seed_task_fixtures(
+    task: dict[str, Any], suite: dict[str, Any], sandbox_on: bool
+) -> SeededFixtures | None:
+    """Seed the fixtures this task declares, or None when there are none.
+
+    A task with an empty ``fixtures:`` list still gets a :class:`SeededFixtures`
+    bound to the sandbox tenant — that is the abstention case, where the point
+    is that nothing exists and the read-backs prove the agent invented nothing.
+    """
+    if not sandbox_on:
+        return None
+    from robothor.engine.benchmark_sandbox import (
+        SeededFixtures,
+        ensure_sandbox_tenant,
+        seed_fixtures,
+    )
+
+    keys = list(task.get("fixtures") or [])
+    spec = suite.get("fixtures")
+    if not keys:
+        if not (task.get("expected", {}).get("state_checks")):
+            return None
+        return SeededFixtures(tenant_id=ensure_sandbox_tenant())
+    if not spec:
+        raise ValueError(
+            f"task '{task['id']}' declares fixtures {keys} but the suite carries no "
+            "fixture spec — add docs/benchmarks/<agent>/fixtures.yaml"
+        )
+    return seed_fixtures(spec, keys)
+
+
+def _render_task_prompt(task: dict[str, Any], seeded: SeededFixtures | None) -> str:
+    """Interpolate ``{{fixture.<key>.<field>}}`` against the seeded rows."""
+    prompt = task["prompt"]
+    if seeded is None:
+        return cast("str", prompt)
+    from robothor.engine.benchmark_sandbox import render_fixture_refs
+
+    return render_fixture_refs(prompt, seeded)
+
+
+def _render_expected(expected: dict[str, Any], seeded: SeededFixtures | None) -> dict[str, Any]:
+    """Interpolate fixture refs inside ``must_contain`` / ``must_not_contain``.
+
+    Lets a prose check name the row the task actually touched — e.g. requiring
+    the agent to report the record's real uuid — instead of a pattern the suite
+    author invented, which is the whole failure mode being fixed here.
+    """
+    if seeded is None:
+        return expected
+    from robothor.engine.benchmark_sandbox import render_fixture_refs
+
+    rendered = dict(expected)
+    for field_name in ("must_contain", "must_not_contain"):
+        patterns = expected.get(field_name)
+        if patterns:
+            rendered[field_name] = [render_fixture_refs(str(p), seeded) for p in patterns]
+    return rendered
+
+
+async def _execute_task_run(
+    *,
+    runner: Any,
+    agent_id: str,
+    prompt: str,
+    trigger_detail: str,
+    child_config: Any,
+    spawn_context: SpawnContext | None,
+    seeded: SeededFixtures | None,
+) -> Any:
+    """Run one benchmark task, tenant-scoped to the sandbox when seeded.
+
+    Two layers, because one is not enough. ``runner.execute(tenant_id=…)`` is
+    what the CRM DAL reads for its WHERE clauses; ``tenant_scope`` binds
+    ``app.tenant_id`` on every connection taken inside the block, which is what
+    row-level security enforces at the database. Without the second, a
+    sandbox-tenant INSERT is refused by the RLS ``WITH CHECK`` clause the moment
+    ``ROBOTHOR_RLS_ENABLED`` is on.
+    """
+    if seeded is None:
+        return await runner.execute(
+            agent_id=agent_id,
+            message=prompt,
+            trigger_type=TriggerType.SUB_AGENT,
+            trigger_detail=trigger_detail,
+            agent_config=child_config,
+            spawn_context=spawn_context,
+        )
+
+    from robothor.db.connection import tenant_scope
+
+    with tenant_scope(seeded.tenant_id):
+        return await runner.execute(
+            agent_id=agent_id,
+            message=prompt,
+            trigger_type=TriggerType.SUB_AGENT,
+            trigger_detail=trigger_detail,
+            agent_config=child_config,
+            spawn_context=spawn_context,
+            tenant_id=seeded.tenant_id,
+        )
+
+
+def _run_task_state_checks(
+    task: dict[str, Any], seeded: SeededFixtures | None, sandbox_on: bool
+) -> list[StateCheckResult]:
+    """Evaluate the task's declared read-backs against the sandbox database."""
+    checks = task.get("expected", {}).get("state_checks")
+    if not checks or seeded is None or not sandbox_on:
+        return []
+    from robothor.engine.benchmark_sandbox import run_state_checks
+    from robothor.engine.feature_flags import benchmark_sandbox_mode
+
+    results = run_state_checks(checks, seeded)
+    if benchmark_sandbox_mode() in ("alert", "enforce"):
+        for failed in (r for r in results if not r.passed):
+            logger.error(
+                "benchmark state check failed for %s: %s (%s)",
+                task["id"],
+                failed.kind,
+                failed.detail,
+            )
+    return results
+
+
+def _teardown_task_fixtures(seeded: SeededFixtures | None) -> None:
+    """Delete every sandbox row this task produced. Never raises."""
+    if seeded is None:
+        return
+    try:
+        from robothor.engine.benchmark_sandbox import teardown_sandbox
+
+        teardown_sandbox(seeded.tenant_id)
+    except Exception as exc:  # noqa: BLE001 — teardown must not fail a run
+        logger.warning("benchmark fixture teardown failed for %s: %s", seeded.tenant_id, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +792,11 @@ async def _benchmark_define(args: dict[str, Any], ctx: ToolContext) -> dict[str,
         if not path.exists():
             return {"error": f"Config file not found: {path}"}
         suite_data = yaml.safe_load(path.read_text()) or {}
+        fixture_spec = _load_suite_fixtures(path)
+        if isinstance(fixture_spec, dict) and fixture_spec.get("error"):
+            return fixture_spec
+        if fixture_spec:
+            suite_data.setdefault("fixtures", fixture_spec)
     else:
         suite_data = {
             "id": suite_id,
@@ -654,10 +897,14 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 
     # Execute each task as a sub-agent run
     from robothor.engine.config import load_agent_config
-    from robothor.engine.models import DeliveryMode, TriggerType
+    from robothor.engine.models import DeliveryMode
 
     # Parent linkage for every task in this suite — see _benchmark_spawn_context.
     benchmark_spawn_ctx = _benchmark_spawn_context(ctx)
+
+    # Sandbox posture is resolved ONCE per suite, so every task in a run is
+    # graded under the same rules even if the flag flips mid-run.
+    sandbox_on = sandbox_active()
 
     results: list[dict[str, Any]] = []
     total_cost = 0.0
@@ -713,13 +960,20 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         # Sandbox side-effecting tools during benchmark runs.
         # Prevents benchmark test data (e.g. carol@example.com) from
         # polluting the live calendar, CRM, and email systems.
-        # Agents can still READ data but cannot WRITE to external systems.
+        # Everything that reaches OUTSIDE this database stays denied in every
+        # mode. What changes when the sandbox is active is narrow and
+        # deliberate: CRM writes are re-allowed, and every row they touch lives
+        # in the isolated sandbox tenant and is deleted when the task ends.
         # Safety tests (must_refuse) still work because the agent sees the
         # tool is denied and must refuse the task prompt.
-        child_config.tools_denied = _benchmark_tools_denied(child_config.tools_allowed)
+        child_config.tools_denied = _benchmark_tools_denied(
+            child_config.tools_allowed, sandbox=sandbox_on
+        )
         # Defense-in-depth: stamp is_benchmark=True so the runner's
         # benchmark-mode guard (and gws CLI wrapper) refuse side-effecting
         # tools even if a future skill/MCP tool re-opens the deny-list hole.
+        # The CRM guard additionally consults the run's tenant, so a benchmark
+        # run outside the sandbox tenant is refused exactly as before.
         child_config.is_benchmark = True
 
         # Per-task wall-clock cap. Without this, a hung sub-agent (provider
@@ -728,17 +982,27 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         # consumed 692K tokens on a single case before alerting.
         per_task_timeout_seconds = 240
 
+        seeded: SeededFixtures | None = None
+        state_results: list[StateCheckResult] = []
         try:
             import asyncio as _asyncio
 
+            # Seed this task's fixtures as real rows BEFORE the prompt is
+            # rendered: the prompt interpolates their real uuids, so the record
+            # it names exists. This is what replaces "Person p-9999 has …",
+            # an assertion the agent could only accept on faith.
+            seeded = _seed_task_fixtures(task, suite, sandbox_on)
+            prompt = _render_task_prompt(task, seeded)
+
             async with _asyncio.timeout(per_task_timeout_seconds):
-                run = await runner.execute(
+                run = await _execute_task_run(
+                    runner=runner,
                     agent_id=agent_id,
-                    message=task["prompt"],
-                    trigger_type=TriggerType.SUB_AGENT,
+                    prompt=prompt,
                     trigger_detail=f"benchmark:{suite_id}:{task['id']}",
-                    agent_config=child_config,
+                    child_config=child_config,
                     spawn_context=benchmark_spawn_ctx,
+                    seeded=seeded,
                 )
 
             output = run.output_text or ""
@@ -748,7 +1012,15 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 "status": run.status.value,
             }
 
-            graded = await _score_task_async(output, task.get("expected", {}), run_meta)
+            # Grade the environment, never the transcript: read the sandbox
+            # back and see what actually changed.
+            state_results = _run_task_state_checks(task, seeded, sandbox_on)
+            graded = await _score_task_async(
+                output,
+                _render_expected(task.get("expected", {}), seeded),
+                run_meta,
+                state_results=state_results if state_checks_scored() else None,
+            )
             total_cost += run.total_cost_usd
 
             task_result: dict[str, Any] = {
@@ -761,6 +1033,11 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 "status": run.status.value,
                 "output_preview": output[:200] if output else "",
             }
+            if seeded is not None or state_results:
+                task_result["state_checks"] = [r.as_dict() for r in state_results]
+                task_result["state_checks_scored"] = state_checks_scored()
+                if seeded is not None:
+                    task_result["fixtures"] = seeded.summary()
             if graded.judge_error:
                 # Not a grade: the grader did not run. Surfaced per-task and
                 # counted as a failure below.
@@ -783,6 +1060,11 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                     "error": str(e),
                 }
             )
+        finally:
+            # Tear down unconditionally — including after a timeout or a crash.
+            # Rows left behind become the next night's ambient state, and a
+            # benchmark that grades yesterday's leftovers is worse than none.
+            _teardown_task_fixtures(seeded)
 
     # Every task in the suite is a case, whether or not it got to run. The
     # only thing `skipped` changes is telemetry — never the denominator.
@@ -1043,6 +1325,21 @@ async def _benchmark_compare(args: dict[str, Any], ctx: ToolContext) -> dict[str
 # ---------------------------------------------------------------------------
 
 
+def _load_suite_fixtures(suite_path: Path) -> dict[str, Any] | None:
+    """Load ``fixtures.yaml`` beside a suite, or an ``{"error": …}`` dict.
+
+    A malformed fixture spec is an error rather than a silent skip: the
+    alternative is a suite whose prompts interpolate ids that were never
+    seeded, which is the class of bug this whole change removes.
+    """
+    from robothor.engine.benchmark_sandbox import FixtureError, load_fixture_spec
+
+    try:
+        return load_fixture_spec(suite_path)
+    except FixtureError as exc:
+        return {"error": str(exc)}
+
+
 def _suite_yaml_path(agent_id: str, workspace: str) -> Path:
     return _resolve_path(f"docs/benchmarks/{agent_id}/suite.yaml", workspace)
 
@@ -1084,6 +1381,14 @@ async def auto_define_suite_from_disk(agent_id: str, workspace: str) -> dict[str
         suite_data = yaml.safe_load(path.read_text()) or {}
     except yaml.YAMLError as exc:
         return {"error": f"Invalid YAML in {path}: {exc}"}
+
+    # Fixtures live beside the suite so a suite can be read on its own and the
+    # rows it grades can be seeded from one declarative file.
+    fixture_spec = _load_suite_fixtures(path)
+    if isinstance(fixture_spec, dict) and fixture_spec.get("error"):
+        return fixture_spec
+    if fixture_spec:
+        suite_data.setdefault("fixtures", fixture_spec)
 
     # Accept both `id:` and `suite_id:` — 8 fleet suites declare `suite_id:`,
     # which previously fell through to `<agent>-default`, silently scattering

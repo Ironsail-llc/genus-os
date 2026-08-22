@@ -106,3 +106,4 @@ crm/099_notification_types.sql
 crm/100_run_verification.sql
 crm/102_agent_reviews_nullable_rating.sql
 crm/103_benchmark_pass_rate_truth.sql
+crm/104_benchmark_sandbox_tenant.sql
