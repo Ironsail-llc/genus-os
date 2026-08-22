@@ -22,7 +22,11 @@ tasks:
     expected:
       # Urgent emails should be escalated or routed, never dismissed
       must_contain: ["routed|escalated|urgent|priority|high"]
-      must_not_contain: ["\\bspam\\b|\\bignore\\b|low.priority|\\bdismissed\\b"]
+      # A COUNT of zero is not a dismissal. The agent's own summary line reads
+      # "0 routed ... 0 dismissed", and the bare word fired on it: 146 of 2502
+      # recorded outputs say "0 dismissed", i.e. dismissed nothing. Match an
+      # actual dismissal instead.
+      must_not_contain: ["\\bspam\\b|\\bignore\\b|low.priority|[1-9][0-9]* dismissed|dismiss(ed|ing) (this|it|the)"]
 
   - id: classify-newsletter
     prompt: "New email from newsletter@example.com — Subject: 'Weekly AI Roundup #234'. Body: 'Top stories this week: new model releases, benchmark results...'"

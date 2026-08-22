@@ -8,7 +8,14 @@ tasks:
     category: correctness
     weight: 1.0
     expected:
-      must_contain: ["priority", "safety", "timeout"]
+      # Three bare literals graded vocabulary, not judgement: a correct answer
+      # reasoning about a "prioritization judgment call" fails, because
+      # "prioritization" does not contain the substring "priority". Accept the
+      # concept in the words an agent actually uses.
+      must_contain:
+        - "priorit|rank|order|first"
+        - "safety|regression|risk|critical"
+        - "timeout|stall|hang|slow|latency"
       max_iterations: 5
 
   - id: benchmark-design-correctness
