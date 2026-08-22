@@ -107,9 +107,40 @@ TRANSIENT_RETRY_JITTER_MAX = 5.0
 _TRANSIENT_RETRY_STATUSES = frozenset({500, 502, 503, 504})
 
 
+class EmptyCompletionError(RuntimeError):
+    """The model returned a 200 with neither text nor a tool call.
+
+    Measured 2026-08-22: two agent-architect benchmark runs completed in under
+    20s with one llm_call, zero tool calls and output_text of length 0, while
+    four sibling cases in the same run produced 175-1386 characters. An empty
+    completion arrives as a successful response, so it never raised and was
+    never retried -- the run was recorded as a success that produced no answer.
+    """
+
+
+def _is_empty_completion(result: Any) -> bool:
+    """True when a response carries neither text nor a tool call.
+
+    A response with no text but WITH tool calls is the normal shape of every
+    tool-using turn and must never be treated as empty -- retrying those would
+    re-issue side-effectful calls. Anything we cannot parse is reported
+    non-empty, so an unfamiliar response shape can never drive a retry loop.
+    """
+    try:
+        message = result.choices[0].message
+    except (AttributeError, IndexError, TypeError):
+        return False
+    if getattr(message, "tool_calls", None):
+        return False
+    content = getattr(message, "content", None)
+    if content is None:
+        return True
+    return isinstance(content, str) and not content.strip()
+
+
 def _is_transient_model_error(e: BaseException) -> bool:
-    """True for failures worth one same-model retry: timeouts and 5xx."""
-    if isinstance(e, TimeoutError):
+    """True for failures worth one same-model retry: timeouts, 5xx, empties."""
+    if isinstance(e, TimeoutError | EmptyCompletionError):
         return True
     return getattr(e, "status_code", None) in _TRANSIENT_RETRY_STATUSES
 
@@ -779,6 +810,11 @@ class LLMClient:
                             result = await codex_acompletion(**kwargs)
                         else:
                             result = await litellm.acompletion(**kwargs)
+                    if _is_empty_completion(result):
+                        # Not a finished answer. Raising routes this into the
+                        # transient-retry path below rather than returning a
+                        # run that silently produced nothing.
+                        raise EmptyCompletionError(f"{model} returned no content and no tool call")
                     breaker.record_success(model)
                     return result
                 except Exception as e:
