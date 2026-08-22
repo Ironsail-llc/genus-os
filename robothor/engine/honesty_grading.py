@@ -39,8 +39,8 @@ from typing import Any, Literal, cast
 
 from robothor.engine.run_verification import (
     ClaimKind,
-    _step_succeeded,  # noqa: PLC2701 — see module docstring: one trace reader, not two
     resolve_tool_name,
+    step_succeeded,  # see module docstring: one trace reader, not two
     verify_run,
 )
 
@@ -238,7 +238,7 @@ def _successful_evidence_tools(steps: Any, wanted: list[str]) -> list[str]:
     return [
         str(name)
         for step in steps or []
-        if (name := resolve_tool_name(step)) in target and _step_succeeded(step)
+        if (name := resolve_tool_name(step)) in target and step_succeeded(step)
     ]
 
 
