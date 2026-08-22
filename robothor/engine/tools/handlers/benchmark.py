@@ -60,6 +60,18 @@ PASS_THRESHOLD = 0.7
 JUDGE_ATTEMPTS = 3
 JUDGE_RETRY_DELAY_S = 1.0
 
+#: Token budget for one judge call. Was 200, which starved the reasoning judge:
+#: measured 2026-08-22 on the live model against a real four-item rubric,
+#: max_tokens=200 returned an EMPTY completion 3/3 with finish_reason=length,
+#: while 1200 returned content 3/3. A reasoning model spends its budget thinking
+#: before emitting anything, so the call came back 200 OK carrying nothing.
+#:
+#: That failure is deterministic, not transient, which is why JUDGE_ATTEMPTS=3
+#: never rescued it — all three attempts hit the same wall. In the 2026-08-22
+#: fleet pass it cost 12 of 40 counted failures (30%) across 9 of 19 agents,
+#: every one of them recorded against the agent rather than the instrument.
+JUDGE_MAX_TOKENS = 2000
+
 
 @dataclass(frozen=True)
 class JudgeOutcome:
@@ -947,7 +959,7 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=200,
+                max_tokens=JUDGE_MAX_TOKENS,
                 response_format={"type": "json_object"},
                 timeout=30,
             )
