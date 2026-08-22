@@ -295,16 +295,21 @@ def _get_benchmark_pass_rate(
     window_days: int = 7,
     tenant_id: str = DEFAULT_TENANT,
     as_of: datetime | None = None,
+    suite_id: str | None = None,
 ) -> float | None:
     """Return the most recent benchmark pass rate for an agent within the window.
 
-    The pass rate is computed as ``passed / total_cases`` from the latest
-    `benchmark_results` row — a *true* pass rate, not the `pass_rate` column,
-    which actually stores the partial-credit aggregate score (a task only
-    needs a 0.70 partial score to be "passed"). Scoring the >=0.85 goal
-    against that aggregate checked the wrong scale; passed/total_cases is the
-    honest "did the agent do its job?" metric. Both columns have always been
-    written correctly, so this is consistent across all historical rows.
+    Computed as ``passed / total_cases`` from the latest `benchmark_results`
+    row. Migration 103 made the `pass_rate` column agree with that, for
+    history too; this still derives the ratio from the counts because they are
+    the two numbers that cannot drift apart.
+
+    ``suite_id`` scopes the read to the agent's own grader. Without it the
+    "latest row" is whatever wrote last under this agent_id — the failure mode
+    that let 709 synthetic rows from suites ``s1``/``s2``/``test-suite`` stand
+    in as agent ``main``'s score. Callers pass the id from the agent's on-disk
+    suite.yaml (``canonical_suite_id``); None keeps the unfiltered read so an
+    agent with no suite on disk still reports its rows.
 
     Returns a value in [0.0, 1.0] from a row whose run_at falls within
     [as_of - window_days, as_of]. Returns None if no row exists or the row
@@ -316,21 +321,26 @@ def _get_benchmark_pass_rate(
         return None
     end = as_of or datetime.now(UTC)
     start = end - timedelta(days=window_days)
+    suite_clause = "AND suite_id = %s" if suite_id else ""
+    params: list[Any] = [agent_id, tenant_id, start, end]
+    if suite_id:
+        params.append(suite_id)
     try:
         with get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                """
+                f"""
                 SELECT passed, total_cases
                 FROM benchmark_results
                 WHERE agent_id = %s
                   AND tenant_id = %s
                   AND run_at >= %s
                   AND run_at <= %s
+                  {suite_clause}
                 ORDER BY run_at DESC
                 LIMIT 1
                 """,
-                (agent_id, tenant_id, start, end),
+                tuple(params),
             )
             row = cur.fetchone()
             if row is None:
@@ -341,6 +351,21 @@ def _get_benchmark_pass_rate(
             return round(float(passed) / float(total_cases), 4)
     except Exception as exc:
         logger.debug("benchmark_pass_rate lookup failed for %s: %s", agent_id, exc)
+        return None
+
+
+def _agent_suite_id(agent_id: str) -> str | None:
+    """The agent's canonical benchmark suite id, or None if it has no suite."""
+    try:
+        import os
+        from pathlib import Path
+
+        from robothor.engine.tools.handlers.benchmark import canonical_suite_id
+
+        workspace = os.environ.get("ROBOTHOR_WORKSPACE") or str(Path.home() / "robothor")
+        return canonical_suite_id(agent_id, workspace)
+    except Exception as exc:
+        logger.debug("canonical suite lookup failed for %s: %s", agent_id, exc)
         return None
 
 
@@ -492,7 +517,11 @@ def compute_goal_metrics(
     # Canonical "did the agent do its job?" metric. Populated from
     # benchmark_results table; None when no recent benchmark run exists.
     pass_rate = _get_benchmark_pass_rate(
-        agent_id, window_days=window_days, tenant_id=tenant_id, as_of=as_of
+        agent_id,
+        window_days=window_days,
+        tenant_id=tenant_id,
+        as_of=as_of,
+        suite_id=_agent_suite_id(agent_id),
     )
     if pass_rate is not None:
         metrics["benchmark_pass_rate"] = round(pass_rate, 4)

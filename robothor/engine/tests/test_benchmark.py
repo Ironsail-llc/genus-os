@@ -10,6 +10,7 @@ import pytest
 
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.benchmark import (
+    JudgeOutcome,
     _score_task,
     _validate_task,
 )
@@ -879,12 +880,14 @@ class TestJudgeOutput:
         )
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
-            score = await _judge_output(
+            outcome = await _judge_output(
                 "Agent output here",
                 ["Is it clear?", "Is it concise?", "Is it actionable?"],
                 "openrouter/xiaomi/mimo-v2-pro",
             )
-        assert abs(score - 2.0 / 3.0) < 0.01
+        assert outcome.error is None
+        assert outcome.score is not None
+        assert abs(outcome.score - 2.0 / 3.0) < 0.01
 
     @pytest.mark.asyncio
     async def test_judge_all_pass(self):
@@ -895,19 +898,24 @@ class TestJudgeOutput:
         mock_response.choices[0].message.content = json.dumps({"scores": [1, 1, 1]})
 
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
-            score = await _judge_output("output", ["a", "b", "c"], "model")
-        assert score == 1.0
+            outcome = await _judge_output("output", ["a", "b", "c"], "model")
+        assert outcome.score == 1.0
 
     @pytest.mark.asyncio
-    async def test_judge_llm_failure_returns_neutral(self):
-        """LLM failure returns 0.5 (non-fatal)."""
+    async def test_judge_llm_failure_is_an_error_not_a_score(self):
+        """An LLM failure has no score at all.
+
+        This used to return 0.5, which made a dead judge indistinguishable
+        from a middling agent — see test_benchmark_pass_rate_truth.py.
+        """
         from robothor.engine.tools.handlers.benchmark import _judge_output
 
         with patch(
             "litellm.acompletion", new_callable=AsyncMock, side_effect=Exception("API down")
         ):
-            score = await _judge_output("output", ["a", "b"], "model")
-        assert score == 0.5
+            outcome = await _judge_output("output", ["a", "b"], "model")
+        assert outcome.score is None
+        assert "API down" in (outcome.error or "")
 
 
 class TestScoreTaskWithJudge:
@@ -925,15 +933,16 @@ class TestScoreTaskWithJudge:
         with patch(
             "robothor.engine.tools.handlers.benchmark._judge_output",
             new_callable=AsyncMock,
-            return_value=0.8,
+            return_value=JudgeOutcome(score=0.8),
         ):
-            score = await _score_task_async(
+            graded = await _score_task_async(
                 "This is a reply to your email",
                 expected,
                 {"total_cost_usd": 0.01, "steps": 2},
             )
         # 2 checks: must_contain "reply" (pass) + judge >= 0.7 (pass) = 2/2 = 1.0
-        assert score == 1.0
+        assert graded.score == 1.0
+        assert graded.judge_error is None
 
     @pytest.mark.asyncio
     async def test_judge_check_fails_below_threshold(self):
@@ -946,15 +955,16 @@ class TestScoreTaskWithJudge:
         with patch(
             "robothor.engine.tools.handlers.benchmark._judge_output",
             new_callable=AsyncMock,
-            return_value=0.4,
+            return_value=JudgeOutcome(score=0.4),
         ):
-            score = await _score_task_async(
+            graded = await _score_task_async(
                 "This is a reply",
                 expected,
                 {"total_cost_usd": 0.01, "steps": 2},
             )
         # must_contain passes, judge fails = 1/2 = 0.5
-        assert score == 0.5
+        assert graded.score == 0.5
+        assert graded.judge_error is None
 
     @pytest.mark.asyncio
     async def test_no_judge_falls_back_to_sync(self):
@@ -962,8 +972,8 @@ class TestScoreTaskWithJudge:
         from robothor.engine.tools.handlers.benchmark import _score_task_async
 
         expected = {"must_contain": ["hello"], "must_not_contain": ["goodbye"]}
-        score = await _score_task_async("hello world", expected, {})
-        assert score == 1.0
+        graded = await _score_task_async("hello world", expected, {})
+        assert graded.score == 1.0
 
 
 class TestBenchmarkSandbox:

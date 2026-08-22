@@ -155,6 +155,10 @@ def report_to_benchmark_row(
         # suite green certifies nothing, which is the failure this eval exists
         # to stop being.
         "pass_rate": round(passed / total, 4) if total else 0.0,
+        # Every case here is pass/fail — there is no partial credit to hold
+        # apart, so the aggregate equals the pass rate. Written explicitly so
+        # the column is never NULL for this suite (migration 103).
+        "aggregate_score": round(passed / total, 4) if total else 0.0,
         "category_scores": category_scores,
         "failures": failures,
         "triggered_by": triggered_by,
@@ -199,9 +203,9 @@ def record_benchmark_row(row: dict[str, Any]) -> bool:
                 """
                 INSERT INTO benchmark_results
                   (agent_id, suite_id, suite_path, total_cases, passed, failed,
-                   pass_rate, category_scores, failures, triggered_by,
-                   experiment_id, cost_usd, tenant_id)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s)
+                   pass_rate, aggregate_score, category_scores, failures,
+                   triggered_by, experiment_id, cost_usd, tenant_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,%s,%s)
                 """,
                 (
                     row["agent_id"],
@@ -211,6 +215,7 @@ def record_benchmark_row(row: dict[str, Any]) -> bool:
                     row["passed"],
                     row["failed"],
                     row["pass_rate"],
+                    row.get("aggregate_score", row["pass_rate"]),
                     json.dumps(row["category_scores"]),
                     json.dumps(row["failures"], default=str),
                     row["triggered_by"],
