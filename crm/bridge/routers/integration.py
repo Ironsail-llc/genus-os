@@ -75,6 +75,7 @@ def log_interaction(
     channel_id = body.channel_identifier or body.contact_name
     resolved = _resolve(body.channel, channel_id, body.contact_name, tenant_id=tenant_id)
     person_id = resolved.get("person_id")
+    message_persisted: bool | None = None
     if person_id and body.content_summary:
         convos = get_conversations_for_contact(str(person_id), tenant_id=tenant_id)
         convo_id = convos[0].get("id") if convos else None
@@ -83,7 +84,23 @@ def log_interaction(
             convo_id = convo.get("id") if convo else None
         if convo_id:
             msg_type = "incoming" if body.direction == "incoming" else "outgoing"
-            send_message(convo_id, body.content_summary, msg_type, tenant_id=tenant_id)
+            # The result is CHECKED, not discarded. Between 2026-04-08 and
+            # 2026-08-22 this call failed on every invocation (a uuid into an
+            # integer PK) and this endpoint still answered 200 "ok", so four and
+            # a half months of messages went missing with nothing to show for it.
+            message_persisted = (
+                send_message(convo_id, body.content_summary, msg_type, tenant_id=tenant_id)
+                is not None
+            )
+            if not message_persisted:
+                logger.warning(
+                    "log_interaction: message NOT persisted for conversation %s "
+                    "(contact=%s channel=%s) — the interaction was accepted but "
+                    "the message row was not written",
+                    convo_id,
+                    body.contact_name,
+                    body.channel,
+                )
 
     log_event(
         "ipc.interaction",
@@ -96,6 +113,7 @@ def log_interaction(
             "channel": body.channel,
             "direction": body.direction,
             "resolved": bool(person_id),
+            "message_persisted": message_persisted,
             "tenant_id": tenant_id,
         },
     )
@@ -111,7 +129,13 @@ def log_interaction(
         source="bridge",
         tenant_id=tenant_id,
     )
-    return {"status": "ok", "contact": body.contact_name, "resolved": bool(person_id)}
+    return {
+        "status": "ok",
+        "contact": body.contact_name,
+        "resolved": bool(person_id),
+        # None = no message was attempted; False = attempted and NOT written.
+        "message_persisted": message_persisted,
+    }
 
 
 # ─── Vault (PostgreSQL-backed) ────────────────────────────────────────────
