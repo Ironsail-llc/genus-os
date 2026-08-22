@@ -1,6 +1,6 @@
 {
   "name": "genus-os",
-  "version": "1.38.0",
+  "version": "1.38.1",
   "private": true,
   "description": "Release automation tooling for Genus OS (semantic-release + commitlint + husky). The product itself lives in the Python package `robothor/` and the Next.js app in `app/`.",
   "scripts": {

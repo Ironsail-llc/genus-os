@@ -1,3 +1,13 @@
+## [1.38.1](https://github.com/Ironsail-llc/genus-os/compare/v1.38.0...v1.38.1) (2026-08-22)
+
+### Bug Fixes
+
+* **engine:** the operator's conversations load memory ([#344](https://github.com/Ironsail-llc/genus-os/issues/344)) ([5ad3caa](https://github.com/Ironsail-llc/genus-os/commit/5ad3caa1e4881e0011f11a9290956fca93970546))
+* **engine:** three more tools were dying at the 120s cap ([#340](https://github.com/Ironsail-llc/genus-os/issues/340)) ([83e7394](https://github.com/Ironsail-llc/genus-os/commit/83e73940f4a3681c9aae96ad64352de8740366f1))
+* **memory:** a truncated extraction is a failure, not an empty conversation ([#342](https://github.com/Ironsail-llc/genus-os/issues/342)) ([7eb3e0d](https://github.com/Ironsail-llc/genus-os/commit/7eb3e0d5cb665eca7d0e531190ced72d5a9c2003))
+* **memory:** resolve a name to the node that carries the relationships ([#343](https://github.com/Ironsail-llc/genus-os/issues/343)) ([420577d](https://github.com/Ironsail-llc/genus-os/commit/420577d81da62969c8eea744da03cb276a80a526))
+* **memory:** the operator's preferences survive a read ([#341](https://github.com/Ironsail-llc/genus-os/issues/341)) ([bdece84](https://github.com/Ironsail-llc/genus-os/commit/bdece84a99d2bd95fac151a728d09bc80f26064e))
+
 ## [1.38.0](https://github.com/Ironsail-llc/genus-os/compare/v1.37.1...v1.38.0) (2026-08-22)
 
 ### Features
