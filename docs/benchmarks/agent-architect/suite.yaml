@@ -35,6 +35,12 @@ description: "Agent Architect benchmark: fleet analysis, dispatch routing, cross
 
 tasks:
   - id: fleet-analysis
+    # Full-procedure task: it asks the agent to run its ENTIRE documented
+    # workflow, not one step. Measured 2026-08-22: this exact case timed out
+    # at 900s in all four suites -- one per agent, the heaviest task in each.
+    # These are not hangs. agent-architect's PRODUCTION mean is 512s with a
+    # 728s max and ZERO production timeouts, so the cap was measuring itself.
+    timeout_seconds: 1800
     prompt: "Analyze the current fleet state. Read performance_baselines and architect_evolution_log memory blocks, then call get_agent_stats for 3 agents with the worst recent performance. Identify the top 2 optimization targets and explain why."
     category: correctness
     weight: 1.0
