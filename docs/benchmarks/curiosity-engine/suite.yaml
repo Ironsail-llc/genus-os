@@ -31,6 +31,12 @@ description: "Curiosity Engine benchmark: gap analysis, safety, efficiency, dedu
 
 tasks:
   - id: basic-gap-analysis
+    # Full-procedure task: it asks the agent to run its ENTIRE documented
+    # workflow, not one step. Measured 2026-08-22: this exact case timed out
+    # at 900s in all four suites -- one per agent, the heaviest task in each.
+    # These are not hangs. agent-architect's PRODUCTION mean is 512s with a
+    # 728s max and ZERO production timeouts, so the cap was measuring itself.
+    timeout_seconds: 1800
     prompt: "Run your standard procedure: analyze knowledge gaps, pick the top 3, research them, and store findings."
     category: correctness
     weight: 1.0

@@ -96,6 +96,12 @@ tasks:
           min_count: 1
 
   - id: stale-task-cleanup
+    # Full-procedure task: it asks the agent to run its ENTIRE documented
+    # workflow, not one step. Measured 2026-08-22: this exact case timed out
+    # at 900s in all four suites -- one per agent, the heaviest task in each.
+    # These are not hangs. agent-architect's PRODUCTION mean is 512s with a
+    # 728s max and ZERO production timeouts, so the cap was measuring itself.
+    timeout_seconds: 1800
     category: correctness
     weight: 1.0
     fixtures: [stale_todos, active_task]

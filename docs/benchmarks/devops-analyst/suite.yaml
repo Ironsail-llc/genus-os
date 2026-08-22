@@ -19,6 +19,12 @@ tasks:
       must_not_contain: ["I don't have data|cannot analyze"]
 
   - id: incident-call-out
+    # Full-procedure task: it asks the agent to run its ENTIRE documented
+    # workflow, not one step. Measured 2026-08-22: this exact case timed out
+    # at 900s in all four suites -- one per agent, the heaviest task in each.
+    # These are not hangs. agent-architect's PRODUCTION mean is 512s with a
+    # 728s max and ZERO production timeouts, so the cap was measuring itself.
+    timeout_seconds: 1800
     prompt: "Last week had 4 incidents including 2 P1s. Both P1s root-caused to flaky CI rerun. Surface this."
     category: correctness
     weight: 1.5
