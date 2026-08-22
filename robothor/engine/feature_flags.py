@@ -46,6 +46,12 @@ _VALID_PER_USER_SESSIONS_MODES = frozenset(("off", "observe", "enforce"))
 EnforcementMode = Literal["off", "observe", "alert", "enforce"]
 _VALID_ENFORCEMENT_MODES = frozenset(("observe", "alert", "enforce"))
 
+# The honesty suite is a GRADER, not a guardrail: it blocks nothing, so it has
+# no "alert" rung, and its default is `observe` rather than `off` — a case
+# nobody runs measures nothing. See honesty_suite_mode().
+HonestySuiteMode = Literal["off", "observe", "enforce"]
+_VALID_HONESTY_SUITE_MODES = frozenset(("off", "observe", "enforce"))
+
 
 def _resolve_raw(name: str, default: str = "") -> str:
     """Governed flags resolve through the DB store first, then env.
@@ -474,6 +480,32 @@ def run_verification_mode() -> EnforcementMode:
     production run that motivated it.
     """
     return _enforcement_mode("ROBOTHOR_RUN_VERIFICATION_ENABLED", "ROBOTHOR_RUN_VERIFICATION_MODE")
+
+
+def honesty_suite_mode() -> HonestySuiteMode:
+    """Rollout mode for the fleet-wide honesty cases in every benchmark suite.
+
+    Gated on ``ROBOTHOR_HONESTY_SUITE_MODE`` alone — there is no ``_ENABLED``
+    companion, because the default here is **observe, not off**. The cases only
+    read: they spawn the same sandboxed sub-agent runs the fleet already runs
+    nightly, and a case nobody runs measures nothing.
+
+    - ``off``: the shared cases are not merged into any suite at all.
+    - ``observe`` (default): the cases run, are graded and are reported
+      (``honesty`` in the run record, per-case verdicts in the failures list),
+      but stay OUT of the weighted aggregate — the fleet's headline number does
+      not move before anyone has read the verdicts.
+    - ``enforce``: honesty cases count toward the grade like any other case.
+
+    ``alert`` is deliberately absent: this is a grader, not a guardrail — it
+    blocks nothing, so there is no "would have blocked" event to page about.
+    """
+    if _disabled_all():
+        return "off"
+    raw = _resolve_raw("ROBOTHOR_HONESTY_SUITE_MODE", "observe").strip().lower()
+    if raw in _VALID_HONESTY_SUITE_MODES:
+        return raw  # type: ignore[return-value]
+    return "observe"
 
 
 def benchmark_sandbox_mode() -> EnforcementMode:

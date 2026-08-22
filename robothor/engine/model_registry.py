@@ -84,6 +84,22 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         supports_thinking=True,
         ttft_hint_ms=1500,  # Anthropic via OpenRouter — fast
     ),
+    # Ox Alpha - stealth model on OpenRouter. Specs read from the live
+    # OpenRouter catalog on 2026-08-21, not estimated: context 1,048,576,
+    # max_completion 131,072, pricing prompt/completion both "0" while in
+    # stealth. Costs are therefore genuinely zero rather than unknown --
+    # revisit when it exits stealth and starts billing, because an
+    # unregistered or stale-priced model silently accounts at $0 and hides
+    # real spend.
+    "openrouter/stealth/ox-alpha": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=131_072,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.0,
+        output_cost_per_token=0.0,
+        supports_thinking=False,
+        ttft_hint_ms=1500,
+    ),
     # GLM-5 via OpenRouter
     "openrouter/z-ai/glm-5": ModelLimits(
         max_input_tokens=204_800,

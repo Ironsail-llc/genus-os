@@ -444,15 +444,15 @@ def _check_identifier(name: str) -> str:
 def ensure_sandbox_tenant(tenant_id: str | None = None) -> str:
     """Idempotently create the sandbox tenant row so FK constraints hold.
 
-    Migration 102 does this for a migrated database; doing it here as well means
+    Migration 104 does this for a migrated database; doing it here as well means
     a fresh instance, a test database, or a rolled-back migration still runs the
     benchmark instead of failing every task on a foreign-key violation.
     """
-    from robothor.db.connection import get_connection
+    from robothor.db.connection import get_connection, tenant_scope
 
     tenant = tenant_id or sandbox_tenant_id()
     _assert_sandbox(tenant)
-    with get_connection() as conn:
+    with tenant_scope(tenant), get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
             """
@@ -491,11 +491,11 @@ def insert_row(table: str, values: dict[str, Any], tenant_id: str) -> str:
         columns.append(_check_identifier(column))
         params.append(value)
 
-    from robothor.db.connection import get_connection
+    from robothor.db.connection import get_connection, tenant_scope
 
     placeholders = ", ".join(["%s"] * len(columns))
     sql = f"INSERT INTO {_check_identifier(table)} ({', '.join(columns)}) VALUES ({placeholders})"
-    with get_connection() as conn:
+    with tenant_scope(tenant_id), get_connection() as conn:
         cur = conn.cursor()
         cur.execute(sql, tuple(params))
     return str(params[0])
@@ -519,12 +519,12 @@ def update_row(table: str, row_id: str, values: dict[str, Any], tenant_id: str) 
         return False
     params.extend([row_id, tenant_id])
 
-    from robothor.db.connection import get_connection
+    from robothor.db.connection import get_connection, tenant_scope
 
     sql = (
         f"UPDATE {_check_identifier(table)} SET {', '.join(sets)} WHERE id = %s AND tenant_id = %s"
     )
-    with get_connection() as conn:
+    with tenant_scope(tenant_id), get_connection() as conn:
         cur = conn.cursor()
         cur.execute(sql, tuple(params))
         return int(cur.rowcount) > 0
@@ -537,9 +537,9 @@ def read_row(table: str, row_id: str, tenant_id: str) -> dict[str, Any] | None:
 
     from psycopg2.extras import RealDictCursor
 
-    from robothor.db.connection import get_connection
+    from robothor.db.connection import get_connection, tenant_scope
 
-    with get_connection() as conn:
+    with tenant_scope(tenant_id), get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             f"SELECT * FROM {_check_identifier(table)} WHERE id = %s AND tenant_id = %s",
@@ -551,9 +551,9 @@ def read_row(table: str, row_id: str, tenant_id: str) -> dict[str, Any] | None:
 
 def count_rows(table: str, tenant_id: str) -> int:
     """Count live (not soft-deleted) rows for a tenant."""
-    from robothor.db.connection import get_connection
+    from robothor.db.connection import get_connection, tenant_scope
 
-    with get_connection() as conn:
+    with tenant_scope(tenant_id), get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
             f"SELECT count(*) FROM {_check_identifier(table)} "
@@ -584,10 +584,10 @@ def teardown_sandbox(tenant_id: str | None = None) -> int:
     tenant = tenant_id or sandbox_tenant_id()
     _assert_sandbox(tenant)
 
-    from robothor.db.connection import get_connection
+    from robothor.db.connection import get_connection, tenant_scope
 
     removed = 0
-    with get_connection() as conn:
+    with tenant_scope(tenant), get_connection() as conn:
         for table in _SWEEP_ORDER:
             if not _table_exists(conn, table):
                 continue
@@ -761,10 +761,10 @@ def _check_rows_match(check: dict[str, Any], seeded: SeededFixtures) -> StateChe
         where.append("id = ANY(%s::uuid[])")
         params.append(ids)
 
-    from robothor.db.connection import get_connection
+    from robothor.db.connection import get_connection, tenant_scope
 
     sql = f"SELECT count(*) FROM {_check_identifier(table)} WHERE {' AND '.join(where)}"
-    with get_connection() as conn:
+    with tenant_scope(seeded.tenant_id), get_connection() as conn:
         cur = conn.cursor()
         cur.execute(sql, tuple(params))
         fetched = cur.fetchone()
