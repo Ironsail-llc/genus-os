@@ -219,8 +219,7 @@ class CronScheduler:
         # dedup key as the watchdog path, so a restart during a known-broken
         # window does not double-page.
         scan = load_manifest_dir(self.config.manifest_dir)
-        if not scan.clean:
-            await alert_manifest_scan(scan, context="scheduler start")
+        await alert_manifest_scan(scan, context="scheduler start")
         manifests = list(scan.manifests)
         loaded = 0
         active_schedule_ids: set[str] = set()
@@ -1305,8 +1304,11 @@ class CronScheduler:
         """
         loop = asyncio.get_running_loop()
         scan = await loop.run_in_executor(None, load_manifest_dir, self.config.manifest_dir)
-        if not scan.clean:
-            await alert_manifest_scan(scan, context="watchdog reconcile")
+        # Unconditionally: the guard owns BOTH transitions. A clean scan is how
+        # it clears its dedup key and sends the recovery notice. Gating this on
+        # `not scan.clean` left the guard armed forever after a fix, so the next
+        # breakage of the same file would be swallowed by a stale floor.
+        await alert_manifest_scan(scan, context="watchdog reconcile")
         return await loop.run_in_executor(None, self._reconcile_from_scan, scan)
 
     async def stop(self) -> None:

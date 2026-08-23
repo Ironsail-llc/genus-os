@@ -2056,3 +2056,48 @@ class TestReconcileKeepsSystemJobs:
                 "stale agent schedule and delete. Give it a namespace prefix in "
                 "_SYSTEM_JOB_PREFIXES."
             )
+
+
+class TestReconcileAlwaysConsultsTheGuard:
+    """The guard owns BOTH transitions, so it must be called unconditionally.
+
+    Caught by a live probe, not by a unit test: reconcile() originally called
+    alert_manifest_scan only when the scan was dirty, so the recovery notice
+    could never fire and the dedup key was never cleared — a manifest fixed at
+    14:31 left the guard armed indefinitely, and the next breakage of the same
+    file would have been swallowed by the stale floor.
+
+    test_recovery_sends_info_not_critical passed the whole time because it
+    calls alert_manifest_scan directly. The caller was the inert part.
+    """
+
+    @pytest.mark.asyncio
+    async def test_reconcile_consults_the_guard_on_a_clean_scan(self, _reconcile_manifests):
+        scheduler = _scheduler_for(_reconcile_manifests)
+        scheduler.scheduler.get_jobs = MagicMock(return_value=[])
+
+        mock_guard = AsyncMock()
+        with (
+            patch("robothor.engine.scheduler.alert_manifest_scan", mock_guard),
+            patch("robothor.engine.scheduler.delete_stale_schedules", MagicMock(return_value=[])),
+        ):
+            await scheduler.reconcile()
+
+        mock_guard.assert_awaited_once()
+        assert mock_guard.await_args[0][0].clean, "the guard must see the clean scan too"
+
+    @pytest.mark.asyncio
+    async def test_reconcile_consults_the_guard_on_a_dirty_scan(self, _reconcile_manifests):
+        scheduler = _scheduler_for(_reconcile_manifests)
+        scheduler.scheduler.get_jobs = MagicMock(return_value=[])
+        (_reconcile_manifests / "main.yaml").write_text(BROKEN_YAML)
+
+        mock_guard = AsyncMock()
+        with (
+            patch("robothor.engine.scheduler.alert_manifest_scan", mock_guard),
+            patch("robothor.engine.scheduler.delete_stale_schedules", MagicMock(return_value=[])),
+        ):
+            await scheduler.reconcile()
+
+        mock_guard.assert_awaited_once()
+        assert not mock_guard.await_args[0][0].clean
