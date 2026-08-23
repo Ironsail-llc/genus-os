@@ -899,6 +899,8 @@ def check_primary_model_unreached(
         return []
     if primaries_changed_at is None:
         primaries_changed_at = _primary_changed_at()
+    # An empty mapping means "no switch times known" -- keep whole-window
+    # semantics rather than excluding everything.
     cutoffs_json = json.dumps(primaries_changed_at) if primaries_changed_at else None
 
     with get_connection() as conn:
