@@ -35,9 +35,6 @@ impetusrx.com
 # Package-manager metadata syntax (not an email address)
 pnpm@10.34.5
 
-# Systemd service paths (template uses hardcoded paths by design)
-/home/philip/robothor
-
 # systemd template unit instances (robothor-alert@<unit>.service) — the email
 # regex reads "name@host" in them. They are unit names, not addresses.
 robothor-alert@

@@ -133,6 +133,28 @@ install_one() {
     fi
 }
 
+# Idempotent install of a single file OUTSIDE SYSTEM_DIR, reporting
+# installed / updated / unchanged exactly like install_one above.
+#
+# Both callers below hand-rolled this instead of sharing it, and the tmpfiles
+# one logged "installed:" unconditionally — so a second run always claimed to
+# have installed something and broke the idempotency contract
+# (tests/test_install_units.py::test_installer_second_run_reports_unchanged).
+install_file() {
+    local src="$1" dest="$2" mode="$3"
+    install -d -m 0755 "$(dirname "$dest")"
+    if [[ ! -f "$dest" ]]; then
+        install -m "$mode" "$src" "$dest"
+        log "installed: ${dest#"$ROOT"}"
+    elif ! cmp -s "$src" "$dest"; then
+        install -m "$mode" "$src" "$dest"
+        log "updated: ${dest#"$ROOT"}"
+    else
+        chmod "$mode" "$dest"
+        log "unchanged: ${dest#"$ROOT"}"
+    fi
+}
+
 for rel in "${rendered_rel[@]}"; do
     install_one "$rel"
 done
@@ -145,25 +167,35 @@ done
 HELPER_SRC="${REPO_ROOT}/infra/bin/robothor-restart-handler.sh"
 HELPER_DST="${ROOT}/usr/local/lib/robothor/robothor-restart-handler.sh"
 if [[ -f "$HELPER_SRC" ]]; then
-    install -d -m 0755 "$(dirname "$HELPER_DST")"
-    if [[ -f "$HELPER_DST" ]] && cmp -s "$HELPER_SRC" "$HELPER_DST"; then
-        log "unchanged: ${HELPER_DST#"$ROOT"}"
-    else
-        install -m 0755 "$HELPER_SRC" "$HELPER_DST"
-        log "installed: ${HELPER_DST#"$ROOT"}"
-    fi
+    install_file "$HELPER_SRC" "$HELPER_DST" 0755
 else
     log "WARNING: ${HELPER_SRC} missing — robothor-restart.service will fail."
 fi
 
 # The request directory the agent writes into. 0700 for the engine's user: the
 # FILENAME is the authorization, so nobody else may create one.
+#
+# Rendered like every other template. A tmpfiles.d line's user/group columns
+# are POSITIONAL — no `User=` prefix — so render-unit.sh needs --tmpfiles to
+# see them. Copying it raw (what this used to do) installs whatever account the
+# template happens to name, which on any instance but the author's does not
+# exist: systemd-tmpfiles then chowns the request directory away from the
+# engine and the broker silently stops working, with no error, because the
+# failure is a permission denial inside the engine.
 TMPFILES_SRC="${REPO_ROOT}/infra/tmpfiles/robothor-restart.conf"
+TMPFILES_DST="${ROOT}/etc/tmpfiles.d/robothor-restart.conf"
 if [[ -f "$TMPFILES_SRC" ]]; then
-    install -d -m 0755 "${ROOT}/etc/tmpfiles.d"
-    install -m 0644 "$TMPFILES_SRC" "${ROOT}/etc/tmpfiles.d/robothor-restart.conf"
-    log "installed: /etc/tmpfiles.d/robothor-restart.conf"
-    [[ -z "$ROOT" ]] && systemd-tmpfiles --create /etc/tmpfiles.d/robothor-restart.conf || true
+    bash "$RENDER" --tmpfiles "$TMPFILES_SRC" "${TMP_DIR}/robothor-restart.conf" \
+        || die "render failed for robothor-restart.conf"
+    install_file "${TMP_DIR}/robothor-restart.conf" "$TMPFILES_DST" 0644
+    # Unconditional, not gated on change: /run is a tmpfs, so the directory is
+    # gone after every reboot even when the conf itself is unchanged.
+    if [[ -z "$ROOT" ]]; then
+        systemd-tmpfiles --create "$TMPFILES_DST" || true
+    fi
+else
+    log "WARNING: ${TMPFILES_SRC} missing — the restart request directory will"
+    log "WARNING: not be created and the broker will never fire."
 fi
 
 # ── Post-install invariants ───────────────────────────────────────────────────

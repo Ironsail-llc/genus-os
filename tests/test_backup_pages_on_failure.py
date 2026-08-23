@@ -6,7 +6,7 @@ disk is not there.
 
 But it ran from **cron**, not systemd:
 
-    30 4 * * * /home/philip/robothor/scripts/backup-ssd.sh >> .../backup.log 2>&1
+    30 4 * * * /opt/robothor/scripts/backup-ssd.sh >> .../backup.log 2&1
 
 So the exit 1 went nowhere. Cron mails root; nothing reads root's mail. The
 offsite-replication and verify jobs are systemd units *and* carry

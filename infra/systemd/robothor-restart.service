@@ -8,7 +8,7 @@
 # the allowlist.
 #
 # ExecStart deliberately points OUTSIDE the repo. The engine runs with
-# ReadWritePaths=/home/philip/robothor, so a root handler executed from inside
+# ReadWritePaths=<workspace>, so a root handler executed from inside
 # the repo could be rewritten by an injected agent — exactly the escalation
 # #205 closed. scripts/install-units.sh installs the handler to
 # /usr/local/lib/robothor/ as root:root 0755.

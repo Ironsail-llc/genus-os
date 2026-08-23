@@ -16,7 +16,7 @@
 # Legacy spellings still rendered (but rejected in new templates by
 # tests/test_install_units.py): ${ROBOTHOR_WORKSPACE} and %h.
 #
-# Usage: render-unit.sh SRC [DEST]     (DEST defaults to stdout)
+# Usage: render-unit.sh [--tmpfiles] SRC [DEST]   (DEST defaults to stdout)
 #
 # Environment:
 #   ROBOTHOR_WORKSPACE     required — workspace root (repo checkout)
@@ -36,9 +36,23 @@ set -euo pipefail
 
 die() { echo "render-unit: $*" >&2; exit 1; }
 
+# --tmpfiles: SRC is a systemd-tmpfiles.d(5) conf, whose USER and GROUP are
+# POSITIONAL columns (TYPE PATH MODE USER GROUP AGE ARGUMENT) rather than
+# `User=`/`Group=` directives. The unit rules below are exact-line anchored and
+# cannot see them, so a tmpfiles conf run through the plain renderer emits the
+# placeholder verbatim — which looks fine and chowns the runtime directory to
+# an account that may not exist. The mode is EXPLICIT, never inferred from the
+# path: magic that cannot be tested in isolation is how this class of bug
+# survives.
+TMPFILES=0
+if [[ "${1:-}" == "--tmpfiles" ]]; then
+    TMPFILES=1
+    shift
+fi
+
 SRC="${1:-}"
 DEST="${2:-}"
-[[ -n "$SRC" ]] || die "usage: render-unit.sh SRC [DEST]"
+[[ -n "$SRC" ]] || die "usage: render-unit.sh [--tmpfiles] SRC [DEST]"
 [[ -r "$SRC" ]] || die "cannot read template: $SRC"
 
 ENV_FILE="${ROBOTHOR_ENV_FILE:-/etc/robothor/robothor.env}"
@@ -75,6 +89,7 @@ fi
 # never rescanned, so a workspace like /home/robothor/repo cannot be mangled
 # by the home substitution, and awk regex/'&' semantics never touch the data.
 export RENDER_WS="$WORKSPACE" RENDER_USER="$SERVICE_USER" RENDER_HOME="$SERVICE_HOME"
+export RENDER_TMPFILES="$TMPFILES"
 rendered="$(awk '
 function lsub(s, pat, rep,    out, i, n) {
     n = length(pat); out = ""
@@ -87,12 +102,24 @@ function lsub(s, pat, rep,    out, i, n) {
 BEGIN {
     WSENT = "\001W\002"; USENT = "\001U\002"; HSENT = "\001H\002"
     ws = ENVIRON["RENDER_WS"]; su = ENVIRON["RENDER_USER"]; home = ENVIRON["RENDER_HOME"]
+    tmpf = (ENVIRON["RENDER_TMPFILES"] == "1")
 }
 {
     s = $0
     # Comment lines pass through untouched — they may legitimately DISCUSS a
     # placeholder (e.g. "never write %h here"), and mangling docs helps nobody.
     if (s ~ /^[ \t]*[#;]/) { print; next }
+    # tmpfiles.d row: TYPE PATH MODE USER GROUP AGE ARGUMENT. Only columns 4
+    # and 5 are accounts; the PATH column legitimately contains "robothor"
+    # (/run/robothor/...) and must never be touched. Assigning a field makes
+    # awk rebuild $0 with OFS, which normalises runs of whitespace on that line
+    # only — semantically identical for tmpfiles.d.
+    if (tmpf && NF >= 5 && $2 ~ /^\//) {
+        n = 0
+        if ($4 == "robothor") { $4 = USENT; n++ }
+        if ($5 == "robothor") { $5 = USENT; n++ }
+        if (n) s = $0
+    }
     s = lsub(s, "${ROBOTHOR_WORKSPACE}", WSENT)
     s = lsub(s, "/opt/robothor", WSENT)
     if (s == "User=robothor")  s = "User=" USENT
@@ -128,6 +155,15 @@ fi
 if [[ "$SERVICE_USER" != "robothor" ]] \
     && leftover="$(grep -nE '^(User|Group)=robothor$' <<<"$directives")"; then
     fail_lines 'placeholder service account' "$leftover"
+fi
+# The tmpfiles account columns get their own gate for the same reason they get
+# their own substitution: the ^(User|Group)= grep above cannot see them. awk
+# always exits 0, so test emptiness explicitly rather than using `if leftover=`.
+if [[ "$TMPFILES" == 1 && "$SERVICE_USER" != "robothor" ]]; then
+    leftover="$(awk 'NF >= 5 && $2 ~ /^\// && ($4 == "robothor" || $5 == "robothor") \
+        { print NR ": " $0 }' <<<"$directives")"
+    [[ -z "$leftover" ]] || fail_lines \
+        'placeholder account in a tmpfiles user/group column' "$leftover"
 fi
 if [[ "$WORKSPACE" != "/opt/robothor" ]] \
     && leftover="$(grep -nF '/opt/robothor' <<<"$directives")"; then

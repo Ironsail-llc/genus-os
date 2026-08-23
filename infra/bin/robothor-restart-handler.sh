@@ -20,7 +20,7 @@
 #     path unit
 #
 # INSTALL LOCATION MATTERS. This must be installed to a root-owned directory
-# OUTSIDE the repo. The engine runs with ReadWritePaths=/home/philip/robothor,
+# OUTSIDE the repo. The engine runs with ReadWritePaths=<workspace>,
 # so a root handler executed from inside the repo could be rewritten by an
 # injected agent — exactly the escalation #205 closed. scripts/install-units.sh
 # copies it to /usr/local/lib/robothor/ root:root 0755.

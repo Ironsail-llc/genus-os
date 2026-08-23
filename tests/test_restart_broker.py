@@ -23,7 +23,7 @@ Two properties this file exists to defend:
 1. A request naming a unit outside the allowlist does nothing. `sshd`, `docker`,
    `postgresql` and `../..` traversal all get refused.
 2. The handler is NOT readable-and-writable by the agent. The engine runs with
-   ReadWritePaths=/home/philip/robothor, so a handler executed as root from
+   ReadWritePaths=<workspace>, so a handler executed as root from
    inside the repo would let an injected agent rewrite it and gain root —
    exactly the hole #205 closed.
 """
@@ -101,7 +101,9 @@ class TestRefusedUnits:
         _, log = _run(tmp_path, name)
         assert _restarted(log) == [], f"{name} was restarted but is not on the allowlist"
 
-    @pytest.mark.parametrize("name", ["..", "../sshd", "robothor-engine;sshd", "robothor-engine sshd"])
+    @pytest.mark.parametrize(
+        "name", ["..", "../sshd", "robothor-engine;sshd", "robothor-engine sshd"]
+    )
     def test_traversal_and_injection_are_refused(self, tmp_path: Path, name: str):
         try:
             _, log = _run(tmp_path, name)
@@ -135,16 +137,18 @@ class TestVisionIsNotAgentRestartable:
 
 class TestTheHandlerIsNotAgentWritable:
     def test_the_unit_does_not_execute_from_the_repo(self):
-        """The engine has ReadWritePaths=/home/philip/robothor.
+        """The engine has ReadWritePaths=<workspace>.
 
         A root handler executed from inside the repo could be rewritten by an
         injected agent — precisely the escalation #205 closed.
         """
         unit = (UNIT_DIR / "robothor-restart.service").read_text()
-        exec_lines = [ln for ln in unit.splitlines() if ln.startswith(("ExecStart", "ExecStartPre"))]
+        exec_lines = [
+            ln for ln in unit.splitlines() if ln.startswith(("ExecStart", "ExecStartPre"))
+        ]
         assert exec_lines, "no ExecStart in the unit"
         for line in exec_lines:
-            assert "/home/philip/robothor" not in line, (
-                f"root unit executes from the agent-writable repo: {line}"
-            )
+            # REPO, not a hardcoded path: this must assert against the
+            # checkout the test is actually running in, on any instance.
+            assert str(REPO) not in line, f"root unit executes from the agent-writable repo: {line}"
             assert "/robothor/infra" not in line, f"root unit executes from the repo: {line}"
