@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -442,6 +443,65 @@ class TestCheckPrimaryModelUnreached:
         rows = {r["agent_id"] for r in detectors.check_primary_model_unreached(primaries={})}
 
         assert agent not in rows
+
+
+    def test_runs_predating_a_primary_switch_are_excluded(
+        self, db_cursor, mock_get_connection
+    ) -> None:
+        """A fleet-wide model switch must not be judged by pre-switch traffic.
+
+        2026-08-23: after every manifest primary moved to Ox Alpha, this
+        detector spent its whole 7-day window flagging agents whose
+        pre-switch runs never touched the new model. Runs older than the
+        agent's recorded switch time are excluded from totals and misses.
+        """
+        agent = f"a_{uuid.uuid4().hex[:8]}"
+        _seed_runs(
+            db_cursor,
+            agent,
+            runs=12,
+            model_used="deepseek/deepseek-v4-pro",
+            age_hours=96.0,
+        )
+
+        switch_at = (
+            datetime.now(timezone.utc) - timedelta(hours=24)
+        ).isoformat()
+
+        rows = {
+            r["agent_id"]: r
+            for r in detectors.check_primary_model_unreached(
+                primaries={agent: "openrouter/stealth/ox-alpha"},
+                primaries_changed_at={agent: switch_at},
+            )
+        }
+
+        assert agent not in rows
+
+    def test_post_switch_fallback_still_flags(self, db_cursor, mock_get_connection) -> None:
+        """Only pre-switch runs are excused -- a live fallback still pages."""
+        agent = f"a_{uuid.uuid4().hex[:8]}"
+        _seed_runs(
+            db_cursor,
+            agent,
+            runs=12,
+            model_used="deepseek/deepseek-v4-pro",
+            age_hours=2.0,
+        )
+
+        switch_at = (
+            datetime.now(timezone.utc) - timedelta(hours=24)
+        ).isoformat()
+
+        rows = {
+            r["agent_id"]: r
+            for r in detectors.check_primary_model_unreached(
+                primaries={agent: "openrouter/stealth/ox-alpha"},
+                primaries_changed_at={agent: switch_at},
+            )
+        }
+
+        assert rows[agent]["unreached_runs"] == 12
 
 
 class TestPrimaryModelUnreachedDetector:

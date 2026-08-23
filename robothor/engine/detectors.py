@@ -24,10 +24,12 @@ Disable them all via env: ROBOTHOR_DETECTORS_ENABLED=0
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 from pathlib import Path
+from datetime import datetime
 from typing import Any
 
 from psycopg2.extras import RealDictCursor
@@ -796,12 +798,68 @@ def _configured_primaries() -> dict[str, str]:
     return primaries
 
 
+_DEFAULTS_STEM = "_defaults"
+
+
+def _primary_changed_at(manifest_dir=None) -> dict[str, str]:
+    """Return ``{agent_id: RFC3339 timestamp}`` of each manifest's last change.
+
+    Uses filesystem ``mtime`` rather than git history: in this deployment the
+    manifests under ``docs/agents/`` are git-ignored operational state, so
+    their git history is stale or absent while their mtimes track real edits
+    (e.g. the 2026-08 fleet-wide Ox Alpha switch rewrote every manifest).
+    A manifest inherited from ``_defaults.yaml`` takes the later of the two
+    mtimes -- the effective primary is a function of both files.
+
+    Best effort by design. When no timestamps can be read the mapping is
+    empty and :func:`check_primary_model_unreached` keeps whole-window
+    semantics.
+    """
+    try:
+        if manifest_dir is None:
+            from robothor.engine.config import EngineConfig
+
+            manifest_dir = EngineConfig.from_env().manifest_dir
+        paths = sorted(Path(manifest_dir).glob("*.yaml"))
+    except Exception as e:  # pragma: no cover - manifest dir missing/unreadable
+        logger.debug("could not stat manifest directory: %s", e)
+        return {}
+
+    def _iso(p: Path) -> str | None:
+        try:
+            return (
+                datetime.fromtimestamp(p.stat().st_mtime)
+                .astimezone()
+                .isoformat()
+            )
+        except OSError as e:  # pragma: no cover - raced deletion
+            logger.debug("could not stat %s: %s", p, e)
+            return None
+
+    defaults_ts = None
+    for p in paths:
+        if p.stem == _DEFAULTS_STEM:
+            defaults_ts = _iso(p)
+            break
+
+    changed: dict[str, str] = {}
+    for p in paths:
+        ts = _iso(p)
+        if ts is None:
+            continue
+        if defaults_ts is not None and defaults_ts > ts:
+            ts = defaults_ts
+        changed[p.stem] = ts
+    return changed
+
+
 def check_primary_model_unreached(
     tenant_id: str = DEFAULT_TENANT,
     window_hours: int = _MODEL_WINDOW_HOURS,
     min_runs: int = _MODEL_MIN_RUNS,
     min_share: float = _MODEL_MIN_SHARE,
     primaries: dict[str, str] | None = None,
+    primaries_changed_at: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return agents whose runs mostly never reached their configured primary.
 
@@ -821,6 +879,12 @@ def check_primary_model_unreached(
         min_share: Share of runs missing the primary at which to report.
         primaries: ``{agent_id: primary model}``; loaded from the manifests
             when omitted.
+        primaries_changed_at: ``{agent_id: RFC3339 timestamp}`` of each
+            agent's latest primary change; runs older than their agent's
+            timestamp are excluded so a recent switch is not judged by
+            pre-switch traffic. Loaded from manifest mtimes
+            (:func:`_primary_changed_at`) when omitted; an empty mapping
+            disables the exclusion entirely.
 
     Returns:
         One dict per affected agent: agent_id, primary, total_runs,
@@ -833,6 +897,9 @@ def check_primary_model_unreached(
         primaries = _configured_primaries()
     if not primaries:
         return []
+    if primaries_changed_at is None:
+        primaries_changed_at = _primary_changed_at()
+    cutoffs_json = json.dumps(primaries_changed_at) if primaries_changed_at else None
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -847,9 +914,16 @@ def check_primary_model_unreached(
               AND started_at > NOW() - make_interval(hours => %(hours)s)
               AND status IN ('completed', 'failed', 'timeout')
               AND model_used IS NOT NULL
+              AND (
+                    %(cutoffs)s::jsonb IS NULL
+                    OR started_at > COALESCE(
+                        (%(cutoffs)s::jsonb ->> agent_id)::timestamptz,
+                        '-infinity'::timestamptz
+                    )
+              )
             GROUP BY agent_id, model_used, models_attempted
             """,
-            {"tenant_id": tenant_id, "hours": window_hours},
+            {"tenant_id": tenant_id, "hours": window_hours, "cutoffs": cutoffs_json},
         )
         rows = [dict(r) for r in cur.fetchall()]
 
