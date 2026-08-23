@@ -26,7 +26,17 @@ SOURCE="${ROBOTHOR_OFFSITE_SOURCE:-/mnt/robothor-backup/robothor/db}"
 DROPIN_DIR="${ROBOTHOR_OFFSITE_DROPIN_DIR:-/etc/systemd/system/robothor-engine.service.d}"
 KEEP="${ROBOTHOR_OFFSITE_KEEP:-7}"
 VERIFY_ONLY="${ROBOTHOR_OFFSITE_VERIFY_ONLY:-0}"
-LOG="${ROBOTHOR_OFFSITE_LOG:-$HOME/robothor/scripts/backup-offsite.log}"
+# The rclone detail lands here. It used to default INSIDE the git working tree
+# (scripts/backup-offsite.log) where it was gitignored, unrotated, and — most
+# of all — somewhere the paged operator had no reason to look. /var/log is
+# where an operator looks. Fall back to the old spot if that is unavailable, so
+# a fresh checkout on a box without /var/log/robothor still logs somewhere.
+_default_log=/var/log/robothor/backup-offsite.log
+if [[ -z "${ROBOTHOR_OFFSITE_LOG:-}" ]] \
+   && ! { mkdir -p /var/log/robothor 2>/dev/null && touch "$_default_log" 2>/dev/null; }; then
+    _default_log="$HOME/robothor/scripts/backup-offsite.log"
+fi
+LOG="${ROBOTHOR_OFFSITE_LOG:-$_default_log}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
 
@@ -61,14 +71,58 @@ for f in "${keep_files[@]}"; do
     include_args+=(--include "$f")
 done
 
+# ── Verification ────────────────────────────────────────────────────────────
+# "Missing offsite" and "the bytes differ" are different emergencies, and the
+# page has to say which. Collapsing both into "verification MISMATCH" is what
+# made the 2026-08-23 page unreadable: a benign retention bug looked exactly
+# like data loss, so the only way to tell was to log in and read the rclone
+# log by hand. rclone can split the two for us, so it does.
+VERIFY_TMP=""
+cleanup_verify_tmp() { [[ -n "$VERIFY_TMP" ]] && rm -rf "$VERIFY_TMP"; }
+trap cleanup_verify_tmp EXIT
+
+# Names the offending generations in the summary line itself. `fail` is what
+# reaches Telegram (via send_failure_alert.sh, which tails the journal), so a
+# detail that only lands in $LOG is a detail the paged operator does not have.
+verify_offsite() {
+    local context="$1"
+    VERIFY_TMP="$(mktemp -d)"
+    local missing="$VERIFY_TMP/missing" differ="$VERIFY_TMP/differ" errors="$VERIFY_TMP/errors"
+    : >"$missing"; : >"$differ"; : >"$errors"
+
+    if rclone check "$SOURCE" "$REMOTE/db" "${include_args[@]}" \
+            --one-way --checkers 4 \
+            --missing-on-dst "$missing" --differ "$differ" --error "$errors" \
+            >>"$LOG" 2>&1; then
+        log "verification OK — all ${#keep_files[@]} retained generations match the source"
+        return 0
+    fi
+
+    local -a problems=()
+    if [[ -s "$missing" ]]; then
+        problems+=("$(wc -l <"$missing" | tr -d ' ') MISSING offsite: $(paste -sd' ' <"$missing")")
+    fi
+    if [[ -s "$differ" ]]; then
+        problems+=("$(wc -l <"$differ" | tr -d ' ') CORRUPT offsite (bytes differ from source): $(paste -sd' ' <"$differ")")
+    fi
+    if [[ -s "$errors" ]]; then
+        problems+=("$(wc -l <"$errors" | tr -d ' ') UNREADABLE: $(paste -sd' ' <"$errors")")
+    fi
+    if ((${#problems[@]} == 0)); then
+        # rclone failed without naming a file — a transport or auth problem,
+        # not a statement about the data. Do not imply the backup is bad.
+        problems+=("rclone check failed without identifying a file — see $LOG")
+    fi
+
+    local IFS='; '
+    fail "$context — ${problems[*]}"
+}
+
 # ── Verify-only: confirm what is already offsite is intact ──────────────────
 if [[ "$VERIFY_ONLY" == "1" ]]; then
     log "verifying ${#keep_files[@]} retained generations offsite at $REMOTE"
-    if rclone check "$SOURCE" "$REMOTE/db" "${include_args[@]}" --one-way --checkers 4 >>"$LOG" 2>&1; then
-        log "verification OK — offsite copy matches source"
-        exit 0
-    fi
-    fail "verification MISMATCH — the offsite copy does not match the source"
+    verify_offsite "offsite verification FAILED"
+    exit 0
 fi
 
 # ── Replicate the database dumps ────────────────────────────────────────────
@@ -89,18 +143,63 @@ fi
 
 # ── Verify the copy landed intact before trusting it ────────────────────────
 log "verifying replicated dumps"
-rclone check "$SOURCE" "$REMOTE/db" "${include_args[@]}" --one-way --checkers 4 >>"$LOG" 2>&1 \
-    || fail "post-upload verification failed — the offsite copy is not intact"
+verify_offsite "post-upload verification FAILED — the offsite copy is not intact"
 
 # ── Retention: keep the newest N generations offsite ────────────────────────
+# The prune and the verify MUST agree on what "the retained set" means. They
+# did not, and it cost a generation a night.
+#
+# 2026-08-23: the remote held robothor_memory-prereboot-20260714.sql.gz, put
+# there by hand before a July reboot; its local copy had since been reaped at
+# -mtime +30. The old prune sorted every remote *.sql.gz and deleted the lowest
+# `excess`. 'p' (0x70) sorts after '2' (0x32), so the orphan was never a
+# candidate — it permanently occupied a retention slot and forced the deletion
+# of the OLDEST REAL generation, every single night, self-perpetuating. The
+# weekly verify then demanded exactly the file the nightly run had deleted.
+#
+# Two rules now, and only these two:
+#   * an object that is not a generation is never a retention slot and never a
+#     prune victim. A human deliberately put it there and the local copy may be
+#     gone; deleting it would destroy the only one. Say it out loud instead.
+#   * a generation is pruned only when it is OLDER than the oldest one we are
+#     keeping. Never "the lowest N by sort order" — that deletes whatever
+#     happens to sort first, including things newer than the retained window if
+#     the local source is ever short.
+GENERATION_RE='^robothor_memory-[0-9]{8}\.sql\.gz$'
+
+declare -A keep_set=()
+for f in "${keep_files[@]}"; do keep_set["$f"]=1; done
+oldest_keep="${keep_files[0]}"
+
 mapfile -t remote_dumps < <(rclone lsf "$REMOTE/db" --include "*.sql.gz" 2>/dev/null | sort)
-excess=$(( ${#remote_dumps[@]} - KEEP ))
-if (( excess > 0 )); then
-    for ((i = 0; i < excess; i++)); do
-        log "pruning old offsite generation: ${remote_dumps[i]}"
-        rclone deletefile "$REMOTE/db/${remote_dumps[i]}" >>"$LOG" 2>&1 \
-            || log "WARNING: could not prune ${remote_dumps[i]}"
-    done
+
+prune_list=()
+unrecognized=()
+for name in "${remote_dumps[@]}"; do
+    if [[ ! "$name" =~ $GENERATION_RE ]]; then
+        unrecognized+=("$name")
+        continue
+    fi
+    [[ -n "${keep_set[$name]:-}" ]] && continue
+    # Lexicographic == chronological for robothor_memory-YYYYMMDD.sql.gz.
+    [[ "$name" < "$oldest_keep" ]] && prune_list+=("$name")
+done
+
+if ((${#unrecognized[@]} > 0)); then
+    log "NOTE: ${#unrecognized[@]} unrecognized object(s) offsite, left untouched and not counted against retention: ${unrecognized[*]}"
 fi
 
-log "offsite replication OK (${#remote_dumps[@]} generations, keeping $KEEP)"
+pruned=0
+for name in "${prune_list[@]}"; do
+    log "pruning old offsite generation: $name"
+    if rclone deletefile "$REMOTE/db/$name" >>"$LOG" 2>&1; then
+        pruned=$((pruned + 1))
+    else
+        log "WARNING: could not prune $name"
+    fi
+done
+
+# Count what is actually there now, not what was there before the prune — the
+# old line reported the pre-prune total and read as an off-by-one every night.
+remaining=$(rclone lsf "$REMOTE/db" --include "*.sql.gz" 2>/dev/null | wc -l | tr -d ' ')
+log "offsite replication OK ($remaining object(s) offsite, ${#keep_files[@]} retained generations, keeping $KEEP, pruned $pruned)"
