@@ -1681,16 +1681,44 @@ class TestRestartCommandTriggerFile:
         assert "robothor-engine.service" in reply_text
 
     @pytest.mark.asyncio
-    async def test_delphi_engine_has_no_trigger_and_gets_ssh_reply(self, bot):
+    async def test_delphi_engine_can_now_be_restarted_without_ssh(self, bot, tmp_path):
+        """The operator is SSH-only and was running this by hand.
+
+        robothor-delphi-engine used to have no path unit, so /restart told him
+        to go and do it himself. The restart broker now watches a per-unit
+        request directory, with the target matched against a hardcoded
+        allowlist in a ROOT-OWNED handler outside the repo — the agent still
+        holds no privilege and still cannot choose an arbitrary unit.
+        """
+        trigger = tmp_path / "robothor-delphi-engine"
+        msg = self._owner_message()
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch(
+                "robothor.engine.telegram._RESTART_TRIGGERS",
+                {"robothor-delphi-engine.service": trigger},
+            ),
+        ):
+            await bot._handle_restart_command(msg, "robothor-delphi-engine.service")
+
+        assert trigger.exists(), "no restart request was written"
+        (reply_text,) = msg.answer.call_args.args
+        assert "ssh" not in reply_text.lower(), (
+            "still telling the operator to SSH in for a unit the broker handles"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_unit_still_gets_the_ssh_reply(self, bot):
+        """The allowlist is short on purpose; everything else is still manual."""
         msg = self._owner_message()
 
         with patch.dict(os.environ, {}, clear=True):
-            await bot._handle_restart_command(msg, "robothor-delphi-engine.service")
+            await bot._handle_restart_command(msg, "sshd.service")
 
         msg.answer.assert_called_once()
         (reply_text,) = msg.answer.call_args.args
         assert "ssh" in reply_text.lower()
-        assert "robothor-delphi-engine.service" in reply_text
 
     @pytest.mark.asyncio
     async def test_owner_gate_regression_still_enforced(self, bot, tmp_path):

@@ -1,14 +1,20 @@
 # Triggered by robothor-restart.path. Runs as root (no User= line) — that is
 # deliberate: systemd exercises the privilege so the agent never has to.
 #
-# The target unit is HARDCODED. It is never read from the trigger file: that
-# file is agent-writable, and letting its contents name a unit would hand an
-# injected agent the ability to stop or restart anything on the machine.
+# The set of restartable units is HARDCODED in the handler. It is never read
+# from a trigger file: those files are agent-writable, and letting their
+# contents name a unit would hand an injected agent the ability to stop or
+# restart anything on the machine. The request is the FILENAME, matched against
+# the allowlist.
+#
+# ExecStart deliberately points OUTSIDE the repo. The engine runs with
+# ReadWritePaths=/home/philip/robothor, so a root handler executed from inside
+# the repo could be rewritten by an injected agent — exactly the escalation
+# #205 closed. scripts/install-units.sh installs the handler to
+# /usr/local/lib/robothor/ as root:root 0755.
 [Unit]
-Description=Robothor — restart the engine on agent request
+Description=Robothor — restart a permitted unit on agent request
 
 [Service]
 Type=oneshot
-# Consume the trigger first, so a failed restart cannot loop the path unit.
-ExecStartPre=/bin/rm -f /run/robothor/restart-request
-ExecStart=/bin/systemctl restart robothor-engine.service
+ExecStart=/usr/local/lib/robothor/robothor-restart-handler.sh

@@ -137,6 +137,35 @@ for rel in "${rendered_rel[@]}"; do
     install_one "$rel"
 done
 
+# ── Privileged helpers ────────────────────────────────────────────────────────
+# robothor-restart.service executes this as ROOT. It must live OUTSIDE the repo:
+# the engine runs with ReadWritePaths=<workspace>, so a root handler executed
+# from inside the repo could be rewritten by an injected agent — exactly the
+# escalation #205 closed. Install it root-owned, not group- or world-writable.
+HELPER_SRC="${REPO_ROOT}/infra/bin/robothor-restart-handler.sh"
+HELPER_DST="${ROOT}/usr/local/lib/robothor/robothor-restart-handler.sh"
+if [[ -f "$HELPER_SRC" ]]; then
+    install -d -m 0755 "$(dirname "$HELPER_DST")"
+    if [[ -f "$HELPER_DST" ]] && cmp -s "$HELPER_SRC" "$HELPER_DST"; then
+        log "unchanged: ${HELPER_DST#"$ROOT"}"
+    else
+        install -m 0755 "$HELPER_SRC" "$HELPER_DST"
+        log "installed: ${HELPER_DST#"$ROOT"}"
+    fi
+else
+    log "WARNING: ${HELPER_SRC} missing — robothor-restart.service will fail."
+fi
+
+# The request directory the agent writes into. 0700 for the engine's user: the
+# FILENAME is the authorization, so nobody else may create one.
+TMPFILES_SRC="${REPO_ROOT}/infra/tmpfiles/robothor-restart.conf"
+if [[ -f "$TMPFILES_SRC" ]]; then
+    install -d -m 0755 "${ROOT}/etc/tmpfiles.d"
+    install -m 0644 "$TMPFILES_SRC" "${ROOT}/etc/tmpfiles.d/robothor-restart.conf"
+    log "installed: /etc/tmpfiles.d/robothor-restart.conf"
+    [[ -z "$ROOT" ]] && systemd-tmpfiles --create /etc/tmpfiles.d/robothor-restart.conf || true
+fi
+
 # ── Post-install invariants ───────────────────────────────────────────────────
 # Every service sources /etc/robothor/robothor.env; a missing file means
 # nothing starts. Warn here, once, rather than letting each unit fail at boot.

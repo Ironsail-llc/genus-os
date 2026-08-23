@@ -1,18 +1,19 @@
-# Lets an agent restart the engine WITHOUT sudo.
+# Watches for agent restart requests. Two triggers, both agent-writable:
 #
-# NoNewPrivileges=yes on the engine blocks every setuid path (sudo included),
-# because the engine user has passwordless sudo and agents hold unrestricted
-# `exec` — a prompt injection would otherwise own the box. But the fleet
-# legitimately self-heals by restarting the engine.
+#   /run/robothor/restart-request           the original #205 single file,
+#                                           meaning "restart the engine"
+#   /run/robothor/restart-requests/<unit>   one file per requested unit, where
+#                                           the FILENAME is the request
 #
-# So: the agent writes /run/robothor/restart-request; systemd notices and runs
-# the restart as root. systemd holds the privilege; the agent never gains it,
-# and cannot choose which unit is restarted.
+# Neither file's CONTENTS are ever read. The handler matches the name against a
+# fixed allowlist compiled into a root-owned script; anything else is discarded
+# and logged.
 [Unit]
-Description=Robothor — watch for an agent-requested engine restart
+Description=Robothor — watch for agent restart requests
 
 [Path]
 PathExists=/run/robothor/restart-request
+DirectoryNotEmpty=/run/robothor/restart-requests
 Unit=robothor-restart.service
 
 [Install]
