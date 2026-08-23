@@ -1,0 +1,19 @@
+# Drives robothor-fleet-guard.service — see that file for the incident this
+# closes. Five minutes matches the engine's own reconcile cadence; with the
+# default threshold of 3 consecutive failures the operator hears about a
+# hollowed-out fleet within ~15 minutes, without paging on a restart blip.
+[Unit]
+Description=Robothor fleet-integrity probe every 5 minutes
+
+[Timer]
+# OnBootSec so a box that boots straight into a broken fleet still gets probed;
+# without it the timer only starts counting from its first manual activation.
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+# Persistent= is deliberately absent: a fleet probe missed while the box was
+# off carries no information, and a catch-up run at boot would only race the
+# engine's own startup.
+
+[Install]
+WantedBy=timers.target
