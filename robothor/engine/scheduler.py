@@ -18,9 +18,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from croniter import croniter  # type: ignore[import-untyped,unused-ignore]
 
-from robothor.engine.config import load_all_manifests, manifest_to_agent_config
+from robothor.engine.config import (
+    ManifestScan,
+    load_manifest_dir,
+    manifest_to_agent_config,
+)
 from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import _beat_incomplete, _looks_like_mid_thought, deliver
+from robothor.engine.manifest_guard import alert_manifest_scan
 from robothor.engine.models import AgentConfig, AgentRun, RunStatus, TriggerType
 from robothor.engine.task_registry import get_task_registry
 from robothor.engine.tracking import (
@@ -39,6 +44,25 @@ if TYPE_CHECKING:
     from robothor.engine.runner import AgentRunner
 
 logger = logging.getLogger(__name__)
+
+#: Job-id namespaces that are engine-owned infrastructure, not agent schedules
+#: derived from a manifest. reconcile must never touch these.
+#:
+#: This used to be a bare ``startswith("workflow:")`` test, so the interval jobs
+#: registered in ``start()`` — ``memory:write-job-sweeper``,
+#: ``memory:vault-projection`` — were culled on the first watchdog reconcile
+#: after EVERY restart (confirmed live 2026-08-23 13:31:58, five minutes after
+#: one). The sweeper ran for at most five minutes per engine lifetime.
+#:
+#: Prefix-based rather than an id allowlist on purpose: the registration sites
+#: are already namespaced, so a future ``memory:*`` job is protected by
+#: construction. An allowlist is the thing that rots.
+_SYSTEM_JOB_PREFIXES: tuple[str, ...] = ("workflow:", "memory:")
+
+
+def _is_agent_job(job_id: str) -> bool:
+    """True when a scheduler job id came from an agent manifest."""
+    return not job_id.startswith(_SYSTEM_JOB_PREFIXES)
 
 
 def _now_iso() -> str:
@@ -190,7 +214,14 @@ class CronScheduler:
 
     async def start(self) -> None:
         """Load manifests and start the scheduler."""
-        manifests = load_all_manifests(self.config.manifest_dir)
+        # At boot a broken manifest is strictly worse than at reconcile time:
+        # the agent gets no job at all, rather than keeping a stale one. Same
+        # dedup key as the watchdog path, so a restart during a known-broken
+        # window does not double-page.
+        scan = load_manifest_dir(self.config.manifest_dir)
+        if not scan.clean:
+            await alert_manifest_scan(scan, context="scheduler start")
+        manifests = list(scan.manifests)
         loaded = 0
         active_schedule_ids: set[str] = set()
         cron_agent_configs: list[AgentConfig] = []
@@ -1184,17 +1215,50 @@ class CronScheduler:
         finally:
             await release(agent_id)
 
-    def reconcile_schedules(self) -> list[str]:
-        """Reconcile DB + in-memory jobs against current manifests.
+    def _reconcile_from_scan(self, scan: ManifestScan) -> list[str]:
+        """Prune schedules that no longer have a manifest — from a CLEAN scan only.
 
-        Removes orphaned schedule rows and APScheduler jobs for agents
-        whose manifests no longer exist. Skips workflow:* jobs.
-        Returns list of pruned agent IDs.
+        The interlock at the top is the whole point. On 2026-08-23 a YAML typo
+        made main.yaml unparseable; the loader dropped it, this function could
+        not tell "broken" from "deleted", and it DELETED main's heartbeat and
+        worker schedules five minutes later. The operator got silence for
+        3h48m.
+
+        Refusing to prune, rather than pruning and then paging, because:
+
+        * The delete is one-way. ``agent_schedules`` has no tombstone and no
+          last_seen_at, so once ``delete_stale_schedules`` returns the evidence
+          is gone. "I just did something irreversible with incomplete
+          information" is not a useful page.
+        * The costs are wildly asymmetric. Pruning a live agent means total
+          silence. NOT pruning a deleted one means a stale row and an orphan
+          job that logs "Agent config not found" and fails — noisy, harmless,
+          and self-correcting on the next clean scan.
+        * A transient read failure would otherwise empty everything.
+          ``delete_stale_schedules`` happens to guard the DB half against an
+          empty active_ids; the in-memory loop below never did.
+
+        Accepted cost: deleting an agent while a DIFFERENT manifest is broken
+        is not reconciled until the break is fixed. That is correct, and the
+        page says so.
         """
-        manifests = load_all_manifests(self.config.manifest_dir)
-        active_ids: set[str] = set()
+        if not scan.clean:
+            if not scan.dir_readable:
+                logger.error(
+                    "Reconcile: manifest directory unreadable — refusing to prune "
+                    "any schedule. Nothing was deleted."
+                )
+            else:
+                logger.error(
+                    "Reconcile: %d manifest(s) failed to parse (%s) — refusing to "
+                    "prune any schedule. Nothing was deleted.",
+                    len(scan.failures),
+                    ", ".join(f.filename for f in scan.failures),
+                )
+            return []
 
-        for manifest in manifests:
+        active_ids: set[str] = set()
+        for manifest in scan.manifests:
             agent_config = manifest_to_agent_config(manifest)
             if agent_config.cron_expr:
                 active_ids.add(agent_config.id)
@@ -1213,7 +1277,7 @@ class CronScheduler:
 
         # Remove orphaned APScheduler in-memory jobs
         for job in self.scheduler.get_jobs():
-            if job.id.startswith("workflow:"):
+            if not _is_agent_job(job.id):
                 continue
             if job.id not in active_ids:
                 logger.info("Reconcile: removing orphaned job %s", job.id)
@@ -1222,6 +1286,28 @@ class CronScheduler:
                     pruned.append(job.id)
 
         return pruned
+
+    def reconcile_schedules(self) -> list[str]:
+        """Reconcile DB + in-memory jobs against current manifests.
+
+        Synchronous and unchanged in signature so existing callers keep working.
+        It cannot page — see :meth:`reconcile` for the alerting wrapper the
+        watchdog uses. Either way, a dirty scan prunes nothing.
+        """
+        return self._reconcile_from_scan(load_manifest_dir(self.config.manifest_dir))
+
+    async def reconcile(self) -> list[str]:
+        """Reconcile, and page the operator when a manifest cannot be read.
+
+        The watchdog's entry point. Reading manifests and the DB prune are both
+        blocking, so they run in the executor (rule 10: no ``asyncio.run`` in
+        engine internals).
+        """
+        loop = asyncio.get_running_loop()
+        scan = await loop.run_in_executor(None, load_manifest_dir, self.config.manifest_dir)
+        if not scan.clean:
+            await alert_manifest_scan(scan, context="watchdog reconcile")
+        return await loop.run_in_executor(None, self._reconcile_from_scan, scan)
 
     async def stop(self) -> None:
         """Shut down the scheduler."""

@@ -12,6 +12,7 @@ from robothor.engine.config import (
     load_agent_config,
     load_all_manifests,
     load_manifest,
+    load_manifest_dir,
     manifest_to_agent_config,
 )
 from robothor.engine.models import (
@@ -641,3 +642,131 @@ class TestGoalsParsing:
     def test_goals_empty_list(self):
         config = manifest_to_agent_config({"id": "bare", "goals": []})
         assert config.goals == []
+
+
+# The incident's exact defect: a list item at 4 spaces inside a 6-space
+# `fallbacks:` list. This is what went into docs/agents/main.yaml at 09:38 on
+# 2026-08-23 and took the primary agent off the air for 3h48m.
+INCIDENT_YAML = """\
+id: main
+name: Main
+model:
+  primary: openrouter/stealth/ox-alpha
+heartbeat:
+  model:
+    fallbacks:
+      - openrouter/xiaomi/mimo-v2.5
+      - openrouter/anthropic/claude-sonnet-4.6
+    - ollama_chat/qwen3.8:27b
+  max_iterations: 0
+"""
+
+
+class TestManifestScan:
+    """`load_manifest` answers "here is the manifest, or nothing". Nothing is
+    the same answer for four different situations, and on 2026-08-23 that cost
+    the fleet its primary agent: a YAML typo made main.yaml unreadable,
+    `load_all_manifests` silently dropped it, and five minutes later the
+    scheduler's reconcile — unable to tell "broken" from "deleted" — DELETED
+    main's heartbeat and worker schedules. Nothing alerted.
+
+    `load_manifest_dir` exists so a caller can ask WHY a file yielded nothing.
+    """
+
+    def test_scan_reports_parse_failure_with_reason(self, tmp_path):
+        (tmp_path / "main.yaml").write_text(INCIDENT_YAML)
+
+        scan = load_manifest_dir(tmp_path)
+
+        assert scan.manifests == ()
+        assert [f.filename for f in scan.failures] == ["main.yaml"]
+        assert scan.failures[0].error_type == "YAMLError"
+        assert scan.failures[0].detail, "a failure with no detail is not actionable"
+        assert not scan.clean
+
+    def test_failure_never_carries_an_absolute_path(self, tmp_path):
+        """Rule 1/2: platform code must not surface instance paths. This detail
+        goes into an operator page, so it must be a bare filename."""
+        (tmp_path / "main.yaml").write_text(INCIDENT_YAML)
+
+        failure = load_manifest_dir(tmp_path).failures[0]
+
+        assert failure.filename == "main.yaml"
+        assert str(tmp_path) not in failure.filename
+        assert str(tmp_path) not in failure.detail
+
+    def test_scan_does_not_flag_defaults_or_schema_as_failures(self, tmp_path):
+        """The anti-fatigue test, and the reason `skipped` exists.
+
+        docs/agents/ ships _defaults.yaml and schema.yaml. Both are valid YAML,
+        neither has an `id`, and both hit `load_manifest`'s `return None` on
+        EVERY load. Classify those as failures and the guard fires forever on a
+        healthy box, gets muted within a week, and becomes one more inert
+        control.
+        """
+        (tmp_path / "_defaults.yaml").write_text("model:\n  primary: x\n")
+        (tmp_path / "schema.yaml").write_text("required_fields:\n  - id\n")
+        (tmp_path / "main.yaml").write_text("id: main\nname: Main\n")
+
+        scan = load_manifest_dir(tmp_path)
+
+        assert scan.failures == ()
+        assert scan.clean
+        assert [m["id"] for m in scan.manifests] == ["main"]
+        assert set(scan.skipped) == {"_defaults.yaml", "schema.yaml"}
+
+    def test_deleted_manifest_is_not_a_failure(self, tmp_path):
+        """The discriminator. An agent the operator deliberately removed leaves
+        no trace in any bucket; a broken one leaves a ManifestFailure. That
+        difference is what lets reconcile prune the first and refuse the
+        second."""
+        (tmp_path / "worker.yaml").write_text("id: worker\nname: Worker\n")
+
+        scan = load_manifest_dir(tmp_path)
+
+        assert scan.clean
+        assert [m["id"] for m in scan.manifests] == ["worker"]
+        assert "main.yaml" not in [f.filename for f in scan.failures]
+        assert "main.yaml" not in scan.skipped
+
+    def test_scan_reports_unreadable_dir(self, tmp_path):
+        """An unmounted workspace currently looks exactly like "the operator
+        deleted every agent". It must not."""
+        scan = load_manifest_dir(tmp_path / "does-not-exist")
+
+        assert not scan.dir_readable
+        assert not scan.clean
+        assert scan.manifests == ()
+
+    def test_scan_counts_what_it_looked_at(self, tmp_path):
+        (tmp_path / "a.yaml").write_text("id: a\n")
+        (tmp_path / "b.yaml").write_text("id: b\n")
+        (tmp_path / "broken.yaml").write_text("not: valid: yaml: [")
+
+        scan = load_manifest_dir(tmp_path)
+
+        assert scan.scanned == 3
+        assert len(scan.manifests) == 2
+        assert len(scan.failures) == 1
+
+    def test_load_all_manifests_still_drops_broken_files(self, tmp_path):
+        """The 12 non-test call sites of load_all_manifests are deliberately
+        untouched. Turning a one-file break into a fleet-wide exception would
+        be a worse outage than the one being fixed."""
+        (tmp_path / "good.yaml").write_text("id: good\nname: Good\n")
+        (tmp_path / "bad.yaml").write_text("not: valid: yaml: [")
+
+        result = load_all_manifests(tmp_path)
+
+        assert [m["id"] for m in result] == ["good"]
+
+    def test_load_manifest_contract_is_unchanged(self, tmp_path):
+        """`load_manifest` still returns dict | None. The swallow was never the
+        bug — the bug was that nobody above it could ask why."""
+        bad = tmp_path / "bad.yaml"
+        bad.write_text("not: valid: yaml: [")
+        assert load_manifest(bad) is None
+
+        good = tmp_path / "good.yaml"
+        good.write_text("id: good\nname: Good\n")
+        assert load_manifest(good)["id"] == "good"

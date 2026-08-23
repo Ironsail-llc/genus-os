@@ -866,8 +866,9 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
         # Schedule reconciliation (every 10 ticks = 5 minutes)
         if tick_count % 10 == 0:
             try:
-                loop = asyncio.get_running_loop()
-                pruned = await loop.run_in_executor(None, scheduler.reconcile_schedules)
+                # reconcile() pages when a manifest cannot be read, and refuses
+                # to prune anything from an incomplete scan.
+                pruned = await scheduler.reconcile()
                 if pruned:
                     logger.info("Watchdog: reconciled schedules, pruned: %s", pruned)
             except Exception as e:

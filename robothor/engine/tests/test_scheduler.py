@@ -1889,3 +1889,170 @@ class TestWorkflowCronParity:
         assert any("vision-pipeline" in m and "0 3 * * *" in m for m in errors), errors
         mock_alert.assert_awaited()
         assert "vision-pipeline" in " ".join(str(a) for a in mock_alert.await_args.args)
+
+
+# ── The 2026-08-23 incident ──────────────────────────────────────────────────
+# A YAML indentation error in docs/agents/main.yaml made it unparseable. The
+# engine stayed active (running). Five minutes later the watchdog's reconcile
+# rebuilt active_ids from only the manifests that parsed and DELETED main's
+# schedules, at logger.info:
+#
+#   09:41:09 Reconcile: removing orphaned job main:worker
+#   09:41:09 Reconcile: removing orphaned job main:heartbeat
+#   09:41:09 Watchdog: reconciled schedules, pruned: ['main:worker', 'main:heartbeat']
+#
+# The operator got silence for 3h48m. agent_schedules has no tombstone, so the
+# 13->11 delta was unrecoverable the moment delete_stale_schedules returned.
+#
+# Prune only from a clean, complete read. Partial knowledge is not authority to
+# delete.
+
+BROKEN_YAML = """\
+id: main
+name: Robothor
+heartbeat:
+  model:
+    fallbacks:
+      - a
+    - b
+"""
+
+
+@pytest.fixture
+def _reconcile_manifests(tmp_path):
+    """A healthy two-agent fleet: main (heartbeat + worker) and worker."""
+    manifest_dir = tmp_path / "docs" / "agents"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "main.yaml").write_text(
+        'id: main\nname: Robothor\nheartbeat:\n  cron: "0 12 * * *"\nworker:\n  cron: "0 7 * * *"\n'
+    )
+    (manifest_dir / "worker.yaml").write_text(
+        'id: worker\nname: Worker\nschedule:\n  cron: "0 * * * *"\n'
+    )
+    return manifest_dir
+
+
+def _scheduler_for(manifest_dir):
+    from robothor.engine.config import EngineConfig
+    from robothor.engine.scheduler import CronScheduler
+
+    config = EngineConfig(manifest_dir=manifest_dir, workspace=manifest_dir.parent.parent)
+    return CronScheduler(config, MagicMock())
+
+
+def _job(job_id):
+    job = MagicMock()
+    job.id = job_id
+    return job
+
+
+class TestReconcileRefusesOnParseFailure:
+    def test_reconcile_does_not_prune_when_a_manifest_fails_to_parse(self, _reconcile_manifests):
+        """THE incident test.
+
+        A healthy fleet, then main.yaml breaks. Nothing may be deleted — not
+        the DB rows, not the in-memory jobs. The delete is one-way and the
+        information needed to undo it does not exist.
+        """
+        scheduler = _scheduler_for(_reconcile_manifests)
+        (_reconcile_manifests / "main.yaml").write_text(BROKEN_YAML)
+
+        hb, worker_job = _job("main:heartbeat"), _job("main:worker")
+        scheduler.scheduler.get_jobs = MagicMock(return_value=[hb, worker_job])
+
+        mock_delete = MagicMock(return_value=[])
+        with patch("robothor.engine.scheduler.delete_stale_schedules", mock_delete):
+            pruned = scheduler.reconcile_schedules()
+
+        assert pruned == []
+        mock_delete.assert_not_called()
+        hb.remove.assert_not_called()
+        worker_job.remove.assert_not_called()
+
+    def test_reconcile_still_prunes_on_a_clean_scan(self, _reconcile_manifests):
+        """The interlock must not turn reconcile into a no-op. An agent the
+        operator really deleted still gets cleaned up."""
+        scheduler = _scheduler_for(_reconcile_manifests)
+        (_reconcile_manifests / "main.yaml").unlink()  # deliberately removed
+
+        stale = _job("main:heartbeat")
+        legit = _job("worker")
+        scheduler.scheduler.get_jobs = MagicMock(return_value=[stale, legit])
+
+        with patch("robothor.engine.scheduler.delete_stale_schedules", MagicMock(return_value=[])):
+            pruned = scheduler.reconcile_schedules()
+
+        stale.remove.assert_called_once()
+        legit.remove.assert_not_called()
+        assert "main:heartbeat" in pruned
+
+    def test_reconcile_refuses_when_the_manifest_dir_is_unreadable(self, tmp_path):
+        """One NFS hiccup or a stray chmod must not empty the job registry.
+
+        delete_stale_schedules happens to guard the DB half against an empty
+        active_ids; the in-memory loop had no such guard and would remove
+        EVERY job while the engine stayed active (running).
+        """
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.scheduler import CronScheduler
+
+        config = EngineConfig(manifest_dir=tmp_path / "gone", workspace=tmp_path)
+        scheduler = CronScheduler(config, MagicMock())
+
+        hb = _job("main:heartbeat")
+        scheduler.scheduler.get_jobs = MagicMock(return_value=[hb])
+
+        mock_delete = MagicMock(return_value=[])
+        with patch("robothor.engine.scheduler.delete_stale_schedules", mock_delete):
+            pruned = scheduler.reconcile_schedules()
+
+        assert pruned == []
+        mock_delete.assert_not_called()
+        hb.remove.assert_not_called()
+
+
+class TestReconcileKeepsSystemJobs:
+    """Engine-owned infrastructure jobs are not agent schedules.
+
+    reconcile exempted only `workflow:`, so memory:write-job-sweeper (an
+    interval job registered in start()) was culled on the first reconcile after
+    EVERY restart — confirmed live on 2026-08-23 at 13:31:58, five minutes
+    after a restart. The sweeper ran for at most five minutes per engine
+    lifetime.
+    """
+
+    @pytest.mark.parametrize(
+        "job_id",
+        ["memory:write-job-sweeper", "memory:vault-projection", "workflow:email-pipeline"],
+    )
+    def test_system_jobs_survive_reconcile(self, _reconcile_manifests, job_id):
+        scheduler = _scheduler_for(_reconcile_manifests)
+        system_job = _job(job_id)
+        scheduler.scheduler.get_jobs = MagicMock(return_value=[system_job])
+
+        with patch("robothor.engine.scheduler.delete_stale_schedules", MagicMock(return_value=[])):
+            pruned = scheduler.reconcile_schedules()
+
+        system_job.remove.assert_not_called()
+        assert job_id not in pruned
+
+    def test_every_registered_job_id_is_agent_derived_or_system_prefixed(self):
+        """Drift gate: the NEXT add_job must not re-introduce the bug.
+
+        Any literal job id in scheduler.py that is not built from an agent id
+        has to carry a namespace prefix reconcile knows to leave alone.
+        """
+        import re
+        from pathlib import Path
+
+        from robothor.engine.scheduler import _SYSTEM_JOB_PREFIXES
+
+        source = Path(__import__("robothor.engine.scheduler", fromlist=["x"]).__file__).read_text()
+        literals = re.findall(r'\bid=["\']([a-z][a-z0-9:_-]*)["\']', source)
+        assert literals, "no literal job ids found — has add_job been refactored?"
+        for job_id in literals:
+            assert job_id.startswith(_SYSTEM_JOB_PREFIXES), (
+                f"job id {job_id!r} is a literal that reconcile would treat as a "
+                "stale agent schedule and delete. Give it a namespace prefix in "
+                "_SYSTEM_JOB_PREFIXES."
+            )
