@@ -414,8 +414,15 @@ class LLMClient:
         from robothor.engine.model_registry import get_model_limits
 
         try:
+            from robothor.engine.runner import proactive_compaction_threshold
+
             model_limits = get_model_limits(self.sizing_model(models, broken_models))
-            compress_threshold = int(model_limits.max_input_tokens * 0.75)
+            # Same clamped threshold as the in-loop trigger. The old
+            # 0.75-of-window guard was 786K tokens on the fleet primary's 1M
+            # window — unreachable, zero firings in 7 days. When the in-loop
+            # pass just compacted, this no-ops (estimate is under threshold);
+            # it exists for the paths that call the client without the loop.
+            compress_threshold = proactive_compaction_threshold(model_limits.max_input_tokens)
             messages[:] = await maybe_compress(messages, models, threshold=compress_threshold)
         except Exception as e:
             logger.warning("Pre-flight compression failed: %s", _sanitize(e))

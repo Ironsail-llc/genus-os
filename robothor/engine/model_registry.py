@@ -95,6 +95,11 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         max_input_tokens=1_048_576,
         max_output_tokens=131_072,
         default_output_tokens=16_384,
+        # $0 is CORRECT, not a gap: verified against OpenRouter's live models
+        # API on 2026-08-24 (pricing.prompt=0, pricing.completion=0 — cloaked
+        # stealth preview). Re-verify when the model de-cloaks; a stealth
+        # model gaining a price while this reads 0 is the 07-07 dated-slug
+        # cost bug all over again.
         input_cost_per_token=0.0,
         output_cost_per_token=0.0,
         supports_thinking=False,
