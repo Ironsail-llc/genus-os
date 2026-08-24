@@ -1,3 +1,21 @@
+## [1.39.0](https://github.com/Ironsail-llc/genus-os/compare/v1.38.3...v1.39.0) (2026-08-24)
+
+### Features
+
+* **engine:** a real local model tier, with a registry gate ([#349](https://github.com/Ironsail-llc/genus-os/issues/349)) ([0ee7164](https://github.com/Ironsail-llc/genus-os/commit/0ee71641655ec41422efafd695a5d39029950816))
+* **infra:** the agent can restart permitted units without sudo ([#346](https://github.com/Ironsail-llc/genus-os/issues/346)) ([e770707](https://github.com/Ironsail-llc/genus-os/commit/e77070745f21c8bb8632c4afbc8f0151a886a84e)), closes [#205](https://github.com/Ironsail-llc/genus-os/issues/205) [#205](https://github.com/Ironsail-llc/genus-os/issues/205)
+* **ops:** the strict validator finally sees the fleet that actually runs ([#350](https://github.com/Ironsail-llc/genus-os/issues/350)) ([354ea72](https://github.com/Ironsail-llc/genus-os/commit/354ea720c105160bce2a04240e6d6067c822f658))
+
+### Bug Fixes
+
+* **cli:** a one-shot run's record survives the loop it ran in ([#353](https://github.com/Ironsail-llc/genus-os/issues/353)) ([006cf40](https://github.com/Ironsail-llc/genus-os/commit/006cf408ca21b52d97d94617d8c5ea27460ffdef))
+* **engine:** a broken manifest pages instead of silently deleting a schedule ([#348](https://github.com/Ironsail-llc/genus-os/issues/348)) ([fdd565e](https://github.com/Ironsail-llc/genus-os/commit/fdd565e85b4a51b84bd6e9584b9583b26b760a61)), closes [#347](https://github.com/Ironsail-llc/genus-os/issues/347)
+* **engine:** one guardrail list, and the safety units the repo never had ([#351](https://github.com/Ironsail-llc/genus-os/issues/351)) ([8b9f3fa](https://github.com/Ironsail-llc/genus-os/commit/8b9f3fa82d2c5beca780efac08a402f3401a20e4)), closes [#329-331](https://github.com/Ironsail-llc/genus-os/issues/329-331)
+
+### Documentation
+
+* **runbooks:** 2026-08-24 restore drill — offsite-sourced, 6m00s ([#352](https://github.com/Ironsail-llc/genus-os/issues/352)) ([d4c599f](https://github.com/Ironsail-llc/genus-os/commit/d4c599f0de559d81f9d70d02ad76b9ec7edd5adf))
+
 ## [1.38.3](https://github.com/Ironsail-llc/genus-os/compare/v1.38.2...v1.38.3) (2026-08-24)
 
 ### Bug Fixes
