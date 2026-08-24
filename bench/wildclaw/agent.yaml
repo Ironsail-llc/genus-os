@@ -1,0 +1,55 @@
+# The agent Genus fields for WildClawBench.
+#
+# Deliberately plain. The point of a harness comparison is to measure the
+# scaffold, not a hand-tuned specialist: no task-specific instructions, no
+# safety coaching, and nothing that names the benchmark. Whatever Genus's
+# defaults do is what gets measured.
+#
+# The model is pinned to one WildClawBench publishes head-to-head numbers for
+# (MiMo V2 Pro: OpenClaw 40.2 / Claude Code 29.9 / Codex 35.3 / Hermes 48.1),
+# so the comparison holds the model constant and varies only the harness.
+# Override with ROBOTHOR_BENCH_MODEL to measure a different row.
+
+id: wildclaw
+name: WildClawBench Agent
+description: Plain Genus agent used to measure the harness against WildClawBench.
+
+model:
+  primary: openrouter/xiaomi/mimo-v2-pro
+  fallbacks: []
+
+schedule:
+  # No cron — this agent is only ever invoked directly by the harness.
+  timezone: UTC
+  # Their tasks declare their own timeout_seconds; the harness passes it in.
+  # This ceiling is the backstop, generous enough never to be the thing that
+  # fires (a smaller cap firing first is exactly the defect that corrupted
+  # our own benchmark grades on 2026-08-24).
+  timeout_seconds: 3600
+  stall_timeout_seconds: 0
+  max_iterations: 80
+  session_target: isolated
+
+delivery:
+  mode: none
+
+# The general-purpose working set. `exec` is what most tasks need; the file
+# tools are what the graders inspect the results of.
+tools_allowed:
+  - exec
+  - read_file
+  - write_file
+  - list_directory
+  - search_files
+  - web_fetch
+  - web_search
+
+instructions: |
+  You are a capable autonomous agent working on a task in a Linux container.
+
+  The working directory is /tmp_workspace. Input files are there, and unless
+  the task says otherwise you should write outputs to /tmp_workspace/results/.
+
+  Work until the task is genuinely done. Use the tools available to you rather
+  than describing what you would do. When a task cannot or should not be
+  completed as asked, say so plainly and explain why.

@@ -42,6 +42,14 @@ dependencies = [
     # with aiohttp>=3.13.4. The 1.84 floor also clears later 2026 advisories.
     "litellm>=1.84.0,<2.0",
     "aiohttp>=3.14.3",
+    # litellm's aiohttp transport imports orjson and does not declare it.
+    # The host venv happens to run a litellm new enough not to need it, so
+    # this only ever bit the CONTAINER: the production image resolved 1.92.0
+    # and every OpenRouter call died with "No module named 'orjson'" — an
+    # image that builds, starts, passes a health check, and cannot make a
+    # single LLM call. Found 2026-08-24 running the WildClawBench harness,
+    # which was the first thing to exercise the shipped image end to end.
+    "orjson>=3.10",
     "aiogram~=3.10",
     "apscheduler~=3.10",
     "croniter~=6.0",
