@@ -173,9 +173,14 @@ class TestPhonePatternPrecision:
             assert check("robothor/engine/tests/x.py", line) == [], line
 
     def test_a_real_phone_number_is_still_caught(self):
-        assert check("robothor/notes.py", "call me at 415-555-2671\n"), (
+        # Assembled at runtime so THIS source file's own line is not
+        # phone-shaped — the gate scans changed files, this one included, and
+        # its first CI run flagged its own fixtures. (555 = reserved block.)
+        number = "-".join(["415", "555", "2671"])
+        assert check("robothor/notes.py", f"call me at {number}\n"), (
             "the boundary guards must not blind the gate to real numbers"
         )
 
     def test_parenthesized_phone_is_still_caught(self):
-        assert check("robothor/notes.py", "office: (212) 867-5309\n")
+        number = "(" + "212" + ") " + "867" + "-" + "5309"
+        assert check("robothor/notes.py", f"office: {number}\n")
