@@ -669,6 +669,7 @@ class WorkflowStepType(StrEnum):
     CONDITION = "condition"
     TRANSFORM = "transform"
     NOOP = "noop"
+    PARALLEL = "parallel"
 
 
 class WorkflowStepStatus(StrEnum):
@@ -709,6 +710,13 @@ class WorkflowStepDef:
 
     # Transform step
     transform_expr: str = ""
+
+    # Parallel step — nested full step definitions executed concurrently.
+    # Flow control stays at the top level: branches may not be condition or
+    # parallel steps (enforced at parse), and a branch's result lands in
+    # run.context["steps"][branch.id] exactly like a top-level step's.
+    parallel_steps: list[WorkflowStepDef] = field(default_factory=list)
+    max_concurrent: int = 0  # 0 = unbounded
 
     # Error handling
     on_failure: str = "abort"  # abort, skip, retry

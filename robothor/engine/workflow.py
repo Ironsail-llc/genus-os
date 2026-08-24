@@ -216,9 +216,15 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
         for t in data.get("triggers", [])
     ]
 
-    steps = []
-    for s in data.get("steps", []):
+    def _parse_step(s: dict[str, Any], *, inside_parallel: bool = False) -> WorkflowStepDef:
         step_type = WorkflowStepType(s.get("type", "noop"))
+
+        if inside_parallel and step_type == WorkflowStepType.PARALLEL:
+            raise ValueError(f"step {s.get('id')!r}: nested parallel steps are not supported")
+        if inside_parallel and step_type == WorkflowStepType.CONDITION:
+            # A condition's goto has no meaning inside a concurrent branch
+            # set — flow control stays at the top level.
+            raise ValueError(f"step {s.get('id')!r}: condition steps cannot run inside parallel")
 
         branches = [
             ConditionBranch(
@@ -228,23 +234,37 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             )
             for b in s.get("branches", [])
         ]
+        parallel_steps = [
+            _parse_step(sub, inside_parallel=True) for sub in s.get("parallel_steps", [])
+        ]
 
-        steps.append(
-            WorkflowStepDef(
-                id=s["id"],
-                type=step_type,
-                agent_id=s.get("agent_id", ""),
-                message=s.get("message", ""),
-                tool_name=s.get("tool_name", ""),
-                tool_args=s.get("tool_args", {}),
-                input_expr=s.get("input", ""),
-                branches=branches,
-                transform_expr=s.get("expression", ""),
-                on_failure=s.get("on_failure", "abort"),
-                retry_count=s.get("retry_count", 0),
-                next=s.get("next", ""),
-            )
+        return WorkflowStepDef(
+            id=s["id"],
+            type=step_type,
+            agent_id=s.get("agent_id", ""),
+            message=s.get("message", ""),
+            tool_name=s.get("tool_name", ""),
+            tool_args=s.get("tool_args", {}),
+            input_expr=s.get("input", ""),
+            branches=branches,
+            transform_expr=s.get("expression", ""),
+            parallel_steps=parallel_steps,
+            max_concurrent=s.get("max_concurrent", 0),
+            on_failure=s.get("on_failure", "abort"),
+            retry_count=s.get("retry_count", 0),
+            next=s.get("next", ""),
         )
+
+    steps = [_parse_step(s) for s in data.get("steps", [])]
+
+    # Branch results land in run.context["steps"] beside top-level results, so
+    # every step id — at either level — must be unique.
+    seen_ids: set[str] = set()
+    for step in steps:
+        for sid in (step.id, *(b.id for b in step.parallel_steps)):
+            if sid in seen_ids:
+                raise ValueError(f"duplicate step id {sid!r} in workflow {data.get('id')!r}")
+            seen_ids.add(sid)
 
     delivery = data.get("delivery", {})
 
@@ -678,10 +698,119 @@ class WorkflowEngine:
                 # Sequential
                 current_idx += 1
 
+    async def _execute_parallel(
+        self, step: WorkflowStepDef, run: WorkflowRun, wf: WorkflowDef
+    ) -> WorkflowStepResult:
+        """Fan out the step's branches concurrently and join.
+
+        Every branch is a full step whose result lands in
+        ``run.context["steps"][branch.id]`` exactly like a top-level step's, so
+        later steps template on branch outputs with no new syntax. Branch
+        retries honor each branch's own ``retry_count`` (same backoff as the
+        top-level loop); the surrounding workflow ``asyncio.timeout`` still
+        bounds the total budget.
+
+        The join is all-or-nothing by status: the parallel step COMPLETES only
+        when every branch completed (or was skipped by its own on_failure);
+        one failed branch fails the join, and the parallel step's own
+        ``on_failure`` then decides abort-vs-skip at the top level — the same
+        contract every other step follows. A failed sibling never cancels the
+        other branches mid-flight: their results are still recorded, because a
+        half-done fan-out with missing context entries is harder to reason
+        about than a completed one with one failure in it.
+        """
+        result = WorkflowStepResult(
+            step_id=step.id,
+            step_type=step.type,
+            status=WorkflowStepStatus.RUNNING,
+            started_at=datetime.now(UTC),
+        )
+
+        semaphore = asyncio.Semaphore(step.max_concurrent) if step.max_concurrent > 0 else None
+
+        async def run_branch(branch: WorkflowStepDef) -> WorkflowStepResult:
+            async def once() -> WorkflowStepResult:
+                if semaphore is None:
+                    return await self._execute_single_step(branch, run, wf)
+                async with semaphore:
+                    return await self._execute_single_step(branch, run, wf)
+
+            branch_result = await once()
+            attempt = 0
+            while (
+                branch_result.status == WorkflowStepStatus.FAILED and attempt < branch.retry_count
+            ):
+                delay = _retry_delay(attempt)
+                logger.warning(
+                    "Parallel branch %s failed (attempt %d/%d) — retrying in %ds: %s",
+                    branch.id,
+                    attempt + 1,
+                    branch.retry_count + 1,
+                    delay,
+                    branch_result.error_message,
+                )
+                await asyncio.sleep(delay)
+                attempt += 1
+                branch_result = await once()
+            if branch_result.status == WorkflowStepStatus.FAILED and branch.on_failure == "skip":
+                branch_result.status = WorkflowStepStatus.SKIPPED
+            return branch_result
+
+        branch_results = await asyncio.gather(*(run_branch(b) for b in step.parallel_steps))
+
+        failed = []
+        for branch, branch_result in zip(step.parallel_steps, branch_results, strict=True):
+            run.step_results.append(branch_result)
+            run.context["steps"][branch.id] = {
+                "status": branch_result.status.value,
+                "output_text": branch_result.output_text or "",
+                "tool_output": branch_result.tool_output,
+                "condition_branch": branch_result.condition_branch,
+                "agent_run_id": branch_result.agent_run_id,
+            }
+            self._persist_step(run, branch_result)
+            if branch_result.status == WorkflowStepStatus.FAILED:
+                failed.append(branch.id)
+
+        result.completed_at = datetime.now(UTC)
+        if failed:
+            result.status = WorkflowStepStatus.FAILED
+            result.error_message = (
+                f"{len(failed)} of {len(step.parallel_steps)} parallel branch(es) "
+                f"failed: {', '.join(failed)}"
+            )
+            if step.on_failure == "skip":
+                # The top-level loop will recast THIS result to SKIPPED and
+                # continue — the same object-mutation contract every step
+                # follows. The absorbed branch failures must be recast too:
+                # the run finalizer counts ANY FAILED row in step_results, so
+                # an honest-but-absorbed branch failure would fail the whole
+                # run the operator explicitly chose to continue. The
+                # error_message stays on the branch row — skip absorbs the
+                # failure, it does not erase the evidence.
+                for branch_result in branch_results:
+                    if branch_result.status == WorkflowStepStatus.FAILED:
+                        branch_result.status = WorkflowStepStatus.SKIPPED
+                        run.context["steps"][branch_result.step_id]["status"] = (
+                            WorkflowStepStatus.SKIPPED.value
+                        )
+        else:
+            result.status = WorkflowStepStatus.COMPLETED
+            result.output_text = f"{len(step.parallel_steps)} branch(es) completed"
+        return result
+
     async def _execute_step(
         self, step: WorkflowStepDef, run: WorkflowRun, wf: WorkflowDef
     ) -> WorkflowStepResult:
-        """Execute a single workflow step."""
+        """Execute a single workflow step, including parallel fan-out."""
+        if step.type == WorkflowStepType.PARALLEL:
+            return await self._execute_parallel(step, run, wf)
+        return await self._execute_single_step(step, run, wf)
+
+    async def _execute_single_step(
+        self, step: WorkflowStepDef, run: WorkflowRun, wf: WorkflowDef
+    ) -> WorkflowStepResult:
+        """Execute one non-parallel step."""
         result = WorkflowStepResult(
             step_id=step.id,
             step_type=step.type,
