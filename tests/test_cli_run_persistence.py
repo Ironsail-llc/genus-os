@@ -22,13 +22,13 @@ from unittest.mock import MagicMock, patch
 
 
 def _args(**overrides):
-    defaults = dict(
-        agent="probe",
-        message="hello",
-        print_only=True,
-        json_output=False,
-        model=None,
-    )
+    defaults = {
+        "agent": "probe",
+        "message": "hello",
+        "print_only": True,
+        "json_output": False,
+        "model": None,
+    }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
 
@@ -81,3 +81,25 @@ def test_cmd_run_drains_background_persistence_before_the_loop_dies():
         "the persist task spawned during execute() was cancelled by loop "
         "teardown instead of being drained — the run record is lost"
     )
+
+
+def test_engine_run_subcommand_drains_too():
+    """`robothor engine run` is a second loop-owning one-shot path with the
+    identical cancellation bug — and the first fix attempt broke it instead
+    (a blind replace converted its return without adding the drain, so it
+    returned None). Source-level pin: every `runner.execute(` call in the CLI
+    module must be followed by a registry drain before its loop ends."""
+    import re
+    from pathlib import Path
+
+    import robothor.cli.engine as cli_engine
+
+    source = Path(cli_engine.__file__).read_text()
+    calls = [m.start() for m in re.finditer(r"await runner\.execute\(", source)]
+    assert len(calls) >= 2, "expected both one-shot paths"
+    for pos in calls:
+        window = source[pos : pos + 2500]
+        assert "get_task_registry().drain" in window, (
+            "a one-shot execute() path lacks the TaskRegistry drain — its "
+            "persist-run task dies with the loop"
+        )

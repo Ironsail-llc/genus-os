@@ -259,6 +259,13 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
             user_id="cli-operator" if trigger == TriggerType.MANUAL else f"service:{agent_id}",
             user_role="owner" if trigger == TriggerType.MANUAL else agent_config.service_role,
         )
+        # Same drain as cmd_run above: this function owns a running loop, so
+        # _finish_run's background persist-run task would be cancelled at
+        # asyncio.run() teardown and the row left status=running forever.
+        from robothor.engine.task_registry import get_task_registry
+
+        await get_task_registry().drain(timeout=30.0)
+        return result
 
     run = asyncio.run(_run())
 
