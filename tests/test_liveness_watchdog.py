@@ -486,3 +486,64 @@ def test_probe_script_is_shellcheck_clean():
         timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+class TestFleetGuardWatchesSemanticsNotAliveness:
+    """robothor-fleet-guard answers a different question than robothor-liveness.
+
+    On 2026-08-23 the engine answered /live with a static 200 for 3h48m while
+    its primary agent did not exist — a YAML typo had removed main.yaml from
+    the fleet and the scheduler had pruned main's heartbeat and worker. A
+    liveness probe cannot see that. /ready runs health.py's check_fleet, which
+    returns 503 when a required agent is missing.
+    """
+
+    FLEET_GUARD = UNIT_DIR / "robothor-fleet-guard.service"
+    FLEET_TIMER = UNIT_DIR / "robothor-fleet-guard.timer"
+
+    def _env(self, text: str) -> dict[str, str]:
+        return dict(
+            line.split("=", 1)[1].split("=", 1)  # Environment=KEY=VALUE
+            for line in text.splitlines()
+            if line.startswith("Environment=") and "=" in line.split("=", 1)[1]
+        )
+
+    def test_the_units_exist(self):
+        assert self.FLEET_GUARD.exists(), "robothor-fleet-guard.service missing"
+        assert self.FLEET_TIMER.exists(), "robothor-fleet-guard.timer missing"
+
+    def test_fleet_guard_probes_ready_not_live(self):
+        """/live is a static 200 that a hollowed-out fleet passes happily."""
+        env = self._env(self.FLEET_GUARD.read_text())
+        url = env["ROBOTHOR_LIVENESS_URL"]
+        assert url.endswith("/ready"), f"fleet guard must probe /ready, got {url}"
+
+    def test_fleet_guard_has_an_independent_counter_and_cooldown(self):
+        """liveness_probe.sh keys its failure counter — and
+        send_failure_alert.sh keys its 1h cooldown — on the unit NAME. Sharing
+        robothor-engine.service would let a database blip mute the fleet guard,
+        and vice versa."""
+        env = self._env(self.FLEET_GUARD.read_text())
+        assert env["ROBOTHOR_LIVENESS_UNIT"] == "robothor-fleet-guard.service"
+        assert env["ROBOTHOR_LIVENESS_STATE_DIR"] != "/run/robothor/liveness"
+
+    def test_environment_overrides_come_after_the_environment_files(self):
+        """systemd applies environment directives in order. An Environment=
+        line placed before EnvironmentFile= is silently overridden by it."""
+        lines = self.FLEET_GUARD.read_text().splitlines()
+        last_file = max(i for i, l in enumerate(lines) if l.startswith("EnvironmentFile="))
+        first_env = min(i for i, l in enumerate(lines) if l.startswith("Environment="))
+        assert first_env > last_file, (
+            "Environment= overrides must follow every EnvironmentFile= or "
+            "robothor.env silently wins"
+        )
+
+    def test_fleet_guard_pages_on_its_own_failure(self):
+        assert "OnFailure=robothor-alert@%n.service" in self.FLEET_GUARD.read_text()
+
+    def test_fleet_guard_timer_probes_from_boot(self):
+        """Without OnBootSec a box that boots into a broken fleet is never
+        probed until someone activates the timer by hand."""
+        text = self.FLEET_TIMER.read_text()
+        assert "OnBootSec=" in text
+        assert "OnUnitActiveSec=" in text

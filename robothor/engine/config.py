@@ -148,43 +148,166 @@ def _resolve_env_vars(obj: object) -> object:
     return obj
 
 
+@dataclass(frozen=True)
+class ManifestFailure:
+    """A manifest file that exists but could not be read.
+
+    ``filename`` is a bare name, never a path: this ends up in an operator page,
+    and platform code must not surface instance paths (rules 1 and 2).
+    """
+
+    filename: str
+    error_type: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class ManifestScan:
+    """The result of reading a manifest directory, including what failed.
+
+    ``load_manifest`` returns ``None`` for four different situations — wrong
+    suffix, file absent, parsed-but-not-an-agent, and unparseable — and
+    ``load_all_manifests`` drops all four identically. On 2026-08-23 that cost
+    the fleet its primary agent: a YAML typo in main.yaml made it unreadable,
+    it was silently dropped, and five minutes later ``reconcile_schedules`` —
+    with no way to tell "broken" from "deliberately deleted" — DELETED main's
+    heartbeat and worker schedules. The operator got silence for 3h48m.
+
+    The buckets are the whole point:
+
+    ``manifests``  parsed, is a mapping, has an ``id`` — a live agent.
+    ``skipped``    parsed fine, no ``id``. NOT a failure. docs/agents/ ships
+                   _defaults.yaml and schema.yaml, which hit this on every
+                   single load; calling them failures would fire the guard
+                   forever on a healthy box and get it muted within a week.
+    ``failures``   the file is there and could not be read. This is news.
+    absent         not in the glob at all — the operator deleted it. Leaves no
+                   trace in any bucket, which is exactly the discriminator that
+                   lets reconcile prune a deletion but refuse a breakage.
+
+    ``dir_readable`` is the fourth signal: an unmounted or chmod'd workspace
+    otherwise looks identical to "the operator deleted every agent".
+    """
+
+    manifests: tuple[dict[str, Any], ...] = ()
+    failures: tuple[ManifestFailure, ...] = ()
+    skipped: tuple[str, ...] = ()
+    scanned: int = 0
+    dir_readable: bool = True
+
+    @property
+    def clean(self) -> bool:
+        """True when the read was complete — every file present was understood.
+
+        Only a clean scan is authority to delete anything.
+        """
+        return self.dir_readable and not self.failures
+
+
+def _scrub_path(detail: object, path: Path) -> str:
+    """Strip the containing directory out of a parser message.
+
+    PyYAML embeds the absolute path of the offending file in its error text
+    ('in "/home/<user>/robothor/docs/agents/main.yaml", line 219'). That string
+    goes straight into an operator page, so the directory has to come off:
+    platform code must not surface instance paths (rules 1 and 2). The bare
+    filename is the part that is actually actionable anyway.
+    """
+    text = str(detail)
+    parent = str(path.parent)
+    if parent and parent not in (".", "/"):
+        text = text.replace(parent + "/", "").replace(parent, "")
+    return text
+
+
+def _load_manifest_classified(
+    manifest_path: Path,
+) -> tuple[dict[str, Any] | None, ManifestFailure | None, bool]:
+    """``(data, failure, was_skipped)`` for one manifest file.
+
+    Classification is by exception TYPE, never by matching on message text —
+    error strings change between library versions and a guard that depends on
+    them fails silently.
+    """
+    path = Path(manifest_path)
+    name = path.name
+    try:
+        # Only open the path if it's a real .yaml file — no user-controlled traversal
+        checked = path
+        if checked.suffix not in (".yaml", ".yml"):
+            logger.error("Manifest path must be a YAML file")
+            return None, ManifestFailure(name, "NotYAML", "not a .yaml/.yml file"), False
+        if not checked.is_file():
+            return None, None, False
+        with checked.open() as f:  # noqa: PTH123
+            data = yaml.safe_load(f)
+        if data and isinstance(data, dict) and "id" in data:
+            return _resolve_env_vars(data), None, False  # type: ignore[return-value]
+        # Valid YAML, just not an agent manifest (_defaults.yaml, schema.yaml).
+        return None, None, True
+    except Exception as e:
+        sanitized_path = str(manifest_path).replace("\n", "\\n").replace("\r", "\\r")
+        logger.error("Failed to load manifest %s: %s", sanitized_path, _sanitize(e))
+        error_type = "YAMLError" if isinstance(e, yaml.YAMLError) else type(e).__name__
+        return None, ManifestFailure(name, error_type, _scrub_path(_sanitize(e), path)), False
+
+
 def load_manifest(manifest_path: Path) -> dict | None:  # type: ignore[type-arg]
     """Load a single YAML manifest file.
 
     After parsing YAML, ``${VAR_NAME}`` patterns in string values are expanded
     from environment variables so manifests can reference secrets without
     hardcoding them.
+
+    Returns ``dict | None`` — an unchanged contract, deliberately. The swallow
+    was never the bug; the bug was that no caller could ask WHY. Callers that
+    need the reason use :func:`load_manifest_dir`.
     """
-    try:
-        # Only open the path if it's a real .yaml file — no user-controlled traversal
-        checked = Path(manifest_path)
-        if checked.suffix not in (".yaml", ".yml"):
-            logger.error("Manifest path must be a YAML file")
-            return None
-        if not checked.is_file():
-            return None
-        with checked.open() as f:  # noqa: PTH123
-            data = yaml.safe_load(f)
-        if data and isinstance(data, dict) and "id" in data:
-            return _resolve_env_vars(data)  # type: ignore[return-value]
-        return None
-    except Exception as e:
-        sanitized_path = str(manifest_path).replace("\n", "\\n").replace("\r", "\\r")
-        logger.error("Failed to load manifest %s: %s", sanitized_path, _sanitize(e))
-        return None
+    data, _failure, _skipped = _load_manifest_classified(manifest_path)
+    return data
+
+
+def load_manifest_dir(manifest_dir: Path) -> ManifestScan:
+    """Read a manifest directory and report what could NOT be read.
+
+    This is the function to use anywhere a decision depends on the fleet being
+    completely known — above all, before deleting a schedule.
+    """
+    if not manifest_dir.is_dir():
+        logger.warning("Manifest directory not found: %s", manifest_dir)
+        return ManifestScan(dir_readable=False)
+
+    manifests: list[dict[str, Any]] = []
+    failures: list[ManifestFailure] = []
+    skipped: list[str] = []
+    scanned = 0
+    for f in sorted(manifest_dir.glob("*.yaml")):
+        scanned += 1
+        data, failure, was_skipped = _load_manifest_classified(f)
+        if failure is not None:
+            failures.append(failure)
+        elif was_skipped:
+            skipped.append(f.name)
+        elif data:
+            manifests.append(data)
+    return ManifestScan(
+        manifests=tuple(manifests),
+        failures=tuple(failures),
+        skipped=tuple(skipped),
+        scanned=scanned,
+        dir_readable=True,
+    )
 
 
 def load_all_manifests(manifest_dir: Path) -> list[dict[str, Any]]:
-    """Load all YAML manifests from a directory."""
-    manifests: list[dict[str, Any]] = []
-    if not manifest_dir.is_dir():
-        logger.warning("Manifest directory not found: %s", manifest_dir)
-        return manifests
-    for f in sorted(manifest_dir.glob("*.yaml")):
-        data = load_manifest(f)
-        if data:
-            manifests.append(data)
-    return manifests
+    """Load all YAML manifests from a directory.
+
+    Successes only — an unreadable file is dropped, exactly as before. Twelve
+    call sites depend on that: turning one broken file into a fleet-wide
+    exception would be a worse outage than the one this module now guards
+    against. Callers that must know about breakage use :func:`load_manifest_dir`.
+    """
+    return list(load_manifest_dir(manifest_dir).manifests)
 
 
 def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:

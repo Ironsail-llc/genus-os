@@ -1,0 +1,65 @@
+# Fleet-integrity watchdog — pages when the engine is UP but its fleet is wrong.
+#
+# robothor-liveness watches whether the process ANSWERS (/live, a static 200).
+# On 2026-08-23 the process answered perfectly for 3h48m while the primary
+# agent did not exist: a YAML typo made docs/agents/main.yaml unparseable, the
+# scheduler pruned main's heartbeat and worker, and every operator message hit
+# "Agent config not found: main". /live would have said 200 the entire time.
+#
+# This unit probes /ready instead, which runs health.py's check_fleet against
+# ROBOTHOR_REQUIRED_AGENT_IDS / ROBOTHOR_MIN_AGENT_COUNT and returns 503 when a
+# required agent is missing. Same script, same counting discipline, different
+# question: not "is it alive" but "is it the right fleet".
+#
+# It is a SEPARATE unit rather than a second URL on robothor-liveness because
+# liveness_probe.sh keys both its failure counter and send_failure_alert.sh's
+# 1h cooldown on the unit name. Sharing one would let a database blip mute the
+# manifest guard, and vice versa.
+#
+# Enable with: sudo systemctl enable --now robothor-fleet-guard.timer
+#
+# Template — instance values use the canonical placeholder spellings
+# (see infra/systemd/README.md) and are substituted by scripts/render-unit.sh
+# at install time.
+[Unit]
+Description=Robothor fleet-integrity watchdog
+# Deliberately NOT ordered after robothor-engine.service: a watchdog that
+# depends on its target stops watching the moment the target stops, which is
+# the only moment it matters. The pager needs DNS, so wait for the network.
+After=network-online.target
+Wants=network-online.target
+# The probe itself failing (e.g. the page could not be delivered) is also
+# operator-visible news.
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+# No User= — runs as root like robothor-alert@.service, because the sender
+# recovers /run/robothor/secrets.env via the root-readable age key and reads
+# the watched unit's journal for the page body.
+EnvironmentFile=/etc/robothor/robothor.env
+# Optional '-': /run is tmpfs, so this does not exist on a cold boot and a
+# non-optional EnvironmentFile would fail the unit outright.
+EnvironmentFile=-/run/robothor/secrets.env
+# AFTER the EnvironmentFiles so these win: systemd applies environment
+# directives in the order they appear.
+#
+# /ready is unauthenticated (auth.py PROBE_PATHS) — unlike /health, which
+# answers 401 and is why the uptime monitor carried no signal for months.
+Environment=ROBOTHOR_LIVENESS_URL=http://127.0.0.1:18800/ready
+# Names this unit, not the engine: gives an independent failure counter and an
+# independent pager cooldown, and puts THIS probe's journal in the page body.
+Environment=ROBOTHOR_LIVENESS_UNIT=robothor-fleet-guard.service
+Environment=ROBOTHOR_LIVENESS_STATE_DIR=/run/robothor/fleet-guard
+ExecStart=/usr/bin/bash /opt/robothor/scripts/liveness_probe.sh
+# The sender retries a page for ~5 minutes to ride out the boot DNS/secrets
+# window. systemd's default TimeoutStartSec (90s) would SIGTERM it mid-retry
+# and lose the page — the exact failure this unit exists to prevent.
+TimeoutStartSec=600
+
+# Containment: the probe needs curl, journalctl, and /run/robothor. It never
+# needs to raise privileges. Filesystem protections are deliberately NOT set —
+# the workspace legitimately lives under the service user's home on some
+# instances, and ProtectHome= would break the ExecStart path itself.
+NoNewPrivileges=yes
+PrivateTmp=yes
