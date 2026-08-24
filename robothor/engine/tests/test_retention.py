@@ -258,8 +258,11 @@ class TestRunRetentionCleanup:
     @patch("robothor.engine.retention._cleanup_table")
     def test_processes_all_tables(self, mock_cleanup):
         mock_cleanup.return_value = 0
-        results = run_retention_cleanup()
-        assert len(results) == len(RETENTION_POLICY)
+        with patch("robothor.engine.messaging.purge_old_messages", return_value=0):
+            results = run_retention_cleanup()
+        # +1: agent_messages purges via messaging.purge_old_messages, outside
+        # RETENTION_POLICY (it carries two clocks the table loop can't express).
+        assert len(results) == len(RETENTION_POLICY) + 1
         assert all(v == 0 for v in results.values())
 
     @patch("robothor.engine.retention._cleanup_table")
@@ -272,7 +275,8 @@ class TestRunRetentionCleanup:
             return 10
 
         mock_cleanup.side_effect = side_effect
-        results = run_retention_cleanup()
+        with patch("robothor.engine.messaging.purge_old_messages", return_value=10):
+            results = run_retention_cleanup()
 
         assert results["telemetry"] == -1  # failure marker
         # All other tables should succeed
@@ -283,6 +287,33 @@ class TestRunRetentionCleanup:
     @patch("robothor.engine.retention._cleanup_table")
     def test_returns_correct_counts(self, mock_cleanup):
         mock_cleanup.side_effect = lambda table, **kwargs: 500 if table == "agent_run_steps" else 0
-        results = run_retention_cleanup()
+        with patch("robothor.engine.messaging.purge_old_messages", return_value=0):
+            results = run_retention_cleanup()
         assert results["agent_run_steps"] == 500
         assert results["audit_log"] == 0
+
+
+class TestAgentMessagesRetention:
+    """agent_messages purges via messaging.purge_old_messages, not _cleanup_table.
+
+    The messaging module owns the two-clock policy (delivered 7d, undelivered
+    30d with per-recipient logging); retention just invokes it on the daily
+    sweep so durable mail cannot accumulate forever.
+    """
+
+    @patch("robothor.engine.messaging.purge_old_messages", return_value=42)
+    @patch("robothor.engine.retention._cleanup_table", return_value=0)
+    def test_daily_sweep_purges_agent_messages(self, mock_cleanup, mock_purge):
+        results = run_retention_cleanup()
+        assert results["agent_messages"] == 42
+        mock_purge.assert_called_once_with()
+
+    @patch(
+        "robothor.engine.messaging.purge_old_messages",
+        side_effect=RuntimeError("db down"),
+    )
+    @patch("robothor.engine.retention._cleanup_table", return_value=10)
+    def test_agent_messages_failure_never_breaks_the_sweep(self, mock_cleanup, mock_purge):
+        results = run_retention_cleanup()
+        assert results["agent_messages"] == -1
+        assert results["agent_run_steps"] == 10
