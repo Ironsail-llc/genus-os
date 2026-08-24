@@ -131,7 +131,7 @@ class TestScenario1AuthFailureTriggersHelperSpawn:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         runner._spawn_recovery_helper = mock_spawn
                         run = await runner.execute(
@@ -196,7 +196,7 @@ class TestScenario2RateLimitBackoff:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         with patch.object(
                             _asyncio, "sleep", new=AsyncMock(side_effect=_yielding_sleep)
@@ -291,7 +291,7 @@ class TestScenario3BudgetExhaustionTriggersReplan:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_acompletion):
                         run = await runner.execute(
                             "test-agent",
@@ -338,7 +338,7 @@ class TestScenario4CascadingFailuresDontSpamHelpers:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         with patch.object(
                             runner,
@@ -396,7 +396,7 @@ class TestScenario5HappyPathNoRecovery:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         with patch.object(
                             runner,
@@ -497,7 +497,7 @@ class TestErrorClassificationInRunner:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
                             "basic-agent",

@@ -109,8 +109,8 @@ class TestNestedRunInheritsTheScope:
         with (
             patch("robothor.engine.runner.create_run", side_effect=_capture),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_steps_batch"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_steps_batch"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", side_effect=[_make_response("done")]),
             tenant_scope("benchmark-sandbox"),
         ):
@@ -131,8 +131,8 @@ class TestNestedRunInheritsTheScope:
                 side_effect=lambda run: (recorded.append(run.tenant_id), str(run.id))[1],
             ),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_steps_batch"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_steps_batch"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", side_effect=[_make_response("done")]),
             tenant_scope("benchmark-sandbox"),
         ):
@@ -157,8 +157,8 @@ class TestNestedRunInheritsTheScope:
                 side_effect=lambda run: (recorded.append(run.tenant_id), str(run.id))[1],
             ),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_steps_batch"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_steps_batch"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", side_effect=[_make_response("done")]),
         ):
             await runner.execute("basic-agent", "hello", agent_config=basic_agent_config)
@@ -187,8 +187,8 @@ class TestRlsRejectionEscalates:
                 ),
             ),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_steps_batch") as runner_batch,
-            patch("robothor.engine.runner.create_step") as runner_step,
+            patch("robothor.engine.run_finalizer.create_steps_batch") as runner_batch,
+            patch("robothor.engine.run_finalizer.create_step") as runner_step,
             patch("robothor.engine.tracking.create_steps_batch") as tracking_batch,
             patch("robothor.engine.tracking.create_step") as tracking_step,
             patch("robothor.engine.alerts.alert", alert_mock),
@@ -275,8 +275,8 @@ class TestTheRecordingThreadKeepsTheBinding:
         with (
             patch("robothor.engine.runner.create_run", side_effect=_capture),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_steps_batch"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_steps_batch"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", side_effect=[_make_response("done")]),
             tenant_scope("benchmark-sandbox"),
         ):

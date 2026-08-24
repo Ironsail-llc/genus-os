@@ -45,7 +45,7 @@ class TestAgentRunnerExecute:
         with patch("litellm.acompletion", new_callable=AsyncMock, return_value=response) as call:
             with patch("robothor.engine.runner.create_run"):
                 with patch("robothor.engine.runner.update_run"):
-                    with patch("robothor.engine.runner.create_step"):
+                    with patch("robothor.engine.run_finalizer.create_step"):
                         run = await runner.execute(
                             "test-agent",
                             "hello",
@@ -61,7 +61,7 @@ class TestAgentRunnerExecute:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch(
                         "litellm.acompletion", new_callable=AsyncMock, return_value=response
                     ):
@@ -108,7 +108,7 @@ class TestAgentRunnerExecute:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
                             "test-agent",
@@ -130,7 +130,7 @@ class TestAgentRunnerExecute:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch(
                         "litellm.acompletion", new_callable=AsyncMock, return_value=response
                     ):
@@ -156,7 +156,7 @@ class TestAgentRunnerExecute:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch(
                         "litellm.acompletion", new_callable=AsyncMock, return_value=response
                     ) as mock_llm:
@@ -188,7 +188,7 @@ class TestAgentRunnerExecute:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_fail):
                         run = await runner.execute(
                             "test-agent",
@@ -213,7 +213,7 @@ class TestAgentRunnerExecute:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=slow_completion):
                         run = await runner.execute(
                             "test-agent",
@@ -239,7 +239,7 @@ class TestAgentRunnerExecute:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
                             "test-agent",
@@ -288,7 +288,7 @@ class TestAgentRunnerExecute:
             patch("robothor.engine.llm_client.LLM_REQUEST_TIMEOUT", 1),
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", side_effect=mock_completion),
         ):
             t0 = time.monotonic()
@@ -313,7 +313,7 @@ class TestAgentRunnerExecute:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch(
                         "litellm.acompletion", new_callable=AsyncMock, return_value=response
                     ):
@@ -386,7 +386,7 @@ class TestIdentityThreading:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch(
                 "robothor.engine.warmup.build_interactive_preamble", return_value=""
@@ -425,7 +425,7 @@ class TestIdentityThreading:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch("robothor.engine.run_person_link.resolve_run_person_id") as mock_resolve,
         ):
@@ -461,7 +461,7 @@ class TestIdentityThreading:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch("robothor.identity.resolve_identity", return_value=resolved) as mock_resolve,
         ):
@@ -495,7 +495,7 @@ class TestIdentityThreading:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch("robothor.identity.resolve_identity") as mock_resolve,
         ):
@@ -525,7 +525,7 @@ class TestIdentityThreading:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch("robothor.identity.resolve_identity") as mock_resolve,
         ):
@@ -565,7 +565,7 @@ class TestIdentityThreading:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("robothor.identity.enrich_identity", return_value=None),
             patch("litellm.acompletion", side_effect=mock_completion),
         ):
@@ -614,7 +614,7 @@ class TestIdentityThreading:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
             patch("robothor.identity.enrich_identity", return_value=None) as mock_enrich,
             # A rapid follow-up: the previous interactive turn was seconds ago,
@@ -669,7 +669,7 @@ class TestIdentityThreading:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("robothor.identity.enrich_identity", return_value=None),
             patch("robothor.memory.blocks.read_block", return_value=None),
             patch("litellm.acompletion", side_effect=mock_completion),
@@ -700,7 +700,7 @@ class TestIdentityThreading:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", new_callable=AsyncMock, return_value=response) as mock_llm,
         ):
             run = await runner.execute(
@@ -738,7 +738,7 @@ class TestIdentityThreading:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
         ):
             run = await runner.execute(
@@ -805,7 +805,7 @@ class TestBrokenModelTracking:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
                             "test-agent",
@@ -839,7 +839,7 @@ class TestBrokenModelTracking:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
                             "test-agent",
@@ -886,7 +886,7 @@ class TestBrokenModelTracking:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=counting_mock):
                         run = await runner.execute(
                             "test-agent",
@@ -939,7 +939,7 @@ class TestBrokenModelTracking:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         await runner.execute(
                             "test-agent",
@@ -994,7 +994,7 @@ class TestBrokenModelTracking:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         with patch(
                             "robothor.engine.model_registry.compute_token_budget",
@@ -1048,7 +1048,7 @@ class TestOnToolCallback:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
                             "test-agent",
@@ -1108,7 +1108,7 @@ class TestOnToolCallback:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
                             "test-agent",
@@ -1157,7 +1157,7 @@ class TestOnToolCallback:
         # streaming path which needs a real async iterator mock
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         # No on_content to avoid streaming path; just verify
                         # on_tool param is accepted alongside on_content signature
@@ -1208,7 +1208,7 @@ class TestOnToolCallback:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         await runner.execute(
                             "test-agent",
@@ -1244,7 +1244,7 @@ class TestThinkingAPI:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch(
                         "litellm.acompletion", new_callable=AsyncMock, return_value=response
                     ) as mock_llm:
@@ -1280,7 +1280,7 @@ class TestThinkingAPI:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch(
                         "litellm.acompletion", new_callable=AsyncMock, return_value=response
                     ):
@@ -1308,7 +1308,7 @@ class TestThinkingAPI:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch(
                         "litellm.acompletion", new_callable=AsyncMock, return_value=response
                     ) as mock_llm:
@@ -1822,7 +1822,7 @@ class TestInterruptSteerWiring:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch.object(runner._llm, "_do_llm_call", new=AsyncMock(side_effect=fake_do_llm_call)),
         ):
             run = await runner.execute("test-agent", "hello", agent_config=sample_agent_config)
@@ -1870,7 +1870,7 @@ class TestInterruptSteerWiring:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch.object(runner._llm, "_do_llm_call", new=AsyncMock(side_effect=fake_do_llm_call)),
         ):
             run = await runner.execute("test-agent", "hello", agent_config=sample_agent_config)
@@ -1896,7 +1896,7 @@ class TestInterruptSteerWiring:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch.object(runner._llm, "_do_llm_call", new=AsyncMock(side_effect=fake_do_llm_call)),
         ):
             await runner.execute("test-agent", "hello", agent_config=sample_agent_config)

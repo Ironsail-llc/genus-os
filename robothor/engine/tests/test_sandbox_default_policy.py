@@ -100,7 +100,7 @@ class TestSandboxObserveEmission:
         with (
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch("robothor.engine.tracking.log_guardrail_event", _capture),
             patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
         ):

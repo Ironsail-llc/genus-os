@@ -90,7 +90,7 @@ class TestExecuteDeep:
     @pytest.mark.asyncio
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
-    @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.run_finalizer.create_step")
     @patch("robothor.engine.rlm_tool.execute_deep_reason")
     async def test_execute_deep_success(
         self, mock_rlm, mock_create_step, mock_update_run, mock_create_run, runner
@@ -115,7 +115,7 @@ class TestExecuteDeep:
     @pytest.mark.asyncio
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
-    @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.run_finalizer.create_step")
     @patch("robothor.engine.rlm_tool.execute_deep_reason")
     async def test_execute_deep_failure(
         self, mock_rlm, mock_create_step, mock_update_run, mock_create_run, runner
@@ -139,7 +139,7 @@ class TestExecuteDeep:
     @pytest.mark.asyncio
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
-    @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.run_finalizer.create_step")
     @patch("robothor.engine.rlm_tool.execute_deep_reason")
     async def test_execute_deep_with_progress(
         self, mock_rlm, mock_create_step, mock_update_run, mock_create_run, runner
@@ -179,7 +179,7 @@ class TestExecuteDeep:
     @pytest.mark.asyncio
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
-    @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.run_finalizer.create_step")
     @patch("robothor.engine.rlm_tool.execute_deep_reason")
     async def test_execute_deep_with_history(
         self, mock_rlm, mock_create_step, mock_update_run, mock_create_run, runner
@@ -210,7 +210,7 @@ class TestExecuteDeep:
     @pytest.mark.asyncio
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
-    @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.run_finalizer.create_step")
     @patch("robothor.engine.rlm_tool.execute_deep_reason")
     async def test_execute_deep_identity_prepended_to_context(
         self, mock_rlm, mock_create_step, mock_update_run, mock_create_run, runner
@@ -247,7 +247,7 @@ class TestExecuteDeep:
     @pytest.mark.asyncio
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
-    @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.run_finalizer.create_step")
     @patch("robothor.engine.rlm_tool.execute_deep_reason")
     async def test_execute_deep_identity_enrichment_offloaded_to_executor(
         self, mock_rlm, mock_create_step, mock_update_run, mock_create_run, runner
@@ -297,7 +297,7 @@ class TestExecuteDeep:
     @pytest.mark.asyncio
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
-    @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.run_finalizer.create_step")
     @patch(
         "robothor.engine.rlm_tool.execute_deep_reason",
         side_effect=ImportError("rlms not installed"),

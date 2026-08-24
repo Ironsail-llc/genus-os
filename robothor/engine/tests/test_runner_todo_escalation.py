@@ -25,7 +25,7 @@ def _todo_list(items_spec: list[tuple[str, str]]) -> TodoList:
 
 class TestEscalateUnfinishedTodos:
     def test_unfinished_items_write_next_action_on_parent(self):
-        from robothor.engine.runner import _escalate_unfinished_todos
+        from robothor.engine.run_finalizer import _escalate_unfinished_todos
 
         todos = _todo_list(
             [
@@ -64,7 +64,7 @@ class TestEscalateUnfinishedTodos:
         ut.assert_not_called()
 
     def test_untagged_parent_becomes_thread_on_escalation(self):
-        from robothor.engine.runner import _escalate_unfinished_todos
+        from robothor.engine.run_finalizer import _escalate_unfinished_todos
 
         todos = _todo_list([("Step 1", "pending"), ("Step 2", "pending")])
         parent = {
@@ -96,7 +96,7 @@ class TestEscalateUnfinishedTodos:
         assert kwargs.get("objective") == "Short-running task that got stuck"
 
     def test_no_parent_task_id_is_noop(self):
-        from robothor.engine.runner import _escalate_unfinished_todos
+        from robothor.engine.run_finalizer import _escalate_unfinished_todos
 
         todos = _todo_list([("A", "pending"), ("B", "pending")])
         with (
@@ -116,7 +116,7 @@ class TestEscalateUnfinishedTodos:
         ut.assert_not_called()
 
     def test_all_completed_is_noop(self):
-        from robothor.engine.runner import _escalate_unfinished_todos
+        from robothor.engine.run_finalizer import _escalate_unfinished_todos
 
         todos = _todo_list([("A", "completed"), ("B", "completed")])
         with (
@@ -136,7 +136,7 @@ class TestEscalateUnfinishedTodos:
         ut.assert_not_called()
 
     def test_empty_todo_list_is_noop(self):
-        from robothor.engine.runner import _escalate_unfinished_todos
+        from robothor.engine.run_finalizer import _escalate_unfinished_todos
 
         assert (
             _escalate_unfinished_todos(
@@ -158,7 +158,7 @@ class TestEscalateUnfinishedTodos:
         )
 
     def test_parent_not_found_is_noop(self):
-        from robothor.engine.runner import _escalate_unfinished_todos
+        from robothor.engine.run_finalizer import _escalate_unfinished_todos
 
         todos = _todo_list([("X", "pending")])
         with (

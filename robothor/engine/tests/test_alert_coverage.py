@@ -18,7 +18,10 @@ import robothor.engine.feature_flags as ff
 # (module, the ladder flag it consumes)
 LADDER_CONSUMERS = [
     ("robothor/engine/guardrails.py", "exec_allowlist"),
-    ("robothor/engine/runner.py", "completion_contract + sandbox_default"),
+    # 2026-08-24: both post-run ladder notifications moved with _finish_run in
+    # the runner decomposition (phase 1) — the consumers' alert rung lives in
+    # the finalization mixin now.
+    ("robothor/engine/run_finalizer.py", "completion_contract + sandbox_default"),
     ("robothor/memory/drift.py", "rip 7 (memory drift)"),
 ]
 
