@@ -1,3 +1,9 @@
+## [1.38.3](https://github.com/Ironsail-llc/genus-os/compare/v1.38.2...v1.38.3) (2026-08-24)
+
+### Bug Fixes
+
+* **backup:** the offsite prune was deleting a live generation every night ([#347](https://github.com/Ironsail-llc/genus-os/issues/347)) ([8bb90da](https://github.com/Ironsail-llc/genus-os/commit/8bb90da6f756e90672d84b2f1d17896756a013bc))
+
 ## [1.38.2](https://github.com/Ironsail-llc/genus-os/compare/v1.38.1...v1.38.2) (2026-08-22)
 
 ### Bug Fixes
