@@ -95,7 +95,7 @@ This is the **primary** trigger mechanism. Crons on individual agents are safety
 
 ### Pattern B: Workflow Chain
 
-YAML workflow defines: trigger → step → condition → step. The workflow engine runs steps sequentially with conditional branching.
+YAML workflow defines: trigger → step → condition → step. The workflow engine runs steps sequentially with conditional branching, and a `parallel` step fans branches out concurrently and joins before the next step.
 
 ```yaml
 # docs/workflows/nightwatch.yaml
@@ -126,6 +126,37 @@ steps:
   - id: done
     type: noop
 ```
+
+Independent steps need not queue. A `parallel` step carries nested full step
+definitions; branches run concurrently (optionally capped by
+`max_concurrent`), each branch's result lands in `steps.<branch_id>` for later
+templating exactly like a top-level step's, and the join completes only when
+every branch has. A failing branch fails the join after its own
+`retry_count`; the parallel step's `on_failure` then decides abort-vs-skip:
+
+```yaml
+steps:
+  - id: gather
+    type: parallel
+    max_concurrent: 3
+    parallel_steps:
+      - id: gather.email
+        type: agent
+        agent_id: email-analyst
+        message: "Summarize unread email"
+      - id: gather.calendar
+        type: tool
+        tool_name: gws_calendar_list
+    on_failure: abort
+
+  - id: brief
+    type: agent
+    agent_id: morning-briefing
+    message: "Email: {{ steps.gather.email.output_text }} Calendar: {{ steps.gather.calendar.tool_output }}"
+```
+
+Branches may be any step type except `condition` and nested `parallel` — flow
+control stays at the top level, enforced at load.
 
 ### Pattern C: Dynamic Sub-Agent Dispatch
 
