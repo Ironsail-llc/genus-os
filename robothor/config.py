@@ -212,7 +212,7 @@ class OllamaConfig:
     port: int = 11434
     embedding_model: str = "qwen3-embedding:0.6b"
     reranker_model: str = "Qwen3-Reranker-0.6B:F16"
-    generation_model: str = "qwen3:32b"
+    generation_model: str = "qwen3:8b"  # must agree with from_env below + env template + docs
     vision_model: str = "llama3.2-vision:11b"
 
     # Per-model-class keep_alive: how long models stay loaded after last use.
@@ -351,7 +351,11 @@ def _load_from_env() -> Config:
         port=int(os.environ.get("ROBOTHOR_OLLAMA_PORT", "11434")),
         embedding_model=os.environ.get("ROBOTHOR_EMBEDDING_MODEL", "qwen3-embedding:0.6b"),
         reranker_model=os.environ.get("ROBOTHOR_RERANKER_MODEL", "Qwen3-Reranker-0.6B:F16"),
-        generation_model=os.environ.get("ROBOTHOR_GENERATION_MODEL", "nemotron-3-super"),
+        # qwen3:8b is THE default generation model, everywhere. This default
+        # disagreed across four files (nemotron-3-super here, qwen3:32b in
+        # llm/ollama.py, qwen3-next:latest in docs, qwen3:8b in the env
+        # template), so what you got depended on which code path asked.
+        generation_model=os.environ.get("ROBOTHOR_GENERATION_MODEL", "qwen3:8b"),
         vision_model=os.environ.get("ROBOTHOR_VISION_MODEL", "llama3.2-vision:11b"),
     )
 

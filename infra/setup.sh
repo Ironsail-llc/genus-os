@@ -320,19 +320,20 @@ if [[ "$SKIP_MODELS" == false ]]; then
         ok "Pulled $model"
     }
 
+    # The generation model is in this list ON PURPOSE. It used to be a
+    # print-only "pull it yourself" note, and nobody ever did: the first
+    # instance ran five months with a watchdog whose configured primary model
+    # simply did not exist on the box, silently. A model a manifest names must
+    # exist by the time setup finishes.
     MODELS=(
         "${ROBOTHOR_EMBEDDING_MODEL:-qwen3-embedding:0.6b}"
         "${ROBOTHOR_RERANKER_MODEL:-Qwen3-Reranker-0.6B:F16}"
+        "${ROBOTHOR_GENERATION_MODEL:-qwen3:8b}"
     )
 
     for model in "${MODELS[@]}"; do
         pull_model "$model"
     done
-
-    echo
-    info "Note: The generation model (${ROBOTHOR_GENERATION_MODEL:-qwen3:8b}) is loaded on demand."
-    info "Pull it now with: ollama pull ${ROBOTHOR_GENERATION_MODEL:-qwen3:8b}"
-    echo
 fi
 
 # ── Install Systemd Services (optional) ────────────────────────────────────

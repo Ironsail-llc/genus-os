@@ -181,7 +181,8 @@ def _embedding_model() -> str:
 
 
 # Default generation model — updated by detect_generation_model()
-GENERATION_MODEL = os.environ.get("ROBOTHOR_GENERATION_MODEL", "qwen3:32b")
+# Default must agree with robothor/config.py and infra/robothor.env.example.
+GENERATION_MODEL = os.environ.get("ROBOTHOR_GENERATION_MODEL", "qwen3:8b")
 
 # Model preferences for auto-detection (in order)
 GENERATION_MODEL_PREFERENCES = [

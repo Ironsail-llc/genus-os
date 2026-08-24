@@ -100,6 +100,37 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         supports_thinking=False,
         ttft_hint_ms=1500,
     ),
+    # Local offline tier — Qwen 3.8 27B on the system Ollama (>= 0.32, upgraded
+    # in place 2026-08-24; 0.17.7 could not read this model's manifest).
+    # Last-resort fallback when OpenRouter is down. Dense 27.3B, 262k ctx,
+    # native tool use (verified through litellm on 2026-08-24: correct
+    # create_task call, 1.9s warm / ~34s cold-load). Costs zero API dollars.
+    #
+    # DELIBERATELY on the default port (11434): ollama_chat/* in litellm routes
+    # to http://localhost:11434 unless api_base is passed, and nothing in the
+    # engine passes one. An earlier design ran a second server on :11435 and
+    # silently sent every request to a model that did not exist on :11434 —
+    # keep the tier where the client actually looks.
+    "ollama_chat/qwen3.8:27b": ModelLimits(
+        max_input_tokens=262_144,
+        max_output_tokens=32_768,
+        default_output_tokens=8_192,
+        input_cost_per_token=0.0,
+        output_cost_per_token=0.0,
+        supports_thinking=False,
+        ttft_hint_ms=9000,  # dense 27B on GB10 — slow, by design for disaster tier
+    ),
+    # Local Qwen3 8B — pf-watchdog's configured primary. Pulled 2026-08-24;
+    # before that the manifest named a model no local server carried.
+    "ollama_chat/qwen3:8b": ModelLimits(
+        max_input_tokens=40_960,
+        max_output_tokens=16_384,
+        default_output_tokens=4_096,
+        input_cost_per_token=0.0,
+        output_cost_per_token=0.0,
+        supports_thinking=False,
+        ttft_hint_ms=4000,
+    ),
     # GLM-5 via OpenRouter
     "openrouter/z-ai/glm-5": ModelLimits(
         max_input_tokens=204_800,

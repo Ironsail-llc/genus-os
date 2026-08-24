@@ -1,5 +1,6 @@
 """Tests for robothor.setup — init wizard."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +17,8 @@ from robothor.setup import (
     run_migration,
     write_env_file,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestCheckPrerequisites:
@@ -471,3 +474,44 @@ class TestCliInit:
         rc = main(["init", "--yes", "--skip-models", "--skip-db"])
         assert rc == 0
         assert mock_run.called
+
+
+class TestGenerationModelDefaultAgreement:
+    """One default, everywhere.
+
+    ROBOTHOR_GENERATION_MODEL's fallback default disagreed across four files
+    (nemotron-3-super, qwen3:32b, qwen3-next:latest, qwen3:8b), so which model
+    you got depended on which code path asked — and none of the four was
+    guaranteed to exist on the box, because setup.sh only PRINTED the pull
+    command for it. The first instance ran five months with a watchdog whose
+    configured primary model did not exist locally.
+    """
+
+    CANONICAL = "qwen3:8b"
+
+    def test_config_py_defaults(self, monkeypatch):
+        """Both the dataclass field default AND the from_env fallback — they
+        were two DIFFERENT wrong values (qwen3:32b and nemotron-3-super)."""
+        monkeypatch.delenv("ROBOTHOR_GENERATION_MODEL", raising=False)
+        assert OllamaConfig().generation_model == self.CANONICAL
+        source = (REPO_ROOT / "robothor" / "config.py").read_text()
+        assert f'os.environ.get("ROBOTHOR_GENERATION_MODEL", "{self.CANONICAL}")' in source
+
+    def test_llm_ollama_default_source(self):
+        text = (REPO_ROOT / "robothor" / "llm" / "ollama.py").read_text()
+        assert f'os.environ.get("ROBOTHOR_GENERATION_MODEL", "{self.CANONICAL}")' in text
+
+    def test_env_template_default(self):
+        text = (REPO_ROOT / "infra" / "robothor.env.example").read_text()
+        assert f"ROBOTHOR_GENERATION_MODEL={self.CANONICAL}" in text
+
+    def test_docs_default(self):
+        text = (REPO_ROOT / "docs" / "configuration.md").read_text()
+        assert f"`ROBOTHOR_GENERATION_MODEL` | `{self.CANONICAL}`" in text
+
+    def test_setup_actually_pulls_the_generation_model(self):
+        """A print-only 'pull it yourself' note is how a manifest's model
+        fails to exist for five months."""
+        text = (REPO_ROOT / "infra" / "setup.sh").read_text()
+        assert '"${ROBOTHOR_GENERATION_MODEL:-' + self.CANONICAL + '}"' in text
+        assert "Pull it now with" not in text

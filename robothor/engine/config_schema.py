@@ -81,6 +81,41 @@ _KNOWN_SESSION_TARGETS = frozenset({"isolated", "persistent"})
 _CRON_RE = re.compile(r"^[\d\*\/\-\,\?\#LW\s]+$")
 
 
+def _check_model_block(warnings: list[str], where: str, model: Any) -> None:
+    """Every model a manifest names must exist in the model registry.
+
+    Nothing checked this before, and it let a fallback chain end in fiction:
+    the fleet's last-resort tier named a model no server could serve for ~30
+    hours. During a real outage the chain would have burned 2 x 600s Ollama
+    timeouts against nothing and then raised — a dead tier makes outages
+    SLOWER, and no log line says why. A typo'd name is just as silent:
+    ``get_model_limits`` degrades to a generic 128K fallback with a warning
+    nobody reads.
+
+    ``${VAR}`` placeholders are skipped — unresolved env vars are a different
+    problem, reported by the loader's own expansion.
+    """
+    if not isinstance(model, dict):
+        return
+    # Deferred: config_schema imports nothing heavy at module level, and the
+    # registry pulls in litellm's catalog machinery.
+    from robothor.engine.model_registry import _MODEL_REGISTRY
+
+    names = [model.get("primary", "")]
+    fallbacks = model.get("fallbacks", [])
+    if isinstance(fallbacks, list):
+        names.extend(fallbacks)
+    for name in names:
+        if not isinstance(name, str) or not name or "${" in name:
+            continue
+        if name not in _MODEL_REGISTRY:
+            warnings.append(
+                f"{where}: model {name!r} is not in the model registry — "
+                "it will be skipped or mis-limited at dispatch (add it to "
+                "robothor/engine/model_registry.py or fix the name)"
+            )
+
+
 def validate_manifest(data: dict[str, Any]) -> list[str]:
     """Validate a merged manifest dict. Returns list of warning strings (empty = valid)."""
     warnings: list[str] = []
@@ -88,6 +123,14 @@ def validate_manifest(data: dict[str, Any]) -> list[str]:
     # Required fields
     if not data.get("id"):
         warnings.append("Missing required field: id")
+
+    # Model blocks — top-level, heartbeat, and worker all carry one, and the
+    # 2026-08-23 incident's broken entry was in the HEARTBEAT block.
+    _check_model_block(warnings, "model", data.get("model"))
+    for section in ("heartbeat", "worker"):
+        sub = data.get(section)
+        if isinstance(sub, dict):
+            _check_model_block(warnings, f"{section}.model", sub.get("model"))
 
     # Schedule ranges
     schedule = data.get("schedule", {})
