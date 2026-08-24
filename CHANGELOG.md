@@ -1,3 +1,9 @@
+## [1.44.1](https://github.com/Ironsail-llc/genus-os/compare/v1.44.0...v1.44.1) (2026-08-24)
+
+### Bug Fixes
+
+* **engine:** make the credential controls actually protect anything ([#372](https://github.com/Ironsail-llc/genus-os/issues/372)) ([ec0b7b9](https://github.com/Ironsail-llc/genus-os/commit/ec0b7b991a1c882e9685d511f40d096f6c4fbc34))
+
 ## [1.44.0](https://github.com/Ironsail-llc/genus-os/compare/v1.43.0...v1.44.0) (2026-08-24)
 
 ### Features
