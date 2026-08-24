@@ -231,6 +231,12 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         # Task-system writes beyond the sandbox CRM set.
         "approve_task",
         "reject_task",
+        # Workflow approvals: approving resumes a real suspended run, and
+        # even the read exposes what the operator is currently being asked
+        # about. A graded agent has no business anywhere near either.
+        "approve_workflow_step",
+        "reject_workflow_step",
+        "list_pending_approvals",
         "delete_task",
         "list_agent_tasks",
         "list_tasks_summary",

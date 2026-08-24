@@ -155,8 +155,49 @@ steps:
     message: "Email: {{ steps.gather.email.output_text }} Calendar: {{ steps.gather.calendar.tool_output }}"
 ```
 
-Branches may be any step type except `condition` and nested `parallel` — flow
-control stays at the top level, enforced at load.
+Branches may be any step type except `condition`, `approval`, and nested
+`parallel` — flow control stays at the top level, enforced at load.
+
+#### Asking a human mid-workflow
+
+An `approval` step suspends the run until a person decides. The run stops
+occupying a worker and a deadline; the question becomes a row in
+`workflow_approvals` and the operator is paged once. When they answer, the
+engine resumes at that step — from a different process if the box restarted
+in between, which is the point.
+
+```yaml
+  - id: confirm-send
+    type: approval
+    prompt: "Send the Q3 report to {{ steps.prepare.tool_output.recipients }}?"
+    approval_timeout_hours: 24
+    on_timeout: abort      # abort (default) | approve | reject
+    on_reject: notify-team # omit to stop the run instead
+```
+
+- `prompt` is rendered from run context at ask time and is required.
+- `on_timeout` is what happens when nobody answers by the deadline. The
+  default is `abort`, because silence is not consent; `approve` exists for
+  low-stakes gates and is opt-in per step so the choice is visible in the
+  YAML. Either way the row is stamped `expired` and kept — "nobody answered"
+  is the fact you want three weeks later.
+- A rejection ends the run as `cancelled`, not `failed`: the operator was
+  asked, said no, and the workflow correctly did nothing. Cron failure paging
+  deliberately does not fire for it.
+- The decision lands in `steps.<id>.tool_output` (`approved`, `decided_by`,
+  `note`) for later templating.
+
+Answering, from the terminal:
+
+```
+robothor engine workflow pending
+robothor engine workflow approve <run-id> --step confirm-send --note "checked"
+robothor engine workflow reject  <run-id> --step confirm-send
+```
+
+Or in chat: a delivery agent with the `list_pending_approvals` /
+`approve_workflow_step` / `reject_workflow_step` tools relays the operator's
+answer, and the engine picks it up on the next watchdog tick (≤1 min).
 
 ### Pattern C: Dynamic Sub-Agent Dispatch
 

@@ -225,6 +225,21 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             # A condition's goto has no meaning inside a concurrent branch
             # set — flow control stays at the top level.
             raise ValueError(f"step {s.get('id')!r}: condition steps cannot run inside parallel")
+        if inside_parallel and step_type == WorkflowStepType.APPROVAL:
+            # Suspending one branch of a fan-out would strand the others: the
+            # run has one resume point, not one per branch. Gate BEFORE the
+            # parallel step instead.
+            raise ValueError(f"step {s.get('id')!r}: approval steps cannot run inside parallel")
+
+        if step_type == WorkflowStepType.APPROVAL:
+            if not s.get("prompt"):
+                raise ValueError(f"step {s.get('id')!r}: approval steps require a prompt")
+            on_timeout = s.get("on_timeout", "abort")
+            if on_timeout not in ("abort", "approve", "reject"):
+                raise ValueError(
+                    f"step {s.get('id')!r}: on_timeout must be abort, approve, or reject "
+                    f"(got {on_timeout!r})"
+                )
 
         branches = [
             ConditionBranch(
@@ -250,6 +265,10 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             transform_expr=s.get("expression", ""),
             parallel_steps=parallel_steps,
             max_concurrent=s.get("max_concurrent", 0),
+            prompt=s.get("prompt", ""),
+            approval_timeout_hours=s.get("approval_timeout_hours", 24),
+            on_timeout=s.get("on_timeout", "abort"),
+            on_reject=s.get("on_reject", ""),
             on_failure=s.get("on_failure", "abort"),
             retry_count=s.get("retry_count", 0),
             next=s.get("next", ""),
@@ -516,6 +535,19 @@ class WorkflowEngine:
                     exc_info=True,
                 )
 
+            # A suspended run has not finished. Stamping completed_at here
+            # would put a completion time on a run that is still waiting, and
+            # every duration/throughput query downstream would read the wait
+            # as work.
+            if run.status == RunStatus.AWAITING_APPROVAL:
+                self._persist_run_end(run)
+                logger.info(
+                    "Workflow suspended: %s run=%s awaiting approval",
+                    _sanitize(workflow_id),
+                    run.id,
+                )
+                return run
+
             # Finalize
             run.completed_at = datetime.now(UTC)
             if run.started_at:
@@ -634,11 +666,27 @@ class WorkflowEngine:
                 e,
             )
 
-    async def _execute_steps(self, run: WorkflowRun, wf: WorkflowDef) -> None:
-        """Execute workflow steps sequentially with flow control."""
+    async def _execute_steps(
+        self, run: WorkflowRun, wf: WorkflowDef, start_step_id: str = ""
+    ) -> None:
+        """Execute workflow steps sequentially with flow control.
+
+        ``start_step_id`` re-enters a suspended run at the step that asked for
+        approval. That step is deliberately re-executed rather than skipped:
+        it is the only code that knows how to turn a decision into a result,
+        and re-running it is safe because the question is idempotent by
+        (run, step).
+        """
         # Build step index for lookups
         step_index = {s.id: i for i, s in enumerate(wf.steps)}
         current_idx = 0
+        if start_step_id:
+            if start_step_id not in step_index:
+                raise ValueError(
+                    f"Cannot resume {run.workflow_id}: step {start_step_id!r} is no longer "
+                    "in the workflow definition"
+                )
+            current_idx = step_index[start_step_id]
 
         while current_idx < len(wf.steps):
             step = wf.steps[current_idx]
@@ -676,6 +724,34 @@ class WorkflowEngine:
 
             # Persist step result
             self._persist_step(run, result)
+
+            # Suspend: the run stops occupying a worker and a deadline, and
+            # the resume point goes into the persisted context. Returning
+            # here (rather than sleeping in place) is the whole feature — an
+            # engine restart during an overnight wait must be survivable.
+            if result.status == WorkflowStepStatus.WAITING:
+                run.status = RunStatus.AWAITING_APPROVAL
+                run.context["_resume_step"] = step.id
+                logger.info(
+                    "Workflow %s suspended at step %s awaiting approval (run=%s)",
+                    _sanitize(run.workflow_id),
+                    step.id,
+                    run.id,
+                )
+                return
+
+            # A rejection is not a failure. The operator was asked, answered
+            # no, and the run stopped doing what they declined — that is the
+            # control working. Marking it FAILED would page them about their
+            # own decision, which is how a useful prompt gets muted.
+            rejection = (result.tool_output or {}).get("approval_rejected")
+            if rejection:
+                run.status = RunStatus.CANCELLED
+                run.error_message = (
+                    f"Step '{step.id}' rejected by {rejection.get('decided_by', 'operator')}"
+                    + (f": {rejection['note']}" if rejection.get("note") else "")
+                )
+                return
 
             # Handle failure
             if result.status == WorkflowStepStatus.FAILED:
@@ -829,6 +905,8 @@ class WorkflowEngine:
                 self._run_condition_step(step, run, result)
             elif step.type == WorkflowStepType.TRANSFORM:
                 self._run_transform_step(step, run, result)
+            elif step.type == WorkflowStepType.APPROVAL:
+                await self._run_approval_step(step, run, result)
             elif step.type == WorkflowStepType.NOOP:
                 result.status = WorkflowStepStatus.COMPLETED
         except Exception as e:
@@ -1006,6 +1084,348 @@ class WorkflowEngine:
         rendered = _render_template(step.transform_expr, run.context)
         result.output_text = rendered
         result.status = WorkflowStepStatus.COMPLETED
+
+    # ── Approval ───────────────────────────────────────────────────────
+
+    async def resume_run(self, run_id: str) -> WorkflowRun | None:
+        """Re-enter a suspended run at the step that asked for approval.
+
+        Returns None when the run is not resumable — already terminal, its
+        workflow no longer loaded, or its resume point gone. Each of those is
+        logged rather than raised: the driver sweeps a batch, and one
+        unresumable run must not stop the others.
+        """
+        state = await asyncio.to_thread(self._load_suspended_run, run_id)
+        if state is None:
+            return None
+        run, resume_step_id = state
+
+        wf = self._workflows.get(run.workflow_id)
+        if wf is None:
+            logger.warning(
+                "Cannot resume run %s: workflow %s is not loaded",
+                run_id,
+                _sanitize(run.workflow_id),
+            )
+            return None
+
+        logger.info(
+            "Resuming workflow %s at step %s (run=%s)",
+            _sanitize(run.workflow_id),
+            resume_step_id,
+            run_id,
+        )
+        run.status = RunStatus.RUNNING
+        run.context.pop("_resume_step", None)
+
+        try:
+            async with asyncio.timeout(wf.timeout_seconds):
+                await self._execute_steps(run, wf, start_step_id=resume_step_id)
+        except TimeoutError:
+            run.status = RunStatus.TIMEOUT
+            run.error_message = f"Timed out after {wf.timeout_seconds}s (resumed)"
+        except Exception as e:
+            run.status = RunStatus.FAILED
+            run.error_message = str(e)
+            logger.error("Resumed workflow %s failed: %s", _sanitize(run.workflow_id), e)
+
+        # Suspended again — a workflow may hold more than one gate.
+        if run.status == RunStatus.AWAITING_APPROVAL:
+            self._persist_run_end(run)
+            return run
+
+        run.completed_at = datetime.now(UTC)
+        if run.started_at:
+            # Wall-clock from the ORIGINAL start, which for an approved run
+            # includes the hours a human spent deciding. That is the honest
+            # number for "how long did this take", and the per-step durations
+            # are where actual compute time lives.
+            run.duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
+        if run.status == RunStatus.RUNNING:
+            failed = sum(1 for r in run.step_results if r.status == WorkflowStepStatus.FAILED)
+            run.status = RunStatus.FAILED if failed > 0 else RunStatus.COMPLETED
+
+        self._persist_run_end(run)
+        logger.info(
+            "Resumed workflow complete: %s status=%s",
+            _sanitize(run.workflow_id),
+            run.status.value,
+        )
+        if run.trigger_type == "cron" and run.status in (RunStatus.FAILED, RunStatus.TIMEOUT):
+            self._notify_run_failure(run)
+        return run
+
+    def _load_suspended_run(self, run_id: str) -> tuple[WorkflowRun, str] | None:
+        """Rebuild a suspended run from the ledger. Sync — called via to_thread."""
+        import json
+
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """SELECT workflow_id, tenant_id, trigger_type, trigger_detail,
+                          correlation_id, status, context, started_at
+                     FROM workflow_runs WHERE id = %s""",
+                (run_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                logger.warning("Cannot resume run %s: no such run", run_id)
+                return None
+            if row[5] != RunStatus.AWAITING_APPROVAL.value:
+                # Already resumed by a concurrent tick, or cancelled by hand.
+                logger.debug("Run %s is %s, not resumable", run_id, row[5])
+                return None
+
+            context = row[6] if isinstance(row[6], dict) else json.loads(row[6] or "{}")
+            resume_step_id = context.get("_resume_step", "")
+            if not resume_step_id:
+                logger.warning("Cannot resume run %s: context carries no resume point", run_id)
+                return None
+
+            cur.execute(
+                """SELECT step_id, step_type, status
+                     FROM workflow_run_steps WHERE run_id = %s ORDER BY started_at""",
+                (run_id,),
+            )
+            prior = cur.fetchall()
+
+        run = WorkflowRun(
+            id=run_id,
+            workflow_id=row[0],
+            tenant_id=row[1],
+            trigger_type=row[2],
+            trigger_detail=row[3] or "",
+            correlation_id=row[4],
+            # Resume is engine-driven; the original caller is long gone. A
+            # narrow service identity is the honest attribution.
+            user_id=f"service:workflow-resume:{row[0]}",
+            user_role="service",
+            status=RunStatus.AWAITING_APPROVAL,
+            started_at=row[7],
+            context=context,
+        )
+        # Prior results are reloaded for their STATUS only — the finalizer
+        # counts them, and a resumed run that forgot its earlier failures
+        # would report itself completed.
+        run.step_results = [
+            WorkflowStepResult(
+                step_id=s[0],
+                step_type=WorkflowStepType(s[1]),
+                status=WorkflowStepStatus(s[2]),
+            )
+            for s in prior
+        ]
+        return run, resume_step_id
+
+    async def _run_approval_step(
+        self, step: WorkflowStepDef, run: WorkflowRun, result: WorkflowStepResult
+    ) -> None:
+        """Ask a human, or act on the answer already given.
+
+        Called twice per gate in the normal case: once to ask (the run then
+        suspends), and once on resume to read the decision. Both paths run
+        the same code because the question is idempotent by (run, step) — a
+        restart mid-wait re-enters here and finds the standing question, not
+        a second one.
+        """
+        from robothor.engine.approvals import ApprovalDecision, request_approval
+
+        prompt = _render_template(step.prompt, run.context)
+        detail = self._approval_detail(step, run)
+
+        req = await asyncio.to_thread(
+            request_approval,
+            run_id=run.id,
+            workflow_id=run.workflow_id,
+            step_id=step.id,
+            prompt=prompt,
+            detail=detail,
+            timeout_hours=step.approval_timeout_hours,
+            tenant_id=run.tenant_id,
+        )
+
+        if req.is_pending:
+            result.status = WorkflowStepStatus.WAITING
+            result.output_text = f"Awaiting approval: {prompt}"
+            if req.newly_created:
+                # Only on the first ask. A resumed run re-enters this method
+                # and must not re-page — that is how a crash loop turns a
+                # useful prompt into noise the operator mutes.
+                self._notify_approval_request(run, step, req)
+            return
+
+        decision = req.status
+        if decision == ApprovalDecision.EXPIRED:
+            if step.on_timeout == "approve":
+                decision = ApprovalDecision.APPROVED
+            elif step.on_timeout == "reject":
+                decision = ApprovalDecision.REJECTED
+            else:
+                # Nobody answered and the step did not opt into a default.
+                # This IS a failure: the workflow was designed to require a
+                # decision and did not get one.
+                result.status = WorkflowStepStatus.FAILED
+                result.error_message = (
+                    f"Approval expired unanswered after {step.approval_timeout_hours}h: {prompt}"
+                )
+                return
+
+        if decision == ApprovalDecision.APPROVED:
+            result.status = WorkflowStepStatus.COMPLETED
+            result.output_text = f"Approved by {req.decided_by or 'timeout policy'}"
+            result.tool_output = {
+                "approved": True,
+                "decided_by": req.decided_by,
+                "note": req.decision_note,
+            }
+            return
+
+        # Rejected — route to the declared branch, or stop the run.
+        result.output_text = f"Rejected by {req.decided_by or 'timeout policy'}"
+        if step.on_reject:
+            result.status = WorkflowStepStatus.COMPLETED
+            result.condition_branch = step.on_reject
+            result.tool_output = {
+                "approved": False,
+                "decided_by": req.decided_by,
+                "note": req.decision_note,
+            }
+            return
+
+        # No branch declared: the operator said no and there is nowhere else
+        # to go. SKIPPED, not FAILED — the step correctly did nothing.
+        result.status = WorkflowStepStatus.SKIPPED
+        result.tool_output = {
+            "approved": False,
+            "decided_by": req.decided_by,
+            "note": req.decision_note,
+            "approval_rejected": {
+                "decided_by": req.decided_by or "timeout policy",
+                "note": req.decision_note or "",
+            },
+        }
+
+    def _approval_detail(self, step: WorkflowStepDef, run: WorkflowRun) -> str:
+        """What the operator sees under the question.
+
+        Snapshotted at ask time rather than re-derived on read: the run's
+        context keeps moving, and showing a decision screen built from later
+        state asks a different question than the one that was posed.
+        """
+        lines = [f"Workflow: {run.workflow_id}", f"Run: {run.id}", f"Step: {step.id}"]
+        prior = [
+            f"  {sid}: {(info.get('output_text') or '')[:200]}"
+            for sid, info in list(run.context.get("steps", {}).items())[-3:]
+            if isinstance(info, dict)
+        ]
+        if prior:
+            lines.append("Recent steps:")
+            lines.extend(prior)
+        lines.append(
+            f"Decide with: robothor workflow approve {run.id} --step {step.id}"
+            f"  (or reject).  Expires in {step.approval_timeout_hours}h "
+            f"→ {step.on_timeout}."
+        )
+        return "\n".join(lines)
+
+    async def drive_approvals(self) -> dict[str, int]:
+        """One sweep: expire what ran out of time, resume what was decided.
+
+        This is the half that makes the feature real. Without a driver the
+        decision lands in a table nobody reads, and the run stays suspended
+        forever — the "built, merged, and not running" failure this platform
+        keeps finding. Cheap enough to run on every watchdog tick: two
+        indexed scans that return nothing on a quiet box.
+        """
+        from robothor.engine.approvals import expire_overdue_approvals, list_decided_approvals
+
+        counts = {"expired": 0, "resumed": 0, "unresumable": 0}
+        try:
+            expired = await asyncio.to_thread(
+                expire_overdue_approvals, tenant_id=self.config.tenant_id
+            )
+            counts["expired"] = len(expired)
+        except Exception as e:
+            logger.warning("Approval expiry sweep failed: %s", e)
+
+        try:
+            decided = await asyncio.to_thread(
+                list_decided_approvals, tenant_id=self.config.tenant_id
+            )
+        except Exception as e:
+            logger.warning("Approval resume sweep failed: %s", e)
+            return counts
+
+        for req in decided:
+            try:
+                # A settled approval whose run is already terminal is the
+                # normal steady state — resume_run returns None and says so
+                # at debug. Only genuine failures are logged loudly.
+                resumed = await self.resume_run(req.run_id)
+                if resumed is not None:
+                    counts["resumed"] += 1
+                else:
+                    counts["unresumable"] += 1
+            except Exception as e:
+                counts["unresumable"] += 1
+                logger.error(
+                    "Failed to resume run %s after approval %s: %s", req.run_id, req.status, e
+                )
+
+        if counts["expired"] or counts["resumed"]:
+            logger.info(
+                "Approval sweep: %d expired, %d resumed", counts["expired"], counts["resumed"]
+            )
+        return counts
+
+    def _notify_approval_request(self, run: WorkflowRun, step: WorkflowStepDef, req: Any) -> None:
+        """Tell the operator a decision is waiting — two channels, both best-effort.
+
+        Same two-channel shape as ``_notify_run_failure``: an immediate page
+        plus a durable CRM notification, because a question only Telegram
+        knows about is lost the moment Telegram is down, and this one blocks
+        a workflow until it is answered.
+        """
+        try:
+            from robothor.engine.alerts import alert
+            from robothor.engine.task_registry import get_task_registry
+
+            get_task_registry().spawn(
+                alert(
+                    "warning",
+                    f"Approval needed: {run.workflow_id}",
+                    f"{req.prompt}\n\n{req.detail}",
+                ),
+                name=f"workflow-approval-alert:{run.workflow_id}",
+            )
+        except Exception as e:
+            logger.error("Failed to spawn approval alert for %s: %s", _sanitize(run.workflow_id), e)
+
+        try:
+            from robothor.crm import dal
+
+            dal.send_notification(
+                from_agent="engine",
+                to_agent="main",
+                notification_type="escalation",
+                subject=f"Approval needed: {run.workflow_id}",
+                body=f"{req.prompt}\n\n{req.detail}",
+                metadata={
+                    "kind": "workflow_approval",
+                    "workflow_id": run.workflow_id,
+                    "run_id": run.id,
+                    "step_id": step.id,
+                    "expires_at": req.expires_at.isoformat() if req.expires_at else None,
+                },
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to record approval notification for %s: %s",
+                _sanitize(run.workflow_id),
+                e,
+            )
 
     # ── Persistence ────────────────────────────────────────────────────
 

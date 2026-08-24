@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from robothor.engine.tools.handlers import (  # noqa: F401
     apollo,
+    approvals,
     benchmark,
     browser,
     crm,

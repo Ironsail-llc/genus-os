@@ -77,6 +77,11 @@ MESSAGING_TOOLS = frozenset(
         "create_team",
         "team_scratchpad_write",
         "team_scratchpad_read",
+        # Workflow approvals: a delivery agent relays the operator's decision
+        # from chat into the engine.
+        "list_pending_approvals",
+        "approve_workflow_step",
+        "reject_workflow_step",
     }
 )
 

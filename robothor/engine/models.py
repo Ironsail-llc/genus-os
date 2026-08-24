@@ -44,6 +44,11 @@ class RunStatus(StrEnum):
     TIMEOUT = "timeout"
     CANCELLED = "cancelled"
     SKIPPED = "skipped"
+    # Suspended waiting on a human decision. Deliberately NOT a variant of
+    # RUNNING: a run that occupies no worker and no deadline is a different
+    # thing from one that does, and every "why is this still running" query
+    # would otherwise flag patient waiting as a stall.
+    AWAITING_APPROVAL = "awaiting_approval"
 
 
 class ErrorType(StrEnum):
@@ -670,6 +675,7 @@ class WorkflowStepType(StrEnum):
     TRANSFORM = "transform"
     NOOP = "noop"
     PARALLEL = "parallel"
+    APPROVAL = "approval"
 
 
 class WorkflowStepStatus(StrEnum):
@@ -678,6 +684,9 @@ class WorkflowStepStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    # Reached, asked, and neither running nor finished. The step-level mirror
+    # of RunStatus.AWAITING_APPROVAL.
+    WAITING = "waiting"
 
 
 @dataclass
@@ -717,6 +726,19 @@ class WorkflowStepDef:
     # run.context["steps"][branch.id] exactly like a top-level step's.
     parallel_steps: list[WorkflowStepDef] = field(default_factory=list)
     max_concurrent: int = 0  # 0 = unbounded
+
+    # Approval step — suspends the run until a human decides.
+    prompt: str = ""  # The question, rendered from run context at ask time
+    approval_timeout_hours: int = 24
+    # What to do when nobody answers by the deadline. "abort" is the default
+    # because an unanswered "should I send this?" is not a yes; auto-approve
+    # exists for low-stakes gates where the operator's silence is genuinely
+    # consent, and it is opt-in per step so that choice is visible in the YAML.
+    on_timeout: str = "abort"  # abort, approve, reject
+    # Where a rejection goes. Empty = abort the run (the common case: the
+    # operator said no, so the thing must not happen). A step id routes to a
+    # cleanup or notify branch instead.
+    on_reject: str = ""
 
     # Error handling
     on_failure: str = "abort"  # abort, skip, retry

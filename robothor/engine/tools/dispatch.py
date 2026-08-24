@@ -138,6 +138,7 @@ def _collect_handlers() -> dict[str, Any]:
     """Collect all HANDLERS dicts from handler modules."""
     from robothor.engine.tools.handlers import (  # noqa: E501
         apollo,
+        approvals,
         benchmark,
         browser,
         crm,
@@ -213,6 +214,7 @@ def _collect_handlers() -> dict[str, Any]:
         timing,
         todolist,
         toolsearch,
+        approvals,
     ]:
         all_handlers.update(mod.HANDLERS)
     return all_handlers

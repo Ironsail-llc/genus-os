@@ -609,7 +609,7 @@ async def main() -> int:
             serve_health(config, runner=runner, workflow_engine=workflow_engine),
             name="health",
         ),
-        asyncio.create_task(_watchdog(config, scheduler), name="watchdog"),
+        asyncio.create_task(_watchdog(config, scheduler, workflow_engine), name="watchdog"),
         asyncio.create_task(_autodream_loop(), name="autodream"),
         asyncio.create_task(_curiosity_density_loop(scheduler), name="curiosity-density"),
         asyncio.create_task(_curator_loop(scheduler), name="curator"),
@@ -790,7 +790,11 @@ def _daily_maintenance_due(now: float, last_run: float | None) -> bool:
     return last_run is None or (now - last_run) >= _DAILY_MAINTENANCE_INTERVAL_SECONDS
 
 
-async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
+async def _watchdog(
+    config: EngineConfig,
+    scheduler: CronScheduler,
+    workflow_engine: WorkflowEngine | None = None,
+) -> None:
     """Subsystem watchdog — pings PostgreSQL and Redis every 30s, notifies systemd, cleans stale sessions daily."""
     global _autodream_stale_alerted  # noqa: PLW0603
 
@@ -873,6 +877,16 @@ async def _watchdog(config: EngineConfig, scheduler: CronScheduler) -> None:
                     logger.info("Watchdog: reconciled schedules, pruned: %s", pruned)
             except Exception as e:
                 logger.warning("Watchdog: schedule reconciliation failed: %s", e)
+
+        # Approval driver (every 2 ticks = 1 minute). A decided approval that
+        # nothing acts on leaves the run suspended forever — the "built,
+        # merged, and not running" failure this platform keeps finding. Two
+        # indexed scans; on a box with no pending approvals it is a no-op.
+        if tick_count % 2 == 0 and workflow_engine is not None:
+            try:
+                await workflow_engine.drive_approvals()
+            except Exception as e:
+                logger.warning("Watchdog: approval driver failed: %s", e)
 
         # Zombie run reaper (every 40 ticks = 20 minutes)
         if tick_count % 40 == 0:
