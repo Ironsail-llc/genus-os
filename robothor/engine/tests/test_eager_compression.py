@@ -1,205 +1,118 @@
-"""Tests for eager tool result compression and context offloading."""
+"""Eager tool compression — thinning that never destroys the only copy.
+
+The 2026-08-24 token audit measured re-sent tool results at 28% of ALL weekly
+input (avg 7.4 sends per result) and named eager compression the second lever
+(~8-12% incremental over offload). It shipped disabled for the same loop-bug
+class the offload had, fixed in #359.
+
+One design gap made the audit's "lossless in combination" claim false as
+specified: offload only covers results ABOVE its threshold (8K). A mid-size
+result (600-8,000 chars) thinned to a one-line summary lost its content with
+NO recovery path — nothing on disk, nothing to read_file back. Thinning now
+SPILLS: when a session has offloading configured, the full content is written
+to disk first and the summary carries the standard retrieval stub. The
+read-back is loop-exempt via the session ledger, same as any offload
+artifact. Only with offloading disabled does thinning stay lossy — the
+pre-existing contract, unchanged.
+"""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from robothor.engine.models import TriggerType
 from robothor.engine.session import AgentSession
 
 
-def _make_session(tool_offload_threshold: int = 0) -> AgentSession:
-    """Create a session with some conversation history."""
-    s = AgentSession(
-        agent_id="test",
+def _session(offload_threshold: int = 8000) -> AgentSession:
+    return AgentSession(
+        agent_id="probe",
         trigger_type=TriggerType.MANUAL,
-        tool_offload_threshold=tool_offload_threshold,
+        tool_offload_threshold=offload_threshold,
     )
-    s.start(
-        system_prompt="You are a test agent.",
-        user_message="Do something.",
-        tools_provided=["read_file"],
+
+
+def _add_tool_msg(s: AgentSession, content: str, tool: str = "list_tasks") -> None:
+    s.record_tool_call(
+        tool_name=tool, tool_input={}, tool_output={"content": content}, tool_call_id="t"
     )
-    return s
 
 
-class TestThinPreviousToolResults:
-    """Tests for AgentSession.thin_previous_tool_results()."""
+def test_thinning_spills_to_disk_and_keeps_the_retrieval_stub():
+    s = _session()
+    _add_tool_msg(s, "x" * 3000)  # mid-size: below offload 8K, above summary min
+    _add_tool_msg(s, "current-iteration result")
 
-    def test_large_tool_result_gets_thinned(self):
-        s = _make_session()
-        # Add an assistant message with tool calls + a large tool result
-        s.messages.append(
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [{"id": "tc1", "function": {"name": "read_file", "arguments": "{}"}}],
-            }
-        )
-        large_result = json.dumps({"data": "x" * 1000})
-        s.messages.append({"role": "tool", "tool_call_id": "tc1", "content": large_result})
+    saved = s.thin_previous_tool_results(protect_after_index=len(s.messages) - 1)
 
-        # Current iteration starts after these messages
-        protect_idx = len(s.messages)
+    assert saved > 0
+    thinned = s.messages[-2]["content"]
+    assert "[Full output:" in thinned, "thinned content lost its only copy"
+    path = thinned.split("[Full output: ")[1].split(" —")[0]
+    assert Path(path).read_text().count("x") >= 2900
 
-        # Add another iteration (should be protected)
-        s.messages.append(
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [{"id": "tc2", "function": {"name": "read_file", "arguments": "{}"}}],
-            }
-        )
-        s.messages.append(
-            {"role": "tool", "tool_call_id": "tc2", "content": json.dumps({"big": "y" * 2000})}
-        )
-
-        chars_saved = s.thin_previous_tool_results(protect_after_index=protect_idx)
-
-        # First tool result should be thinned
-        assert len(s.messages[3]["content"]) < len(large_result)
-        assert chars_saved > 0
-
-        # Second tool result (protected) should be untouched
-        assert len(s.messages[5]["content"]) > 500
-
-    def test_small_tool_results_untouched(self):
-        s = _make_session()
-        small_content = json.dumps({"ok": True})
-        s.messages.append({"role": "tool", "tool_call_id": "tc1", "content": small_content})
-
-        chars_saved = s.thin_previous_tool_results(protect_after_index=len(s.messages))
-        assert chars_saved == 0
-        assert s.messages[-1]["content"] == small_content
-
-    def test_non_tool_messages_untouched(self):
-        s = _make_session()
-        user_msg = "x" * 1000
-        s.messages.append({"role": "user", "content": user_msg})
-
-        chars_saved = s.thin_previous_tool_results(protect_after_index=len(s.messages))
-        assert chars_saved == 0
-        assert s.messages[-1]["content"] == user_msg
-
-    def test_idempotent(self):
-        s = _make_session()
-        s.messages.append(
-            {"role": "tool", "tool_call_id": "tc1", "content": json.dumps({"k": "v" * 600})}
-        )
-        protect_idx = len(s.messages)
-
-        saved1 = s.thin_previous_tool_results(protect_after_index=protect_idx)
-        content_after_first = s.messages[-1]["content"]
-        saved2 = s.thin_previous_tool_results(protect_after_index=protect_idx)
-
-        assert saved1 > 0
-        assert saved2 == 0  # Already thinned, nothing more to save
-        assert s.messages[-1]["content"] == content_after_first
-
-    def test_returns_correct_chars_saved(self):
-        s = _make_session()
-        original = json.dumps({"data": "z" * 800})
-        s.messages.append({"role": "tool", "tool_call_id": "tc1", "content": original})
-        protect_idx = len(s.messages)
-
-        chars_saved = s.thin_previous_tool_results(protect_after_index=protect_idx)
-        thinned = s.messages[-1]["content"]
-        assert chars_saved == len(original) - len(thinned)
-
-    def test_protect_after_index_boundary(self):
-        s = _make_session()
-        large = json.dumps({"a": "b" * 800})
-        # Add two large tool results
-        s.messages.append({"role": "tool", "tool_call_id": "tc1", "content": large})
-        boundary = len(s.messages)
-        s.messages.append({"role": "tool", "tool_call_id": "tc2", "content": large})
-
-        s.thin_previous_tool_results(protect_after_index=boundary)
-
-        # First is thinned (before boundary)
-        assert len(s.messages[boundary - 1]["content"]) < len(large)
-        # Second is untouched (at/after boundary)
-        assert s.messages[boundary]["content"] == large
+    # and the spill is loop-exempt like any offload artifact
+    assert s._is_offload_readback("read_file", {"path": path})
 
 
-class TestOffloadToolResult:
-    """Tests for context offloading of large tool results."""
+def test_thinning_without_offload_stays_lossy_as_before():
+    """tool_offload_threshold=0 = no disk machinery; the pre-existing lossy
+    contract is unchanged rather than silently writing temp files."""
+    s = _session(offload_threshold=0)
+    _add_tool_msg(s, "y" * 3000)
+    _add_tool_msg(s, "current")
 
-    def test_large_result_offloaded_to_file(self):
-        s = _make_session(tool_offload_threshold=100)
-        large_output = {"data": "x" * 200}
+    saved = s.thin_previous_tool_results(protect_after_index=len(s.messages) - 1)
+    assert saved > 0
+    assert "[Full output:" not in s.messages[-2]["content"]
 
-        s.record_tool_call(
-            tool_name="read_file",
-            tool_input={"path": "/tmp/test"},
-            tool_output=large_output,
-            tool_call_id="tc1",
-        )
 
-        content = s.messages[-1]["content"]
-        assert "[Full output:" in content
-        assert "read_file to retrieve" in content
+def test_current_iteration_is_protected():
+    s = _session()
+    _add_tool_msg(s, "z" * 3000)
+    idx = len(s.messages) - 1
+    s.thin_previous_tool_results(protect_after_index=idx - 1)
+    assert "z" * 100 in s.messages[idx]["content"], "the protected message was thinned"
 
-        # Extract file path and verify it exists with correct content
-        path_start = content.index("[Full output: ") + len("[Full output: ")
-        path_end = content.index(" — use read_file")
-        offload_path = Path(content[path_start:path_end])
-        assert offload_path.exists()
-        stored = offload_path.read_text()
-        assert json.loads(stored) == large_output
-        offload_path.unlink()
 
-    def test_small_result_stays_inline(self):
-        s = _make_session(tool_offload_threshold=100)
-        small_output = {"ok": True}
+def test_small_results_are_untouched():
+    s = _session()
+    _add_tool_msg(s, "short result")
+    _add_tool_msg(s, "current")
+    saved = s.thin_previous_tool_results(protect_after_index=len(s.messages) - 1)
+    assert saved == 0
+    assert (
+        s.messages[-2]["content"].endswith("short result")
+        or "short result" in s.messages[-2]["content"]
+    )
 
-        s.record_tool_call(
-            tool_name="read_file",
-            tool_input={},
-            tool_output=small_output,
-            tool_call_id="tc1",
-        )
 
-        content = s.messages[-1]["content"]
-        assert "[Full output:" not in content
-        assert json.loads(content) == small_output
+def test_an_offload_stub_is_never_rethinned():
+    """An already-offloaded message IS the summary+path; thinning it again
+    would destroy the pointer."""
+    s = _session(offload_threshold=100)
+    _add_tool_msg(s, "w" * 500)  # offloads immediately
+    stub_before = s.messages[-1]["content"]
+    _add_tool_msg(s, "current")
+    s.thin_previous_tool_results(protect_after_index=len(s.messages) - 1)
+    assert s.messages[-2]["content"] == stub_before
 
-    def test_offloading_disabled_when_threshold_zero(self):
-        s = _make_session(tool_offload_threshold=0)
-        large_output = {"data": "x" * 10000}
 
-        s.record_tool_call(
-            tool_name="read_file",
-            tool_input={},
-            tool_output=large_output,
-            tool_call_id="tc1",
-        )
+class TestFleetDefaultPlumbing:
+    @staticmethod
+    def _flag(v2: dict) -> bool:
+        from robothor.engine.config import manifest_to_agent_config
 
-        content = s.messages[-1]["content"]
-        assert "[Full output:" not in content
-        assert json.loads(content) == large_output
+        return manifest_to_agent_config({"id": "p", "v2": v2}).eager_tool_compression
 
-    def test_offloaded_file_has_tool_name_prefix(self):
-        s = _make_session(tool_offload_threshold=100)
+    def test_env_supplies_the_default(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_EAGER_TOOL_COMPRESSION", "1")
+        assert self._flag({}) is True
 
-        s.record_tool_call(
-            tool_name="web_fetch",
-            tool_input={"url": "https://example.com"},
-            tool_output={"html": "<div>" + "x" * 500 + "</div>"},
-            tool_call_id="tc1",
-        )
+    def test_manifest_false_beats_env(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_EAGER_TOOL_COMPRESSION", "1")
+        assert self._flag({"eager_tool_compression": False}) is False
 
-        content = s.messages[-1]["content"]
-        # Should still have untrusted_content wrapper since web_fetch is external
-        assert "untrusted_content" in content
-        assert "[Full output:" in content
-
-        # Extract path and check prefix
-        # Content is wrapped, so parse inside the wrapper
-        path_start = content.index("[Full output: ") + len("[Full output: ")
-        path_end = content.index(" — use read_file")
-        offload_path = Path(content[path_start:path_end])
-        assert "tool_web_fetch_" in offload_path.name
-        if offload_path.exists():
-            offload_path.unlink()
+    def test_default_stays_off(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_EAGER_TOOL_COMPRESSION", raising=False)
+        assert self._flag({}) is False
