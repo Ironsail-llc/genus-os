@@ -1,3 +1,9 @@
+## [1.42.0](https://github.com/Ironsail-llc/genus-os/compare/v1.41.1...v1.42.0) (2026-08-24)
+
+### Features
+
+* **engine:** agent mail that survives a restart, not a 1h Redis TTL ([#365](https://github.com/Ironsail-llc/genus-os/issues/365)) ([85939ba](https://github.com/Ironsail-llc/genus-os/commit/85939ba4aea8353ca49b1544bc7d2285d210d604))
+
 ## [1.41.1](https://github.com/Ironsail-llc/genus-os/compare/v1.41.0...v1.41.1) (2026-08-24)
 
 ### Code Refactoring
