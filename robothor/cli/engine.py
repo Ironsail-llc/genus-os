@@ -53,7 +53,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         # un-runnable outside the daemon, so a grader fix could not be verified
         # until the next nightly cron.
         set_runner(runner, config)
-        return await runner.execute(
+        result = await runner.execute(
             agent_id=agent_id,
             message=message,
             trigger_type=TriggerType.MANUAL,
@@ -63,6 +63,21 @@ def cmd_run(args: argparse.Namespace) -> int:
             user_id="cli-operator",
             user_role="owner",
         )
+        # Drain background work BEFORE asyncio.run() tears the loop down.
+        #
+        # _finish_run spawns DB persistence (persist-run:<id>) on the
+        # TaskRegistry whenever a loop is running — and here one IS running, so
+        # the "CLI, tests (no loop)" sync fallback never fires. Without this
+        # drain, asyncio.run() returns the moment execute() does and cancels
+        # the pending persist task: the run row stays status=running with
+        # model_used NULL until the zombie reaper classifies the SUCCESSFUL
+        # run as a TIMEOUT. Found live 2026-08-24 with the tier-probe run.
+        # The daemon drains this same registry at shutdown; the CLI owns its
+        # loop, so it drains here.
+        from robothor.engine.task_registry import get_task_registry
+
+        await get_task_registry().drain(timeout=30.0)
+        return result
 
     run = asyncio.run(_run())
 
@@ -235,7 +250,7 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
         # un-runnable outside the daemon, so a grader fix could not be verified
         # until the next nightly cron.
         set_runner(runner, config)
-        return await runner.execute(
+        result = await runner.execute(
             agent_id=agent_id,
             message=message,
             trigger_type=trigger,
