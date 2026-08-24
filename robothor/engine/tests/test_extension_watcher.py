@@ -49,7 +49,9 @@ def test_unknown_slash_is_not_a_bundle(tmp_path):
 
 
 def test_telegram_wires_bundle_resolution():
-    from robothor.engine import telegram
+    # The handler bodies moved to telegram_handlers (phase 3b of the
+    # decomposition); the wiring assertion follows the code.
+    from robothor.engine import telegram_handlers
 
-    src = inspect.getsource(telegram)
+    src = inspect.getsource(telegram_handlers)
     assert "resolve_slash_command(" in src

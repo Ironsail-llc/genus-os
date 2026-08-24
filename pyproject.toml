@@ -199,6 +199,7 @@ ignore = ["E501", "SIM108", "SIM110", "SIM117", "RET504", "RET505"]
 "robothor/engine/buddy_critic.py" = ["PERF401"]
 "robothor/engine/session.py" = ["PERF401"]
 "robothor/engine/telegram.py" = ["PERF401"]
+"robothor/engine/telegram_handlers.py" = ["PERF401"]
 # Test files: B017 blind-exception checks for DB constraint violations, N801/N802
 # test-name conventions mirror the camelCase flag being tested, A002 `id` shadows
 # builtin intentionally (matches the production field name), ERA001 commented

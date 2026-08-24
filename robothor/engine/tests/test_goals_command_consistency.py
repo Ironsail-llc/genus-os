@@ -124,7 +124,7 @@ class TestFormatAgentGrades:
         return row
 
     def test_percentage_matches_the_fraction(self):
-        from robothor.engine.telegram import format_agent_grades
+        from robothor.engine.telegram_handlers import format_agent_grades
 
         text = format_agent_grades([self._grade()])
 
@@ -132,7 +132,7 @@ class TestFormatAgentGrades:
         assert "(18%)" not in text
 
     def test_partial_credit_is_labelled_not_disguised(self):
-        from robothor.engine.telegram import format_agent_grades
+        from robothor.engine.telegram_handlers import format_agent_grades
 
         text = format_agent_grades([self._grade()])
 
@@ -140,14 +140,14 @@ class TestFormatAgentGrades:
         assert "partial credit" in text.lower()
 
     def test_judge_errors_are_surfaced(self):
-        from robothor.engine.telegram import format_agent_grades
+        from robothor.engine.telegram_handlers import format_agent_grades
 
         text = format_agent_grades([self._grade(judge_errors=2)])
 
         assert "judge error" in text.lower()
 
     def test_worst_agent_comes_first(self):
-        from robothor.engine.telegram import format_agent_grades
+        from robothor.engine.telegram_handlers import format_agent_grades
 
         text = format_agent_grades(
             [
@@ -158,7 +158,7 @@ class TestFormatAgentGrades:
         assert text.index("bad") < text.index("good")
 
     def test_zero_case_row_does_not_divide_by_zero(self):
-        from robothor.engine.telegram import format_agent_grades
+        from robothor.engine.telegram_handlers import format_agent_grades
 
         text = format_agent_grades([self._grade(total_cases=0, passed=0)])
 
