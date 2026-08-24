@@ -604,12 +604,28 @@ class AgentSession:
             if msg.get("role") != "tool":
                 continue
             content = msg.get("content", "")
-            if len(content) < TOOL_SUMMARY_MIN_CHARS:
+            if not isinstance(content, str) or len(content) < TOOL_SUMMARY_MIN_CHARS:
+                continue
+            if "[Full output:" in content:
+                # Already an offload stub — the summary plus the retrieval
+                # pointer. Thinning it again would destroy the pointer.
                 continue
             summary = extract_tool_summary(content)
-            if len(summary) < len(content):
-                chars_saved += len(content) - len(summary)
-                msg["content"] = summary
+            if len(summary) >= len(content):
+                continue
+            # Thinning must never destroy the ONLY copy. Offload only covers
+            # results above its threshold, so a mid-size result thinned to a
+            # one-line summary used to vanish with no recovery path — the gap
+            # that made "lossless in combination" false. When this session has
+            # offloading configured, spill the full content to disk first and
+            # carry the standard retrieval stub; the read-back is loop-exempt
+            # via the offload ledger. With offloading disabled, the historical
+            # lossy contract stands rather than writing temp files nobody
+            # opted into.
+            if self._tool_offload_threshold:
+                summary = self._offload_tool_result(content, "thinned")
+            chars_saved += len(content) - len(summary)
+            msg["content"] = summary
         return chars_saved
 
     def get_final_text(self) -> str | None:
