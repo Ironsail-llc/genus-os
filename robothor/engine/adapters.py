@@ -65,6 +65,16 @@ class AdapterConfig:
     version: str = ""
     author: str = ""
     description: str = ""
+    # ── Bundle contract (2026-08-24) ──
+    # tools_allowed: the ONLY tools this adapter may expose. Anything else the
+    # server offers is DRIFT — not registered, logged loudly. Empty = legacy
+    # allow-all (warned once at registration). This is the supply-chain
+    # protection the field's plugin marketplaces lack: a compromised or
+    # silently-updated server cannot sprout new capabilities into the fleet.
+    tools_allowed: list[str] = field(default_factory=list)
+    # command_sha256: pins the stdio executable (command[0]). A binary swap
+    # under the same path refuses the adapter outright — fail-closed.
+    command_sha256: str = ""
 
 
 def _resolve_env(value: str) -> str:
@@ -108,7 +118,46 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
         version=data.get("version", ""),
         author=data.get("author", ""),
         description=data.get("description", ""),
+        tools_allowed=list(data.get("tools_allowed", []) or []),
+        # str() BEFORE the falsiness check: YAML parses an unquoted all-zeros
+        # (or all-digits) hash as an INTEGER, and `int(0) or ""` silently
+        # became "no pin declared" — a fail-open path for exactly the value an
+        # attacker would love. None stays "", every other scalar is stringified.
+        command_sha256=("" if data.get("command_sha256") is None else str(data["command_sha256"])),
     )
+
+
+def verify_adapter_integrity(adapter: AdapterConfig) -> tuple[bool, str]:
+    """Check a stdio adapter's pinned executable hash. ``(ok, reason)``.
+
+    No pin declared -> passes with no claim: integrity is opt-in per adapter,
+    and a pass here never asserts more than the config asked for. With a pin,
+    the check is fail-closed: an unresolvable or unreadable binary refuses the
+    adapter exactly like a mismatch — "could not check" must never degrade to
+    "allowed", or the attacker's easiest move is breaking the check.
+    """
+    if adapter.transport != "stdio" or not adapter.command_sha256:
+        return True, "no integrity pin declared"
+    if not adapter.command:
+        return False, "command_sha256 declared but no command to verify"
+
+    import hashlib
+    import shutil
+
+    exe = adapter.command[0]
+    resolved = exe if Path(exe).is_absolute() else (shutil.which(exe) or "")
+    if not resolved or not Path(resolved).is_file():
+        return False, f"pinned executable not found: {exe}"
+    try:
+        digest = hashlib.sha256(Path(resolved).read_bytes()).hexdigest()
+    except OSError as e:
+        return False, f"pinned executable unreadable: {e}"
+    if digest != adapter.command_sha256.lower():
+        return False, (
+            f"sha256 mismatch for {resolved}: expected {adapter.command_sha256[:12]}…, "
+            f"got {digest[:12]}… — the binary changed since it was pinned"
+        )
+    return True, "sha256 verified"
 
 
 def load_adapters(adapter_dir: Path | None = None) -> list[AdapterConfig]:

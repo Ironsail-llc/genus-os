@@ -75,10 +75,21 @@ class ToolRegistry:
         import asyncio
         import time
 
+        from robothor.engine.adapters import verify_adapter_integrity
         from robothor.engine.mcp_client import get_mcp_client_pool
 
         pool = get_mcp_client_pool()
         for adapter in adapters:
+            # Integrity BEFORE connection: an unverified stdio binary must not
+            # even be spawned, let alone asked for its tool list.
+            ok, reason = verify_adapter_integrity(adapter)
+            if not ok:
+                logger.error(
+                    "Adapter '%s' REFUSED — integrity check failed: %s",
+                    adapter.name,
+                    reason,
+                )
+                continue
             # Check failure cache — skip if in backoff window
             now = time.monotonic()
             if adapter.name in self._adapter_failures:
@@ -94,9 +105,22 @@ class ToolRegistry:
             try:
                 session = await asyncio.wait_for(pool.get_session(adapter.name), timeout=5.0)
                 mcp_tools = await asyncio.wait_for(session.list_tools(), timeout=5.0)
+                allow = set(adapter.tools_allowed)
+                if not allow:
+                    logger.warning(
+                        "Adapter '%s' has no tools_allowed list — registering "
+                        "every tool its server offers (legacy allow-all). Pin "
+                        "the expected tools in the adapter YAML so a changed "
+                        "server cannot sprout new capabilities silently.",
+                        adapter.name,
+                    )
+                drifted: list[str] = []
                 for tool in mcp_tools:
                     name = tool.get("name", "")
                     if not name:
+                        continue
+                    if allow and name not in allow:
+                        drifted.append(name)
                         continue
                     self._schemas[name] = {
                         "type": "function",
@@ -109,6 +133,18 @@ class ToolRegistry:
                         },
                     }
                     self._adapter_routes[name] = adapter.name
+                if drifted:
+                    # Loud on purpose: the server offered tools the bundle
+                    # never declared. That is the exact supply-chain move —
+                    # a compromised or auto-updated server growing new
+                    # capabilities — and it must read as an event, not debug.
+                    logger.warning(
+                        "Adapter '%s' DRIFT: server offered %d tool(s) not in "
+                        "tools_allowed, refused: %s",
+                        adapter.name,
+                        len(drifted),
+                        ", ".join(sorted(drifted)),
+                    )
                 # Clear failure cache on success
                 self._adapter_failures.pop(adapter.name, None)
                 logger.info("Adapter '%s': discovered %d tools", adapter.name, len(mcp_tools))
