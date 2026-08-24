@@ -179,3 +179,130 @@ def test_verify_only_checks_only_the_retained_generations(tmp_path: Path):
         "verification failed against a healthy backup — it compared all 5 local "
         f"dumps to the 2 retained offsite: {result.stdout + result.stderr}"
     )
+
+
+# ── Retention must not eat a live generation ─────────────────────────────────
+# 2026-08-23: the offsite copy had one object whose name does not follow the
+# generation convention — robothor_memory-prereboot-20260714.sql.gz, uploaded
+# by hand before a reboot in July. Its local counterpart was reaped at
+# -mtime +30, so it existed ONLY on the remote.
+#
+# The prune picked victims by sorting every remote *.sql.gz lexicographically
+# and deleting the lowest `excess`. 'p' (0x70) sorts after '2' (0x32), so the
+# orphan was never a candidate — it just permanently occupied a retention slot
+# and forced the deletion of the oldest REAL generation, every single night.
+# The weekly verify then demanded the file the nightly run had just deleted.
+#
+# Two definitions of "the retained set" in one script: verify derives it from
+# LOCAL filenames (:52-54), prune derived it from REMOTE ones (:96-103). They
+# can never be guaranteed consistent. The prune must select from the same set
+# verify checks, and must never treat an unrecognized object as a generation.
+
+FOREIGN = "robothor_memory-prereboot-20260714.sql.gz"
+
+
+def _seed_remote_orphan(dest: Path, name: str = FOREIGN) -> Path:
+    """Put an object on the remote that the local source does not have."""
+    db = dest / "db"
+    db.mkdir(parents=True, exist_ok=True)
+    orphan = db / name
+    with gzip.open(orphan, "wb") as fh:
+        fh.write(b"hand-uploaded-before-a-reboot" * 100)
+    return orphan
+
+
+def test_prune_never_deletes_a_retained_generation_when_remote_has_a_foreign_file(
+    tmp_path: Path,
+):
+    """The production condition, verbatim.
+
+    KEEP=2, three local dumps, plus one non-conforming object already offsite.
+    Every generation the verify will demand must still be there afterwards.
+    """
+    src = _make_source(tmp_path, days=3)
+    dest = tmp_path / "remote"
+    _seed_remote_orphan(dest)
+
+    result = _run(tmp_path, src, dest)  # KEEP=2
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    retained = sorted(f.name for f in src.glob("*.sql.gz"))[-2:]
+    offsite = {f.name for f in (dest / "db").glob("*.sql.gz")}
+    missing = [g for g in retained if g not in offsite]
+    assert not missing, (
+        f"the prune deleted retained generation(s) {missing} — an unrecognized "
+        f"remote object consumed a retention slot. Offsite now: {sorted(offsite)}"
+    )
+
+
+def test_a_pruned_remote_still_verifies(tmp_path: Path):
+    """The end-to-end shape of the incident: replicate, prune, then verify.
+
+    The nightly run reported success at 05:35 and the weekly verify failed at
+    06:30 on the file the nightly run had itself just deleted.
+    """
+    src = _make_source(tmp_path, days=3)
+    dest = tmp_path / "remote"
+    _seed_remote_orphan(dest)
+
+    assert _run(tmp_path, src, dest).returncode == 0
+
+    result = _run(tmp_path, src, dest, ROBOTHOR_OFFSITE_VERIFY_ONLY="1")
+    assert result.returncode == 0, (
+        "verification failed immediately after a successful replication — the "
+        f"prune deleted something verify requires: {result.stdout + result.stderr}"
+    )
+
+
+def test_unrecognized_remote_object_is_reported_not_pruned(tmp_path: Path):
+    """An object that is not a generation is never a retention slot, and never
+    a prune victim — deleting it would destroy the only copy of something a
+    human deliberately put there. Say it out loud instead."""
+    src = _make_source(tmp_path, days=3)
+    dest = tmp_path / "remote"
+    orphan = _seed_remote_orphan(dest)
+
+    result = _run(tmp_path, src, dest)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert orphan.exists(), "an unrecognized remote object was pruned"
+    output = result.stdout + result.stderr
+    assert FOREIGN in output and "unrecognized" in output.lower(), (
+        f"the unrecognized object was not reported: {output}"
+    )
+
+
+def test_verify_distinguishes_missing_from_corrupt(tmp_path: Path):
+    """'Missing offsite' and 'the bytes differ' are different emergencies.
+
+    Collapsing both into 'verification MISMATCH' is what made the 2026-08-23
+    page unreadable: it looked identical to real corruption, so the operator
+    could not tell a benign retention bug from data loss without logging in.
+    """
+    src = _make_source(tmp_path, days=3)
+    dest = tmp_path / "remote"
+    assert _run(tmp_path, src, dest).returncode == 0
+
+    offsite = sorted((dest / "db").glob("*.sql.gz"))
+    assert len(offsite) == 2, [f.name for f in offsite]
+
+    # (a) a generation deleted from the remote
+    gone = offsite[0].name
+    offsite[0].unlink()
+    missing_run = _run(tmp_path, src, dest, ROBOTHOR_OFFSITE_VERIFY_ONLY="1")
+    assert missing_run.returncode != 0
+    missing_out = missing_run.stdout + missing_run.stderr
+    assert "missing" in missing_out.lower(), missing_out
+    assert gone in missing_out, f"the page must name the absent generation: {missing_out}"
+
+    # (b) a generation whose bytes no longer match
+    _run(tmp_path, src, dest)  # restore the remote
+    intact = sorted((dest / "db").glob("*.sql.gz"))[0]
+    intact.write_bytes(b"corrupted")
+    corrupt_run = _run(tmp_path, src, dest, ROBOTHOR_OFFSITE_VERIFY_ONLY="1")
+    assert corrupt_run.returncode != 0
+    corrupt_out = corrupt_run.stdout + corrupt_run.stderr
+    assert "missing" not in corrupt_out.lower(), (
+        f"corruption was reported as a missing file: {corrupt_out}"
+    )
+    assert intact.name in corrupt_out, f"the page must name the bad generation: {corrupt_out}"
