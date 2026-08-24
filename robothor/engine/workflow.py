@@ -559,10 +559,13 @@ class WorkflowEngine:
                 run.status = RunStatus.FAILED if failed > 0 else RunStatus.COMPLETED
 
             # A FAILED run that consumed the whole workflow budget was really
-            # killed by the deadline: asyncio.timeout cancels the step, but the
-            # runner swallows the CancelledError and reports a step *failure*
-            # ('Run cancelled externally'), so the TimeoutError branch above is
-            # unreachable for agent steps. Reclassify honestly.
+            # killed by the deadline. This used to be the ONLY way a workflow
+            # timeout surfaced: the runner absorbed the CancelledError that
+            # asyncio.timeout delivers and reported a step *failure*, leaving
+            # the TimeoutError branch above unreachable for agent steps. The
+            # runner now re-raises an outer cancellation, so that branch does
+            # fire — this reclassification stays as a backstop for steps that
+            # fail for their own reasons right at the deadline.
             if run.status == RunStatus.FAILED and run.duration_ms >= wf.timeout_seconds * 1000:
                 last = run.step_results[-1] if run.step_results else None
                 last_step = last.step_id if last else "unknown"
