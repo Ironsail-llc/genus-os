@@ -652,13 +652,18 @@ class TestGoalsBotCommand:
         # exposes both commands so users see them.
         from pathlib import Path
 
-        import robothor.engine.telegram as tg_mod
+        import robothor.engine.telegram_handlers as tg_mod
 
         with Path(tg_mod.__file__).open(encoding="utf-8") as f:
             src = f.read()
         assert "/goal — Show or update the active session goal" in src
         assert "/goals — Show each agent's benchmark grade" in src
-        assert 'BotCommand(command="goals"' in src
+        # The BotCommand menu registration stays in telegram.py (start_polling);
+        # only the handler bodies moved.
+        import robothor.engine.telegram as tg_main
+
+        menu_src = Path(tg_main.__file__).read_text(encoding="utf-8")
+        assert 'BotCommand(command="goals"' in menu_src
 
 
 class TestStreamingToolVisibility:

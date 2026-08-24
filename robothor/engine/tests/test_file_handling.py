@@ -16,7 +16,8 @@ import pytest
 
 from robothor.engine.chat import MAX_HISTORY, ChatSession, _sessions, get_shared_session
 from robothor.engine.models import RunStatus
-from robothor.engine.telegram import TelegramBot, _extract_pdf_text
+from robothor.engine.telegram import TelegramBot
+from robothor.engine.telegram_handlers import _extract_pdf_text
 
 
 @pytest.fixture

@@ -25,7 +25,9 @@ CAPS = {
     # Lowered 4000 -> 3200 after phase 2 (LLM-call + lifecycle clusters out).
     "robothor/engine/runner.py": 3200,
     # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
-    "robothor/engine/telegram.py": 3150,
+    # Lowered again after phase 3b (_setup_handlers closures -> methods).
+    "robothor/engine/telegram.py": 2000,
+    "robothor/engine/telegram_handlers.py": 1300,
     "robothor/engine/telegram_plan_mode.py": 900,
     "robothor/engine/run_finalizer.py": 1100,
     "robothor/engine/run_lifecycle.py": 800,
