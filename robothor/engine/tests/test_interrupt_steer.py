@@ -172,7 +172,7 @@ class TestInterruptTerminalState:
             patch.object(runner, "_run_verification", verify_spy),
             patch("robothor.engine.runner.create_run"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_step"),
+            patch("robothor.engine.run_finalizer.create_step"),
             patch(
                 "litellm.acompletion",
                 new_callable=AsyncMock,

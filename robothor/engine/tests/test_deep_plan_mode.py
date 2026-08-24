@@ -88,7 +88,7 @@ class TestDeepPlanPreamble:
     @pytest.mark.asyncio
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
-    @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.run_finalizer.create_step")
     @patch("robothor.engine.runner.build_system_prompt", return_value=_MOCK_PROMPT)
     async def test_execute_uses_deep_plan_preamble(
         self, mock_build, mock_step, mock_update, mock_create, runner
@@ -134,7 +134,7 @@ class TestDeepPlanPreamble:
     @pytest.mark.asyncio
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
-    @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.run_finalizer.create_step")
     @patch("robothor.engine.runner.build_system_prompt", return_value=_MOCK_PROMPT)
     async def test_execute_uses_normal_preamble_without_deep_plan(
         self, mock_build, mock_step, mock_update, mock_create, runner
@@ -199,7 +199,7 @@ class TestExecuteDeepContextOverride:
     @pytest.mark.asyncio
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
-    @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.run_finalizer.create_step")
     @patch("robothor.engine.rlm_tool.execute_deep_reason")
     async def test_context_override_used(
         self, mock_rlm, mock_step, mock_update, mock_create, runner
@@ -237,7 +237,7 @@ class TestExecuteDeepContextOverride:
     @pytest.mark.asyncio
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
-    @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.run_finalizer.create_step")
     @patch("robothor.engine.rlm_tool.execute_deep_reason")
     async def test_context_override_ignores_history(
         self, mock_rlm, mock_step, mock_update, mock_create, runner
@@ -272,7 +272,7 @@ class TestExecuteDeepContextOverride:
     @pytest.mark.asyncio
     @patch("robothor.engine.runner.create_run")
     @patch("robothor.engine.runner.update_run")
-    @patch("robothor.engine.runner.create_step")
+    @patch("robothor.engine.run_finalizer.create_step")
     @patch("robothor.engine.rlm_tool.execute_deep_reason")
     async def test_no_context_override_uses_history(
         self, mock_rlm, mock_step, mock_update, mock_create, runner

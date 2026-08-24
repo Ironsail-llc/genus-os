@@ -125,7 +125,7 @@ async def test_rbac_gate_runs_only_for_system_triggers(
     with (
         patch("robothor.engine.runner.create_run"),
         patch("robothor.engine.runner.update_run"),
-        patch("robothor.engine.runner.create_step"),
+        patch("robothor.engine.run_finalizer.create_step"),
         patch("litellm.acompletion", side_effect=_completion),
     ):
         run = await runner.execute(
@@ -152,7 +152,7 @@ async def test_injection_enforce_returns_failed_run_not_raise(
     with (
         patch("robothor.engine.runner.create_run") as mock_create,
         patch("robothor.engine.runner.update_run"),
-        patch("robothor.engine.runner.create_step"),
+        patch("robothor.engine.run_finalizer.create_step"),
     ):
         # A dirty CRON prompt under enforce must NOT raise out of execute();
         # it returns a persisted terminal FAILED run.

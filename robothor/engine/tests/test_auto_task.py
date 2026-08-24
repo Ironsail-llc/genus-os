@@ -90,7 +90,7 @@ class TestAutoTaskResolution:
         mock_resolve = MagicMock(return_value=True)
         with (
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_steps_batch"),
+            patch("robothor.engine.run_finalizer.create_steps_batch"),
             patch("robothor.crm.dal.resolve_task", mock_resolve),
         ):
             runner._persist_run_sync(run)
@@ -114,7 +114,7 @@ class TestAutoTaskResolution:
         mock_update = MagicMock(return_value=True)
         with (
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_steps_batch"),
+            patch("robothor.engine.run_finalizer.create_steps_batch"),
             patch("robothor.crm.dal.update_task", mock_update),
         ):
             runner._persist_run_sync(run)
@@ -137,7 +137,7 @@ class TestAutoTaskResolution:
         mock_resolve = MagicMock()
         with (
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_steps_batch"),
+            patch("robothor.engine.run_finalizer.create_steps_batch"),
             patch("robothor.crm.dal.resolve_task", mock_resolve),
         ):
             runner._persist_run_sync(run)

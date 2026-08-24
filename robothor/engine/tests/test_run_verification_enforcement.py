@@ -262,7 +262,7 @@ class TestVenmoFixtureEndToEnd:
             patch("robothor.engine.tracking.log_guardrail_event"),
             patch("robothor.engine.feature_flags.notify_guardrail_alert"),
             patch("robothor.engine.runner.update_run"),
-            patch("robothor.engine.runner.create_steps_batch"),
+            patch("robothor.engine.run_finalizer.create_steps_batch"),
         ):
             runner._verify_run_claims(run)
             runner._persist_run_sync(run)

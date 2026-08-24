@@ -41,7 +41,7 @@ class TestOnStatusLifecycle:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch(
                         "litellm.acompletion",
                         new_callable=AsyncMock,
@@ -104,7 +104,7 @@ class TestOnStatusLifecycle:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
                             "test-agent",
@@ -139,7 +139,7 @@ class TestOnStatusLifecycle:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch(
                         "litellm.acompletion",
                         new_callable=AsyncMock,
@@ -167,7 +167,7 @@ class TestOnStatusLifecycle:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch(
                         "litellm.acompletion",
                         new_callable=AsyncMock,
@@ -221,7 +221,7 @@ class TestOnStatusLifecycle:
 
         with patch("robothor.engine.runner.create_run"):
             with patch("robothor.engine.runner.update_run"):
-                with patch("robothor.engine.runner.create_step"):
+                with patch("robothor.engine.run_finalizer.create_step"):
                     with patch("litellm.acompletion", side_effect=mock_completion):
                         run = await runner.execute(
                             "test-agent",
