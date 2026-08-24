@@ -48,7 +48,12 @@ _KNOWN_PRE_POLICIES = frozenset(
         "inbound_only",
     }
 )
-_KNOWN_POST_POLICIES = frozenset({"no_sensitive_data"})
+# requires_human_task_closure is enforced post-run (check_task_closure_post_run
+# below) but was missing here — so the engine enforced a policy its own
+# known-set called unknown, and the :243 unknown-policy log flagged every
+# agent that declared it. tests/test_guardrail_list_agreement.py pins all the
+# lists together now.
+_KNOWN_POST_POLICIES = frozenset({"no_sensitive_data", "requires_human_task_closure"})
 _KNOWN_POLICIES = _KNOWN_PRE_POLICIES | _KNOWN_POST_POLICIES
 
 # Patterns for destructive commands
@@ -91,6 +96,10 @@ POLICY_DESCRIPTIONS: dict[str, str] = {
         "If this run reads a task with requires_human=true and does not close or update it, "
         "the engine auto-marks that task IN_PROGRESS at run-end so the next heartbeat will not re-pick it. "
         "To fully close, call update_task(status=DONE) or resolve_task explicitly."
+    ),
+    "inbound_only": (
+        "Outbound email sending is blocked except replies to inbound mail; "
+        "first-contact sends require approval."
     ),
     "no_recent_changelog_reversal": (
         "For writes to docs/agents/*.yaml, any top-level field touched in a changelog entry "

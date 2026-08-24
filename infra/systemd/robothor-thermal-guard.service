@@ -1,0 +1,23 @@
+# Thermal guard — the warning layer the firmware does not provide.
+#
+# This class of box can expose no ACPI trip points ("[Firmware Bug]: No valid
+# trip points!") and hard-cuts power near ~95C with zero warning — three times
+# in Aug 2026 on the first instance, each mistaken for a power outage. The
+# guard script throttles at 85C, pages at 90C, and performs a CLEAN reboot at
+# 94C (DB-safe, self-recovering) before the firmware's dirty cut. Thresholds
+# are env-overridable (ROBOTHOR_THERMAL_*).
+#
+# Adopted into the repo 2026-08-24: this SAFETY control ran on the first
+# instance with no tracked source at all.
+[Unit]
+Description=Robothor — thermal guard (pages at 90C, clean reboot at 94C; firmware exposes no trip points)
+# The guard dying must itself be loud: a silent thermal watchdog is how the
+# next "power outage" happens.
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/robothor/robothor.env
+# Optional '-': /run is tmpfs; absent on cold boot.
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/usr/local/bin/robothor-thermal-guard.sh

@@ -1,0 +1,18 @@
+# Boot-time CPU policy: schedutil governor + a frequency cap for thermal
+# headroom on boxes whose firmware exposes no trip points (see
+# robothor-thermal-guard.service — this sets the steady-state cap, the guard
+# handles excursions). The 65% cap matches the guard's ROBOTHOR_THERMAL_NORMAL_PCT
+# default; instances with adequate cooling can raise both via drop-in.
+#
+# Adopted into the repo 2026-08-24: previously enabled on the first instance
+# with no tracked source.
+[Unit]
+Description=Robothor — schedutil governor + CPU frequency cap (thermal headroom)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'for c in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo schedutil > $c; done; MAXF=$(cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq); CAP=$((MAXF*65/100)); for c in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq; do echo $CAP > $c; done'
+
+[Install]
+WantedBy=multi-user.target

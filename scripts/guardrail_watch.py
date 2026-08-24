@@ -229,6 +229,9 @@ HOST_SCRIPT_DRIFT_PAIRS: list[tuple[str, str]] = [
     ("/usr/local/bin/robothor-pg-basebackup.sh", "scripts/pg-basebackup.sh"),
     ("/usr/local/bin/robothor-wal-offsite.sh", "scripts/wal-offsite.sh"),
     ("/usr/local/bin/robothor-wal-archive.sh", "scripts/wal-archive.sh"),
+    # The thermal guard is a SAFETY control (Aug 2026 GPU event) that ran for
+    # weeks with no repo mirror at all — a rebuilt box would have lost it.
+    ("/usr/local/bin/robothor-thermal-guard.sh", "scripts/thermal-guard.sh"),
 ]
 
 

@@ -1,0 +1,19 @@
+# NATS is the federation transport (robothor/federation/, Ed25519 + HLC).
+# Adopted into the repo 2026-08-24: it ran enabled on the first instance with
+# no tracked source — one of six such units — so a rebuild from the repo would
+# silently lose the federation bus.
+[Unit]
+Description=NATS Server — Robothor Federation Transport
+After=network.target
+Documentation=https://docs.nats.io
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nats-server -c /etc/nats/nats-server.conf
+Restart=always
+RestartSec=5
+KillMode=control-group
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
