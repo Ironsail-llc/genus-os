@@ -1,3 +1,25 @@
+## [1.41.0](https://github.com/Ironsail-llc/genus-os/compare/v1.40.0...v1.41.0) (2026-08-24)
+
+### Features
+
+* **engine:** adapter bundles — tool allowlists and binary pinning ([#363](https://github.com/Ironsail-llc/genus-os/issues/363)) ([2ae3ca6](https://github.com/Ironsail-llc/genus-os/commit/2ae3ca6722f9a44c73262bfaf16b6fba808cec96))
+
+### Bug Fixes
+
+* **ci:** the phone pattern must not fire inside UUID fixtures ([#358](https://github.com/Ironsail-llc/genus-os/issues/358)) ([3d9a0f6](https://github.com/Ironsail-llc/genus-os/commit/3d9a0f6076037d04884597d6796250c66df06370)), closes [#356](https://github.com/Ironsail-llc/genus-os/issues/356)
+
+### Code Refactoring
+
+* **engine:** extract LLM-call and lifecycle clusters (phase 2) ([#360](https://github.com/Ironsail-llc/genus-os/issues/360)) ([ef644cc](https://github.com/Ironsail-llc/genus-os/commit/ef644cc5cd1f585776cebe2e0a3ac31b41abb589))
+* **engine:** extract plan-mode flows from the telegram god-module ([#362](https://github.com/Ironsail-llc/genus-os/issues/362)) ([6a18105](https://github.com/Ironsail-llc/genus-os/commit/6a18105c86ec876f923f83dad9dfc3834d102a17))
+* **engine:** extract run finalization from the runner god-object ([#356](https://github.com/Ironsail-llc/genus-os/issues/356)) ([42a78c4](https://github.com/Ironsail-llc/genus-os/commit/42a78c4acedc9de72603ec2811ab42ed1732a8e3))
+
+### Performance Improvements
+
+* **engine:** eager tool compression, made lossless before being turned on ([#361](https://github.com/Ironsail-llc/genus-os/issues/361)) ([392366c](https://github.com/Ironsail-llc/genus-os/commit/392366c7b8a3b5a243897517292ade9edb595867)), closes [#359](https://github.com/Ironsail-llc/genus-os/issues/359)
+* **engine:** the compaction trigger is finally reachable ([#357](https://github.com/Ironsail-llc/genus-os/issues/357)) ([953e4ff](https://github.com/Ironsail-llc/genus-os/commit/953e4ffe09d09db6759042502b0006906f34062e))
+* **engine:** tool-result offload works — the loop bug is fixed ([#359](https://github.com/Ironsail-llc/genus-os/issues/359)) ([0590518](https://github.com/Ironsail-llc/genus-os/commit/059051821b17cd4fe222789beac5b498d060e00c))
+
 ## [1.40.0](https://github.com/Ironsail-llc/genus-os/compare/v1.39.0...v1.40.0) (2026-08-24)
 
 ### Features
