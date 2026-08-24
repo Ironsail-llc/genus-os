@@ -46,8 +46,36 @@ def _ollama_url() -> str:
         return "http://localhost:11434"
 
 
+# Availability cache. An /api/tags probe ran on EVERY search — pure tax, since
+# the reranker's availability does not change between searches milliseconds
+# apart. A short TTL keeps the degrade-on-outage behaviour: an Ollama restart
+# is noticed within a minute, and a failed probe is cached only briefly so
+# recovery is just as fast.
+_AVAILABILITY_TTL_SECONDS = 60.0
+_availability_cache: dict[str, object] = {}
+
+
+def _availability_cache_clear() -> None:
+    _availability_cache.clear()
+
+
+def _availability_cache_age_for_tests(seconds: float) -> None:
+    if "at" in _availability_cache:
+        _availability_cache["at"] = float(_availability_cache["at"]) - seconds  # type: ignore[arg-type]
+
+
 async def check_reranker_available() -> bool:
-    """Check if a reranker model is available in Ollama."""
+    """Check if a reranker model is available in Ollama (cached, 60s TTL)."""
+    cached_at = _availability_cache.get("at")
+    if cached_at is not None and (time.time() - float(cached_at)) < _AVAILABILITY_TTL_SECONDS:  # type: ignore[arg-type]
+        return bool(_availability_cache.get("value"))
+    result = await _check_reranker_available_uncached()
+    _availability_cache["at"] = time.time()
+    _availability_cache["value"] = result
+    return result
+
+
+async def _check_reranker_available_uncached() -> bool:
     global RERANKER_MODEL  # noqa: PLW0603
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -106,7 +134,8 @@ async def rerank_pair(
                 "raw": True,
                 "stream": False,
                 "keep_alive": _keep_alive_reranker(),
-                "options": {"temperature": 0.0, "num_predict": 2},
+                # One token is enough for yes/no — the parser only checks the prefix.
+                "options": {"temperature": 0.0, "num_predict": 1},
             },
         )
         resp.raise_for_status()
@@ -148,6 +177,18 @@ async def rerank(
         for r in results[:top_k]:
             r["rerank_relevant"] = "skipped"
         return results[:top_k]
+
+    # Cap the scored pool. The candidates arrive RRF-ordered from the fused
+    # retrieval legs, so pairs past the cap were already ranked out by BOTH
+    # legs — scoring them buys ~nothing and each pair costs a serialized
+    # ~37ms Ollama generate call. Scoring all 30-60 fused candidates was 97%
+    # of search_facts's 1.3s p50 (measured 2026-08-24). 0 disables the cap.
+    try:
+        max_candidates = int(os.environ.get("MEMORY_RERANK_MAX_CANDIDATES", "16"))
+    except ValueError:
+        max_candidates = 16
+    if max_candidates > 0:
+        results = results[:max_candidates]
 
     t0 = time.time()
     yes_results: list[dict[str, Any]] = []
