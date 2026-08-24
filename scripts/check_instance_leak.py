@@ -46,9 +46,15 @@ LEAK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # Hardcoded home directory paths
     (re.compile(r"/home/\w+/"), "hardcoded home path — use $ROBOTHOR_WORKSPACE or Path.home()"),
     (re.compile(r"/Users/\w+/"), "hardcoded home path — use $ROBOTHOR_WORKSPACE or Path.home()"),
-    # Phone numbers (US format)
+    # Phone numbers (US format). Boundary guards on both sides: without them
+    # this fired inside UUID-shaped fixture ids ('…-0000-0000-0000-…' contains
+    # 000-000 0000) and flagged any PR that merely touched a file containing a
+    # UUID literal. A match embedded in a longer digit/hex/hyphen run is an
+    # identifier, not a phone number.
     (
-        re.compile(r"\+?1?\s*[-.(]?\d{3}[-.)]\s*\d{3}[-.]?\d{4}"),
+        re.compile(
+            r"(?<![\d.\-])\+?1?\s*[-.(]?\d{3}[-.)]\s*\d{3}[-.]?\d{4}(?![\d.\-])"
+        ),
         "possible phone number — move to brain/CLAUDE.md or .env",
     ),
     # Street addresses

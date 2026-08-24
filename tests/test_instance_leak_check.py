@@ -154,3 +154,33 @@ def test_the_leak_gate_job_has_full_history():
         assert checkout.get("with", {}).get("fetch-depth") == 0
         return
     pytest.fail("no job runs the leak gate")
+
+
+class TestPhonePatternPrecision:
+    """The US-phone regex fired inside UUID-shaped test fixtures
+    ('00000000-0000-0000-0000-…' contains 000-000 0000), which made the CI
+    gate flag any PR that merely TOUCHED a file with a UUID literal — the
+    first victim was the runner decomposition, for retargeting a patch in a
+    test whose fixtures it never changed. A gate that cries wolf on fixtures
+    gets bypassed; precision is part of the control."""
+
+    def test_uuid_fixture_ids_are_not_phone_numbers(self):
+        for line in (
+            'id="00000000-0000-0000-0000-0000000000rv",\n',
+            'run_id = "00000000-0000-0000-0000-00000006cb7e"\n',
+            "correlation: 123e4567-e89b-12d3-a456-426614174000\n",
+        ):
+            assert check("robothor/engine/tests/x.py", line) == [], line
+
+    def test_a_real_phone_number_is_still_caught(self):
+        # Assembled at runtime so THIS source file's own line is not
+        # phone-shaped — the gate scans changed files, this one included, and
+        # its first CI run flagged its own fixtures. (555 = reserved block.)
+        number = "-".join(["415", "555", "2671"])
+        assert check("robothor/notes.py", f"call me at {number}\n"), (
+            "the boundary guards must not blind the gate to real numbers"
+        )
+
+    def test_parenthesized_phone_is_still_caught(self):
+        number = "(" + "212" + ") " + "867" + "-" + "5309"
+        assert check("robothor/notes.py", f"office: {number}\n")
