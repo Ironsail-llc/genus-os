@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from robothor.engine.config import EngineConfig
-
     from robothor.engine.session import AgentSession
 
 
