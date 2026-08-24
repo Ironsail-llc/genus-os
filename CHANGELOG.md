@@ -1,3 +1,19 @@
+## [1.43.0](https://github.com/Ironsail-llc/genus-os/compare/v1.42.0...v1.43.0) (2026-08-24)
+
+### Features
+
+* **engine:** a workflow can ask a human and survive the wait ([#366](https://github.com/Ironsail-llc/genus-os/issues/366)) ([7d6b85a](https://github.com/Ironsail-llc/genus-os/commit/7d6b85ab7914a1b183f750e0e4c344c1cdbe6c6e))
+
+### Bug Fixes
+
+* **benchmark:** a case the harness killed is not a case the agent failed ([#368](https://github.com/Ironsail-llc/genus-os/issues/368)) ([1ac95d0](https://github.com/Ironsail-llc/genus-os/commit/1ac95d0510eb34b67e39b069ef12073dbb765168))
+* **engine:** a cancelled run stays cancelled ([#369](https://github.com/Ironsail-llc/genus-os/issues/369)) ([840b21e](https://github.com/Ironsail-llc/genus-os/commit/840b21e56a31692124c77b063de518844694e31e)), closes [#368](https://github.com/Ironsail-llc/genus-os/issues/368) [#368](https://github.com/Ironsail-llc/genus-os/issues/368) [#368](https://github.com/Ironsail-llc/genus-os/issues/368)
+* **flags:** the inert-control detector must not overstate what it can see ([#370](https://github.com/Ironsail-llc/genus-os/issues/370)) ([3ae5ae0](https://github.com/Ironsail-llc/genus-os/commit/3ae5ae0d42a3f8d3c07d4425b6bb7d4cd958780b))
+
+### Code Refactoring
+
+* **engine:** make the tool gates say out loud what they each do ([#367](https://github.com/Ironsail-llc/genus-os/issues/367)) ([4f0a637](https://github.com/Ironsail-llc/genus-os/commit/4f0a637f492a25c1d26b0c5632cf2723715b25e5))
+
 ## [1.42.0](https://github.com/Ironsail-llc/genus-os/compare/v1.41.1...v1.42.0) (2026-08-24)
 
 ### Features

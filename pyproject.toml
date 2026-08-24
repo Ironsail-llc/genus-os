@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "genusos"
-version = "1.42.0"
+version = "1.43.0"
 description = "Self-hosted AI agent operating system: deterministic engine, plugin-style skills and connectors, multi-tenant CRM and memory. Everything is a plugin."
 readme = "README.md"
 license = "MIT"
