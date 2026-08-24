@@ -4,8 +4,11 @@ It had no tests at all, and on 2026-08-23 it passed a real leak:
 infra/tmpfiles/robothor-restart.conf shipped `d /run/robothor/restart-requests
 0700 philip philip -` into git. Two independent holes let that through.
 
-  1. scripts/instance_leak_allowlist.yaml had globally exempted the string
-     `/home/philip/robothor` across the entire tracked tree since 2026-05-28.
+  1. scripts/instance_leak_allowlist.yaml had globally exempted the operator's
+     own workspace path (slash-home-slash-<operator>-slash-robothor, not spelled
+     literally here or this very file would trip the gate — which the CI run
+     that caught the first version of this docstring proved) across the entire
+     tracked tree since 2026-05-28.
      The hook ran and passed; it was not bypassed. That is worse.
   2. There was no pattern for a bare POSITIONAL account. tmpfiles.d rows spell
      the user and group as columns 4 and 5 with no `User=` prefix, so neither
