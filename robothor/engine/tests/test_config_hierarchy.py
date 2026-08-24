@@ -256,3 +256,73 @@ class TestRuntimeOverrides:
             assert result == {"v2": {"safety_cap": 500}}
         finally:
             config_mod._runtime_overrides = old
+
+
+class TestValidateManifestModelBlock:
+    """Every model a manifest names must exist in the registry.
+
+    Nothing checked this before, and it let a fallback chain end in fiction:
+    docs/agents/_defaults.yaml and main.yaml named ollama_chat/qwen3.8:27b as
+    the last-resort tier for ~30 hours while no server anywhere could serve it
+    — litellm routes ollama_chat/* to :11434, where the model did not exist.
+    During a real OpenRouter outage the chain would have spent 2 x 600s
+    (LLM_REQUEST_TIMEOUT_OLLAMA) connecting to nothing and then raised. The
+    dead tier made outages twenty minutes SLOWER, and no log line said why.
+
+    A typo'd model name is exactly as silent: get_model_limits falls back to a
+    generic 128K limit with a warning nobody reads, and the model is simply
+    skipped at dispatch.
+    """
+
+    def test_unknown_primary_model_warns(self):
+        data = {"id": "a", "model": {"primary": "openrouter/nonexistent/model-xyz"}}
+        warnings = validate_manifest(data)
+        assert any("nonexistent/model-xyz" in w for w in warnings), warnings
+
+    def test_unknown_fallback_model_warns(self):
+        data = {
+            "id": "a",
+            "model": {
+                "primary": "openrouter/xiaomi/mimo-v2.5",
+                "fallbacks": ["ollama_chat/qwen99:1b"],
+            },
+        }
+        warnings = validate_manifest(data)
+        assert any("qwen99:1b" in w for w in warnings), warnings
+
+    def test_registered_models_do_not_warn(self):
+        data = {
+            "id": "a",
+            "model": {
+                "primary": "openrouter/xiaomi/mimo-v2.5",
+                "fallbacks": [
+                    "openrouter/anthropic/claude-sonnet-4.6",
+                    "ollama_chat/qwen3.8:27b",
+                ],
+            },
+        }
+        warnings = validate_manifest(data)
+        assert not any("not in the model registry" in w for w in warnings), warnings
+
+    def test_heartbeat_and_worker_model_blocks_are_checked(self):
+        """The incident file's broken entry was in the HEARTBEAT model block —
+        a top-level-only check would have missed it."""
+        data = {
+            "id": "a",
+            "model": {"primary": "openrouter/xiaomi/mimo-v2.5"},
+            "heartbeat": {"model": {"fallbacks": ["ollama_chat/bogus:27b"]}},
+            "worker": {"model": {"primary": "openrouter/fake/worker-model"}},
+        }
+        warnings = validate_manifest(data)
+        assert any("bogus:27b" in w for w in warnings), warnings
+        assert any("fake/worker-model" in w for w in warnings), warnings
+
+    def test_empty_model_block_is_fine(self):
+        assert not any("model registry" in w for w in validate_manifest({"id": "a"}))
+
+    def test_env_var_placeholders_are_not_flagged(self):
+        """Manifests may reference ${VARS} resolved at load time; an unresolved
+        placeholder is a different problem than an unknown model."""
+        data = {"id": "a", "model": {"primary": "${ROBOTHOR_PRIMARY_MODEL}"}}
+        warnings = validate_manifest(data)
+        assert not any("model registry" in w for w in warnings), warnings
