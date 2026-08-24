@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -444,7 +444,6 @@ class TestCheckPrimaryModelUnreached:
 
         assert agent not in rows
 
-
     def test_runs_predating_a_primary_switch_are_excluded(
         self, db_cursor, mock_get_connection
     ) -> None:
@@ -464,9 +463,7 @@ class TestCheckPrimaryModelUnreached:
             age_hours=96.0,
         )
 
-        switch_at = (
-            datetime.now(timezone.utc) - timedelta(hours=24)
-        ).isoformat()
+        switch_at = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
 
         rows = {
             r["agent_id"]: r
@@ -489,9 +486,7 @@ class TestCheckPrimaryModelUnreached:
             age_hours=2.0,
         )
 
-        switch_at = (
-            datetime.now(timezone.utc) - timedelta(hours=24)
-        ).isoformat()
+        switch_at = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
 
         rows = {
             r["agent_id"]: r

@@ -28,8 +28,8 @@ import json
 import logging
 import os
 import time
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from psycopg2.extras import RealDictCursor
@@ -801,7 +801,7 @@ def _configured_primaries() -> dict[str, str]:
 _DEFAULTS_STEM = "_defaults"
 
 
-def _primary_changed_at(manifest_dir=None) -> dict[str, str]:
+def _primary_changed_at(manifest_dir: Path | None = None) -> dict[str, str]:
     """Return ``{agent_id: RFC3339 timestamp}`` of each manifest's last change.
 
     Uses filesystem ``mtime`` rather than git history: in this deployment the
