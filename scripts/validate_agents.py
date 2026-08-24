@@ -50,32 +50,56 @@ def _import_checks():
     return load_schema, validate_agent
 
 
-def load_manifests(agent_id: str | None = None) -> dict:
-    """Load YAML manifests from docs/agents/.
+def load_manifests(
+    agent_id: str | None = None,
+    *,
+    instance: bool = False,
+    manifest_dir: Path | None = None,
+) -> tuple[dict, list[dict]]:
+    """Load YAML manifests. Returns ``(manifests_by_id, parse_failures)``.
 
-    Only tracked manifests are validated — instance-local (gitignored)
-    manifests are skipped so the platform validator never fails on agents
-    that live only in a single operator's fleet.
+    Default mode: git-TRACKED manifests only — the platform CI gate must not
+    fail on agents that live in a single operator's fleet.
+
+    ``--instance``: every manifest PRESENT. Every real instance manifest is
+    gitignored, so on a box running 25 manifests the default mode validated
+    exactly one — the validator was green because it checked almost nothing,
+    and on 2026-08-23 it had no opinion about the broken main.yaml that took
+    the primary agent down for 3h48m.
+
+    Parse failures are RETURNED, never raised: a validator that tracebacks on
+    the exact defect it exists to catch is decoration. The failure carries the
+    bare filename only — this output lands in a paged/journaled report, and
+    platform output must not surface instance paths.
     """
     import subprocess
 
-    try:
-        tracked = subprocess.check_output(
-            ["git", "ls-files", "docs/agents/*.yaml"],
-            cwd=REPO_ROOT,
-            text=True,
-        )
-        tracked_paths = {REPO_ROOT / p for p in tracked.splitlines() if p.strip()}
-    except (subprocess.SubprocessError, FileNotFoundError):
-        # Fall back to globbing everything if git isn't available (tarball install).
-        tracked_paths = set(MANIFEST_DIR.glob("*.yaml"))
+    directory = manifest_dir or MANIFEST_DIR
+    if instance:
+        candidate_paths = set(directory.glob("*.yaml"))
+    else:
+        try:
+            tracked = subprocess.check_output(
+                ["git", "ls-files", "docs/agents/*.yaml"],
+                cwd=REPO_ROOT,
+                text=True,
+            )
+            tracked_paths = {REPO_ROOT / p for p in tracked.splitlines() if p.strip()}
+        except (subprocess.SubprocessError, FileNotFoundError):
+            # Fall back to globbing everything if git isn't available (tarball install).
+            tracked_paths = set(directory.glob("*.yaml"))
+        candidate_paths = {f for f in directory.glob("*.yaml") if f in tracked_paths}
 
-    manifests = {}
-    for f in sorted(MANIFEST_DIR.glob("*.yaml")):
-        if f not in tracked_paths:
+    manifests: dict = {}
+    parse_failures: list[dict] = []
+    for f in sorted(candidate_paths):
+        try:
+            with f.open() as fh:
+                data = yaml.safe_load(fh)
+        except yaml.YAMLError as e:
+            detail = str(e).replace(str(f.parent) + "/", "").replace(str(f.parent), "")
+            parse_failures.append({"file": f.name, "error": detail.split("\n")[0][:200]})
             continue
-        with f.open() as fh:
-            data = yaml.safe_load(fh)
         if (
             data
             and isinstance(data, dict)
@@ -83,7 +107,7 @@ def load_manifests(agent_id: str | None = None) -> dict:
             and (agent_id is None or data["id"] == agent_id)
         ):
             manifests[data["id"]] = data
-    return manifests
+    return manifests, parse_failures
 
 
 def get_registered_tools() -> set[str]:
@@ -113,7 +137,29 @@ def main():
         action="store_true",
         help="Run chain validation checks M-R in addition to A-L",
     )
+    parser.add_argument(
+        "--instance",
+        action="store_true",
+        help="Validate EVERY manifest present, not just git-tracked ones — "
+        "for on-box use (guardrail watch); instance manifests are gitignored "
+        "and invisible to the default mode",
+    )
+    parser.add_argument(
+        "--manifest-dir",
+        type=Path,
+        default=None,
+        help="Override the manifest directory (default docs/agents/)",
+    )
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help="Workspace root for file-existence checks (default: this repo). "
+        "Instruction/bootstrap paths in manifests are workspace-relative, so "
+        "validating another instance's manifests needs its root, not ours.",
+    )
     args = parser.parse_args()
+    workspace = args.workspace or REPO_ROOT
 
     load_schema, validate_agent = _import_checks()
 
@@ -124,11 +170,23 @@ def main():
     else:
         print("Schema: schema.yaml not found, using minimal required fields")
 
-    # Load all TRACKED manifests. Agent manifests are instance config and
-    # mostly gitignored, so a clean platform checkout yields zero. That's
-    # fine — the platform ships no enforced fleet.
-    all_manifests = load_manifests()
-    if not all_manifests:
+    # Default: TRACKED manifests only (agent manifests are instance config and
+    # mostly gitignored — a clean platform checkout yields zero, and that's
+    # fine: the platform ships no enforced fleet). --instance flips to
+    # everything present.
+    all_manifests, parse_failures = load_manifests(
+        instance=args.instance, manifest_dir=args.manifest_dir
+    )
+    if parse_failures:
+        print()
+        print("=== UNPARSEABLE MANIFESTS ===")
+        for pf in parse_failures:
+            print(f"  {pf['file']}: {pf['error']}")
+        print(
+            f"{len(parse_failures)} manifest(s) could not be parsed — the agents "
+            "they define DO NOT EXIST as far as the engine is concerned."
+        )
+    if not all_manifests and not parse_failures:
         print(
             "OK: No tracked manifests found — agent manifests are instance config, not platform code."
         )
@@ -143,7 +201,7 @@ def main():
 
     # Filter to single agent if specified
     if args.agent:
-        target = load_manifests(args.agent)
+        target = {k: v for k, v in all_manifests.items() if k == args.agent}
         if not target:
             print(f"ERROR: No manifest found for '{args.agent}'", file=sys.stderr)
             sys.exit(1)
@@ -172,13 +230,13 @@ def main():
             manifest,
             all_manifests,
             registered_tools,
-            repo_root=REPO_ROOT,
+            repo_root=workspace,
             ci=args.ci,
         )
 
         # Append chain checks M-R if requested
         if chain_validate:
-            chain_results = chain_validate(manifest, all_manifests, repo_root=REPO_ROOT)
+            chain_results = chain_validate(manifest, all_manifests, repo_root=workspace)
             results.extend(chain_results)
 
         all_results[agent_id] = results
@@ -205,6 +263,7 @@ def main():
         json.dump(
             {
                 "agents": output,
+                "parse_failures": parse_failures,
                 "summary": {
                     "total_agents": len(all_results),
                     "total_checks": total_pass + total_warn + total_fail + total_skip,
@@ -218,7 +277,7 @@ def main():
             indent=2,
         )
         print()
-        sys.exit(1 if total_fail > 0 else 0)
+        sys.exit(1 if (total_fail > 0 or parse_failures) else 0)
 
     # Human-readable output
     print()
@@ -272,7 +331,9 @@ def main():
         f"{agents_clean} clean, {agents_warn} warnings, {agents_fail} failures"
     )
 
-    sys.exit(1 if total_fail > 0 else 0)
+    # A parse failure fails the run: the file names an agent that does not
+    # exist as far as the engine is concerned, which is the 2026-08-23 outage.
+    sys.exit(1 if (total_fail > 0 or parse_failures) else 0)
 
 
 if __name__ == "__main__":
