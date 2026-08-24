@@ -78,6 +78,7 @@ from robothor.engine.stall_watchdog import (
     _fleet_wallclock_ceiling,
     _StallWatchdog,
 )
+from robothor.engine.tool_admission import ToolAdmissionMixin  # noqa: E402
 from robothor.engine.tools import get_registry
 from robothor.engine.tracking import create_run, update_run
 
@@ -522,7 +523,12 @@ def proactive_compaction_threshold(max_input_tokens: int) -> int:
     return min(fraction, budget)
 
 
-class AgentRunner(LLMCallMixin, RunLifecycleMixin, RunFinalizationMixin):
+class AgentRunner(
+    LLMCallMixin,
+    RunLifecycleMixin,
+    RunFinalizationMixin,
+    ToolAdmissionMixin,
+):
     """Executes agents: builds prompt, enters tool loop, tracks everything."""
 
     def __init__(self, config: EngineConfig) -> None:
@@ -1935,7 +1941,6 @@ class AgentRunner(LLMCallMixin, RunLifecycleMixin, RunFinalizationMixin):
 
         # ── v2: Lifecycle hooks ──
         from robothor.engine.hook_registry import (
-            HookAction,
             HookContext,
             HookEvent,
             get_hook_registry,
@@ -2328,299 +2333,34 @@ class AgentRunner(LLMCallMixin, RunLifecycleMixin, RunFinalizationMixin):
                 except json.JSONDecodeError:
                     tool_args = {}
 
-                # ── [PLAN MODE GUARD] Runtime enforcement ──
-                # Belt-and-suspenders: even though schemas are filtered,
-                # block any non-readonly tool call during plan mode at runtime.
-                if readonly_mode and tool_name not in _readonly_tool_set:
-                    guard_msg = (
-                        f"Tool '{tool_name}' is not available in plan mode. "
-                        "Only read-only tools can be used during planning."
-                    )
-                    session.record_tool_call(
+                # ── [ADMISSION] Every gate between the ask and the call ──
+                # Order is a security property; see tool_admission.py.
+                verdict = await self._admit_tool_call(
+                    tc=tc,
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    session=session,
+                    agent_config=agent_config,
+                    guardrail_engine=guardrail_engine,
+                    hook_registry=hook_registry,
+                    readonly_mode=readonly_mode,
+                    readonly_tool_set=_readonly_tool_set,
+                    allowed_tool_set=_allowed_tool_set,
+                )
+                # A MODIFY hook may have rewritten the arguments; the call
+                # below must use what admission returned, never its own copy.
+                tool_args = verdict.tool_args
+                if not verdict.allowed:
+                    self._record_refusal(
+                        verdict,
+                        tc=tc,
                         tool_name=tool_name,
-                        tool_input=tool_args,
-                        tool_output={"error": guard_msg, "guard": "plan_mode"},
-                        tool_call_id=tc.id,
-                        error_message=guard_msg,
+                        session=session,
+                        scratchpad=scratchpad,
+                        escalation=escalation,
+                        iteration_errors=iteration_errors,
                     )
-                    iteration_errors.append((tool_name, guard_msg, None))
-                    if scratchpad:
-                        scratchpad.record_tool_call(tool_name, error=guard_msg)
                     continue
-
-                # ── [TOOLS_ALLOWED GUARD] Runtime enforcement ──
-                # Belt-and-suspenders: even though schemas are filtered,
-                # block any tool call not in the agent's allowed set.
-                if _allowed_tool_set and tool_name not in _allowed_tool_set:
-                    guard_msg = f"Tool '{tool_name}' is not available to this agent."
-                    session.record_tool_call(
-                        tool_name=tool_name,
-                        tool_input=tool_args,
-                        tool_output={"error": guard_msg, "guard": "tools_allowed"},
-                        tool_call_id=tc.id,
-                        error_message=guard_msg,
-                    )
-                    iteration_errors.append((tool_name, guard_msg, None))
-                    if scratchpad:
-                        scratchpad.record_tool_call(tool_name, error=guard_msg)
-                    continue
-
-                # ── [HOOKS] Pre-tool-use lifecycle hook ──
-                if hook_registry:
-                    try:
-                        pre_tool_ctx = HookContext(
-                            event=HookEvent.PRE_TOOL_USE,
-                            agent_id=agent_config.id,
-                            run_id=session.run.id,
-                            tool_name=tool_name,
-                            tool_args=tool_args,
-                        )
-                        pre_hr = await hook_registry.dispatch(HookEvent.PRE_TOOL_USE, pre_tool_ctx)
-                        if pre_hr.action == HookAction.BLOCK:
-                            block_msg = f"Blocked by lifecycle hook: {pre_hr.reason}"
-                            session.record_tool_call(
-                                tool_name=tool_name,
-                                tool_input=tool_args,
-                                tool_output={"error": block_msg, "hook": "pre_tool_use"},
-                                tool_call_id=tc.id,
-                                error_message=block_msg,
-                            )
-                            iteration_errors.append((tool_name, block_msg, None))
-                            if scratchpad:
-                                scratchpad.record_tool_call(tool_name, error=block_msg)
-                            if escalation:
-                                escalation.record_error()
-                            continue
-                        if pre_hr.action == HookAction.MODIFY and pre_hr.modified_args:
-                            tool_args = pre_hr.modified_args
-                    except Exception as e:
-                        logger.warning(
-                            "PRE_TOOL_USE hook error for %s: %s", _sanitize(tool_name), _sanitize(e)
-                        )
-
-                # ── [GUARDRAILS] Pre-execution check ──
-                if guardrail_engine:
-                    gr = guardrail_engine.check_pre_execution(
-                        tool_name,
-                        tool_args,
-                        agent_id=agent_config.id,
-                        prior_steps=session.run.steps,
-                    )
-                    # ── [OBSERVE] Allowed, but a rollout-gated guardrail would
-                    # have blocked this in enforce mode. Persist it: a soak that
-                    # records nothing cannot distinguish "clean" from "blind".
-                    if gr.allowed and gr.action == "observed":
-                        try:
-                            from robothor.engine.tracking import log_guardrail_event
-
-                            log_guardrail_event(
-                                run_id=session.run.id,
-                                guardrail_name=gr.guardrail_name,
-                                action="observed",
-                                tool_name=tool_name,
-                                reason=gr.reason,
-                                mode="observe",
-                                step_number=len(session.run.steps),
-                            )
-                        except Exception as _audit_exc:  # noqa: BLE001
-                            # A control fired; losing its audit trail is itself an
-                            # incident. Never let this write fail silently.
-                            logger.error(
-                                "guardrail event could not be recorded: %s",
-                                _sanitize(_audit_exc),
-                            )
-                    if not gr.allowed:
-                        # ── [HUMAN APPROVAL] Escalation for opt-in agents ──
-                        if gr.action == "escalate":
-                            from robothor.engine.permission_escalation import (
-                                get_permission_manager,
-                            )
-
-                            mgr = get_permission_manager()
-                            if mgr:
-                                approved = await mgr.request_approval(
-                                    agent_id=agent_config.id,
-                                    run_id=session.run_id,
-                                    tool_name=tool_name,
-                                    tool_args=tool_args,
-                                    guardrail_name=gr.guardrail_name,
-                                    reason=gr.reason,
-                                    timeout_seconds=agent_config.human_approval_timeout,
-                                )
-                                if approved:
-                                    pass  # fall through to execute tool
-                                else:
-                                    gr_error_msg = (
-                                        f"Denied by operator ({gr.guardrail_name}): {gr.reason}"
-                                    )
-                                    session.record_tool_call(
-                                        tool_name=tool_name,
-                                        tool_input=tool_args,
-                                        tool_output={"error": gr_error_msg},
-                                        tool_call_id=tc.id,
-                                        error_message=gr_error_msg,
-                                    )
-                                    if scratchpad:
-                                        scratchpad.record_tool_call(tool_name, error=gr_error_msg)
-                                    continue
-                            elif agent_config.human_approval_fail_open:
-                                pass  # opted-in unattended autonomy: auto-approve
-                            else:
-                                # No approver reachable. Legacy behavior auto-
-                                # approves; ROBOTHOR_APPROVAL_* makes this fail
-                                # closed (observe logs the would-deny; enforce
-                                # denies the tool).
-                                from robothor.engine.feature_flags import approval_mode
-                                from robothor.engine.permission_escalation import (
-                                    fail_closed_on_missing_manager,
-                                )
-
-                                _appr_mode = approval_mode()
-                                if _appr_mode != "off":
-                                    try:
-                                        from robothor.engine.tracking import log_guardrail_event
-
-                                        log_guardrail_event(
-                                            run_id=session.run.id,
-                                            guardrail_name=gr.guardrail_name,
-                                            action="blocked"
-                                            if _appr_mode == "enforce"
-                                            else "observed",
-                                            tool_name=tool_name,
-                                            reason="human approval required but no approver reachable",
-                                            mode=_appr_mode,
-                                            step_number=len(session.run.steps),
-                                        )
-                                    except Exception as _audit_exc:  # noqa: BLE001
-                                        # A control fired; losing its audit trail is itself an
-                                        # incident. Never let this write fail silently.
-                                        logger.error(
-                                            "guardrail event could not be recorded: %s",
-                                            _sanitize(_audit_exc),
-                                        )
-                                if fail_closed_on_missing_manager():
-                                    gr_error_msg = (
-                                        f"Denied — human approval required for "
-                                        f"{gr.guardrail_name} but no approver is reachable"
-                                    )
-                                    session.record_tool_call(
-                                        tool_name=tool_name,
-                                        tool_input=tool_args,
-                                        tool_output={"error": gr_error_msg},
-                                        tool_call_id=tc.id,
-                                        error_message=gr_error_msg,
-                                    )
-                                    if scratchpad:
-                                        scratchpad.record_tool_call(tool_name, error=gr_error_msg)
-                                    if escalation:
-                                        escalation.record_error()
-                                    continue
-                                # otherwise auto-approve (legacy) and fall through
-                        else:
-                            gr_error_msg = (
-                                f"Blocked by guardrail ({gr.guardrail_name}): {gr.reason}"
-                            )
-                            session.record_tool_call(
-                                tool_name=tool_name,
-                                tool_input=tool_args,
-                                tool_output={"error": gr_error_msg, "guardrail": gr.guardrail_name},
-                                tool_call_id=tc.id,
-                                error_message=gr_error_msg,
-                            )
-                            iteration_errors.append((tool_name, gr_error_msg, None))
-                            try:
-                                from robothor.engine.tracking import (
-                                    log_guardrail_event,
-                                    log_tool_event,
-                                )
-
-                                log_tool_event(
-                                    run_id=session.run.id,
-                                    tool_name=tool_name,
-                                    duration_ms=0,
-                                    success=False,
-                                    error_type="guardrail_blocked",
-                                )
-                                # Make the guardrail block visible in the audit
-                                # table the health dashboard reads (PR-1).
-                                log_guardrail_event(
-                                    run_id=session.run.id,
-                                    guardrail_name=gr.guardrail_name,
-                                    action="blocked",
-                                    tool_name=tool_name,
-                                    reason=gr.reason,
-                                    mode="enforce",
-                                    step_number=len(session.run.steps),
-                                )
-                            except Exception as _audit_exc:  # noqa: BLE001
-                                # A control fired; losing its audit trail is itself an
-                                # incident. Never let this write fail silently.
-                                logger.error(
-                                    "guardrail event could not be recorded: %s",
-                                    _sanitize(_audit_exc),
-                                )
-                            if scratchpad:
-                                scratchpad.record_tool_call(tool_name, error=gr_error_msg)
-                            if escalation:
-                                escalation.record_error()
-                            continue
-
-                # ── [RBAC] System-run permission gate ──
-                # Only genuinely autonomous, no-interactive-user runs are governed
-                # by the (permissive) service_role here. Interactive surfaces
-                # (telegram/webchat/slack/ide/manual/webhook/channel) are gated by
-                # the dispatch user_role check instead — an ALLOWLIST so a new
-                # trigger type defaults to the restrictive user path, not
-                # service_role. See _SYSTEM_TRIGGER_TYPES.
-                if agent_config is not None and session.run.trigger_type in _SYSTEM_TRIGGER_TYPES:
-                    from robothor.engine.feature_flags import rbac_enforcement_mode
-                    from robothor.engine.permissions import classify_system_tool_access
-
-                    _rbac_mode = rbac_enforcement_mode()
-                    # check_tool_permission opens a sync DB connection; keep it off
-                    # the event loop so a slow round-trip can't stall the engine.
-                    _rbac_action, _rbac_reason = await asyncio.to_thread(
-                        classify_system_tool_access,
-                        agent_config.service_role,
-                        session.run.tenant_id,
-                        tool_name,
-                        _rbac_mode,
-                    )
-                    if _rbac_action != "allow":
-                        try:
-                            from robothor.engine.tracking import log_guardrail_event
-
-                            log_guardrail_event(
-                                run_id=session.run.id,
-                                guardrail_name="rbac",
-                                action="blocked" if _rbac_action == "block" else "observed",
-                                tool_name=tool_name,
-                                reason=_rbac_reason,
-                                mode=_rbac_mode,
-                                step_number=len(session.run.steps),
-                            )
-                        except Exception as _audit_exc:  # noqa: BLE001
-                            # A control fired; losing its audit trail is itself an
-                            # incident. Never let this write fail silently.
-                            logger.error(
-                                "guardrail event could not be recorded: %s",
-                                _sanitize(_audit_exc),
-                            )
-                        if _rbac_action == "block":
-                            rbac_msg = f"Blocked by RBAC: {_rbac_reason}"
-                            session.record_tool_call(
-                                tool_name=tool_name,
-                                tool_input=tool_args,
-                                tool_output={"error": rbac_msg, "guardrail": "rbac"},
-                                tool_call_id=tc.id,
-                                error_message=rbac_msg,
-                            )
-                            iteration_errors.append((tool_name, rbac_msg, None))
-                            if scratchpad:
-                                scratchpad.record_tool_call(tool_name, error=rbac_msg)
-                            if escalation:
-                                escalation.record_error()
-                            continue
 
                 # Emit tool_start event
                 if on_tool:

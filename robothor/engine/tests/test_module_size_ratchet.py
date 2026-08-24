@@ -23,7 +23,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # module -> (cap_lines, rationale)
 CAPS = {
     # Lowered 4000 -> 3200 after phase 2 (LLM-call + lifecycle clusters out).
-    "robothor/engine/runner.py": 3200,
+    # Lowered 3200 -> 2900 after phase 4 (tool-call admission gates out).
+    "robothor/engine/runner.py": 2900,
     # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
     # Lowered again after phase 3b (_setup_handlers closures -> methods).
     "robothor/engine/telegram.py": 2000,
@@ -32,6 +33,7 @@ CAPS = {
     "robothor/engine/run_finalizer.py": 1100,
     "robothor/engine/run_lifecycle.py": 800,
     "robothor/engine/run_llm_calls.py": 450,
+    "robothor/engine/tool_admission.py": 400,
     "robothor/engine/chat.py": 1600,
     "robothor/engine/scheduler.py": 1600,
 }

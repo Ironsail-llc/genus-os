@@ -92,13 +92,18 @@ class TestRunnerRecordsObservations:
     def test_runner_logs_an_event_for_observed_results(self):
         """The runner must record allowed-but-observed results.
 
-        It logs guardrail events only under ``if not gr.allowed`` today, so an
-        ``observed`` result would still vanish. There must be a branch that
-        records it.
-        """
-        from robothor.engine import runner as runner_mod
+        A guardrail that only logs under ``if not gr.allowed`` makes an
+        ``observed`` result vanish, and a soak that records nothing cannot
+        tell "clean" from "blind". There must be a branch that records it.
 
-        body = Path(runner_mod.__file__).read_text()
+        Reads ``tool_admission`` rather than ``runner``: the pre-execution
+        gate moved there when the admission gates were extracted. The grep
+        follows the code, because what matters is that the branch exists —
+        not which module holds it.
+        """
+        from robothor.engine import tool_admission as admission_mod
+
+        body = Path(admission_mod.__file__).read_text()
 
         call_pos = body.index("gr = guardrail_engine.check_pre_execution(")
         window = body[call_pos : call_pos + 4000]
