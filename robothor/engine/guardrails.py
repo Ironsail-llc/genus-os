@@ -966,7 +966,11 @@ class GuardrailEngine:
         """The NAME of the first credential kind found, never the value."""
         if not text:
             return None
-        haystack = text[:20000]
+        # The SAME limit the output detector uses. A private, shorter cap here
+        # meant this gate said "no secret" about output the detector had just
+        # flagged — the 10KB bug, reintroduced one function over. Two scanners
+        # with two bounds is a silent disagreement about what counts.
+        haystack = text[:SENSITIVE_SCAN_LIMIT]
         for name, pattern in NAMED_SENSITIVE_PATTERNS:
             if pattern.search(haystack):
                 return name
