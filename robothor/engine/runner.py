@@ -2005,6 +2005,7 @@ class AgentRunner(
         _pre_iteration_msg_idx = len(session.messages)
         _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
         _runaway_alerted = False  # one-shot latch for 500K alert
+        _secret_notified = False  # one-shot latch for the credential-exposure note
 
         while True:
             # ── [STEER / INTERRUPT] live operator influence (Rip 9) ──
@@ -2441,6 +2442,45 @@ class AgentRunner(
                     post_gr = guardrail_engine.check_post_execution(tool_name, result)
                     if post_gr.action == "warned":
                         logger.warning("Guardrail warning for %s: %s", tool_name, post_gr.reason)
+                        # And tell the AGENT. This used to be the log line
+                        # alone, which meant the platform could detect a
+                        # credential in a file the agent had just read and the
+                        # agent would never know: it carried on, published it,
+                        # and never warned the user. Detection that reaches no
+                        # one is the same shape as a control that never runs.
+                        #
+                        # Once per run, not per tool call — repeating it every
+                        # iteration would crowd out the task. The reason string
+                        # names the KIND of credential and never the value,
+                        # because this message is persisted with the
+                        # conversation.
+                        # Redact before the result reaches the model. The
+                        # agent needs to know a credential is THERE — which
+                        # file, what kind — and never needs the characters.
+                        # Without this it quotes the key back while correctly
+                        # explaining why the key is dangerous, which leaks it
+                        # into the transcript, the session store, and every
+                        # log downstream of them.
+                        if post_gr.guardrail_name == "no_sensitive_data":
+                            from robothor.engine.guardrails import redact_secrets
+
+                            result = redact_secrets(result)
+
+                        if post_gr.guardrail_name == "no_sensitive_data" and not _secret_notified:
+                            _secret_notified = True
+                            session.messages.append(
+                                {
+                                    "role": ENGINE_CONTEXT_ROLE,
+                                    "content": (
+                                        f"[SYSTEM] {post_gr.reason} Treat this as a "
+                                        "credential exposure: tell the user which file "
+                                        "or output contains it — WITHOUT repeating the "
+                                        "value — and that it should be removed from the "
+                                        "code and rotated. Do not commit, push, send, or "
+                                        "otherwise publish content containing it."
+                                    ),
+                                }
+                            )
 
                 # ── [HOOKS] Post-tool-use lifecycle hook ──
                 if hook_registry:

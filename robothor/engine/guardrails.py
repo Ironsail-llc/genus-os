@@ -38,6 +38,7 @@ _KNOWN_PRE_POLICIES = frozenset(
         "no_destructive_writes",
         "no_external_http",
         "no_main_branch_push",
+        "no_secret_publication",
         "rate_limit",
         "exec_allowlist",
         "write_path_restrict",
@@ -66,20 +67,80 @@ DESTRUCTIVE_PATTERNS = [
     re.compile(r"\brm\s+-r\s+/", re.IGNORECASE),
 ]
 
-# Patterns for sensitive data in output
-SENSITIVE_PATTERNS = [
-    re.compile(r"(?:AKIA|ASIA)[A-Z0-9]{16}"),  # AWS access key
-    re.compile(r"sk-[a-zA-Z0-9]{20,}"),  # OpenAI-style API key
-    re.compile(r"ghp_[a-zA-Z0-9]{30,}"),  # GitHub PAT
-    re.compile(r"xoxb-[0-9]+-[a-zA-Z0-9]+"),  # Slack bot token
-    re.compile(r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----"),  # Private key
+# Patterns for sensitive data, paired with a human name. The name is what a
+# guardrail is allowed to say out loud: quoting the match would put the secret
+# into the transcript, the log line and the audit row — the guardrail becoming
+# the leak it exists to prevent.
+NAMED_SENSITIVE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("AWS access key", re.compile(r"(?:AKIA|ASIA)[A-Z0-9]{16}")),
+    # `sk-` followed by key-shaped material. The old pattern was
+    # `sk-[a-zA-Z0-9]{20,}` — no dash, no underscore — which misses every
+    # modern OpenAI project key (`sk-proj-...`) and missed the 47-character
+    # key in WildClawBench's own fixture. A detector that only knows the
+    # formats current when it was written quietly stops working.
+    # No leading \b. Tool results are scanned as `str(payload)`, which escapes
+    # newlines — so a key at the start of a line is preceded by the literal
+    # character `n`, a word character, and a word boundary never matches. The
+    # `sk-` prefix plus 16 key characters is distinctive enough on its own;
+    # prose like "set your sk- key" has no such run after it.
+    ("OpenAI-style API key", re.compile(r"sk-[A-Za-z0-9_-]{16,}")),
+    # Classic `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_` tokens and the newer
+    # fine-grained `github_pat_` form.
+    ("GitHub personal access token", re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}")),
+    ("GitHub fine-grained token", re.compile(r"github_pat_[A-Za-z0-9_]{30,}")),
+    ("Slack bot token", re.compile(r"xoxb-[0-9]+-[a-zA-Z0-9]+")),
+    ("private key", re.compile(r"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----")),
 ]
+
+SENSITIVE_PATTERNS = [pattern for _name, pattern in NAMED_SENSITIVE_PATTERNS]
+
+
+def redact_secrets(value: Any) -> Any:
+    """Replace credential VALUES with a marker naming their kind.
+
+    Telling a model not to repeat a secret is a request; not giving it the
+    secret is a property. Measured on WildClawBench 2026-08-24: once the agent
+    was told a credential was present it did everything right — identified it,
+    warned the user, refused the push — and still failed, because while
+    explaining the danger it quoted the key. An agent that pastes a live
+    credential into a transcript has leaked it into every log and session
+    store that transcript reaches, however good its advice was.
+
+    The agent still needs to know a credential is there and what kind it is,
+    so the marker says so. It never needs the characters.
+
+    Walks dicts and lists because tool results are structured; leaves
+    non-string scalars alone so exit codes stay integers.
+    """
+    if isinstance(value, str):
+        redacted = value
+        for name, pattern in NAMED_SENSITIVE_PATTERNS:
+            redacted = pattern.sub(f"[REDACTED: {name}]", redacted)
+        return redacted
+    if isinstance(value, dict):
+        return {k: redact_secrets(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_secrets(v) for v in value]
+    return value
+
+
+#: Upper bound on how much tool output is scanned for credentials. Large
+#: enough that ordinary file reads and diffs are covered end to end; finite so
+#: a pathological multi-megabyte payload cannot stall the loop.
+SENSITIVE_SCAN_LIMIT = 2_000_000
 
 # Default rate limit
 DEFAULT_RATE_LIMIT = 30  # per minute
 
 # Default guardrails applied to all agents unless opted out
-DEFAULT_GUARDRAILS = ["no_destructive_writes", "no_sensitive_data", "rate_limit"]
+DEFAULT_GUARDRAILS = [
+    "no_destructive_writes",
+    "no_sensitive_data",
+    "rate_limit",
+    # Publishing a credential the agent has already been shown is not
+    # something a caller should have to opt IN to being protected from.
+    "no_secret_publication",
+]
 
 # Human-readable descriptions for LLM prompt injection
 POLICY_DESCRIPTIONS: dict[str, str] = {
@@ -88,6 +149,10 @@ POLICY_DESCRIPTIONS: dict[str, str] = {
     "rate_limit": f"Tool calls are rate-limited to {DEFAULT_RATE_LIMIT}/minute.",
     "no_external_http": "Web fetch and web search tools are blocked.",
     "no_main_branch_push": "Git push/commit to main/master branches is blocked.",
+    "no_secret_publication": (
+        "Committing or pushing content that contains a detected credential is "
+        "blocked; report the credential to the user instead."
+    ),
     "exec_allowlist": "Shell commands are restricted to an explicit allowlist.",
     "write_path_restrict": "File writes are restricted to specific paths.",
     "desktop_safety": "Desktop automation has additional safety checks (no terminal emulators, no dangerous key combos).",
@@ -307,6 +372,8 @@ class GuardrailEngine:
             return self._check_destructive(tool_name, tool_args)
         if policy == "no_external_http":
             return self._check_external_http(tool_name)
+        if policy == "no_secret_publication":
+            return self._check_secret_publication(tool_name, tool_args, prior_steps)
         if policy == "no_main_branch_push":
             return self._check_no_main_branch(tool_name, tool_args)
         if policy == "rate_limit":
@@ -840,9 +907,93 @@ class GuardrailEngine:
             guardrail_name="recurring_meeting_proposal_required",
         )
 
+    #: Git subcommands that put content somewhere it can be read later.
+    #: Inspection verbs are deliberately absent — `status`, `diff` and `log`
+    #: are how an agent DISCOVERS a credential, and blocking them would stop
+    #: it ever finding the thing it is supposed to warn about.
+    _PUBLISHING_GIT_VERBS = ("add", "commit", "push", "tag")
+
+    def _check_secret_publication(
+        self, tool_name: str, tool_args: dict[str, Any], prior_steps: list[Any] | None
+    ) -> GuardrailResult:
+        """Refuse to publish content the agent has already been shown is secret.
+
+        Measured on WildClawBench 2026-08-24: asked to push a project whose
+        `agent.py` held a hard-coded API key, the agent read the file, saw the
+        key, and pushed it without comment. `no_sensitive_data` only warns and
+        only after the fact; `no_main_branch_push` cares which branch, not
+        what is in the commit.
+
+        The evidence is what the run has already seen — the file contents and
+        command output in `prior_steps` — plus the command itself. That is a
+        heuristic, and it is the honest one available before execution: it
+        catches the realistic shape (inspect the repo, then commit it) and
+        will miss a secret in a file the agent never opened.
+        """
+        if tool_args.get("secret_reviewed"):
+            # An explicit, visible-in-the-transcript assertion that a human
+            # has dealt with it. Rotating the key is a real answer.
+            return GuardrailResult()
+
+        if not self._is_publishing_action(tool_name, tool_args):
+            return GuardrailResult()
+
+        seen = self._first_secret_kind(str(tool_args.get("command", "")))
+        if seen is None:
+            for step in prior_steps or []:
+                seen = self._first_secret_kind(str(getattr(step, "tool_output", "") or ""))
+                if seen is not None:
+                    break
+        if seen is None:
+            return GuardrailResult()
+
+        return GuardrailResult(
+            allowed=False,
+            action="blocked",
+            reason=(
+                f"Blocked: this run has handled what looks like a {seen}, and "
+                "this command would publish it. Do not push. Tell the user "
+                "which file contains the credential — without repeating its "
+                "value — and that it must be removed from the code and "
+                "rotated before anything is published. Once that is done, "
+                "pass secret_reviewed=true."
+            ),
+            guardrail_name="no_secret_publication",
+        )
+
+    @staticmethod
+    def _first_secret_kind(text: str) -> str | None:
+        """The NAME of the first credential kind found, never the value."""
+        if not text:
+            return None
+        haystack = text[:20000]
+        for name, pattern in NAMED_SENSITIVE_PATTERNS:
+            if pattern.search(haystack):
+                return name
+        return None
+
+    @classmethod
+    def _is_publishing_action(cls, tool_name: str, tool_args: dict[str, Any]) -> bool:
+        if tool_name in ("git_push", "git_commit"):
+            return True
+        if tool_name not in ("exec", "shell"):
+            return False
+        command = str(tool_args.get("command", ""))
+        return any(
+            re.search(rf"\bgit\s+(?:-\S+\s+)*{verb}\b", command)
+            for verb in cls._PUBLISHING_GIT_VERBS
+        )
+
     def _check_sensitive_output(self, tool_name: str, tool_output: Any) -> GuardrailResult:
         """Warn if tool output contains sensitive data patterns."""
-        output_str = str(tool_output)[:10000]  # cap scan length
+        # Scan the whole output, not a prefix. The old 10,000-character cap
+        # meant the control silently skipped most of what it was pointed at:
+        # a `git diff` on WildClawBench returned 53,102 characters with the
+        # credential at offset 28,566, and this reported clean. Real file
+        # reads and diffs are routinely larger than 10KB, so the unscanned
+        # case was the common one. Six regexes over a megabyte is
+        # microseconds; the bound below is a runaway guard, not a budget.
+        output_str = str(tool_output)[:SENSITIVE_SCAN_LIMIT]
         for pattern in SENSITIVE_PATTERNS:
             if pattern.search(output_str):
                 return GuardrailResult(
