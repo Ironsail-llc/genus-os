@@ -1,3 +1,9 @@
+## [1.41.1](https://github.com/Ironsail-llc/genus-os/compare/v1.41.0...v1.41.1) (2026-08-24)
+
+### Code Refactoring
+
+* **engine:** 27 handler closures become methods (phase 3b) ([#364](https://github.com/Ironsail-llc/genus-os/issues/364)) ([bcdeab1](https://github.com/Ironsail-llc/genus-os/commit/bcdeab1b21ee0f305ef9f54ee1b43ec247627df5)), closes [#4](https://github.com/Ironsail-llc/genus-os/issues/4) [#7](https://github.com/Ironsail-llc/genus-os/issues/7)
+
 ## [1.41.0](https://github.com/Ironsail-llc/genus-os/compare/v1.40.0...v1.41.0) (2026-08-24)
 
 ### Features
