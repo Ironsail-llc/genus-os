@@ -1529,7 +1529,7 @@ class AgentRunner(
 
                         set_current_sandbox(None)
 
-        except (TimeoutError, asyncio.CancelledError):
+        except (TimeoutError, asyncio.CancelledError) as _cancel_exc:
             # Prefer the watchdog's structured abort_reason (names the
             # last progress signal). Fall back to hard-timeout framing
             # only when cancellation came from outside the watchdog.
@@ -1572,13 +1572,33 @@ class AgentRunner(
             # who else is alive at cancel time, the watchdog's last touch,
             # and elapsed-since-start. Lands in agent_runs.error_traceback.
             diag = _build_cancel_diagnostic(watchdog, agent_id)
-            return self._finish_run(
+            finished = self._finish_run(
                 session.timeout(reason=reason, traceback=diag),
                 trace=trace,
                 agent_config=agent_config,
                 session=session,
                 spawn_context=spawn_context,
             )
+            # The row is written; now let the cancellation continue.
+            #
+            # Catching it at all is right — 29 runs sat `running` forever
+            # before this handler existed. Catching it and RETURNING was the
+            # other half of the bug: an outer deadline becomes a suggestion,
+            # because `asyncio.timeout` only raises TimeoutError if its
+            # cancellation reaches the context manager. Absorbed here, the
+            # enclosing block exits normally and the cap silently does
+            # nothing. Measured 2026-08-24: benchmark-runner's own 3600s
+            # ceiling cancelled its task, the benchmark case inside absorbed
+            # it, and the sweep ran on for three more hours — losing one
+            # innocent agent's case to the same kill every hour.
+            #
+            # Only a cancellation this run did not cause propagates. Its own
+            # watchdog (handled above) and its own hard cap (TimeoutError,
+            # not CancelledError) still return a timed-out run, because for
+            # those the deadline that fired was this run's to enforce.
+            if isinstance(_cancel_exc, asyncio.CancelledError):
+                raise
+            return finished
         except Exception as e:
             tb = traceback.format_exc()
             logger.error("Agent %s failed: %s", _sanitize(agent_id), _sanitize(e), exc_info=True)

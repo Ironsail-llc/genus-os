@@ -1610,9 +1610,11 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 results.append(_timeout_result(task, per_task_timeout_seconds, agent_id, suite_id))
                 continue
 
-            # The runner absorbs the cancellation this cap delivers and returns
-            # a TIMEOUT run with an empty output_text rather than re-raising, so
-            # the branch above is NOT the common path. Grading that empty string
+            # Belt and braces. The runner now re-raises an outer cancellation,
+            # so the `except TimeoutError` above is the normal path for this
+            # cap — but a run can still come back TIMEOUT from its own watchdog
+            # or its own hard cap, and those arrive here as a returned run with
+            # an empty output_text. Grading that empty string
             # is how a harness kill became partial credit: every
             # `must_not_contain` pattern passes against "", and agent-architect's
             # killed cases were filed at 0.4–0.667 as if the agent had answered
