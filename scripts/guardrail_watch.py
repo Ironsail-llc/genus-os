@@ -374,6 +374,55 @@ def _run_db_dependent_checks() -> None:
     check_memory_scoping_is_not_vacuous()
 
 
+def check_instance_manifests(
+    manifest_dir: Path | None = None,
+    workspace: Path | None = None,
+    script: Path | None = None,
+) -> bool:
+    """Validate every instance manifest on this box, daily.
+
+    The strict validator's default mode checks git-TRACKED manifests only, and
+    every real instance manifest is gitignored — so a box running 25 manifests
+    had exactly one validated, in CI, where instance defects cannot appear. On
+    2026-08-23 an unparseable main.yaml took the primary agent down for 3h48m
+    and the validator had no opinion. Its first --instance run found two live
+    fleet defects nothing had ever looked for.
+
+    Returns False on any FAIL or parse failure so main() can exit non-zero and
+    the unit's OnFailure= pager fires. Runs as a subprocess: the validator
+    imports the engine's ToolRegistry, and a crash in that import must fail
+    THIS CHECK, not the whole watch. A watchdog whose probe dies must not
+    report health.
+    """
+    root = workspace or REPO_ROOT
+    validator = script or (Path(__file__).resolve().parent / "validate_agents.py")
+    print("\n=== instance manifest validation ===")
+    if not validator.exists():
+        print(f"  FAIL: validator missing at {validator.name} — could not run")
+        return False
+    cmd = [sys.executable, str(validator), "--instance", "--workspace", str(root)]
+    if manifest_dir is not None:
+        cmd += ["--manifest-dir", str(manifest_dir)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=str(root))
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  FAIL: validator could not run: {exc}")
+        return False
+    # Reprint only the signal: parse failures, FAIL lines, and the summary.
+    interesting = [
+        line
+        for line in result.stdout.splitlines()
+        if "FAIL" in line or "SUMMARY" in line or "UNPARSEABLE" in line or ".yaml" in line
+    ]
+    for line in interesting[-30:]:
+        print(f"  {line.strip()}")
+    if result.returncode != 0:
+        print("  FAIL: instance manifest validation failed (see lines above)")
+        return False
+    print("  ok: every instance manifest parses and passes schema checks")
+    return True
+
+
 def main() -> int:
     # DB-free checks run FIRST and unconditionally. 2026-08-16: this unit's
     # Persistent=true timer fired at boot before postgres was up. The
@@ -385,6 +434,7 @@ def main() -> int:
     check_soak_deadlines()
     check_dropin_drift()
     check_host_script_drift()
+    manifests_ok = check_instance_manifests()
 
     try:
         _run_db_dependent_checks()
@@ -400,6 +450,10 @@ def main() -> int:
         )
         return 1
 
+    if not manifests_ok:
+        # The fleet's manifests are the fleet. A failing validation must reach
+        # the operator; rc=1 fires the unit's OnFailure= pager.
+        return 1
     return 0
 
 
