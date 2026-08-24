@@ -215,4 +215,15 @@ def run_retention_cleanup() -> dict[str, int]:
         except Exception as e:
             logger.warning("Retention cleanup failed for %s: %s", table, e)
             results[table] = -1
+
+    # agent_messages carries two clocks (delivered 7d, undelivered 30d with
+    # per-recipient logging of dropped mail), so the messaging module owns the
+    # policy and this sweep just invokes it.
+    try:
+        from robothor.engine.messaging import purge_old_messages
+
+        results["agent_messages"] = purge_old_messages()
+    except Exception as e:
+        logger.warning("Retention cleanup failed for agent_messages: %s", e)
+        results["agent_messages"] = -1
     return results

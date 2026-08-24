@@ -22,72 +22,82 @@ class TestAgentMessage:
 
 
 class TestAgentMessenger:
-    def _mock_redis(self):
-        r = MagicMock()
-        r.lpush = MagicMock(return_value=1)
-        r.expire = MagicMock()
-        r.publish = MagicMock()
-        r.rpop = MagicMock(return_value=None)
-        r.llen = MagicMock(return_value=0)
-        return r
+    """Unit surface of the DURABLE messenger (Postgres store, Redis wake).
 
-    def test_send_success(self):
-        r = self._mock_redis()
+    The Redis-list mechanics these tests used to mock (lpush/rpop/llen/TTL)
+    no longer exist — the 1h-TTL inbox lost undelivered messages by design
+    and was replaced in migration 105. The real durability, exactly-once and
+    retention proofs run against the actual database in
+    test_durable_messaging.py (integration lane); these cover the unit-lane
+    contract with the store mocked.
+    """
+
+    def _mock_conn(self, rows=None, fail=False):
+        conn = MagicMock()
+        cur = MagicMock()
+        if fail:
+            cur.execute.side_effect = RuntimeError("db down")
+        cur.fetchall.return_value = rows or []
+        cur.fetchone.return_value = [0]
+        conn.cursor.return_value = cur
+        cm = MagicMock()
+        cm.__enter__ = MagicMock(return_value=conn)
+        cm.__exit__ = MagicMock(return_value=False)
+        return cm, conn, cur
+
+    def test_send_stores_then_wakes(self, monkeypatch):
+        cm, conn, cur = self._mock_conn()
+        monkeypatch.setattr("robothor.db.connection.get_connection", lambda: cm)
+        r = MagicMock()
         m = AgentMessenger(redis_client=r)
-        ok = m.send("agent-a", "agent-b", "hello")
-        assert ok is True
-        r.lpush.assert_called_once()
+
+        assert m.send("a", "b", "hello", tenant_id="t1") is True
+        sql, params = cur.execute.call_args[0]
+        assert "INSERT INTO agent_messages" in sql
+        assert params[0] == "t1" and params[1] == "a" and params[2] == "b"
+        conn.commit.assert_called_once()
         r.publish.assert_called_once()
 
-    def test_send_no_redis(self):
-        m = AgentMessenger(redis_client=None)
-        # Patch _get_redis to return None
-        m._get_redis = lambda: None  # type: ignore[method-assign]
-        ok = m.send("a", "b", "x")
-        assert ok is False
-
-    def test_receive_empty(self):
-        r = self._mock_redis()
+    def test_send_fails_closed_when_the_store_fails(self, monkeypatch):
+        """The WRITE is the success criterion — a wake ping over a lost
+        message is the old fabric's failure mode."""
+        cm, _, _ = self._mock_conn(fail=True)
+        monkeypatch.setattr("robothor.db.connection.get_connection", lambda: cm)
+        r = MagicMock()
         m = AgentMessenger(redis_client=r)
-        msgs = m.receive("agent-a")
-        assert msgs == []
 
-    def test_receive_messages(self):
-        msg1 = AgentMessage(from_agent="x", to_agent="a", content="hi")
-        msg2 = AgentMessage(from_agent="y", to_agent="a", content="hey")
+        assert m.send("a", "b", "x") is False
+        r.publish.assert_not_called()
 
-        r = self._mock_redis()
-        # rpop returns messages then None
-        r.rpop = MagicMock(
-            side_effect=[
-                msg1.to_json().encode(),
-                msg2.to_json().encode(),
-                None,
-            ]
+    def test_send_succeeds_when_only_the_wake_fails(self, monkeypatch):
+        cm, _, _ = self._mock_conn()
+        monkeypatch.setattr("robothor.db.connection.get_connection", lambda: cm)
+        r = MagicMock()
+        r.publish.side_effect = ConnectionError("redis down")
+        m = AgentMessenger(redis_client=r)
+
+        assert m.send("a", "b", "x") is True
+
+    def test_receive_claims_atomically(self, monkeypatch):
+        cm, conn, cur = self._mock_conn(rows=[("a", "b", "hi", 1000.0, "", {"k": "v"})])
+        monkeypatch.setattr("robothor.db.connection.get_connection", lambda: cm)
+        m = AgentMessenger(redis_client=False)
+
+        msgs = m.receive("b", tenant_id="t1")
+        sql = cur.execute.call_args[0][0]
+        assert "delivered_at = now()" in sql
+        assert "FOR UPDATE SKIP LOCKED" in sql, (
+            "without the locked claim, concurrent receivers double-deliver"
         )
-        m = AgentMessenger(redis_client=r)
-        msgs = m.receive("a", limit=10)
-        assert len(msgs) == 2
-        assert msgs[0].content == "hi"
-        assert msgs[1].content == "hey"
+        assert [x.content for x in msgs] == ["hi"]
+        assert msgs[0].metadata == {"k": "v"}
 
-    def test_broadcast(self):
-        r = self._mock_redis()
-        m = AgentMessenger(redis_client=r)
-        count = m.broadcast("agent-a", "team1", ["agent-a", "agent-b", "agent-c"], "update")
-        assert count == 2  # skips self
-
-    def test_inbox_count(self):
-        r = self._mock_redis()
-        r.llen = MagicMock(return_value=5)
-        m = AgentMessenger(redis_client=r)
-        assert m.inbox_count("agent-a") == 5
-
-    def test_send_with_metadata(self):
-        r = self._mock_redis()
-        m = AgentMessenger(redis_client=r)
-        ok = m.send("a", "b", "msg", metadata={"key": "val"})
-        assert ok is True
+    def test_send_with_metadata(self, monkeypatch):
+        cm, _, cur = self._mock_conn()
+        monkeypatch.setattr("robothor.db.connection.get_connection", lambda: cm)
+        m = AgentMessenger(redis_client=False)
+        assert m.send("a", "b", "msg", metadata={"key": "val"}) is True
+        assert '"key": "val"' in cur.execute.call_args[0][1][5]
 
 
 class TestMessengerSingleton:

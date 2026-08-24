@@ -32,6 +32,7 @@ async def _handle_send_agent_message(args: dict[str, Any], ctx: ToolContext) -> 
         to_agent=to_agent,
         content=content,
         metadata=metadata or {},
+        tenant_id=getattr(ctx, "tenant_id", "") or "",
     )
     return {"sent": ok, "to_agent": to_agent}
 
@@ -45,7 +46,9 @@ async def _handle_receive_agent_messages(args: dict[str, Any], ctx: ToolContext)
         return {"error": "Messaging not initialized"}
 
     limit = int(args.get("limit", 10))
-    messages = messenger.receive(ctx.agent_id, limit=limit)
+    messages = messenger.receive(
+        ctx.agent_id, limit=limit, tenant_id=getattr(ctx, "tenant_id", "") or ""
+    )
     return {
         "messages": [
             {
