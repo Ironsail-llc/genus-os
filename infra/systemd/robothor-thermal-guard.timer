@@ -1,0 +1,12 @@
+# Drives robothor-thermal-guard.service — see that file for the incident class.
+# 30s: the firmware hard-cut arrives with no warning, so the polling interval
+# IS the warning margin.
+[Unit]
+Description=Robothor — thermal guard every 30s
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=30
+
+[Install]
+WantedBy=timers.target

@@ -50,21 +50,22 @@ _KNOWN_V2_KEYS = frozenset(
     }
 )
 
-_KNOWN_GUARDRAILS = frozenset(
-    {
-        "no_destructive_writes",
-        "no_sensitive_data",
-        "rate_limit",
-        "no_external_http",
-        "no_main_branch_push",
-        "exec_allowlist",
-        "write_path_restrict",
-        "desktop_safety",
-        "human_approval",
-        "requires_human_task_closure",
-        "recurring_meeting_proposal_required",
-    }
-)
+# Derived, not duplicated. This used to be a hand-maintained copy of the
+# enforcement sets in guardrails.py, and the two drifted in BOTH directions:
+# this list was missing inbound_only and no_recent_changelog_reversal (spurious
+# "Unknown guardrail" warnings on every boot for agents using them), and it
+# carried requires_human_task_closure before the enforcement set did. A
+# hand-maintained parallel list is the same defect class as the hardcoded
+# alert-name list and the model-switch list — it always drifts.
+
+
+def _known_guardrails() -> frozenset[str]:
+    from robothor.engine.guardrails import _KNOWN_POLICIES
+
+    return _KNOWN_POLICIES
+
+
+_KNOWN_GUARDRAILS = _known_guardrails()
 
 _KNOWN_DIFFICULTY_CLASSES = frozenset({"", "simple", "moderate", "complex"})
 
