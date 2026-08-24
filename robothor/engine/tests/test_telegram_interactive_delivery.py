@@ -192,7 +192,7 @@ class TestInteractiveDeliveryTruth:
         message.chat.id = 12345
         message.from_user.id = 12345
 
-        with patch("robothor.engine.telegram.save_plan_state_async", new_callable=AsyncMock):
+        with patch("robothor.engine.telegram_plan_mode.save_plan_state_async", new_callable=AsyncMock):
             await bot._run_plan_mode("12345", session_key, session, "do it", message)
 
         assert run.delivery_status == "delivered"
