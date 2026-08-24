@@ -16,6 +16,7 @@ import tempfile
 import time
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
@@ -98,6 +99,11 @@ class AgentSession:
         self._start_time: float | None = None
         self._tool_offload_threshold = tool_offload_threshold
         self._last_offload_path: str | None = None  # set by _offload_tool_result
+        # Every path this session has offloaded. read_file of one of these must
+        # NEVER be re-offloaded: the stub tells the agent to read it back, and
+        # re-offloading the read produced an infinite stub-chasing loop — the
+        # bug that kept this whole mechanism disabled.
+        self._offloaded_paths: set[str] = set()
         self._step_costs: list[float] = []
         self.todo_list: TodoList | None = None
         # ── Upgrade-plan session state (Phase 0 foundation) ────────────
@@ -323,7 +329,11 @@ class AgentSession:
 
         # Offload large results to temp file, keeping summary + path in context
         self._last_offload_path = None
-        if self._tool_offload_threshold and len(content) > self._tool_offload_threshold:
+        if (
+            self._tool_offload_threshold
+            and len(content) > self._tool_offload_threshold
+            and not self._is_offload_readback(tool_name, tool_input)
+        ):
             content = self._offload_tool_result(content, tool_name)
 
         # Symbolic short-term memory (Rip 13): build a per-run task-state graph
@@ -522,6 +532,26 @@ class AgentSession:
 
     # ── Eager tool result compression ──────────────────────────────
 
+    def _is_offload_readback(self, tool_name: str, tool_input: dict[str, Any]) -> bool:
+        """True when this call reads BACK an offloaded artifact.
+
+        Exact first: the session's own ledger. Prefix+tempdir shape second, so
+        an artifact from another run (or a session restored from DB, whose
+        in-memory ledger is empty) cannot loop either. The shape check demands
+        both the offload filename convention AND the temp directory — an
+        ordinary huge file named tool_*.txt in a project dir still offloads.
+        """
+        if tool_name != "read_file":
+            return False
+        path = str(tool_input.get("path", "") or "")
+        if not path:
+            return False
+        if path in self._offloaded_paths:
+            return True
+        p = Path(path)
+        in_tmp = str(p.resolve().parent) == tempfile.gettempdir()
+        return in_tmp and p.name.startswith("tool_") and p.name.endswith(".txt")
+
     def _offload_tool_result(self, content: str, tool_name: str) -> str:
         """Write large tool result to temp file, return summary + file path."""
         from robothor.engine.compaction import extract_tool_summary
@@ -531,6 +561,7 @@ class AgentSession:
         with os.fdopen(fd, "w") as f:
             f.write(content)
         self._last_offload_path = path  # picked up for the symbol graph node
+        self._offloaded_paths.add(path)
         return f"{summary}\n[Full output: {path} — use read_file to retrieve if needed]"
 
     def _record_symbol_node(self, tool_name: str, tool_output: Any, raw_len: int) -> None:
