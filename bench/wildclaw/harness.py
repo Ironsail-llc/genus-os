@@ -37,7 +37,9 @@ from pathlib import Path
 from typing import Any
 
 POD = "genus-bench"
-IMAGE = "localhost/genus-bench:latest"
+#: The production image plus the toolchain the tasks assume — see
+#: bench/wildclaw/Dockerfile for why that layer is separate.
+IMAGE = os.environ.get("BENCH_IMAGE", "localhost/genus-bench-tools:latest")
 CONTAINER_WORKSPACE = "/tmp_workspace"
 
 
