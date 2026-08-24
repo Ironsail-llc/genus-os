@@ -310,6 +310,14 @@ def load_all_manifests(manifest_dir: Path) -> list[dict[str, Any]]:
     return list(load_manifest_dir(manifest_dir).manifests)
 
 
+def _env_int(name: str, default: int) -> int:
+    """Integer env read that treats garbage as the default, never a crash."""
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
 def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     """Convert a YAML manifest dict to an AgentConfig."""
     model = manifest.get("model", {})
@@ -516,7 +524,14 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         lifecycle_hooks=v2.get("lifecycle_hooks", []),
         sandbox=v2.get("sandbox", "local"),
         eager_tool_compression=v2.get("eager_tool_compression", False),
-        tool_offload_threshold=v2.get("tool_offload_threshold", 0),
+        # Fleet default via env so staging the offload does not mean editing
+        # every manifest; an explicit manifest value (including 0 = opt out)
+        # always wins. See session._offload_tool_result for the mechanism and
+        # the 2026-08-24 token audit for why: results above ~8K chars held 80%
+        # of re-sent tool mass (~19% of ALL weekly input).
+        tool_offload_threshold=v2.get(
+            "tool_offload_threshold", _env_int("ROBOTHOR_TOOL_OFFLOAD_THRESHOLD", 0)
+        ),
         tool_timeout_seconds=int(v2.get("tool_timeout_seconds", 120)),
         # Continuous execution mode
         continuous=v2.get("continuous", False),
