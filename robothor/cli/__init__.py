@@ -678,6 +678,12 @@ def main(argv: list[str] | None = None) -> int:
     eng_wf_sub.add_parser("list", help="List loaded workflows")
     eng_wf_run = eng_wf_sub.add_parser("run", help="Run a workflow")
     eng_wf_run.add_argument("workflow_id", help="Workflow ID")
+    eng_wf_sub.add_parser("pending", help="List workflow runs awaiting approval")
+    for _verb in ("approve", "reject"):
+        _p = eng_wf_sub.add_parser(_verb, help=f"{_verb.capitalize()} a waiting workflow step")
+        _p.add_argument("run_id", help="Workflow run ID (from `workflow pending`)")
+        _p.add_argument("--step", default="", help="Step ID (only needed if several are waiting)")
+        _p.add_argument("--note", default="", help="Why — recorded with the decision")
 
     args = parser.parse_args(argv)
 

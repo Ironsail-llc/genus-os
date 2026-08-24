@@ -3546,6 +3546,72 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    schemas["list_pending_approvals"] = {
+        "type": "function",
+        "function": {
+            "name": "list_pending_approvals",
+            "description": (
+                "List workflow steps waiting on a human decision, with the question, "
+                "the run id, and how long is left before the step's timeout policy applies."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    schemas["approve_workflow_step"] = {
+        "type": "function",
+        "function": {
+            "name": "approve_workflow_step",
+            "description": (
+                "Approve a workflow step that is waiting on a human decision. Only call "
+                "this when the operator has actually said yes — the workflow will do the "
+                "thing it asked about. The run resumes within a minute."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string", "description": "Workflow run id"},
+                    "step_id": {
+                        "type": "string",
+                        "description": "Step id — required only if several steps are waiting",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Why, in the operator's words. Recorded with the decision.",
+                    },
+                },
+                "required": ["run_id"],
+            },
+        },
+    }
+
+    schemas["reject_workflow_step"] = {
+        "type": "function",
+        "function": {
+            "name": "reject_workflow_step",
+            "description": (
+                "Reject a workflow step waiting on a human decision. The workflow will "
+                "not do the thing it asked about, and the run stops (or takes its "
+                "declared rejection branch)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string", "description": "Workflow run id"},
+                    "step_id": {
+                        "type": "string",
+                        "description": "Step id — required only if several steps are waiting",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Why, in the operator's words. Recorded with the decision.",
+                    },
+                },
+                "required": ["run_id"],
+            },
+        },
+    }
+
     schemas["team_scratchpad_read"] = {
         "type": "function",
         "function": {
