@@ -1,3 +1,13 @@
+## [1.40.0](https://github.com/Ironsail-llc/genus-os/compare/v1.39.0...v1.40.0) (2026-08-24)
+
+### Features
+
+* **engine:** workflow parallel fan-out/join ([#354](https://github.com/Ironsail-llc/genus-os/issues/354)) ([0e0acf4](https://github.com/Ironsail-llc/genus-os/commit/0e0acf4e8a1a64dcc9ab4c857d25712ab594562c)), closes [#1](https://github.com/Ironsail-llc/genus-os/issues/1)
+
+### Performance Improvements
+
+* **memory:** search_facts warm p50 1,314ms → 353ms, eval-verified ([#355](https://github.com/Ironsail-llc/genus-os/issues/355)) ([cd5b7b7](https://github.com/Ironsail-llc/genus-os/commit/cd5b7b78e2ed8a6dc720a519a6cabd665e430e4c))
+
 ## [1.39.0](https://github.com/Ironsail-llc/genus-os/compare/v1.38.3...v1.39.0) (2026-08-24)
 
 ### Features
