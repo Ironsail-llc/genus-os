@@ -596,6 +596,34 @@ def _escalate_unfinished_todos(
     return True
 
 
+def proactive_compaction_threshold(max_input_tokens: int) -> int:
+    """The token estimate at which the in-loop compaction fires.
+
+    Two bounds, take the smaller:
+
+    * half the sizing model's window — the original overflow guard, still the
+      binding constraint on small-window fallbacks (a 40K fallback must
+      compact at 20K, not wait for an absolute budget it can never hold);
+    * an absolute budget (ROBOTHOR_COMPACTION_TRIGGER_TOKENS, default 80,000)
+      — because on the fleet primary's 1M window the fraction alone was
+      524,288 tokens, 7.4x the p95 per-call input, and the entire graduated
+      compaction system sat shipped-and-inert with ZERO firings in 7 days
+      while re-sent history was 28% of all input (audit 2026-08-24).
+
+    0 disables the absolute budget (window fraction only) — a documented
+    escape hatch, not a silent one.
+    """
+    fraction = int(max_input_tokens * 0.50)
+    raw = os.environ.get("ROBOTHOR_COMPACTION_TRIGGER_TOKENS", "80000")
+    try:
+        budget = int(raw)
+    except ValueError:
+        budget = 80_000
+    if budget <= 0:
+        return fraction
+    return min(fraction, budget)
+
+
 class AgentRunner:
     """Executes agents: builds prompt, enters tool loop, tracks everything."""
 
@@ -2370,7 +2398,7 @@ class AgentRunner:
                     )
 
             # ── [PROACTIVE COMPACTION] Compress before hitting the 75% cliff ──
-            if _iteration > 0 and _iteration % 5 == 0:
+            if _iteration > 0:
                 try:
                     from robothor.engine.context import estimate_tokens, maybe_compress
                     from robothor.engine.model_registry import get_model_limits
@@ -2380,8 +2408,15 @@ class AgentRunner:
                     # next (first non-broken), not the configured primary —
                     # otherwise a run on a smaller-window fallback compacts at
                     # the primary's (larger) threshold and can overflow.
+                    #
+                    # Checked EVERY iteration (was every 5th): at ~10K
+                    # tokens/iteration a 5-gap overshoots the budget by half
+                    # the budget again before anyone looks, and estimate_tokens
+                    # is a cheap length sum.
                     model_limits = get_model_limits(LLMClient.sizing_model(models, broken_models))
-                    proactive_threshold = int(model_limits.max_input_tokens * 0.50)
+                    proactive_threshold = proactive_compaction_threshold(
+                        model_limits.max_input_tokens
+                    )
                     if est_tokens > proactive_threshold:
                         pre_len = len(session.messages)
 
