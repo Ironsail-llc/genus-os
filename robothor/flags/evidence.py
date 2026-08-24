@@ -113,6 +113,23 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
 }
 
 
+def evidence_horizon_days(table: str) -> int | None:
+    """How far back this evidence table can actually see, or None if forever.
+
+    Derived from the retention policy that does the pruning rather than
+    restated here. A second copy would drift from the thing that actually
+    deletes the rows, and this module would then quote a horizon nobody
+    enforces — the parallel-list failure it exists to detect.
+    """
+    from robothor.engine.retention import RETENTION_POLICY
+
+    policy = RETENTION_POLICY.get(table)
+    if policy is None or policy.get("action") == "update":
+        return None
+    days = policy.get("days")
+    return int(days) if days else None
+
+
 def _unknown_verdict(name: str, mode: str, table: str) -> Verdict:
     return Verdict(
         name=name,
@@ -164,7 +181,18 @@ def verdict(name: str, mode: str) -> Verdict:
         message = "disabled"
     elif not ever_fired:
         status = "INERT"
-        message = "NEVER FIRED — this control cannot protect you."
+        # What the data supports, and no more. `agent_guardrail_events` is
+        # pruned at 30 days, so an empty result cannot distinguish "never
+        # fired" from "fired before the window". RBAC blocked 46 calls on
+        # 2026-07-02 and has been correctly quiet since — its allow-all
+        # `service` role gives it nothing to block — and the old wording
+        # called that a control that had never worked.
+        horizon = evidence_horizon_days(src.table)
+        message = (
+            f"no evidence in {horizon}d (older rows are pruned) — not demonstrably firing"
+            if horizon
+            else "no evidence on record — this control cannot protect you."
+        )
     elif count_7d == 0:
         status = "UNPROVEN"
         message = f"last fired {last_fired:%Y-%m-%d} — nothing in 7d"

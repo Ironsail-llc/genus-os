@@ -57,7 +57,11 @@ def test_enforce_with_zero_evidence_is_inert(db_cursor, monkeypatch):
     _use_test_db(db_cursor, monkeypatch)
     v = evidence.verdict("ROBOTHOR_APPROVAL_MODE", "enforce")
     assert v.status == "INERT"
-    assert "NEVER FIRED" in v.message.upper()
+    # The STATUS is the contract — a control with no evidence is never
+    # reported as working. The message no longer says "NEVER FIRED": that
+    # phrasing claimed all of history from a 30-day retention window (see
+    # test_a_pruned_evidence_table_never_claims_never).
+    assert "not demonstrably firing" in v.message
 
 
 def test_missing_evidence_table_is_unknown_not_a_crash(db_cursor, monkeypatch):
@@ -113,3 +117,49 @@ def test_off_mode_is_unproven_not_inert(db_cursor, monkeypatch):
     v = evidence.verdict("ROBOTHOR_RBAC_MODE", "off")
     assert v.status == "UNPROVEN"
     assert v.message == "disabled"
+
+
+# ─── The detector must not claim more than the data can support ───────────
+#
+# `agent_guardrail_events` is pruned at 30 days (RETENTION_POLICY). So a
+# control that fired 46 times on 2026-07-02 and has been correctly quiet
+# since — RBAC's allow-all `service` role gives it nothing to block — reads
+# back as `max(created_at) IS NULL`, and the detector called that
+# "NEVER FIRED — this control cannot protect you."
+#
+# That is a claim about all of history made from a 30-day window. It is the
+# same defect this module exists to catch, one level up: a diagnostic that
+# overstates what it knows gets ignored, exactly like a pager that cries wolf.
+
+
+def test_a_pruned_evidence_table_never_claims_never(db_cursor, monkeypatch):
+    """No rows in a retained window is not the same as no rows ever."""
+    _use_test_db(db_cursor, monkeypatch)
+    db_cursor.execute("DELETE FROM agent_guardrail_events WHERE guardrail_name = 'rbac'")
+    v = evidence.verdict("ROBOTHOR_RBAC_MODE", "enforce")
+
+    assert "never" not in v.message.lower(), (
+        f"the detector claimed history it cannot see: {v.message!r}"
+    )
+    assert "30" in v.message, "the reader must be told how far back the evidence goes"
+
+
+def test_the_horizon_comes_from_the_retention_policy(db_cursor, monkeypatch):
+    """Derived, not restated.
+
+    A second hand-maintained copy of the retention window would drift from
+    the policy that actually prunes the rows, and the detector would then
+    quote a horizon nobody enforces.
+    """
+    from robothor.engine.retention import RETENTION_POLICY
+
+    assert (
+        evidence.evidence_horizon_days("agent_guardrail_events")
+        == RETENTION_POLICY["agent_guardrail_events"]["days"]
+    )
+
+
+def test_a_table_with_no_retention_policy_has_no_horizon(db_cursor, monkeypatch):
+    """`crm_curator_state` and friends are not pruned; claiming a window for
+    them would be its own overstatement."""
+    assert evidence.evidence_horizon_days("crm_curator_state") is None
