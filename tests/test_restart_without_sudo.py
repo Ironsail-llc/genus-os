@@ -40,22 +40,36 @@ def test_restart_service_runs_as_root_and_is_oneshot():
         "the restart unit must run as root; that is the whole point — the agent "
         "never gains privilege, systemd exercises it"
     )
-    assert "systemctl restart" in src
+    # The restart itself moved into the root-owned handler when the broker
+    # grew from one hardcoded unit to an allowlist. Follow it there rather
+    # than dropping the assertion.
+    handler = SVC_UNIT.parent.parent / "bin" / "robothor-restart-handler.sh"
+    assert handler.exists(), "the handler the unit executes is missing"
+    assert "systemctl restart" in handler.read_text()
 
 
 def test_restart_service_consumes_the_trigger():
     """A trigger left in place would restart in a loop."""
-    src = SVC_UNIT.read_text()
-    assert "rm -f" in src or "ConditionPathExists" in src, (
-        "the trigger file must be removed, or the path unit re-fires forever"
-    )
+    handler = (SVC_UNIT.parent.parent / "bin" / "robothor-restart-handler.sh").read_text()
+    assert "rm -f" in handler, "the trigger file must be removed, or the path unit re-fires forever"
+    # And it must be removed for REFUSED requests too, or an un-allowlisted
+    # name loops the path unit just as effectively as an honoured one.
+    consume = handler.index("rm -f")
+    refuse = handler.index("not in the allowlist")
+    assert consume < refuse, "the request must be consumed before it is judged"
 
 
 def test_restart_service_only_restarts_robothor_units():
     """The agent must not be able to name an arbitrary unit."""
-    src = SVC_UNIT.read_text()
-    assert "robothor-" in src, "restart target must be pinned to robothor units"
-    assert "$(cat" not in src and "${" not in src.split("ExecStart")[-1].split("\n")[0], (
+    handler = (SVC_UNIT.parent.parent / "bin" / "robothor-restart-handler.sh").read_text()
+    allowed = handler.split("ALLOWED=(")[1].split(")")[0]
+    names = [n.strip() for n in allowed.split() if n.strip()]
+    assert names, "the allowlist is empty"
+    assert all(n.startswith("robothor-") for n in names), (
+        f"a non-robothor unit is agent-restartable: {names}"
+    )
+    # The unit name must come from the FILENAME, never the file's contents.
+    assert "$(cat" not in handler and "$(<" not in handler, (
         "the unit to restart must NOT be read from the agent-writable trigger "
         "file — that would let an agent restart (or stop) any unit on the box"
     )

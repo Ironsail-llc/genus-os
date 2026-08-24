@@ -448,3 +448,157 @@ def test_execstart_never_relies_on_bare_env_lookup():
                 assert parts[0].startswith("/"), (
                     f"{unit.name}: {line!r} does not use an absolute path"
                 )
+
+
+# ── Repo tmpfiles templates ──────────────────────────────────────────────────
+# infra/systemd/ has been gated since the renderer landed; infra/tmpfiles/ never
+# was. So infra/tmpfiles/robothor-restart.conf shipped with a real operator
+# username in its positional user/group columns, and nothing caught it:
+#
+#   * render-unit.sh's account rules are anchored to exact `User=`/`Group=`
+#     lines, and a tmpfiles row's account columns are POSITIONAL.
+#   * check_instance_leak.py's /home/<user>/ pattern does not match a bare name.
+#   * install-units.sh copied the file RAW, deliberately bypassing the renderer,
+#     so on any other instance the request directory would be chowned to an
+#     account that does not exist and the restart broker would silently break.
+
+TMPFILES_DIR = REPO_ROOT / "infra" / "tmpfiles"
+
+# Mirrors the set in test_repo_templates_use_canonical_spellings. `robothor` is
+# the PLACEHOLDER (rendered to $ROBOTHOR_SERVICE_USER); postgres and root exist
+# on every box; `-` means "leave it alone".
+CANONICAL_ACCOUNTS = {"robothor", "postgres", "root", "-"}
+
+
+def repo_tmpfiles() -> list[Path]:
+    """Git-TRACKED tmpfiles.d templates."""
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", "infra/tmpfiles"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+        cwd=REPO_ROOT,
+    ).stdout.splitlines()
+    confs = sorted(REPO_ROOT / line for line in tracked if line.endswith(".conf"))
+    assert confs, "no tracked tmpfiles templates found in infra/tmpfiles/"
+    return confs
+
+
+def tmpfiles_rows(text: str) -> list[list[str]]:
+    """Field-split non-comment rows: TYPE PATH MODE USER GROUP AGE ARGUMENT."""
+    rows = []
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        fields = line.split()
+        if len(fields) >= 5 and fields[1].startswith("/"):
+            rows.append(fields)
+    return rows
+
+
+def render_tmpfiles(src: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(RENDER), "--tmpfiles", str(src)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+
+
+@pytest.mark.parametrize("conf", repo_tmpfiles(), ids=lambda p: p.name)
+def test_repo_tmpfiles_use_canonical_account(conf: Path):
+    """An instance username in a positional account column is invisible to
+    every other gate in this file."""
+    rows = tmpfiles_rows(conf.read_text())
+    assert rows, f"{conf.name}: no tmpfiles rows parsed — check the format"
+    for fields in rows:
+        for column, value in (("user", fields[3]), ("group", fields[4])):
+            assert value in CANONICAL_ACCOUNTS, (
+                f"{conf.name}: {column} column names {value!r}, an instance "
+                "account — use the `robothor` placeholder (rendered to "
+                "ROBOTHOR_SERVICE_USER by render-unit.sh --tmpfiles)"
+            )
+
+
+@pytest.mark.parametrize("conf", repo_tmpfiles(), ids=lambda p: p.name)
+def test_repo_tmpfiles_render_installable(conf: Path):
+    """The drift gate: the placeholder must actually be substituted, or the
+    runtime directory is chowned to an account that may not exist."""
+    result = render_tmpfiles(conf, base_env())
+    assert result.returncode == 0, f"{conf.name}: {result.stdout}{result.stderr}"
+    for fields in tmpfiles_rows(result.stdout):
+        assert fields[3] in (USER, "-"), f"{conf.name}: user column {fields[3]!r}"
+        assert fields[4] in (USER, "-"), f"{conf.name}: group column {fields[4]!r}"
+        assert "robothor" not in (fields[3], fields[4]), (
+            f"{conf.name}: placeholder account survives rendering"
+        )
+
+
+@pytest.mark.parametrize("conf", repo_tmpfiles(), ids=lambda p: p.name)
+def test_repo_tmpfiles_have_no_instance_home_paths(conf: Path):
+    text = "\n".join(
+        line for line in conf.read_text().splitlines() if not line.lstrip().startswith("#")
+    )
+    for home in re.findall(r"/home/[A-Za-z0-9._-]+", text):
+        assert home == "/home/robothor", f"{conf.name}: {home} is an instance home path"
+
+
+def test_tmpfiles_runtime_paths_are_not_mangled(tmp_path: Path):
+    """/run/robothor is a real runtime path, not a placeholder. Guards against
+    'fixing' the positional-account problem with a blanket word swap."""
+    conf = tmp_path / "robothor-x.conf"
+    conf.write_text("d /run/robothor/requests 0700 robothor robothor -\n")
+    result = render_tmpfiles(conf, base_env())
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "/run/robothor/requests" in result.stdout
+
+
+def test_tmpfiles_other_accounts_are_untouched(tmp_path: Path):
+    conf = tmp_path / "robothor-pg.conf"
+    conf.write_text("d /run/pg 0700 postgres postgres -\n")
+    result = render_tmpfiles(conf, base_env())
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "postgres postgres" in result.stdout
+
+
+def test_tmpfiles_flag_does_not_change_unit_rendering(sample_unit: Path):
+    """--tmpfiles must not alter unit-file behaviour; the rules are disjoint."""
+    plain = render(sample_unit, base_env())
+    flagged = render_tmpfiles(sample_unit, base_env())
+    assert plain.stdout == flagged.stdout
+
+
+def test_positional_account_is_invisible_without_the_flag(tmp_path: Path):
+    """Documents the bug the flag exists for: render-unit.sh's User=/Group=
+    rules are exact-line anchored, so a tmpfiles conf through the PLAIN
+    renderer emits the placeholder verbatim — which is why piping it through
+    unchanged would have looked fixed while chowning to a bogus account."""
+    conf = tmp_path / "robothor-x.conf"
+    conf.write_text("d /run/x 0700 robothor robothor -\n")
+    result = render(conf, base_env())
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "robothor robothor" in result.stdout, (
+        "if this now renders, the flag is redundant — delete it and this test"
+    )
+
+
+def test_installs_the_privileged_helper_and_tmpfiles_conf(tmp_path: Path):
+    """The broker needs both, and neither is a systemd unit — so nothing else
+    in this file covers them. Delete both installer blocks and every other test
+    here still passes."""
+    result = run_install(tmp_path, base_env())
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    helper = tmp_path / "usr/local/lib/robothor/robothor-restart-handler.sh"
+    assert helper.exists(), result.stdout
+    assert helper.stat().st_mode & 0o777 == 0o755
+
+    conf = tmp_path / "etc/tmpfiles.d/robothor-restart.conf"
+    assert conf.exists(), result.stdout
+    assert conf.stat().st_mode & 0o777 == 0o644
+    rows = tmpfiles_rows(conf.read_text())
+    assert rows, f"no tmpfiles row installed:\n{conf.read_text()}"
+    fields = rows[0]
+    assert fields[3] == USER and fields[4] == USER, f"unrendered account: {fields}"

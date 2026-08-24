@@ -10,6 +10,8 @@ Exit code 0 = clean, 1 = leaks found.
 
 from __future__ import annotations
 
+import argparse
+import os
 import re
 import subprocess
 import sys
@@ -24,6 +26,10 @@ INSTANCE_PATHS = {
     "templates/",
     ".env",
     "CHANGELOG.md",
+    # Dated agent session transcripts — they quote the operator's shell history
+    # verbatim and are never edited again. They are session artifacts, not
+    # platform docs.
+    "docs/superpowers/plans/",
 }
 
 # Generated/vendored files — skip entirely (package names false-positive as emails)
@@ -54,6 +60,35 @@ LEAK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
         "possible street address — move to brain/CLAUDE.md",
     ),
 ]
+
+# systemd-tmpfiles.d(5) / sysusers.d(5) row: TYPE PATH MODE USER GROUP AGE ARG.
+# The account columns are POSITIONAL — no `User=` prefix — so neither the
+# unit-file convention nor the /home/<user>/ pattern can see an instance
+# username there. infra/tmpfiles/robothor-restart.conf shipped exactly that way
+# and every gate passed it.
+#
+# Matched by the SHAPE of the line, not by the word: the repo says "robothor"
+# everywhere legitimately. The shape (single-letter type + absolute path +
+# octal mode + two identifiers) is specific enough that prose, Python and
+# `ls -l` output cannot match it.
+TMPFILES_ROW_RE = re.compile(
+    r"^\s*[a-zA-Z][+!=^\-]*\s+/\S+\s+(?:[0-7]{3,4}|-)\s+"
+    r"(?P<user>[A-Za-z_][A-Za-z0-9_-]*|-)\s+"
+    r"(?P<group>[A-Za-z_][A-Za-z0-9_-]*|-)(?:\s|$)"
+)
+
+# systemd unit account directive. Applied ONLY to unit-shaped files: in Python
+# a bare `Group = None` would otherwise match.
+UNIT_ACCOUNT_RE = re.compile(
+    r"^\s*(?P<key>User|Group)\s*=\s*(?P<account>[A-Za-z_][A-Za-z0-9_-]*)\s*$"
+)
+UNIT_SUFFIXES = (".service", ".timer", ".path", ".socket", ".mount", ".target", ".slice")
+
+# The only accounts a platform template may name. Mirrors the set in
+# tests/test_install_units.py::test_repo_templates_use_canonical_spellings —
+# `robothor` is the PLACEHOLDER rendered to $ROBOTHOR_SERVICE_USER at install
+# time; postgres/root/nobody exist on every box; `-` means "leave it alone".
+PERMITTED_ACCOUNTS = {"robothor", "postgres", "root", "nobody", "-"}
 
 # Email pattern — checked separately with allowlist
 EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
@@ -104,6 +139,27 @@ def _check_file(path: str, content: str, allowlist: set[str]) -> list[str]:
                 warnings.append(f"  {path}:{line_num} — {message}")
                 break  # One warning per line
 
+        if not any(allow in line for allow in allowlist):
+            row = TMPFILES_ROW_RE.match(line)
+            if row:
+                for column in ("user", "group"):
+                    account = row.group(column)
+                    if account not in PERMITTED_ACCOUNTS:
+                        warnings.append(
+                            f"  {path}:{line_num} — tmpfiles {column} column names "
+                            f"'{account}' — use the `robothor` placeholder "
+                            "(rendered by scripts/render-unit.sh --tmpfiles)"
+                        )
+
+            if path.endswith(UNIT_SUFFIXES) or ".service.d/" in path:
+                unit = UNIT_ACCOUNT_RE.match(line)
+                if unit and unit.group("account") not in PERMITTED_ACCOUNTS:
+                    warnings.append(
+                        f"  {path}:{line_num} — {unit.group('key')}= names "
+                        f"'{unit.group('account')}', an instance account — use "
+                        "`robothor` (rendered to ROBOTHOR_SERVICE_USER)"
+                    )
+
         # Check emails
         for email_match in EMAIL_RE.finditer(line):
             email = email_match.group(0).lower()
@@ -119,42 +175,88 @@ def _check_file(path: str, content: str, allowlist: set[str]) -> list[str]:
     return warnings
 
 
-def main() -> int:
-    """Scan staged files for instance data leaks."""
-    # Get list of staged files
-    result = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
-        capture_output=True,
-        text=True,
-    )
-    staged_files = [f for f in result.stdout.strip().splitlines() if f]
+def _git(*args: str) -> str:
+    return subprocess.run(["git", *args], capture_output=True, text=True, check=False).stdout
 
-    if not staged_files:
+
+def _target_files(mode: str, base: str | None) -> list[tuple[str, str | None]]:
+    """``(path, git_rev_or_None)`` for each file to scan.
+
+    Three modes, one scanner:
+
+    default  staged files, read from the index — the pre-commit hook.
+    --ci     everything this branch changed against the merge base, read from
+             the working tree (the checkout IS the PR head). Same set a
+             reviewer sees in the diff, and the same set the hook sees, so
+             local and CI agree.
+    --all    every tracked file. A deliberate cleanup pass, NOT a merge gate:
+             the tree carries pre-existing warnings (mostly test-fixture
+             emails) that would make a whole-tree gate red on day one and
+             disabled within a week.
+    """
+    if mode == "all":
+        return [(f, None) for f in _git("ls-files").splitlines() if f]
+    if mode == "ci":
+        ref = base or os.environ.get("GITHUB_BASE_REF") or ""
+        base_ref = f"origin/{ref}" if ref and not ref.startswith("origin/") else (ref or "")
+        if not base_ref or not _git("rev-parse", "--verify", "--quiet", base_ref).strip():
+            base_ref = "origin/main"
+        if not _git("rev-parse", "--verify", "--quiet", base_ref).strip():
+            # push-to-main run: a squash of an already-scanned PR. Cheap backstop.
+            base_ref = "HEAD~1"
+        changed = _git("diff", "--name-only", "--diff-filter=ACMR", f"{base_ref}...HEAD")
+        return [(f, None) for f in changed.splitlines() if f]
+    staged = _git("diff", "--cached", "--name-only", "--diff-filter=ACMR")
+    return [(f, "") for f in staged.splitlines() if f]
+
+
+def main() -> int:
+    """Scan for instance data leaks (CLAUDE.md rule #1)."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--ci", action="store_true", help="scan files changed against the merge base"
+    )
+    group.add_argument("--all", action="store_true", help="scan every tracked file")
+    parser.add_argument("--base", help="base ref for --ci (default origin/$GITHUB_BASE_REF)")
+    args = parser.parse_args()
+
+    mode = "ci" if args.ci else "all" if args.all else "staged"
+    targets = _target_files(mode, args.base)
+
+    if not targets:
         return 0
 
     allowlist = _load_allowlist()
     all_warnings: list[str] = []
 
-    for path in staged_files:
+    for path, rev in targets:
         if _is_instance_path(path):
             continue
         if Path(path).name in GENERATED_FILES:
             continue
 
-        # Read staged content (not working tree)
-        content_result = subprocess.run(
-            ["git", "show", f":{path}"],
-            capture_output=True,
-            text=True,
-        )
-        if content_result.returncode != 0:
-            continue
+        if rev == "":
+            # Staged content, not the working tree.
+            content_result = subprocess.run(
+                ["git", "show", f":{path}"],
+                capture_output=True,
+                text=True,
+            )
+            if content_result.returncode != 0:
+                continue
+            content = content_result.stdout
+        else:
+            try:
+                content = Path(path).read_text(encoding="utf-8", errors="replace")
+            except (OSError, UnicodeDecodeError):
+                continue
 
         # Only check text files
-        if "\x00" in content_result.stdout[:1024]:
+        if "\x00" in content[:1024]:
             continue
 
-        warnings = _check_file(path, content_result.stdout, allowlist)
+        warnings = _check_file(path, content, allowlist)
         all_warnings.extend(warnings)
 
     if all_warnings:

@@ -92,10 +92,22 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 # The restart TARGET is hardcoded in that path unit's paired .service — this
 # file's contents are never read as the unit to restart, only as an audit
 # trail (UTC timestamp + sender). Module-level so tests can inject a tmp_path.
-# A unit with no entry here has no path-unit watching for it yet (e.g.
-# robothor-delphi-engine) — the handler tells the caller to use SSH instead.
+# A unit with no entry here has no path-unit watching for it — the handler
+# tells the caller to use SSH instead. That list is deliberately short: vision
+# and mediamtx are absent because they were disabled by hand after the
+# 2026-08-19 GPU thermal event, and re-enabling them unattended would let the
+# agent undo a thermal-safety decision on a box nobody is standing next to.
 _RESTART_TRIGGERS: dict[str, Path] = {
+    # The engine keeps the original single-file trigger from #205 for
+    # compatibility; the rest use the per-unit request directory, where the
+    # FILENAME is the request and the handler matches it against its own
+    # hardcoded allowlist. Adding a key here does NOT grant anything on its
+    # own — infra/bin/robothor-restart-handler.sh is the authority, and a name
+    # it does not recognise is discarded and logged.
     "robothor-engine.service": Path("/run/robothor/restart-request"),
+    "robothor-delphi-engine.service": Path("/run/robothor/restart-requests/robothor-delphi-engine"),
+    "robothor-bridge.service": Path("/run/robothor/restart-requests/robothor-bridge"),
+    "robothor-app.service": Path("/run/robothor/restart-requests/robothor-app"),
 }
 
 # Friendly tool names for streaming indicators
