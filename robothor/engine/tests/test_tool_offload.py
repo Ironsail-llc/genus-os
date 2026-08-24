@@ -83,7 +83,7 @@ def test_reading_a_normal_huge_file_still_offloads():
     """The exemption is for offload artifacts only — a genuinely huge ordinary
     file read must still be offloaded, or read_file becomes the bypass."""
     s = _session(threshold=100)
-    _record(s, "read_file", {"path": "/home/user/project/big.log"}, "w" * 500)
+    _record(s, "read_file", {"path": "/srv/project/big.log"}, "w" * 500)
     assert "[Full output:" in s.messages[-1]["content"]
 
 
