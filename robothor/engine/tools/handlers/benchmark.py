@@ -1317,9 +1317,17 @@ def _timeout_result(
     # record, which is None on a run that never started and a mock under test.
     measured = elapsed_seconds if isinstance(elapsed_seconds, int | float) else None
     actual = float(measured) if measured is not None else cap_seconds
+    # Did the case exhaust ITS OWN budget, or did something smaller fire? The
+    # answer decides whether this is the agent's failure or the harness's, so
+    # it is computed once here and carried on the result rather than re-derived
+    # by every reader from two numbers.
+    # Strictly UNDER, not merely different: a case cancelled at 901s of a
+    # 900s budget overran its own cap, and calling that a harness kill
+    # would excuse a genuinely slow agent.
+    smaller_cap_fired = measured is not None and (cap_seconds - actual) >= 1.0
     detail = (
         f"after {actual:.0f}s"
-        if measured is None or abs(actual - cap_seconds) < 1.0
+        if not smaller_cap_fired
         else f"after {actual:.0f}s, well under its {cap_seconds:.0f}s budget — "
         "a smaller cap fired first"
     )
@@ -1338,6 +1346,11 @@ def _timeout_result(
         "score": 0.0,
         "outcome": _OUTCOME_TIMEOUT,
         "timed_out": True,
+        # True only with evidence. Absent a measurement there is nothing to
+        # show an outer cap fired, and assuming one would quietly drop real
+        # failures out of the denominator — the opposite mistake, and the
+        # more dangerous one.
+        "harness_kill": smaller_cap_fired,
         "timeout_seconds": cap_seconds,
         "status": _OUTCOME_TIMEOUT,
         "elapsed_seconds": round(actual, 1),
@@ -1349,6 +1362,109 @@ def _timeout_result(
     if error_message:
         result["error"] = error_message
     return result
+
+
+def _score_suite(results: list[dict[str, Any]], *, suite_id: str, agent_id: str) -> dict[str, Any]:
+    """Headline numbers for one suite run: what counted, what did not, and why.
+
+    Two kinds of case are deliberately kept out of the pass-rate denominator,
+    for the same reason: the agent was never actually measured on them.
+
+    The honesty rollout ladder is the first. In `observe` those cases run, are
+    graded and are reported — but they stay OUT of the graded set, so the
+    fleet's headline number does not move overnight before anyone has read the
+    verdicts. `enforce` folds them in. Category scores always include them:
+    the whole point is that the fabrications become visible on day one.
+
+    A harness kill is the second, and it is newer. When a cap smaller than the
+    case's own budget fires — an outer wall-clock ceiling on the run that
+    hosts the sweep, most often — the agent never got the time the suite
+    promised it. Scoring that 0.0 files an infrastructure failure as an
+    agent's, which is how crm-dedup went 6/7 -> 4/7 on 2026-08-24 without
+    doing anything wrong. The kill stays visible in `harness_kills`; it just
+    stops being a grade.
+    """
+    honesty_summary = _summarise_honesty(results)
+    graded = (
+        results
+        if honesty_summary["counted_in_aggregate"]
+        else [r for r in results if r.get("category") != HONESTY_CATEGORY]
+    )
+    # A subset run of honesty cases only would otherwise have nothing to grade.
+    graded = graded or results
+
+    harness_kills = sum(1 for r in results if r.get("harness_kill"))
+    graded = [r for r in graded if not r.get("harness_kill")]
+
+    # Weighted aggregate (partial credit) over the whole graded suite.
+    total_weight = sum(r.get("weight", 1.0) for r in graded)
+    aggregate = (
+        sum(r["score"] * r.get("weight", 1.0) for r in graded) / total_weight
+        if total_weight > 0
+        else 0.0
+    )
+
+    # Per-category breakdown — over EVERY result, honesty included.
+    categories: dict[str, list[float]] = {}
+    for r in results:
+        cat = r.get("category", "correctness")
+        categories.setdefault(cat, []).append(r["score"])
+
+    category_scores = {cat: round(statistics.mean(scores), 3) for cat, scores in categories.items()}
+
+    # Headline: how many cases the agent actually passed. A case with a judge
+    # error is failed regardless of its partial score — the criterion was
+    # never evaluated, so nothing certifies it as met.
+    judge_errors = sum(1 for r in graded if r.get("judge_error"))
+    # Harness wall-clock kills. Reported beside judge_errors and for the same
+    # reason: both are counts of cases the harness failed to grade, and reading
+    # either as a statement about the agent is a mistake. A suite whose
+    # `timeouts` is climbing needs its cap raised, not its agent optimised.
+    # Counted over EVERY result rather than the graded subset: an honesty case
+    # killed by the cap in `observe` mode is still a case the harness failed to
+    # grade, and hiding it would defeat the point of the number.
+    timeouts = sum(1 for r in results if r.get("outcome") == _OUTCOME_TIMEOUT)
+    passed = sum(
+        1
+        for r in graded
+        if r.get("score", 0) >= PASS_THRESHOLD and not r.get("judge_error") and not r.get("skipped")
+    )
+    total_cases = len(graded)
+    failed = total_cases - passed
+    pass_rate = passed / total_cases if total_cases else 0.0
+
+    if harness_kills:
+        # Loud, because the alternative to a wrong grade must not be a silent
+        # one. A sweep whose kills are climbing is broken infrastructure and
+        # the operator has to hear about it from somewhere.
+        logger.warning(
+            "Benchmark %s/%s: %d case(s) excluded from the grade — killed by a cap "
+            "smaller than their own budget. %d case(s) graded.",
+            agent_id,
+            suite_id,
+            harness_kills,
+            total_cases,
+        )
+
+    return {
+        # The cases that actually counted. Callers use it to mark which
+        # failures are graded ones — a harness kill is listed but not counted.
+        "graded": graded,
+        "honesty": honesty_summary,
+        "aggregate_score": aggregate,
+        "category_scores": category_scores,
+        "judge_errors": judge_errors,
+        "timeouts": timeouts,
+        "harness_kills": harness_kills,
+        "passed": passed,
+        "total_cases": total_cases,
+        "failed": failed,
+        "pass_rate": pass_rate,
+        # A suite that graded nothing has no rate. Saying `measured: False`
+        # keeps a 0.0 from being read as "the agent failed everything" and a
+        # sweep killed on its first case from being read as anything at all.
+        "measured": total_cases > 0,
+    }
 
 
 def _teardown_task_fixtures(seeded: SeededFixtures | None) -> None:
@@ -1703,56 +1819,19 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     executed = [r for r in results if not r.get("skipped")]
     skipped_count = len(results) - len(executed)
 
-    # The honesty rollout ladder. In `observe` the cases run, are graded and
-    # are reported — but they stay OUT of the graded set, so the fleet's
-    # headline number does not move overnight before anyone has read the
-    # verdicts. `enforce` folds them in. Category scores always include them:
-    # the whole point is that the fabrications become visible on day one.
-    honesty_summary = _summarise_honesty(results)
-    graded = (
-        results
-        if honesty_summary["counted_in_aggregate"]
-        else [r for r in results if r.get("category") != HONESTY_CATEGORY]
-    )
-    # A subset run of honesty cases only would otherwise have nothing to grade.
-    graded = graded or results
-
-    # Weighted aggregate (partial credit) over the whole graded suite.
-    total_weight = sum(r.get("weight", 1.0) for r in graded)
-    aggregate = (
-        sum(r["score"] * r.get("weight", 1.0) for r in graded) / total_weight
-        if total_weight > 0
-        else 0.0
-    )
-
-    # Per-category breakdown — over EVERY result, honesty included.
-    categories: dict[str, list[float]] = {}
-    for r in results:
-        cat = r.get("category", "correctness")
-        categories.setdefault(cat, []).append(r["score"])
-
-    category_scores = {cat: round(statistics.mean(scores), 3) for cat, scores in categories.items()}
-
-    # Headline: how many cases the agent actually passed. A case with a judge
-    # error is failed regardless of its partial score — the criterion was
-    # never evaluated, so nothing certifies it as met.
-    judge_errors = sum(1 for r in graded if r.get("judge_error"))
-    # Harness wall-clock kills. Reported beside judge_errors and for the same
-    # reason: both are counts of cases the harness failed to grade, and reading
-    # either as a statement about the agent is a mistake. A suite whose
-    # `timeouts` is climbing needs its cap raised, not its agent optimised.
-    # Counted over EVERY result rather than the graded subset: an honesty case
-    # killed by the cap in `observe` mode is still a case the harness failed to
-    # grade, and hiding it would defeat the point of the number.
-    timeouts = sum(1 for r in results if r.get("outcome") == _OUTCOME_TIMEOUT)
-    passed = sum(
-        1
-        for r in graded
-        if r.get("score", 0) >= PASS_THRESHOLD and not r.get("judge_error") and not r.get("skipped")
-    )
-    total_cases = len(graded)
-    failed = total_cases - passed
-    pass_rate = passed / total_cases if total_cases else 0.0
+    scores = _score_suite(results, suite_id=suite_id, agent_id=agent_id)
+    graded = scores["graded"]
+    honesty_summary = scores["honesty"]
+    aggregate = scores["aggregate_score"]
+    category_scores = scores["category_scores"]
+    judge_errors = scores["judge_errors"]
+    timeouts = scores["timeouts"]
+    harness_kills = scores["harness_kills"]
+    passed = scores["passed"]
+    total_cases = scores["total_cases"]
+    failed = scores["failed"]
+    pass_rate = scores["pass_rate"]
+    measured = scores["measured"]
 
     # Build run record
     run_record: dict[str, Any] = {
@@ -1768,6 +1847,8 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "failed": failed,
         "judge_errors": judge_errors,
         "timeouts": timeouts,
+        "harness_kills": harness_kills,
+        "measured": measured,
         "category_scores": category_scores,
         "honesty": honesty_summary,
         "task_results": results,
