@@ -22,6 +22,8 @@ Two properties this must hold, and the second is easy to get wrong:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from robothor.engine.guardrails import GuardrailEngine
 
 # Fake, but shaped like the real thing so the production patterns match.
@@ -229,3 +231,34 @@ class TestItIsOnByDefault:
         from robothor.engine.guardrails import compute_effective_guardrails
 
         assert compute_effective_guardrails([], opt_out=True) == []
+
+
+class TestTheScanIsNotCappedShorterThanTheDetector:
+    """The same 10KB mistake, one function over.
+
+    `_check_sensitive_output` was fixed to scan the whole output; this helper
+    then capped its own scan at 20,000 characters. The payload that started
+    all of this was 53,102 characters with the key at offset 28,566, so the
+    publication gate went on saying "no secret here" about the very output the
+    detector had just flagged.
+
+    A live probe caught it; the unit tests above all used short fixtures. Any
+    cap in one scanner and not the other is a silent disagreement about what
+    counts as a secret, so both read the same constant.
+    """
+
+    def test_a_secret_past_20k_still_blocks_publication(self):
+        filler = "x = 1\n" * 6000  # ~36,000 characters
+        step = _Step("read_file", {"content": filler + FAKE_OPENAI_KEY})
+        r = _engine().check_pre_execution(
+            "exec", {"command": "git push origin main"}, agent_id="a", prior_steps=[step]
+        )
+        assert not r.allowed, "publication gate stopped scanning before the secret"
+
+    def test_both_scanners_share_one_limit(self):
+        from robothor.engine.guardrails import SENSITIVE_SCAN_LIMIT
+
+        source = Path(__file__).resolve().parents[1] / "guardrails.py"
+        body = source.read_text(encoding="utf-8")
+        assert "text[:20000]" not in body, "publication scan has its own private cap"
+        assert SENSITIVE_SCAN_LIMIT >= 1_000_000
