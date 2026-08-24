@@ -1,3 +1,9 @@
+## [1.44.0](https://github.com/Ironsail-llc/genus-os/compare/v1.43.0...v1.44.0) (2026-08-24)
+
+### Features
+
+* **bench:** measure Genus against WildClawBench instead of asserting ([#371](https://github.com/Ironsail-llc/genus-os/issues/371)) ([7b82f79](https://github.com/Ironsail-llc/genus-os/commit/7b82f79bf52f570fcea9c9a4b22037e00d38b054))
+
 ## [1.43.0](https://github.com/Ironsail-llc/genus-os/compare/v1.42.0...v1.43.0) (2026-08-24)
 
 ### Features
