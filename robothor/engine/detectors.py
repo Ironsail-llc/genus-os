@@ -827,11 +827,7 @@ def _primary_changed_at(manifest_dir: Path | None = None) -> dict[str, str]:
 
     def _iso(p: Path) -> str | None:
         try:
-            return (
-                datetime.fromtimestamp(p.stat().st_mtime)
-                .astimezone()
-                .isoformat()
-            )
+            return datetime.fromtimestamp(p.stat().st_mtime).astimezone().isoformat()
         except OSError as e:  # pragma: no cover - raced deletion
             logger.debug("could not stat %s: %s", p, e)
             return None
