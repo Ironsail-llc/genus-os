@@ -1,3 +1,9 @@
+## [1.48.1](https://github.com/Ironsail-llc/genus-os/compare/v1.48.0...v1.48.1) (2026-08-25)
+
+### Bug Fixes
+
+* **bench:** pip installs finally land in the interpreter that runs ([#392](https://github.com/Ironsail-llc/genus-os/issues/392)) ([d2c4664](https://github.com/Ironsail-llc/genus-os/commit/d2c466431d91d4f111addb2716c34ca5e9903c96))
+
 ## [1.48.0](https://github.com/Ironsail-llc/genus-os/compare/v1.47.4...v1.48.0) (2026-08-25)
 
 ### Features
