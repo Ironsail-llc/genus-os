@@ -369,7 +369,9 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             instruction_file=raw_heartbeat.get("instruction_file", ""),
             session_target=raw_heartbeat.get("session_target", "isolated"),
             model_primary=hb_model.get("primary", ""),
-            model_fallbacks=hb_model.get("fallbacks", []),
+            model_fallbacks=_with_last_resort(
+                hb_model.get("primary", ""), hb_model.get("fallbacks", [])
+            ),
             max_iterations=int(raw_heartbeat.get("max_iterations", 15)),
             safety_cap=int(raw_heartbeat.get("safety_cap", 50)),
             timeout_seconds=int(raw_heartbeat.get("timeout_seconds", 0)),
@@ -449,7 +451,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         name=manifest.get("name", manifest["id"]),
         description=manifest.get("description", ""),
         model_primary=model.get("primary", ""),
-        model_fallbacks=model.get("fallbacks", []),
+        model_fallbacks=_with_last_resort(model.get("primary", ""), model.get("fallbacks", [])),
         cron_expr=schedule.get("cron", ""),
         timezone=schedule.get("timezone", "America/New_York"),
         timeout_seconds=schedule.get("timeout_seconds", 600),
@@ -595,6 +597,24 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
         else:
             merged[key] = val
     return merged
+
+
+def _with_last_resort(primary: str, fallbacks: list[str]) -> list[str]:
+    """Append the instance's model of last resort to a fallback chain.
+
+    ``ROBOTHOR_LAST_RESORT_MODEL`` names the model that must terminate every
+    agent's chain — on this fleet, the on-device Ollama tier that still
+    answers when every cloud provider is unreachable. An engine-level append
+    rather than a manifest convention because `_defaults.yaml` fallback lists
+    are REPLACED by each manifest's own `model:` block (deep-merge replaces
+    lists), which left exactly one of 23 agents holding the offline tier the
+    instance thought its whole fleet had (2026-08-25 drill). Unset, nothing
+    changes.
+    """
+    last_resort = os.environ.get("ROBOTHOR_LAST_RESORT_MODEL", "").strip()
+    if not last_resort or last_resort == primary or last_resort in fallbacks:
+        return fallbacks
+    return [*fallbacks, last_resort]
 
 
 # Cache for _defaults.yaml: (mtime, parsed_dict)
