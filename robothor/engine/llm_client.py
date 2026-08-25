@@ -414,7 +414,7 @@ class LLMClient:
         from robothor.engine.model_registry import get_model_limits
 
         try:
-            from robothor.engine.runner import proactive_compaction_threshold
+            from robothor.engine.run_budget import proactive_compaction_threshold
 
             model_limits = get_model_limits(self.sizing_model(models, broken_models))
             # Same clamped threshold as the in-loop trigger. The old

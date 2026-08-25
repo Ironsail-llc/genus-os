@@ -63,6 +63,19 @@ from robothor.engine.prompts import (
     PLAN_MODE_PREAMBLE,
     PLAN_MODE_SUFFIX,
 )
+
+# Re-exported for existing importers. The `as` form is what marks a name as
+# deliberately re-exported; a plain import reads to mypy as a private detail,
+# which is the right default and the wrong one here.
+from robothor.engine.run_budget import (  # noqa: E402
+    DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
+)
+from robothor.engine.run_budget import (
+    deadline_warning as deadline_warning,
+)
+from robothor.engine.run_budget import (
+    proactive_compaction_threshold as proactive_compaction_threshold,
+)
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_lifecycle import RunLifecycleMixin
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
@@ -495,34 +508,11 @@ def _resolve_sandbox_decision(config: AgentConfig, mode: str) -> str:
     return "host"
 
 
-def proactive_compaction_threshold(max_input_tokens: int) -> int:
-    """The token estimate at which the in-loop compaction fires.
-
-    Two bounds, take the smaller:
-
-    * half the sizing model's window — the original overflow guard, still the
-      binding constraint on small-window fallbacks (a 40K fallback must
-      compact at 20K, not wait for an absolute budget it can never hold);
-    * an absolute budget (ROBOTHOR_COMPACTION_TRIGGER_TOKENS, default 80,000)
-      — because on the fleet primary's 1M window the fraction alone was
-      524,288 tokens, 7.4x the p95 per-call input, and the entire graduated
-      compaction system sat shipped-and-inert with ZERO firings in 7 days
-      while re-sent history was 28% of all input (audit 2026-08-24).
-
-    0 disables the absolute budget (window fraction only) — a documented
-    escape hatch, not a silent one.
-    """
-    fraction = int(max_input_tokens * 0.50)
-    raw = os.environ.get("ROBOTHOR_COMPACTION_TRIGGER_TOKENS", "80000")
-    try:
-        budget = int(raw)
-    except ValueError:
-        budget = 80_000
-    if budget <= 0:
-        return fraction
-    return min(fraction, budget)
-
-
+#: Fraction of a run's wall-clock ceiling at which the agent is told to wrap
+#: up. At 80% of a 900-second budget there are three minutes left — a few
+#: tool calls at the measured rate of roughly six seconds each, which is
+#: enough to write out what has been gathered. A warning at 95% is one the
+#: agent cannot act on.
 class AgentRunner(
     LLMCallMixin,
     RunLifecycleMixin,
@@ -2006,6 +1996,7 @@ class AgentRunner(
         _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
         _runaway_alerted = False  # one-shot latch for 500K alert
         _secret_notified = False  # one-shot latch for the credential-exposure note
+        _deadline_warned = False  # one-shot latch for the wrap-up note
 
         while True:
             # ── [STEER / INTERRUPT] live operator influence (Rip 9) ──
@@ -2101,6 +2092,20 @@ class AgentRunner(
             # safety_cap=0 is the manifest sentinel for "no cap" (main.yaml sets
             # this for heartbeat + worker per operator directive 2026-04-20). The
             # check only fires when the cap is positive.
+            # ── [DEADLINE] Tell the agent while it can still act ──
+            # A run killed at its ceiling loses whatever it had not yet
+            # written. Warning once at 80% lets it flush partial results —
+            # which is the difference between partial credit and none.
+            if not _deadline_warned and self._active_watchdog is not None:
+                _dl_note = deadline_warning(
+                    self._active_watchdog.elapsed_seconds,
+                    float(getattr(self._active_watchdog, "_hard_timeout", 0) or 0),
+                )
+                if _dl_note:
+                    _deadline_warned = True
+                    logger.info("Deadline warning issued at iteration %d", _iteration)
+                    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _dl_note})
+
             if _safety_cap > 0 and _iteration >= _safety_cap:
                 await self._force_wrapup(
                     session,
