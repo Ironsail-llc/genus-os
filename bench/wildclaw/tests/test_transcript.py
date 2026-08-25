@@ -427,3 +427,50 @@ class TestTaskBudgetIsTheTaskBudget:
         literal = re.search(r'f"(.*)"\s*$', line.strip()).group(1)
         theirs = literal.replace("{timeout_seconds}", "900").replace("\\n", "\n")
         assert benchmark_preamble(900) == theirs
+
+
+class TestTheHarnessRefusesToRunWithoutItsPod:
+    """A missing container must not read as sixty capability failures.
+
+    The bench pod carries the database the agent needs. Remove it and every
+    task still "runs": podman exits instantly with `no pod with name or ID
+    genus-bench`, the agent never starts, no transcript is written, and the
+    grader dies on a missing file. The harness then reports
+
+        score=0.00  tokens=0  cost=$0  0s
+
+    for all ten tasks and prints a category mean of 0.0%. Nothing in that
+    output says the environment was absent rather than the agent incapable —
+    and a 0.0% category mean is exactly the shape of a real result.
+
+    Same defect class as an unstaged workspace, which is already handled by
+    recording `workspace_staged`. The difference is that a missing workspace
+    affects one task and a missing pod affects the whole run, so this one is
+    fatal at startup rather than recorded per task.
+    """
+
+    @staticmethod
+    def _source() -> str:
+        return (Path(__file__).resolve().parents[1] / "harness.py").read_text(encoding="utf-8")
+
+    def test_a_preflight_exists_and_runs_before_any_task(self):
+        body = self._source()
+        assert "def _preflight(" in body, "no preflight check"
+        main_body = body[body.index("def main(") :]
+        assert "_preflight(" in main_body
+        assert main_body.index("_preflight(") < main_body.index("for task_file in task_files"), (
+            "the pod check must run before the first task, not after"
+        )
+
+    def test_the_preflight_names_the_pod_and_the_fix(self):
+        body = self._source()
+        start = body.index("def _preflight(")
+        end = body.index("\ndef ", start + 10)
+        pre = body[start:end]
+        assert "POD" in pre, "the error must name the pod it looked for"
+        assert "podman pod create" in pre, "tell the operator how to fix it"
+
+    def test_zero_tasks_is_also_refused(self):
+        """An empty glob prints `no tasks matched` — keep that, it is the same class."""
+        body = self._source()
+        assert "no tasks matched" in body

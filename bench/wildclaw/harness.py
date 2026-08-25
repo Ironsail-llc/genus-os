@@ -436,6 +436,40 @@ def _read_grade(out_dir: Path) -> dict[str, Any]:
     }
 
 
+def _preflight() -> str:
+    """Is the environment the agent needs actually here?
+
+    Without the bench pod every task exits instantly — podman prints `no pod
+    with name or ID genus-bench`, the agent never starts, and the grader dies
+    on a transcript that was never written. The run then reports a clean
+    `0.0%` category mean, which is indistinguishable from a real result.
+
+    Returns an empty string when everything is present, otherwise the message
+    to die with.
+    """
+    probe = subprocess.run(
+        ["podman", "pod", "exists", POD],
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode != 0:
+        return (
+            f"bench pod {POD!r} is not running — every task would score 0.00 "
+            f"with no agent ever starting.\n"
+            f"  podman pod create --name {POD}\n"
+            f"  (then gb-pg, gb-redis and the migrate step; see "
+            f"bench/wildclaw/README.md)"
+        )
+    images = subprocess.run(
+        ["podman", "image", "exists", IMAGE],
+        capture_output=True,
+        text=True,
+    )
+    if images.returncode != 0:
+        return f"bench image {IMAGE!r} is not built — see bench/wildclaw/README.md"
+    return ""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", required=True, type=Path, help="WildClawBench checkout")
@@ -455,6 +489,11 @@ def main() -> int:
         task_files = task_files[: args.limit]
     if not task_files:
         print(f"no tasks matched under {task_dir}", file=sys.stderr)
+        return 2
+
+    problem = _preflight()
+    if problem:
+        print(problem, file=sys.stderr)
         return 2
 
     args.out.mkdir(parents=True, exist_ok=True)
