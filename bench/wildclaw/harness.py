@@ -70,14 +70,19 @@ def _load_task(task_file: Path, repo: Path) -> dict[str, Any]:
     return parse_task_md(task_file)
 
 
-def _prepare_workspace(task: dict[str, Any], data_root: Path, repo: Path, dest: Path) -> None:
-    """Copy the pristine task workspace into a fresh directory.
+def _prepare_workspace(task: dict[str, Any], data_root: Path, repo: Path, dest: Path) -> bool:
+    """Stage a task's pristine workspace. Returns whether fixtures were found.
 
-    The benchmark's parser resolves `workspace_path` against the REPO, but the
-    task data is a separate HuggingFace download. Re-root it, then insist the
-    result exists: an empty workspace still runs, still grades, and scores
-    zero — an infrastructure mistake wearing the costume of a capability
-    result, which is the failure this whole harness exists to avoid.
+    The benchmark's parser resolves `workspace_path` against the REPO while
+    the data is a separate HuggingFace download, so it is re-rooted here.
+
+    Not every task ships fixtures — `task_1_arxiv_digest` fetches from arXiv
+    live — so a missing directory is not automatically a broken download, and
+    an earlier version that raised on it stopped a legitimate category run
+    dead. But an empty workspace still runs, still grades, and still scores
+    zero, and that must never pass for a capability result. The answer is to
+    record it: the caller puts `workspace_staged` on the result and counts it
+    in the summary, so a reader can tell a real zero from an unfed one.
     """
     if dest.exists():
         shutil.rmtree(dest)
@@ -87,44 +92,54 @@ def _prepare_workspace(task: dict[str, Any], data_root: Path, repo: Path, dest: 
     if relative.is_absolute():
         with contextlib.suppress(ValueError):
             relative = relative.relative_to(repo)
-    source = data_root / relative / "exec"
-    if not source.is_dir():
-        # Some categories ship no workspace at all — the Social Interaction
-        # tasks are conversations and need no input files. That is different
-        # from a task whose siblings have data and which is missing only
-        # because the download was partial, and the difference decides whether
-        # an empty workspace is legitimate or a silent zero. Ask the category.
-        category_dir = data_root / relative.parent
-        if category_dir.is_dir():
-            raise FileNotFoundError(
-                f"task workspace not found: {source} — its category HAS data, "
-                f"so this one is missing. Download it with\n"
-                f"  hf download internlm/WildClawBench --repo-type dataset "
-                f"--include '{relative}/**' --local-dir {data_root}"
-            )
-        logger.info(
-            "%s: category ships no workspace data; starting from an empty one",
-            task.get("task_id", relative.name),
-        )
-    else:
-        shutil.copytree(source, dest, dirs_exist_ok=True)
 
-    # `tmp/` is a staging area the warmup reads and then deletes — a task's
-    # mock service loads its fixtures from there so the agent cannot simply
-    # read them off disk. WildClawBench mounts it alongside `exec/`; copying
-    # only `exec/` left the mock Slack server dying on a missing fixtures
-    # file, and the agent then truthfully reported an empty workspace.
+    source = data_root / relative / "exec"
+    staged = source.is_dir()
+    if staged:
+        shutil.copytree(source, dest, dirs_exist_ok=True)
+    else:
+        logger.warning(
+            "%s: no workspace staged (looked in %s) — running from an empty one. "
+            "If this task needs fixtures, its score is not a capability result.",
+            task.get("task_id", relative.name),
+            source,
+        )
+
+    # `tmp/` is a staging area the warmup reads and then deletes, so a task's
+    # mock service can load fixtures the agent cannot simply read off disk.
+    # WildClawBench mounts it alongside `exec/`; copying only `exec/` left the
+    # mock Slack server dying on a missing file.
     staging = data_root / relative / "tmp"
     if staging.is_dir():
         shutil.copytree(staging, dest / "tmp", dirs_exist_ok=True)
 
-    # `gt/` is the ground truth. It is NEVER copied: handing an agent the
-    # answer key would not be a benchmark, and the mistake would be
-    # invisible in the score — it would just look like we had won.
+    # `gt/` is the ground truth and is NEVER copied. Handing an agent the
+    # answer key would not be a benchmark, and the mistake would be invisible
+    # in the score — it would just look like we had won.
 
     results = dest / "results"
     results.mkdir(exist_ok=True)
     results.chmod(0o777)
+    return staged
+
+
+def _grader_needs_live_services(task: dict[str, Any]) -> bool:
+    """Does this task's grader read from a mock service that must still be up?
+
+    Measured across all 60 tasks: 6 graders fetch an audit log over HTTP
+    (`http://localhost:9110/slack/audit`), 10 read the ground-truth directory
+    at `/tmp_workspace/gt`, and NONE do both. That disjointness is what makes
+    two grading modes safe rather than two answers to the same question:
+
+    * live services  -> grade INSIDE the agent's container, before it exits,
+      because the audit log lives in the service's memory.
+    * everything else -> grade OUTSIDE it, in a fresh container with `gt/`
+      mounted. The answer key never shares a filesystem with the agent.
+
+    Checked against the grader's own source, so a task that starts reading a
+    service tomorrow is classified by what it does, not by a list here.
+    """
+    return "localhost:9" in str(task.get("automated_checks") or "")
 
 
 def _warmup_prelude(task: dict[str, Any]) -> str:
@@ -274,14 +289,15 @@ def _run_agent(
     # in-container for exactly this reason; grading from outside reads an
     # empty audit log and scores a correct run zero, which is what it did to
     # all six Social Interaction tasks.
-    script = "\n".join(
-        [
-            *([_warmup_prelude(task)] if _warmup_prelude(task) else []),
-            "python -m bench.wildclaw.run_one",
-            f"cd {CONTAINER_WORKSPACE} && python /out/_grade.py > /out/grade.out 2>/out/grade.err",
-        ]
-    )
-    cmd += ["sh", "-c", script]
+    steps = [
+        *([_warmup_prelude(task)] if _warmup_prelude(task) else []),
+        "python -m bench.wildclaw.run_one",
+    ]
+    if _grader_needs_live_services(task):
+        steps.append(
+            f"cd {CONTAINER_WORKSPACE} && python /out/_grade.py > /out/grade.out 2>/out/grade.err"
+        )
+    cmd += ["sh", "-c", "\n".join(steps)]
     started = time.perf_counter()
     proc = subprocess.run(
         cmd,
@@ -310,6 +326,57 @@ def _write_grade_script(task: dict[str, Any], out_dir: Path) -> None:
         ]
     )
     (out_dir / "_grade.py").write_text(runner_src, encoding="utf-8")
+
+
+def _grade_with_ground_truth(
+    task: dict[str, Any], workspace: Path, out_dir: Path, data_root: Path, repo: Path
+) -> dict[str, Any]:
+    """Grade in a FRESH container, with the answer key mounted.
+
+    Ten graders compare the agent's output against `/tmp_workspace/gt`. That
+    directory must therefore exist at grading time and must never exist while
+    the agent is running — so it is mounted here, into a container the agent
+    has already finished with and cannot reach.
+    """
+    relative = Path(task["workspace_path"])
+    if relative.is_absolute():
+        with contextlib.suppress(ValueError):
+            relative = relative.relative_to(repo)
+    gt = data_root / relative / "gt"
+
+    cmd = [
+        "podman",
+        "run",
+        "--rm",
+        "--user",
+        "0",
+        "-v",
+        f"{workspace}:{CONTAINER_WORKSPACE}:z",
+        "-v",
+        f"{out_dir}:/out:z",
+    ]
+    if gt.is_dir():
+        cmd += ["-v", f"{gt}:{CONTAINER_WORKSPACE}/gt:ro,z"]
+    cmd += [
+        "-w",
+        CONTAINER_WORKSPACE,
+        "-e",
+        f"OPENROUTER_API_KEY={_api_key()}",
+        "-e",
+        "OPENROUTER_BASE_URL="
+        + os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        "-e",
+        "JUDGE_MODEL=" + os.environ.get("JUDGE_MODEL", "openai/gpt-5.4"),
+        IMAGE,
+        "sh",
+        "-c",
+        "python /out/_grade.py > /out/grade.out 2>/out/grade.err",
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        return {"overall_score": 0.0, "grading_error": "grader timed out"}
+    return _read_grade(out_dir)
 
 
 def _read_grade(out_dir: Path) -> dict[str, Any]:
@@ -367,7 +434,7 @@ def main() -> int:
 
         out_dir = args.out / task_id
         workspace = args.out / "_ws" / task_id
-        _prepare_workspace(task, args.data, args.repo, workspace)
+        staged = _prepare_workspace(task, args.data, args.repo, workspace)
 
         run_info = _run_agent(task, workspace, out_dir, args.model or None, args.repo)
         usage = {}
@@ -375,7 +442,11 @@ def main() -> int:
         if usage_path.exists():
             usage = json.loads(usage_path.read_text())
 
-        score = _read_grade(out_dir)
+        score = (
+            _read_grade(out_dir)
+            if _grader_needs_live_services(task)
+            else _grade_with_ground_truth(task, workspace, out_dir, args.data, args.repo)
+        )
         overall = float(score.get("overall_score", 0.0) or 0.0)
         (out_dir / "score.json").write_text(json.dumps(score, indent=2), encoding="utf-8")
 
@@ -387,7 +458,15 @@ def main() -> int:
             + (f"  ERROR: {score['grading_error'][:80]}" if score.get("grading_error") else ""),
             flush=True,
         )
-        results.append({"task_id": task_id, "score": overall, "usage": usage, "detail": score})
+        results.append(
+            {
+                "task_id": task_id,
+                "score": overall,
+                "usage": usage,
+                "detail": score,
+                "workspace_staged": staged,
+            }
+        )
 
     graded = [r for r in results if not r["detail"].get("grading_error")]
     summary = {
@@ -396,6 +475,9 @@ def main() -> int:
         "tasks_graded": len(graded),
         "mean_score": round(sum(r["score"] for r in graded) / len(graded), 4) if graded else 0.0,
         "total_cost_usd": round(sum(r["usage"].get("cost_usd", 0) or 0 for r in results), 4),
+        # Tasks that ran without fixtures. A zero here is not a capability
+        # result, and a reader has to be able to tell the difference.
+        "tasks_without_workspace": sum(1 for r in results if not r.get("workspace_staged")),
         "results": results,
     }
     (args.out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
