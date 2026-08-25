@@ -78,12 +78,14 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
                 return {"error": f"unsupported image format: {fmt or 'unknown'}"}
 
             original = img.size
-            work = img
+            # Typed as the base Image, not ImageFile: `resize` returns the
+            # former, and LANCZOS moved to the Resampling enum in Pillow 10.
+            work: Image.Image = img
             if max(original) > MAX_DIMENSION:
                 scale = MAX_DIMENSION / max(original)
                 work = img.resize(
                     (max(1, int(original[0] * scale)), max(1, int(original[1] * scale))),
-                    Image.LANCZOS,
+                    Image.Resampling.LANCZOS,
                 )
 
             reencode = fmt in _REENCODE_TO_PNG or work is not img
