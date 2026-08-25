@@ -28,3 +28,18 @@ RUN apt-get update \
 RUN git config --system --add safe.directory '*' \
     && git config --system user.email "agent@example.com" \
     && git config --system user.name "Agent"
+
+# The production venv ships without pip (uv-built), so the bare `pip` on
+# PATH belonged to the SYSTEM interpreter while `python` is the venv's —
+# every task warmup and every agent `pip install X` installed into an
+# interpreter nothing runs, and the first import failed anyway. jigsaw's
+# grader died on `No module named 'PIL'` one line after a successful
+# `pip install Pillow`. Give the venv its own pip so installs land where
+# python looks.
+RUN /opt/venv/bin/python -m ensurepip --default-pip 2>/dev/null \
+    || (curl -sS https://bootstrap.pypa.io/get-pip.py | /opt/venv/bin/python)
+
+# The toolchain the benchmark's harness images pre-install ("pinned Python
+# toolchain, and pre-installed binaries" — WildClawBench report §3). Task
+# graders import these without declaring them.
+RUN /opt/venv/bin/pip install --no-cache-dir Pillow numpy openai

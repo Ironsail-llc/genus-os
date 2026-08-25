@@ -573,3 +573,40 @@ class TestATimedOutTaskDoesNotKillTheCategory:
         harness._run_agent(self._task(), ws, tmp_path / "out", None, tmp_path)
         leftover = [p for p in tmp_path.rglob("*.env") if p.is_file()]
         assert not leftover, f"secret-bearing env files left behind: {leftover}"
+
+
+class TestGtGradingRunsInTheTaskEnvironment:
+    """The grader is part of the task and gets the task's environment.
+
+    jigsaw_puzzle's grader opens images with PIL. The benchmark grades inside
+    the task container, where the task's warmup (`pip install openai Pillow
+    numpy`) has already run; our gt-mode grades in a FRESH container, where
+    it had not — so the grader died on `No module named 'PIL'` and a
+    completed run scored a spurious zero. The warmup prelude therefore runs
+    in the grading container too.
+
+    Same file also carried the argv-key leak `_run_agent` was already cured
+    of: the judge key rode `-e OPENROUTER_API_KEY=...` where any exception
+    repr publishes it.
+    """
+
+    @staticmethod
+    def _source() -> str:
+        return (Path(__file__).resolve().parents[1] / "harness.py").read_text(encoding="utf-8")
+
+    def test_the_warmup_runs_before_the_grade_script(self):
+        body = self._source()
+        start = body.index("def _grade_with_ground_truth(")
+        end = body.index("\ndef ", start + 10)
+        fn = body[start:end]
+        assert "_warmup_prelude" in fn, "the grading container skips the task's warmup"
+
+    def test_no_key_in_the_grading_argv(self):
+        body = self._source()
+        start = body.index("def _grade_with_ground_truth(")
+        end = body.index("\ndef ", start + 10)
+        fn = body[start:end]
+        assert 'f"OPENROUTER_API_KEY={_api_key()}"' not in fn, (
+            "the judge key rides argv — any exception repr publishes it"
+        )
+        assert "--env-file" in fn
