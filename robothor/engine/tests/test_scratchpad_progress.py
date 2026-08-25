@@ -119,14 +119,21 @@ class TestScratchpadPlanTracking:
         assert "4/4 complete" in summary
 
     def test_format_summary_legacy_fallback(self):
-        """Without plan, falls back to percentage-based progress."""
+        """Without a plan there is no percentage — only the honest count.
+
+        This test used to assert "50%": three successful calls against
+        plan_steps=6. That ratio measured call volume, not progress, and at
+        successes >= plan_steps it printed "100%" while the task could be
+        entirely undone. See TestNoFabricatedProgress.
+        """
         sp = Scratchpad()
         sp.record_tool_call("t1")
         sp.record_tool_call("t2")
         sp.record_tool_call("t3")
 
         summary = sp.format_summary(plan_steps=6)
-        assert "50%" in summary
+        assert "%" not in summary
+        assert "3 successful tool call(s)" in summary
 
     def test_out_of_order_execution(self):
         sp = Scratchpad()
@@ -205,3 +212,42 @@ class TestScratchpadExistingBehavior:
         assert restored._tool_calls == 2
         assert restored._successes == 1
         assert restored._errors == 1
+
+
+class TestNoFabricatedProgress:
+    """The legacy estimator reported "Estimated progress: 100%" as soon as
+    successful tool calls reached the plan-step count — it measured call
+    volume, not progress. On a graded research run it told the agent "100%"
+    at tool call 6, before the key document had even been read, tilting it
+    toward wrap-up instead of verification. A developer-channel message
+    asserting completeness the system cannot know is the fabricated-signal
+    defect class; the honest statement is the count itself.
+    """
+
+    def test_call_volume_is_not_reported_as_a_percentage(self):
+        from robothor.engine.scratchpad import Scratchpad
+
+        sp = Scratchpad()
+        for i in range(6):
+            sp.record_tool_call(f"tool_{i}")
+        summary = sp.format_summary(plan_steps=6)
+        assert "100%" not in summary
+        assert "Estimated progress" not in summary
+
+    def test_the_honest_line_is_a_count(self):
+        from robothor.engine.scratchpad import Scratchpad
+
+        sp = Scratchpad()
+        for i in range(4):
+            sp.record_tool_call(f"tool_{i}")
+        summary = sp.format_summary(plan_steps=6)
+        assert "4 successful tool call(s); no step-level plan tracked" in summary
+
+    def test_plan_aware_progress_is_untouched(self):
+        from robothor.engine.scratchpad import Scratchpad
+
+        sp = Scratchpad()
+        sp.set_plan([{"tool": "exec", "action": "run"}, {"tool": "write_file", "action": "save"}])
+        sp.record_tool_call("exec")
+        summary = sp.format_summary()
+        assert "Plan progress" in summary

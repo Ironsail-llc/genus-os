@@ -114,3 +114,22 @@ class TestItReachesTheAgent:
         src = (Path(__file__).resolve().parents[1] / "runner.py").read_text(encoding="utf-8")
         assert "_deadline_warned = False" in src
         assert "_deadline_warned = True" in src
+
+
+class TestCheckpointThenContinue:
+    """The nudge orders write-first, improve-after.
+
+    On a graded 1200s research run the agent received the warning at 978s and
+    spent ~120 more seconds verifying before its FIRST write to the output
+    location; a marginally slower finish would have scored zero on
+    everything. "Save your partial work" alone lets an agent read it as
+    "finish up, then save" — the order matters and the message states it.
+    """
+
+    def test_the_message_orders_write_first_then_improve(self):
+        from robothor.engine.run_budget import deadline_warning
+
+        note = deadline_warning(80.0, 100.0)
+        assert note is not None
+        assert "FIRST" in note
+        assert "then keep improving" in note

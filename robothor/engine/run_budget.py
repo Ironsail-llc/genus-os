@@ -43,12 +43,15 @@ def deadline_warning(elapsed: float, hard_timeout: float) -> str | None:
     if elapsed < hard_timeout * DEADLINE_WARNING_FRACTION:
         return None
     remaining = max(0, int(hard_timeout - elapsed))
+    # Write-FIRST, improve-after: a graded run got this note with ~220s left
+    # yet wrote nothing for ~120 more seconds. The order is the message.
     return (
         f"[SYSTEM] Time budget: {int(elapsed)}s used of {int(hard_timeout)}s, "
-        f"about {remaining}s left. Save your partial work NOW — write whatever "
-        "results you already have to the location the task asked for, even if "
-        "incomplete, and say plainly what is missing. Do not start a new "
-        "subtask; anything unwritten when the budget expires is lost."
+        f"about {remaining}s left. FIRST write your current partial answer to "
+        "the location the task asked for, even if incomplete — then keep "
+        "improving and overwrite it. Say plainly what is missing. Do not "
+        "start a new subtask; anything unwritten when the budget expires is "
+        "lost."
     )
 
 

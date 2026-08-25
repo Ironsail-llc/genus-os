@@ -53,7 +53,11 @@ class TestScratchpad:
         for _ in range(3):
             sp.record_tool_call("tool")
         summary = sp.format_summary(plan_steps=6)
-        assert "50%" in summary
+        # This asserted "50%" until 2026-08-25: the ratio measured call
+        # volume, not progress, and printed "100%" while the task could be
+        # entirely undone. The honest line is the count.
+        assert "%" not in summary
+        assert "3 successful tool call(s)" in summary
 
     def test_to_dict_and_from_dict(self):
         sp = Scratchpad(inject_interval=5)
