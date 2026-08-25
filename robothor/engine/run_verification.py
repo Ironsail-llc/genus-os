@@ -287,6 +287,24 @@ _FILE_PATTERNS = [
         re.IGNORECASE,
     ),
     re.compile(r"\b(?:wrote|saved)\s+(?:it\s+|that\s+)?to\s+[~./][\w./-]+", re.IGNORECASE),
+    # Passive voice, named artefact. The two patterns above need either the
+    # literal word "file" or an explicit path, so "The report is saved." —
+    # verbatim from a run that had written to the wrong directory and scored
+    # zero — made no claim at all. Agents describe what they produced by its
+    # name far more often than they say "file".
+    re.compile(
+        r"\b(?:report|summary|results?|output|document|digest|manifest|file|"
+        r"[\w.-]+\.(?:md|json|csv|txt|ya?ml|tex))\s+"
+        r"(?:has\s+been\s+|have\s+been\s+|is\s+|are\s+|was\s+|were\s+)"
+        r"(?:now\s+|already\s+)?(?:saved|written|created|generated)\b",
+        re.IGNORECASE,
+    ),
+    # Active voice with the artefact named instead of "file".
+    re.compile(
+        r"\b(?:wrote|saved|created|generated)\s+(?:the\s+|a\s+|an\s+|your\s+)?"
+        r"(?:report|summary|results?|output|document|digest|manifest)\b",
+        re.IGNORECASE,
+    ),
 ]
 
 _SCHEDULED_PATTERNS = [

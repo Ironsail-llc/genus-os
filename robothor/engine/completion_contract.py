@@ -69,7 +69,19 @@ _COMPLETION_CLAIM_PATTERNS = [
 ]
 # A "not" (or similar) shortly before a match means the phrase is being
 # negated ("the task is NOT complete") rather than claimed.
-_NEGATION_RE = re.compile(r"\b(not|isn't|isnt|hasn't|hasnt|never)\b", re.IGNORECASE)
+# Words that make a nearby completion phrase something other than a claim.
+# Negation was here from the start; the intent markers were added 2026-08-25
+# because "I will make sure the report is saved" is a plan, not a report of
+# work done, and the claim patterns cannot tell the difference on their own.
+# Both `run_verification` and this module read it, and its own docstring
+# already promised "negation, abstention or hypothetical".
+_NEGATION_RE = re.compile(
+    r"\b(not|isn't|isnt|hasn't|hasnt|never"
+    r"|will|won't|wont|would|should|shall"
+    r"|going\s+to|plan\s+to|planning\s+to|intend|intending"
+    r"|about\s+to|need\s+to|trying\s+to|attempt)\b",
+    re.IGNORECASE,
+)
 _NEGATION_WINDOW = 20
 
 

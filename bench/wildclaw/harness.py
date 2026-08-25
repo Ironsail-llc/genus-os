@@ -237,6 +237,14 @@ def _run_agent(
         "ROBOTHOR_REDIS_URL=redis://127.0.0.1:6379/0",
         "-e",
         "ROBOTHOR_MANIFEST_DIR=/app/bench/wildclaw",
+        # The fleet runs completion contracts in enforce (see
+        # /etc/robothor/robothor.env). Leaving them off here measured a
+        # weaker platform than the one that ships — the same shape as
+        # withholding the task's skills.
+        "-e",
+        "ROBOTHOR_COMPLETION_CONTRACTS_ENABLED=1",
+        "-e",
+        "ROBOTHOR_COMPLETION_CONTRACTS_MODE=enforce",
         # Genus resolves its skills directory from this, so the task's skills
         # land somewhere the loader actually reads.
         "-e",
