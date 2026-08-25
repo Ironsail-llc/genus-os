@@ -257,16 +257,31 @@ def _run_agent(
         "-i",
         IMAGE,
     ]
+    # The grade script is staged BEFORE the agent runs, because grading now
+    # happens inside this same container while the task's mock services are
+    # still alive. Their audit log — which is what most of these graders
+    # actually read — lives in the service's memory and dies with the
+    # container.
+    _write_grade_script(task, out_dir)
+
     installed = _install_skills(task, repo, workspace)
     if installed:
         logger.info("installed %d task skill(s) into the workspace", installed)
 
-    prelude = _warmup_prelude(task)
-    if prelude:
-        # `exec` so the agent replaces the shell and still owns stdin.
-        cmd += ["sh", "-c", f"{prelude}\nexec python -m bench.wildclaw.run_one"]
-    else:
-        cmd += ["python", "-m", "bench.wildclaw.run_one"]
+    # Agent, then grader, in one container. NOT `exec` — the shell has to
+    # survive the agent so it can run the grader while the mock services
+    # started by the warmup are still listening. WildClawBench grades
+    # in-container for exactly this reason; grading from outside reads an
+    # empty audit log and scores a correct run zero, which is what it did to
+    # all six Social Interaction tasks.
+    script = "\n".join(
+        [
+            *([_warmup_prelude(task)] if _warmup_prelude(task) else []),
+            "python -m bench.wildclaw.run_one",
+            f"cd {CONTAINER_WORKSPACE} && python /out/_grade.py > /out/grade.out 2>/out/grade.err",
+        ]
+    )
+    cmd += ["sh", "-c", script]
     started = time.perf_counter()
     proc = subprocess.run(
         cmd,
@@ -280,85 +295,44 @@ def _run_agent(
     return {"returncode": proc.returncode, "elapsed": elapsed}
 
 
-def _grade(task: dict[str, Any], workspace: Path, out_dir: Path) -> dict[str, Any]:
-    """Execute the task's own grade() against our transcript and workspace.
-
-    Run in a subprocess so a grader that calls sys.exit, imports oddly, or
-    leaks state cannot take the sweep down with it.
-    """
-    transcript_path = out_dir / "transcript.jsonl"
-    entries: list[Any] = []
-    if transcript_path.exists():
-        for line in transcript_path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                try:
-                    entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-
+def _write_grade_script(task: dict[str, Any], out_dir: Path) -> None:
+    """Stage the task's own grade() so the container can run it."""
+    out_dir.mkdir(parents=True, exist_ok=True)
     runner_src = "\n".join(
         [
             "import json, sys",
-            f"_transcript = json.loads({json.dumps(json.dumps(entries))})",
+            "_t = [json.loads(l) for l in open('/out/transcript.jsonl') if l.strip()]",
             "",
             task["automated_checks"],
             "",
-            # The CONTAINER path, not the host one: the grader runs inside,
-            # where the workspace is mounted at /tmp_workspace. Passing the
-            # host path made every file-fixture check read an absent
-            # directory and score 0 — a broken probe that looks exactly like
-            # a failing agent.
-            f"result = grade(transcript=_transcript, "
-            f"workspace_path={json.dumps(CONTAINER_WORKSPACE)})",
+            f"result = grade(transcript=_t, workspace_path={json.dumps(CONTAINER_WORKSPACE)})",
             "print('__SCORE__' + json.dumps(result))",
         ]
     )
-    script = out_dir / "_grade.py"
-    script.write_text(runner_src, encoding="utf-8")
+    (out_dir / "_grade.py").write_text(runner_src, encoding="utf-8")
 
-    # Graded inside a container, as root, with cwd=/tmp_workspace — the
-    # environment the graders are written for. They probe container-only paths
-    # such as /root/.openclaw/... before falling back to the transcript passed
-    # in, and on a host that probe raises PermissionError instead of returning
-    # False. Running them anywhere else grades the harness, not the agent.
-    cmd = [
-        "podman",
-        "run",
-        "--rm",
-        "--user",
-        "0",
-        "-v",
-        f"{workspace}:{CONTAINER_WORKSPACE}:z",
-        "-v",
-        f"{out_dir}:/out:z",
-        "-w",
-        CONTAINER_WORKSPACE,
-        "-e",
-        f"OPENROUTER_API_KEY={_api_key()}",
-        "-e",
-        "OPENROUTER_BASE_URL="
-        + os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-        "-e",
-        "JUDGE_MODEL=" + os.environ.get("JUDGE_MODEL", "openai/gpt-5.4"),
-        IMAGE,
-        "python",
-        "/out/_grade.py",
-    ]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
-    except subprocess.TimeoutExpired:
-        return {"overall_score": 0.0, "grading_error": "grader timed out"}
 
-    (out_dir / "grade.log").write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
-    for line in proc.stdout.splitlines():
+def _read_grade(out_dir: Path) -> dict[str, Any]:
+    """Read what the in-container grader produced."""
+    stdout = (
+        (out_dir / "grade.out").read_text(encoding="utf-8")
+        if (out_dir / "grade.out").exists()
+        else ""
+    )
+    for line in stdout.splitlines():
         if line.startswith("__SCORE__"):
             try:
                 return json.loads(line[len("__SCORE__") :])
             except json.JSONDecodeError:
                 break
+    err = (
+        (out_dir / "grade.err").read_text(encoding="utf-8")
+        if (out_dir / "grade.err").exists()
+        else ""
+    )
     return {
         "overall_score": 0.0,
-        "grading_error": (proc.stderr or "grader produced no score").strip()[:400],
+        "grading_error": (err or "grader produced no score").strip()[:400],
     }
 
 
@@ -401,7 +375,7 @@ def main() -> int:
         if usage_path.exists():
             usage = json.loads(usage_path.read_text())
 
-        score = _grade(task, workspace, out_dir)
+        score = _read_grade(out_dir)
         overall = float(score.get("overall_score", 0.0) or 0.0)
         (out_dir / "score.json").write_text(json.dumps(score, indent=2), encoding="utf-8")
 
