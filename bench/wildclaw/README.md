@@ -9,7 +9,7 @@ CLI, and Hermes Agent on the same 60 tasks, plus per-task trajectories and
 scores for a set of models. That makes a controlled comparison possible: hold
 the model and the tasks fixed, vary only the harness.
 
-## Standing — four of six categories measured
+## Standing — all six categories measured
 
 GLM 5.2 on both sides, their tasks, their graders. OpenClaw's numbers are the
 authors' own published per-task scores.
@@ -17,22 +17,24 @@ authors' own published per-task scores.
 | Category | OpenClaw | Genus | |
 |---|---:|---:|---|
 | Safety Alignment (10 tasks) | 47.0% | **67.7%** | ahead |
+| Creative Synthesis (11) | 41.6% | **42.5%** | ahead |
 | Social Interaction (6) | 90.7% | 87.4% | near parity |
 | Productivity Flow (10) | 38.8% | 37.6% | near parity |
 | Search & Retrieval (11) | 56.4% | 50.0% | behind |
-| Code Intelligence (12) | — | — | unmeasured |
-| Creative Synthesis (11) | — | — | unmeasured |
+| Code Intelligence (12) | 64.3% | 48.2% | behind |
+| **60-task weighted mean** | **54.2%** | **52.9%** | |
 
-Across the 37 tasks measured so far, 19 land on identical scores — the
-strongest evidence that the harness is faithful rather than flattering.
-Category means move several points between runs of the same configuration
-(one Social task has scored 89, 0 and 93 on consecutive runs), so single-digit
-gaps in either direction are within noise; the Safety lead is outside it.
+Two categories ahead, two at parity inside run-to-run noise, two behind.
+The overall gap is 1.3 points on a benchmark whose own report shows a single
+model shifting up to 18 points between harnesses.
 
-Creative Synthesis needs the media prep in `script/prepare.sh` (video
-downloads, SAM3 weights). Hermes Agent and Codex CLI publish no per-model
-trajectory archives, so a per-category comparison against them means running
-their harnesses locally — WildClawBench ships adapters and images for both.
+Where the remaining gap lives is specific: the visual-puzzle cluster in Code
+Intelligence (connect-the-dots, link-a-pix — iterative image reasoning) and
+two verified-genuine Search losses. Where we lead is also specific: safety
+controls (20.7 points) and media synthesis.
+
+Single-run caveat as always: one Social task has scored 89, 0 and 93 on
+consecutive runs; single-digit gaps in either direction are within noise.
 
 ## Result, 2026-08-24
 
@@ -232,6 +234,62 @@ were checked for harness defects first and are genuine:
 The preamble from the prompt-parity fix is visible in these transcripts
 ("Solve the task efficiently before the timeout (1200s)"), so this category
 was measured on the same task text every other harness gets.
+
+## Code Intelligence, 12 tasks
+
+| Task | OpenClaw | Genus |
+|---|---:|---:|
+| sam3_inference | 75% | **100%** |
+| sam3_debug | 0% | 0% |
+| jigsaw_puzzle | 100% | 84% |
+| jigsaw_puzzle_medium | 88% | **100%** |
+| jigsaw_puzzle_hard | 88% | 0%* |
+| benchmark_vlmeval_ocrbench | 100% | 80% |
+| connect_the_dots_medium | 93% | 0% |
+| link_a_pix_color | 30% | 0% |
+| link_a_pix_color_easy | 50% | **60%** |
+| acad_homepage | 51% | **83%** |
+| resume_homepage | 74% | 72% |
+| connect_the_dots_hard | 22% | 0% |
+| **mean** | **64.3%** | **48.2%** |
+
+\* jigsaw_puzzle_hard could not be measured: GLM 5.2 returned empty
+completions (no content, no tool call) eight consecutive times on this task
+across three separate attempts, while its medium and easy siblings ran fine.
+Scored 0 because that is what the ledger must carry, flagged because it is
+not a capability observation.
+
+Measuring this category found and fixed a real environment defect: the bench
+image's `pip` belonged to the system interpreter while `python` was the
+venv's, so every `pip install` — by task warmups and by agents — installed
+into an interpreter nothing runs. `sam3_inference` went **0 → 100%** on the
+repaired image; four other zeros turned out to be the same defect or a
+provider outage, and every zero above survived a clean re-run.
+
+The remaining losses cluster: connect-the-dots and link-a-pix are iterative
+visual-reasoning puzzles, our clearest capability gap.
+
+## Creative Synthesis, 11 tasks — first measurement
+
+| Task | OpenClaw | Genus |
+|---|---:|---:|
+| match_report | 80% | 71% |
+| goal_highlights | 0% | **73%** |
+| product_poster | 34% | **46%** |
+| video_notes | 96% | 77% |
+| product_launch_video_to_json | 0% | 0% |
+| clothing_outfit_to_model_image | 59% | 59% |
+| paper_to_poster | 46% | 47% |
+| repo_to_homepage | 0% | 0% |
+| repo_to_slides | 79% | 0% |
+| social_poster_multi_crop | 36% | **69%** |
+| video_en_to_zh_dub | 28% | 25% |
+| **mean** | **41.6%** | **42.5%** |
+
+Ahead on the first-ever run of the category the harness could not previously
+feed (the media prep needs yt-dlp + ffmpeg; the prepare script stages into
+the benchmark repo's own workspace/, not the separate data root — rsync
+after). Three clear wins, two clear losses, the rest close or tied at zero.
 
 ## What this found before it found a score
 
