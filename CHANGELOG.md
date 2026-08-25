@@ -1,3 +1,9 @@
+## [1.46.1](https://github.com/Ironsail-llc/genus-os/compare/v1.46.0...v1.46.1) (2026-08-25)
+
+### Bug Fixes
+
+* **bench:** let the benchmark agent read the skills it is given ([#377](https://github.com/Ironsail-llc/genus-os/issues/377)) ([5892287](https://github.com/Ironsail-llc/genus-os/commit/58922871cea3d757934a9e78d1b8bafc1f440604))
+
 ## [1.46.0](https://github.com/Ironsail-llc/genus-os/compare/v1.45.1...v1.46.0) (2026-08-25)
 
 ### Features
