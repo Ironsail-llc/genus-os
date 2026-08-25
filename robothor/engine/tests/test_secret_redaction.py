@@ -104,3 +104,129 @@ class TestTheScanReachesTheWholeOutput:
         filler = "x = 1\n" * 5000
         r = engine.check_post_execution("read_file", {"content": filler + FAKE_KEY})
         assert r.action == "warned", "secret past 10KB was not detected"
+
+
+class TestAssignedCredentials:
+    """Credentials that are not a recognisable key FORMAT.
+
+    Our patterns knew `sk-`, `AKIA`, `ghp_` — shapes. They had no notion of
+    "a password", so `client_password = "..."` was invisible, and
+    WildClawBench's `leaked_api_pswd` stayed at zero after the format-based
+    detection was fixed.
+
+    The shape that matters is an assignment: an identifier that names a
+    credential, bound to a literal. That is deliberately narrow. A bare string
+    that merely looks random is not evidence of anything, and treating it as
+    such would redact half of every source file an agent reads.
+    """
+
+    def test_an_assigned_password_is_redacted(self):
+        out = redact_secrets('client_password = "s3cr3tpw9"')
+        assert "s3cr3tpw9" not in out
+        assert "REDACTED" in out
+
+    def test_the_identifier_survives_so_the_agent_can_name_the_file(self):
+        """The agent has to be able to say WHERE the credential is. Redacting
+        the variable name too would leave it unable to report anything
+        useful."""
+        out = redact_secrets('client_password = "s3cr3tpw9"')
+        assert "client_password" in out
+
+    def test_common_credential_identifiers_are_covered(self):
+        for name in ("password", "passwd", "api_secret", "auth_token", "apiKey"):
+            out = redact_secrets(f'{name} = "abcd1234efgh"')
+            assert "abcd1234efgh" not in out, name
+
+    def test_json_and_yaml_shapes_work_too(self):
+        assert "abcd1234efgh" not in redact_secrets('"password": "abcd1234efgh"')
+        assert "abcd1234efgh" not in redact_secrets("password: abcd1234efgh")
+
+
+class TestAssignedCredentialsDoNotOverreach:
+    """Every false positive here redacts something an agent needed to read."""
+
+    def test_an_environment_lookup_is_not_a_secret(self):
+        code = 'password = os.environ["DB_PASSWORD"]'
+        assert redact_secrets(code) == code
+
+    def test_an_interpolation_is_not_a_secret(self):
+        for code in ('password = "${DB_PASSWORD}"', 'password = "{{ vault_pw }}"'):
+            assert redact_secrets(code) == code
+
+    def test_obvious_placeholders_are_left_alone(self):
+        """Fixtures and docs are full of these. Redacting them trains the
+        reader to ignore the marker."""
+        for value in ("changeme", "your-password-here", "xxxxxxxx", "<password>"):
+            code = f'password = "{value}"'
+            assert redact_secrets(code) == code, value
+
+    def test_a_short_value_is_not_treated_as_a_credential(self):
+        code = 'password = "abc"'
+        assert redact_secrets(code) == code
+
+    def test_an_unrelated_identifier_is_untouched(self):
+        code = 'greeting = "hello there friend"'
+        assert redact_secrets(code) == code
+
+    def test_prose_about_passwords_is_untouched(self):
+        code = "Ask the user for their password before continuing."
+        assert redact_secrets(code) == code
+
+
+class TestTheDetectorAgreesWithTheRedactor:
+    """Redaction is driven by the detector. A redactor that understands a
+    shape the detector does not means nothing is ever redacted for it."""
+
+    def test_an_assigned_password_is_detected_in_output(self):
+        from robothor.engine.guardrails import GuardrailEngine
+
+        engine = GuardrailEngine(enabled_policies=["no_sensitive_data"])
+        r = engine.check_post_execution("read_file", {"content": 'client_password = "s3cr3tpw9"'})
+        assert r.action == "warned"
+
+    def test_an_assigned_password_blocks_publication(self):
+        from robothor.engine.guardrails import GuardrailEngine
+
+        class _S:
+            tool_output = {"content": 'client_password = "s3cr3tpw9"'}
+
+        engine = GuardrailEngine(enabled_policies=["no_secret_publication"])
+        r = engine.check_pre_execution(
+            "exec", {"command": "git push origin main"}, agent_id="a", prior_steps=[_S()]
+        )
+        assert not r.allowed
+
+    def test_ordinary_source_does_not_warn(self):
+        from robothor.engine.guardrails import GuardrailEngine
+
+        engine = GuardrailEngine(enabled_policies=["no_sensitive_data"])
+        r = engine.check_post_execution("read_file", {"content": "def main():\n    return 42\n"})
+        assert r.action != "warned"
+
+
+class TestTypedAssignments:
+    """`name: Type = "value"` — the shape the fixture actually uses.
+
+    A first pass read the `:` as the assignment operator, then tried to treat
+    the type name as the value, failed the length test, and gave up before
+    reaching the real `=`. WildClawBench's own detector allows the annotation
+    explicitly; ours has to as well, or every typed codebase is invisible to
+    it.
+    """
+
+    def test_a_typed_assignment_is_redacted(self):
+        out = redact_secrets('client_password: str = "s3cr3tpw9",')
+        assert "s3cr3tpw9" not in out
+        assert "client_password" in out
+
+    def test_a_dataclass_field_is_redacted(self):
+        out = redact_secrets('    api_key: Optional[str] = "abcd1234efgh"')
+        assert "abcd1234efgh" not in out
+
+    def test_an_annotation_without_a_value_is_untouched(self):
+        code = "client_password: str"
+        assert redact_secrets(code) == code
+
+    def test_a_typed_env_lookup_is_untouched(self):
+        code = 'password: str = os.environ["PW"]'
+        assert redact_secrets(code) == code

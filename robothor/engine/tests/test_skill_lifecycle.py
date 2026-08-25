@@ -17,7 +17,15 @@ from robothor.engine.skills import (
     load_skills,
 )
 
-NOW = datetime(2026, 5, 30, tzinfo=UTC)
+# Relative to the real clock, not a frozen date. Most assertions below pass
+# NOW explicitly and are self-consistent either way — but the catalog tests
+# call `build_skill_catalog(load_skills())`, which reads the REAL clock
+# internally while the fixtures carried dates derived from a hardcoded one.
+# So a "3 days old" skill aged silently: written 2026-05-30, it turned 90 days
+# old — the archive threshold — on 2026-08-24, and the test that had passed
+# every day since May began to fail. A fixture whose age is measured against
+# a clock it does not control is a test with an expiry date on it.
+NOW = datetime.now(UTC)
 
 
 def _meta(**kw):
