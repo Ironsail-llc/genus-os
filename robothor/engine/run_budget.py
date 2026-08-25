@@ -78,3 +78,16 @@ def proactive_compaction_threshold(max_input_tokens: int) -> int:
     if budget <= 0:
         return fraction
     return min(fraction, budget)
+
+
+def effective_wallclock_ceiling(timeout_seconds: int) -> int:
+    """The hard wall-clock bound a run actually gets.
+
+    An agent's own ``timeout_seconds`` when positive; the fleet ceiling when
+    the agent declares 0 ("no cap") — nothing runs unbounded. One derivation,
+    used by both the watchdog setup and the run loop's self-check, so the two
+    can never disagree about what the ceiling is.
+    """
+    from robothor.engine.stall_watchdog import _fleet_wallclock_ceiling
+
+    return timeout_seconds if timeout_seconds > 0 else _fleet_wallclock_ceiling()

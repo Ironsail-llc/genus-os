@@ -1498,6 +1498,22 @@ class AgentRunner(
                         on_status=on_status,
                         on_stream_event=on_stream_event,
                     )
+                    # A run the watchdog flagged that RETURNED (cooperative
+                    # abort, or the loop's own wall-clock self-check) must
+                    # finalize as TIMEOUT, exactly like one the cancel
+                    # reached. Only the except-handler mapped this before,
+                    # so a cooperative abort finalized as COMPLETED — a
+                    # run killed for overrunning its budget reported
+                    # success.
+                    if watchdog.was_stall_timeout:
+                        reason = watchdog.abort_reason or "Watchdog abort"
+                        return self._finish_run(
+                            session.timeout(reason=reason),
+                            trace=trace,
+                            agent_config=agent_config,
+                            session=session,
+                            spawn_context=spawn_context,
+                        )
                 finally:
                     with contextlib.suppress(Exception):
                         session_registry.unregister(session)
@@ -1997,8 +2013,40 @@ class AgentRunner(
         _runaway_alerted = False  # one-shot latch for 500K alert
         _secret_notified = False  # one-shot latch for the credential-exposure note
         _deadline_warned = False  # one-shot latch for the wrap-up note
+        # ── [WALLCLOCK] the loop's own deadline — computed once, checked
+        # every iteration. See the self-check below for why this exists.
+        from robothor.engine.run_budget import effective_wallclock_ceiling
+
+        _wallclock_ceiling = effective_wallclock_ceiling(agent_config.timeout_seconds)
+        _wallclock_deadline = (
+            time.monotonic() + _wallclock_ceiling if _wallclock_ceiling > 0 else None
+        )
 
         while True:
+            # ── [WALLCLOCK] The loop bounds itself ──
+            # On 2026-08-25 a run blew through its 1200s ceiling to 3110s
+            # with THREE layers silent at once: the outer asyncio.timeout,
+            # the watchdog's task.cancel(), and the deadline warning. All
+            # three live BESIDE the loop — an outer context manager, a
+            # sibling task, a message injection — and can go silent
+            # together while the loop keeps iterating. This check is the
+            # loop reading its own clock: it cannot be cancelled, starved,
+            # or unhooked without also ending the loop it is part of.
+            if _wallclock_deadline is not None and time.monotonic() >= _wallclock_deadline:
+                _reason = (
+                    f"Circuit-breaker hard timeout ({_wallclock_ceiling}s) — "
+                    f"loop self-check; last activity: "
+                    f"{self._active_watchdog.last_activity_desc if self._active_watchdog else 'unknown'}"
+                )
+                logger.warning("Run loop self-check: %s", _reason)
+                if self._active_watchdog is not None:
+                    # Trip the watchdog's flag so the cooperative check below
+                    # ends the run and execute() maps it to TIMEOUT exactly
+                    # as if the watchdog had fired.
+                    self._active_watchdog.trip(_reason)
+                else:
+                    session.record_error(_reason)
+                    return
             # ── [STEER / INTERRUPT] live operator influence (Rip 9) ──
             # An external caller may have set a steer (inject + continue) or an
             # interrupt (halt) on this session via session_registry.
