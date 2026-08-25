@@ -1,3 +1,9 @@
+## [1.45.1](https://github.com/Ironsail-llc/genus-os/compare/v1.45.0...v1.45.1) (2026-08-25)
+
+### Bug Fixes
+
+* **engine:** let an agent's tool rate limit match its workload ([#375](https://github.com/Ironsail-llc/genus-os/issues/375)) ([00e707c](https://github.com/Ironsail-llc/genus-os/commit/00e707cf8c751a57f37b88cfef1c40b3c690539a))
+
 ## [1.45.0](https://github.com/Ironsail-llc/genus-os/compare/v1.44.1...v1.45.0) (2026-08-25)
 
 ### Features
