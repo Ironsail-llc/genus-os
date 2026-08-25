@@ -1,3 +1,14 @@
+## [1.48.0](https://github.com/Ironsail-llc/genus-os/compare/v1.47.4...v1.48.0) (2026-08-25)
+
+### Features
+
+* **bench:** the benchmark becomes a standing practice, not a campaign ([#389](https://github.com/Ironsail-llc/genus-os/issues/389)) ([a8b4db3](https://github.com/Ironsail-llc/genus-os/commit/a8b4db3ae6cb6f58e207500b927e4a4d5f4dd4c7))
+
+### Bug Fixes
+
+* **bench:** the rotation unit carries no ${...} for the render gate to refuse ([#390](https://github.com/Ironsail-llc/genus-os/issues/390)) ([f4afe60](https://github.com/Ironsail-llc/genus-os/commit/f4afe6009dbeb9aa6f89bc05e9542b784351794b)), closes [#389](https://github.com/Ironsail-llc/genus-os/issues/389) [#389](https://github.com/Ironsail-llc/genus-os/issues/389)
+* **engine:** the run loop bounds its own wall-clock ([#388](https://github.com/Ironsail-llc/genus-os/issues/388)) ([498b2ed](https://github.com/Ironsail-llc/genus-os/commit/498b2ed98b04aa227806902cb36c0d1df93ccddc))
+
 ## [1.47.4](https://github.com/Ironsail-llc/genus-os/compare/v1.47.3...v1.47.4) (2026-08-25)
 
 ### Bug Fixes
