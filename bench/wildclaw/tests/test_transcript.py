@@ -183,3 +183,22 @@ class TestFidelity:
 
     def test_an_empty_conversation_is_an_empty_transcript(self):
         assert to_wildclaw_transcript([]) == []
+
+
+class TestGroundTruthIsNeverStaged:
+    """`gt/` holds the answer key.
+
+    WildClawBench ships three directories per task: `exec/` (the agent's
+    workspace), `tmp/` (a staging area the warmup consumes), and `gt/`. Only
+    the first two are ever mounted. Copying the third would not be a
+    benchmark, and the mistake would be invisible in the score — it would
+    simply look like we had won.
+    """
+
+    def test_the_harness_never_copies_gt(self):
+        from pathlib import Path
+
+        source = Path(__file__).resolve().parents[1] / "harness.py"
+        body = source.read_text(encoding="utf-8")
+        assert '/ "gt"' not in body
+        assert 'relative / "tmp"' in body, "the staging dir must still be copied"
