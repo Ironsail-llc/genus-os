@@ -22,12 +22,11 @@ EnvironmentFile=-/run/robothor/secrets.env
 # 900-1200s budgets each, plus grading); the per-task containers enforce
 # their own ceilings, so the unit-level cap is a backstop only.
 TimeoutStartSec=6h
-# Instance-provisioned paths (see robothor.env.example):
-#   WILDCLAW_REPO  — WildClawBench checkout
-#   WILDCLAW_DATA  — downloaded workspace fixtures
-#   WILDCLAW_OUT   — ledger + per-run output root
-ExecStart=/opt/robothor/venv/bin/python -m bench.wildclaw.rotation \
-    --repo ${WILDCLAW_REPO} --data ${WILDCLAW_DATA} --out ${WILDCLAW_OUT}
+# Paths come from the WILDCLAW_* variables in robothor.env — the rotation
+# resolves them itself, so no ${...} rides a directive (the render gate
+# refuses them, and a typo'd systemd expansion becomes an empty word
+# silently).
+ExecStart=/opt/robothor/venv/bin/python -m bench.wildclaw.rotation
 
 [Install]
 WantedBy=multi-user.target
