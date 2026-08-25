@@ -95,6 +95,91 @@ NAMED_SENSITIVE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 SENSITIVE_PATTERNS = [pattern for _name, pattern in NAMED_SENSITIVE_PATTERNS]
 
 
+#: Identifiers that name a credential. An assignment to one of these, bound to
+#: a literal, is the shape that the format-based patterns above cannot see:
+#: `client_password = "..."` is not a recognisable key FORMAT, which is why
+#: WildClawBench's `leaked_api_pswd` stayed at zero after those were fixed.
+_CREDENTIAL_IDENTIFIER = (
+    r"[A-Za-z0-9_]*(?:passwd|password|secret|api[_-]?key|apikey|auth[_-]?token"
+    r"|access[_-]?token|credential)[A-Za-z0-9_]*"
+)
+
+#: `name = "value"`, `"name": "value"`, `name: value`. Group 'val' is the
+#: literal. Deliberately narrow: a bare string that merely looks random is not
+#: evidence of anything, and treating it as such would redact half of every
+#: source file an agent reads.
+ASSIGNED_CREDENTIAL_PATTERN = re.compile(
+    r"\b(?P<name>" + _CREDENTIAL_IDENTIFIER + r")\b"
+    # An optional closing quote covers the JSON shape `"password": "..."`,
+    # and the optional annotation covers `client_password: str = "..."`.
+    # Without the latter the `:` reads as the assignment, the type name
+    # fails the length test, and the real `=` is never reached — so every
+    # typed codebase is invisible to this detector.
+    r"[\"']?\s*(?::\s*[^=\n]{1,60})?\s*[=:]\s*"
+    r"(?P<quote>[\"']?)"
+    r"(?P<val>[^\s\"',;)}\]]{8,128})"
+    r"(?P=quote)",
+    re.IGNORECASE,
+)
+
+#: Values that are placeholders rather than credentials. Redacting these
+#: trains the reader to ignore the marker, and fixtures and documentation are
+#: full of them.
+_PLACEHOLDER_VALUES = frozenset(
+    {
+        "changeme",
+        "change_me",
+        "password",
+        "your-password-here",
+        "yourpasswordhere",
+        "placeholder",
+        "example",
+        "redacted",
+        "notasecret",
+        "hunter2000",
+    }
+)
+
+
+def _first_assigned_credential(text: str) -> str | None:
+    """The NAME of the first credential-shaped assignment, never the value."""
+    for match in ASSIGNED_CREDENTIAL_PATTERN.finditer(text):
+        if not _is_placeholder(match.group("val")):
+            return str(match.group("name"))
+    return None
+
+
+def _redact_assigned_credentials(text: str) -> str:
+    """Replace the VALUE in `password = "..."`, keeping the identifier.
+
+    The agent still has to be able to say which file and which setting holds
+    the credential; redacting the name as well would leave it unable to report
+    anything actionable.
+    """
+
+    def _sub(match: re.Match[str]) -> str:
+        val = match.group("val")
+        if _is_placeholder(val):
+            return match.group(0)
+        quote = match.group("quote")
+        return f"{match.group('name')}={quote}[REDACTED: credential]{quote}"
+
+    return ASSIGNED_CREDENTIAL_PATTERN.sub(_sub, text)
+
+
+def _is_placeholder(value: str) -> bool:
+    """True for values that carry no secret: env lookups, interpolations,
+    obvious dummies, and single-character padding like `xxxxxxxx`."""
+    lowered = value.strip().lower()
+    if lowered in _PLACEHOLDER_VALUES:
+        return True
+    if value.startswith(("$", "{", "<", "os.environ", "process.env")):
+        return True
+    if len(set(lowered)) <= 2:  # xxxxxxxx, --------, ........
+        return True
+    return "environ" in lowered or "getenv" in lowered
+
+
 def redact_secrets(value: Any) -> Any:
     """Replace credential VALUES with a marker naming their kind.
 
@@ -116,7 +201,7 @@ def redact_secrets(value: Any) -> Any:
         redacted = value
         for name, pattern in NAMED_SENSITIVE_PATTERNS:
             redacted = pattern.sub(f"[REDACTED: {name}]", redacted)
-        return redacted
+        return _redact_assigned_credentials(redacted)
     if isinstance(value, dict):
         return {k: redact_secrets(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -974,6 +1059,9 @@ class GuardrailEngine:
         for name, pattern in NAMED_SENSITIVE_PATTERNS:
             if pattern.search(haystack):
                 return name
+        assigned = _first_assigned_credential(haystack)
+        if assigned:
+            return f"credential assigned to '{assigned}'"
         return None
 
     @classmethod
@@ -1006,6 +1094,17 @@ class GuardrailEngine:
                     reason=f"Possible sensitive data in {tool_name} output: {pattern.pattern}",
                     guardrail_name="no_sensitive_data",
                 )
+        # Assignment-shaped credentials, which have no recognisable format.
+        # The redactor understands these; a detector that did not would mean
+        # nothing was ever redacted for them.
+        assigned = _first_assigned_credential(output_str)
+        if assigned:
+            return GuardrailResult(
+                allowed=True,
+                action="warned",
+                reason=(f"Possible credential assigned to '{assigned}' in {tool_name} output"),
+                guardrail_name="no_sensitive_data",
+            )
         return GuardrailResult()
 
 
