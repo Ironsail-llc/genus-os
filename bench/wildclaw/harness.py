@@ -420,6 +420,23 @@ def _run_agent(
     return {"returncode": proc.returncode, "elapsed": elapsed}
 
 
+def _provider_failed(usage: dict[str, Any]) -> bool:
+    """Did this run die of a dead PROVIDER rather than anything the agent did?
+
+    The shape is specific: the engine's "every model in the chain failed"
+    error plus almost nothing spent. The bench agent deliberately carries no
+    fallback models — it measures one model on one harness — so an upstream
+    outage streak kills the run in a handful of requests, and the task then
+    records a zero indistinguishable from a capability result. Four of one
+    night's zeros were exactly this. A run that died late with real tokens
+    spent is NOT this shape; whatever it produced deserves its grade.
+    """
+    return (
+        "All models failed" in str(usage.get("error") or "")
+        and int(usage.get("total_tokens") or 0) < 50_000
+    )
+
+
 def _write_grade_script(task: dict[str, Any], out_dir: Path) -> None:
     """Stage the task's own grade() so the container can run it."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -612,6 +629,19 @@ def main() -> int:
         if usage_path.exists():
             usage = json.loads(usage_path.read_text())
 
+        # A dead provider is not a capability result: retry once with a
+        # fresh workspace. A second failure is recorded as provider_failure
+        # so the ledger carries the caveat instead of the lie.
+        provider_failure = False
+        if _provider_failed(usage):
+            print("  provider outage shape — retrying the task once", flush=True)
+            staged = _prepare_workspace(task, args.data, args.repo, workspace)
+            run_info = _run_agent(task, workspace, out_dir, args.model or None, args.repo)
+            usage = {}
+            if usage_path.exists():
+                usage = json.loads(usage_path.read_text())
+            provider_failure = _provider_failed(usage)
+
         score = (
             _read_grade(out_dir)
             if _grader_needs_live_services(task)
@@ -637,6 +667,7 @@ def main() -> int:
                 "detail": score,
                 "workspace_staged": staged,
                 "harness_kill": bool(run_info.get("harness_kill")),
+                "provider_failure": provider_failure,
             }
         )
 
