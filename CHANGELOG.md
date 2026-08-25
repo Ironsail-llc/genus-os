@@ -1,3 +1,9 @@
+## [1.46.3](https://github.com/Ironsail-llc/genus-os/compare/v1.46.2...v1.46.3) (2026-08-25)
+
+### Bug Fixes
+
+* **bench:** a task with no fixtures is recorded, not fatal and not silent ([#379](https://github.com/Ironsail-llc/genus-os/issues/379)) ([5a84c2b](https://github.com/Ironsail-llc/genus-os/commit/5a84c2b66eb0433c03773f79b8e38be1f5c93598))
+
 ## [1.46.2](https://github.com/Ironsail-llc/genus-os/compare/v1.46.1...v1.46.2) (2026-08-25)
 
 ### Bug Fixes
