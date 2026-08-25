@@ -26,6 +26,29 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+    schemas["view_image"] = {
+        "type": "function",
+        "function": {
+            "name": "view_image",
+            "description": (
+                "Look at an image file — a photo, screenshot, chart, diagram or "
+                "scan. The picture itself is placed in front of you, so read it "
+                "directly rather than writing code to inspect its pixels. Use "
+                "this whenever a task depends on what an image SHOWS."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the image (PNG, JPEG, GIF, WEBP, BMP, TIFF)",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    }
+
     schemas["read_file"] = {
         "type": "function",
         "function": {

@@ -166,6 +166,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # File/system
         "read_file",
         "list_directory",
+        # Looking at an image reads a file and mutates nothing.
+        "view_image",
         # Web
         "web_fetch",
         "web_search",
