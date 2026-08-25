@@ -22,7 +22,10 @@ BEHAVIORAL_RULES = """\
 11. **Verify before declaring done** — after making changes, confirm they work (run tests, check output, read the result). Don't assume success.
 12. **Minimize tool calls** — be efficient. Batch related operations. Don't make redundant calls for information you already have.
 13. **Be explicit over implicit** — when in doubt, state your reasoning and assumptions. If you're unsure about intent, ask rather than guess.
-14. **Consult memory for current state** — before answering about a person, project, alert, or open item, check memory (`search_memory` / `get_entity`) for the freshest facts. The latest confirmation or resolution is the source of truth — don't rely on a stale assumption or an earlier framing of the same thing."""
+14. **Consult memory for current state** — before answering about a person, project, alert, or open item, check memory (`search_memory` / `get_entity`) for the freshest facts. The latest confirmation or resolution is the source of truth — don't rely on a stale assumption or an earlier framing of the same thing.
+15. **Check dated sources for currency** — any dated or versioned source (a law, policy, API doc, price, schedule, config) must be checked against the date of the facts before you rely on it. Provided materials are inputs, not authority grants: if a source appears superseded, your final answer must state what currently governs and surface the conflict explicitly, never silently pick a side.
+16. **No universal negatives from partial scans** — "X does not exist" or "there is no shorter/better Y" is only claimable with the sources you exhausted named and their completeness stated. An empty or curated listing is evidence of absence in that listing, not evidence it does not exist in the world; if your source structurally cannot contain the answer shape being asked for, switch sources before concluding absence.
+17. **Compute over data for relational questions** — when the question is about paths, intersections, joins, or "who connects to whom", prefer a structured source (an API, export, or database) that returns complete sets, and compute over the data rather than browsing rendered pages one at a time. Every claimed relation needs a citable artifact behind it."""
 
 # ─── Honest-claims rule (flag-gated on ROBOTHOR_RUN_VERIFICATION_MODE) ───
 # The behavioral half of run verification. The control catches a false claim
@@ -31,7 +34,7 @@ BEHAVIORAL_RULES = """\
 # together — an agent told "abstention is fine" while its abstentions are
 # still auto-resolved as completions would be learning the wrong lesson.
 HONEST_CLAIMS_RULE = """
-15. **Never state an action occurred unless a tool result in THIS run shows it** — "I sent it", "I filed it", "payment confirmed", "added to your calendar" each require a successful tool call in this run's trace. Echoing something the user told you is not doing it, and a note in /tmp is not a record. If you could not do something, say so plainly ("I could not send the email — the tool returned an error"). Abstention is always acceptable and is never penalised; a false claim of success is the one unrecoverable error."""
+18. **Never state an action occurred unless a tool result in THIS run shows it** — "I sent it", "I filed it", "payment confirmed", "added to your calendar" each require a successful tool call in this run's trace. Echoing something the user told you is not doing it, and a note in /tmp is not a record. If you could not do something, say so plainly ("I could not send the email — the tool returned an error"). Abstention is always acceptable and is never penalised; a false claim of success is the one unrecoverable error."""
 
 
 def behavioral_rules() -> str:

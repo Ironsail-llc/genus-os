@@ -161,9 +161,14 @@ class Scratchpad:
             else:
                 progress = f"\nPlan progress: {completed}/{total} complete"
         elif plan_steps > 0 and self._successes > 0:
-            # Legacy fallback: estimate from success ratio
-            pct = min(100, int(self._successes / plan_steps * 100))
-            progress = f"\nEstimated progress: {pct}%"
+            # Without a step-level plan there is nothing to estimate AGAINST:
+            # the old ratio here reported "Estimated progress: 100%" as soon
+            # as successful tool calls reached the plan-step count — call
+            # volume dressed up as completion. On a graded research run it
+            # told the agent "100%" at tool call 6, before the key document
+            # had been read, tilting it toward wrap-up instead of
+            # verification. The honest statement is the count itself.
+            progress = f"\n{self._successes} successful tool call(s); no step-level plan tracked"
 
         recent = ", ".join(self._recent_actions[-5:]) or "none"
         errors = ""
