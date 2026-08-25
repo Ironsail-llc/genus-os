@@ -1,0 +1,33 @@
+# Nightly WildClawBench rotation — one category per night, same model and
+# graders as the published OpenClaw baseline, appended to a ledger.
+#
+# A benchmark that only runs during campaigns measures the platform a few
+# days a month; this one is standing. Six runnable categories make a full
+# sweep every six nights, so a regression surfaces within a week of being
+# introduced. A LOW SCORE IS A RESULT and exits 0; only a run that could not
+# produce a summary exits non-zero and pages.
+[Unit]
+Description=Robothor — nightly WildClawBench category rotation
+After=network-online.target
+Wants=network-online.target
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+User=robothor
+WorkingDirectory=/opt/robothor
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+# A category can legitimately run for hours (Productivity Flow tasks carry
+# 900-1200s budgets each, plus grading); the per-task containers enforce
+# their own ceilings, so the unit-level cap is a backstop only.
+TimeoutStartSec=6h
+# Instance-provisioned paths (see robothor.env.example):
+#   WILDCLAW_REPO  — WildClawBench checkout
+#   WILDCLAW_DATA  — downloaded workspace fixtures
+#   WILDCLAW_OUT   — ledger + per-run output root
+ExecStart=/opt/robothor/venv/bin/python -m bench.wildclaw.rotation \
+    --repo ${WILDCLAW_REPO} --data ${WILDCLAW_DATA} --out ${WILDCLAW_OUT}
+
+[Install]
+WantedBy=multi-user.target

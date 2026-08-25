@@ -255,6 +255,8 @@ EXPECTED_INSTALLED = [
     "robothor-alert@.service",
     "robothor-liveness.service",
     "robothor-liveness.timer",
+    "robothor-bench-rotation.service",
+    "robothor-bench-rotation.timer",
     "robothor-engine.service.d/hardening.conf",
     "robothor-engine.service.d/upgrade-rip-flags.conf",
 ]
