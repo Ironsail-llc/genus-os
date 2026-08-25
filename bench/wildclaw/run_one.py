@@ -116,7 +116,22 @@ def _persisted_steps(run_id: str) -> list[dict]:
         return []
 
 
+def _phase(name: str) -> None:
+    """Stamp a lifecycle phase to /out, flushed immediately.
+
+    When a container is killed from outside, these stamps are what remains:
+    they say whether the agent loop had ended, whether the transcript was
+    being built, or whether execute() was still running at the kill.
+    """
+    try:
+        with Path("/out/phases.log").open("a", encoding="utf-8") as f:
+            f.write(f"{time.time():.0f} {name}\n")
+    except OSError:
+        pass
+
+
 def main() -> int:
+    _phase("run_one_start")
     prompt = sys.stdin.read().strip()
     if not prompt:
         print("no prompt on stdin", file=sys.stderr)
@@ -132,6 +147,7 @@ def main() -> int:
     error = None
     try:
         result = asyncio.run(_run(prompt, timeout_seconds))
+        _phase("execute_returned")
     except Exception as exc:  # a crashed harness is a result, not a mystery
         error = f"{type(exc).__name__}: {exc}"
         result = {"run": None, "messages": [], "elapsed": 0.0}
@@ -147,6 +163,7 @@ def main() -> int:
         for entry in entries:
             fh.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
 
+    _phase("transcript_written")
     run = result["run"]
     usage = {
         "input_tokens": getattr(run, "input_tokens", 0) or 0,
@@ -167,6 +184,7 @@ def main() -> int:
         str(getattr(run, "output_text", "") or ""), encoding="utf-8"
     )
     print(json.dumps({"transcript_entries": len(entries), **usage}))
+    _phase("exiting")
     return 0 if error is None else 1
 
 

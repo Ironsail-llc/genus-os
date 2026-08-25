@@ -20,6 +20,7 @@ import logging
 import os
 import time
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,21 @@ class _StallWatchdog:
         # when the watchdog itself didn't trip (e.g. external cancellation).
         self._start_time: float = time.monotonic()
 
+    def _trace(self, line: str) -> None:
+        """Append one line to the env-named trace file; never raise.
+
+        Twice a run outlived every timeout layer and the evidence died with
+        its container. The trace exists so the NEXT wedge explains itself.
+        """
+        path = os.environ.get("ROBOTHOR_WATCHDOG_TRACE_FILE", "")
+        if not path:
+            return
+        try:
+            with Path(path).open("a", encoding="utf-8") as f:
+                f.write(f"{time.time():.0f} {line}\n")
+        except OSError:
+            pass
+
     def touch(self, description: str = "") -> None:
         """Record activity — resets the stall timer.
 
@@ -136,6 +152,10 @@ class _StallWatchdog:
         if self._stall_timeout <= 0 and self._hard_timeout <= 0 and self._early_stall_timeout <= 0:
             return
         self._start_time = time.monotonic()
+        self._trace(
+            f"watch_start hard={self._hard_timeout} stall={self._stall_timeout} "
+            f"early={self._early_stall_timeout} tick={self._tick_seconds}"
+        )
         self._task = asyncio.create_task(self._watch(monitored_task))
 
     async def _watch(self, monitored_task: asyncio.Task[Any]) -> None:
@@ -147,6 +167,7 @@ class _StallWatchdog:
                 now = time.monotonic()
                 idle = now - self._last_activity
                 elapsed = now - self._start_time
+                self._trace(f"tick elapsed={elapsed:.0f} idle={idle:.0f} hard={self._hard_timeout}")
 
                 # Hard timeout (absolute safety net — should almost
                 # never fire; stall detection is the primary mechanism)
@@ -163,6 +184,7 @@ class _StallWatchdog:
                     )
                     self._cancelled = True
                     self._abort_event.set()
+                    self._trace(f"CANCEL elapsed={elapsed:.0f} reason={self._abort_reason[:80]}")
                     monitored_task.cancel()
                     return
 
@@ -191,6 +213,7 @@ class _StallWatchdog:
                     )
                     self._cancelled = True
                     self._abort_event.set()
+                    self._trace(f"CANCEL elapsed={elapsed:.0f} reason={self._abort_reason[:80]}")
                     monitored_task.cancel()
                     return
 
@@ -208,6 +231,7 @@ class _StallWatchdog:
                     )
                     self._cancelled = True
                     self._abort_event.set()
+                    self._trace(f"CANCEL elapsed={elapsed:.0f} reason={self._abort_reason[:80]}")
                     monitored_task.cancel()
                     return
         except asyncio.CancelledError:
@@ -228,9 +252,11 @@ class _StallWatchdog:
         self._abort_reason = reason
         self._cancelled = True
         self._abort_event.set()
+        self._trace(f"TRIP {reason[:100]}")
 
     def stop(self) -> None:
         """Stop the watchdog."""
+        self._trace("stop_called")
         if self._task and not self._task.done():
             self._task.cancel()
 

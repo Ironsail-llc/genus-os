@@ -284,6 +284,10 @@ def _container_command(
         # land somewhere the loader actually reads.
         "ROBOTHOR_WORKSPACE": CONTAINER_WORKSPACE,
         "BENCH_TASK_TIMEOUT": str(task.get("timeout_seconds", 600)),
+        # Twice a run outlived every timeout layer and the evidence died with
+        # its container. Both trace files land on the /out host mount, so the
+        # next wedge carries its own post-mortem.
+        "ROBOTHOR_WATCHDOG_TRACE_FILE": "/out/wd.log",
         "OPENROUTER_API_KEY": _api_key(),
     }
     if model:
