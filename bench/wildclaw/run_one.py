@@ -37,10 +37,17 @@ async def _run(prompt: str, timeout_seconds: int) -> dict:
     model_override = os.environ.get("ROBOTHOR_BENCH_MODEL", "").strip()
     if model_override:
         agent_config.model_primary = model_override
-    # The task's own budget is the only wall-clock owner. Anything smaller
-    # firing first files a harness kill as an agent failure — the exact defect
-    # that corrupted our fleet grades on 2026-08-24.
-    agent_config.timeout_seconds = max(int(timeout_seconds) + 120, 600)
+    # The task's own budget, exactly — it is the only wall-clock owner, and
+    # it is also the budget every competing harness is killed at.
+    #
+    # This used to add 120s of grace, which was generous in the wrong
+    # direction. `deadline_warning()` fires at 80% of the agent's ceiling, so
+    # padding a 900s task to 1020s moved the warning to 816s — 91% of the real
+    # budget, long past the point where an agent could still write partial
+    # results. The pad also let the run continue past where every other
+    # harness had already been stopped. Generosity that moves a control out of
+    # range is not generosity.
+    agent_config.timeout_seconds = int(timeout_seconds)
 
     # Capture the live session so the transcript is the FULL conversation.
     # `agent_run_steps` records tool calls but not the assistant's prose, and
