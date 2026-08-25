@@ -123,6 +123,31 @@ def _prepare_workspace(task: dict[str, Any], data_root: Path, repo: Path, dest: 
     return staged
 
 
+# WildClawBench prepends this to every task prompt in `eval/run_batch.py`,
+# ABOVE the backend adapter — so OpenClaw, Codex, Claude Code and Hermes all
+# receive it. It is one fixed string across all 60 tasks, parameterised only
+# by the task's own declared timeout, which makes it part of the task
+# specification rather than any agent's configuration. Reproduced verbatim,
+# trailing space included: a harness that sends the bare `Prompt` section
+# measures its agent on a different task than the published baselines.
+_PREAMBLE = (
+    "You are an expert in a restricted, non-interactive environment. Solve "
+    "the task efficiently before the timeout ({timeout}s). Run all processes "
+    "in the foreground without user input or background services. Provide a "
+    "complete, functional solution in a single pass with no placeholders. \n"
+)
+
+
+def benchmark_preamble(timeout_seconds: int) -> str:
+    """The benchmark's own system prompt for a task with this budget."""
+    return _PREAMBLE.format(timeout=int(timeout_seconds))
+
+
+def compose_prompt(task: dict[str, Any]) -> str:
+    """What the agent is actually given: preamble first, then the task."""
+    return benchmark_preamble(task.get("timeout_seconds", 120)) + task["prompt"]
+
+
 def _grader_needs_live_services(task: dict[str, Any]) -> bool:
     """Does this task's grader read from a mock service that must still be up?
 
@@ -309,7 +334,7 @@ def _run_agent(
     started = time.perf_counter()
     proc = subprocess.run(
         cmd,
-        input=task["prompt"],
+        input=compose_prompt(task),
         capture_output=True,
         text=True,
         timeout=int(task.get("timeout_seconds", 600)) + 300,

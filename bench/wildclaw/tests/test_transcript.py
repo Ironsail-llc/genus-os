@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import json
 
+from pathlib import Path
+
+from bench.wildclaw.harness import benchmark_preamble
 from bench.wildclaw.transcript import to_wildclaw_transcript
 
 
@@ -309,3 +312,118 @@ class TestTranscriptComesFromTheCompleteRecord:
 
         entries = steps_to_transcript([], [{"role": "user", "content": "do the thing"}])
         assert any(e["message"]["role"] == "user" for e in entries)
+
+
+class TestBenchmarkPreambleParity:
+    """The benchmark hands every harness the same preamble. So must we.
+
+    `eval/run_batch.py` composes the agent's input as::
+
+        system_prompt = f"You are an expert in a restricted, non-interactive
+        environment. Solve the task efficiently before the timeout
+        ({timeout_seconds}s). ..."
+        prompt = system_prompt + prompt
+
+    That happens in the SHARED runner, above the backend adapter — so
+    OpenClaw, Codex, Claude Code and Hermes all receive it. It is one fixed
+    string across all 60 tasks, parameterised only by the task's own declared
+    timeout. It is part of the task specification, not any agent's config.
+
+    Sending the bare `Prompt` section instead measures our agent on a
+    different task than the one the published baselines were scored on — and
+    withholds the single sentence that tells an agent it is on a clock. That
+    matters most exactly where we score worst: every Productivity Flow run so
+    far hit its wall-clock ceiling.
+
+    Same shape as the missing `git`, the withheld skills, and the disabled
+    completion contracts: the harness gave our agent less than the platform
+    it was being compared against.
+    """
+
+    @staticmethod
+    def _source(name: str) -> str:
+        from pathlib import Path
+
+        return (Path(__file__).resolve().parents[1] / name).read_text(encoding="utf-8")
+
+    def test_the_preamble_is_built_from_the_task_timeout(self):
+        from bench.wildclaw.harness import benchmark_preamble
+
+        text = benchmark_preamble(900)
+        assert "900s" in text, "the preamble must name the task's own budget"
+        assert "before the timeout" in text
+        assert "no placeholders" in text
+
+    def test_the_preamble_precedes_the_task_prompt(self):
+        from bench.wildclaw.harness import compose_prompt
+
+        composed = compose_prompt({"prompt": "Rename the PDFs.", "timeout_seconds": 600})
+        assert composed.endswith("Rename the PDFs.")
+        assert composed.startswith("You are an expert")
+        assert "600s" in composed
+
+    def test_the_agent_is_given_the_composed_prompt_not_the_bare_section(self):
+        """A regression guard on the wiring, not just the helper."""
+        body = self._source("harness.py")
+        assert 'input=task["prompt"]' not in body, (
+            "the agent is being handed the bare Prompt section; the benchmark's "
+            "preamble is what every other harness receives"
+        )
+        assert "input=compose_prompt(task)" in body
+
+
+class TestTaskBudgetIsTheTaskBudget:
+    """The agent's ceiling must be the task's declared budget, exactly.
+
+    `run_one.py` inflated it by 120s. Two consequences, both against us:
+
+    * `deadline_warning()` fires at 80% of the agent's ceiling. On a 900s
+      task an inflated 1020s ceiling puts the warning at 816s — 91% of the
+      real budget, far too late for an agent to write partial results.
+    * The run keeps going past the point where every competing harness has
+      already been killed.
+
+    Generosity that moves a control out of range is not generosity.
+    """
+
+    @staticmethod
+    def _source(name: str) -> str:
+        from pathlib import Path
+
+        return (Path(__file__).resolve().parents[1] / name).read_text(encoding="utf-8")
+
+    def test_the_ceiling_is_not_padded(self):
+        body = self._source("run_one.py")
+        assert "+ 120" not in body, "the agent outlives the budget it is graded on"
+        assert "agent_config.timeout_seconds = int(timeout_seconds)" in body
+
+    def test_the_container_still_outlives_the_agent(self):
+        """The OUTER timeout must stay generous — grading runs after the agent."""
+        body = self._source("harness.py")
+        assert "+ 300" in body, "the container must outlive the agent and its grader"
+
+    def test_the_preamble_matches_the_benchmark_verbatim(self):
+        """Pin it against the real source when the repo is present.
+
+        The substring assertions above run everywhere, including CI where the
+        benchmark checkout does not exist. This one is the exact check, and it
+        is the one that catches an upstream reword.
+        """
+        import os
+        import re
+
+        import pytest
+
+        repo = os.environ.get("WILDCLAW_REPO", "")
+        src = Path(repo) / "eval" / "run_batch.py" if repo else None
+        if src is None or not src.exists():
+            pytest.skip("WILDCLAW_REPO not set to a benchmark checkout")
+
+        line = next(
+            ln
+            for ln in src.read_text(encoding="utf-8").splitlines()
+            if ln.strip().startswith("system_prompt = f")
+        )
+        literal = re.search(r'f"(.*)"\s*$', line.strip()).group(1)
+        theirs = literal.replace("{timeout_seconds}", "900").replace("\\n", "\n")
+        assert benchmark_preamble(900) == theirs
