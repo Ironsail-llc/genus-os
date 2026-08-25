@@ -213,6 +213,22 @@ class _StallWatchdog:
         except asyncio.CancelledError:
             pass
 
+    def trip(self, reason: str) -> None:
+        """Trip the abort flag from outside the watch task.
+
+        The run loop's wall-clock self-check uses this: when the loop finds
+        its own deadline passed while the watchdog failed to act (2026-08-25:
+        a run blew through a 1200s ceiling to 3110s with the outer
+        ``asyncio.timeout``, the watchdog cancel, AND the deadline warning
+        all silent at once), it trips the same flag the watch task would
+        have set, so every downstream consumer — the cooperative abort
+        check, the TIMEOUT status mapping, the abort-reason reporting —
+        behaves exactly as if the watchdog had fired.
+        """
+        self._abort_reason = reason
+        self._cancelled = True
+        self._abort_event.set()
+
     def stop(self) -> None:
         """Stop the watchdog."""
         if self._task and not self._task.done():

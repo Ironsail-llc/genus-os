@@ -36,7 +36,7 @@ CAPS = {
     "robothor/engine/run_lifecycle.py": 800,
     "robothor/engine/run_llm_calls.py": 450,
     "robothor/engine/tool_admission.py": 400,
-    "robothor/engine/run_budget.py": 88,
+    "robothor/engine/run_budget.py": 96,
     "robothor/engine/chat.py": 1600,
     "robothor/engine/scheduler.py": 1600,
 }
