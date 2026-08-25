@@ -1,3 +1,13 @@
+## [1.47.4](https://github.com/Ironsail-llc/genus-os/compare/v1.47.3...v1.47.4) (2026-08-25)
+
+### Bug Fixes
+
+* **bench:** a timed-out task no longer kills the category, the container, or the key ([#387](https://github.com/Ironsail-llc/genus-os/issues/387)) ([85d5330](https://github.com/Ironsail-llc/genus-os/commit/85d53302797268910db11e1fef2aa32fd8d49272))
+
+### Documentation
+
+* **bench:** search & retrieval measured — 50.0% vs 56.4% — and a standing table ([#386](https://github.com/Ironsail-llc/genus-os/issues/386)) ([70ec66c](https://github.com/Ironsail-llc/genus-os/commit/70ec66c617be17f478e1bfe34a18394bec92b0b8))
+
 ## [1.47.3](https://github.com/Ironsail-llc/genus-os/compare/v1.47.2...v1.47.3) (2026-08-25)
 
 ### Bug Fixes
