@@ -16,7 +16,6 @@ that isn't true.
 from __future__ import annotations
 
 import json
-
 from pathlib import Path
 
 from bench.wildclaw.harness import benchmark_preamble
@@ -526,9 +525,7 @@ class TestATimedOutTaskDoesNotKillTheCategory:
         from bench.wildclaw import harness
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-DUMMYSECRETVALUE00000000")
-        cmd, _ = harness._container_command(
-            self._task(), tmp_path / "ws", tmp_path / "out", None
-        )
+        cmd, _ = harness._container_command(self._task(), tmp_path / "ws", tmp_path / "out", None)
         assert "--name" in cmd
         name = cmd[cmd.index("--name") + 1]
         assert name.startswith("wcb-")
@@ -548,7 +545,8 @@ class TestATimedOutTaskDoesNotKillTheCategory:
             return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         monkeypatch.setattr(harness.subprocess, "run", fake_run)
-        ws = tmp_path / "ws"; ws.mkdir()
+        ws = tmp_path / "ws"
+        ws.mkdir()
         out = tmp_path / "out"
         result = harness._run_agent(self._task(), ws, out, None, tmp_path)
         assert result.get("harness_kill") is True
@@ -570,7 +568,8 @@ class TestATimedOutTaskDoesNotKillTheCategory:
             return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         monkeypatch.setattr(harness.subprocess, "run", fake_run)
-        ws = tmp_path / "ws"; ws.mkdir()
+        ws = tmp_path / "ws"
+        ws.mkdir()
         harness._run_agent(self._task(), ws, tmp_path / "out", None, tmp_path)
         leftover = [p for p in tmp_path.rglob("*.env") if p.is_file()]
         assert not leftover, f"secret-bearing env files left behind: {leftover}"

@@ -1,0 +1,15 @@
+# Fires the nightly benchmark rotation. 04:40 sits after the 03:30
+# intelligence pipeline and before the 05:30 backup chain, in the quietest
+# stretch of the box's night.
+[Unit]
+Description=Robothor — nightly WildClawBench rotation timer
+
+[Timer]
+OnCalendar=*-*-* 04:40:00
+# Catch up after a powered-off night rather than silently skipping a sweep
+# day — the rotation is deterministic by date, so the roster stays aligned.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

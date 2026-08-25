@@ -306,3 +306,39 @@ a hard error rather than an empty directory that runs, grades, and scores
 zero. Both of the pipeline's early "scores" were bugs of exactly that shape —
 a host path handed to a grader running inside the container, and a
 quote-wrapped API key producing a 401 that reads as a model failure.
+
+## The nightly rotation
+
+The campaign that produced these numbers ended, as campaigns do. What keeps
+the measurement honest afterwards is `rotation.py`: every night at 04:40 the
+box runs ONE category — same model, same graders, same containers as the
+published OpenClaw baseline — and appends one JSON line to a ledger:
+
+```json
+{"when": "...", "category": "04_Search_Retrieval", "mean": 0.50,
+ "baseline_mean": 0.5636, "delta": -0.0636, "harness_kills": 0,
+ "per_task": {"...": 1.0}}
+```
+
+Six runnable categories make a full sweep every six nights, so a regression
+surfaces within a week of being introduced instead of at the next campaign.
+`baselines.json` carries OpenClaw's published per-task scores so every ledger
+line reads standalone. Categories whose fixtures are not staged are named on
+stdout, never silently dropped — a rotation that shrinks to the easy
+categories is grading a different platform than it claims.
+
+A low score is a **result** and exits 0; only a run that could not produce a
+summary exits non-zero and pages via `OnFailure=`. The rotation rebuilds the
+bench pod if a reboot took it (`ensure_pod`), so the morning after a power
+cut is a data point, not a page.
+
+Enable on an instance (units install via `scripts/install-units.sh`):
+
+```bash
+# /etc/robothor/robothor.env
+WILDCLAW_REPO=/opt/robothor-bench/WildClawBench
+WILDCLAW_DATA=/opt/robothor-bench/wcb-data
+WILDCLAW_OUT=/opt/robothor-bench/out
+
+sudo systemctl enable --now robothor-bench-rotation.timer
+```
