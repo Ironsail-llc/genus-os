@@ -91,44 +91,47 @@ environment without touching what ships.
 | Task | OpenClaw | Genus |
 |---|---:|---:|
 | meeting_negotiation | 90% | 90% |
-| chat_action_extraction | 97% | 96% |
-| chat_multi_step_reasoning | 93% | **0%** |
+| chat_action_extraction | 97% | 93% |
+| chat_multi_step_reasoning | 93% | 93% |
 | chat_thread_consolidation | 96% | **100%** |
-| chat_escalation_routing | 82% | 78% |
-| chat_cross_dept_update (zh) | 87% | **88%** |
-| **mean** | **90.7%** | **75.2%** |
+| chat_escalation_routing | 82% | 70% |
+| chat_cross_dept_update (zh) | 87% | 79% |
+| **mean** | **90.7%** | **87.4%** |
 
-Five of six tasks land within a few points either way, two of them ahead. The
-mean gap is one task: `chat_multi_step_reasoning` scores zero because the
-agent wrote its report to `tmp_workspace/results/results.md` — a relative path
-that resolved to `/tmp_workspace/tmp_workspace/results/results.md` — and then
-said "The report is saved" without checking. That is a real failure and it is
-ours: a path built wrong, and success claimed without verification.
+Near parity. One task ahead, two level, three behind by single digits.
 
-### This category read 63.2% an hour earlier, and that number was wrong
+This category read 63.2% and then 75.2% earlier in the same night, and both
+of those numbers were harness defects rather than agent behaviour — grading
+against dead mock services, and a missing toolchain. The third reading moved
+again for a different reason: `chat_multi_step_reasoning` swung 0% → 93%
+between runs.
 
-Every one of these graders fetches its evidence from the task's mock services
-while they are still running:
+**Do not attribute that swing to the claim-detector fix shipped alongside
+it.** The detector now catches "The report is saved" when nothing was saved,
+which is worth having on its own; it does not make an agent write to the
+right path. The task had already scored 89% in an earlier run and 0% in
+another. Run-to-run variance on this category is the largest single term in
+these numbers, and a 3.3-point mean gap sits inside it.
 
-    SLACK_AUDIT = "http://localhost:9110/slack/audit"
+## Productivity Flow — 3 of 10 tasks, all zero
 
-That audit log lives in the service's memory. The harness ran the agent in a
-throwaway container, let it exit, and then graded in a *different* one — so
-every API-based criterion read an empty log and scored zero. `escalation_routing`
-was filed at 25% while the transcript shows the agent making nine successful
-`POST /slack/drafts/save` calls, each returning `{"status": "draft_saved"}`.
-`cross_dept_update` was filed at 7% with `contacts_api_used: 0` after calling
-the contacts API correctly.
+| Task | budget | ran | outcome |
+|---|---:|---:|---|
+| pdf_digest (65 PDFs) | 900s | 1020s | killed |
+| arxiv_digest | 1200s | 1320s | killed |
+| bibtex | 900s | 925s | nothing written |
 
-Grading now runs inside the same container, after the agent, while the
-services are alive — which is what WildClawBench does and why it does it. The
-two worst tasks went 25% → 78% and 7% → 88%.
+OpenClaw scores 38.8%. Every run hit its wall-clock ceiling and lost work it
+had already done, because the graders award per criterion and an empty
+results directory earns none of them. That is what `deadline_warning`
+addresses — the agent is now told at 80% of its budget to write out what it
+has. Its effect here is **unmeasured**: the one re-run finished early, under
+budget, so the warning never fired.
 
-Worth stating plainly: this was diagnosed *after* concluding that those two
-failures were "capability, not plumbing". That conclusion was wrong, and it
-was wrong because the mock services had been verified as *startable* rather
-than the grading path being verified end to end. Only the six Social tasks
-query a live service, so the Safety Alignment numbers are unaffected.
+A later bibtex run did produce partial artefacts for the first time
+(`renamed_dir_exists`, `bibtex_dir_exists`), still gated to 0 overall. With
+2.7x spread in tokens and 1.7x in wall-clock between two runs of the same
+task, single samples here decide nothing.
 
 ## What this found before it found a score
 
