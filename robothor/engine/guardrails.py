@@ -215,6 +215,21 @@ def redact_secrets(value: Any) -> Any:
 SENSITIVE_SCAN_LIMIT = 2_000_000
 
 # Default rate limit
+#: Per-minute tool-call ceiling, applied per agent. Override per agent with
+#: `rate_limit_per_minute`.
+#:
+#: MEASURED on this instance 2026-08-24, and left unchanged deliberately:
+#: 127 `rate_limit` blocks in 30 days (most recent that day), against a
+#: legitimate distribution whose mean is 7.2 calls/minute and whose peak is
+#: 36.8 across 900 real runs. So 30 sits just under the top of normal
+#: behaviour and does block real work — it should probably be higher.
+#:
+#: It is not raised here because raising it turned three tests in
+#: test_plan_mode into runaway loops: they had been relying on this throttle
+#: to terminate, which means it has been doing duty as a de-facto runaway
+#: guard well beyond its stated job. Changing a fleet-wide default whose
+#: removal destabilises things nobody had connected to it is a soak, not a
+#: side effect of adding a knob. The knob is the part that ships.
 DEFAULT_RATE_LIMIT = 30  # per minute
 
 # Default guardrails applied to all agents unless opted out
@@ -388,6 +403,9 @@ class GuardrailEngine:
 
     enabled_policies: list[str] = field(default_factory=list)
     workspace: str = ""  # Workspace root for normalizing absolute paths
+    #: Per-minute tool-call ceiling. 0 means "use the platform default" —
+    #: an unset field must never read as "block everything".
+    rate_limit_per_minute: int = 0
     _exec_allowlists: dict[str, list[re.Pattern]] = field(default_factory=dict)  # type: ignore[type-arg]
     _write_allowlists: dict[str, list[str]] = field(default_factory=dict)
     _rate_counts: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
@@ -518,7 +536,8 @@ class GuardrailEngine:
         return GuardrailResult()
 
     def _check_rate_limit(self, agent_id: str) -> GuardrailResult:
-        """Rate limit: max N tool calls per minute."""
+        """Rate limit: max N tool calls per minute, per agent."""
+        limit = self.rate_limit_per_minute or DEFAULT_RATE_LIMIT
         now = time.monotonic()
         key = agent_id or "_default"
         calls = self._rate_counts[key]
@@ -528,11 +547,11 @@ class GuardrailEngine:
         self._rate_counts[key] = [t for t in calls if t > cutoff]
         calls = self._rate_counts[key]
 
-        if len(calls) >= DEFAULT_RATE_LIMIT:
+        if len(calls) >= limit:
             return GuardrailResult(
                 allowed=False,
                 action="blocked",
-                reason=f"Rate limit exceeded: {len(calls)}/{DEFAULT_RATE_LIMIT} calls/min",
+                reason=f"Rate limit exceeded: {len(calls)}/{limit} calls/min",
                 guardrail_name="rate_limit",
             )
         calls.append(now)

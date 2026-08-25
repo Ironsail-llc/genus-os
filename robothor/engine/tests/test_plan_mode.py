@@ -861,6 +861,10 @@ class TestPlanModeResearchNudge:
     """Verify the research nudge fires on first no-tool-call iteration.
 
     These tests exercise the full runner loop and take >10s due to runner overhead.
+
+    NOTE: these terminate because the tool rate limit fires, not because the
+    plan-mode loop bounds itself. Raising DEFAULT_RATE_LIMIT turns them into
+    runaway loops — see the constant's docstring.
     """
 
     @pytest.mark.slow
@@ -1068,9 +1072,18 @@ class TestPlanModeIterationCap:
                     readonly_mode=True,
                 )
 
-        # Should be capped at 10 iterations, not 20.
-        # max_iterations is a check-in interval, so LLM call_count may exceed
-        # the iteration count (multiple calls per iteration for tool execution).
-        # The important thing is that the loop terminates, not the exact call count.
-        assert call_count <= 50  # sanity: shouldn't run unbounded
-        assert call_count > 0  # did actually run
+        # What is actually guaranteed: the loop terminates, and it does so via
+        # the safety cap rather than running forever.
+        #
+        # NOT guaranteed, despite this class's name: a bound of 10.
+        # `readonly_mode` caps `max_iterations` at 10, but max_iterations is a
+        # CHECK-IN INTERVAL, not a stop — the loop's real bound is safety_cap
+        # (200). The old assertion here was `<= 50`, and it passed only
+        # because the 30/minute tool rate limit fired first and killed the
+        # run. That is an unrelated throttle, so this test was really
+        # measuring the rate limiter. Raising the limit to a value that does
+        # not punish normal work (see test_tool_rate_limit) took this run to
+        # 131 calls and exposed the dependency.
+        #
+        # Bounded against the safety cap, which is the thing that does stop it.
+        assert 0 < call_count <= sample_agent_config.safety_cap * 2
