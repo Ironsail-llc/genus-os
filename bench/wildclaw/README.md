@@ -113,25 +113,64 @@ right path. The task had already scored 89% in an earlier run and 0% in
 another. Run-to-run variance on this category is the largest single term in
 these numbers, and a 3.3-point mean gap sits inside it.
 
-## Productivity Flow — 3 of 10 tasks, all zero
+## Productivity Flow, all 10 tasks
 
-| Task | budget | ran | outcome |
-|---|---:|---:|---|
-| pdf_digest (65 PDFs) | 900s | 1020s | killed |
-| arxiv_digest | 1200s | 1320s | killed |
-| bibtex | 900s | 925s | nothing written |
+| Task | OpenClaw | Genus |
+|---|---:|---:|
+| arxiv_digest | 0% | 0% |
+| table_tex_download | 56% | 56% |
+| bibtex | 0% | 0% |
+| 2022_conference_papers | 87% | 0% |
+| wikipedia_biography | 0% | **30%** |
+| calendar_scheduling | 0% | **100%** |
+| openmmlab_contributors | 39% | 39% |
+| real_image_category | 94% | 42% |
+| scp_crawl | 96% | 94% |
+| pdf_digest | 14% | 14% |
+| **mean** | **38.8%** | **37.6%** |
 
-OpenClaw scores 38.8%. Every run hit its wall-clock ceiling and lost work it
-had already done, because the graders award per criterion and an empty
-results directory earns none of them. That is what `deadline_warning`
-addresses — the agent is now told at 80% of its budget to write out what it
-has. Its effect here is **unmeasured**: the one re-run finished early, under
-budget, so the warning never fired.
+**Five of ten score identically.** That is the strongest evidence yet that the
+harness is faithful — same tasks, same graders, same model, landing on the same
+partial credit. Two clear wins, two clear losses, one near-tie.
 
-A later bibtex run did produce partial artefacts for the first time
-(`renamed_dir_exists`, `bibtex_dir_exists`), still gated to 0 overall. With
-2.7x spread in tokens and 1.7x in wall-clock between two runs of the same
-task, single samples here decide nothing.
+### The earlier "0 of 3" was a biased sample, and I read it wrong
+
+This category was previously reported as three tasks, all zero, against
+OpenClaw's 38.8% category mean — and described as being "behind, badly".
+
+Those three were `pdf_digest`, `arxiv_digest` and `bibtex`. **OpenClaw scores
+14%, 0% and 0% on them**: a 4.7% mean. They are the three hardest tasks in the
+category, and two of them defeat both harnesses completely. Comparing three
+hand-picked tasks against a ten-task mean was not a like-for-like comparison,
+and the conclusion drawn from it was wrong.
+
+On those same three tasks we now score 14%, 0%, 0% — **identical to OpenClaw**.
+
+### What the prompt-parity fix actually bought
+
+Not score, on those three. Time and tokens:
+
+| Task | before | now |
+|---|---|---|
+| pdf_digest | 1020s — **killed** | 468s |
+| arxiv_digest | 1320s — **killed** | 494s |
+| bibtex | 925s, 4.9M tokens | 336s, 1.16M tokens |
+
+Every task in the category now finishes inside its budget; the longest is 675s
+of 900s. Nothing is killed at its ceiling any more. `bibtex` uses **4x fewer
+tokens** for the same score.
+
+The plausible cause is the benchmark preamble this harness had been withholding
+— it tells the agent it is on a clock and asks for "a complete, functional
+solution in a single pass with no placeholders". That is a hypothesis consistent
+with the numbers, not a controlled result: budget calibration changed in the
+same commit, and this category's run-to-run variance has been large.
+
+### Still genuinely behind
+
+`2022_conference_papers` (0 vs 87) and `real_image_category` (42 vs 94) are
+real losses on the same tasks with the same model, and neither is explained by
+anything in the harness.
 
 ## What this found before it found a score
 
