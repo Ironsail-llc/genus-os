@@ -639,3 +639,36 @@ class TestTheNextWedgeExplainsItself:
         assert "def _phase(" in body
         for stamp in ("execute_returned", "transcript_written", "exiting"):
             assert f'_phase("{stamp}")' in body, f"missing phase stamp: {stamp}"
+
+
+class TestProviderOutageIsNotACapabilityResult:
+    """A dead provider must not score an agent.
+
+    GLM 5.2 via OpenRouter flaked four times tonight — "All models failed to
+    respond" after ~8 requests and a few thousand tokens. The bench agent
+    deliberately has no fallback models (it is measuring one model on one
+    harness), so a provider streak kills the run and the task records a zero
+    that looks exactly like a capability result. Four of tonight's zeros were
+    this.
+
+    Detection is the SHAPE of the failure — a provider-failure error string
+    plus almost no tokens spent — and the remedy is one retry with a fresh
+    workspace. A second failure records `provider_failure: true` so the
+    rotation's ledger can carry the caveat instead of the lie.
+    """
+
+    def test_the_shape_detector(self):
+        from bench.wildclaw.harness import _provider_failed
+
+        assert _provider_failed({"error": "All models failed to respond", "total_tokens": 9409})
+        assert not _provider_failed({"error": None, "total_tokens": 9409})
+        assert not _provider_failed(
+            {"error": "All models failed to respond", "total_tokens": 900_000}
+        ), "a long run that died late did real work — that is not an outage shape"
+        assert not _provider_failed({})
+
+    def test_the_main_loop_retries_once(self):
+        body = (Path(__file__).resolve().parents[1] / "harness.py").read_text(encoding="utf-8")
+        main_body = body[body.index("def main(") :]
+        assert "_provider_failed(" in main_body, "main never checks for the outage shape"
+        assert "provider_failure" in main_body, "the summary never records a persistent outage"
