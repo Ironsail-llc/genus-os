@@ -105,9 +105,10 @@ class TestLoopSelfDeadline:
             )
 
         assert run.status in (RunStatus.TIMEOUT, RunStatus.FAILED)
-        assert "hard timeout" in (run.error_message or "").lower() or "wall-clock" in (
-            run.error_message or ""
-        ).lower(), f"run ended for the wrong reason: {run.error_message!r}"
+        assert (
+            "hard timeout" in (run.error_message or "").lower()
+            or "wall-clock" in (run.error_message or "").lower()
+        ), f"run ended for the wrong reason: {run.error_message!r}"
 
     @pytest.mark.asyncio
     async def test_a_run_inside_budget_is_untouched(self, runner):
