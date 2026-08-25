@@ -1,3 +1,9 @@
+## [1.46.4](https://github.com/Ironsail-llc/genus-os/compare/v1.46.3...v1.46.4) (2026-08-25)
+
+### Bug Fixes
+
+* **bench:** build the transcript from the complete record, not the survivors ([#380](https://github.com/Ironsail-llc/genus-os/issues/380)) ([dd4a9a3](https://github.com/Ironsail-llc/genus-os/commit/dd4a9a3512f765212a979cd1734239efa94e3185))
+
 ## [1.46.3](https://github.com/Ironsail-llc/genus-os/compare/v1.46.2...v1.46.3) (2026-08-25)
 
 ### Bug Fixes
