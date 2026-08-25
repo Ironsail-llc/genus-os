@@ -1,3 +1,9 @@
+## [1.50.1](https://github.com/Ironsail-llc/genus-os/compare/v1.50.0...v1.50.1) (2026-08-25)
+
+### Bug Fixes
+
+* **bench:** a dead provider is not a capability result ([#395](https://github.com/Ironsail-llc/genus-os/issues/395)) ([1db6d82](https://github.com/Ironsail-llc/genus-os/commit/1db6d827a873126ce7f1dcbe399e93e069166ed0))
+
 ## [1.50.0](https://github.com/Ironsail-llc/genus-os/compare/v1.49.0...v1.50.0) (2026-08-25)
 
 ### Features
