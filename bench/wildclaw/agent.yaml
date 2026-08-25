@@ -49,6 +49,19 @@ tools_allowed:
   - search_files
   - web_fetch
   - web_search
+  # A task's skill is how the benchmark tells an agent which APIs exist and
+  # how to call them, and it hands the same SKILL.md to every harness.
+  # OpenClaw reads those files straight into its context; Genus surfaces only
+  # the name and a one-line description (185 characters for task 6) and
+  # expects the body to be fetched on demand. Without these two tools our
+  # agent could see that a skill existed, could not read it, and spent its
+  # run reverse-engineering the endpoints from the filesystem — 11 directory
+  # listings and 7 file reads on a task it then failed.
+  #
+  # Same content, delivered the way this platform delivers it. Parity, not a
+  # hint: nothing here is task-specific.
+  - list_skills
+  - skill_view
 
 instructions: |
   You are a capable autonomous agent working on a task in a Linux container.

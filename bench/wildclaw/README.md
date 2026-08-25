@@ -128,6 +128,25 @@ three results were all mine rather than the agent's:
 The category went 36.9% -> 63.2% across those fixes. None of them changed the
 agent; all of them changed whether the task was possible.
 
+### A hypothesis that did not pay off
+
+Genus's skill catalog surfaces a name and a one-line description — 185
+characters for the task-6 skill — and expects the body to be fetched with
+`skill_view`. The bench agent had neither `skill_view` nor `list_skills`, so
+it could see that a skill existed, could not read it, and spent its run
+reverse-engineering endpoints from the filesystem: eleven directory listings
+and seven file reads on a task it then failed.
+
+Granting those two tools is right on its own terms — the benchmark hands the
+same `SKILL.md` to every harness and OpenClaw reads it straight into context.
+It did NOT move the tasks it was meant to fix: escalation routing went 25% to
+24%, the Chinese cross-department update 7% to 5%. The hypothesis was wrong.
+
+What it did buy is cost: 253k tokens per task down to 211k, a 17% reduction,
+because the agent stops searching for what the skill would have told it.
+Recorded here as a null result on quality and a real one on efficiency,
+rather than dropped because it did not say what it was supposed to.
+
 ## What this found before it found a score
 
 Standing up a clean containerised instance surfaced two defects that no test
