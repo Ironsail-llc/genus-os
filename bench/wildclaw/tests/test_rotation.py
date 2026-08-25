@@ -140,3 +140,38 @@ class TestEnsurePod:
         started = " ".join(" ".join(c) for c in calls)
         assert "gb-pg" in started and "gb-redis" in started
         assert "robothor.cli migrate" in started, "the database must be migrated"
+
+
+class TestEnvFallbacks:
+    """The systemd unit passes no arguments — the render gate forbids ${...}
+    in directives, so the paths ride WILDCLAW_* environment variables and the
+    rotation resolves them itself."""
+
+    def test_flags_fall_back_to_the_environment(self, monkeypatch, tmp_path):
+        from bench.wildclaw.rotation import resolve_paths
+
+        monkeypatch.setenv("WILDCLAW_REPO", str(tmp_path / "repo"))
+        monkeypatch.setenv("WILDCLAW_DATA", str(tmp_path / "data"))
+        monkeypatch.setenv("WILDCLAW_OUT", str(tmp_path / "out"))
+        repo, data, out = resolve_paths(None, None, None)
+        assert (repo, data, out) == (tmp_path / "repo", tmp_path / "data", tmp_path / "out")
+
+    def test_explicit_flags_beat_the_environment(self, monkeypatch, tmp_path):
+        from pathlib import Path
+
+        from bench.wildclaw.rotation import resolve_paths
+
+        monkeypatch.setenv("WILDCLAW_REPO", "/env/repo")
+        repo, _, _ = resolve_paths(Path("/flag/repo"), Path("/d"), Path("/o"))
+        assert repo == Path("/flag/repo")
+
+    def test_missing_both_is_a_loud_error(self, monkeypatch):
+        import pytest
+
+        from bench.wildclaw.rotation import resolve_paths
+
+        monkeypatch.delenv("WILDCLAW_REPO", raising=False)
+        monkeypatch.delenv("WILDCLAW_DATA", raising=False)
+        monkeypatch.delenv("WILDCLAW_OUT", raising=False)
+        with pytest.raises(SystemExit):
+            resolve_paths(None, None, None)

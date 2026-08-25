@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import os
 import subprocess
 import sys
 import time
@@ -37,6 +38,34 @@ from pathlib import Path
 from typing import Any
 
 _HERE = Path(__file__).resolve().parent
+
+
+def resolve_paths(
+    repo: Path | None, data: Path | None, out: Path | None
+) -> tuple[Path, Path, Path]:
+    """Flags when given, WILDCLAW_* environment otherwise.
+
+    The systemd unit passes no arguments at all: the render gate refuses any
+    ``${...}`` in a directive (systemd expands them only in ExecStart=, and a
+    typo'd variable there becomes an empty word silently), so the unit sets
+    the three WILDCLAW_* variables via EnvironmentFile and this resolves
+    them. Missing both is a configuration error and says which name is
+    missing rather than crashing later on a None path.
+    """
+    resolved = []
+    for value, env_name in (
+        (repo, "WILDCLAW_REPO"),
+        (data, "WILDCLAW_DATA"),
+        (out, "WILDCLAW_OUT"),
+    ):
+        if value is None:
+            raw = os.environ.get(env_name, "")
+            if not raw:
+                print(f"{env_name} is not set and no flag was given", file=sys.stderr)
+                raise SystemExit(2)
+            value = Path(raw)
+        resolved.append(value)
+    return resolved[0], resolved[1], resolved[2]
 
 
 def runnable_categories(repo: Path, data_root: Path) -> list[str]:
@@ -176,9 +205,9 @@ def ensure_pod() -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--repo", required=True, type=Path)
-    ap.add_argument("--data", required=True, type=Path)
-    ap.add_argument("--out", required=True, type=Path, help="ledger + run output root")
+    ap.add_argument("--repo", type=Path, default=None)
+    ap.add_argument("--data", type=Path, default=None)
+    ap.add_argument("--out", type=Path, default=None, help="ledger + run output root")
     ap.add_argument("--category", default="", help="override the rotation's pick")
     ap.add_argument("--model", default="openrouter/z-ai/glm-5.2")
     ap.add_argument(
@@ -188,6 +217,8 @@ def main() -> int:
         help="run only the first N tasks — smoke-testing the plumbing, not a measurement",
     )
     args = ap.parse_args()
+    repo_path, data_path, out_path = resolve_paths(args.repo, args.data, args.out)
+    args.repo, args.data, args.out = repo_path, data_path, out_path
 
     cats = runnable_categories(args.repo, args.data)
     all_cats = sorted(
