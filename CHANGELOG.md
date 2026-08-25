@@ -1,3 +1,9 @@
+## [1.46.0](https://github.com/Ironsail-llc/genus-os/compare/v1.45.1...v1.46.0) (2026-08-25)
+
+### Features
+
+* **bench:** run the tasks the way the benchmark defines them ([#376](https://github.com/Ironsail-llc/genus-os/issues/376)) ([320d8ee](https://github.com/Ironsail-llc/genus-os/commit/320d8ee57689cd863d05f0f7f1e77797214dcaa9)), closes [#375](https://github.com/Ironsail-llc/genus-os/issues/375)
+
 ## [1.45.1](https://github.com/Ironsail-llc/genus-os/compare/v1.45.0...v1.45.1) (2026-08-25)
 
 ### Bug Fixes
