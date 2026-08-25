@@ -1,3 +1,13 @@
+## [1.47.2](https://github.com/Ironsail-llc/genus-os/compare/v1.47.1...v1.47.2) (2026-08-25)
+
+### Bug Fixes
+
+* **bench:** our agent was the only one not told it was on a clock ([#384](https://github.com/Ironsail-llc/genus-os/issues/384)) ([9cb4555](https://github.com/Ironsail-llc/genus-os/commit/9cb4555403c473fadc1a330da840407c0440d2f9))
+
+### Documentation
+
+* **bench:** the standing after the harness stopped lying ([#383](https://github.com/Ironsail-llc/genus-os/issues/383)) ([2a819fa](https://github.com/Ironsail-llc/genus-os/commit/2a819fab329030435cb09a459bc0c6936ac43fc2))
+
 ## [1.47.1](https://github.com/Ironsail-llc/genus-os/compare/v1.47.0...v1.47.1) (2026-08-25)
 
 ### Bug Fixes
