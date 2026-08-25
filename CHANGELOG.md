@@ -1,3 +1,9 @@
+## [1.47.0](https://github.com/Ironsail-llc/genus-os/compare/v1.46.4...v1.47.0) (2026-08-25)
+
+### Features
+
+* **engine:** tell an agent it is running out of time, while it can still act ([#381](https://github.com/Ironsail-llc/genus-os/issues/381)) ([2b2a14c](https://github.com/Ironsail-llc/genus-os/commit/2b2a14c42ddd7a31e9800b07281c9060c63c2a56))
+
 ## [1.46.4](https://github.com/Ironsail-llc/genus-os/compare/v1.46.3...v1.46.4) (2026-08-25)
 
 ### Bug Fixes
