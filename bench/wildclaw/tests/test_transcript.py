@@ -474,3 +474,103 @@ class TestTheHarnessRefusesToRunWithoutItsPod:
         """An empty glob prints `no tasks matched` — keep that, it is the same class."""
         body = self._source()
         assert "no tasks matched" in body
+
+
+class TestATimedOutTaskDoesNotKillTheCategory:
+    """The 1500s backstop fired for the first time today and took the run with it.
+
+    Every earlier category run ended each task from inside — the agent's own
+    ceiling always fired first — so `_run_agent`'s subprocess.run had never
+    actually hit its timeout. When it finally did (Code Intelligence task 12),
+    the `TimeoutExpired` flew out unhandled: the whole category run died with
+    nine tasks unmeasured, and the traceback printed the full podman command —
+    OPENROUTER_API_KEY included — into the log.
+
+    Killing the client also does not kill the container: `podman run --rm`
+    orphans it, and the agent inside kept billing for another half hour.
+
+    Three properties, each pinned separately:
+    * the container has a name, so it can be torn down;
+    * a timeout is recorded and the loop moves on;
+    * no secret ever appears in the argv, where any exception repr can
+      publish it.
+    """
+
+    def _task(self, tmp=None):
+        return {
+            "task_id": "99_Test_task_1_example",
+            "prompt": "do the thing",
+            "timeout_seconds": 5,
+            "automated_checks": "def grade(**kwargs):\n    return {'overall_score': 0.0}",
+            "env": "OPENROUTER_API_KEY",
+        }
+
+    def test_no_secret_in_the_podman_argv(self, tmp_path, monkeypatch):
+        from bench.wildclaw import harness
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-DUMMYSECRETVALUE00000000")
+        cmd, env_file = harness._container_command(
+            self._task(), tmp_path / "ws", tmp_path / "out", "openrouter/x/y"
+        )
+        joined = " ".join(cmd)
+        assert "sk-or-" not in joined, "the key is in argv — any exception repr publishes it"
+        assert "OPENROTHOR" not in joined
+        assert "--env-file" in cmd
+        body = env_file.read_text(encoding="utf-8")
+        assert "OPENROUTER_API_KEY=sk-or-v1-DUMMYSECRETVALUE00000000" in body
+        assert "ROBOTHOR_DB_HOST=127.0.0.1" in body, "all env moves to the file, not just secrets"
+        mode = env_file.stat().st_mode & 0o777
+        assert mode == 0o600, f"env file is {oct(mode)}, must be 0600"
+
+    def test_the_container_is_named_so_it_can_be_torn_down(self, tmp_path, monkeypatch):
+        from bench.wildclaw import harness
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-DUMMYSECRETVALUE00000000")
+        cmd, _ = harness._container_command(
+            self._task(), tmp_path / "ws", tmp_path / "out", None
+        )
+        assert "--name" in cmd
+        name = cmd[cmd.index("--name") + 1]
+        assert name.startswith("wcb-")
+
+    def test_a_timeout_is_recorded_and_the_container_torn_down(self, tmp_path, monkeypatch):
+        import subprocess as sp
+
+        from bench.wildclaw import harness
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-DUMMYSECRETVALUE00000000")
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[:2] == ["podman", "run"]:
+                raise sp.TimeoutExpired(cmd, kwargs.get("timeout", 0))
+            return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(harness.subprocess, "run", fake_run)
+        ws = tmp_path / "ws"; ws.mkdir()
+        out = tmp_path / "out"
+        result = harness._run_agent(self._task(), ws, out, None, tmp_path)
+        assert result.get("harness_kill") is True
+        assert result.get("returncode") != 0
+        teardowns = [c for c in calls if c[:3] == ["podman", "rm", "-f"]]
+        assert teardowns, "the orphaned container must be torn down"
+        assert teardowns[0][3].startswith("wcb-")
+        log = (out / "agent.log").read_text(encoding="utf-8")
+        assert "sk-or-" not in log
+
+    def test_the_env_file_is_removed_after_the_run(self, tmp_path, monkeypatch):
+        import subprocess as sp
+
+        from bench.wildclaw import harness
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-DUMMYSECRETVALUE00000000")
+
+        def fake_run(cmd, **kwargs):
+            return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(harness.subprocess, "run", fake_run)
+        ws = tmp_path / "ws"; ws.mkdir()
+        harness._run_agent(self._task(), ws, tmp_path / "out", None, tmp_path)
+        leftover = [p for p in tmp_path.rglob("*.env") if p.is_file()]
+        assert not leftover, f"secret-bearing env files left behind: {leftover}"
