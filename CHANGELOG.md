@@ -1,3 +1,9 @@
+## [1.47.1](https://github.com/Ironsail-llc/genus-os/compare/v1.47.0...v1.47.1) (2026-08-25)
+
+### Bug Fixes
+
+* **engine:** the claim detector could not hear "the report is saved" ([#382](https://github.com/Ironsail-llc/genus-os/issues/382)) ([7fcc715](https://github.com/Ironsail-llc/genus-os/commit/7fcc715cd3c0e88efe0816098d7a70d90f3d7aae))
+
 ## [1.47.0](https://github.com/Ironsail-llc/genus-os/compare/v1.46.4...v1.47.0) (2026-08-25)
 
 ### Features
