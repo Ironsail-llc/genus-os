@@ -412,9 +412,7 @@ def _run_agent(
     finally:
         env_file.unlink(missing_ok=True)
     elapsed = time.perf_counter() - started
-    (out_dir / "agent.log").write_text(
-        _scrub(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
-    )
+    (out_dir / "agent.log").write_text(_scrub(proc.stdout + "\n--- stderr ---\n" + proc.stderr))
     return {"returncode": proc.returncode, "elapsed": elapsed}
 
 
@@ -464,25 +462,47 @@ def _grade_with_ground_truth(
     ]
     if gt.is_dir():
         cmd += ["-v", f"{gt}:{CONTAINER_WORKSPACE}/gt:ro,z"]
+    # The key never rides argv — same cure _run_agent already got: any
+    # exception repr publishes the command line.
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    env_file = out_dir.parent / f"{_container_name(task)}-grade.env"
+    env_file.touch(mode=0o600, exist_ok=True)
+    env_file.chmod(0o600)
+    env_file.write_text(
+        f"OPENROUTER_API_KEY={_api_key()}\n"
+        "OPENROUTER_BASE_URL="
+        + os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+        + "\n"
+        "JUDGE_MODEL=" + os.environ.get("JUDGE_MODEL", "openai/gpt-5.4") + "\n",
+        encoding="utf-8",
+    )
+
+    # The grader is part of the task and gets the task's environment. The
+    # benchmark grades inside the task container, where the warmup (`pip
+    # install openai Pillow numpy`, mock fixtures, ...) has already run; a
+    # fresh container that skips it fails on the first import the warmup
+    # provided — jigsaw_puzzle's PIL-reading grader died exactly there and a
+    # completed run scored a spurious zero.
+    steps = [
+        *([_warmup_prelude(task)] if _warmup_prelude(task) else []),
+        "python /out/_grade.py > /out/grade.out 2>/out/grade.err",
+    ]
     cmd += [
         "-w",
         CONTAINER_WORKSPACE,
-        "-e",
-        f"OPENROUTER_API_KEY={_api_key()}",
-        "-e",
-        "OPENROUTER_BASE_URL="
-        + os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-        "-e",
-        "JUDGE_MODEL=" + os.environ.get("JUDGE_MODEL", "openai/gpt-5.4"),
+        "--env-file",
+        str(env_file),
         IMAGE,
         "sh",
         "-c",
-        "python /out/_grade.py > /out/grade.out 2>/out/grade.err",
+        "\n".join(steps),
     ]
     try:
         subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     except subprocess.TimeoutExpired:
         return {"overall_score": 0.0, "grading_error": "grader timed out"}
+    finally:
+        env_file.unlink(missing_ok=True)
     return _read_grade(out_dir)
 
 
