@@ -64,11 +64,17 @@ from robothor.engine.prompts import (
     PLAN_MODE_SUFFIX,
 )
 
-# Re-exported so existing callers and tests keep importing them from here.
-from robothor.engine.run_budget import (  # noqa: E402,F401
-    DEADLINE_WARNING_FRACTION,
-    deadline_warning,
-    proactive_compaction_threshold,
+# Re-exported for existing importers. The `as` form is what marks a name as
+# deliberately re-exported; a plain import reads to mypy as a private detail,
+# which is the right default and the wrong one here.
+from robothor.engine.run_budget import (  # noqa: E402
+    DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
+)
+from robothor.engine.run_budget import (
+    deadline_warning as deadline_warning,
+)
+from robothor.engine.run_budget import (
+    proactive_compaction_threshold as proactive_compaction_threshold,
 )
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_lifecycle import RunLifecycleMixin
