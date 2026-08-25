@@ -1,3 +1,13 @@
+## [1.49.0](https://github.com/Ironsail-llc/genus-os/compare/v1.48.1...v1.49.0) (2026-08-25)
+
+### Features
+
+* **engine:** every agent ends its fallback chain at the instance's last-resort model ([#393](https://github.com/Ironsail-llc/genus-os/issues/393)) ([2721ac5](https://github.com/Ironsail-llc/genus-os/commit/2721ac510ecd13fdc4f365b992237bd3edfc91b9))
+
+### Bug Fixes
+
+* **engine:** research norms and honest signals, from a controlled competitive loss ([#391](https://github.com/Ironsail-llc/genus-os/issues/391)) ([bb2634f](https://github.com/Ironsail-llc/genus-os/commit/bb2634f2b1c70e46a6471c7269b208481656ae04))
+
 ## [1.48.1](https://github.com/Ironsail-llc/genus-os/compare/v1.48.0...v1.48.1) (2026-08-25)
 
 ### Bug Fixes
