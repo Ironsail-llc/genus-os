@@ -29,6 +29,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -234,59 +235,83 @@ def _passthrough_env(task: dict[str, Any]) -> list[str]:
     return args
 
 
-def _run_agent(
-    task: dict[str, Any],
-    workspace: Path,
-    out_dir: Path,
-    model: str | None,
-    repo: Path,
-) -> dict[str, Any]:
-    """Run one task inside a throwaway container joined to the bench pod."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    # See the mount comment below: the container writes as an unrelated
-    # subuid, so both directories have to admit it.
-    out_dir.chmod(0o777)
-    workspace.chmod(0o777)
-    env = [
-        "-e",
-        "ROBOTHOR_DB_HOST=127.0.0.1",
-        "-e",
-        "ROBOTHOR_DB_PORT=5432",
-        "-e",
-        "ROBOTHOR_DB_NAME=robothor_test",
-        "-e",
-        "ROBOTHOR_DB_USER=robothor",
-        "-e",
-        "ROBOTHOR_DB_PASSWORD=robothor",
-        "-e",
-        "ROBOTHOR_REDIS_URL=redis://127.0.0.1:6379/0",
-        "-e",
-        "ROBOTHOR_MANIFEST_DIR=/app/bench/wildclaw",
+_SECRET_RE = re.compile(r"sk-or-[A-Za-z0-9_-]{8,}")
+
+
+def _scrub(text: str) -> str:
+    """Strip API keys from anything the harness writes or prints."""
+    return _SECRET_RE.sub("[REDACTED:openrouter-key]", text or "")
+
+
+def _container_name(task: dict[str, Any]) -> str:
+    """A deterministic per-task name so an orphaned container can be found.
+
+    `podman run --rm` only removes the container when the CLIENT lives to see
+    it exit. Kill the client — which is exactly what a subprocess timeout
+    does — and the container survives, nameless, billing tokens. A name makes
+    both the pre-run sweep and the post-timeout teardown possible.
+    """
+    slug = re.sub(r"[^a-z0-9-]+", "-", str(task.get("task_id", "task")).lower())
+    return ("wcb-" + slug.strip("-"))[:60]
+
+
+def _container_command(
+    task: dict[str, Any], workspace: Path, out_dir: Path, model: str | None
+) -> tuple[list[str], Path]:
+    """Build the podman invocation. Environment goes in a 0600 file, not argv.
+
+    The first time the container timeout ever fired, the unhandled
+    `TimeoutExpired` printed its `cmd` — OPENROUTER_API_KEY included — into
+    the run log. Any exception repr, `ps` listing, or shell history does the
+    same to argv. So no assignment rides the command line: everything goes
+    through --env-file, written 0600 and deleted after the run.
+    """
+    env: dict[str, str] = {
+        "ROBOTHOR_DB_HOST": "127.0.0.1",
+        "ROBOTHOR_DB_PORT": "5432",
+        "ROBOTHOR_DB_NAME": "robothor_test",
+        "ROBOTHOR_DB_USER": "robothor",
+        "ROBOTHOR_DB_PASSWORD": "robothor",
+        "ROBOTHOR_REDIS_URL": "redis://127.0.0.1:6379/0",
+        "ROBOTHOR_MANIFEST_DIR": "/app/bench/wildclaw",
         # The fleet runs completion contracts in enforce (see
         # /etc/robothor/robothor.env). Leaving them off here measured a
         # weaker platform than the one that ships — the same shape as
         # withholding the task's skills.
-        "-e",
-        "ROBOTHOR_COMPLETION_CONTRACTS_ENABLED=1",
-        "-e",
-        "ROBOTHOR_COMPLETION_CONTRACTS_MODE=enforce",
+        "ROBOTHOR_COMPLETION_CONTRACTS_ENABLED": "1",
+        "ROBOTHOR_COMPLETION_CONTRACTS_MODE": "enforce",
         # Genus resolves its skills directory from this, so the task's skills
         # land somewhere the loader actually reads.
-        "-e",
-        f"ROBOTHOR_WORKSPACE={CONTAINER_WORKSPACE}",
-        "-e",
-        f"BENCH_TASK_TIMEOUT={task.get('timeout_seconds', 600)}",
-        "-e",
-        f"OPENROUTER_API_KEY={_api_key()}",
-    ]
+        "ROBOTHOR_WORKSPACE": CONTAINER_WORKSPACE,
+        "BENCH_TASK_TIMEOUT": str(task.get("timeout_seconds", 600)),
+        "OPENROUTER_API_KEY": _api_key(),
+    }
     if model:
-        env += ["-e", f"ROBOTHOR_BENCH_MODEL={model}"]
+        env["ROBOTHOR_BENCH_MODEL"] = model
+    for line in str(task.get("env") or "").splitlines():
+        name = line.strip()
+        if not name or "=" in name or name in env:
+            continue
+        value = os.environ.get(name)
+        if value:
+            env[name] = value
+
+    # Next to the out dirs, not inside one: out_dir is opened to 0777 so the
+    # container's subuid can write it, and a secret does not live in a
+    # world-readable directory.
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    env_file = out_dir.parent / f"{_container_name(task)}.env"
+    env_file.touch(mode=0o600, exist_ok=True)
+    env_file.chmod(0o600)
+    env_file.write_text("".join(f"{k}={v}\n" for k, v in env.items()), encoding="utf-8")
 
     repo_root = Path(__file__).resolve().parents[2]
     cmd = [
         "podman",
         "run",
         "--rm",
+        "--name",
+        _container_name(task),
         "--pod",
         POD,
         # Mounted plain, not :U. The production image runs non-root, so under
@@ -300,11 +325,34 @@ def _run_agent(
         f"{out_dir}:/out:z",
         "-v",
         f"{repo_root}/bench:/app/bench:ro,z",
-        *env,
-        *_passthrough_env(task),
+        "--env-file",
+        str(env_file),
         "-i",
         IMAGE,
     ]
+    return cmd, env_file
+
+
+def _run_agent(
+    task: dict[str, Any],
+    workspace: Path,
+    out_dir: Path,
+    model: str | None,
+    repo: Path,
+) -> dict[str, Any]:
+    """Run one task inside a throwaway container joined to the bench pod."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # See the mount comment in _container_command: the container writes as an
+    # unrelated subuid, so both directories have to admit it.
+    out_dir.chmod(0o777)
+    workspace.chmod(0o777)
+
+    cmd, env_file = _container_command(task, workspace, out_dir, model)
+    name = _container_name(task)
+    # A previous crashed run can leave a same-named container behind — and
+    # today's crash proved --rm does not clean up after a killed client.
+    subprocess.run(["podman", "rm", "-f", name], capture_output=True, text=True)
+
     # The grade script is staged BEFORE the agent runs, because grading now
     # happens inside this same container while the task's mock services are
     # still alive. Their audit log — which is what most of these graders
@@ -332,15 +380,41 @@ def _run_agent(
         )
     cmd += ["sh", "-c", "\n".join(steps)]
     started = time.perf_counter()
-    proc = subprocess.run(
-        cmd,
-        input=compose_prompt(task),
-        capture_output=True,
-        text=True,
-        timeout=int(task.get("timeout_seconds", 600)) + 300,
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=compose_prompt(task),
+            capture_output=True,
+            text=True,
+            timeout=int(task.get("timeout_seconds", 600)) + 300,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # The backstop fired: the agent's own ceiling failed to end the run.
+        # Record it, tear down the orphan (--rm died with the client), and
+        # let the category continue — nine tasks died with the first
+        # unhandled one of these. Grading still runs: the workspace is a
+        # host mount, so partial artifacts earn the partial credit a
+        # competitor's timed-out run would earn.
+        elapsed = time.perf_counter() - started
+        subprocess.run(["podman", "rm", "-f", name], capture_output=True, text=True)
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        (out_dir / "agent.log").write_text(
+            _scrub(
+                f"HARNESS KILL after {elapsed:.0f}s — the container outlived "
+                f"the task budget and the backstop, and was torn down.\n"
+                + stdout
+                + "\n--- stderr ---\n"
+                + stderr
+            )
+        )
+        return {"returncode": -9, "elapsed": elapsed, "harness_kill": True}
+    finally:
+        env_file.unlink(missing_ok=True)
     elapsed = time.perf_counter() - started
-    (out_dir / "agent.log").write_text(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
+    (out_dir / "agent.log").write_text(
+        _scrub(proc.stdout + "\n--- stderr ---\n" + proc.stderr)
+    )
     return {"returncode": proc.returncode, "elapsed": elapsed}
 
 
@@ -527,6 +601,7 @@ def main() -> int:
             f"tokens={usage.get('total_tokens', 0)}  "
             f"cost=${usage.get('cost_usd', 0)}  "
             f"{run_info['elapsed']:.0f}s"
+            + ("  HARNESS KILL" if run_info.get("harness_kill") else "")
             + (f"  ERROR: {score['grading_error'][:80]}" if score.get("grading_error") else ""),
             flush=True,
         )
@@ -537,6 +612,7 @@ def main() -> int:
                 "usage": usage,
                 "detail": score,
                 "workspace_staged": staged,
+                "harness_kill": bool(run_info.get("harness_kill")),
             }
         )
 
