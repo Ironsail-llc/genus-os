@@ -1,3 +1,9 @@
+## [1.46.2](https://github.com/Ironsail-llc/genus-os/compare/v1.46.1...v1.46.2) (2026-08-25)
+
+### Bug Fixes
+
+* **bench:** grade inside the container, while the services are still alive ([#378](https://github.com/Ironsail-llc/genus-os/issues/378)) ([2da7444](https://github.com/Ironsail-llc/genus-os/commit/2da744404bd6ae23804202c34c89544f08b164af))
+
 ## [1.46.1](https://github.com/Ironsail-llc/genus-os/compare/v1.46.0...v1.46.1) (2026-08-25)
 
 ### Bug Fixes
