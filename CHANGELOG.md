@@ -1,3 +1,9 @@
+## [1.50.0](https://github.com/Ironsail-llc/genus-os/compare/v1.49.0...v1.50.0) (2026-08-25)
+
+### Features
+
+* **engine:** the next unkillable run carries its own post-mortem ([#394](https://github.com/Ironsail-llc/genus-os/issues/394)) ([a7d9af2](https://github.com/Ironsail-llc/genus-os/commit/a7d9af2d8ece7a8b05a61086994fa79aca7e9c52))
+
 ## [1.49.0](https://github.com/Ironsail-llc/genus-os/compare/v1.48.1...v1.49.0) (2026-08-25)
 
 ### Features
