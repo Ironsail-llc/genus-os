@@ -9,6 +9,31 @@ CLI, and Hermes Agent on the same 60 tasks, plus per-task trajectories and
 scores for a set of models. That makes a controlled comparison possible: hold
 the model and the tasks fixed, vary only the harness.
 
+## Standing — four of six categories measured
+
+GLM 5.2 on both sides, their tasks, their graders. OpenClaw's numbers are the
+authors' own published per-task scores.
+
+| Category | OpenClaw | Genus | |
+|---|---:|---:|---|
+| Safety Alignment (10 tasks) | 47.0% | **67.7%** | ahead |
+| Social Interaction (6) | 90.7% | 87.4% | near parity |
+| Productivity Flow (10) | 38.8% | 37.6% | near parity |
+| Search & Retrieval (11) | 56.4% | 50.0% | behind |
+| Code Intelligence (12) | — | — | unmeasured |
+| Creative Synthesis (11) | — | — | unmeasured |
+
+Across the 37 tasks measured so far, 19 land on identical scores — the
+strongest evidence that the harness is faithful rather than flattering.
+Category means move several points between runs of the same configuration
+(one Social task has scored 89, 0 and 93 on consecutive runs), so single-digit
+gaps in either direction are within noise; the Safety lead is outside it.
+
+Creative Synthesis needs the media prep in `script/prepare.sh` (video
+downloads, SAM3 weights). Hermes Agent and Codex CLI publish no per-model
+trajectory archives, so a per-category comparison against them means running
+their harnesses locally — WildClawBench ships adapters and images for both.
+
 ## Result, 2026-08-24
 
 Safety Alignment category, 10 tasks, GLM 5.2 on both sides. OpenClaw's column
@@ -171,6 +196,42 @@ same commit, and this category's run-to-run variance has been large.
 `2022_conference_papers` (0 vs 87) and `real_image_category` (42 vs 94) are
 real losses on the same tasks with the same model, and neither is explained by
 anything in the harness.
+
+## Search & Retrieval, 11 tasks
+
+| Task | OpenClaw | Genus |
+|---|---:|---:|
+| google_scholar_search | 100% | 0% |
+| conflicting_handling | 100% | 0% |
+| constraint_search | 0% | 0% |
+| efficient_search | 20% | **100%** |
+| fuzzy_search | 100% | 100% |
+| excel_with_search | 50% | 50% |
+| location_search | 0% | **50%** |
+| paper_affiliation_search | 100% | 100% |
+| artwork_search | 0% | 0% |
+| tomllib_trace | 50% | 50% |
+| fuzzy_repo_search | 100% | 100% |
+| **mean** | **56.4%** | **50.0%** |
+
+Seven of eleven identical. Two wins, two losses — and this time the losses
+were checked for harness defects first and are genuine:
+
+* `google_scholar_search` — the agent worked its full 1200s budget across 140
+  requests and produced a real, verified coauthor chain from Ziyu Liu to
+  Geoffrey Hinton — six nodes long. The judge requires the shortest chain,
+  four nodes. OpenClaw found it; we found a longer valid one. A search-quality
+  loss, not a tooling one: the agent had `web_search` and `web_fetch` and used
+  the whole budget.
+* `conflicting_handling` — the task plants conflicting legal sources (the
+  superseded 民法通则 two-year limitation period against the Civil Code's
+  three years) and asks which governs. The agent answered two years. Resolving
+  to the outdated authority is precisely what the task tests, and we failed it
+  on reasoning, not environment.
+
+The preamble from the prompt-parity fix is visible in these transcripts
+("Solve the task efficiently before the timeout (1200s)"), so this category
+was measured on the same task text every other harness gets.
 
 ## What this found before it found a score
 
