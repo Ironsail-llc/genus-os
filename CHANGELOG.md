@@ -1,3 +1,9 @@
+## [1.47.3](https://github.com/Ironsail-llc/genus-os/compare/v1.47.2...v1.47.3) (2026-08-25)
+
+### Bug Fixes
+
+* **bench:** a missing container must not read as sixty capability failures ([#385](https://github.com/Ironsail-llc/genus-os/issues/385)) ([bec9f7d](https://github.com/Ironsail-llc/genus-os/commit/bec9f7d4bd0607ef8ffa6a10c446e830eb34e9a7))
+
 ## [1.47.2](https://github.com/Ironsail-llc/genus-os/compare/v1.47.1...v1.47.2) (2026-08-25)
 
 ### Bug Fixes
