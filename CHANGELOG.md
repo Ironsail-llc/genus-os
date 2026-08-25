@@ -1,3 +1,13 @@
+## [1.45.0](https://github.com/Ironsail-llc/genus-os/compare/v1.44.1...v1.45.0) (2026-08-25)
+
+### Features
+
+* **engine:** detect credentials that have no recognisable format ([#374](https://github.com/Ironsail-llc/genus-os/issues/374)) ([9e08a3d](https://github.com/Ironsail-llc/genus-os/commit/9e08a3dca3aa67ac253e770fc0fc1205b05c323f)), closes [372/#373](https://github.com/372/genus-os/issues/373)
+
+### Bug Fixes
+
+* **engine:** one scan limit, not two ([#373](https://github.com/Ironsail-llc/genus-os/issues/373)) ([85139e2](https://github.com/Ironsail-llc/genus-os/commit/85139e26bcebedd97fe2b04779424bfd003762a8))
+
 ## [1.44.1](https://github.com/Ironsail-llc/genus-os/compare/v1.44.0...v1.44.1) (2026-08-24)
 
 ### Bug Fixes
