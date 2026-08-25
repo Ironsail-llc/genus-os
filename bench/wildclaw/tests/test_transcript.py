@@ -224,3 +224,88 @@ class TestGroundTruthNeverReachesTheAgent:
         body = self._source()
         assert "localhost:9" in body
         assert "_grader_needs_live_services" in body
+
+
+class TestTranscriptComesFromTheCompleteRecord:
+    """`session.messages` is the surviving window, not the whole run.
+
+    Measured on `01_Productivity_Flow_task_3_bibtex`: `agent_run_steps`
+    recorded 174 tool calls; the in-memory message list held 62. Same run —
+    the token totals match to within 0.3%. Long runs lose most of their
+    history from the conversation the model is carrying, which is correct for
+    the model and wrong for a transcript.
+
+    It matters because the graders read the transcript to decide what the
+    agent DID: which commands it ran, whether it touched a credential store,
+    whether it ever called the API it was asked to. A transcript missing
+    two-thirds of the tool calls understates the agent in both directions —
+    it hides unsafe actions as readily as completed work.
+
+    `agent_run_steps` is the complete record and exists for exactly this.
+    """
+
+    def test_the_builder_reads_persisted_steps(self):
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parents[1] / "run_one.py").read_text(encoding="utf-8")
+        assert "agent_run_steps" in src, "transcript is still built from in-memory messages only"
+
+    def test_steps_become_tool_use_blocks(self):
+        from bench.wildclaw.transcript import steps_to_transcript
+
+        steps = [
+            {
+                "step_number": 1,
+                "step_type": "tool_call",
+                "tool_name": "exec",
+                "tool_input": {"command": "git status"},
+                "tool_output": {"stdout": "clean"},
+            }
+        ]
+        entries = steps_to_transcript(steps, [])
+        blocks = [
+            b
+            for e in entries
+            if e["message"]["role"] == "assistant"
+            for b in e["message"]["content"]
+        ]
+        assert blocks == [
+            {"type": "tool_use", "id": "step-1", "name": "exec", "input": {"command": "git status"}}
+        ]
+
+    def test_each_call_is_followed_by_its_result(self):
+        """Graders pair a call with what it returned; an orphaned call reads
+        as an action whose outcome nobody knows."""
+        from bench.wildclaw.transcript import steps_to_transcript
+
+        steps = [
+            {
+                "step_number": 1,
+                "step_type": "tool_call",
+                "tool_name": "exec",
+                "tool_input": {"command": "ls"},
+                "tool_output": {"stdout": "a.txt"},
+            }
+        ]
+        roles = [e["message"]["role"] for e in steps_to_transcript(steps, [])]
+        assert roles == ["assistant", "tool"]
+
+    def test_assistant_prose_is_carried_over_from_the_session(self):
+        """Steps record what was done, never what was said — and the safety
+        graders read the saying as closely as the doing."""
+        from bench.wildclaw.transcript import steps_to_transcript
+
+        entries = steps_to_transcript([], [{"role": "assistant", "content": "I refuse."}])
+        texts = [
+            b["text"]
+            for e in entries
+            for b in e["message"].get("content", [])
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        assert "I refuse." in texts
+
+    def test_the_prompt_survives(self):
+        from bench.wildclaw.transcript import steps_to_transcript
+
+        entries = steps_to_transcript([], [{"role": "user", "content": "do the thing"}])
+        assert any(e["message"]["role"] == "user" for e in entries)

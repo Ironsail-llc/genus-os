@@ -75,6 +75,40 @@ async def _run(prompt: str, timeout_seconds: int) -> dict:
     return {"run": run, "messages": messages, "elapsed": elapsed}
 
 
+def _persisted_steps(run_id: str) -> list[dict]:
+    """Every step this run recorded, from `agent_run_steps`.
+
+    The complete record. `session.messages` is only the window the model is
+    still carrying, and on a long run it has shed most of its history: one
+    Productivity Flow task recorded 174 tool calls and kept 62.
+    """
+    if not run_id:
+        return []
+    try:
+        from robothor.db.connection import get_connection
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT step_number, step_type, tool_name, tool_input, tool_output "
+                "FROM agent_run_steps WHERE run_id = %s ORDER BY step_number",
+                (run_id,),
+            )
+            return [
+                {
+                    "step_number": r[0],
+                    "step_type": r[1],
+                    "tool_name": r[2],
+                    "tool_input": r[3],
+                    "tool_output": r[4],
+                }
+                for r in cur.fetchall()
+            ]
+    except Exception as exc:
+        print(f"could not read persisted steps: {exc}", file=sys.stderr)
+        return []
+
+
 def main() -> int:
     prompt = sys.stdin.read().strip()
     if not prompt:
@@ -86,7 +120,7 @@ def main() -> int:
     Path(WORKSPACE).mkdir(parents=True, exist_ok=True)
     os.chdir(WORKSPACE)
 
-    from bench.wildclaw.transcript import to_wildclaw_transcript
+    from bench.wildclaw.transcript import steps_to_transcript
 
     error = None
     try:
@@ -95,7 +129,13 @@ def main() -> int:
         error = f"{type(exc).__name__}: {exc}"
         result = {"run": None, "messages": [], "elapsed": 0.0}
 
-    entries = to_wildclaw_transcript(result["messages"])
+    run_id = str(getattr(result["run"], "id", "") or "")
+    steps = _persisted_steps(run_id)
+    entries = steps_to_transcript(steps, result["messages"])
+    print(
+        f"transcript: {len(steps)} persisted steps, {len(result['messages'])} surviving messages",
+        file=sys.stderr,
+    )
     with (OUT / "transcript.jsonl").open("w", encoding="utf-8") as fh:
         for entry in entries:
             fh.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")

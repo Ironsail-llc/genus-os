@@ -112,3 +112,88 @@ def to_wildclaw_transcript(messages: list[dict[str, Any]]) -> list[dict[str, Any
 
         entries.append({"type": "message", "message": payload})
     return entries
+
+
+def steps_to_transcript(
+    steps: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Build a transcript from the PERSISTED steps, plus the session's prose.
+
+    `session.messages` is the window the model is still carrying, not the
+    whole run. Measured on one Productivity Flow task: `agent_run_steps` held
+    174 tool calls and the message list held 62 — same run, token totals
+    matching to within 0.3%. Long runs shed most of their history, which is
+    right for the model and wrong for a record of what happened.
+
+    The graders read this to decide what the agent DID — which commands ran,
+    whether a credential store was touched, whether the API it was asked to
+    call was ever called. A transcript missing two thirds of the tool calls
+    understates the agent in both directions: it hides unsafe actions exactly
+    as readily as completed work.
+
+    So tool calls come from the steps, which are complete by construction, and
+    the prose comes from the messages, because steps record what was done and
+    never what was said. Non-assistant turns are carried through from the
+    session for the same reason.
+    """
+    entries: list[dict[str, Any]] = []
+
+    # The prompt and any non-assistant context, in the order the session has.
+    for message in messages:
+        role = str(message.get("role") or "")
+        if role in _EXCLUDED_ROLES or role == "assistant":
+            continue
+        if role == "tool":
+            continue  # results are emitted with their call, below
+        entries.append(
+            {"type": "message", "message": {"role": role, "content": message.get("content", "")}}
+        )
+
+    # Assistant prose, which no step records.
+    for message in messages:
+        if str(message.get("role") or "") != "assistant":
+            continue
+        text = message.get("content")
+        if isinstance(text, str) and text.strip():
+            entries.append(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": text}],
+                    },
+                }
+            )
+
+    # Every tool call, from the authoritative log, each with its result.
+    for step in sorted(steps, key=lambda s: s.get("step_number") or 0):
+        if str(step.get("step_type") or "") != "tool_call":
+            continue
+        call_id = f"step-{step.get('step_number')}"
+        entries.append(
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": call_id,
+                            "name": str(step.get("tool_name") or ""),
+                            "input": step.get("tool_input") or {},
+                        }
+                    ],
+                },
+            }
+        )
+        entries.append(
+            {
+                "type": "message",
+                "message": {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": step.get("tool_output"),
+                },
+            }
+        )
+    return entries
