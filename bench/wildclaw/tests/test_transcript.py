@@ -610,3 +610,32 @@ class TestGtGradingRunsInTheTaskEnvironment:
             "the judge key rides argv — any exception repr publishes it"
         )
         assert "--env-file" in fn
+
+
+class TestTheNextWedgeExplainsItself:
+    """Every bench container runs with the watchdog trace armed and run_one
+    stamping its phases to /out. Twice a run outlived every timeout layer and
+    the evidence died with its container; both files persist on the host
+    mount, so the next occurrence carries its own post-mortem."""
+
+    @staticmethod
+    def _source(name: str) -> str:
+        return (Path(__file__).resolve().parents[1] / name).read_text(encoding="utf-8")
+
+    def test_the_trace_env_rides_every_task_container(self, tmp_path, monkeypatch):
+        from bench.wildclaw import harness
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-DUMMYSECRETVALUE00000000")
+        _, env_file = harness._container_command(
+            {"task_id": "99_T_task_1_x", "prompt": "p", "timeout_seconds": 5, "env": ""},
+            tmp_path / "ws",
+            tmp_path / "out",
+            None,
+        )
+        assert "ROBOTHOR_WATCHDOG_TRACE_FILE=/out/wd.log" in env_file.read_text(encoding="utf-8")
+
+    def test_run_one_stamps_its_phases(self):
+        body = self._source("run_one.py")
+        assert "def _phase(" in body
+        for stamp in ("execute_returned", "transcript_written", "exiting"):
+            assert f'_phase("{stamp}")' in body, f"missing phase stamp: {stamp}"
