@@ -514,6 +514,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         scratchpad_enabled=v2.get("scratchpad_enabled", False),
         todo_list_enabled=v2.get("todo_list_enabled", False),
         guardrails=v2.get("guardrails", []),
+        rate_limit_per_minute=int(v2.get("rate_limit_per_minute", 0)),
         guardrails_opt_out=v2.get("guardrails_opt_out", False),
         exec_allowlist=v2.get("exec_allowlist", []),
         write_path_allowlist=v2.get("write_path_allowlist", []),

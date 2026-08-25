@@ -29,6 +29,12 @@ schedule:
   stall_timeout_seconds: 0
   max_iterations: 80
   session_target: isolated
+  # WildClawBench tasks demand 10-60+ tool calls, often in a burst of file
+  # reads. The platform default of 30/minute BLOCKS the call rather than
+  # delaying it, and a measured run hit it at 64 calls in 64 seconds and gave
+  # up mid-task. This is the workload the knob exists for; it is not a hint
+  # about the tasks, and every other harness runs unthrottled.
+  rate_limit_per_minute: 300
 
 delivery:
   mode: none

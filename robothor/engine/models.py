@@ -370,6 +370,10 @@ class AgentConfig:
     scratchpad_enabled: bool = False
     todo_list_enabled: bool = False  # In-conversation todo list (Claude Code-style)
     guardrails: list[str] = field(default_factory=list)
+    # Per-minute tool-call ceiling for this agent. 0 = platform default.
+    # A tool-heavy agent (batch file reads, many greps) can legitimately
+    # burst well past the fleet norm; a narrow one can be held tighter.
+    rate_limit_per_minute: int = 0
     guardrails_opt_out: bool = False  # Skip default guardrails for this agent
     # RBAC service role for system/cron/heartbeat runs (which have no interactive
     # user). Resolves against the role_permissions table. Default "service" maps

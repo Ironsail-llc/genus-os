@@ -586,6 +586,7 @@ class RunLifecycleMixin:
             engine = GuardrailEngine(
                 enabled_policies=effective,
                 workspace=str(self.config.workspace) + "/",
+                rate_limit_per_minute=getattr(agent_config, "rate_limit_per_minute", 0),
             )
             if agent_config.exec_allowlist:
                 engine._exec_allowlists[agent_config.id] = [
