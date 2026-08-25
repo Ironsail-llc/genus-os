@@ -185,20 +185,42 @@ class TestFidelity:
         assert to_wildclaw_transcript([]) == []
 
 
-class TestGroundTruthIsNeverStaged:
+class TestGroundTruthNeverReachesTheAgent:
     """`gt/` holds the answer key.
 
-    WildClawBench ships three directories per task: `exec/` (the agent's
-    workspace), `tmp/` (a staging area the warmup consumes), and `gt/`. Only
-    the first two are ever mounted. Copying the third would not be a
-    benchmark, and the mistake would be invisible in the score — it would
-    simply look like we had won.
+    Ten graders compare the agent's output against `/tmp_workspace/gt`, so it
+    has to exist at grading time — and must never exist while the agent is
+    running. The invariant is not "the string gt never appears"; it is that
+    `gt` is mounted only by the grading path, into a container the agent has
+    already finished with.
+
+    Worth a test because the mistake is invisible in the score. Handing an
+    agent the answer key does not look like a bug; it looks like winning.
     """
 
-    def test_the_harness_never_copies_gt(self):
+    @staticmethod
+    def _source() -> str:
         from pathlib import Path
 
-        source = Path(__file__).resolve().parents[1] / "harness.py"
-        body = source.read_text(encoding="utf-8")
-        assert '/ "gt"' not in body
-        assert 'relative / "tmp"' in body, "the staging dir must still be copied"
+        return (Path(__file__).resolve().parents[1] / "harness.py").read_text(encoding="utf-8")
+
+    def test_the_agent_workspace_never_stages_gt(self):
+        """`_prepare_workspace` builds what the agent runs against."""
+        body = self._source()
+        start = body.index("def _prepare_workspace(")
+        end = body.index("def ", start + 10)
+        prepare = body[start:end]
+        assert '"gt"' not in prepare, "the agent's workspace stages the answer key"
+        assert 'relative / "tmp"' in prepare, "the staging dir must still be copied"
+
+    def test_only_the_grading_path_mounts_gt(self):
+        body = self._source()
+        start = body.index("def _grade_with_ground_truth(")
+        end = body.index("def ", start + 10)
+        assert '"gt"' in body[start:end], "the grader needs the answer key mounted"
+
+    def test_the_two_grading_modes_are_chosen_by_what_the_grader_reads(self):
+        """Not by a hand-maintained list of task ids, which would drift."""
+        body = self._source()
+        assert "localhost:9" in body
+        assert "_grader_needs_live_services" in body

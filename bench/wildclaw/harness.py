@@ -123,6 +123,25 @@ def _prepare_workspace(task: dict[str, Any], data_root: Path, repo: Path, dest: 
     return staged
 
 
+def _grader_needs_live_services(task: dict[str, Any]) -> bool:
+    """Does this task's grader read from a mock service that must still be up?
+
+    Measured across all 60 tasks: 6 graders fetch an audit log over HTTP
+    (`http://localhost:9110/slack/audit`), 10 read the ground-truth directory
+    at `/tmp_workspace/gt`, and NONE do both. That disjointness is what makes
+    two grading modes safe rather than two answers to the same question:
+
+    * live services  -> grade INSIDE the agent's container, before it exits,
+      because the audit log lives in the service's memory.
+    * everything else -> grade OUTSIDE it, in a fresh container with `gt/`
+      mounted. The answer key never shares a filesystem with the agent.
+
+    Checked against the grader's own source, so a task that starts reading a
+    service tomorrow is classified by what it does, not by a list here.
+    """
+    return "localhost:9" in str(task.get("automated_checks") or "")
+
+
 def _warmup_prelude(task: dict[str, Any]) -> str:
     """The task's warmup, as a shell prelude to the agent command.
 
@@ -270,14 +289,15 @@ def _run_agent(
     # in-container for exactly this reason; grading from outside reads an
     # empty audit log and scores a correct run zero, which is what it did to
     # all six Social Interaction tasks.
-    script = "\n".join(
-        [
-            *([_warmup_prelude(task)] if _warmup_prelude(task) else []),
-            "python -m bench.wildclaw.run_one",
-            f"cd {CONTAINER_WORKSPACE} && python /out/_grade.py > /out/grade.out 2>/out/grade.err",
-        ]
-    )
-    cmd += ["sh", "-c", script]
+    steps = [
+        *([_warmup_prelude(task)] if _warmup_prelude(task) else []),
+        "python -m bench.wildclaw.run_one",
+    ]
+    if _grader_needs_live_services(task):
+        steps.append(
+            f"cd {CONTAINER_WORKSPACE} && python /out/_grade.py > /out/grade.out 2>/out/grade.err"
+        )
+    cmd += ["sh", "-c", "\n".join(steps)]
     started = time.perf_counter()
     proc = subprocess.run(
         cmd,
@@ -306,6 +326,57 @@ def _write_grade_script(task: dict[str, Any], out_dir: Path) -> None:
         ]
     )
     (out_dir / "_grade.py").write_text(runner_src, encoding="utf-8")
+
+
+def _grade_with_ground_truth(
+    task: dict[str, Any], workspace: Path, out_dir: Path, data_root: Path, repo: Path
+) -> dict[str, Any]:
+    """Grade in a FRESH container, with the answer key mounted.
+
+    Ten graders compare the agent's output against `/tmp_workspace/gt`. That
+    directory must therefore exist at grading time and must never exist while
+    the agent is running — so it is mounted here, into a container the agent
+    has already finished with and cannot reach.
+    """
+    relative = Path(task["workspace_path"])
+    if relative.is_absolute():
+        with contextlib.suppress(ValueError):
+            relative = relative.relative_to(repo)
+    gt = data_root / relative / "gt"
+
+    cmd = [
+        "podman",
+        "run",
+        "--rm",
+        "--user",
+        "0",
+        "-v",
+        f"{workspace}:{CONTAINER_WORKSPACE}:z",
+        "-v",
+        f"{out_dir}:/out:z",
+    ]
+    if gt.is_dir():
+        cmd += ["-v", f"{gt}:{CONTAINER_WORKSPACE}/gt:ro,z"]
+    cmd += [
+        "-w",
+        CONTAINER_WORKSPACE,
+        "-e",
+        f"OPENROUTER_API_KEY={_api_key()}",
+        "-e",
+        "OPENROUTER_BASE_URL="
+        + os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        "-e",
+        "JUDGE_MODEL=" + os.environ.get("JUDGE_MODEL", "openai/gpt-5.4"),
+        IMAGE,
+        "sh",
+        "-c",
+        "python /out/_grade.py > /out/grade.out 2>/out/grade.err",
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        return {"overall_score": 0.0, "grading_error": "grader timed out"}
+    return _read_grade(out_dir)
 
 
 def _read_grade(out_dir: Path) -> dict[str, Any]:
@@ -371,7 +442,11 @@ def main() -> int:
         if usage_path.exists():
             usage = json.loads(usage_path.read_text())
 
-        score = _read_grade(out_dir)
+        score = (
+            _read_grade(out_dir)
+            if _grader_needs_live_services(task)
+            else _grade_with_ground_truth(task, workspace, out_dir, args.data, args.repo)
+        )
         overall = float(score.get("overall_score", 0.0) or 0.0)
         (out_dir / "score.json").write_text(json.dumps(score, indent=2), encoding="utf-8")
 
