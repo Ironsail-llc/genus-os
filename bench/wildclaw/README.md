@@ -86,6 +86,48 @@ measured the Dockerfile, not the harness. `bench/wildclaw/Dockerfile` now adds
 the toolchain in a layer over the production image, which equalises the
 environment without touching what ships.
 
+## Social Interaction, 6 tasks — we lose this one
+
+| Task | OpenClaw | Genus |
+|---|---:|---:|
+| meeting_negotiation | 90% | 79% |
+| chat_action_extraction | 97% | 91% |
+| chat_multi_step_reasoning | 93% | 89% |
+| chat_thread_consolidation | 96% | 88% |
+| chat_escalation_routing | 82% | 25% |
+| chat_cross_dept_update (zh) | 87% | 7% |
+| **mean** | **90.7%** | **63.2%** |
+
+Four tasks are close. Two are not: escalation routing and the Chinese-language
+cross-department update, where we score 25% and 7% against 82% and 87%. On
+this category OpenClaw is clearly better and no reading of the numbers says
+otherwise.
+
+Getting to a number worth reporting took four harness fixes, and the first
+three results were all mine rather than the agent's:
+
+1. **Warmup was never run.** Tasks boot mock services — a Slack API reading a
+   fixtures file — before the agent starts. All six Social tasks and eight of
+   ten Productivity Flow tasks declare one. Without it the agent correctly
+   reported that every message source was empty. Category scored 0.0.
+2. **Only `exec/` was staged.** Tasks also ship `tmp/`, a staging area the
+   warmup consumes and deletes so the agent cannot read the fixtures off
+   disk. Missing it killed the mock server on a missing file. (`gt/` is the
+   answer key and is never copied — pinned by a test, because that mistake
+   would be invisible in the score: it would just look like we had won.)
+3. **Skills went to the wrong path.** The benchmark hands every harness the
+   same `SKILL.md` files at `/root/skills`, where OpenClaw reads them. Genus
+   reads `$ROBOTHOR_WORKSPACE/agents/skills/`. Same files, same format,
+   delivered where this platform looks — capability parity, not a hint.
+4. **Our own rate limit stopped the agent.** 30 tool calls/minute, and it
+   blocks rather than delays. One run made 64 calls in 64 seconds and gave up
+   mid-task. Fixed platform-side in #375 (the limit is now per-agent
+   configurable); the benchmark agent sets 300, which is what every other
+   harness effectively has.
+
+The category went 36.9% -> 63.2% across those fixes. None of them changed the
+agent; all of them changed whether the task was possible.
+
 ## What this found before it found a score
 
 Standing up a clean containerised instance surfaced two defects that no test

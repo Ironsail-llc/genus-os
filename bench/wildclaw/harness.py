@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -35,6 +36,8 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 POD = "genus-bench"
 #: The production image plus the toolchain the tasks assume — see
@@ -86,20 +89,117 @@ def _prepare_workspace(task: dict[str, Any], data_root: Path, repo: Path, dest: 
             relative = relative.relative_to(repo)
     source = data_root / relative / "exec"
     if not source.is_dir():
-        raise FileNotFoundError(
-            f"task workspace not found: {source} — download it with\n"
-            f"  hf download internlm/WildClawBench --repo-type dataset "
-            f"--include '{relative}/**' --local-dir {data_root}"
+        # Some categories ship no workspace at all — the Social Interaction
+        # tasks are conversations and need no input files. That is different
+        # from a task whose siblings have data and which is missing only
+        # because the download was partial, and the difference decides whether
+        # an empty workspace is legitimate or a silent zero. Ask the category.
+        category_dir = data_root / relative.parent
+        if category_dir.is_dir():
+            raise FileNotFoundError(
+                f"task workspace not found: {source} — its category HAS data, "
+                f"so this one is missing. Download it with\n"
+                f"  hf download internlm/WildClawBench --repo-type dataset "
+                f"--include '{relative}/**' --local-dir {data_root}"
+            )
+        logger.info(
+            "%s: category ships no workspace data; starting from an empty one",
+            task.get("task_id", relative.name),
         )
-    shutil.copytree(source, dest, dirs_exist_ok=True)
+    else:
+        shutil.copytree(source, dest, dirs_exist_ok=True)
+
+    # `tmp/` is a staging area the warmup reads and then deletes — a task's
+    # mock service loads its fixtures from there so the agent cannot simply
+    # read them off disk. WildClawBench mounts it alongside `exec/`; copying
+    # only `exec/` left the mock Slack server dying on a missing fixtures
+    # file, and the agent then truthfully reported an empty workspace.
+    staging = data_root / relative / "tmp"
+    if staging.is_dir():
+        shutil.copytree(staging, dest / "tmp", dirs_exist_ok=True)
+
+    # `gt/` is the ground truth. It is NEVER copied: handing an agent the
+    # answer key would not be a benchmark, and the mistake would be
+    # invisible in the score — it would just look like we had won.
 
     results = dest / "results"
     results.mkdir(exist_ok=True)
     results.chmod(0o777)
 
 
+def _warmup_prelude(task: dict[str, Any]) -> str:
+    """The task's warmup, as a shell prelude to the agent command.
+
+    WildClawBench runs these inside the task container before the agent
+    starts: they install packages and boot the mock services the task talks
+    to (a Slack server reading a fixtures file, for instance). Skipping them
+    does not make a task harder, it makes it impossible — the agent then
+    truthfully reports that every data source is empty. All six Social
+    Interaction tasks and eight of ten Productivity Flow tasks declare one,
+    which is why both categories scored a clean zero before this existed.
+
+    Runs in the SAME container as the agent, so background services started
+    here are still listening when the agent runs.
+    """
+    warmup = str(task.get("warmup") or "")
+    lines = [
+        line.strip()
+        for line in warmup.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    return "\n".join(lines)
+
+
+def _install_skills(task: dict[str, Any], repo: Path, workspace: Path) -> int:
+    """Put the task's declared skills where Genus actually loads them.
+
+    WildClawBench hands every harness the same `SKILL.md` files and mounts
+    them at `/root/skills`, which is where OpenClaw looks. Genus reads
+    `$ROBOTHOR_WORKSPACE/agents/skills/*/SKILL.md`, so a mount at the
+    OpenClaw path delivers nothing: the agent never learns the task has a
+    mock Slack API to call, and answers that it cannot see any messages.
+
+    Same files, same format, put where this platform reads them — capability
+    parity, not a hint.
+    """
+    installed = 0
+    dest_root = workspace / "agents" / "skills"
+    for line in str(task.get("skills") or "").splitlines():
+        name = line.strip().replace("\\", "/").strip("/")
+        if not name:
+            continue
+        source = repo / str(task.get("skills_path") or "skills") / name
+        if not source.is_dir():
+            logger.warning("skill declared but not found in the repo: %s", source)
+            continue
+        dest = dest_root / Path(name).name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, dest, dirs_exist_ok=True)
+        installed += 1
+    return installed
+
+
+def _passthrough_env(task: dict[str, Any]) -> list[str]:
+    """The `env` block lists variable NAMES to carry into the container, not
+    assignments. Anything unset on the host is skipped rather than passed as
+    empty, which would look like a configured blank rather than an absence."""
+    args: list[str] = []
+    for line in str(task.get("env") or "").splitlines():
+        name = line.strip()
+        if not name or "=" in name:
+            continue
+        value = _api_key() if name == "OPENROUTER_API_KEY" else os.environ.get(name)
+        if value:
+            args += ["-e", f"{name}={value}"]
+    return args
+
+
 def _run_agent(
-    task: dict[str, Any], workspace: Path, out_dir: Path, model: str | None
+    task: dict[str, Any],
+    workspace: Path,
+    out_dir: Path,
+    model: str | None,
+    repo: Path,
 ) -> dict[str, Any]:
     """Run one task inside a throwaway container joined to the bench pod."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -122,6 +222,10 @@ def _run_agent(
         "ROBOTHOR_REDIS_URL=redis://127.0.0.1:6379/0",
         "-e",
         "ROBOTHOR_MANIFEST_DIR=/app/bench/wildclaw",
+        # Genus resolves its skills directory from this, so the task's skills
+        # land somewhere the loader actually reads.
+        "-e",
+        f"ROBOTHOR_WORKSPACE={CONTAINER_WORKSPACE}",
         "-e",
         f"BENCH_TASK_TIMEOUT={task.get('timeout_seconds', 600)}",
         "-e",
@@ -149,12 +253,20 @@ def _run_agent(
         "-v",
         f"{repo_root}/bench:/app/bench:ro,z",
         *env,
+        *_passthrough_env(task),
         "-i",
         IMAGE,
-        "python",
-        "-m",
-        "bench.wildclaw.run_one",
     ]
+    installed = _install_skills(task, repo, workspace)
+    if installed:
+        logger.info("installed %d task skill(s) into the workspace", installed)
+
+    prelude = _warmup_prelude(task)
+    if prelude:
+        # `exec` so the agent replaces the shell and still owns stdin.
+        cmd += ["sh", "-c", f"{prelude}\nexec python -m bench.wildclaw.run_one"]
+    else:
+        cmd += ["python", "-m", "bench.wildclaw.run_one"]
     started = time.perf_counter()
     proc = subprocess.run(
         cmd,
@@ -283,7 +395,7 @@ def main() -> int:
         workspace = args.out / "_ws" / task_id
         _prepare_workspace(task, args.data, args.repo, workspace)
 
-        run_info = _run_agent(task, workspace, out_dir, args.model or None)
+        run_info = _run_agent(task, workspace, out_dir, args.model or None, args.repo)
         usage = {}
         usage_path = out_dir / "usage.json"
         if usage_path.exists():
