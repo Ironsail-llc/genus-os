@@ -34,6 +34,7 @@ import hashlib
 import logging
 import os
 import time
+from collections.abc import Callable  # noqa: TC003
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -113,7 +114,7 @@ class KeyPool:
     as a queue. A key that comes back goes back where it was.
     """
 
-    def __init__(self, keys: list[str], clock=time.monotonic) -> None:
+    def __init__(self, keys: list[str], clock: Callable[[], float] = time.monotonic) -> None:
         self._keys = list(keys)
         self._clock = clock
         # key -> (reason, retired_at). Absent means available.

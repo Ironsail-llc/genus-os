@@ -423,7 +423,7 @@ class LLMClient:
         var = env_var_for_model(model)
         if var is None:
             return None
-        cache = self.__dict__.setdefault("_key_pools", {})
+        cache: dict[str, KeyPool] = self.__dict__.setdefault("_key_pools", {})
         if var not in cache:
             cache[var] = KeyPool(keys_from_env(var))
         return cache[var]
