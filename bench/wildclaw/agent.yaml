@@ -49,6 +49,12 @@ tools_allowed:
   - search_files
   - web_fetch
   - web_search
+  # Vision. Several tasks hand the agent a picture and ask what it shows;
+  # the competing harness reads images into context by default, which is how
+  # it scored where we scored zero on the same multimodal model. `view_image`
+  # ships to every agent on this fleet, so withholding it here would measure
+  # a weaker platform than the one under test. Capability parity, not a hint.
+  - view_image
   # A task's skill is how the benchmark tells an agent which APIs exist and
   # how to call them, and it hands the same SKILL.md to every harness.
   # OpenClaw reads those files straight into its context; Genus surfaces only
