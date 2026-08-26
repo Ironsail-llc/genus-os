@@ -122,6 +122,46 @@ class HookContext:
 # ─── Registry ────────────────────────────────────────────────────────
 
 
+def register_plugin_hooks(registry: Any) -> int:
+    """Register lifecycle handlers contributed by installed plugins.
+
+    The last of the four entry-point groups #411 declared to have no consumer.
+    `genus.tools` was loaded but never advertised to the model (#421);
+    `genus.guardrails` had no consumer at all (#424); these were registered
+    nowhere, so a plugin could not run anything on a lifecycle event. A
+    competitive audit rated the platform "far behind" on extensibility partly
+    for that.
+
+    Engine handlers always win. A package claiming `channel_bus.surface` would
+    be intercepting the engine's own channel plumbing, so an already-registered
+    name is refused and logged rather than overwritten.
+
+    Never raises: one broken package must not stop the daemon from starting.
+    """
+    try:
+        from robothor.plugins import load_plugins
+
+        existing = set(getattr(registry, "_python_handlers", {}))
+        loaded = load_plugins(reserved_names=existing)
+    except Exception as e:  # noqa: BLE001 - a plugin must not break boot
+        logger.warning("Plugin hooks unavailable: %s", e)
+        return 0
+
+    registered = 0
+    for name, handler in (loaded.hooks or {}).items():
+        if name in getattr(registry, "_python_handlers", {}):
+            logger.warning(
+                "Plugin hook %r refused — an engine handler already owns that name",
+                name,
+            )
+            continue
+        registry.register_python_handler(name, handler)
+        registered += 1
+    if registered:
+        logger.info("Registered %d plugin lifecycle hook(s)", registered)
+    return registered
+
+
 class HookRegistry:
     """Collects and dispatches lifecycle hooks."""
 
