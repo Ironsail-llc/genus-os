@@ -1,3 +1,13 @@
+## [1.51.0](https://github.com/Ironsail-llc/genus-os/compare/v1.50.1...v1.51.0) (2026-08-26)
+
+### Features
+
+* **engine:** an agent can look at a picture ([#397](https://github.com/Ironsail-llc/genus-os/issues/397)) ([bc0e2b8](https://github.com/Ironsail-llc/genus-os/commit/bc0e2b886df523086e26eeae7e22d2623131ebf8))
+
+### Documentation
+
+* **bench:** all six categories measured — two ahead, two parity, two behind ([#396](https://github.com/Ironsail-llc/genus-os/issues/396)) ([b9ac523](https://github.com/Ironsail-llc/genus-os/commit/b9ac52328882cebc5df0b65c2a6e93c376f982a3))
+
 ## [1.50.1](https://github.com/Ironsail-llc/genus-os/compare/v1.50.0...v1.50.1) (2026-08-25)
 
 ### Bug Fixes
