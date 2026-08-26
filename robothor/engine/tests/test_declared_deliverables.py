@@ -243,3 +243,71 @@ class TestNonEnglishPrompts:
             "/ws/results/result.png",
             "/ws/results/description.txt",
         ]
+
+
+class TestItReadsTheTaskNotTheSystemPrompt:
+    """The first wiring read `session.messages[0]` — the SYSTEM prompt.
+
+    Live-probed on the real benchmark: extraction worked, the run hit its
+    ceiling, and the note never appeared, because the text it was handed
+    contained no task paths. The feature shipped inert.
+
+    The wiring test that should have caught it only grepped runner.py for
+    `deadline_note(`. A test that checks a symbol is present is not a test
+    that the symbol is fed the right thing — the same lesson as the handler
+    signature and the misplaced manifest key.
+    """
+
+    def test_task_text_is_taken_from_the_first_user_message(self):
+        from robothor.engine.deliverables import task_text_from
+
+        messages = [
+            {"role": "system", "content": "You are a capable agent. Work in /tmp."},
+            {"role": "user", "content": "Save it to /ws/results/out.md"},
+        ]
+        assert task_text_from(messages) == "Save it to /ws/results/out.md"
+
+    def test_the_system_prompt_is_never_used(self):
+        from robothor.engine.deliverables import task_text_from
+
+        messages = [{"role": "system", "content": "write to /sys/prompt/path.md"}]
+        assert task_text_from(messages) == ""
+
+    def test_history_before_the_task_does_not_win(self):
+        """A resumed run carries history between system and task."""
+        from robothor.engine.deliverables import task_text_from
+
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "assistant", "content": "earlier reply"},
+            {"role": "user", "content": "Save to /ws/a.md"},
+        ]
+        assert "/ws/a.md" in task_text_from(messages)
+
+    def test_content_blocks_are_flattened(self):
+        from robothor.engine.deliverables import task_text_from
+
+        messages = [{"role": "user", "content": [{"type": "text", "text": "save /ws/b.md"}]}]
+        assert "/ws/b.md" in task_text_from(messages)
+
+    def test_empty_is_safe(self):
+        from robothor.engine.deliverables import task_text_from
+
+        assert task_text_from([]) == ""
+        assert task_text_from(None) == ""
+
+    def test_the_runner_uses_the_helper_not_an_index(self):
+        """Pin the wiring by what it READS, not by which symbols appear."""
+        from pathlib import Path
+
+        import robothor.engine.runner as m
+
+        body = Path(m.__file__).read_text(encoding="utf-8")
+        start = body.index("_deadline_warned and self._active_watchdog")
+        block = body[start : body.index("if _safety_cap > 0", start)]
+        assert "task_text_from(session.messages)" in block
+        # Scoped to this block: elsewhere `messages[0]` is a legitimate,
+        # guarded append to the system prompt.
+        assert "session.messages[0]" not in block, (
+            "messages[0] is the SYSTEM prompt — the note would read the wrong text"
+        )

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 #: Absolute paths that look like a FILE — a suffix is required, because a
 #: bare directory ("work inside /tmp_workspace") is a location, not a
@@ -73,6 +74,30 @@ _INPUT_DIRS = ("/input/", "/inputs/", "/gt/", "/fixtures/", "/data/", "/exec/")
 #: Most it will report. A prompt naming dozens of files is describing a tree,
 #: not a deliverable set, and a wall of paths is noise.
 _MAX_PATHS = 10
+
+
+def task_text_from(messages: list[dict[str, Any]] | None) -> str:
+    """The task text: the FIRST user message, never the system prompt.
+
+    `messages[0]` is the system prompt. Reading it here shipped this feature
+    inert — extraction worked, the run hit its ceiling, and the note never
+    appeared, because the text it was handed contained no task paths. A
+    resumed run also carries history between the system prompt and the task,
+    so "the last message" is equally wrong; the task is the first user turn.
+    """
+    for msg in messages or []:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return " ".join(
+                str(b.get("text", ""))
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+            )
+    return ""
 
 
 def declared_paths(text: str | None) -> list[str]:
