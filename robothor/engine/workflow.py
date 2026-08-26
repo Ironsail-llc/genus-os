@@ -1397,7 +1397,13 @@ class WorkflowEngine:
 
             get_task_registry().spawn(
                 alert(
-                    "warning",
+                    # "critical", not "warning": only critical is in
+                    # _PAGE_LEVELS, and everything else becomes a row in the
+                    # same table the escalation below already writes to. This
+                    # call and that one were documented as independent
+                    # channels while being one channel, so a workflow blocked
+                    # on a human never interrupted the human.
+                    "critical",
                     f"Approval needed: {run.workflow_id}",
                     f"{req.prompt}\n\n{req.detail}",
                 ),
