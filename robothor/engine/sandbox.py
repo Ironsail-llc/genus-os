@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import subprocess
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -34,14 +35,33 @@ SANDBOX_WORKDIR = "/workspace"
 
 
 def sandbox_binary() -> str:
-    """The container runtime to shell out to.
+    """The container runtime to shell out to, safest available first.
 
     `docker` needs a daemon whose socket is root-equivalent — handing an agent
     the docker group would defeat the sandbox it enables. Rootless `podman` is
-    a drop-in with the same CLI and no daemon, which is why this is a knob and
-    not a constant.
+    a drop-in with the same CLI and no daemon.
+
+    This used to default to `docker` regardless, which contradicted the
+    paragraph above AND did not work: on this instance the engine user is not
+    in the docker group, so `docker ps` is permission-denied while rootless
+    podman runs fine. An agent declaring `sandbox: docker` could not have
+    started a container at all. Nothing broke only because every manifest
+    says `sandbox: host` — which is to say the sandbox had never run here.
+
+    A security default that cannot execute is not a security default. An
+    explicit `ROBOTHOR_SANDBOX_BINARY` always wins; otherwise prefer the
+    rootless runtime that is actually installed.
     """
-    return os.environ.get("ROBOTHOR_SANDBOX_BINARY", "docker")
+    explicit = os.environ.get("ROBOTHOR_SANDBOX_BINARY", "").strip()
+    if explicit:
+        return explicit
+    for candidate in ("podman", "docker"):
+        if shutil.which(candidate):
+            return candidate
+    # Neither installed. Name the safer one so the caller's failure message
+    # points at what should be installed, rather than at a daemon we would
+    # not want anyway.
+    return "podman"
 
 
 def sandbox_network() -> str:

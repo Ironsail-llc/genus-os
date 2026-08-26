@@ -87,7 +87,11 @@ class TestSandboxDocker:
                 await s.start()
 
     @pytest.mark.asyncio
-    async def test_docker_exec(self):
+    async def test_docker_exec(self, monkeypatch):
+        # Pin the runtime: the default now prefers rootless podman when it is
+        # installed, and this test is about the exec ARGV shape, not the
+        # runtime choice (which test_sandbox_runtime_choice.py covers).
+        monkeypatch.setenv("ROBOTHOR_SANDBOX_BINARY", "docker")
         s = Sandbox(mode=SandboxMode.DOCKER, run_id="exec-run")
         s.container_id = "abc123"
         s._started = True
