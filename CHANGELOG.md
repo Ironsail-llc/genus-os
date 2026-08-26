@@ -1,3 +1,10 @@
+## [1.51.4](https://github.com/Ironsail-llc/genus-os/compare/v1.51.3...v1.51.4) (2026-08-26)
+
+### Bug Fixes
+
+* **engine:** a manifest key in the wrong block is no longer silent ([#404](https://github.com/Ironsail-llc/genus-os/issues/404)) ([a603371](https://github.com/Ironsail-llc/genus-os/commit/a6033713807c3107b6d40d8d8bb67f4144b0eaa9))
+* **engine:** run finalization is bounded — nothing after the loop may hang ([#405](https://github.com/Ironsail-llc/genus-os/issues/405)) ([19c49b2](https://github.com/Ironsail-llc/genus-os/commit/19c49b2ae54d1df23608dd4e2674b93a542a7710)), closes [#394](https://github.com/Ironsail-llc/genus-os/issues/394) [#388](https://github.com/Ironsail-llc/genus-os/issues/388)
+
 ## [1.51.3](https://github.com/Ironsail-llc/genus-os/compare/v1.51.2...v1.51.3) (2026-08-26)
 
 ### Bug Fixes
