@@ -1,3 +1,9 @@
+## [1.51.5](https://github.com/Ironsail-llc/genus-os/compare/v1.51.4...v1.51.5) (2026-08-26)
+
+### Bug Fixes
+
+* **engine:** finalization gets a total budget, not just a per-step one ([#406](https://github.com/Ironsail-llc/genus-os/issues/406)) ([b4af1b8](https://github.com/Ironsail-llc/genus-os/commit/b4af1b81adb6917b6c7c9a1c19c0f876e10e520d)), closes [#405](https://github.com/Ironsail-llc/genus-os/issues/405)
+
 ## [1.51.4](https://github.com/Ironsail-llc/genus-os/compare/v1.51.3...v1.51.4) (2026-08-26)
 
 ### Bug Fixes
