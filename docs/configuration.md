@@ -70,6 +70,35 @@ responses are retried up to 3 attempts with jittered exponential backoff
 timeouts and network errors get one retry; other errors fall back to local
 immediately.
 
+### Credential pools
+
+Every model in a fallback chain authenticates with the same provider key, so
+a chain built on one credential is a chain of one link: on 2026-08-25 a single
+capped `OPENROUTER_API_KEY` stopped the whole fleet, four cloud models and a
+local tier notwithstanding.
+
+Configure spares as numbered siblings and the engine rotates through them:
+
+```
+OPENROUTER_API_KEY=sk-or-v1-primary
+OPENROUTER_API_KEY_2=sk-or-v1-spare
+```
+
+| Behaviour | Rule |
+|-----------|------|
+| Order | Priority order — put the cheapest or highest-limit key first |
+| Discovery | `_2`, `_3`, … up to `_16`; the walk **stops at the first gap** |
+| Spend cap (HTTP 402) | Key sits out `900s`, then returns on its own — topping up needs no restart |
+| Rejected key (401) | Out for the life of the process; a revoked key never recovers |
+| Model denied (403) | **No** rotation — OpenRouter answers 403 for "this key may not use *this model*", which is the model's problem, not the key's |
+| Provider outage (5xx) | **No** key is retired — the credential was not the problem |
+| Retry target | The **same** model, not the next one — a dead key is not a dead model |
+| Nothing configured | No pool is built and litellm's own env lookup is used, exactly as before |
+
+Keys are never logged. Anything naming a credential — logs, alerts, `repr()` —
+uses a one-way fingerprint (`key-1a2b3c4d`) rather than the usual last-four
+convention, which would print real key material.
+
 ## Service Ports
 
 | Variable | Default | Description |

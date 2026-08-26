@@ -39,6 +39,7 @@ import litellm
 
 from robothor.engine.codex_provider import CodexProviderError, is_codex_model
 from robothor.engine.codex_provider import acompletion as codex_acompletion
+from robothor.engine.key_pool import KeyPool, Retirement, env_var_for_model, keys_from_env
 from robothor.engine.metrics import LLM_CALL_DURATION, LLM_CALLS_TOTAL, LLM_TOKENS_TOTAL
 from robothor.engine.model_breaker import _current_run_id_var, get_model_breaker
 from robothor.engine.retry import retry_async
@@ -148,6 +149,21 @@ def is_credit_exhausted(e: Exception) -> bool:
         return True
     msg = str(e).lower()
     return any(marker in msg for marker in _CREDIT_EXHAUSTED_MARKERS)
+
+
+def is_auth_failure(e: Exception) -> bool:
+    """Is the CREDENTIAL rejected, as opposed to this model being off-limits?
+
+    401 only, deliberately. A 403 from OpenRouter usually means "this key may
+    not use *this model*" — a privileged, moderated, or region-blocked model —
+    which is model-specific, not credential-specific. Treating it as a dead key
+    would retire a perfectly good credential for the life of the process and
+    skip the one model the operator actually needs to hear about.
+
+    Status only, never prose: an existing 403 in the suite carries the message
+    "Rate limited", and matching on words would classify it as a live key.
+    """
+    return _status_of(e) == 401
 
 
 def rate_limit_wait_seconds(e: Exception) -> float | None:
@@ -390,6 +406,27 @@ class LLMClient:
     def _active_watchdog(self) -> _StallWatchdog | None:
         """Read-only view over the per-task stall watchdog ContextVar."""
         return _active_watchdog_var.get()
+
+    # ─── Credentials ─────────────────────────────────────────────────
+
+    def _key_pool(self, model: str) -> KeyPool | None:
+        """The credential pool this model authenticates against, if any.
+
+        Cached per env var so a key retired on one model stays retired for
+        the rest of the chain — otherwise every model in a four-deep chain
+        pays the dead credential's round trip before advancing.
+
+        Read lazily rather than at construction: the engine loads secrets
+        from tmpfs after import, so a pool built in ``__init__`` would be
+        permanently empty on a real box.
+        """
+        var = env_var_for_model(model)
+        if var is None:
+            return None
+        cache = self.__dict__.setdefault("_key_pools", {})
+        if var not in cache:
+            cache[var] = KeyPool(keys_from_env(var))
+        return cache[var]
 
     # ─── Cost ────────────────────────────────────────────────────────
 
@@ -976,7 +1013,13 @@ class LLMClient:
                 per_call_timeout = (
                     timeout_override if timeout_override is not None else LLM_REQUEST_TIMEOUT
                 )
-            attempts = 1 + TRANSIENT_RETRIES_PER_MODEL
+            pool = self._key_pool(model)
+            # Rotating through spare credentials must not eat the transient
+            # retry budget: a key swap and a flaky provider are different
+            # failures, and spending one on the other means the model gets
+            # fewer real attempts the more spare keys are configured.
+            rotation_headroom = max(0, len(pool.status()) - 1) if pool else 0
+            attempts = 1 + TRANSIENT_RETRIES_PER_MODEL + rotation_headroom
             for attempt in range(attempts):
                 try:
                     kwargs = self._build_llm_kwargs(
@@ -987,6 +1030,12 @@ class LLMClient:
                         temperature,
                         request_timeout=per_call_timeout,
                     )
+                    if pool is not None and (key := pool.current()) is not None:
+                        # Only when a pool actually resolved a key. Passing
+                        # api_key=None would override litellm's own env
+                        # lookup and break every instance that has never set
+                        # a numbered sibling — which is all of them today.
+                        kwargs["api_key"] = key
                     async with asyncio.timeout(per_call_timeout):
                         if is_codex_model(model):
                             result = await codex_acompletion(**kwargs)
@@ -1007,7 +1056,30 @@ class LLMClient:
                     # A spent budget is not a busy provider: no wait fixes it,
                     # and every other model on the same key fails identically.
                     # Walking the chain just burns them all.
-                    if is_credit_exhausted(e):
+                    # A dead credential is not a dead model. If a spare key
+                    # exists, retire this one and retry the SAME model —
+                    # advancing the chain would burn models for a reason
+                    # that has nothing to do with them, and every one of
+                    # them shares the credential that just failed anyway.
+                    spent = is_credit_exhausted(e)
+                    if (spent or is_auth_failure(e)) and pool is not None:
+                        failed_key = pool.current()
+                        if failed_key is not None:
+                            pool.retire(
+                                failed_key,
+                                Retirement.CREDIT_EXHAUSTED if spent else Retirement.AUTH_FAILED,
+                            )
+                            if not pool.exhausted():
+                                logger.warning(
+                                    "Model %s: credential %s failed (%s) — "
+                                    "rotating to the next key and retrying "
+                                    "the same model",
+                                    _sanitize(model),
+                                    pool.fingerprint(failed_key),
+                                    "credit exhausted" if spent else "auth rejected",
+                                )
+                                continue
+                    if spent:
                         logger.error(
                             "Model %s: the account's credit is exhausted — no "
                             "model on this key can answer. Top up or raise the "
@@ -1051,6 +1123,19 @@ class LLMClient:
                     # Giving up on this model — record the failure once per
                     # chain advancement (a retried-then-recovered blip must
                     # not count double toward the breaker threshold).
+                    if is_auth_failure(e):
+                        # A rejected credential says nothing about the model.
+                        # Blaming it blacklists a healthy model, and because
+                        # every model in the chain shares the key, a four-deep
+                        # chain blacklists all four — then keeps skipping them
+                        # for the breaker's cooldown after the key is fixed.
+                        logger.error(
+                            "Model %s: the credential was rejected — advancing "
+                            "without marking the model broken. Check the key, "
+                            "not the provider.",
+                            _sanitize(model),
+                        )
+                        break
                     if is_timeout:
                         breaker.record_failure(model, reason=f"timeout after {per_call_timeout}s")
                         logger.warning(
