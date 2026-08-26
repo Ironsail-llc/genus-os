@@ -1,3 +1,9 @@
+## [1.54.0](https://github.com/Ironsail-llc/genus-os/compare/v1.53.0...v1.54.0) (2026-08-26)
+
+### Features
+
+* **engine:** a restart interrupts a run, it does not have to destroy it ([#413](https://github.com/Ironsail-llc/genus-os/issues/413)) ([efa577e](https://github.com/Ironsail-llc/genus-os/commit/efa577e1a5f3ab1167ad7e2efa4fddc6b0bb0f59))
+
 ## [1.53.0](https://github.com/Ironsail-llc/genus-os/compare/v1.52.2...v1.53.0) (2026-08-26)
 
 ### Features
