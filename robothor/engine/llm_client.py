@@ -992,8 +992,20 @@ class LLMClient:
             _sanitize(broken_models or set()),
         )
         breaker = get_model_breaker()
+        # Credentials proven spent during THIS call. A model whose key is
+        # in here cannot succeed, so it is skipped rather than tried.
+        dead_credentials: set[str | None] = set()
+
         for model in models:
             if broken_models and model in broken_models:
+                continue
+            if env_var_for_model(model) in dead_credentials:
+                # Its credential was proven spent earlier in this same call.
+                # Trying it buys a guaranteed failure and a round trip.
+                logger.info(
+                    "skipping %s — it shares a credential already proven spent",
+                    _sanitize(model),
+                )
                 continue
             if breaker.is_open(model):
                 # This model has failed repeatedly and is in cooldown. Skipping
@@ -1080,6 +1092,31 @@ class LLMClient:
                                 )
                                 continue
                     if spent:
+                        # Every model sharing this credential will fail the
+                        # same way, so they are skipped rather than tried.
+                        # But a model on a DIFFERENT credential — or none at
+                        # all, like the local ollama tier — is unaffected,
+                        # and raising here strands it. On 2026-08-26 that is
+                        # exactly what happened: main's chain ended in a
+                        # local Qwen that was up and answering in 9.8s, and
+                        # a spent OpenRouter key meant the chain never
+                        # reached it.
+                        dead_var = env_var_for_model(model)
+                        dead_credentials.add(dead_var)
+                        reachable = [
+                            m
+                            for m in models[models.index(model) + 1 :]
+                            if env_var_for_model(m) not in dead_credentials
+                        ]
+                        if reachable:
+                            logger.warning(
+                                "Model %s: the account's credit is exhausted — "
+                                "skipping every model on the same key and "
+                                "falling through to %s.",
+                                _sanitize(model),
+                                _sanitize(reachable[0]),
+                            )
+                            break
                         logger.error(
                             "Model %s: the account's credit is exhausted — no "
                             "model on this key can answer. Top up or raise the "

@@ -162,6 +162,70 @@ async def test_no_key_configured_sends_no_api_key(client):
     assert "api_key" not in acompletion.call_args_list[0].kwargs
 
 
+# ─── a spent key must not strand a keyless local tier ───────────────────
+#
+# The 2026-08-26 chat outage. main's chain ends in ollama_chat/qwen3.8:27b,
+# which needs no credential and was sitting on the box answering in 9.8s —
+# but a spent OpenRouter key raised instead of advancing, so the chain never
+# reached it. The local tier existed, worked, and was unreachable.
+#
+# Skipping the rest of the chain on credit exhaustion is right for models
+# that share the dead credential. It is wrong for every model that does not.
+
+
+@pytest.mark.asyncio
+async def test_a_spent_key_still_falls_through_to_the_local_tier(client, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-capped")
+    ok = object()
+    acompletion = AsyncMock(side_effect=[_err(402, "credit limit exceeded"), ok])
+
+    result = await _run(
+        client, acompletion, chain=("openrouter/primary", "ollama_chat/qwen3.8:27b")
+    )
+
+    assert result is ok
+    assert [c.kwargs["model"] for c in acompletion.call_args_list] == [
+        "openrouter/primary",
+        "ollama_chat/qwen3.8:27b",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_spent_key_skips_the_models_that_share_it(client, monkeypatch):
+    """Walking siblings on the dead key wastes a round trip each and cannot work."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-capped")
+    ok = object()
+    acompletion = AsyncMock(side_effect=[_err(402, "credit limit exceeded"), ok])
+
+    await _run(
+        client,
+        acompletion,
+        chain=(
+            "openrouter/primary",
+            "openrouter/sibling-a",
+            "openrouter/sibling-b",
+            "ollama_chat/qwen3.8:27b",
+        ),
+    )
+
+    assert [c.kwargs["model"] for c in acompletion.call_args_list] == [
+        "openrouter/primary",
+        "ollama_chat/qwen3.8:27b",
+    ], "the two siblings share the spent key and must be skipped, not tried"
+
+
+@pytest.mark.asyncio
+async def test_with_nothing_keyless_left_it_still_raises_the_credit_error(client, monkeypatch):
+    """A clear 'top up the account' beats a bare None when nothing can run."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-capped")
+    acompletion = AsyncMock(side_effect=_err(402, "credit limit exceeded"))
+
+    with pytest.raises(Exception, match="credit"):
+        await _run(client, acompletion, chain=("openrouter/primary", "openrouter/sibling"))
+
+    assert acompletion.call_count == 1
+
+
 # ─── credential failures are not model failures ─────────────────────────
 #
 # Found by live probe, not by a mock: firing a real 402 at the pool showed
