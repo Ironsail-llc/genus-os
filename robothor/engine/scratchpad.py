@@ -8,8 +8,15 @@ Mirrors Claude Code's TodoWrite pattern for orientation.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any
+
+#: Identical (tool, args, result) repeats before the loop is called a stall.
+#: Three is enough to be deliberate and few enough to catch a 29-repeat
+#: polling loop early — that loop cost one run 65% of its wall clock.
+LOOP_REPEAT_THRESHOLD = 3
 
 
 @dataclass
@@ -18,6 +25,11 @@ class Scratchpad:
 
     inject_interval: int = 3  # inject summary every N tool calls
     max_injections: int = 5  # stop injecting into messages after this many
+    # No-progress loop detection: the last (tool, args, result) signature and
+    # how many times it has repeated unchanged.
+    _repeat_signature: str | None = None
+    _repeat_count: int = 0
+    _repeat_tool: str = ""
     _tool_calls: int = 0
     _successes: int = 0
     _errors: int = 0
@@ -46,12 +58,20 @@ class Scratchpad:
         self,
         tool_name: str,
         error: str | None = None,
+        result: Any = None,
+        tool_input: dict[str, Any] | None = None,
     ) -> None:
-        """Record a tool call result."""
+        """Record a tool call result.
+
+        `result` and `tool_input` are optional so existing callers keep
+        working; without them the no-progress detector simply never fires.
+        """
         self._tool_calls += 1
         self._recent_actions.append(tool_name)
         if len(self._recent_actions) > 10:
             self._recent_actions = self._recent_actions[-10:]
+
+        self._track_repetition(tool_name, error, result, tool_input)
 
         if error:
             self._errors += 1
@@ -65,9 +85,59 @@ class Scratchpad:
                 )
         else:
             self._successes += 1
-            # Try to advance plan progress on success
-            if self._plan_steps:
+            # Try to advance plan progress on success — but never while the
+            # same call is repeating with no new information. Advancing on
+            # ANY matching successful call is what let a 29-repeat polling
+            # loop walk the plan forward and read as healthy progress to
+            # `should_replan`.
+            if self._plan_steps and self._repeat_count < LOOP_REPEAT_THRESHOLD:
                 self._try_advance_step(tool_name)
+
+    def _track_repetition(
+        self,
+        tool_name: str,
+        error: str | None,
+        result: Any,
+        tool_input: dict[str, Any] | None,
+    ) -> None:
+        """Count identical (tool, args, result) calls in a row.
+
+        Repetition alone is not a stall — polling a build, a deploy or a
+        queue is ordinary agent work. What makes it a stall is repetition
+        with NO CHANGE: same arguments in, same bytes out. Errors are
+        excluded because they already have an escalation path; this is
+        specifically the successful-but-useless call nothing could see.
+
+        Never raises: an unhashable argument must not break tool recording.
+        """
+        if error:
+            self._repeat_signature = None
+            self._repeat_count = 0
+            return
+        try:
+            payload = json.dumps(
+                {"tool": tool_name, "args": tool_input or {}, "result": result},
+                sort_keys=True,
+                default=str,
+            )
+        except (TypeError, ValueError):
+            self._repeat_signature = None
+            self._repeat_count = 0
+            return
+        signature = hashlib.sha256(payload.encode("utf-8", "replace")).hexdigest()
+        if signature == self._repeat_signature:
+            self._repeat_count += 1
+        else:
+            self._repeat_signature = signature
+            self._repeat_count = 1
+        self._repeat_tool = tool_name
+
+    @property
+    def stalled_signature(self) -> str | None:
+        """The repeated call's signature once it qualifies as a stall."""
+        if self._repeat_count >= LOOP_REPEAT_THRESHOLD:
+            return self._repeat_signature
+        return None
 
     def _try_advance_step(self, tool_name: str) -> None:
         """Heuristic: if the tool matches the current plan step's tool, advance."""
@@ -170,6 +240,15 @@ class Scratchpad:
             # verification. The honest statement is the count itself.
             progress = f"\n{self._successes} successful tool call(s); no step-level plan tracked"
 
+        stall = ""
+        if self.stalled_signature is not None:
+            stall = (
+                f"\nNO NEW INFORMATION: `{self._repeat_tool}` has returned the "
+                f"same result {self._repeat_count} times in a row with the same "
+                "arguments. Repeating it again will not change anything — change "
+                "the approach, or write out what you already have."
+            )
+
         recent = ", ".join(self._recent_actions[-5:]) or "none"
         errors = ""
         if self._recent_errors:
@@ -181,7 +260,8 @@ class Scratchpad:
             f"({self._successes} ok, {self._errors} errors)\n"
             f"Recent actions: {recent}"
             f"{errors}"
-            f"{progress}\n"
+            f"{progress}"
+            f"{stall}\n"
             f"Continue with your next action."
         )
 

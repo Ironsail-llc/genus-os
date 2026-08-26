@@ -2634,7 +2634,14 @@ class AgentRunner(
 
                 # ── [SCRATCHPAD] Record tool call ──
                 if scratchpad:
-                    scratchpad.record_tool_call(tool_name, error=error_msg)
+                    # Result and args feed the no-progress detector; without
+                    # them every call looks identical and it can never fire.
+                    scratchpad.record_tool_call(
+                        tool_name,
+                        error=error_msg,
+                        result=result,
+                        tool_input=tool_args,
+                    )
 
                 # ── [CIRCUIT BREAKER] Stop calling tools that keep failing ──
                 if error_msg:
