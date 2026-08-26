@@ -30,7 +30,10 @@ CAPS = {
     # finalization outside the outer asyncio.timeout, and the stretch
     # where a 1200s run reached 3110s. Further trimming would have meant
     # deleting the explanation to satisfy a line count.
-    "robothor/engine/runner.py": 2954,
+    # +2: the deadline note now also takes the task text, so it can name the
+    # deliverable that is missing. The composition itself was extracted to
+    # deliverables.py rather than grown here.
+    "robothor/engine/runner.py": 2956,
     # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
     # Lowered again after phase 3b (_setup_handlers closures -> methods).
     "robothor/engine/telegram.py": 2000,

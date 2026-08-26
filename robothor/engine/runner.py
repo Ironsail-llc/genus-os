@@ -46,6 +46,7 @@ from robothor.engine.config import (
 # Re-exported for existing importers. The `as` form is what marks a name as
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
+from robothor.engine.deliverables import deadline_note  # noqa: E402
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 
 # LLM dispatch/cost/streaming + the request-timeout constants now live in
@@ -2149,9 +2150,10 @@ class AgentRunner(
             # written. Warning once at 80% lets it flush partial results —
             # which is the difference between partial credit and none.
             if not _deadline_warned and self._active_watchdog is not None:
-                _dl_note = deadline_warning(
+                _dl_note = deadline_note(
                     self._active_watchdog.elapsed_seconds,
                     float(getattr(self._active_watchdog, "_hard_timeout", 0) or 0),
+                    session.messages[0].get("content") if session.messages else "",
                 )
                 if _dl_note:
                     _deadline_warned = True

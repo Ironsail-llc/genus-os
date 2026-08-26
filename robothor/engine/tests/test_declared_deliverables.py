@@ -1,0 +1,140 @@
+"""The engine knows what file the task asked for, and whether it exists.
+
+Measured, repeatedly, on WildClawBench: a task says "save the result to
+/tmp_workspace/results/result.png"; the grader awards unconditional credit
+for that file merely existing; and our agent writes SEVEN images into
+`results/` under other names. The string `result.png` appears exactly once
+in the whole transcript — in the prompt. Elsewhere an agent printed the full
+answer to stdout at turn 323 and spent its last four calls re-deriving it
+instead of writing the two lines the task asked for.
+
+The engine had no way to notice. `verify_output` judges the agent's
+NARRATION, never the workspace, and the deadline note says "write your
+partial answer" without knowing where.
+
+So: read the paths the task itself names, and when the clock is running down
+and one of them is not on disk, say so by name. This is not benchmark
+coaching — production tasks name deliverables constantly ("write the report
+to X", "save the CSV to Y"), and an agent that says "done" with no file
+there is the completion-contract failure this platform already exists to
+catch.
+
+Deliberately conservative: a false positive nags an agent about a file it
+was never asked for, and a nagging control gets ignored.
+"""
+
+from __future__ import annotations
+
+from robothor.engine.deliverables import (
+    deadline_note,
+    declared_paths,
+    missing_deliverables_note,
+)
+
+
+class TestReadingWhatTheTaskAsksFor:
+    def test_a_plain_absolute_path(self):
+        assert "/tmp_workspace/results/result.png" in declared_paths(
+            "Save the finished image to /tmp_workspace/results/result.png"
+        )
+
+    def test_a_backticked_path(self):
+        assert "/out/report.md" in declared_paths("Write your report to `/out/report.md`.")
+
+    def test_several_paths(self):
+        found = declared_paths(
+            "Save the image to /ws/results/result.png and the description "
+            "to /ws/results/description.txt"
+        )
+        assert found == ["/ws/results/result.png", "/ws/results/description.txt"]
+
+    def test_order_is_preserved_and_duplicates_collapse(self):
+        found = declared_paths("write /a/x.md then check /a/x.md then /a/y.md")
+        assert found == ["/a/x.md", "/a/y.md"]
+
+    def test_a_path_with_no_extension_is_ignored(self):
+        """A directory or a bare mention is not a deliverable."""
+        assert declared_paths("work inside /tmp_workspace and /usr/bin") == []
+
+    def test_prose_without_paths_yields_nothing(self):
+        assert declared_paths("Summarise the findings and explain them.") == []
+
+    def test_input_paths_are_not_deliverables(self):
+        """The task's INPUT file is not something the agent must produce."""
+        found = declared_paths(
+            "The input image is at /ws/input/origin.png. Save your answer to /ws/results/result.png"
+        )
+        assert "/ws/results/result.png" in found
+        assert "/ws/input/origin.png" not in found
+
+    def test_urls_are_not_paths(self):
+        assert declared_paths("fetch https://example.com/a/b.json") == []
+
+    def test_it_is_bounded(self):
+        many = " ".join(f"/ws/results/f{i}.md" for i in range(500))
+        assert len(declared_paths(many)) <= 10
+
+    def test_empty_and_none_are_safe(self):
+        assert declared_paths("") == []
+        assert declared_paths(None) == []
+
+
+class TestTheNote:
+    def test_names_a_missing_deliverable(self, tmp_path):
+        note = missing_deliverables_note([str(tmp_path / "results" / "result.png")], remaining=120)
+        assert note is not None
+        assert "result.png" in note
+
+    def test_says_nothing_when_the_file_exists(self, tmp_path):
+        p = tmp_path / "out.md"
+        p.write_text("done", encoding="utf-8")
+        assert missing_deliverables_note([str(p)], remaining=120) is None
+
+    def test_says_nothing_with_no_declared_paths(self):
+        assert missing_deliverables_note([], remaining=120) is None
+
+    def test_reports_only_the_missing_ones(self, tmp_path):
+        there = tmp_path / "a.md"
+        there.write_text("x", encoding="utf-8")
+        gone = tmp_path / "b.md"
+        note = missing_deliverables_note([str(there), str(gone)], remaining=90)
+        assert "b.md" in note
+        assert "a.md" not in note
+
+    def test_the_note_states_the_time_left(self, tmp_path):
+        note = missing_deliverables_note([str(tmp_path / "x.md")], remaining=90)
+        assert "90" in note
+
+    def test_an_unreadable_path_does_not_raise(self):
+        missing_deliverables_note(["\x00bad"], remaining=10)
+
+
+class TestTheRunnerChecksThem:
+    @staticmethod
+    def _source() -> str:
+        from pathlib import Path
+
+        import robothor.engine.runner as m
+
+        return Path(m.__file__).read_text(encoding="utf-8")
+
+    def test_the_deadline_path_consults_deliverables(self):
+        body = self._source()
+        assert "deadline_note(" in body, (
+            "the deadline warning still cannot say WHICH file is missing"
+        )
+
+
+class TestTheComposedNote:
+    def test_it_carries_both_halves(self, tmp_path):
+        note = deadline_note(90.0, 100.0, f"save it to {tmp_path}/results/out.md")
+        assert note is not None
+        assert "Time budget" in note
+        assert "out.md" in note
+
+    def test_no_warning_before_the_threshold(self, tmp_path):
+        assert deadline_note(10.0, 100.0, f"save to {tmp_path}/x.md") is None
+
+    def test_the_warning_stands_alone_when_nothing_was_declared(self):
+        note = deadline_note(90.0, 100.0, "summarise the findings")
+        assert note is not None and "Time budget" in note
