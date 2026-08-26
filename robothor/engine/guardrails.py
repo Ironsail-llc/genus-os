@@ -417,13 +417,81 @@ class GuardrailEngine:
         # disabling the guardrail the operator believed was active (audit
         # 2026-05-29). We log rather than raise so one bad name can't crash the
         # whole engine, but the ERROR is impossible to miss.
-        unknown = [p for p in self.enabled_policies if p not in _KNOWN_POLICIES]
+        unknown = [
+            p
+            for p in self.enabled_policies
+            if p not in _KNOWN_POLICIES and self._plugin_guardrail(p) is None
+        ]
         if unknown:
             logger.error(
                 "Unknown guardrail policy(ies) %s — NOT ENFORCED. Known: %s",
                 sorted(unknown),
                 sorted(_KNOWN_POLICIES),
             )
+
+    def _plugin_guardrails(self) -> dict[str, Any]:
+        """Guardrails contributed by installed plugins, cached per engine.
+
+        #411 declared the `genus.guardrails` entry-point group and nothing
+        consumed it; #421 made plugin TOOLS reachable and left this group
+        declared-but-unconsumed. A competitive audit rated the platform "far
+        behind" on extensibility partly for that.
+        """
+        cache: dict[str, Any] | None = self.__dict__.get("_plugin_guardrail_cache")
+        if cache is not None:
+            return cache
+        try:
+            from robothor.plugins import load_plugins
+
+            loaded = load_plugins(reserved_names=set(_KNOWN_POLICIES))
+            cache = dict(loaded.guardrails or {})
+        except Exception as e:  # noqa: BLE001 - a plugin must not break safety
+            logger.warning("Plugin guardrails unavailable: %s", e)
+            cache = {}
+        self.__dict__["_plugin_guardrail_cache"] = cache
+        return cache
+
+    def _plugin_guardrail(self, policy: str) -> Any:
+        """The plugin callable for `policy`, or None.
+
+        A built-in always wins: otherwise an installed package could quietly
+        neuter `no_destructive_writes` by claiming the name.
+        """
+        if policy in _KNOWN_POLICIES:
+            return None
+        return self._plugin_guardrails().get(policy)
+
+    def _run_plugin_guardrail(
+        self, policy: str, handler: Any, tool_name: str, tool_args: dict[str, Any]
+    ) -> GuardrailResult:
+        """Call a plugin guardrail. A broken package must not break the call.
+
+        Returning ALLOW on a plugin error is deliberate and is the one place
+        this file fails open: a third-party package that raises must not be
+        able to halt the fleet. The warning is how it stays visible.
+        """
+        try:
+            verdict = handler(tool_name, tool_args, None)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Plugin guardrail %r raised (%s) — allowing", policy, e)
+            return GuardrailResult()
+        if verdict is None or verdict is True:
+            return GuardrailResult()
+        if isinstance(verdict, GuardrailResult):
+            return verdict
+        if isinstance(verdict, dict):
+            return GuardrailResult(
+                allowed=bool(verdict.get("allowed", False)),
+                action=str(verdict.get("action", "blocked")),
+                reason=str(verdict.get("reason", "")),
+                guardrail_name=policy,
+            )
+        logger.warning(
+            "Plugin guardrail %r returned %s, expected GuardrailResult/dict/None — allowing",
+            policy,
+            type(verdict).__name__,
+        )
+        return GuardrailResult()
 
     def check_pre_execution(
         self,
@@ -495,6 +563,9 @@ class GuardrailEngine:
             return self._check_changelog_reversal(tool_name, tool_args)
         if policy == "inbound_only":
             return self._check_inbound_only(tool_name, tool_args)
+        handler = self._plugin_guardrail(policy)
+        if handler is not None:
+            return self._run_plugin_guardrail(policy, handler, tool_name, tool_args)
         return GuardrailResult()
 
     def _run_post_policy(
