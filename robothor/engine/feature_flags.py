@@ -369,6 +369,13 @@ def _enforcement_mode(enabled_var: str, mode_var: str) -> EnforcementMode:
     if _disabled_all() or not _env_bool(enabled_var):
         return "off"
     raw = _resolve_raw(mode_var, "observe").strip().lower()
+    if raw == "off":
+        # `off` is advertised by flags.store.valid_values_for for every
+        # governed *_MODE flag, and the Controls API accepts, persists and
+        # audits it — but it used to fall through to `observe` here, so the
+        # operator's de-escalation lever was inert. Reading it as written
+        # keeps the API and the engine describing the same ladder.
+        return "off"
     if raw in _VALID_ENFORCEMENT_MODES:
         return raw  # type: ignore[return-value]
     return "observe"
@@ -660,3 +667,54 @@ def notify_guardrail_alert(
             exc,
         )
         return False
+
+
+#: The guardrails whose absence makes a process unguarded. Kept here rather
+#: than in the daemon so any entry point can report the same posture.
+_SECURITY_GUARDRAILS: dict[str, str] = {
+    "rbac": "rbac_enforcement_mode",
+    "injection_scan": "injection_scan_mode",
+    "exec_allowlist_strict": "exec_allowlist_mode",
+    "approval": "approval_mode",
+    "sandbox_default": "sandbox_default_mode",
+}
+
+
+def security_posture() -> dict[str, str]:
+    """What each security guardrail resolves to IN THIS PROCESS.
+
+    Per-process, deliberately. The flags are set by ``Environment=`` lines in
+    a drop-in on a single systemd unit, so a second daemon running the same
+    engine code inherits none of them. That is not hypothetical: this
+    instance ran a second engine daemon with all five of these off for four
+    days, and nothing anywhere said so.
+    """
+    posture: dict[str, str] = {}
+    for name, fn_name in _SECURITY_GUARDRAILS.items():
+        fn = globals().get(fn_name)
+        try:
+            posture[name] = str(fn()) if callable(fn) else "unknown"
+        except Exception:  # noqa: BLE001 - a posture report must never crash a boot
+            posture[name] = "unknown"
+    return posture
+
+
+def log_security_posture() -> None:
+    """State the posture at startup, and warn when a guardrail is off.
+
+    A process that is unguarded should say so in its own journal. Reading a
+    drop-in on another unit is not something anyone does at 2am.
+    """
+    posture = security_posture()
+    rendered = ", ".join(f"{k}={v}" for k, v in sorted(posture.items()))
+    off = sorted(k for k, v in posture.items() if v == "off")
+    if off:
+        logger.warning(
+            "Security posture: %s — this process is running UNGUARDED for: %s. "
+            "Guardrail flags are per-process; check this unit's environment, "
+            "not another unit's drop-in.",
+            rendered,
+            ", ".join(off),
+        )
+    else:
+        logger.info("Security posture: %s", rendered)

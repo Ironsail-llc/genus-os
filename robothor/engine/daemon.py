@@ -475,6 +475,13 @@ async def main() -> int:
     root.setLevel(logging.INFO)
 
     logger.info("Starting Genus OS Agent Engine...")
+    # State this process's guardrail posture before anything runs. The flags
+    # come from systemd Environment= lines on a single unit, so a second
+    # daemon running this same code inherits none of them — which is exactly
+    # what happened here for four days, silently.
+    from robothor.engine.feature_flags import log_security_posture
+
+    log_security_posture()
 
     # A tenant env conflict silently discards every default-tenant write in this
     # process (RLS refuses the row, the caller gets None). Say so at boot rather
