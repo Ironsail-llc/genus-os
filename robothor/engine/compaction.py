@@ -116,6 +116,112 @@ def extract_tool_summary(content: str) -> str:
     return stripped[:80] + ("..." if len(stripped) > 80 else "")
 
 
+#: Per-tool-result budget when feeding fact extraction. Enough for a table
+#: or a coordinate dump, small enough that forty of them stay inside the
+#: summariser's own window.
+TOOL_FACT_CHARS = 1200
+
+#: How many recent tool calls the deterministic tail names.
+TAIL_TOOL_CALLS = 8
+
+#: Tools whose `path` argument names something the run produced.
+_WRITING_TOOLS = ("write_file", "edit_file", "append_file", "create_file")
+
+
+def _content_text(content: Any) -> str:
+    """Flatten message content to text, dropping image payloads.
+
+    Tool results became content-block lists when image viewing shipped; a
+    base64 payload must never be fed to the summariser (it is megabytes of
+    noise that would evict the real findings).
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            str(b.get("text", ""))
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+        )
+    return ""
+
+
+def build_extraction_input(messages: list[dict[str, Any]]) -> str:
+    """The conversation text fact extraction actually reads.
+
+    Tool results used to be excluded by construction — the filter was
+    `role in ("user", "assistant")` — so in an agentic run, where the
+    findings live in tool output, the summariser kept the agent's prose and
+    dropped its evidence. A benchmark run lost its grid dimensions, pitch,
+    origins and colour table at compaction and restarted extraction from
+    zero at the halfway point of its budget.
+
+    Prose keeps its 300-char preview: it is narration, and the opening is
+    the informative part. Tool results get a larger budget through
+    `extract_tool_summary`, because truncating a table at 300 characters
+    keeps the header and discards the data.
+    """
+    text_parts: list[str] = []
+    for msg in messages:
+        role = msg.get("role", "unknown")
+        text = _content_text(msg.get("content"))
+        if not text:
+            continue
+        if role in ("user", "assistant"):
+            text_parts.append(f"{role}: {text[:300]}")
+        elif role == "tool":
+            summary = extract_tool_summary(text)
+            text_parts.append(f"tool: {summary[:TOOL_FACT_CHARS]}")
+    return "\n".join(text_parts[-40:])
+
+
+def deterministic_tail(messages: list[dict[str, Any]]) -> str:
+    """Run state that survives compaction without an LLM succeeding.
+
+    Fact extraction is one `gemini-2.5-flash` call with a 1000-token cap and
+    a timeout; when it fails or returns thin, everything the run knew is
+    gone. The paths a run has written and what it most recently did are
+    cheap to derive exactly, so they should never ride on that call.
+
+    Never raises: this runs on the compaction path, and a malformed tool
+    call must not cost a run its whole history.
+    """
+    written: list[str] = []
+    recent: list[str] = []
+    for msg in messages:
+        calls = msg.get("tool_calls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            fn = call.get("function")
+            if not isinstance(fn, dict):
+                continue
+            name = str(fn.get("name") or "")
+            args: dict[str, Any] = {}
+            try:
+                raw = fn.get("arguments")
+                if isinstance(raw, str):
+                    args = json.loads(raw)
+                elif isinstance(raw, dict):
+                    args = raw
+            except (ValueError, TypeError):
+                args = {}
+            if name:
+                recent.append(name)
+            path = args.get("path") if isinstance(args, dict) else None
+            if name in _WRITING_TOOLS and isinstance(path, str) and path not in ("", *written):
+                written.append(path)
+
+    lines: list[str] = []
+    if written:
+        lines.append("Files written this run: " + ", ".join(written[-TAIL_TOOL_CALLS:]))
+    if recent:
+        lines.append("Recent tool calls: " + ", ".join(recent[-TAIL_TOOL_CALLS:]))
+    return "\n".join(lines)[:3500]
+
+
 async def extract_facts(
     messages: list[dict[str, Any]],
     model: str = FACT_EXTRACTION_MODEL,
@@ -127,19 +233,9 @@ async def extract_facts(
     if not messages:
         return []
 
-    # Build conversation text for the LLM
-    text_parts: list[str] = []
-    for msg in messages:
-        role = msg.get("role", "unknown")
-        content = msg.get("content")
-        if content and isinstance(content, str) and role in ("user", "assistant"):
-            preview = content[:300] if len(content) > 300 else content
-            text_parts.append(f"{role}: {preview}")
-
-    if not text_parts:
+    conversation_text = build_extraction_input(messages)
+    if not conversation_text:
         return []
-
-    conversation_text = "\n".join(text_parts[-40:])  # Last 40 entries max
 
     try:
         import litellm
@@ -238,14 +334,28 @@ async def summarize_segment(
     return fallback
 
 
-def _build_retained_context_message(facts: list[CompactionFact]) -> dict[str, Any]:
-    """Build a retained context message from extracted facts."""
+def _build_retained_context_message(
+    facts: list[CompactionFact],
+    messages: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build a retained context message from extracted facts.
+
+    `messages` adds the deterministic tail — the paths this run wrote and
+    what it recently did. Optional so existing callers keep working, but
+    every caller inside this module passes it: the facts come from one
+    LLM call with a 1000-token cap and a timeout, and when that returns
+    thin the run should still know what it produced.
+    """
     lines = [RETAINED_CONTEXT_MARKER]
     # Sort by priority descending
     lines.extend(
         f"- [{fact.category}] (p{fact.priority}) {fact.text}"
         for fact in sorted(facts, key=lambda f: f.priority, reverse=True)
     )
+    if messages:
+        tail = deterministic_tail(messages)
+        if tail:
+            lines.append(tail)
     return {"role": "user", "content": "\n".join(lines)}
 
 
@@ -491,7 +601,7 @@ async def compact(
         # Nothing old to summarize — just inject facts and return
         result_msgs = [system_msg]
         if all_facts:
-            result_msgs.append(_build_retained_context_message(all_facts))
+            result_msgs.append(_build_retained_context_message(all_facts, messages))
         result_msgs.extend(recent_messages)
         est = estimate_tokens(result_msgs)
         return CompactionResult(
@@ -518,7 +628,7 @@ async def compact(
 
     # Retained facts always first (after system)
     if all_facts:
-        result_msgs.append(_build_retained_context_message(all_facts))
+        result_msgs.append(_build_retained_context_message(all_facts, messages))
 
     # Segment summaries as a combined user message
     if segment_summaries:
@@ -550,7 +660,7 @@ async def compact(
         segment_summaries.pop(0)
         result_msgs = [system_msg]
         if all_facts:
-            result_msgs.append(_build_retained_context_message(all_facts))
+            result_msgs.append(_build_retained_context_message(all_facts, messages))
         if segment_summaries:
             combined_summary = "[Conversation summary]\n" + "\n---\n".join(segment_summaries)
             result_msgs.append({"role": "user", "content": combined_summary})
