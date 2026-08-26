@@ -1,3 +1,10 @@
+## [1.55.2](https://github.com/Ironsail-llc/genus-os/compare/v1.55.1...v1.55.2) (2026-08-26)
+
+### Bug Fixes
+
+* **engine:** make the offline tier reachable, and validate it ([#416](https://github.com/Ironsail-llc/genus-os/issues/416)) ([54a1d67](https://github.com/Ironsail-llc/genus-os/commit/54a1d67e79aba173822f36c7d5f5c5cbb58dc588))
+* **engine:** the alert self-test and approval requests now page ([#418](https://github.com/Ironsail-llc/genus-os/issues/418)) ([b2de30e](https://github.com/Ironsail-llc/genus-os/commit/b2de30e3c6e6691910f1bc33153bb9c08f8de8ba))
+
 ## [1.55.1](https://github.com/Ironsail-llc/genus-os/compare/v1.55.0...v1.55.1) (2026-08-26)
 
 ### Bug Fixes
