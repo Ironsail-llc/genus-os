@@ -219,6 +219,17 @@ def _collect_handlers() -> dict[str, Any]:
         images,
     ]:
         all_handlers.update(mod.HANDLERS)
+
+    # Third-party tools, last and never over the top of ours. `reserved_names`
+    # is the built-in set: a plugin silently replacing `exec` or `write_file`
+    # would be a takeover, not an extension. A plugin that fails to load is
+    # recorded and skipped — one broken package must not stop the engine.
+    from robothor.plugins import load_plugins
+
+    plugins = load_plugins(reserved_names=set(all_handlers))
+    for failure in plugins.failures:
+        logger.warning("Plugin %r not loaded: %s", failure.name, failure.reason)
+    all_handlers.update(plugins.tools)
     return all_handlers
 
 
