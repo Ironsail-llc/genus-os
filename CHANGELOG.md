@@ -1,3 +1,9 @@
+## [1.52.2](https://github.com/Ironsail-llc/genus-os/compare/v1.52.1...v1.52.2) (2026-08-26)
+
+### Bug Fixes
+
+* **bench:** a spent API budget is not sixty capability failures ([#409](https://github.com/Ironsail-llc/genus-os/issues/409)) ([f45db9f](https://github.com/Ironsail-llc/genus-os/commit/f45db9f986b3f88f9f2a12b5f10530ca42435940)), closes [#395](https://github.com/Ironsail-llc/genus-os/issues/395)
+
 ## [1.52.1](https://github.com/Ironsail-llc/genus-os/compare/v1.52.0...v1.52.1) (2026-08-26)
 
 ### Bug Fixes
