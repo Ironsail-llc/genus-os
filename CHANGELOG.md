@@ -1,3 +1,15 @@
+## [1.56.0](https://github.com/Ironsail-llc/genus-os/compare/v1.55.3...v1.56.0) (2026-08-26)
+
+### Features
+
+* **plugins:** a plugin can extend the safety layer, not just tools ([#424](https://github.com/Ironsail-llc/genus-os/issues/424)) ([4bca8b9](https://github.com/Ironsail-llc/genus-os/commit/4bca8b9e4a5bf4ff78cda9d91ad6203c538a6289))
+* **plugins:** lifecycle hooks were the last group nothing consumed ([#425](https://github.com/Ironsail-llc/genus-os/issues/425)) ([84236d8](https://github.com/Ironsail-llc/genus-os/commit/84236d8ce56463ae28827ea20d216de42db1dad7)), closes [#411](https://github.com/Ironsail-llc/genus-os/issues/411) [#421](https://github.com/Ironsail-llc/genus-os/issues/421)
+
+### Bug Fixes
+
+* **engine:** long runs never checkpointed, so resume had nothing ([#423](https://github.com/Ironsail-llc/genus-os/issues/423)) ([bb21826](https://github.com/Ironsail-llc/genus-os/commit/bb21826eab77d1daf9eaf656271d684ddca7f01b))
+* **plugins:** a plugin tool was never offered to the model ([#421](https://github.com/Ironsail-llc/genus-os/issues/421)) ([34177d4](https://github.com/Ironsail-llc/genus-os/commit/34177d478007e53227a8225342ae11168ffc5b67)), closes [#411](https://github.com/Ironsail-llc/genus-os/issues/411)
+
 ## [1.55.3](https://github.com/Ironsail-llc/genus-os/compare/v1.55.2...v1.55.3) (2026-08-26)
 
 ### Bug Fixes
