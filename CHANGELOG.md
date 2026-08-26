@@ -1,3 +1,10 @@
+## [1.51.1](https://github.com/Ironsail-llc/genus-os/compare/v1.51.0...v1.51.1) (2026-08-26)
+
+### Bug Fixes
+
+* **bench:** the bench agent gets the platform's eyes too ([#398](https://github.com/Ironsail-llc/genus-os/issues/398)) ([2a1afbd](https://github.com/Ironsail-llc/genus-os/commit/2a1afbd9418cf6233f80ee08f3fa4c70ceaebb06))
+* **engine:** looking at a picture must never destroy a run ([#399](https://github.com/Ironsail-llc/genus-os/issues/399)) ([30d1472](https://github.com/Ironsail-llc/genus-os/commit/30d1472b025cc589f36d07e0b3c50315a6c9743c)), closes [#397](https://github.com/Ironsail-llc/genus-os/issues/397)
+
 ## [1.51.0](https://github.com/Ironsail-llc/genus-os/compare/v1.50.1...v1.51.0) (2026-08-26)
 
 ### Features
