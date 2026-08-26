@@ -124,13 +124,20 @@ def missing_deliverables_note(
     missing: list[str] = []
     for path in paths:
         try:
-            candidate = Path(path).resolve()
-            if not candidate.is_relative_to(root):
-                continue
-            if not candidate.exists():
+            # Rebuild from the trusted root rather than validating the
+            # untrusted string and then using it. `relative_to` raises for
+            # anything outside the workspace — including traversal, which
+            # `resolve()` has already collapsed — and the path that finally
+            # touches the filesystem is constructed from `root`, never from
+            # task text. Same containment, expressed so it is checkable.
+            relative = Path(path).resolve().relative_to(root)
+            if not (root / relative).exists():
                 missing.append(path)
-        except (OSError, ValueError):
-            # An unparseable path is not evidence of anything; skip it rather
+        except ValueError:
+            # Outside the workspace: not this task's deliverable.
+            continue
+        except OSError:
+            # An unreadable path is not evidence of anything; skip it rather
             # than reporting a file the task never really named.
             continue
     if not missing:
