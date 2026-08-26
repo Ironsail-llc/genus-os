@@ -75,6 +75,30 @@ _INPUT_DIRS = ("/input/", "/inputs/", "/gt/", "/fixtures/", "/data/", "/exec/")
 _MAX_PATHS = 10
 
 
+def task_text_from(messages: list[dict] | None) -> str:
+    """The task text: the FIRST user message, never the system prompt.
+
+    `messages[0]` is the system prompt. Reading it here shipped this feature
+    inert — extraction worked, the run hit its ceiling, and the note never
+    appeared, because the text it was handed contained no task paths. A
+    resumed run also carries history between the system prompt and the task,
+    so "the last message" is equally wrong; the task is the first user turn.
+    """
+    for msg in messages or []:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return " ".join(
+                str(b.get("text", ""))
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+            )
+    return ""
+
+
 def declared_paths(text: str | None) -> list[str]:
     """Absolute file paths the task text asks the agent to produce.
 
