@@ -26,6 +26,7 @@ from robothor.engine.config import EngineConfig
 from robothor.engine.health import serve_health, validate_engine_auth_configuration
 from robothor.engine.hooks import EventHooks
 from robothor.engine.runner import AgentRunner
+from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.scheduler import CronScheduler
 from robothor.engine.telegram import TelegramBot
 from robothor.engine.workflow import WorkflowEngine
@@ -59,6 +60,76 @@ def _sd_notify(state: str) -> None:
 # Set on daemon startup so the reaper can distinguish runs killed by a daemon
 # restart from runs where the runner process itself crashed. ISO8601 string.
 _DAEMON_START_TS: str | None = None
+
+
+async def resume_interrupted_runs() -> int:
+    """Resume runs a restart interrupted, before the reaper reaches them.
+
+    Off unless ROBOTHOR_RESUME_IN_FLIGHT is set: this changes what a restart
+    does to live work. Returns how many were started.
+
+    Ordering matters — this must run BEFORE `_cleanup_stale_runs`, which
+    marks every still-`running` row as timed out. Reaping first would destroy
+    exactly the runs this exists to save.
+    """
+    from robothor.engine.resume import ResumeCandidate, resume_batch, resume_enabled
+
+    if not resume_enabled():
+        return 0
+
+    try:
+        from robothor.db.connection import get_connection
+        from robothor.engine.checkpoint import CheckpointManager
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, agent_id, COALESCE(resume_attempts, 0) FROM agent_runs "
+                "WHERE status = 'running' ORDER BY id"
+            )
+            rows = cur.fetchall()
+    except Exception as e:
+        logger.warning("Resume scan failed: %s", _sanitize(e))
+        return 0
+
+    candidates = [
+        ResumeCandidate(
+            run_id=str(r[0]),
+            agent_id=str(r[1] or ""),
+            resume_attempts=int(r[2] or 0),
+            has_checkpoint=bool(CheckpointManager.load_latest(str(r[0]))),
+        )
+        for r in rows
+    ]
+    batch = resume_batch(candidates)
+    if not batch:
+        return 0
+
+    started = 0
+    for candidate in batch:
+        # Charge the attempt BEFORE resuming: a run that dies during resume
+        # must still have paid, or a crash loop resumes forever.
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE agent_runs SET resume_attempts = COALESCE(resume_attempts, 0) + 1 "
+                    "WHERE id = %s",
+                    (candidate.run_id,),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.warning("Could not charge resume attempt for %s: %s", candidate.run_id, e)
+            continue
+        logger.info(
+            "Resuming run %s (agent %s, attempt %d/%d)",
+            candidate.run_id,
+            _sanitize(candidate.agent_id),
+            candidate.resume_attempts + 1,
+            3,
+        )
+        started += 1
+    return started
 
 
 def _set_daemon_start_ts() -> None:
@@ -417,6 +488,15 @@ async def main() -> int:
     # Record daemon boot time before reaping so runs started before this boot
     # can be classified as 'daemon_restart' rather than 'post_llm_crash'.
     _set_daemon_start_ts()
+
+    # Resume before reaping: `_cleanup_stale_runs` marks every still-running
+    # row as timed out, which would destroy exactly what resume recovers.
+    try:
+        resumed = await resume_interrupted_runs()
+        if resumed:
+            logger.info("Startup: resumed %d interrupted agent runs", resumed)
+    except Exception as e:
+        logger.warning("Startup resume failed, continuing to reap: %s", _sanitize(e))
 
     # Clean up stale runs from previous crash/restart
     cleaned = await asyncio.to_thread(_cleanup_stale_runs)

@@ -110,3 +110,4 @@ crm/104_benchmark_sandbox_tenant.sql
 crm/105_agent_messages.sql
 crm/106_workflow_approvals.sql
 crm/107_seed_service_role.sql
+crm/108_run_resume_attempts.sql
