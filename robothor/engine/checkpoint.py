@@ -10,12 +10,23 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+import time
+from collections.abc import Callable  # noqa: TC003
+from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_INTERVAL = 5  # checkpoint every N successful tool calls
+
+#: Also checkpoint when this long has passed since the last one, regardless of
+#: tool-call count. The step trigger alone cannot fire for long, low-step work,
+#: which is exactly the work that most needs to survive a restart: measured over
+#: 30 days on this instance, benchmark-runner averaged 107 minutes and 1.2 tool
+#: calls per run, so it never reached 5 and never checkpointed. Of 45 of its
+#: runs killed by a daemon restart, ZERO had a checkpoint to resume from.
+#: Durability was inversely correlated with how much it was needed.
+CHECKPOINT_MAX_SECONDS = 300.0
 CHECKPOINT_SCHEMA_VERSION = 1  # increment when checkpoint format changes
 
 
@@ -25,18 +36,41 @@ class CheckpointManager:
 
     run_id: str = ""
     interval: int = CHECKPOINT_INTERVAL
+    max_seconds: float = CHECKPOINT_MAX_SECONDS
+    clock: Callable[[], float] = time.monotonic
     _success_count: int = 0
     _checkpoint_count: int = 0
+    _last_checkpoint_at: float = field(default=0.0)
+
+    def __post_init__(self) -> None:
+        self._last_checkpoint_at = self.clock()
 
     def record_success(self) -> None:
         """Record a successful tool call."""
         self._success_count += 1
 
+    def note_checkpoint_saved(self) -> None:
+        """Rearm the time trigger. Without this every later iteration fires."""
+        self._last_checkpoint_at = self.clock()
+
     def should_checkpoint(self) -> bool:
-        """Whether it's time to save a checkpoint."""
+        """Whether it's time to save a checkpoint.
+
+        Two triggers, either sufficient. The step trigger is the original: N
+        successful tool calls. The time trigger exists because that one cannot
+        fire for work that spends an hour inside a single tool call — the
+        precise shape of every long-running agent here, and the reason resume
+        had nothing to resume from.
+
+        A run that has done no work at all is never checkpointed: there is
+        nothing worth persisting, and the runner would otherwise write one on
+        the first idle iteration of every run.
+        """
         if self._success_count == 0:
             return False
-        return self._success_count % self.interval == 0
+        if self._success_count % self.interval == 0:
+            return True
+        return (self.clock() - self._last_checkpoint_at) >= self.max_seconds
 
     def save(
         self,
@@ -77,6 +111,7 @@ class CheckpointManager:
                     ),
                 )
             self._checkpoint_count += 1
+            self.note_checkpoint_saved()
             logger.debug(
                 "Checkpoint %d saved for run %s at step %d",
                 self._checkpoint_count,
