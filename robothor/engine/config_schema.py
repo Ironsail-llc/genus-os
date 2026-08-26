@@ -14,41 +14,42 @@ logger = logging.getLogger(__name__)
 
 # ── Known v2 keys (to catch typos) ──────────────────────────────────
 
-_KNOWN_V2_KEYS = frozenset(
-    {
-        "can_spawn_agents",
-        "max_nesting_depth",
-        "sub_agent_max_iterations",
-        "sub_agent_timeout_seconds",
-        "max_concurrent_spawns",
-        "max_spawn_batch",
-        "mcp_servers",
-        "error_feedback",
-        "planning_enabled",
-        "planning_model",
-        "scratchpad_enabled",
-        "guardrails",
-        "guardrails_opt_out",
-        "exec_allowlist",
-        "write_path_allowlist",
-        "checkpoint_enabled",
-        "verification_enabled",
-        "verification_prompt",
-        "difficulty_class",
-        "lifecycle_hooks",
-        "sandbox",
-        "eager_tool_compression",
-        "tool_offload_threshold",
-        "safety_cap",
-        "continuous",
-        "progress_report_interval",
-        "max_cost_usd",
-        "hard_budget",
-        "human_approval_tools",
-        "human_approval_timeout",
-        "todo_list_enabled",
-    }
-)
+
+def _v2_keys_read_by_config() -> frozenset[str]:
+    """Every key `config.py` actually reads out of the `v2:` block.
+
+    Derived from the source rather than hand-maintained. The hand-written
+    list had drifted three keys — `rate_limit_per_minute`,
+    `tool_timeout_seconds` and `human_approval_fail_open` — so a manifest
+    that set any of them CORRECTLY was told "possible typo?", while the same
+    key in the wrong block said nothing at all. Exactly backwards, and this
+    project has now shipped that same drifted-hardcoded-list defect enough
+    times to stop writing them by hand.
+
+    Falls back to a static set if the source cannot be read, because a
+    validator must never be the reason a manifest fails to load.
+    """
+    import re
+    from pathlib import Path as _Path
+
+    static = frozenset(
+        {
+            "can_spawn_agents",
+            "max_nesting_depth",
+            "guardrails",
+            "sandbox",
+            "rate_limit_per_minute",
+        }
+    )
+    try:
+        src = (_Path(__file__).parent / "config.py").read_text(encoding="utf-8")
+    except OSError:
+        return static
+    found = frozenset(re.findall(r"""v2\.get\(\s*['"]([a-z0-9_]+)""", src))
+    return found or static
+
+
+_KNOWN_V2_KEYS = _v2_keys_read_by_config()
 
 # Derived, not duplicated. This used to be a hand-maintained copy of the
 # enforcement sets in guardrails.py, and the two drifted in BOTH directions:
@@ -117,6 +118,62 @@ def _check_model_block(warnings: list[str], where: str, model: Any) -> None:
             )
 
 
+def _key_home_map() -> dict[str, str]:
+    """Which block each manifest key is actually read from.
+
+    Derived from `config.py`, like the v2 key set, because every
+    hand-maintained list in this project has eventually drifted from the
+    code it describes.
+
+    Only keys read from EXACTLY ONE block are included. `safety_cap` is read
+    from both `v2:` and `schedule:` and is therefore not misplaceable — a
+    map that claimed otherwise would emit a confident, wrong warning, which
+    is worse than none.
+    """
+    import re
+    from pathlib import Path as _Path
+
+    try:
+        src = (_Path(__file__).parent / "config.py").read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    homes: dict[str, set[str]] = {}
+    for block in ("v2", "schedule", "model", "delivery"):
+        pattern = rf"""{block}\.get\(\s*['"]([a-z0-9_]+)"""
+        for key in re.findall(pattern, src):
+            homes.setdefault(key, set()).add(block)
+    return {key: next(iter(blocks)) for key, blocks in homes.items() if len(blocks) == 1}
+
+
+#: A key here that turns up in the wrong block is reported, because a REAL
+#: key in the WRONG block silently does nothing while looking deliberate.
+#: `bench/wildclaw` carried `rate_limit_per_minute: 300` under `schedule:`
+#: (read from `v2:`) and ran throttled at the 30/min default through every
+#: measurement taken after the knob supposedly shipped — with a comment above
+#: it explaining why the throttle needed raising.
+#:
+#: An unrecognised key is never reported: it may be a future field or an
+#: instance extension, and warning about those would make this noise. Noisy
+#: warnings get muted, and a muted warning is what this exists to prevent.
+_KEY_HOME: dict[str, str] = _key_home_map()
+
+
+def _check_misplaced_keys(warnings: list[str], data: dict[str, Any]) -> None:
+    """Report keys that sit in a block other than the one they are read from."""
+    for block in ("schedule", "v2", "model", "delivery"):
+        section = data.get(block)
+        if not isinstance(section, dict):
+            continue
+        for key in section:
+            home = _KEY_HOME.get(key)
+            if home and home != block:
+                warnings.append(
+                    f"{block}.{key} is ignored — {key!r} is read from the "
+                    f"{home!r} block. Move it under {home}: or it silently "
+                    "does nothing."
+                )
+
+
 def validate_manifest(data: dict[str, Any]) -> list[str]:
     """Validate a merged manifest dict. Returns list of warning strings (empty = valid)."""
     warnings: list[str] = []
@@ -124,6 +181,8 @@ def validate_manifest(data: dict[str, Any]) -> list[str]:
     # Required fields
     if not data.get("id"):
         warnings.append("Missing required field: id")
+
+    _check_misplaced_keys(warnings, data)
 
     # Model blocks — top-level, heartbeat, and worker all carry one, and the
     # 2026-08-23 incident's broken entry was in the HEARTBEAT block.
