@@ -1,3 +1,10 @@
+## [1.51.3](https://github.com/Ironsail-llc/genus-os/compare/v1.51.2...v1.51.3) (2026-08-26)
+
+### Bug Fixes
+
+* **engine:** a successful call that changes nothing is not progress ([#403](https://github.com/Ironsail-llc/genus-os/issues/403)) ([fa4b0b4](https://github.com/Ironsail-llc/genus-os/commit/fa4b0b4cb0620d01126f2bc5982eb85bebffc7a1))
+* **engine:** compaction keeps what the agent learned, not just what it said ([#402](https://github.com/Ironsail-llc/genus-os/issues/402)) ([d09d5ec](https://github.com/Ironsail-llc/genus-os/commit/d09d5ec16afff74d02907002ff4ede13cd0eb6a4))
+
 ## [1.51.2](https://github.com/Ironsail-llc/genus-os/compare/v1.51.1...v1.51.2) (2026-08-26)
 
 ### Bug Fixes
