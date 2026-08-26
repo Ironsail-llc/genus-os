@@ -223,3 +223,23 @@ class TestTheExtractorCannotBeHung:
         started = time.perf_counter()
         declared_paths(evil)
         assert time.perf_counter() - started < 1.0
+
+
+class TestNonEnglishPrompts:
+    """CJK text has no spaces. A whitespace tokenizer found NOTHING in the
+    Chinese task prompts this feature exists for — every unit test passed
+    while the real behaviour was zero. Probing a real prompt caught it."""
+
+    def test_a_path_embedded_in_chinese_prose(self):
+        text = "将结果保存为：`/tmp_workspace/results/result.png`（完整网格图片）"
+        assert "/tmp_workspace/results/result.png" in declared_paths(text)
+
+    def test_two_paths_in_chinese_prose(self):
+        text = (
+            "保存为：`/ws/results/result.png`（图片）；"
+            "描述写入：`/ws/results/description.txt`（纯文本）"
+        )
+        assert declared_paths(text) == [
+            "/ws/results/result.png",
+            "/ws/results/description.txt",
+        ]

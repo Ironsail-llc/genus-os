@@ -32,19 +32,38 @@ from pathlib import Path
 #: deliverable. Extensions are capped at 5 characters so a sentence ending
 #: mid-path does not produce a phantom file.
 #:
-#: Linear by construction, after two attempts that were not. This pattern
-#: runs over untrusted task text, so a crafted prompt must not be able to
-#: hang the engine before the agent takes a step (CodeQL py/polynomial-redos).
+#: Tokens are runs of ASCII path characters, and each is matched once against
+#: an anchored pattern. Linear in the input, and language-agnostic: CJK text
+#: contains no spaces, so splitting on whitespace found NOTHING in the
+#: Chinese task prompts this exists for — caught by probing a real prompt,
+#: after the unit tests had all passed.
 #:
-#: The first version nested quantifiers — `(?:[\w.\-]+/)+` — which backtracks
-#: on `/-/-/-/...`. The second flattened them but left `.` inside the body
-#: class, so the body competed with the literal `\.` for every dot and
-#: backtracked on `/a.a.a.a...`. The body now excludes dots outright, leaving
-#: exactly one place a dot can match and nothing to backtrack over.
+#: Three regex attempts preceded this, each flagged by CodeQL
+#: (py/polynomial-redos) and each correctly. Nested quantifiers backtracked
+#: on `/-/-/-/...`; flattening them left `.` competing with the literal `\.`
+#: and backtracked on `/a.a.a...`; removing dots from the body still left an
+#: unanchored scan, which is quadratic on `////...` because every start
+#: position rescans to the end. This pattern runs over untrusted task text,
+#: so a crafted prompt must not be able to hang the engine before the agent
+#: takes a step — and the fix for that is not a cleverer regex, it is not
+#: scanning free text with one.
 #:
-#: The cost is a directory containing a dot (`/a/b.c/d.png`), which is not a
-#: shape task prompts use for deliverables. Worth it to be unhangable.
-_PATH_RE = re.compile(r"(?<![\w:/])(/[\w\-/]+\.[A-Za-z0-9]{1,5})\b")
+#: A suffix is required, because a bare directory ("work inside
+#: /tmp_workspace") is a location, not a deliverable. Extensions are capped
+#: at 5 characters so a sentence ending mid-path yields no phantom file.
+#: Deliberately ASCII, not `\w`: Python's `\w` matches CJK, which would glue
+#: a path to the sentence around it.
+_PATH_CHARS_RE = re.compile(r"[A-Za-z0-9_\-/.]+")
+_PATH_TOKEN_RE = re.compile(r"\A(/[A-Za-z0-9_\-/]+\.[A-Za-z0-9]{1,5})\Z")
+
+#: Punctuation a path picks up from prose: backticks, quotes, a trailing
+#: comma or full stop, parentheses.
+#: A trailing dot is prose punctuation, never part of a filename — and it
+#: must be in this set or `strip` halts on it before reaching the backtick
+#: underneath. Stripping it cannot damage a real path: a file ending in `.`
+#: has no extension and would not match anyway.
+_TRIM = "`'\".,;:!?()[]<>" + "\u3002\uff0c\u201c\u201d"
+
 
 #: Directory names that hold a task's INPUTS. A path under one of these is
 #: something the agent reads, never something it must produce, and warning
@@ -65,7 +84,13 @@ def declared_paths(text: str | None) -> list[str]:
     if not text:
         return []
     found: list[str] = []
-    for match in _PATH_RE.finditer(str(text)):
+    for raw in _PATH_CHARS_RE.findall(str(text)):
+        token = raw.strip(_TRIM)
+        if not token.startswith("/"):
+            continue
+        match = _PATH_TOKEN_RE.match(token)
+        if not match:
+            continue
         path = match.group(1)
         if any(part in path for part in _INPUT_DIRS):
             continue
