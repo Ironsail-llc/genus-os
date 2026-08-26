@@ -186,3 +186,31 @@ class TestPathsAreConfinedToTheWorkspace:
     def test_the_composed_note_passes_the_workspace_through(self, tmp_path):
         note = deadline_note(90.0, 100.0, f"save it to {tmp_path}/out.md", workspace=str(tmp_path))
         assert note is not None and "out.md" in note
+
+
+class TestTheExtractorCannotBeHung:
+    """The path pattern runs over untrusted task text.
+
+    The first version nested quantifiers — `(?:[\\w.\\-]+/)+` — which
+    backtracks polynomially on input like `/-/-/-/-/...`. CodeQL flagged it
+    (py/polynomial-redos) and was right: a crafted task prompt could hang the
+    engine before the agent ran a single step. The pattern is now a single
+    flat quantifier, which is linear.
+    """
+
+    def test_a_pathological_string_returns_promptly(self):
+        import time
+
+        evil = "/" + "-/" * 4000
+        started = time.perf_counter()
+        declared_paths(evil)
+        elapsed = time.perf_counter() - started
+        assert elapsed < 1.0, f"the extractor took {elapsed:.1f}s on crafted input"
+
+    def test_a_long_benign_string_is_also_fast(self):
+        import time
+
+        text = " ".join(f"/ws/results/file{i}.md" for i in range(5000))
+        started = time.perf_counter()
+        declared_paths(text)
+        assert time.perf_counter() - started < 1.0

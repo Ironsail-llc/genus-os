@@ -31,7 +31,13 @@ from pathlib import Path
 #: bare directory ("work inside /tmp_workspace") is a location, not a
 #: deliverable. Extensions are capped at 5 characters so a sentence ending
 #: mid-path does not produce a phantom file.
-_PATH_RE = re.compile(r"(?<![\w:/])(/(?:[\w.\-]+/)+[\w.\-]+\.[A-Za-z0-9]{1,5})\b")
+#:
+#: ONE flat quantifier, deliberately. The first version nested them —
+#: `(?:[\w.\-]+/)+` — which backtracks polynomially on input like
+#: `/-/-/-/...`, and this pattern runs over untrusted task text, so a crafted
+#: prompt could hang the engine before the agent took a single step
+#: (CodeQL py/polynomial-redos).
+_PATH_RE = re.compile(r"(?<![\w:/])(/[\w.\-/]+\.[A-Za-z0-9]{1,5})\b")
 
 #: Directory names that hold a task's INPUTS. A path under one of these is
 #: something the agent reads, never something it must produce, and warning
