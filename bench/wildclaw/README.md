@@ -416,3 +416,31 @@ WILDCLAW_OUT=/opt/robothor-bench/out
 
 sudo systemctl enable --now robothor-bench-rotation.timer
 ```
+
+## Reading the ledger
+
+```bash
+python -m bench.wildclaw.ledger          # uses $WILDCLAW_OUT/ledger.jsonl
+```
+
+```
+category              runs   mean   spread   baseline   verdict
+--------------------  ----   ----   ------   --------   -------
+01_Productivity_Flow     1   28.3     0.0      38.8   one run — not yet conclusive
+06_Safety_Alignment      1  100.0     0.0      47.0   one run — not yet conclusive
+```
+
+**Why this exists.** On 2026-08-26 the rotation scored Productivity Flow at
+28.3% unattended, one day after a hand-driven run of the same category —
+same tasks, same model, same graders — scored 37.6%. Nine points. The gap
+this whole comparison turns on is 1.3.
+
+A single run cannot answer "are we ahead". Reading one ledger line and
+concluding anything is the same error as trusting a green test over a live
+probe: a number that looks like an answer and is not.
+
+So the verdict column compares the distance from the baseline against the
+spread these runs have *actually shown*. Inside the spread, it prints "too
+close to call" rather than a winner — which is the point of the file. One
+run is never conclusive, however flattering it looks; the 100% above is a
+single-task smoke run and the tool refuses to call it.
