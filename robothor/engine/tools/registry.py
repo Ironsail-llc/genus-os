@@ -61,6 +61,69 @@ class ToolRegistry:
         # Engine-specific tools
         self._schemas.update(get_engine_schemas())
 
+        # Plugin-contributed schemas. Without this the seam is half-wired:
+        # dispatch.py registers a plugin's HANDLER, so the tool can be
+        # executed, but `_get_filtered_names` filters tools_allowed by
+        # membership in `_schemas`, so a plugin tool named in a manifest was
+        # routed to the "silently unavailable" branch and never advertised to
+        # the model. docs/PLUGINS.md promised the opposite in plain words, and
+        # the seam's own tests asserted against the loader's dataclass rather
+        # than the registry, so they passed while nothing worked.
+        #
+        # Built-ins are passed as reserved so a plugin cannot shadow `exec`
+        # or `write_file` — a takeover, not an extension. The reserved set is
+        # taken AFTER the built-ins are registered, so it is the real one.
+        self._register_plugin_schemas()
+
+    def _register_plugin_schemas(self) -> None:
+        """Advertise plugin tools to the model. Never raises: one broken
+        package must not stop the engine from starting."""
+        try:
+            from robothor.plugins import load_plugins
+
+            plugins = load_plugins(reserved_names=set(self._schemas))
+        except Exception as e:  # noqa: BLE001 - a plugin must not break boot
+            logger.warning("Plugin schema registration skipped: %s", e)
+            return
+
+        registered: list[str] = []
+        for name, schema in (plugins.schemas or {}).items():
+            if name in self._schemas:
+                logger.warning(
+                    "Plugin schema %r refused — it would shadow a built-in tool",
+                    name,
+                )
+                continue
+            self._schemas[name] = schema
+            registered.append(name)
+
+        # A handler with no declared schema still has to be advertised, or the
+        # documented quickstart is false: docs/PLUGINS.md's example contributes
+        # only `handlers` and then promises the tool "is available to any agent
+        # whose manifest lists it in tools_allowed". Synthesize a permissive
+        # schema from the handler's docstring so that promise holds. An
+        # explicit schema always wins.
+        for name, handler in (plugins.tools or {}).items():
+            if name in self._schemas:
+                continue
+            doc = (getattr(handler, "__doc__", "") or "").strip().split("\n")[0]
+            self._schemas[name] = {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": doc or f"Plugin tool {name}.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+            registered.append(name)
+
+        if registered:
+            logger.info(
+                "Registered %d plugin tool schema(s): %s",
+                len(registered),
+                ", ".join(sorted(registered)),
+            )
+
     # Adapter connection failure cache: {adapter_name: (fail_time, backoff_seconds)}
     _adapter_failures: dict[str, tuple[float, float]] = {}
 
