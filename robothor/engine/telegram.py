@@ -489,26 +489,9 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
                 todos = event.get("todos", [])
                 try:
                     if todos:
-                        checklist_text = _format_checklist_html(todos)
-                        if checklist_msg_id:
-                            await self._retry_on_flood(
-                                self.bot.edit_message_text(
-                                    chat_id=int(chat_id),
-                                    message_id=checklist_msg_id,
-                                    text=checklist_text,
-                                    parse_mode="HTML",
-                                )
-                            )
-                        else:
-                            msg = await self._retry_on_flood(
-                                self.bot.send_message(
-                                    chat_id=int(chat_id),
-                                    text=checklist_text,
-                                    parse_mode="HTML",
-                                )
-                            )
-                            if msg:
-                                checklist_msg_id = msg.message_id
+                        checklist_msg_id = await self._send_or_edit_checklist(
+                            chat_id=chat_id, todos=todos, message_id=checklist_msg_id
+                        )
                     elif checklist_msg_id:
                         with contextlib.suppress(Exception):
                             await self.bot.delete_message(
@@ -517,7 +500,11 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
                             )
                         checklist_msg_id = None
                 except Exception:
-                    logger.debug("Checklist update failed", exc_info=True)
+                    # WARNING, not DEBUG: this block was raising TypeError on
+                    # every update for as long as the call sites were wrong,
+                    # and a DEBUG line is why nobody noticed the live
+                    # checklist had simply stopped existing.
+                    logger.warning("Checklist update failed", exc_info=True)
 
         # ── Execute agent ──
         model = self._model_override.get(chat_id)
@@ -1664,6 +1651,40 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
 
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+    async def _send_or_edit_checklist(
+        self,
+        chat_id: str,
+        todos: list[dict[str, str]],
+        message_id: int | None,
+    ) -> int | None:
+        """Render the live todo checklist, editing in place after the first send.
+
+        Extracted from the ``todo_updated`` handler so it can be tested at all.
+        Inline, both calls handed ``_retry_on_flood`` a pre-built coroutine
+        instead of the zero-arg factory it documents, so every update raised
+        TypeError before reaching the network — swallowed by the handler's
+        ``except Exception``.
+        """
+        text = _format_checklist_html(todos)
+        if message_id:
+            await self._retry_on_flood(
+                lambda: self.bot.edit_message_text(
+                    chat_id=int(chat_id),
+                    message_id=message_id,
+                    text=text,
+                    parse_mode="HTML",
+                )
+            )
+            return message_id
+        msg = await self._retry_on_flood(
+            lambda: self.bot.send_message(
+                chat_id=int(chat_id),
+                text=text,
+                parse_mode="HTML",
+            )
+        )
+        return msg.message_id if msg else None
+
     async def _retry_on_flood(
         self,
         coro_factory: Any,
@@ -1682,6 +1703,12 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         Raises:
             TelegramRetryAfter: If all retries are exhausted.
         """
+        if not callable(coro_factory):
+            raise TypeError(
+                "_retry_on_flood needs a zero-arg factory, not a pre-built "
+                "coroutine — a coroutine cannot be awaited twice, so retrying "
+                "it is impossible. Wrap the call in a lambda."
+            )
         last_exc: TelegramRetryAfter | None = None
         for attempt in range(1, max_retries + 1):
             try:
