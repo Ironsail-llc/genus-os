@@ -30,8 +30,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     "timeout": {
                         "type": "integer",
                         "description": (
-                            "Seconds to allow before killing the command "
-                            "(default 30, maximum 900)."
+                            "Seconds to allow before killing the command (default 30, maximum 900)."
                         ),
                     },
                 },
