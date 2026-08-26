@@ -81,32 +81,38 @@ class TestReadingWhatTheTaskAsksFor:
 
 class TestTheNote:
     def test_names_a_missing_deliverable(self, tmp_path):
-        note = missing_deliverables_note([str(tmp_path / "results" / "result.png")], remaining=120)
+        note = missing_deliverables_note(
+            [str(tmp_path / "results" / "result.png")], remaining=120, workspace=str(tmp_path)
+        )
         assert note is not None
         assert "result.png" in note
 
     def test_says_nothing_when_the_file_exists(self, tmp_path):
         p = tmp_path / "out.md"
         p.write_text("done", encoding="utf-8")
-        assert missing_deliverables_note([str(p)], remaining=120) is None
+        assert missing_deliverables_note([str(p)], remaining=120, workspace=str(tmp_path)) is None
 
     def test_says_nothing_with_no_declared_paths(self):
-        assert missing_deliverables_note([], remaining=120) is None
+        assert missing_deliverables_note([], remaining=120, workspace="/tmp") is None
 
     def test_reports_only_the_missing_ones(self, tmp_path):
         there = tmp_path / "a.md"
         there.write_text("x", encoding="utf-8")
         gone = tmp_path / "b.md"
-        note = missing_deliverables_note([str(there), str(gone)], remaining=90)
+        note = missing_deliverables_note(
+            [str(there), str(gone)], remaining=90, workspace=str(tmp_path)
+        )
         assert "b.md" in note
         assert "a.md" not in note
 
     def test_the_note_states_the_time_left(self, tmp_path):
-        note = missing_deliverables_note([str(tmp_path / "x.md")], remaining=90)
+        note = missing_deliverables_note(
+            [str(tmp_path / "x.md")], remaining=90, workspace=str(tmp_path)
+        )
         assert "90" in note
 
     def test_an_unreadable_path_does_not_raise(self):
-        missing_deliverables_note(["\x00bad"], remaining=10)
+        missing_deliverables_note(["\x00bad"], remaining=10, workspace="/tmp")
 
 
 class TestTheRunnerChecksThem:
@@ -127,14 +133,56 @@ class TestTheRunnerChecksThem:
 
 class TestTheComposedNote:
     def test_it_carries_both_halves(self, tmp_path):
-        note = deadline_note(90.0, 100.0, f"save it to {tmp_path}/results/out.md")
+        note = deadline_note(
+            90.0, 100.0, f"save it to {tmp_path}/results/out.md", workspace=str(tmp_path)
+        )
         assert note is not None
         assert "Time budget" in note
         assert "out.md" in note
 
     def test_no_warning_before_the_threshold(self, tmp_path):
-        assert deadline_note(10.0, 100.0, f"save to {tmp_path}/x.md") is None
+        assert (
+            deadline_note(10.0, 100.0, f"save to {tmp_path}/x.md", workspace=str(tmp_path)) is None
+        )
 
     def test_the_warning_stands_alone_when_nothing_was_declared(self):
-        note = deadline_note(90.0, 100.0, "summarise the findings")
+        note = deadline_note(90.0, 100.0, "summarise the findings", workspace="/tmp")
         assert note is not None and "Time budget" in note
+
+
+class TestPathsAreConfinedToTheWorkspace:
+    """Prompt text is untrusted input, and these paths reach the filesystem.
+
+    `declared_paths` reads whatever the task says; `missing_deliverables_note`
+    then stats it. A prompt is attacker-influenceable in any deployment where
+    someone else can file a task, so a path from one must not send the engine
+    poking at arbitrary locations — CodeQL flags exactly this shape
+    (py/path-injection), and it is right to.
+
+    Confinement is also the more CORRECT rule: a file outside the agent's
+    workspace is not the deliverable the task is graded on.
+    """
+
+    def test_a_path_outside_the_workspace_is_ignored(self, tmp_path):
+        note = missing_deliverables_note(
+            ["/etc/shadow", str(tmp_path / "out.md")], remaining=60, workspace=str(tmp_path)
+        )
+        assert note is not None
+        assert "/etc/shadow" not in note
+        assert "out.md" in note
+
+    def test_traversal_out_of_the_workspace_is_ignored(self, tmp_path):
+        note = missing_deliverables_note(
+            [str(tmp_path / ".." / ".." / "etc" / "passwd")],
+            remaining=60,
+            workspace=str(tmp_path),
+        )
+        assert note is None
+
+    def test_no_workspace_means_no_filesystem_access(self, tmp_path):
+        """Fail closed: without a workspace to confine to, check nothing."""
+        assert missing_deliverables_note([str(tmp_path / "x.md")], remaining=60) is None
+
+    def test_the_composed_note_passes_the_workspace_through(self, tmp_path):
+        note = deadline_note(90.0, 100.0, f"save it to {tmp_path}/out.md", workspace=str(tmp_path))
+        assert note is not None and "out.md" in note

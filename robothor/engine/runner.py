@@ -2154,6 +2154,7 @@ class AgentRunner(
                     self._active_watchdog.elapsed_seconds,
                     float(getattr(self._active_watchdog, "_hard_timeout", 0) or 0),
                     session.messages[0].get("content") if session.messages else "",
+                    getattr(agent_config, "workspace", "") or self.config.workspace,
                 )
                 if _dl_note:
                     _deadline_warned = True

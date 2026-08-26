@@ -63,18 +63,33 @@ def declared_paths(text: str | None) -> list[str]:
     return found
 
 
-def missing_deliverables_note(paths: list[str], remaining: int) -> str | None:
+def missing_deliverables_note(
+    paths: list[str], remaining: int, workspace: str | None = None
+) -> str | None:
     """A note naming the declared files that are not on disk yet, or None.
 
-    Returns None when nothing was declared or everything already exists —
-    the silent case has to be the common one, or the note stops being read.
+    Returns None when nothing was declared or everything already exists — the
+    silent case has to be the common one, or the note stops being read.
+
+    Every path is confined to `workspace` before it is touched. Task text is
+    untrusted input in any deployment where someone else can file a task, and
+    these paths reach the filesystem; without a workspace to confine to,
+    nothing is checked at all. Confinement is also the more correct rule — a
+    file outside the agent's workspace is not the deliverable it is graded on.
     """
-    if not paths:
+    if not paths or not workspace:
+        return None
+    try:
+        root = Path(workspace).resolve()
+    except (OSError, ValueError):
         return None
     missing: list[str] = []
     for path in paths:
         try:
-            if not Path(path).exists():
+            candidate = Path(path).resolve()
+            if not candidate.is_relative_to(root):
+                continue
+            if not candidate.exists():
                 missing.append(path)
         except (OSError, ValueError):
             # An unparseable path is not evidence of anything; skip it rather
@@ -92,7 +107,12 @@ def missing_deliverables_note(paths: list[str], remaining: int) -> str | None:
     )
 
 
-def deadline_note(elapsed: float, hard_timeout: float, task_text: str | None) -> str | None:
+def deadline_note(
+    elapsed: float,
+    hard_timeout: float,
+    task_text: str | None,
+    workspace: str | None = None,
+) -> str | None:
     """The full wrap-up note: the time warning, plus any missing deliverable.
 
     Composed here rather than in the runner because it is one question — the
@@ -107,6 +127,8 @@ def deadline_note(elapsed: float, hard_timeout: float, task_text: str | None) ->
     if not base:
         return None
     missing = missing_deliverables_note(
-        declared_paths(task_text), remaining=max(0, int(hard_timeout - elapsed))
+        declared_paths(task_text),
+        remaining=max(0, int(hard_timeout - elapsed)),
+        workspace=workspace,
     )
     return f"{base}\n{missing}" if missing else base
