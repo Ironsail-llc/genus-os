@@ -220,16 +220,28 @@ async def test_an_empty_answer_is_a_failure_and_the_walk_continues():
 
 
 def test_every_planner_call_site_gets_the_whole_chain():
-    """The branch fixed two of three. runner.py's replan kept models[1:2]."""
-    import subprocess
+    """The branch fixed two of three. runner.py's replan kept models[1:2].
 
-    out = subprocess.run(
-        ["grep", "-rn", "fallback_models=models", "robothor/"],
-        capture_output=True,
-        text=True,
-        cwd="/home/philip/wt-offlinetier",
-    ).stdout
-    offenders = [ln for ln in out.splitlines() if "models[1:2]" in ln]
+    Scans the whole package rather than naming the known sites: the defect was
+    that a third call site existed at all. The root is derived from this file,
+    never a checkout path — an earlier version hardcoded one and the instance
+    leak gate caught it.
+    """
+    from pathlib import Path
+
+    # parents[2] IS the robothor package (…/robothor/engine/tests/this.py).
+    package = Path(__file__).resolve().parents[2]
+    assert package.name == "robothor" and (package / "engine").is_dir(), (
+        f"scan root wrong: {package} — this test would certify nothing"
+    )
+    needle = "fallback_models=models[1:" + "2]"  # split so this file is not a hit
+    offenders = [
+        f"{path.relative_to(package.parent)}:{n}"
+        for path in package.rglob("*.py")
+        if "tests" not in path.parts
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if needle in line
+    ]
     assert not offenders, f"a planner call site still truncates the chain: {offenders}"
 
 
