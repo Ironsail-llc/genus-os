@@ -1,3 +1,13 @@
+## [1.53.0](https://github.com/Ironsail-llc/genus-os/compare/v1.52.2...v1.53.0) (2026-08-26)
+
+### Features
+
+* **engine:** a plugin seam, so extending the platform is not a fork ([#411](https://github.com/Ironsail-llc/genus-os/issues/411)) ([6a717a3](https://github.com/Ironsail-llc/genus-os/commit/6a717a32234fd686be11eadd7d8852ae82e8c915))
+
+### Bug Fixes
+
+* **engine:** a rate limit is a wait, and a spent budget is neither ([#410](https://github.com/Ironsail-llc/genus-os/issues/410)) ([129f685](https://github.com/Ironsail-llc/genus-os/commit/129f68530ec97088f2aa33425916e0748deb11d2)), closes [#409](https://github.com/Ironsail-llc/genus-os/issues/409)
+
 ## [1.52.2](https://github.com/Ironsail-llc/genus-os/compare/v1.52.1...v1.52.2) (2026-08-26)
 
 ### Bug Fixes
