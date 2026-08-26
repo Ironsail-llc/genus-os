@@ -254,13 +254,27 @@ class TestMessageHygiene:
 
 
 class TestHandleModelError:
-    @pytest.mark.parametrize("status", [401, 402, 403, 429, 500, 502, 503, 504])
+    @pytest.mark.parametrize("status", [401, 402, 403, 500, 502, 503, 504])
     def test_http_errors_mark_broken(self, status):
         broken: set[str] = set()
         err = Exception("boom")
         err.status_code = status
         LLMClient._handle_model_error(err, "m1", broken)
         assert "m1" in broken
+
+    def test_429_does_not_mark_broken(self):
+        """A rate limit is a WAIT, not a dead model.
+
+        429 used to sit in the list above, beside 401/402/403, so one rate
+        limit burned the primary model for the whole run and every later
+        call fell down the chain. It is now retried in place after the
+        interval the provider names (see test_rate_limit_is_a_wait.py).
+        """
+        broken: set[str] = set()
+        err = Exception("slow down")
+        err.status_code = 429
+        LLMClient._handle_model_error(err, "m1", broken)
+        assert "m1" not in broken
 
     def test_timeout_marks_broken(self):
         broken: set[str] = set()
