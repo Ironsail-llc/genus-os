@@ -98,8 +98,11 @@ class TestTheRunnerUsesIt:
         return Path(m.__file__).read_text(encoding="utf-8")
 
     def test_sandbox_teardown_is_bounded(self):
+        """The runner bounds via the shared FinalizationBudget (see
+        test_finalization_budget) — a per-step helper alone let five slow
+        steps compound to 300s."""
         body = self._source()
-        assert "bounded_finalization" in body, "the runner never bounds anything"
+        assert "FinalizationBudget(" in body, "the runner never bounds anything"
         idx = body.index("await sandbox.stop()") if "await sandbox.stop()" in body else -1
         assert idx == -1, (
             "sandbox.stop() is still awaited unbounded in the finally block — "
@@ -116,6 +119,4 @@ class TestTheRunnerUsesIt:
             if "\n    async def " in handler
             else handler
         )
-        assert "bounded_finalization" in handler, (
-            "the cancellation path still finalizes without a bound"
-        )
+        assert "_fin.run(" in handler, "the cancellation path still finalizes without a bound"

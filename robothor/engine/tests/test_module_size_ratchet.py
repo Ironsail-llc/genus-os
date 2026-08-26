@@ -40,10 +40,10 @@ CAPS = {
     "robothor/engine/run_lifecycle.py": 800,
     "robothor/engine/run_llm_calls.py": 450,
     "robothor/engine/tool_admission.py": 400,
-    # `bounded_finalization` belongs here: it answers this module's own
-    # question — how much may one run spend before something intervenes —
-    # for the stretch after the loop, which had no bound at all.
-    "robothor/engine/run_budget.py": 155,
+    "robothor/engine/run_budget.py": 120,
+    # The finalization cluster (what a run may spend AFTER its loop ends)
+    # was extracted here rather than growing run_budget past its cap.
+    "robothor/engine/finalization_budget.py": 160,
     "robothor/engine/chat.py": 1600,
     "robothor/engine/scheduler.py": 1600,
 }

@@ -43,6 +43,11 @@ from robothor.engine.config import (
     load_agent_config,
 )
 
+# Re-exported for existing importers. The `as` form is what marks a name as
+# deliberately re-exported; a plain import reads to mypy as a private detail,
+# which is the right default and the wrong one here.
+from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
+
 # LLM dispatch/cost/streaming + the request-timeout constants now live in
 # llm_client.LLMClient (Phase A / Slice 1). AgentRunner delegates to an
 # instance of it; the historical method surface is preserved via thin
@@ -63,15 +68,8 @@ from robothor.engine.prompts import (
     PLAN_MODE_PREAMBLE,
     PLAN_MODE_SUFFIX,
 )
-from robothor.engine.run_budget import (
-    DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
-)
-
-# Re-exported for existing importers. The `as` form is what marks a name as
-# deliberately re-exported; a plain import reads to mypy as a private detail,
-# which is the right default and the wrong one here.
 from robothor.engine.run_budget import (  # noqa: E402
-    bounded_finalization as bounded_finalization,
+    DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
 )
 from robothor.engine.run_budget import (
     deadline_warning as deadline_warning,
@@ -772,6 +770,8 @@ class AgentRunner(
         # Saved token is reset in the run-loop finally so a nested run restores
         # the parent's watchdog instead of clobbering it.
         _wd_token = _active_watchdog_var.set(watchdog)
+        # Per-step bounds stop one hang; the shared total stops N compounding.
+        _fin = FinalizationBudget()
 
         # Start watchdog immediately to cover setup phase
         _init_task = asyncio.current_task()
@@ -1530,7 +1530,7 @@ class AgentRunner(
                         _active_watchdog_var.reset(_wd_token)
                     # Sandbox teardown, bounded: runs after watchdog.stop().
                     if sandbox:
-                        await bounded_finalization(sandbox.stop(), "sandbox_stop")
+                        await _fin.run(sandbox.stop(), "sandbox_stop")
                         from robothor.engine.sandbox import set_current_sandbox
 
                         set_current_sandbox(None)
@@ -1579,7 +1579,7 @@ class AgentRunner(
             # and elapsed-since-start. Lands in agent_runs.error_traceback.
             diag = _build_cancel_diagnostic(watchdog, agent_id)
             # The one finalization OUTSIDE the outer asyncio.timeout — see
-            # bounded_finalization's docstring for what that cost.
+            # finalization_budget's module docstring for what that cost.
             _finish = asyncio.to_thread(
                 self._finish_run,
                 session.timeout(reason=reason, traceback=diag),
@@ -1588,7 +1588,7 @@ class AgentRunner(
                 session=session,
                 spawn_context=spawn_context,
             )
-            finished = await bounded_finalization(_finish, "finish_after_cancel") or session.run
+            finished = await _fin.run(_finish, "finish_after_cancel") or session.run
             # The row is written; now let the cancellation continue.
             #
             # Catching it at all is right — 29 runs sat `running` forever

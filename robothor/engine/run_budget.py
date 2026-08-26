@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -100,49 +99,18 @@ def effective_wallclock_ceiling(timeout_seconds: int) -> int:
     return timeout_seconds if timeout_seconds > 0 else _fleet_wallclock_ceiling()
 
 
-#: Wall-clock allowed for any single finalization step — sandbox teardown,
-#: delivery, verification, the closing DB writes.
-#:
-#: Everything after the agent loop runs AFTER `watchdog.stop()`, and the
-#: cancellation handler's own `_finish_run` sits outside the outer
-#: `asyncio.timeout` entirely. So this stretch had no protection of any kind,
-#: which is how a run with a 1200s ceiling reached 3110s: the loop ended at
-#: 1169s, the watchdog stopped itself, and the next 331 seconds were spent
-#: somewhere in teardown with nothing left watching.
-#:
-#: Generous enough for a slow write or a container stop; finite, because a
-#: run may fail to finalize but may not hang doing so.
-FINALIZATION_TIMEOUT = 60
-
-
-async def bounded_finalization(
-    awaitable: Any,
-    step: str,
-    timeout: float = FINALIZATION_TIMEOUT,
-) -> Any:
-    """Await one finalization step under a bound, swallowing every failure.
-
-    Returns the step's result, or None if it timed out or raised.
-
-    Nothing here may propagate. Finalization runs on the way out of a run, so
-    an exception raised at this point replaces whatever the run was actually
-    reporting — the operator would see a teardown error instead of the real
-    outcome. A timeout names the step, because a hang that does not say where
-    it happened is the same mystery this bound exists to end.
-    """
-    import asyncio as _asyncio
-
-    try:
-        return await _asyncio.wait_for(awaitable, timeout=timeout)
-    except TimeoutError:
-        logger.warning(
-            "Finalization step %r exceeded %.0fs and was abandoned — the run "
-            "still reports its outcome, but this step did not complete",
-            step,
-            timeout,
-        )
-    except _asyncio.CancelledError:
-        logger.warning("Finalization step %r was cancelled", step)
-    except Exception as e:
-        logger.warning("Finalization step %r failed: %s", step, e)
-    return None
+# The finalization cluster moved to its own module — it answers a different
+# question (what may a run spend AFTER its loop ends) and was crowding this
+# one. Re-exported so existing importers keep working.
+from robothor.engine.finalization_budget import (  # noqa: E402
+    FINALIZATION_TIMEOUT as FINALIZATION_TIMEOUT,
+)
+from robothor.engine.finalization_budget import (  # noqa: E402
+    FINALIZATION_TOTAL_BUDGET as FINALIZATION_TOTAL_BUDGET,
+)
+from robothor.engine.finalization_budget import (  # noqa: E402
+    FinalizationBudget as FinalizationBudget,
+)
+from robothor.engine.finalization_budget import (  # noqa: E402
+    bounded_finalization as bounded_finalization,
+)
