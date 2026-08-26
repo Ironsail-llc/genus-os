@@ -1,3 +1,13 @@
+## [1.51.2](https://github.com/Ironsail-llc/genus-os/compare/v1.51.1...v1.51.2) (2026-08-26)
+
+### Bug Fixes
+
+* **engine:** the exec timeout an agent can actually reach ([#401](https://github.com/Ironsail-llc/genus-os/issues/401)) ([9876e41](https://github.com/Ironsail-llc/genus-os/commit/9876e41cf55218f24875e03530c0d5737adcbbc3))
+
+### Documentation
+
+* **bench:** the visual-puzzle gap is code reasoning, not vision ([#400](https://github.com/Ironsail-llc/genus-os/issues/400)) ([a8105cf](https://github.com/Ironsail-llc/genus-os/commit/a8105cf63e4fe146efe749df2c112e4faa9dd4ec)), closes [#399](https://github.com/Ironsail-llc/genus-os/issues/399)
+
 ## [1.51.1](https://github.com/Ironsail-llc/genus-os/compare/v1.51.0...v1.51.1) (2026-08-26)
 
 ### Bug Fixes
