@@ -157,8 +157,28 @@ class TestTheContainerIsABoundary:
 class TestRuntimeIsNotHardcoded:
     """Rootless podman is what removes the root-equivalent docker socket."""
 
-    def test_binary_defaults_to_docker(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_binary_defaults_to_the_rootless_runtime_when_present(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """This asserted `docker` while the class docstring above argued for
+        podman. The default was also non-functional here — the engine user is
+        not in the docker group — so an agent declaring `sandbox: docker`
+        could not start a container at all."""
         monkeypatch.delenv("ROBOTHOR_SANDBOX_BINARY", raising=False)
+        monkeypatch.setattr(
+            "robothor.engine.sandbox.shutil.which",
+            lambda name: f"/usr/bin/{name}" if name in ("podman", "docker") else None,
+        )
+        assert sandbox_binary() == "podman"
+
+    def test_binary_falls_back_to_docker_without_podman(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ROBOTHOR_SANDBOX_BINARY", raising=False)
+        monkeypatch.setattr(
+            "robothor.engine.sandbox.shutil.which",
+            lambda name: "/usr/bin/docker" if name == "docker" else None,
+        )
         assert sandbox_binary() == "docker"
 
     def test_binary_is_overridable(self, monkeypatch: pytest.MonkeyPatch) -> None:
