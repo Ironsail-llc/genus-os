@@ -1,3 +1,9 @@
+## [1.55.1](https://github.com/Ironsail-llc/genus-os/compare/v1.55.0...v1.55.1) (2026-08-26)
+
+### Bug Fixes
+
+* **engine:** a process that is unguarded should say so, and "off" should mean off ([#417](https://github.com/Ironsail-llc/genus-os/issues/417)) ([7fa50b3](https://github.com/Ironsail-llc/genus-os/commit/7fa50b394890b8e4f8cabd4dfca0eecadc25f440))
+
 ## [1.55.0](https://github.com/Ironsail-llc/genus-os/compare/v1.54.0...v1.55.0) (2026-08-26)
 
 ### Features
