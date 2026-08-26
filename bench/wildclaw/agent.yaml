@@ -34,6 +34,13 @@ schedule:
   # delaying it, and a measured run hit it at 64 calls in 64 seconds and gave
   # up mid-task. This is the workload the knob exists for; it is not a hint
   # about the tasks, and every other harness runs unthrottled.
+
+# `rate_limit_per_minute` is read from the v2 block. It sat under `schedule:`
+# from the day it was added, loaded as 0, and left this agent throttled at the
+# 30/min default through every measurement — five guardrail blocks in one run
+# on a task that had scored full marks before. config_schema now reports a
+# key in the wrong block rather than ignoring it.
+v2:
   rate_limit_per_minute: 300
 
 delivery:
