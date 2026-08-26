@@ -1,3 +1,13 @@
+## [1.55.3](https://github.com/Ironsail-llc/genus-os/compare/v1.55.2...v1.55.3) (2026-08-26)
+
+### Bug Fixes
+
+* **engine:** chat paid full timeouts on written-off providers ([#419](https://github.com/Ironsail-llc/genus-os/issues/419)) ([b50a73f](https://github.com/Ironsail-llc/genus-os/commit/b50a73fc06f96beebba4d06b5eed83e10cb11aca)), closes [#415](https://github.com/Ironsail-llc/genus-os/issues/415)
+
+### Performance Improvements
+
+* **memory:** entity recall scanned the whole fact set, 5x a turn ([#420](https://github.com/Ironsail-llc/genus-os/issues/420)) ([f63e98e](https://github.com/Ironsail-llc/genus-os/commit/f63e98e3de1bf57c8659cd9c1220a489ce201299))
+
 ## [1.55.2](https://github.com/Ironsail-llc/genus-os/compare/v1.55.1...v1.55.2) (2026-08-26)
 
 ### Bug Fixes
