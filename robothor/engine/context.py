@@ -146,6 +146,7 @@ async def maybe_compress(
     messages: list[dict[str, Any]],
     models: list[str] | None = None,
     threshold: int | None = None,
+    broken_models: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Compress conversation if above threshold.
 
@@ -194,6 +195,7 @@ async def maybe_compress(
         models=models,
         threshold=compress_at,
         drain_to=DRAIN_THRESHOLD,
+        broken_models=broken_models,
     )
 
     compressed = result.messages

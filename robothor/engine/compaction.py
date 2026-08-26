@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -37,6 +38,26 @@ FACT_EXTRACTION_MODEL = "gemini/gemini-2.5-flash"
 # hung provider (Gemini has been flaky) would otherwise stall the whole run and
 # trip the stall watchdog as if the agent itself froze (audit 2026-05-29).
 COMPACTION_LLM_TIMEOUT = 45.0
+
+#: On-device generation is far slower than a cloud call, and the engine gives
+#: this model class 600s (LLM_REQUEST_TIMEOUT_OLLAMA). A 45s cap on the last
+#: link means the chain walk arrives at the offline tier and cancels it —
+#: reaching a model you then kill is not reaching it.
+COMPACTION_LOCAL_LLM_TIMEOUT = 300.0
+
+#: Ceiling for the whole walk. Per-model timeouts alone multiply by chain
+#: length, and compaction runs inside a run's wall-clock budget.
+COMPACTION_WALK_BUDGET = 360.0
+
+
+def _timeout_for(model: str) -> float:
+    """Per-model ceiling: the offline tier needs one it can actually meet."""
+    return (
+        COMPACTION_LOCAL_LLM_TIMEOUT
+        if model.startswith(("ollama_chat/", "ollama/"))
+        else COMPACTION_LLM_TIMEOUT
+    )
+
 
 FACT_EXTRACTION_PROMPT = """\
 Extract key facts from this conversation segment. Return JSON only:
@@ -237,11 +258,16 @@ async def _acompletion_over_chain(models: str | list[str], **kwargs: Any) -> Any
 
     chain = [models] if isinstance(models, str) else list(models)
     last: Exception | None = None
+    started = time.monotonic()
     for model in chain:
+        remaining = COMPACTION_WALK_BUDGET - (time.monotonic() - started)
+        if remaining <= 0:
+            logger.warning("Compaction walk budget exhausted before %s", model)
+            break
         try:
-            return await asyncio.wait_for(
+            response = await asyncio.wait_for(
                 litellm.acompletion(model=model, **kwargs),
-                timeout=COMPACTION_LLM_TIMEOUT,
+                timeout=min(_timeout_for(model), remaining),
             )
         except Exception as e:  # noqa: PERF203 - the walk IS the error handling
             last = e
@@ -250,6 +276,19 @@ async def _acompletion_over_chain(models: str | list[str], **kwargs: Any) -> Any
                 model,
                 str(e)[:100],
             )
+            continue
+        # An empty answer is a failure, not a result. Both callers treat empty
+        # as "nothing to retain" and move on silently, so stopping here would
+        # lose the context just as thoroughly as an exception — without even
+        # trying the tier below.
+        try:
+            content = response.choices[0].message.content
+        except (AttributeError, IndexError, TypeError):
+            content = None
+        if content:
+            return response
+        last = last or RuntimeError(f"{model} returned no content")
+        logger.warning("Compaction model %s returned nothing — trying the next", model)
     raise last if last is not None else RuntimeError("no compaction model configured")
 
 
@@ -485,6 +524,7 @@ async def compact(
     models: list[str] | None = None,
     threshold: int = 80_000,
     drain_to: int = 60_000,
+    broken_models: set[str] | None = None,
 ) -> CompactionResult:
     """4-pass graduated compaction.
 
@@ -522,8 +562,10 @@ async def compact(
 
     # The WHOLE chain, not models[0]: compaction has to survive a dead primary
     # or it silently drops the agent's context during exactly the outage the
-    # fallback chain exists for.
-    summary_model: str | list[str] = list(models) if models else FACT_EXTRACTION_MODEL
+    # fallback chain exists for. Models the run has already proven dead are
+    # dropped, so each pass does not re-dial them for a full round trip.
+    _usable = [m for m in (models or []) if m not in (broken_models or set())] or list(models or [])
+    summary_model: str | list[str] = _usable or FACT_EXTRACTION_MODEL
     working = list(messages)  # Shallow copy
     all_facts: list[CompactionFact] = []
 

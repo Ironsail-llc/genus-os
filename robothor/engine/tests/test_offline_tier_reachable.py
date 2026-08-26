@@ -158,3 +158,105 @@ def test_a_real_last_resort_model_is_not_flagged(monkeypatch):
     monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/qwen3.8:27b")
     warnings = validate_manifest({"id": "x", "model": {"primary": "ollama_chat/qwen3.8:27b"}})
     assert not [w for w in warnings if "last-resort" in w.lower()], warnings
+
+
+# ─── found by adversarial review of this branch, before merge ────────────
+
+
+@pytest.mark.asyncio
+async def test_the_local_tier_gets_a_timeout_it_can_actually_meet():
+    """Walking to a model and then cancelling it is not reaching it.
+
+    COMPACTION_LLM_TIMEOUT is 45s. The on-device 27B answered a real
+    tool-schema prompt in 64s, and the engine itself allows that model class
+    600s (LLM_REQUEST_TIMEOUT_OLLAMA). A 45s cap on the last link means the
+    chain walk arrives at the offline tier and kills it — the fix would have
+    looked correct and changed nothing.
+    """
+    from robothor.engine.compaction import _timeout_for
+
+    assert _timeout_for("openrouter/anything") == compaction.COMPACTION_LLM_TIMEOUT
+    assert _timeout_for("ollama_chat/qwen3.8:27b") >= 300, (
+        "the offline tier needs a timeout it can meet"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_empty_answer_is_a_failure_and_the_walk_continues():
+    """A degraded model that returns nothing must not end the walk.
+
+    Both compaction legs treat empty as 'no facts' and move on silently, so
+    stopping at the first empty response loses the context just as thoroughly
+    as an exception would — without even trying the tier below.
+    """
+    calls: list[str] = []
+
+    def _resp(content):
+        class _Msg:
+            pass
+
+        m = _Msg()
+        m.content = content
+
+        class _Choice:
+            message = m
+
+        class _R:
+            choices = [_Choice()]
+
+        return _R()
+
+    async def side_effect(**kw):
+        calls.append(kw["model"])
+        return _resp("" if kw["model"] != "ollama_chat/qwen3.8:27b" else "a real summary")
+
+    with patch("litellm.acompletion", AsyncMock(side_effect=side_effect)):
+        out = await compaction.summarize_segment(
+            [{"role": "user", "content": "hello there"}], model=CHAIN
+        )
+
+    assert calls == CHAIN, "an empty answer ended the walk"
+    assert out == "a real summary"
+
+
+def test_every_planner_call_site_gets_the_whole_chain():
+    """The branch fixed two of three. runner.py's replan kept models[1:2]."""
+    import subprocess
+
+    out = subprocess.run(
+        ["grep", "-rn", "fallback_models=models", "robothor/"],
+        capture_output=True,
+        text=True,
+        cwd="/home/philip/wt-offlinetier",
+    ).stdout
+    offenders = [ln for ln in out.splitlines() if "models[1:2]" in ln]
+    assert not offenders, f"a planner call site still truncates the chain: {offenders}"
+
+
+@pytest.mark.asyncio
+async def test_compaction_skips_models_the_client_already_knows_are_dead():
+    """broken_models was in scope at the call site and simply not passed.
+
+    Without it, every compaction pass re-dials models the run has already
+    proven dead — a full round trip each, on a path that runs repeatedly
+    inside one run.
+    """
+    seen: dict[str, object] = {}
+
+    async def fake_extract(messages, model):
+        seen["model"] = model
+        return []
+
+    with (
+        patch.object(compaction, "extract_facts", fake_extract),
+        patch.object(compaction, "summarize_segment", AsyncMock(return_value="s")),
+    ):
+        await compaction.compact(
+            [{"role": "user", "content": "x " * 200} for _ in range(40)],
+            models=CHAIN,
+            threshold=10,
+            drain_to=5,
+            broken_models={"openrouter/dead-primary"},
+        )
+
+    assert seen.get("model") == ["ollama_chat/qwen3.8:27b"], seen

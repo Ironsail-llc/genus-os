@@ -2861,7 +2861,7 @@ class AgentRunner(
                         plan_result,
                         scratchpad,
                         models[0],
-                        fallback_models=models[1:2],
+                        fallback_models=models[1:],  # [1:2] missed the offline tier
                     )
                     if new_plan.success and new_plan.plan:
                         plan_result = new_plan
