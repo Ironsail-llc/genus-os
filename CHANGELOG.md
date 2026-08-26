@@ -1,3 +1,9 @@
+## [1.52.1](https://github.com/Ironsail-llc/genus-os/compare/v1.52.0...v1.52.1) (2026-08-26)
+
+### Bug Fixes
+
+* **engine:** the deliverable note reads the task, not the system prompt ([#408](https://github.com/Ironsail-llc/genus-os/issues/408)) ([f7a6032](https://github.com/Ironsail-llc/genus-os/commit/f7a6032012a3eab6a595c84cc96b46b81dd84ee2)), closes [#407](https://github.com/Ironsail-llc/genus-os/issues/407)
+
 ## [1.52.0](https://github.com/Ironsail-llc/genus-os/compare/v1.51.5...v1.52.0) (2026-08-26)
 
 ### Features
