@@ -672,3 +672,33 @@ class TestProviderOutageIsNotACapabilityResult:
         main_body = body[body.index("def main(") :]
         assert "_provider_failed(" in main_body, "main never checks for the outage shape"
         assert "provider_failure" in main_body, "the summary never records a persistent outage"
+
+
+class TestTheBenchAgentCanSee:
+    """The bench agent gets the platform's vision, like every other agent.
+
+    Fifth instance of one pattern: the missing `git`, the withheld skills,
+    the disabled completion contracts, the withheld preamble, and now the
+    withheld eyes. `view_image` ships to every agent on the fleet as of
+    2026-08-25; a bench manifest without it measures a weaker platform than
+    the one under test.
+
+    Not a hint and not coaching — the competing harness reads images into
+    context by default, which is how it scored 93/88/30/22 on the four
+    picture tasks Genus scored zero on with the same multimodal model.
+    """
+
+    def test_view_image_is_in_the_bench_manifest(self):
+        import yaml
+
+        manifest = yaml.safe_load(
+            (Path(__file__).resolve().parents[1] / "agent.yaml").read_text(encoding="utf-8")
+        )
+        assert "view_image" in manifest["tools_allowed"]
+
+    def test_the_manifest_carries_no_task_specific_coaching(self):
+        """The parity guard: capabilities may be granted, hints may not."""
+        body = (Path(__file__).resolve().parents[1] / "agent.yaml").read_text(encoding="utf-8")
+        lowered = body.lower()
+        for banned in ("jigsaw", "link-a-pix", "link_a_pix", "connect the dots", "sam3", "scholar"):
+            assert banned not in lowered, f"task-specific coaching leaked in: {banned}"
