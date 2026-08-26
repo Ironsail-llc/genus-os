@@ -13,13 +13,26 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "exec",
-            "description": "Execute a shell command (30s timeout). Use for gog CLI, file operations, etc.",
+            "description": (
+                "Execute a shell command. Defaults to a 30s limit; pass "
+                "`timeout` (seconds, up to 900) for anything slower — a model "
+                "call, a build, media processing. Do NOT background a long "
+                "command to dodge the limit: a backgrounded child is killed "
+                "when exec returns, and its output file is left truncated."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
                         "description": "Shell command to execute",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": (
+                            "Seconds to allow before killing the command "
+                            "(default 30, maximum 900)."
+                        ),
                     },
                 },
                 "required": ["command"],

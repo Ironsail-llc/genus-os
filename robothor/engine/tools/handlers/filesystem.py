@@ -22,13 +22,40 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     return decorator
 
 
+#: Seconds an `exec` gets when the agent does not ask for more. Unchanged —
+#: most commands are short and a long default would hide hangs.
+DEFAULT_EXEC_TIMEOUT = 30
+
+#: The most an agent may ask for. A command that outlives the run owning it
+#: is a leak, not a long job; 15 minutes covers model calls, builds and
+#: media work while staying inside every agent's wall-clock ceiling.
+MAX_EXEC_TIMEOUT = 900
+
+
+def resolve_exec_timeout(args: dict[str, Any]) -> int:
+    """The timeout for one exec call: what was asked for, within the ceiling.
+
+    Tolerant of what models actually emit — `"120"` as often as `120` — and
+    falls back rather than raising, because a malformed timeout must not turn
+    a working command into a tool error.
+    """
+    raw = args.get("timeout", DEFAULT_EXEC_TIMEOUT)
+    try:
+        requested = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_EXEC_TIMEOUT
+    if requested <= 0:
+        return DEFAULT_EXEC_TIMEOUT
+    return min(requested, MAX_EXEC_TIMEOUT)
+
+
 @_handler("exec")
 async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     command = args.get("command", "")
     if not command:
         return {"error": "No command provided"}
 
-    timeout = int(args.get("timeout", 30))
+    timeout = resolve_exec_timeout(args)
 
     # An agent configured `sandbox: docker` must actually have its shell
     # commands run in the container. This used to go straight to subprocess.run
@@ -53,7 +80,7 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=int(args.get("timeout", 30)),
+                timeout=timeout,
                 cwd=ctx.workspace or None,
             )
             return {
@@ -62,7 +89,14 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "exit_code": proc.returncode,
             }
         except subprocess.TimeoutExpired:
-            return {"error": f"Command timed out ({int(args.get('timeout', 30))}s limit)"}
+            return {
+                "error": (
+                    f"Command timed out ({timeout}s limit). Ask for more time with "
+                    f"the `timeout` parameter (up to {MAX_EXEC_TIMEOUT}s) rather "
+                    "than backgrounding the command — a backgrounded child is "
+                    "killed when exec returns."
+                )
+            }
         except Exception as e:
             return {"error": f"Command failed: {e}"}
 
