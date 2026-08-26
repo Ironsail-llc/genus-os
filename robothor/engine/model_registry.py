@@ -185,6 +185,24 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         cache_read_cost_per_token=0.000_000_145,  # $0.145/M
         ttft_hint_ms=1500,  # DeepSeek-direct p50 ~145ms
     ),
+    # DeepSeek V4 Flash via OpenRouter — the fleet's single cloud fallback
+    # (2026-08-26). Cheaper than the mimo-v2.5 primary it backs up
+    # ($0.080/$0.159 vs $0.140/$0.280), same 1M context, native tool use.
+    #
+    # What it does and does not cover: it is a DIFFERENT MODEL on the SAME
+    # OpenRouter credential, so it protects against mimo failing specifically
+    # — a 400, a moderation block, that model being down — and NOT against the
+    # key capping, which is the outage that actually happened this morning and
+    # took a three-deep OpenRouter chain down with it. The on-device tier the
+    # engine appends to every chain is the only defence against that.
+    "openrouter/deepseek/deepseek-v4-flash": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=65_536,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_000_08,  # $0.080/M
+        output_cost_per_token=0.000_000_159,  # $0.159/M
+        ttft_hint_ms=900,
+    ),
     # Gemini 2.5 Flash
     "gemini/gemini-2.5-flash": ModelLimits(
         max_input_tokens=1_048_576,
