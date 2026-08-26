@@ -139,6 +139,31 @@ _CREDIT_EXHAUSTED_MARKERS = (
 )
 
 
+#: Extra in-place retries for the on-device tier when it answers "busy".
+#: Every agent's chain ends in one local model served with a small parallel
+#: slot count, so during a cloud outage the whole fleet arrives at once and
+#: the queue fills. That is backpressure, not death: it drains in seconds,
+#: and one retry throws away the only tier still answering.
+LOCAL_CAPACITY_RETRIES = 4
+LOCAL_CAPACITY_RETRY_JITTER = 3.0
+
+#: Statuses a local inference server uses for "queue full, come back".
+_CAPACITY_STATUSES = frozenset({503, 529})
+
+
+def is_local_model(model: str) -> bool:
+    """Is this served on-device, with no credential and no provider account?"""
+    return model.startswith(("ollama_chat/", "ollama/"))
+
+
+def is_capacity_error(e: Exception) -> bool:
+    """Is the server saying "busy", rather than "broken"?"""
+    if getattr(e, "status_code", None) in _CAPACITY_STATUSES:
+        return True
+    msg = str(e).lower()
+    return any(m in msg for m in ("no slot", "queue is full", "server busy", "overloaded"))
+
+
 def _status_of(e: Exception) -> int | None:
     return getattr(e, "status_code", None)
 
@@ -425,8 +450,16 @@ class LLMClient:
             return None
         cache: dict[str, KeyPool] = self.__dict__.setdefault("_key_pools", {})
         if var not in cache:
-            cache[var] = KeyPool(keys_from_env(var))
-        return cache[var]
+            keys = keys_from_env(var)
+            if not keys:
+                # No credential configured for this provider. Managing an
+                # empty pool would mean reporting it "exhausted" and skipping
+                # every model on it, when the correct behaviour is the one
+                # every deployment has today: let litellm resolve the
+                # environment itself.
+                return None
+            cache[var] = KeyPool(keys)
+        return cache.get(var)
 
     # ─── Cost ────────────────────────────────────────────────────────
 
@@ -905,6 +938,16 @@ class LLMClient:
         is_provider_down = isinstance(e, CodexProviderError) or (
             isinstance(e, FileNotFoundError) and is_codex_model(model)
         )
+        # A queue-full local tier is backpressure, not a dead model. Marking
+        # it broken during a cloud outage removes the last thing answering,
+        # for exactly the duration of the load that caused it.
+        if is_local_model(model) and is_capacity_error(e) and not is_timeout:
+            logger.warning(
+                "Local tier %s is at capacity — leaving it in rotation; "
+                "this is backpressure, not a model failure.",
+                _sanitize(model),
+            )
+            return
         # Mark broken for auth, rate limit, provider failures, and timeouts
         if broken_models is not None and (
             status in (401, 402, 403, 500, 502, 503, 504) or is_timeout or is_provider_down
@@ -994,14 +1037,19 @@ class LLMClient:
         breaker = get_model_breaker()
         # Credentials proven spent during THIS call. A model whose key is
         # in here cannot succeed, so it is skipped rather than tried.
-        dead_credentials: set[str | None] = set()
+        dead_credentials: set[str] = set()
 
-        for model in models:
+        for position, model in enumerate(models):
             if broken_models and model in broken_models:
                 continue
-            if env_var_for_model(model) in dead_credentials:
+            model_var = env_var_for_model(model)
+            if model_var is not None and model_var in dead_credentials:
                 # Its credential was proven spent earlier in this same call.
                 # Trying it buys a guaranteed failure and a round trip.
+                # Guarded on `is not None` deliberately: a model with no
+                # pooled credential shares nothing with anyone, and treating
+                # them as a group would let one provider's quota error strand
+                # the local tier — the very outage this code exists to end.
                 logger.info(
                     "skipping %s — it shares a credential already proven spent",
                     _sanitize(model),
@@ -1026,13 +1074,28 @@ class LLMClient:
                     timeout_override if timeout_override is not None else LLM_REQUEST_TIMEOUT
                 )
             pool = self._key_pool(model)
+            if pool is not None and pool.exhausted():
+                # Every configured credential for this provider is retired.
+                # Calling anyway would omit api_key and hand litellm the very
+                # key the pool just proved dead, quietly undoing retirement.
+                if model_var is not None:
+                    dead_credentials.add(model_var)
+                logger.info(
+                    "skipping %s — every configured credential for it is retired",
+                    _sanitize(model),
+                )
+                continue
             # Rotating through spare credentials must not eat the transient
             # retry budget: a key swap and a flaky provider are different
-            # failures, and spending one on the other means the model gets
-            # fewer real attempts the more spare keys are configured.
-            rotation_headroom = max(0, len(pool.status()) - 1) if pool else 0
-            attempts = 1 + TRANSIENT_RETRIES_PER_MODEL + rotation_headroom
-            for attempt in range(attempts):
+            # failures. They are counted separately so that configuring a
+            # spare cannot buy extra retries against an unrelated 5xx.
+            attempts = 1 + (
+                LOCAL_CAPACITY_RETRIES if is_local_model(model) else TRANSIENT_RETRIES_PER_MODEL
+            )
+            rotations_left = (len(pool) - 1) if pool is not None else 0
+            attempt = 0
+            while attempt < attempts:
+                attempt_key = None
                 try:
                     kwargs = self._build_llm_kwargs(
                         model,
@@ -1042,12 +1105,16 @@ class LLMClient:
                         temperature,
                         request_timeout=per_call_timeout,
                     )
-                    if pool is not None and (key := pool.current()) is not None:
-                        # Only when a pool actually resolved a key. Passing
-                        # api_key=None would override litellm's own env
-                        # lookup and break every instance that has never set
-                        # a numbered sibling — which is all of them today.
-                        kwargs["api_key"] = key
+                    if pool is not None:
+                        # Bound per attempt so the failure handler retires the
+                        # credential this request actually carried. Re-reading
+                        # the pool afterwards retires whatever is current
+                        # *then* — which, with the shared client the daemon
+                        # builds, is the healthy spare another run just
+                        # rotated onto.
+                        attempt_key = pool.current()
+                        if attempt_key is not None:
+                            kwargs["api_key"] = attempt_key
                     async with asyncio.timeout(per_call_timeout):
                         if is_codex_model(model):
                             result = await codex_acompletion(**kwargs)
@@ -1074,23 +1141,25 @@ class LLMClient:
                     # that has nothing to do with them, and every one of
                     # them shares the credential that just failed anyway.
                     spent = is_credit_exhausted(e)
-                    if (spent or is_auth_failure(e)) and pool is not None:
-                        failed_key = pool.current()
-                        if failed_key is not None:
-                            pool.retire(
-                                failed_key,
-                                Retirement.CREDIT_EXHAUSTED if spent else Retirement.AUTH_FAILED,
+                    if (spent or is_auth_failure(e)) and attempt_key is not None:
+                        assert pool is not None
+                        pool.retire(
+                            attempt_key,
+                            Retirement.CREDIT_EXHAUSTED if spent else Retirement.AUTH_FAILED,
+                        )
+                        if not pool.exhausted() and rotations_left > 0:
+                            rotations_left -= 1
+                            logger.warning(
+                                "Model %s: credential %s failed (%s) — "
+                                "rotating to the next key and retrying "
+                                "the same model",
+                                _sanitize(model),
+                                pool.fingerprint(attempt_key),
+                                "credit exhausted" if spent else "auth rejected",
                             )
-                            if not pool.exhausted():
-                                logger.warning(
-                                    "Model %s: credential %s failed (%s) — "
-                                    "rotating to the next key and retrying "
-                                    "the same model",
-                                    _sanitize(model),
-                                    pool.fingerprint(failed_key),
-                                    "credit exhausted" if spent else "auth rejected",
-                                )
-                                continue
+                            # Deliberately does not advance `attempt`: a key
+                            # swap is not a retry of a flaky provider.
+                            continue
                     if spent:
                         # Every model sharing this credential will fail the
                         # same way, so they are skipped rather than tried.
@@ -1101,12 +1170,15 @@ class LLMClient:
                         # local Qwen that was up and answering in 9.8s, and
                         # a spent OpenRouter key meant the chain never
                         # reached it.
-                        dead_var = env_var_for_model(model)
-                        dead_credentials.add(dead_var)
+                        if model_var is not None:
+                            dead_credentials.add(model_var)
+                        # `position`, not models.index(model): a chain may list
+                        # the same model twice, and the first index points
+                        # behind the cursor at models already tried.
                         reachable = [
                             m
-                            for m in models[models.index(model) + 1 :]
-                            if env_var_for_model(m) not in dead_credentials
+                            for m in models[position + 1 :]
+                            if (v := env_var_for_model(m)) is None or v not in dead_credentials
                         ]
                         if reachable:
                             logger.warning(
@@ -1139,11 +1211,17 @@ class LLMClient:
                         if self._active_watchdog:
                             self._active_watchdog.touch(f"rate_limit_wait:{model}")
                         await asyncio.sleep(_wait)
+                        attempt += 1
                         continue
                     if attempt < attempts - 1 and _is_transient_model_error(e):
-                        delay = random.uniform(
-                            TRANSIENT_RETRY_JITTER_MIN, TRANSIENT_RETRY_JITTER_MAX
-                        )
+                        if is_local_model(model) and is_capacity_error(e):
+                            # The queue drains on its own; a flat, calmer wait
+                            # beats hammering the server that is already full.
+                            delay = LOCAL_CAPACITY_RETRY_JITTER
+                        else:
+                            delay = random.uniform(
+                                TRANSIENT_RETRY_JITTER_MIN, TRANSIENT_RETRY_JITTER_MAX
+                            )
                         logger.warning(
                             "Model %s transient failure (%s) — retrying same model "
                             "in %.1fs (attempt %d/%d)",
@@ -1156,6 +1234,7 @@ class LLMClient:
                         if self._active_watchdog:
                             self._active_watchdog.touch(f"model_retry:{model}")
                         await asyncio.sleep(delay)
+                        attempt += 1
                         continue
                     # Giving up on this model — record the failure once per
                     # chain advancement (a retried-then-recovered blip must
@@ -1180,7 +1259,10 @@ class LLMClient:
                             _sanitize(model),
                             per_call_timeout,
                         )
-                    else:
+                    elif not (is_local_model(model) and is_capacity_error(e)):
+                        # Local backpressure must not open the breaker: it
+                        # would blind the fleet's only offline tier for the
+                        # cooldown, during the outage it exists to cover.
                         breaker.record_failure(model, reason=str(e)[:120])
                     self._handle_model_error(e, model, broken_models)
                     if self._active_watchdog:
@@ -1244,147 +1326,207 @@ class LLMClient:
                 per_call_timeout = (
                     timeout_override if timeout_override is not None else LLM_REQUEST_TIMEOUT
                 )
-            try:
-                kwargs = self._build_llm_kwargs(
-                    model,
-                    messages,
-                    tools,
-                    input_est,
-                    temperature,
-                    stream=True,
-                    request_timeout=per_call_timeout,
+            pool = self._key_pool(model)
+            if pool is not None and pool.exhausted():
+                # Every credential for this provider is retired; calling
+                # anyway would omit api_key and let litellm resolve the
+                # very key the pool just proved dead.
+                logger.info(
+                    "skipping %s — every configured credential for it is retired",
+                    _sanitize(model),
                 )
-                if is_codex_model(model):
-                    async with asyncio.timeout(per_call_timeout):
-                        result = await codex_acompletion(**kwargs)
-                    content = str(result.choices[0].message.content or "")
-                    if on_content and content:
-                        await on_content(content)
-                    await _emit({"type": "text_delta", "delta": content, "accumulated": content})
-                    await _emit(
-                        {
-                            "type": "usage",
-                            "input_tokens": 0,
-                            "output_tokens": 0,
-                        }
+                continue
+            rotations_left = (len(pool) - 1) if pool is not None else 0
+            while True:
+                attempt_key = None
+                try:
+                    kwargs = self._build_llm_kwargs(
+                        model,
+                        messages,
+                        tools,
+                        input_est,
+                        temperature,
+                        stream=True,
+                        request_timeout=per_call_timeout,
                     )
-                    await _emit({"type": "message_stop"})
-                    return result
-
-                stream_start = time.monotonic()
-                async with asyncio.timeout(per_call_timeout):
-                    stream = await litellm.acompletion(**kwargs)
-
-                chunks: list[Any] = []
-                accumulated_content = ""
-                has_tool_calls = False
-                ttft_logged = False
-                seen_tool_ids: set[str] = set()
-
-                # Consume stream with per-chunk timeout so stalled streams
-                # fall back to the next model instead of hanging the run.
-                chunk_iter = stream.__aiter__()
-                while True:
-                    try:
-                        chunk = await asyncio.wait_for(
-                            chunk_iter.__anext__(), timeout=STREAM_CHUNK_TIMEOUT
+                    if pool is not None:
+                        attempt_key = pool.current()
+                        if attempt_key is not None:
+                            kwargs["api_key"] = attempt_key
+                    if is_codex_model(model):
+                        async with asyncio.timeout(per_call_timeout):
+                            result = await codex_acompletion(**kwargs)
+                        content = str(result.choices[0].message.content or "")
+                        if on_content and content:
+                            await on_content(content)
+                        await _emit(
+                            {"type": "text_delta", "delta": content, "accumulated": content}
                         )
-                    except StopAsyncIteration:
-                        break
-                    except TimeoutError:
-                        logger.warning(
-                            "Stream stalled for %ds, aborting model=%s",
-                            STREAM_CHUNK_TIMEOUT,
-                            _sanitize(model),
-                        )
-                        raise TimeoutError(
-                            f"Stream stalled after {STREAM_CHUNK_TIMEOUT}s of no chunks"
-                        ) from None
-
-                    chunks.append(chunk)
-
-                    # Progress-based watchdog: only real content (text or
-                    # tool-call bytes) counts as activity. SSE keepalive
-                    # chunks and empty frames used to keep the watchdog
-                    # alive on dead streams — that was the 07:00/08:00
-                    # failure mode (900s of pings, 0 tokens, hard-killed).
-                    if not chunk.choices:
-                        # Check for usage in non-choice chunks (some providers)
-                        usage = getattr(chunk, "usage", None)
-                        if usage:
-                            await _emit(
-                                {
-                                    "type": "usage",
-                                    "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                                    "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
-                                }
-                            )
-                        continue
-                    delta = chunk.choices[0].delta
-                    if getattr(delta, "content", None):
-                        if not ttft_logged:
-                            ttft_ms = int((time.monotonic() - stream_start) * 1000)
-                            logger.info("TTFT %dms model=%s", ttft_ms, _sanitize(model))
-                            ttft_logged = True
-                        accumulated_content += delta.content
-                        if self._active_watchdog:
-                            self._active_watchdog.touch(f"stream_text:{model}")
                         await _emit(
                             {
-                                "type": "text_delta",
-                                "delta": delta.content,
-                                "accumulated": accumulated_content,
+                                "type": "usage",
+                                "input_tokens": 0,
+                                "output_tokens": 0,
                             }
                         )
-                        if not has_tool_calls and on_content:
-                            with contextlib.suppress(Exception):
-                                await on_content(accumulated_content)
-                    if getattr(delta, "tool_calls", None):
-                        has_tool_calls = True
-                        if self._active_watchdog:
-                            self._active_watchdog.touch(f"stream_tool_call:{model}")
-                        for tc in delta.tool_calls:
-                            tc_id = getattr(tc, "id", None)
-                            tc_fn = getattr(tc, "function", None)
-                            if tc_id and tc_id not in seen_tool_ids:
-                                seen_tool_ids.add(tc_id)
-                                await _emit(
-                                    {
-                                        "type": "tool_use_start",
-                                        "tool_name": getattr(tc_fn, "name", "") if tc_fn else "",
-                                        "call_id": tc_id,
-                                    }
-                                )
-                            if tc_fn and getattr(tc_fn, "arguments", None):
-                                await _emit(
-                                    {
-                                        "type": "tool_use_delta",
-                                        "delta": tc_fn.arguments,
-                                        "call_id": tc_id or "",
-                                    }
-                                )
+                        await _emit({"type": "message_stop"})
+                        return result
 
-                await _emit({"type": "message_stop"})
-                # Final progress tick — we have a complete response to return.
-                if self._active_watchdog:
-                    self._active_watchdog.touch(f"stream_complete:{model}")
-                return litellm.stream_chunk_builder(chunks)
-            except TimeoutError as te:
-                self._handle_model_error(
-                    te,
-                    model,
-                    broken_models,
-                    streaming=True,
-                )
-                last_error = te
-                # Model rotation is activity — don't let watchdog kill us mid-fallback
-                if self._active_watchdog:
-                    self._active_watchdog.touch(f"stream_timeout_fallback:{model}")
-            except Exception as e:
-                self._handle_model_error(e, model, broken_models, streaming=True)
-                last_error = e
-                if self._active_watchdog:
-                    self._active_watchdog.touch(f"stream_error_fallback:{model}")
+                    stream_start = time.monotonic()
+                    async with asyncio.timeout(per_call_timeout):
+                        stream = await litellm.acompletion(**kwargs)
+
+                    chunks: list[Any] = []
+                    accumulated_content = ""
+                    has_tool_calls = False
+                    ttft_logged = False
+                    seen_tool_ids: set[str] = set()
+
+                    # Consume stream with per-chunk timeout so stalled streams
+                    # fall back to the next model instead of hanging the run.
+                    chunk_iter = stream.__aiter__()
+                    while True:
+                        try:
+                            chunk = await asyncio.wait_for(
+                                chunk_iter.__anext__(), timeout=STREAM_CHUNK_TIMEOUT
+                            )
+                        except StopAsyncIteration:
+                            break
+                        except TimeoutError:
+                            logger.warning(
+                                "Stream stalled for %ds, aborting model=%s",
+                                STREAM_CHUNK_TIMEOUT,
+                                _sanitize(model),
+                            )
+                            raise TimeoutError(
+                                f"Stream stalled after {STREAM_CHUNK_TIMEOUT}s of no chunks"
+                            ) from None
+
+                        chunks.append(chunk)
+
+                        # Progress-based watchdog: only real content (text or
+                        # tool-call bytes) counts as activity. SSE keepalive
+                        # chunks and empty frames used to keep the watchdog
+                        # alive on dead streams — that was the 07:00/08:00
+                        # failure mode (900s of pings, 0 tokens, hard-killed).
+                        if not chunk.choices:
+                            # Check for usage in non-choice chunks (some providers)
+                            usage = getattr(chunk, "usage", None)
+                            if usage:
+                                await _emit(
+                                    {
+                                        "type": "usage",
+                                        "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                                        "output_tokens": getattr(usage, "completion_tokens", 0)
+                                        or 0,
+                                    }
+                                )
+                            continue
+                        delta = chunk.choices[0].delta
+                        if getattr(delta, "content", None):
+                            if not ttft_logged:
+                                ttft_ms = int((time.monotonic() - stream_start) * 1000)
+                                logger.info("TTFT %dms model=%s", ttft_ms, _sanitize(model))
+                                ttft_logged = True
+                            accumulated_content += delta.content
+                            if self._active_watchdog:
+                                self._active_watchdog.touch(f"stream_text:{model}")
+                            await _emit(
+                                {
+                                    "type": "text_delta",
+                                    "delta": delta.content,
+                                    "accumulated": accumulated_content,
+                                }
+                            )
+                            if not has_tool_calls and on_content:
+                                with contextlib.suppress(Exception):
+                                    await on_content(accumulated_content)
+                        if getattr(delta, "tool_calls", None):
+                            has_tool_calls = True
+                            if self._active_watchdog:
+                                self._active_watchdog.touch(f"stream_tool_call:{model}")
+                            for tc in delta.tool_calls:
+                                tc_id = getattr(tc, "id", None)
+                                tc_fn = getattr(tc, "function", None)
+                                if tc_id and tc_id not in seen_tool_ids:
+                                    seen_tool_ids.add(tc_id)
+                                    await _emit(
+                                        {
+                                            "type": "tool_use_start",
+                                            "tool_name": getattr(tc_fn, "name", "")
+                                            if tc_fn
+                                            else "",
+                                            "call_id": tc_id,
+                                        }
+                                    )
+                                if tc_fn and getattr(tc_fn, "arguments", None):
+                                    await _emit(
+                                        {
+                                            "type": "tool_use_delta",
+                                            "delta": tc_fn.arguments,
+                                            "call_id": tc_id or "",
+                                        }
+                                    )
+
+                    await _emit({"type": "message_stop"})
+                    # Final progress tick — we have a complete response to return.
+                    if self._active_watchdog:
+                        self._active_watchdog.touch(f"stream_complete:{model}")
+                    # The interactive path proves a model healthy more often
+                    # than any cron does; without this only failures ever
+                    # reach the breaker, so it can open and never clear.
+                    # The interactive path proves a model healthy more often
+                    # than any cron does; without this only failures ever
+                    # reach the breaker, so it can open and never clear.
+                    get_model_breaker().record_success(model)
+                    return litellm.stream_chunk_builder(chunks)
+                except TimeoutError as te:
+                    self._handle_model_error(
+                        te,
+                        model,
+                        broken_models,
+                        streaming=True,
+                    )
+                    last_error = te
+                    # Model rotation is activity — don't let watchdog kill us mid-fallback
+                    if self._active_watchdog:
+                        self._active_watchdog.touch(f"stream_timeout_fallback:{model}")
+                    break
+                except Exception as e:
+                    spent = is_credit_exhausted(e)
+                    if (spent or is_auth_failure(e)) and attempt_key is not None:
+                        assert pool is not None
+                        pool.retire(
+                            attempt_key,
+                            Retirement.CREDIT_EXHAUSTED if spent else Retirement.AUTH_FAILED,
+                        )
+                        if not pool.exhausted() and rotations_left > 0:
+                            rotations_left -= 1
+                            logger.warning(
+                                "Model %s: credential %s failed (%s) — rotating "
+                                "to the next key and retrying the same model",
+                                _sanitize(model),
+                                pool.fingerprint(attempt_key),
+                                "credit exhausted" if spent else "auth rejected",
+                            )
+                            # Safe to retry in place: a credential error
+                            # surfaces at stream creation, before any chunk has
+                            # reached on_content, so nothing is duplicated.
+                            continue
+                    if is_auth_failure(e):
+                        # A rejected credential says nothing about the model.
+                        logger.error(
+                            "Model %s: the credential was rejected — advancing "
+                            "without marking the model broken.",
+                            _sanitize(model),
+                        )
+                        last_error = e
+                        break
+                    self._handle_model_error(e, model, broken_models, streaming=True)
+                    last_error = e
+                    if self._active_watchdog:
+                        self._active_watchdog.touch(f"stream_error_fallback:{model}")
+                    break
 
         # repr(): str(TimeoutError()) is "" — see _call_llm's exhaustion log.
         logger.error("All models failed (streaming). Last error: %s", _sanitize(repr(last_error)))

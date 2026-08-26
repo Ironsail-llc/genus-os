@@ -50,6 +50,27 @@ CREDIT_COOLDOWN_SECONDS = 900.0
 _MAX_POOL_KEYS = 16
 
 
+class SecretKey(str):
+    """A credential that is a real ``str`` everywhere except ``repr()``.
+
+    structlog's console renderer formats exceptions with
+    ``RichTracebackFormatter(show_locals=True)``, which prints every frame
+    local through ``repr()``. The engine binds the credential into the frame
+    it re-raises from, so a capped key would print in full into the journal —
+    73 characters, under rich's 80-character truncation. Masking ``repr`` is
+    the only fix that covers every path out of that frame, including the
+    ``CancelledError`` that no ``except Exception`` catches.
+
+    Subclassing ``str`` keeps it a working credential: litellm, hashing, and
+    equality are all unchanged; only the printed form differs.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "<api-key redacted>"
+
+
 class Retirement(StrEnum):
     """Why a key was taken out of rotation, which decides whether it returns."""
 
@@ -148,11 +169,15 @@ class KeyPool:
             return True
         return False
 
-    def current(self) -> str | None:
-        """The highest-priority key available right now, or None if all are out."""
+    def current(self) -> SecretKey | None:
+        """The highest-priority key available right now, or None if all are out.
+
+        Returned masked so that binding it into a caller's frame cannot leak
+        it through a rendered traceback.
+        """
         for key in self._keys:
             if self._available(key):
-                return key
+                return SecretKey(key)
         return None
 
     def retire(self, key: str, reason: Retirement) -> None:
@@ -173,6 +198,10 @@ class KeyPool:
             remaining,
             len(self._keys),
         )
+
+    def __len__(self) -> int:
+        """How many credentials are configured, retired or not."""
+        return len(self._keys)
 
     def exhausted(self) -> bool:
         """Is there nothing left to try? The caller then fails as it does today."""

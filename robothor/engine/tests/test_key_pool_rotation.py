@@ -11,11 +11,13 @@ sends the original key anyway — the failure mode that shipped #407 inert.
 
 from __future__ import annotations
 
+import contextlib
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from robothor.engine import llm_client
+from robothor.engine.key_pool import Retirement
 from robothor.engine.llm_client import LLMClient
 from robothor.engine.model_breaker import ModelBreaker
 
@@ -330,3 +332,171 @@ async def test_an_ordinary_failure_does_not_retire_a_key(client, monkeypatch):
     await _run(client, acompletion)
 
     assert _keys_used(acompletion) == ["sk-primary", "sk-primary"]
+
+
+# ─── defects found by adversarial review of this branch ──────────────────
+#
+# Every test below reproduces a defect that a review agent found and an
+# independent verifier confirmed empirically against this branch. Two of them
+# would have created NEW outage modes in the code written to end an outage.
+
+
+@pytest.mark.asyncio
+async def test_retires_the_key_the_request_used_not_whatever_is_current(client, monkeypatch):
+    """A concurrent failure must not retire the healthy key that replaced it.
+
+    The daemon shares one LLMClient — and so one KeyPool — across every
+    concurrent run. Two calls go out on sk-primary; it is capped; both come
+    back 402. The first retires sk-primary and rotates. The second must retire
+    the key IT used, not re-read the pool and burn sk-spare, which just
+    answered successfully.
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-primary")
+    monkeypatch.setenv("OPENROUTER_API_KEY_2", "sk-spare")
+    pool = client._key_pool("openrouter/primary")
+    ok = object()
+    calls: list[str | None] = []
+
+    async def side_effect(**kw):
+        calls.append(kw.get("api_key"))
+        if len(calls) == 1:
+            # A concurrent run already retired the capped key and moved on.
+            pool.retire("sk-primary", Retirement.CREDIT_EXHAUSTED)
+            raise _err(402, "credit limit exceeded")
+        return ok
+
+    acompletion = AsyncMock(side_effect=side_effect)
+    await _run(client, acompletion)
+
+    spare = [s for s in pool.status() if s.position == 2][0]
+    assert spare.available, "the spare answered successfully and must stay in rotation"
+
+
+@pytest.mark.asyncio
+async def test_a_keyless_model_is_never_skipped_for_someone_elses_dead_key(client, monkeypatch):
+    """A quota error from an unpooled provider must not strand the local tier.
+
+    env_var_for_model returns None for everything that is not openrouter/, so
+    recording None as a dead credential marks EVERY keyless model — the local
+    ollama tier included — as sharing a spent key. That is the 2026-08-26
+    outage reproduced through a different door.
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-live")
+    ok = object()
+    acompletion = AsyncMock(
+        side_effect=[
+            Exception("You exceeded your current quota, please check your plan"),
+            ok,
+        ]
+    )
+
+    result = await _run(
+        client, acompletion, chain=("gemini/gemini-2.5-pro", "ollama_chat/qwen3.8:27b")
+    )
+
+    assert result is ok
+    assert [c.kwargs["model"] for c in acompletion.call_args_list] == [
+        "gemini/gemini-2.5-pro",
+        "ollama_chat/qwen3.8:27b",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_pool_does_not_leak_back_to_the_env_key(client, monkeypatch):
+    """Retirement must not be undone by litellm's own env lookup.
+
+    Omitting api_key once every key is retired hands litellm the very
+    credential the pool just proved dead, so "out for the life of the process"
+    is unenforceable exactly when it matters.
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-revoked")
+    pool = client._key_pool("openrouter/primary")
+    pool.retire("sk-revoked", Retirement.AUTH_FAILED)
+    ok = object()
+    acompletion = AsyncMock(return_value=ok)
+
+    result = await _run(
+        client, acompletion, chain=("openrouter/primary", "ollama_chat/qwen3.8:27b")
+    )
+
+    assert result is ok
+    models = [c.kwargs["model"] for c in acompletion.call_args_list]
+    assert models == ["ollama_chat/qwen3.8:27b"], "a model whose only key is dead must be skipped"
+
+
+@pytest.mark.asyncio
+async def test_the_key_is_redacted_in_repr_so_tracebacks_cannot_print_it(client, monkeypatch):
+    """structlog's console renderer dumps frame locals with show_locals=True.
+
+    The engine binds the credential into _call_llm's frame and re-raises from
+    it, so a rendered traceback would print the whole key. repr() is what that
+    renderer calls, so repr is where the redaction has to live.
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-0123456789abcdef")
+    pool = client._key_pool("openrouter/primary")
+    key = pool.current()
+
+    assert key == "sk-or-v1-0123456789abcdef", "it must still work as the real credential"
+    assert "0123456789abcdef" not in repr(key)
+    assert "0123456789abcdef" not in repr({"api_key": key})
+
+
+@pytest.mark.asyncio
+async def test_spare_keys_do_not_inflate_the_transient_retry_budget(client, monkeypatch):
+    """Rotation headroom must not be spendable on 5xx.
+
+    Otherwise every configured spare buys one more full-timeout attempt
+    against a hung provider on every model — so the operational fix this
+    change recommends makes unrelated blips slower.
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-1")
+    one = AsyncMock(side_effect=_err(503))
+    await _run(client, one)
+    baseline = one.call_count
+
+    fresh = LLMClient()
+    monkeypatch.setenv("OPENROUTER_API_KEY_2", "sk-2")
+    monkeypatch.setenv("OPENROUTER_API_KEY_3", "sk-3")
+    many = AsyncMock(side_effect=_err(503))
+    await _run(fresh, many)
+
+    assert many.call_count == baseline, "spare keys must not buy extra 5xx retries"
+
+
+@pytest.mark.asyncio
+async def test_a_duplicated_model_still_raises_the_credit_error(client, monkeypatch):
+    """The fallthrough must use the loop's position, not the first index.
+
+    With a model repeated in the chain, models.index() points behind the
+    cursor, so the code breaks as though a fallback existed and the caller
+    gets a bare None instead of the actionable credit error.
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-capped")
+    acompletion = AsyncMock(side_effect=_err(402, "credit limit exceeded"))
+
+    with pytest.raises(Exception, match="credit"):
+        await _run(client, acompletion, chain=("openrouter/p", "openrouter/p"))
+
+
+@pytest.mark.asyncio
+async def test_streaming_rotates_credentials_too(client, monkeypatch):
+    """Interactive chat streams, so a pool that only helps cron is half a fix."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-capped")
+    monkeypatch.setenv("OPENROUTER_API_KEY_2", "sk-spare")
+    seen: list[str | None] = []
+
+    async def side_effect(**kw):
+        seen.append(kw.get("api_key"))
+        raise _err(402, "credit limit exceeded")
+
+    acompletion = AsyncMock(side_effect=side_effect)
+    with (
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch("robothor.engine.llm_client.litellm.acompletion", acompletion),
+    ):
+        with contextlib.suppress(Exception):
+            await client._call_llm_streaming(
+                [{"role": "user", "content": "hi"}], ["openrouter/primary"], [], broken_models=set()
+            )
+
+    assert seen[:2] == ["sk-capped", "sk-spare"], f"streaming did not rotate: {seen}"
