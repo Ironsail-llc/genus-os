@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -37,6 +38,26 @@ FACT_EXTRACTION_MODEL = "gemini/gemini-2.5-flash"
 # hung provider (Gemini has been flaky) would otherwise stall the whole run and
 # trip the stall watchdog as if the agent itself froze (audit 2026-05-29).
 COMPACTION_LLM_TIMEOUT = 45.0
+
+#: On-device generation is far slower than a cloud call, and the engine gives
+#: this model class 600s (LLM_REQUEST_TIMEOUT_OLLAMA). A 45s cap on the last
+#: link means the chain walk arrives at the offline tier and cancels it —
+#: reaching a model you then kill is not reaching it.
+COMPACTION_LOCAL_LLM_TIMEOUT = 300.0
+
+#: Ceiling for the whole walk. Per-model timeouts alone multiply by chain
+#: length, and compaction runs inside a run's wall-clock budget.
+COMPACTION_WALK_BUDGET = 360.0
+
+
+def _timeout_for(model: str) -> float:
+    """Per-model ceiling: the offline tier needs one it can actually meet."""
+    return (
+        COMPACTION_LOCAL_LLM_TIMEOUT
+        if model.startswith(("ollama_chat/", "ollama/"))
+        else COMPACTION_LLM_TIMEOUT
+    )
+
 
 FACT_EXTRACTION_PROMPT = """\
 Extract key facts from this conversation segment. Return JSON only:
@@ -222,9 +243,58 @@ def deterministic_tail(messages: list[dict[str, Any]]) -> str:
     return "\n".join(lines)[:3500]
 
 
+async def _acompletion_over_chain(models: str | list[str], **kwargs: Any) -> Any:
+    """Call the first model in the chain that answers.
+
+    Compaction used to take ``models[0]`` and call litellm directly, so it had
+    none of the fallback the agent loop has. During the 2026-08-26 outage that
+    meant every extraction went to the capped primary and returned nothing,
+    while the local tier answering the agent's own turns sat next in the same
+    list. Both legs here swallow failure — extraction returns ``[]`` and the
+    summary degrades to a placeholder — so the loss is silent: the agent's
+    context is replaced by "[Segment: N messages]" with zero retained facts.
+    """
+    import litellm
+
+    chain = [models] if isinstance(models, str) else list(models)
+    last: Exception | None = None
+    started = time.monotonic()
+    for model in chain:
+        remaining = COMPACTION_WALK_BUDGET - (time.monotonic() - started)
+        if remaining <= 0:
+            logger.warning("Compaction walk budget exhausted before %s", model)
+            break
+        try:
+            response = await asyncio.wait_for(
+                litellm.acompletion(model=model, **kwargs),
+                timeout=min(_timeout_for(model), remaining),
+            )
+        except Exception as e:  # noqa: PERF203 - the walk IS the error handling
+            last = e
+            logger.warning(
+                "Compaction model %s failed (%s) — trying the next in the chain",
+                model,
+                str(e)[:100],
+            )
+            continue
+        # An empty answer is a failure, not a result. Both callers treat empty
+        # as "nothing to retain" and move on silently, so stopping here would
+        # lose the context just as thoroughly as an exception — without even
+        # trying the tier below.
+        try:
+            content = response.choices[0].message.content
+        except (AttributeError, IndexError, TypeError):
+            content = None
+        if content:
+            return response
+        last = last or RuntimeError(f"{model} returned no content")
+        logger.warning("Compaction model %s returned nothing — trying the next", model)
+    raise last if last is not None else RuntimeError("no compaction model configured")
+
+
 async def extract_facts(
     messages: list[dict[str, Any]],
-    model: str = FACT_EXTRACTION_MODEL,
+    model: str | list[str] = FACT_EXTRACTION_MODEL,
 ) -> list[CompactionFact]:
     """Extract structured facts from conversation messages via LLM.
 
@@ -238,20 +308,15 @@ async def extract_facts(
         return []
 
     try:
-        import litellm
-
-        response = await asyncio.wait_for(
-            litellm.acompletion(
-                model=model,
-                messages=[
-                    {"role": "system", "content": FACT_EXTRACTION_PROMPT},
-                    {"role": "user", "content": conversation_text},
-                ],
-                temperature=0.1,
-                max_tokens=1000,
-                response_format={"type": "json_object"},
-            ),
-            timeout=COMPACTION_LLM_TIMEOUT,
+        response = await _acompletion_over_chain(
+            model,
+            messages=[
+                {"role": "system", "content": FACT_EXTRACTION_PROMPT},
+                {"role": "user", "content": conversation_text},
+            ],
+            temperature=0.1,
+            max_tokens=1000,
+            response_format={"type": "json_object"},
         )
 
         raw = response.choices[0].message.content
@@ -283,7 +348,7 @@ async def extract_facts(
 
 async def summarize_segment(
     messages: list[dict[str, Any]],
-    model: str = FACT_EXTRACTION_MODEL,
+    model: str | list[str] = FACT_EXTRACTION_MODEL,
 ) -> str:
     """Summarize a segment of conversation messages via LLM.
 
@@ -310,19 +375,14 @@ async def summarize_segment(
         return fallback
 
     try:
-        import litellm
-
-        response = await asyncio.wait_for(
-            litellm.acompletion(
-                model=model,
-                messages=[
-                    {"role": "system", "content": SEGMENT_SUMMARY_PROMPT},
-                    {"role": "user", "content": "\n".join(text_parts)},
-                ],
-                temperature=0.1,
-                max_tokens=300,
-            ),
-            timeout=COMPACTION_LLM_TIMEOUT,
+        response = await _acompletion_over_chain(
+            model,
+            messages=[
+                {"role": "system", "content": SEGMENT_SUMMARY_PROMPT},
+                {"role": "user", "content": "\n".join(text_parts)},
+            ],
+            temperature=0.1,
+            max_tokens=300,
         )
 
         summary_text: str | None = response.choices[0].message.content
@@ -464,6 +524,7 @@ async def compact(
     models: list[str] | None = None,
     threshold: int = 80_000,
     drain_to: int = 60_000,
+    broken_models: set[str] | None = None,
 ) -> CompactionResult:
     """4-pass graduated compaction.
 
@@ -499,7 +560,12 @@ async def compact(
             tokens_after=tokens_before,
         )
 
-    summary_model = models[0] if models else FACT_EXTRACTION_MODEL
+    # The WHOLE chain, not models[0]: compaction has to survive a dead primary
+    # or it silently drops the agent's context during exactly the outage the
+    # fallback chain exists for. Models the run has already proven dead are
+    # dropped, so each pass does not re-dial them for a full round trip.
+    _usable = [m for m in (models or []) if m not in (broken_models or set())] or list(models or [])
+    summary_model: str | list[str] = _usable or FACT_EXTRACTION_MODEL
     working = list(messages)  # Shallow copy
     all_facts: list[CompactionFact] = []
 

@@ -636,7 +636,9 @@ class LLMClient:
             # pass just compacted, this no-ops (estimate is under threshold);
             # it exists for the paths that call the client without the loop.
             compress_threshold = proactive_compaction_threshold(model_limits.max_input_tokens)
-            messages[:] = await maybe_compress(messages, models, threshold=compress_threshold)
+            messages[:] = await maybe_compress(
+                messages, models, threshold=compress_threshold, broken_models=broken_models
+            )
         except Exception as e:
             logger.warning("Pre-flight compression failed: %s", _sanitize(e))
 

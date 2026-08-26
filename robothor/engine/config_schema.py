@@ -83,6 +83,31 @@ _KNOWN_SESSION_TARGETS = frozenset({"isolated", "persistent"})
 _CRON_RE = re.compile(r"^[\d\*\/\-\,\?\#LW\s]+$")
 
 
+def _check_last_resort_model(warnings: list[str]) -> None:
+    """The model every agent's chain ends in is appended AFTER validation.
+
+    ``_with_last_resort`` (config.py) adds ``ROBOTHOR_LAST_RESORT_MODEL`` to
+    every chain inside ``manifest_to_agent_config``, which runs after
+    ``validate_manifest``. So the one model the entire fleet's offline tier
+    depends on was the one model nothing could check — a typo in robothor.env,
+    or an ``ollama rm``, produced a fleet-wide chain ending in fiction with
+    zero warnings on any agent. That is the exact failure ``_check_model_block``
+    was written to prevent, one layer above where it could see it.
+    """
+    import os
+
+    last_resort = os.environ.get("ROBOTHOR_LAST_RESORT_MODEL", "").strip()
+    if not last_resort:
+        return
+    from robothor.engine.model_registry import _MODEL_REGISTRY
+
+    if last_resort not in _MODEL_REGISTRY:
+        warnings.append(
+            f"last-resort model {last_resort!r} (ROBOTHOR_LAST_RESORT_MODEL) is not in "
+            "the model registry — every agent's chain ends in a model nothing can serve"
+        )
+
+
 def _check_model_block(warnings: list[str], where: str, model: Any) -> None:
     """Every model a manifest names must exist in the model registry.
 
@@ -187,6 +212,7 @@ def validate_manifest(data: dict[str, Any]) -> list[str]:
     # Model blocks — top-level, heartbeat, and worker all carry one, and the
     # 2026-08-23 incident's broken entry was in the HEARTBEAT block.
     _check_model_block(warnings, "model", data.get("model"))
+    _check_last_resort_model(warnings)
     for section in ("heartbeat", "worker"):
         sub = data.get(section)
         if isinstance(sub, dict):

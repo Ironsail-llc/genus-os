@@ -485,7 +485,11 @@ class RunLifecycleMixin:
                 message,
                 tool_names,
                 plan_model,
-                fallback_models=models[1:2],
+                # The whole remaining chain, not one model: models[1:2] can
+                # never reach the offline tier that terminates every chain, so
+                # a cloud outage silently removed the planning stage from every
+                # run at the same moment it removed the strong model.
+                fallback_models=models[1:],
             )
         except Exception as e:
             logger.debug("Planning phase failed: %s", _sanitize(e))
