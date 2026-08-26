@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 #: Absolute paths that look like a FILE — a suffix is required, because a
 #: bare directory ("work inside /tmp_workspace") is a location, not a
@@ -75,7 +76,7 @@ _INPUT_DIRS = ("/input/", "/inputs/", "/gt/", "/fixtures/", "/data/", "/exec/")
 _MAX_PATHS = 10
 
 
-def task_text_from(messages: list[dict] | None) -> str:
+def task_text_from(messages: list[dict[str, Any]] | None) -> str:
     """The task text: the FIRST user message, never the system prompt.
 
     `messages[0]` is the system prompt. Reading it here shipped this feature
