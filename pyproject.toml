@@ -42,6 +42,12 @@ dependencies = [
     # with aiohttp>=3.13.4. The 1.84 floor also clears later 2026 advisories.
     "litellm>=1.84.0,<2.0",
     "aiohttp>=3.14.3",
+    # `view_image` decodes and downscales before an image reaches a model.
+    # A core dependency, not an extra: an agent that cannot look at a picture
+    # is missing a capability every competing harness has, and the format
+    # check must be a real decode (a text file named .png must not be sent
+    # to a model as an image).
+    "Pillow>=10.0",
     # litellm's aiohttp transport imports orjson and does not declare it.
     # The host venv happens to run a litellm new enough not to need it, so
     # this only ever bit the CONTAINER: the production image resolved 1.92.0

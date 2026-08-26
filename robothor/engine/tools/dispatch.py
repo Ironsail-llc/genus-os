@@ -152,6 +152,7 @@ def _collect_handlers() -> dict[str, Any]:
         goal,
         gws,
         identity,
+        images,
         intents,
         jira,
         judge,
@@ -215,6 +216,7 @@ def _collect_handlers() -> dict[str, Any]:
         todolist,
         toolsearch,
         approvals,
+        images,
     ]:
         all_handlers.update(mod.HANDLERS)
     return all_handlers

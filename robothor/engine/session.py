@@ -297,13 +297,26 @@ class AgentSession:
         self.run.steps.append(step)
 
         # Append tool result to conversation.
-        # Screenshots get image content blocks so vision models can see the screen.
-        screenshot_tools = {"desktop_screenshot", "browser"}
-        if tool_name in screenshot_tools and isinstance(tool_output, dict):
-            b64_data = tool_output.get("screenshot_base64")
+        #
+        # A tool result carrying image data becomes a real image content block
+        # so the agent's own model can SEE it. Keyed on the output SHAPE, not
+        # on a list of blessed tool names: this was `{"desktop_screenshot",
+        # "browser"}` until 2026-08-25, which meant no tool could ever show an
+        # agent a file. Four benchmark tasks that hand the agent a PNG scored
+        # zero against a competing harness feeding the same multimodal model
+        # the same picture.
+        #
+        # Convention: `image_base64` (+ optional `image_mime`), or the older
+        # `screenshot_base64`, which is PNG by definition.
+        if isinstance(tool_output, dict):
+            b64_data = tool_output.get("image_base64") or tool_output.get("screenshot_base64")
             if b64_data and isinstance(b64_data, str):
+                mime = tool_output.get("image_mime") or "image/png"
                 w = tool_output.get("width", "?")
                 h = tool_output.get("height", "?")
+                caption = f"Image ({w}x{h})"
+                if tool_output.get("note"):
+                    caption += f" — {tool_output['note']}"
                 self.messages.append(
                     {
                         "role": "tool",
@@ -311,14 +324,9 @@ class AgentSession:
                         "content": [
                             {
                                 "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{b64_data}",
-                                },
+                                "image_url": {"url": f"data:{mime};base64,{b64_data}"},
                             },
-                            {
-                                "type": "text",
-                                "text": f"Screenshot captured ({w}x{h})",
-                            },
+                            {"type": "text", "text": caption},
                         ],
                     }
                 )
