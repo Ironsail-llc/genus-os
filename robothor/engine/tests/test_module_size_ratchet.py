@@ -26,7 +26,11 @@ CAPS = {
     # Lowered 3200 -> 2900 after phase 4 (tool-call admission gates out).
     # 2900 -> 2950 held while the run-budget cluster left (deadline warning,
     # compaction trigger, runaway token caps -> run_budget.py).
-    "robothor/engine/runner.py": 2950,
+    # +4 for bounding the cancellation path's _finish_run — the one
+    # finalization outside the outer asyncio.timeout, and the stretch
+    # where a 1200s run reached 3110s. Further trimming would have meant
+    # deleting the explanation to satisfy a line count.
+    "robothor/engine/runner.py": 2954,
     # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
     # Lowered again after phase 3b (_setup_handlers closures -> methods).
     "robothor/engine/telegram.py": 2000,
@@ -36,7 +40,10 @@ CAPS = {
     "robothor/engine/run_lifecycle.py": 800,
     "robothor/engine/run_llm_calls.py": 450,
     "robothor/engine/tool_admission.py": 400,
-    "robothor/engine/run_budget.py": 96,
+    # `bounded_finalization` belongs here: it answers this module's own
+    # question — how much may one run spend before something intervenes —
+    # for the stretch after the loop, which had no bound at all.
+    "robothor/engine/run_budget.py": 155,
     "robothor/engine/chat.py": 1600,
     "robothor/engine/scheduler.py": 1600,
 }

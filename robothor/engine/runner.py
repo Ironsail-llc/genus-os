@@ -63,12 +63,15 @@ from robothor.engine.prompts import (
     PLAN_MODE_PREAMBLE,
     PLAN_MODE_SUFFIX,
 )
+from robothor.engine.run_budget import (
+    DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
+)
 
 # Re-exported for existing importers. The `as` form is what marks a name as
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
 from robothor.engine.run_budget import (  # noqa: E402
-    DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
+    bounded_finalization as bounded_finalization,
 )
 from robothor.engine.run_budget import (
     deadline_warning as deadline_warning,
@@ -1525,12 +1528,9 @@ class AgentRunner(
                     watchdog.stop()
                     with contextlib.suppress(Exception):
                         _active_watchdog_var.reset(_wd_token)
-                    # Cleanup sandbox if created
+                    # Sandbox teardown, bounded: runs after watchdog.stop().
                     if sandbox:
-                        try:
-                            await sandbox.stop()
-                        except Exception as e:
-                            logger.warning("Sandbox cleanup failed: %s", _sanitize(e))
+                        await bounded_finalization(sandbox.stop(), "sandbox_stop")
                         from robothor.engine.sandbox import set_current_sandbox
 
                         set_current_sandbox(None)
@@ -1578,13 +1578,17 @@ class AgentRunner(
             # who else is alive at cancel time, the watchdog's last touch,
             # and elapsed-since-start. Lands in agent_runs.error_traceback.
             diag = _build_cancel_diagnostic(watchdog, agent_id)
-            finished = self._finish_run(
+            # The one finalization OUTSIDE the outer asyncio.timeout — see
+            # bounded_finalization's docstring for what that cost.
+            _finish = asyncio.to_thread(
+                self._finish_run,
                 session.timeout(reason=reason, traceback=diag),
                 trace=trace,
                 agent_config=agent_config,
                 session=session,
                 spawn_context=spawn_context,
             )
+            finished = await bounded_finalization(_finish, "finish_after_cancel") or session.run
             # The row is written; now let the cancellation continue.
             #
             # Catching it at all is right — 29 runs sat `running` forever
