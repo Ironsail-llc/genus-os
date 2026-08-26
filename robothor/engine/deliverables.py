@@ -64,7 +64,7 @@ def declared_paths(text: str | None) -> list[str]:
 
 
 def missing_deliverables_note(
-    paths: list[str], remaining: int, workspace: str | None = None
+    paths: list[str], remaining: int, workspace: str | Path | None = None
 ) -> str | None:
     """A note naming the declared files that are not on disk yet, or None.
 
@@ -111,7 +111,7 @@ def deadline_note(
     elapsed: float,
     hard_timeout: float,
     task_text: str | None,
-    workspace: str | None = None,
+    workspace: str | Path | None = None,
 ) -> str | None:
     """The full wrap-up note: the time warning, plus any missing deliverable.
 
