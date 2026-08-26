@@ -1328,6 +1328,17 @@ class LLMClient:
                 per_call_timeout = (
                     timeout_override if timeout_override is not None else LLM_REQUEST_TIMEOUT
                 )
+            if get_model_breaker().is_open(model):
+                # _call_llm has skipped open-breaker models for a long time,
+                # because a dead provider otherwise costs the full per-call
+                # timeout on every run. Streaming is the INTERACTIVE path, so
+                # it was the operator's own chat paying that timeout against a
+                # provider the engine had already written off. Safe to consult
+                # only because a streamed success now reaches the breaker too;
+                # otherwise an open breaker could never clear from the one
+                # path that proves a model healthy.
+                logger.info("skipping %s — circuit breaker open", _sanitize(model))
+                continue
             pool = self._key_pool(model)
             if pool is not None and pool.exhausted():
                 # Every credential for this provider is retired; calling
@@ -1474,9 +1485,6 @@ class LLMClient:
                     # Final progress tick — we have a complete response to return.
                     if self._active_watchdog:
                         self._active_watchdog.touch(f"stream_complete:{model}")
-                    # The interactive path proves a model healthy more often
-                    # than any cron does; without this only failures ever
-                    # reach the breaker, so it can open and never clear.
                     # The interactive path proves a model healthy more often
                     # than any cron does; without this only failures ever
                     # reach the breaker, so it can open and never clear.
