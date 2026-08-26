@@ -363,24 +363,42 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
 async def _maybe_run_alert_selftest() -> None:
     """Optional live probe of the alert delivery path (env-gated).
 
-    ROBOTHOR_ALERT_SELFTEST=1 fires one info alert so the alert() ->
-    send_fn(chat_id, text) path can be verified end-to-end on a running
-    box — a code-free way to confirm the fixed sender arity actually
-    reaches the operator, without waiting for a real incident to trip it.
-    Best-effort: never raises into the caller.
+    ROBOTHOR_ALERT_SELFTEST=1 fires one alert at a PAGING level so the
+    alert() -> send_fn(chat_id, text) path is verified end-to-end on a running
+    box — a code-free way to confirm the sender actually reaches the operator,
+    without waiting for a real incident to trip it.
+
+    The level matters and is the whole point: this probe used to fire at
+    ``info``, which is not in ``_PAGE_LEVELS``, so it wrote a database row and
+    never touched the Telegram sender whose arity it was written to confirm.
+    An operator set the flag, saw no error, and concluded pages worked — while
+    a revoked bot token or an unset chat id stayed invisible. A probe that
+    cannot fail is worse than no probe, because it reads as a pass.
+
+    Best-effort: never raises into the caller, but it does not fail quietly
+    either — silence was the original defect.
     """
     if os.environ.get("ROBOTHOR_ALERT_SELFTEST") != "1":
         return
     try:
         from robothor.engine.alerts import alert
 
-        await alert(
-            "info",
+        delivered = await alert(
+            "critical",
             "Alert delivery self-test",
-            "Engine startup self-test — the alert() delivery path is live.",
+            "Engine startup self-test — if you are reading this on Telegram, "
+            "the paging path works. Unset ROBOTHOR_ALERT_SELFTEST to stop it.",
         )
     except Exception as e:
-        logger.debug("Alert delivery self-test failed: %s", e)
+        logger.error("Alert delivery self-test RAISED: %s — the paging path is broken", e)
+        return
+    if delivered:
+        logger.info("Alert delivery self-test: the paging path delivered.")
+    else:
+        logger.error(
+            "Alert delivery self-test did NOT deliver — check the bot token and "
+            "ROBOTHOR_TELEGRAM_CHAT_ID. Pages will not reach the operator."
+        )
 
 
 def _log_task_results(done: set[asyncio.Task[Any]]) -> bool:

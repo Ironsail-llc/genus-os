@@ -29,7 +29,15 @@ async def test_selftest_fires_one_alert_when_env_set(monkeypatch):
 
     assert len(calls) == 1, "ROBOTHOR_ALERT_SELFTEST=1 must fire exactly one alert"
     level, title, _body = calls[0]
-    assert level == "info"
+    # Was `== "info"`, which pinned the defect: info is not in _PAGE_LEVELS,
+    # so the probe wrote a database row and never touched the Telegram sender
+    # it exists to verify. A test asserting the broken level is how a dead
+    # control stays dead.
+    from robothor.engine.alerts import _PAGE_LEVELS
+
+    assert level in _PAGE_LEVELS, (
+        f"the self-test fired at {level!r}, which never reaches the operator"
+    )
     assert "self-test" in title.lower()
 
 
