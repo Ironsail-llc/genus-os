@@ -230,6 +230,70 @@ async def llm_call(
     )
 
 
+#: What the agent is told in place of a picture its model cannot see. Plain
+#: text, in the tool result where the image would have been, so the agent
+#: learns the capability is unavailable *for this model* and can fall back to
+#: inspecting the file programmatically.
+IMAGE_UNSUPPORTED_NOTE = (
+    "[the image could not be shown to this model — it accepts text only. "
+    "Inspect the file programmatically instead, e.g. with Pillow via exec.]"
+)
+
+#: Provider phrasings for "I cannot accept an image". OpenRouter answers a
+#: text-only model with a 404 whose message is the giveaway; others use a
+#: 400 with prose. Matched on the message, not the status, because a bare
+#: 404 also means "no such model".
+_IMAGE_UNSUPPORTED_MARKERS = (
+    "support image input",
+    "image_url is not supported",
+    "does not support image",
+    "image input is not supported",
+    "unsupported content type: image",
+)
+
+
+def is_image_unsupported_error(e: Exception) -> bool:
+    """Did the provider refuse specifically because of an image?"""
+    msg = str(e).lower()
+    return any(marker in msg for marker in _IMAGE_UNSUPPORTED_MARKERS)
+
+
+def strip_image_blocks(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Return a copy of `messages` with image blocks replaced by a note.
+
+    The caller's list is never mutated: a retry that rewrote history in place
+    would leave the conversation permanently blind even after a vision-capable
+    fallback took over. Text blocks alongside the image (the caption naming
+    its dimensions) survive — that is real context about what the agent
+    looked at.
+    """
+    changed = False
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            out.append(msg)
+            continue
+        if not any(
+            isinstance(b, dict) and b.get("type") in ("image_url", "image") for b in content
+        ):
+            out.append(msg)
+            continue
+        changed = True
+        texts = [
+            str(b.get("text", ""))
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+        ]
+        note = IMAGE_UNSUPPORTED_NOTE
+        if texts:
+            note = " ".join(texts) + " " + note
+        out.append({**msg, "content": note})
+    return out, changed
+
+
 class LLMClient:
     """LLM dispatch, model-fallback, streaming, cost, and message hygiene.
 
@@ -754,6 +818,38 @@ class LLMClient:
             suffix = " (streaming)" if streaming else ""
             logger.warning("Model %s%s failed: %s", _sanitize(model), suffix, _sanitize(e))
 
+    async def _call_with_image_fallback(
+        self,
+        *,
+        model: str,
+        messages: list[dict[str, Any]],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        """One litellm call, surviving a model that cannot accept images.
+
+        A text-only model answers an image content block with a hard refusal,
+        and before this that refusal walked the whole fallback chain and ended
+        the run — an agent lost everything because it looked at a picture.
+        Here the images are stripped, the agent is told plainly that this
+        model cannot see and to inspect the file programmatically, and the
+        SAME model is retried once. Every other failure is re-raised untouched
+        so the normal fallback and breaker logic still owns it.
+        """
+        try:
+            return await litellm.acompletion(**kwargs)
+        except Exception as e:
+            if not is_image_unsupported_error(e):
+                raise
+            stripped, changed = strip_image_blocks(messages)
+            if not changed:
+                raise
+            logger.warning(
+                "Model %s cannot accept images — retrying without them; "
+                "the agent is told to inspect the file programmatically",
+                _sanitize(model),
+            )
+            return await litellm.acompletion(**{**kwargs, "messages": stripped})
+
     # ─── Non-streaming call ──────────────────────────────────────────
 
     async def _call_llm(
@@ -816,7 +912,9 @@ class LLMClient:
                         if is_codex_model(model):
                             result = await codex_acompletion(**kwargs)
                         else:
-                            result = await litellm.acompletion(**kwargs)
+                            result = await self._call_with_image_fallback(
+                                model=model, messages=kwargs.get("messages", []), kwargs=kwargs
+                            )
                     if _is_empty_completion(result):
                         # Not a finished answer. Raising routes this into the
                         # transient-retry path below rather than returning a
