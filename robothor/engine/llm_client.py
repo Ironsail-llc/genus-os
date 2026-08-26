@@ -107,6 +107,85 @@ TRANSIENT_RETRY_JITTER_MAX = 5.0
 _TRANSIENT_RETRY_STATUSES = frozenset({500, 502, 503, 504})
 
 
+#: Longest a run will wait out a rate limit before giving up on that model.
+#: A provider can name an hour; a run that sleeps an hour inside its own
+#: wall-clock ceiling has thrown the budget away in a different manner.
+MAX_RATE_LIMIT_WAIT = 30.0
+
+#: Fallback wait when a 429 carries no interval.
+_DEFAULT_RATE_LIMIT_WAIT = 5.0
+
+#: Headers providers use to say when to come back.
+_RETRY_AFTER_HEADERS = (
+    "retry-after",
+    "x-ratelimit-reset-requests",
+    "x-ratelimit-reset-tokens",
+    "x-ratelimit-reset",
+)
+
+#: A spent budget, not a busy provider. No wait fixes it, and no other model
+#: on the same key will work either. A campaign lost hours to this: an
+#: exhausted key produced task after task of zeros indistinguishable from
+#: capability failures.
+_CREDIT_EXHAUSTED_MARKERS = (
+    "key limit exceeded",
+    "insufficient credit",
+    "insufficient_quota",
+    "exceeded your current quota",
+    "billing hard limit",
+    "payment required",
+    "not enough credits",
+)
+
+
+def _status_of(e: Exception) -> int | None:
+    return getattr(e, "status_code", None)
+
+
+def is_credit_exhausted(e: Exception) -> bool:
+    """Is the ACCOUNT out of money, rather than the provider merely busy?"""
+    if _status_of(e) == 402:
+        return True
+    msg = str(e).lower()
+    return any(marker in msg for marker in _CREDIT_EXHAUSTED_MARKERS)
+
+
+def rate_limit_wait_seconds(e: Exception) -> float | None:
+    """How long to wait before retrying THIS model, or None if not a 429.
+
+    A rate limit is the provider saying "not right now". Marking the model
+    broken and walking the fallback chain answers a question it did not ask,
+    and burns the primary for the rest of the run.
+    """
+    status = _status_of(e)
+    if status is not None:
+        # Trust the status over the prose. A 403 is Forbidden however it is
+        # worded — an existing test raises exactly that with the message
+        # "Rate limited", and treating it as a wait would retry an auth
+        # failure forever instead of falling to the next model.
+        if status != 429:
+            return None
+    elif "rate limit" not in str(e).lower():
+        # No status at all: some providers raise bare exceptions, so the
+        # message is the only signal available.
+        return None
+    if is_credit_exhausted(e):
+        return None
+    headers = getattr(getattr(e, "response", None), "headers", None) or {}
+    lowered = {str(k).lower(): v for k, v in dict(headers).items()}
+    for name in _RETRY_AFTER_HEADERS:
+        raw = lowered.get(name)
+        if raw is None:
+            continue
+        try:
+            seconds = float(str(raw).strip())
+        except (TypeError, ValueError):
+            continue
+        if seconds > 0:
+            return min(seconds, MAX_RATE_LIMIT_WAIT)
+    return _DEFAULT_RATE_LIMIT_WAIT
+
+
 class EmptyCompletionError(RuntimeError):
     """The model returned a 200 with neither text nor a tool call.
 
@@ -791,7 +870,7 @@ class LLMClient:
         )
         # Mark broken for auth, rate limit, provider failures, and timeouts
         if broken_models is not None and (
-            status in (401, 402, 403, 429, 500, 502, 503, 504) or is_timeout or is_provider_down
+            status in (401, 402, 403, 500, 502, 503, 504) or is_timeout or is_provider_down
         ):
             # First model to fail = primary model — log at ERROR for visibility
             is_primary = len(broken_models) == 0
@@ -925,6 +1004,33 @@ class LLMClient:
                 except Exception as e:
                     last_error = e
                     is_timeout = isinstance(e, TimeoutError)
+                    # A spent budget is not a busy provider: no wait fixes it,
+                    # and every other model on the same key fails identically.
+                    # Walking the chain just burns them all.
+                    if is_credit_exhausted(e):
+                        logger.error(
+                            "Model %s: the account's credit is exhausted — no "
+                            "model on this key can answer. Top up or raise the "
+                            "limit; this is not a model failure.",
+                            _sanitize(model),
+                        )
+                        raise
+                    # A rate limit is the provider saying "not right now".
+                    # Wait the interval it names and retry the SAME model.
+                    _wait = rate_limit_wait_seconds(e)
+                    if _wait is not None and attempt < attempts - 1:
+                        logger.warning(
+                            "Model %s rate-limited — waiting %.1fs and retrying "
+                            "the same model (attempt %d/%d)",
+                            _sanitize(model),
+                            _wait,
+                            attempt + 1,
+                            attempts,
+                        )
+                        if self._active_watchdog:
+                            self._active_watchdog.touch(f"rate_limit_wait:{model}")
+                        await asyncio.sleep(_wait)
+                        continue
                     if attempt < attempts - 1 and _is_transient_model_error(e):
                         delay = random.uniform(
                             TRANSIENT_RETRY_JITTER_MIN, TRANSIENT_RETRY_JITTER_MAX
