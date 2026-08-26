@@ -1,3 +1,14 @@
+## [1.55.0](https://github.com/Ironsail-llc/genus-os/compare/v1.54.0...v1.55.0) (2026-08-26)
+
+### Features
+
+* **bench:** the ledger reports what it establishes, not just what it scored ([#414](https://github.com/Ironsail-llc/genus-os/issues/414)) ([90638b7](https://github.com/Ironsail-llc/genus-os/commit/90638b72ae80a9b9b882fcaee36595a34edbbc92))
+* **engine:** a fallback chain that shares one key is a chain of one link ([#415](https://github.com/Ironsail-llc/genus-os/issues/415)) ([7641afb](https://github.com/Ironsail-llc/genus-os/commit/7641afbdca11efd4bd475199c5b962fadd76e383))
+
+### Bug Fixes
+
+* **engine:** the sandbox picks a runtime it can actually execute ([#412](https://github.com/Ironsail-llc/genus-os/issues/412)) ([bf43d32](https://github.com/Ironsail-llc/genus-os/commit/bf43d32c973a3cd2ff851f6e43048f618d755905))
+
 ## [1.54.0](https://github.com/Ironsail-llc/genus-os/compare/v1.53.0...v1.54.0) (2026-08-26)
 
 ### Features
