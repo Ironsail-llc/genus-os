@@ -269,6 +269,22 @@ provider outage, and every zero above survived a clean re-run.
 The remaining losses cluster: connect-the-dots and link-a-pix are iterative
 visual-reasoning puzzles, our clearest capability gap.
 
+**And it is a code gap, not a vision gap** — a correction worth recording,
+because the first diagnosis was wrong. Chasing these four tasks found that
+nothing in the engine could put an image in front of a model, which looked
+like the whole answer. It was not: `z-ai/glm-5.2` reports
+`input_modalities: ["text"]` on OpenRouter and returns `404 No endpoints
+found that support image input` for any image block. **Both harnesses ran
+the same blind model.** OpenClaw did not win these tasks by seeing them; it
+won them by better *programmatic* image analysis — PIL and OCR in code —
+which is exactly what our agent was attempting and doing worse.
+
+Check `input_modalities` on the models endpoint before believing a model can
+see. The vision work that came out of the wrong diagnosis was still worth
+shipping (`view_image`, plus the fix for a text-only model turning one image
+block into a lost run), and on this fleet the only vision-capable model is
+the local `qwen3.8:27b` offline tier.
+
 ## Creative Synthesis, 11 tasks — first measurement
 
 | Task | OpenClaw | Genus |
