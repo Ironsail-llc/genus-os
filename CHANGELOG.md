@@ -1,3 +1,9 @@
+## [1.52.0](https://github.com/Ironsail-llc/genus-os/compare/v1.51.5...v1.52.0) (2026-08-26)
+
+### Features
+
+* **engine:** the deadline note names the file the task asked for ([#407](https://github.com/Ironsail-llc/genus-os/issues/407)) ([a48d446](https://github.com/Ironsail-llc/genus-os/commit/a48d446acd57460659bb3895084b8c021e4f9008))
+
 ## [1.51.5](https://github.com/Ironsail-llc/genus-os/compare/v1.51.4...v1.51.5) (2026-08-26)
 
 ### Bug Fixes
