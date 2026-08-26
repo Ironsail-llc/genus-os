@@ -101,9 +101,12 @@ class TestItReachesTheAgent:
     def test_the_loop_appends_it_to_the_conversation(self):
         from pathlib import Path
 
+        # Bounded by the NEXT statement rather than a character count: a
+        # fixed window breaks the moment anything is added to the block,
+        # which is a test failing for the wrong reason.
         src = (Path(__file__).resolve().parents[1] / "runner.py").read_text(encoding="utf-8")
         start = src.index("_deadline_warned and self._active_watchdog")
-        window = src[start : start + 700]
+        window = src[start : src.index("if _safety_cap > 0", start)]
         assert "session.messages.append" in window
         assert "ENGINE_CONTEXT_ROLE" in window
 
