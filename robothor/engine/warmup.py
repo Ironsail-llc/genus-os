@@ -1013,9 +1013,16 @@ def _build_entity_context(
                     SELECT fact_text, category, importance_score, person_id
                     FROM memory_facts
                     WHERE is_active = TRUE AND tenant_id = %s
-                      AND EXISTS (
-                        SELECT 1 FROM unnest(entities) e WHERE lower(e) = lower(%s)
-                      )
+                      -- Indexed by idx_facts_entities_lower (migration 109).
+                      -- The previous EXISTS(unnest(...)) form was unindexable
+                      -- and scanned the tenant's whole active set, five times
+                      -- per warmup: 13,155 buffers (105 MB) a call against a
+                      -- 128 MB shared_buffers, ~262 ms versus 2.7 ms for every
+                      -- other warmup section. lower() cannot simply be dropped
+                      -- to reuse the raw-array GIN — 646 of 14,714 entity names
+                      -- on this instance collapse under it, and that rewrite
+                      -- was measured losing 37% of matched rows.
+                      AND lower_entities(entities) && ARRAY[lower(%s)]
                       {scope_clause}
                     ORDER BY
                       0.55 * COALESCE(importance_score, 0.5)
