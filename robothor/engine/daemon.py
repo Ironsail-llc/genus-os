@@ -627,6 +627,14 @@ async def main() -> int:
     hook_registry.register_python_handler("channel_bus.main_started", _channel_bus_on_main_start)
     hook_registry.register_python_handler("channel_bus.main_finished", _channel_bus_on_main_end)
 
+    # Plugin-contributed lifecycle handlers, AFTER the engine's own so that an
+    # installed package cannot claim a channel_bus.* name. Registering these
+    # was the last of #411's four declared entry-point groups to have no
+    # consumer at all.
+    from robothor.engine.hook_registry import register_plugin_hooks
+
+    register_plugin_hooks(hook_registry)
+
     global_hooks = load_global_hooks(config.workspace / "docs" / "hooks")
     if global_hooks:
         hook_registry.register_many(global_hooks)
