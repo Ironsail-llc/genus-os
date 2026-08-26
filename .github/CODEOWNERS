@@ -1,7 +1,48 @@
-# Default: an independent repository maintainer reviews everything.
-# The former @genusos/maintainers owner does not exist in this organization.
-* @danylo-ironsail
+# CODEOWNERS — deliberately NOT a catch-all.
+#
+# There is no `*` rule: application code (agents/, app/, brain/, crm/, memory/,
+# robothor/, tests/, ...) has no code owner, so no one is auto-requested on it.
+# The former @genusos/maintainers group does not exist in this organization.
+#
+# @danylo-ironsail owns the Kubernetes / infrastructure / release surface only.
+# Note: main does not have `require_code_owner_reviews` enabled, so these rules
+# only auto-request review — they do not block merges.
 
-# CRM subsystem
-/crm/ @danylo-ironsail
-/robothor/crm/ @danylo-ironsail
+# --- Kubernetes / Helm ---
+/helm/                              @danylo-ironsail
+
+# --- Host & container infrastructure ---
+/infra/                             @danylo-ironsail
+/local/                             @danylo-ironsail
+/Dockerfile.app                     @danylo-ironsail
+/Dockerfile.python                  @danylo-ironsail
+/.dockerignore                      @danylo-ironsail
+
+# --- CI / release automation ---
+/.github/workflows/                 @danylo-ironsail
+/.github/labeler.yml                @danylo-ironsail
+/.github/CODEOWNERS                 @danylo-ironsail
+/.releaserc.js                      @danylo-ironsail
+/scripts/update-helm-values.sh      @danylo-ironsail
+/scripts/promote-release-values.js  @danylo-ironsail
+/scripts/check-version-consistency.js @danylo-ironsail
+/scripts/check_workflow_action_pins.py @danylo-ironsail
+
+# --- Secrets management ---
+/.sops.yaml                         @danylo-ironsail
+/scripts/decrypt-secrets.sh         @danylo-ironsail
+/scripts/with-secrets.sh            @danylo-ironsail
+
+# --- Host ops: systemd units, backups, WAL archiving ---
+/scripts/install-*.sh               @danylo-ironsail
+/scripts/install_*.sh               @danylo-ironsail
+/scripts/backup-*.sh                @danylo-ironsail
+/scripts/wal-*.sh                   @danylo-ironsail
+/scripts/pg-basebackup.sh           @danylo-ironsail
+/scripts/render-unit.sh             @danylo-ironsail
+/scripts/cron-wrapper.sh            @danylo-ironsail
+/scripts/thermal-guard.sh           @danylo-ironsail
+/scripts/check_dropin_drift.sh      @danylo-ironsail
+/scripts/build-sandbox-image.sh     @danylo-ironsail
+/scripts/*.service                  @danylo-ironsail
+/scripts/*.timer                    @danylo-ironsail
