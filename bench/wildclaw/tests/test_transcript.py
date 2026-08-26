@@ -702,3 +702,47 @@ class TestTheBenchAgentCanSee:
         lowered = body.lower()
         for banned in ("jigsaw", "link-a-pix", "link_a_pix", "connect the dots", "sam3", "scholar"):
             assert banned not in lowered, f"task-specific coaching leaked in: {banned}"
+
+
+class TestCreditExhaustionIsNotACapabilityResult:
+    """A spent API budget must not read as sixty capability failures.
+
+    2026-08-26: the OpenRouter key hit its limit mid-campaign — usage $5278
+    against a $100 cap, `limit_remaining: 0`. Every task then failed in
+    ~16 seconds with zero tokens and "All models failed to respond".
+
+    `_provider_failed` already recognises that shape and retries once, which
+    is right for a transient blip and useless here: the retry cannot succeed,
+    and the nightly rotation would spend hours producing a full slate of
+    zeros before writing a clean-looking `mean 0.0%` to the ledger.
+
+    Two consecutive provider failures at the START of a run means the
+    provider is down for everyone, not that this task is hard. Stop, and say
+    which it was — the operator can top up a key, but only if the run says
+    that is what happened.
+    """
+
+    @staticmethod
+    def _source() -> str:
+        return (Path(__file__).resolve().parents[1] / "harness.py").read_text(encoding="utf-8")
+
+    def test_the_run_aborts_after_consecutive_provider_failures(self):
+        body = self._source()
+        main_body = body[body.index("def main(") :]
+        assert "_consecutive_provider_failures" in main_body, (
+            "nothing counts consecutive outages — the rotation would grind "
+            "through every task producing zeros"
+        )
+        assert "PROVIDER_FAILURE_ABORT" in body
+
+    def test_the_abort_names_the_cause(self):
+        body = self._source()
+        assert "provider is failing every request" in body, (
+            "an abort that does not name the cause is another mystery zero"
+        )
+
+    def test_a_success_resets_the_counter(self):
+        """One flaky task must not arm an abort three tasks later."""
+        body = self._source()
+        main_body = body[body.index("def main(") :]
+        assert "_consecutive_provider_failures = 0" in main_body
