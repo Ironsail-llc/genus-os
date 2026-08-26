@@ -420,6 +420,15 @@ def _run_agent(
     return {"returncode": proc.returncode, "elapsed": elapsed}
 
 
+#: Consecutive provider failures that mean the provider, not the tasks.
+#: Two is enough: one is a blip that `_provider_failed` already retries, and
+#: a key that has hit its limit fails every request forever. Without this the
+#: nightly rotation grinds through a whole category producing zeros and
+#: writes a clean-looking `mean 0.0%` to the ledger — the shape of a real
+#: result, and a lie.
+PROVIDER_FAILURE_ABORT = 2
+
+
 def _provider_failed(usage: dict[str, Any]) -> bool:
     """Did this run die of a dead PROVIDER rather than anything the agent did?
 
@@ -613,6 +622,7 @@ def main() -> int:
 
     args.out.mkdir(parents=True, exist_ok=True)
     results: list[dict[str, Any]] = []
+    _consecutive_provider_failures = 0
 
     for task_file in task_files:
         task = _load_task(task_file, args.repo)
@@ -641,6 +651,20 @@ def main() -> int:
             if usage_path.exists():
                 usage = json.loads(usage_path.read_text())
             provider_failure = _provider_failed(usage)
+
+        if provider_failure:
+            _consecutive_provider_failures += 1
+            if _consecutive_provider_failures >= PROVIDER_FAILURE_ABORT:
+                print(
+                    f"\naborting: the provider is failing every request "
+                    f"({_consecutive_provider_failures} tasks in a row returned "
+                    "nothing). This is not a capability result — check the API "
+                    "key's credit and rate limits, then re-run.",
+                    file=sys.stderr,
+                )
+                return 3
+        else:
+            _consecutive_provider_failures = 0
 
         score = (
             _read_grade(out_dir)
