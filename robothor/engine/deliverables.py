@@ -32,12 +32,19 @@ from pathlib import Path
 #: deliverable. Extensions are capped at 5 characters so a sentence ending
 #: mid-path does not produce a phantom file.
 #:
-#: ONE flat quantifier, deliberately. The first version nested them —
-#: `(?:[\w.\-]+/)+` — which backtracks polynomially on input like
-#: `/-/-/-/...`, and this pattern runs over untrusted task text, so a crafted
-#: prompt could hang the engine before the agent took a single step
-#: (CodeQL py/polynomial-redos).
-_PATH_RE = re.compile(r"(?<![\w:/])(/[\w.\-/]+\.[A-Za-z0-9]{1,5})\b")
+#: Linear by construction, after two attempts that were not. This pattern
+#: runs over untrusted task text, so a crafted prompt must not be able to
+#: hang the engine before the agent takes a step (CodeQL py/polynomial-redos).
+#:
+#: The first version nested quantifiers — `(?:[\w.\-]+/)+` — which backtracks
+#: on `/-/-/-/...`. The second flattened them but left `.` inside the body
+#: class, so the body competed with the literal `\.` for every dot and
+#: backtracked on `/a.a.a.a...`. The body now excludes dots outright, leaving
+#: exactly one place a dot can match and nothing to backtrack over.
+#:
+#: The cost is a directory containing a dot (`/a/b.c/d.png`), which is not a
+#: shape task prompts use for deliverables. Worth it to be unhangable.
+_PATH_RE = re.compile(r"(?<![\w:/])(/[\w\-/]+\.[A-Za-z0-9]{1,5})\b")
 
 #: Directory names that hold a task's INPUTS. A path under one of these is
 #: something the agent reads, never something it must produce, and warning

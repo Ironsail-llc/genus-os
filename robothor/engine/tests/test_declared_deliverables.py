@@ -214,3 +214,12 @@ class TestTheExtractorCannotBeHung:
         started = time.perf_counter()
         declared_paths(text)
         assert time.perf_counter() - started < 1.0
+
+    def test_many_dots_do_not_backtrack(self):
+        """The second attempt left `.` in the body class and backtracked here."""
+        import time
+
+        evil = "/" + "a." * 5000
+        started = time.perf_counter()
+        declared_paths(evil)
+        assert time.perf_counter() - started < 1.0
