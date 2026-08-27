@@ -46,9 +46,7 @@ from robothor.memory.eval_corpus import (  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("corpus-gen")
 
-GENERATOR_MODEL = os.environ.get(
-    "MEMORY_EVAL_GENERATOR_MODEL", "openrouter/xiaomi/mimo-v2.5"
-)
+GENERATOR_MODEL = os.environ.get("MEMORY_EVAL_GENERATOR_MODEL", "openrouter/xiaomi/mimo-v2.5")
 
 # De-personalized cast per the platform rule — no instance data in a tracked
 # corpus. The generator is told to stay inside it.
@@ -211,8 +209,10 @@ async def main() -> int:
     log.info("rejected: %s", dict(rejected))
     total_seen = len(accepted) + sum(rejected.values())
     if total_seen:
-        log.info("rejection rate %.0f%% — this is the number to watch",
-                 100 * sum(rejected.values()) / total_seen)
+        log.info(
+            "rejection rate %.0f%% — this is the number to watch",
+            100 * sum(rejected.values()) / total_seen,
+        )
 
     existing = yaml.safe_load(suite_path().read_text())["cases"]
     merged = [*existing, *accepted]

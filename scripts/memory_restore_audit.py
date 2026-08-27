@@ -47,7 +47,7 @@ def main() -> int:
         rows = cur.fetchall()[: args.limit]
 
         print(f"evidence-backed wrongly-archived candidates: {len(rows)}")
-        for fid, tenant, txt, reads in rows[:10]:
+        for fid, _tenant, txt, reads in rows[:10]:
             print(f"  {fid:>8}  reads={reads:<3} {txt[:60]}")
         if len(rows) > 10:
             print(f"  ... and {len(rows) - 10} more")
@@ -69,7 +69,9 @@ def main() -> int:
         )
         restored = cur.rowcount
         conn.commit()
-        print(f"\nrestored {restored} fact(s); manifest written with reason='restore:audit-2026-07'")
+        print(
+            f"\nrestored {restored} fact(s); manifest written with reason='restore:audit-2026-07'"
+        )
     return 0
 
 

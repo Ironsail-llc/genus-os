@@ -69,7 +69,7 @@ def check_2_agent_capabilities():
     if not manifest_path.exists():
         return False
 
-    with open(manifest_path) as f:
+    with manifest_path.open() as f:
         manifest = json.load(f)
 
     agents = manifest.get("agents", {})
@@ -82,7 +82,7 @@ def check_2_agent_capabilities():
             return False
 
     # Each agent has tools and bridge_endpoints
-    for _name, agent in agents.items():
+    for agent in agents.values():
         if "tools" not in agent or "bridge_endpoints" not in agent:
             return False
 

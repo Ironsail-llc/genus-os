@@ -33,7 +33,7 @@ def main() -> int:
 
     before_retire, after_retire = set(), set()
     lifted = 0
-    for (fid, cat, imp, fails, last_acc, acc, reinf, last_acc_s, acc_s) in rows:
+    for fid, cat, imp, fails, last_acc, acc, reinf, last_acc_s, acc_s in rows:
         imp = float(imp or 0.0)
         d_before = compute_decay_score(last_acc, acc or 0, reinf or 0, imp, fails or 0)
         d_after = compute_decay_score(last_acc_s, acc_s or 0, reinf or 0, imp, fails or 0)
