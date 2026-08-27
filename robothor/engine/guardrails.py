@@ -437,8 +437,11 @@ class GuardrailEngine:
         declared-but-unconsumed. A competitive audit rated the platform "far
         behind" on extensibility partly for that.
         """
+        from robothor.plugins import generation
+
+        current = generation()
         cache: dict[str, Any] | None = self.__dict__.get("_plugin_guardrail_cache")
-        if cache is not None:
+        if cache is not None and self.__dict__.get("_plugin_guardrail_generation") == current:
             return cache
         try:
             from robothor.plugins import load_plugins
@@ -449,6 +452,7 @@ class GuardrailEngine:
             logger.warning("Plugin guardrails unavailable: %s", e)
             cache = {}
         self.__dict__["_plugin_guardrail_cache"] = cache
+        self.__dict__["_plugin_guardrail_generation"] = current
         return cache
 
     def _plugin_guardrail(self, policy: str) -> Any:

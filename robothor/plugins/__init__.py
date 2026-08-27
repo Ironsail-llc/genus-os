@@ -21,7 +21,16 @@ from robothor.plugins.loader import (
     CONTRACT_VERSION,
     PluginFailure,
     PluginSet,
+    generation,
     load_plugins,
+    reload_plugins,
 )
 
-__all__ = ["CONTRACT_VERSION", "PluginFailure", "PluginSet", "load_plugins"]
+__all__ = [
+    "CONTRACT_VERSION",
+    "PluginFailure",
+    "PluginSet",
+    "generation",
+    "load_plugins",
+    "reload_plugins",
+]

@@ -80,5 +80,8 @@ LockPersonality=yes
 # NOTE: do NOT add RestrictNamespaces without re-testing the sandbox — rootless
 # podman (Phase 2) needs CLONE_NEWUSER/CLONE_NEWNS to start a container.
 
+# Re-read installed plugins without cancelling in-flight runs.
+ExecReload=/bin/kill -HUP $MAINPID
+
 [Install]
 WantedBy=multi-user.target
