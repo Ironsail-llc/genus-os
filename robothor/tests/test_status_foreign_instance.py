@@ -10,7 +10,7 @@ HOME, reported
 
     PostgreSQL:  Connected — 118 tables
     Vault:       15 secret(s) stored
-    Workspace:   /home/philip/robothor
+    Workspace:   /home/<operator>/robothor
 
 — the operator's instance, not the caller's. Postgres peer auth over the Unix
 socket supplies the database; the system env file supplies the workspace.

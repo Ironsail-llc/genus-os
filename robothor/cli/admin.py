@@ -397,7 +397,7 @@ def describe_instance_ownership(
     Measured on a real box: a fresh clone of the public repo, installed into a
     temp venv and run with `env -i` and a different HOME, reported the
     operator's 118-table database, 15 vault secrets, and
-    Workspace: /home/philip/robothor. Postgres peer auth over the Unix socket
+    Workspace: /home/<operator>/robothor. Postgres peer auth over the socket
     supplies the database; the system env file supplies the workspace.
 
     Intended on a single-operator box. On a shared machine — which is what
