@@ -90,7 +90,6 @@ from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
 from robothor.engine.stall_watchdog import (
     _active_watchdog_var,
     _build_cancel_diagnostic,
-    _fleet_wallclock_ceiling,
     _StallWatchdog,
 )
 from robothor.engine.tool_admission import ToolAdmissionMixin  # noqa: E402
@@ -751,17 +750,15 @@ class AgentRunner(
         # Create stall watchdog EARLY so it covers the setup phase too.
         # Previously the watchdog was only started after setup completed,
         # meaning a hang during warmup/adapter loading went undetected.
-        stall_timeout = getattr(agent_config, "stall_timeout_seconds", 300)
-        # Absolute wall-clock ceiling. When an agent sets timeout_seconds=0
-        # ("no cap" — e.g. main's heartbeat/worker) it previously had NO hard
-        # bound, so a slow-but-not-stalled run could grind for 25–128 min
-        # (audit 2026-05-29). Fall back to a generous fleet ceiling instead of
-        # leaving it unbounded; one turn never legitimately needs this long.
-        effective_hard_timeout = agent_config.timeout_seconds
-        if effective_hard_timeout <= 0:
-            effective_hard_timeout = _fleet_wallclock_ceiling()
+        # Every budget from ONE derivation, scaled for the chain that serves this
+        # run. A 0 budget still means "disabled" and stays 0.
+        from robothor.engine.run_budget import watchdog_budgets_for
+
+        _budgets = watchdog_budgets_for(agent_config)
+        stall_timeout = _budgets.stall
+        effective_hard_timeout = _budgets.hard
         hard_timeout = effective_hard_timeout if effective_hard_timeout > 0 else None
-        early_stall_timeout = getattr(agent_config, "early_stall_timeout_seconds", 0)
+        early_stall_timeout = _budgets.early_stall
         watchdog = _StallWatchdog(
             stall_timeout=stall_timeout,
             hard_timeout=effective_hard_timeout,
@@ -2020,9 +2017,11 @@ class AgentRunner(
         _deadline_warned = False  # one-shot latch for the wrap-up note
         # ── [WALLCLOCK] the loop's own deadline — computed once, checked
         # every iteration. See the self-check below for why this exists.
-        from robothor.engine.run_budget import effective_wallclock_ceiling
+        from robothor.engine.run_budget import chain_for, effective_wallclock_ceiling
 
-        _wallclock_ceiling = effective_wallclock_ceiling(agent_config.timeout_seconds)
+        _wallclock_ceiling = effective_wallclock_ceiling(
+            agent_config.timeout_seconds, models=chain_for(agent_config)
+        )
         _wallclock_deadline = (
             time.monotonic() + _wallclock_ceiling if _wallclock_ceiling > 0 else None
         )

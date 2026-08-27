@@ -86,19 +86,8 @@ def proactive_compaction_threshold(max_input_tokens: int) -> int:
     return min(fraction, budget)
 
 
-def effective_wallclock_ceiling(timeout_seconds: int) -> int:
-    """The hard wall-clock bound a run actually gets.
-
-    An agent's own ``timeout_seconds`` when positive; the fleet ceiling when
-    the agent declares 0 ("no cap") — nothing runs unbounded. One derivation,
-    used by both the watchdog setup and the run loop's self-check, so the two
-    can never disagree about what the ceiling is.
-    """
-    from robothor.engine.stall_watchdog import _fleet_wallclock_ceiling
-
-    return timeout_seconds if timeout_seconds > 0 else _fleet_wallclock_ceiling()
-
-
+# Tempo-scaled watchdog budgets moved to their own module (how long may a run
+# be SILENT, given which model answers). Re-exported so importers keep working.
 # The finalization cluster moved to its own module — it answers a different
 # question (what may a run spend AFTER its loop ends) and was crowding this
 # one. Re-exported so existing importers keep working.
@@ -113,4 +102,16 @@ from robothor.engine.finalization_budget import (  # noqa: E402
 )
 from robothor.engine.finalization_budget import (  # noqa: E402
     bounded_finalization as bounded_finalization,
+)
+from robothor.engine.watchdog_budgets import (  # noqa: E402
+    WatchdogBudgets as WatchdogBudgets,
+)
+from robothor.engine.watchdog_budgets import (  # noqa: E402
+    chain_for as chain_for,
+)
+from robothor.engine.watchdog_budgets import (  # noqa: E402
+    effective_wallclock_ceiling as effective_wallclock_ceiling,
+)
+from robothor.engine.watchdog_budgets import (  # noqa: E402
+    watchdog_budgets_for as watchdog_budgets_for,
 )
