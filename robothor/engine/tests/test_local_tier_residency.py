@@ -29,9 +29,7 @@ CLOUD = "openrouter/xiaomi/mimo-v2.5"
 
 
 def _kwargs(model: str) -> dict:
-    return LLMClient._build_llm_kwargs(
-        model, [{"role": "user", "content": "hi"}], [], 10, 0.3
-    )
+    return LLMClient._build_llm_kwargs(model, [{"role": "user", "content": "hi"}], [], 10, 0.3)
 
 
 class TestTheEngineDeclaresResidency:

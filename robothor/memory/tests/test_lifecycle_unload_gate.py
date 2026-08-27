@@ -206,7 +206,9 @@ class TestItRefusesTheFleetsOfflineTier:
         self._force_pressure(monkeypatch)
         monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/qwen3.8:27b")
         monkeypatch.setattr(lifecycle.llm_client, "GENERATION_MODEL", "qwen3.8:27b")
-        monkeypatch.setattr(lifecycle.llm_client, "_embedding_model", lambda: "qwen3-embedding:0.6b")
+        monkeypatch.setattr(
+            lifecycle.llm_client, "_embedding_model", lambda: "qwen3-embedding:0.6b"
+        )
 
         posted: list[Any] = []
 
@@ -231,7 +233,9 @@ class TestItRefusesTheFleetsOfflineTier:
         monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/qwen3.8:27b")
         # bare id on one side, routed id on the other
         monkeypatch.setattr(lifecycle.llm_client, "GENERATION_MODEL", "ollama_chat/qwen3.8:27b")
-        monkeypatch.setattr(lifecycle.llm_client, "_embedding_model", lambda: "qwen3-embedding:0.6b")
+        monkeypatch.setattr(
+            lifecycle.llm_client, "_embedding_model", lambda: "qwen3-embedding:0.6b"
+        )
 
         posted: list[Any] = []
 
@@ -255,7 +259,9 @@ class TestItRefusesTheFleetsOfflineTier:
         self._force_pressure(monkeypatch)
         monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/qwen3.8:27b")
         monkeypatch.setattr(lifecycle.llm_client, "GENERATION_MODEL", "qwen3:1.7b")
-        monkeypatch.setattr(lifecycle.llm_client, "_embedding_model", lambda: "qwen3-embedding:0.6b")
+        monkeypatch.setattr(
+            lifecycle.llm_client, "_embedding_model", lambda: "qwen3-embedding:0.6b"
+        )
 
         posted: list[Any] = []
 
