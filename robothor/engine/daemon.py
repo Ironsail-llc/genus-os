@@ -318,6 +318,7 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
     try:
         from robothor.federation.config import FederationConfig
         from robothor.federation.connections import load_connections
+        from robothor.federation.models import ConnectionState
         from robothor.federation.nats import NATSManager
 
         # Resolve federation config: engine env vars → federation.yaml fallback
@@ -345,6 +346,14 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
             )
             return None
 
+        # The transport owns every endpoint this instance holds. An instance
+        # in the middle of an organisation is a child upward and a parent
+        # downward, which one NATSManager cannot represent — so the manager is
+        # now something the transport routes TO, not the thing held directly.
+        from robothor.federation.transport import FederationTransport, set_transport
+
+        transport = FederationTransport(hub_url=nats_url)
+
         nats_mgr = NATSManager(nats_url)
         connected = await nats_mgr.connect()
         if connected:
@@ -361,23 +370,71 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
             from robothor.federation.nats import set_nats_manager
 
             set_nats_manager(nats_mgr)
+            set_transport(transport)
             logger.info(
                 "Federation: NATS connected, %d connections loaded",
                 len(connections),
             )
-            # Ensure streams + register an inbound responder for active
-            # connections so peer federation_query/trigger calls are answered.
-            for conn in connections:
-                if conn.state.value == "active":
-                    await nats_mgr.ensure_stream(conn.id)
-                    if runner is not None:
-                        from robothor.engine.federation_responder import make_command_handler
 
-                        await nats_mgr.serve_requests(conn.id, make_command_handler(conn, runner))
+            # Attach every ACTIVE connection. Inbound peers are served on our
+            # hub; outbound parents get their own dialled endpoint. A PENDING
+            # row attaches nothing — activation is the handshake completing.
+            from robothor.engine.federation_responder import make_command_handler
+            from robothor.federation.connections import save_connection
+
+            attached = 0
+            pairing = 0
+            for conn in connections:
+                if conn.state not in (ConnectionState.ACTIVE, ConnectionState.PENDING):
+                    continue
+
+                # A PENDING inbound connection is admitted for pairing only:
+                # the peer's hello is what activates it, so the parent has to
+                # be listening first. The responder serves exactly one op in
+                # that state.
+                is_pairing = conn.state == ConnectionState.PENDING
+                if is_pairing and conn.direction != "inbound":
+                    continue  # we dial THEM to pair; that is `federation accept`
+
+                handler = (
+                    make_command_handler(
+                        conn,
+                        runner,
+                        config=fed_config,
+                        on_activate=save_connection,
+                    )
+                    if runner is not None
+                    else None
+                )
+                if await transport.attach(conn, handler=handler, pending_ok=is_pairing):
+                    if is_pairing:
+                        pairing += 1
+                    else:
+                        attached += 1
+                        if conn.direction == "inbound":
+                            await nats_mgr.ensure_stream(conn.id)
+
+            if pairing:
+                logger.info(
+                    "Federation: %d connection(s) listening for a pairing handshake", pairing
+                )
+
+            active = sum(1 for c in connections if c.state == ConnectionState.ACTIVE)
+            if active and not attached:
+                # Rows say active, the wire says nothing. This is the state the
+                # box has been in since March, and it used to be a debug line.
+                await _alert_federation_dead(
+                    f"{active} federation connection(s) are marked ACTIVE but none "
+                    f"could be attached to the transport. This instance is NOT "
+                    f"federated despite what `federation status` reports."
+                )
+            elif attached < active:
+                logger.warning("Federation: %d of %d active connections attached", attached, active)
         else:
             from robothor.federation.nats import set_nats_manager
 
             set_nats_manager(None)
+            set_transport(None)
             await _alert_federation_dead(
                 f"NATS connection to {nats_url} failed, so {len(connections)} "
                 f"configured federation connection(s) are dead. This instance is "
@@ -890,8 +947,13 @@ async def main() -> int:
     # federation were merely unconfigured.
     try:
         from robothor.federation.nats import set_nats_manager
+        from robothor.federation.transport import get_transport, set_transport
 
         set_nats_manager(None)
+        live = get_transport()
+        set_transport(None)
+        if live is not None:
+            await live.close()
     except Exception:  # noqa: BLE001 - shutdown must not raise
         pass
 

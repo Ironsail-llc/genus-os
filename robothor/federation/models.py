@@ -124,6 +124,31 @@ class Connection:
     created_at: str = ""
     updated_at: str = ""
 
+    # ── Migration 112: the principal this peer acts as, locally ──────
+    # The authorization gate reads these three on every inbound op. They are
+    # deliberately unset by default: `_principal()` then falls back to
+    # `federation_child`, which migration 112 seeds `'*' -> deny`. A peer that
+    # was never explicitly granted a role therefore has none.
+    tenant_id: str = "default"
+    local_principal_id: str = ""
+    local_principal_role: str = ""
+
+    # Which way the link was established. `inbound` means the peer dialled us.
+    direction: str = "outbound"
+
+    # How to reach the peer: {"kind": "nats", "url": ..., "account": ...}.
+    # A dict rather than a string because a connection carries credentials and
+    # an endpoint, not just a protocol name.
+    transport: dict[str, Any] = field(default_factory=dict)
+
+    # Set by the handshake, not by `save_connection`. `activated_at` is the
+    # only honest answer to "since when?"; `last_seen_at` is the only honest
+    # answer to "is the transport alive?" — `state` answers neither, which is
+    # why `federation status` printed `active` for a dead link.
+    activated_at: str = ""
+    last_seen_at: str = ""
+    last_error: str = ""
+
 
 # ── Invite Token ─────────────────────────────────────────────────────
 
@@ -133,6 +158,7 @@ class InviteToken:
     """One-time token for connection establishment (Consul pattern)."""
 
     token: str = ""  # base64-encoded blob
+    connection_id: str = ""  # minted by the issuer; BOTH sides adopt it
     issuer_id: str = ""
     issuer_name: str = ""
     issuer_endpoint: str = ""
@@ -203,6 +229,31 @@ def default_exports_for(relationship: Relationship) -> list[str]:
     if relationship == Relationship.CHILD:
         return list(CHILD_DEFAULT_EXPORTS)
     return list(PEER_DEFAULT_EXPORTS)
+
+
+# ── The role a peer acts as, locally ─────────────────────────────────
+#
+# Seeded by migration 112. `federation_parent` gets read-only allows;
+# `federation_child` gets `'*' -> deny`. `check_tool_permission` fails closed
+# on an unseeded role, so these two strings must keep matching the migration —
+# `test_wiring.py` asserts exactly that.
+
+ROLE_FEDERATION_PARENT = "federation_parent"
+ROLE_FEDERATION_CHILD = "federation_child"
+
+
+def principal_role_for_peer(our_relationship: Relationship) -> str:
+    """The local role the PEER acts as, given OUR relationship to them.
+
+    Inverted, and deliberately so: if we are the PARENT, the peer is our child
+    and gets the deny-all role. PEER links are not part of the organisational
+    model Genus OS exposes, so they also get deny-all rather than defaulting
+    into anything elevated — a symmetric peer must be granted capabilities one
+    at a time, explicitly.
+    """
+    if our_relationship == Relationship.CHILD:
+        return ROLE_FEDERATION_PARENT
+    return ROLE_FEDERATION_CHILD
 
 
 # ── Conflict resolution strategies ───────────────────────────────────
