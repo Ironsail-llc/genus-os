@@ -73,8 +73,11 @@ class TestTheInvariantIsChecked:
 
     def test_a_cloud_only_chain_is_judged_against_the_cloud_allowance(self):
         """Not every instance has a local tier; the check must not invent one."""
-        m = {"id": "probe", "model": {"primary": CLOUD, "fallbacks": []},
-             "schedule": {"stall_timeout_seconds": 60}}
+        m = {
+            "id": "probe",
+            "model": {"primary": CLOUD, "fallbacks": []},
+            "schedule": {"stall_timeout_seconds": 60},
+        }
         assert _stall_warnings(validate_manifest(m)), "60s < the 120s cloud allowance"
 
     def test_the_heartbeat_and_worker_blocks_are_checked(self):
@@ -104,7 +107,9 @@ class TestTheWholeFleetSatisfiesIt:
                 continue
             data.setdefault("model", {"primary": CLOUD, "fallbacks": [LOCAL]})
             offenders.extend(f"{f.name}: {w}" for w in _stall_warnings(validate_manifest(data)))
-        assert not offenders, "manifests still violating the stall invariant:\n" + "\n".join(offenders)
+        assert not offenders, "manifests still violating the stall invariant:\n" + "\n".join(
+            offenders
+        )
 
 
 class TestScalingChangedTheAnswer:

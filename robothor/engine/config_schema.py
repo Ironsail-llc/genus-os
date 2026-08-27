@@ -151,7 +151,9 @@ def _check_stall_budget_vs_llm_timeout(
         return
 
     allowance = max(
-        LLM_REQUEST_TIMEOUT_OLLAMA if m.startswith(("ollama_chat/", "ollama/")) else LLM_REQUEST_TIMEOUT
+        LLM_REQUEST_TIMEOUT_OLLAMA
+        if m.startswith(("ollama_chat/", "ollama/"))
+        else LLM_REQUEST_TIMEOUT
         for m in chain
     )
     factor = chain_tempo_factor(chain)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import re
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.tools.constants import (
@@ -21,6 +23,162 @@ if TYPE_CHECKING:
     from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
+
+
+# ── Tool search ranking ───────────────────────────────────────────────
+#
+# The first version scored `sum(haystack.count(term))` over the raw query
+# split. `str.count` is SUBSTRING counting, so a one-letter term counted every
+# occurrence of that letter in the description: searching "send an email to a
+# person", `browser` scored 34 — 29 of them the letter "a" in a 422-character
+# description — and beat `gws_gmail_send` at 28, whose points came from
+# actually matching "send", "email" and its own name.
+#
+# An agent that searches for the tool it needs and is handed `browser` is
+# worse off than one simply given all 101 schemas, which is why deferred tool
+# loading could not be switched on.
+
+_SEARCH_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "to",
+        "of",
+        "for",
+        "in",
+        "on",
+        "at",
+        "by",
+        "with",
+        "and",
+        "or",
+        "is",
+        "are",
+        "be",
+        "as",
+        "it",
+        "its",
+        "this",
+        "that",
+        "from",
+        "into",
+        "my",
+        "me",
+        "i",
+        "you",
+        "your",
+        "please",
+        "get",
+        "some",
+        "any",
+        "do",
+        "does",
+        "how",
+        "what",
+        "when",
+        "where",
+        "can",
+    }
+)
+
+#: Below this length a term carries no signal and a lot of noise.
+_MIN_TERM_LENGTH = 3
+
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _query_terms(query: str) -> list[str]:
+    """Content words from a free-text query, deduplicated, order preserved."""
+    seen: dict[str, None] = {}
+    for word in _WORD_RE.findall(query.lower()):
+        if len(word) >= _MIN_TERM_LENGTH and word not in _SEARCH_STOPWORDS:
+            seen.setdefault(word, None)
+    return list(seen)
+
+
+#: What an agent SAYS it wants, mapped to the verb a tool is named with.
+#: Without this, "look up a company" ranks the vision tool `look` first on an
+#: exact name match, and the four *_company tools tie so the answer falls out
+#: alphabetically — `create_company` for a read-only request. Intent is the
+#: difference between keyword search and a router.
+_INTENT_VERBS: dict[str, frozenset[str]] = {
+    "look": frozenset({"get", "list", "search", "read", "find"}),
+    "find": frozenset({"get", "list", "search", "read"}),
+    "fetch": frozenset({"get", "read", "list"}),
+    "retrieve": frozenset({"get", "read", "list"}),
+    "show": frozenset({"get", "list", "read"}),
+    "view": frozenset({"get", "list", "read"}),
+    "check": frozenset({"get", "list", "search"}),
+    "make": frozenset({"create", "add", "new"}),
+    "add": frozenset({"create", "add"}),
+    "new": frozenset({"create", "add"}),
+    "change": frozenset({"update", "modify", "set", "edit"}),
+    "edit": frozenset({"update", "modify", "set"}),
+    "modify": frozenset({"update", "modify", "set"}),
+    "remove": frozenset({"delete", "remove", "drop"}),
+    "drop": frozenset({"delete", "remove"}),
+    "execute": frozenset({"exec", "run"}),
+}
+
+#: Worth less than an exact name match, more than a description hit: it says
+#: which of several same-noun tools the agent meant.
+_INTENT_BONUS = 4.0
+
+
+def _intent_bonus(name_words: set[str], terms: list[str]) -> float:
+    """Reward a tool whose verb matches what the query asked to DO."""
+    for term in terms:
+        wanted = _INTENT_VERBS.get(term)
+        if wanted and (name_words & wanted):
+            return _INTENT_BONUS
+    return 0.0
+
+
+def _term_weights(terms: list[str], corpus: list[tuple[str, str]]) -> dict[str, float]:
+    """Inverse document frequency over the candidate tools.
+
+    "run" appears in classify_run_failure, get_agent_run, list_agent_runs and
+    more, so a single match on it is weak evidence — yet it outranked `exec`,
+    which matched "shell" AND "command" in its description. A term shared by
+    many candidates discriminates between them less. A rare exact term keeps
+    its full weight, which is what keeps "gmail" decisive.
+    """
+    total = max(1, len(corpus))
+    weights: dict[str, float] = {}
+    for term in terms:
+        df = sum(1 for name, desc in corpus if term in name.lower() or term in desc.lower())
+        weights[term] = math.log(1 + total / (1 + df))
+    return weights
+
+
+def _score_tool(
+    name: str, description: str, terms: list[str], weights: dict[str, float] | None = None
+) -> float:
+    """Rank one tool against the query's content words.
+
+    The name is worth far more than the description: a tool is named for what
+    it does, while descriptions vary in length by a factor of five and a long
+    one should not win on volume. Each term is counted ONCE per field for the
+    same reason — repetition is a property of the prose, not of relevance.
+    """
+    name_words = set(_WORD_RE.findall(name.lower()))
+    desc_words = set(_WORD_RE.findall(description.lower()))
+    score = 0.0
+    for term in terms:
+        w = (weights or {}).get(term, 1.0)
+        if term in name_words:
+            score += 6.0 * w  # exact word in the tool's own name
+        elif term in name.lower():
+            score += 3.0 * w  # substring, e.g. "mail" in gws_gmail_send
+        if term in desc_words:
+            score += 2.0 * w
+        elif term in description.lower():
+            score += 0.5 * w
+    # A tie between a tool matching two terms and one matching one is decided
+    # by coverage, not by which happened to sort first.
+    matched = sum(1 for t in terms if t in name_words or t in desc_words or t in name.lower())
+    return score + matched * 0.25 + _intent_bonus(name_words, terms)
 
 
 class ToolRegistry:
@@ -316,19 +474,15 @@ class ToolRegistry:
         tool_search meta-tool, which passes the agent's allow-set (the runner's
         _deferred_allowed set) so search is scoped to what the agent may run.
         """
-        terms = [t for t in query.lower().split() if t]
-        scored: list[tuple[int, str, str]] = []
-        for n in names:
-            schema = self._schemas.get(n, {})
-            fn = schema.get("function", {})
-            desc = str(fn.get("description", ""))
-            haystack = f"{n} {desc}".lower()
-            if not terms:
-                score = 0
-            else:
-                score = sum(haystack.count(t) for t in terms)
-                # Strong boost when the tool name itself matches a term.
-                score += sum(5 for t in terms if t in n.lower())
+        terms = _query_terms(query)
+        corpus = [
+            (n, str(self._schemas.get(n, {}).get("function", {}).get("description", "")))
+            for n in names
+        ]
+        weights = _term_weights(terms, corpus) if terms else {}
+        scored: list[tuple[float, str, str]] = []
+        for n, desc in corpus:
+            score = _score_tool(n, desc, terms, weights) if terms else 0.0
             if score > 0 or not terms:
                 scored.append((score, n, desc[:200]))
         scored.sort(key=lambda x: (-x[0], x[1]))
