@@ -21,6 +21,7 @@ BEFORE install, and what the loader holds the payload to afterwards.
 from __future__ import annotations
 
 import logging
+import pathlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,10 +51,26 @@ def read_manifest(dist: Any) -> PluginManifest | None:
     """
     if dist is None:
         return None
+    raw = None
+    # 1. The .dist-info directory, where a build backend can place it directly.
     try:
         raw = dist.read_text(MANIFEST_NAME)
     except Exception:  # noqa: BLE001 - unreadable metadata is "undeclared"
-        return None
+        raw = None
+    # 2. The distribution's own file list. Still the PACKAGING layer — the file
+    #    is located and read through the installed-distribution metadata, never
+    #    by importing the package — so the pre-import guarantee holds. Getting
+    #    an arbitrary file into .dist-info needs build-backend cooperation, and
+    #    requiring that of every plugin author would make the manifest a
+    #    packaging puzzle rather than a declaration.
+    if not raw:
+        try:
+            for f in dist.files or ():
+                if pathlib.PurePosixPath(str(f)).name == MANIFEST_NAME:
+                    raw = pathlib.Path(dist.locate_file(f)).read_text(encoding="utf-8")
+                    break
+        except Exception:  # noqa: BLE001
+            raw = None
     if not raw:
         return None
     try:

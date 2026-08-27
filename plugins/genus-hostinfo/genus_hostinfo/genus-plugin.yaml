@@ -1,0 +1,10 @@
+# What this distribution contributes. Read from the packaging layer BEFORE the
+# module is imported, so an undeclared plugin never executes inside the daemon.
+name: genus-hostinfo
+contract_version: 1
+handlers:
+  - host_state
+schemas:
+  - host_state
+services:
+  - host_state
