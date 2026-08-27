@@ -161,6 +161,7 @@ detector watches.
 |----------|---------|-------------|
 | `ROBOTHOR_DETECTORS_ENABLED` | `1` | `0` disables every detector |
 | `ROBOTHOR_DECLARED_TOOL_OUTAGES` | *(empty)* | `tool:reason,tool:reason` — tool outages the operator has already decided about, so `tool_outage_detector` stops alerting about them |
+| `ROBOTHOR_RECORD_ASSISTANT_TURNS` | *(off)* | `true` persists each assistant turn onto its `agent_run_steps` row, so a finished run's reasoning can be read back. Off by default: a turn contains whatever the agent was reasoning about, which on a real instance is the operator's own data. Capped at 2,500 characters per turn. |
 
 ## Service URL Overrides
 

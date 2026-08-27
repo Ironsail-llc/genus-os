@@ -15,6 +15,7 @@ import os
 import tempfile
 import time
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -27,6 +28,89 @@ if TYPE_CHECKING:
     from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
+
+
+#: How much of one assistant turn's content is kept.
+#:
+#: This MUST stay below ``tracking.MAX_TOOL_OUTPUT_CHARS``. The step writer
+#: replaces any oversized ``tool_output`` wholesale with
+#: ``{_truncated, total_chars, content}``, which drops ``role`` and
+#: ``tool_calls`` — the two fields that make a turn a reasoning chain — and
+#: leaves a flat string. Capping above the writer's cap yields a feature that
+#: passes its own unit tests and stores nothing usable.
+#: ``test_turn_cap_is_below_the_step_writer_cap`` pins the relationship.
+ASSISTANT_TURN_MAX_CHARS = 2500
+
+#: Budget for the whole serialised turn, with headroom under the writer's cap
+#: for ``role``, ``tool_calls`` and JSON punctuation.
+_ASSISTANT_TURN_MAX_SERIALISED = 3500
+
+
+def _recording_assistant_turns() -> bool:
+    """Whether to persist assistant turns onto the step row.
+
+    Read per call rather than at import so an operator can turn it on for a
+    debugging window without restarting the engine.
+
+    Off by default, and deliberately not a platform default: a turn contains
+    whatever the agent was reasoning about, which on a real instance is the
+    operator's mail and CRM. Storing that is the operator's decision.
+    """
+    return os.environ.get("ROBOTHOR_RECORD_ASSISTANT_TURNS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _capped_turn(message: dict[str, Any]) -> dict[str, Any]:
+    """A bounded, detached copy of an assistant turn, safe to persist.
+
+    Detached because the caller keeps mutating the live message as the
+    conversation continues; handing that object to the DB writer would
+    persist whatever it later became. Truncation is marked rather than
+    silent — an unmarked cut reads as the model having stopped early, which
+    is exactly the wrong conclusion when diagnosing a run.
+
+    Sized to survive the step writer intact: see ``ASSISTANT_TURN_MAX_CHARS``.
+    """
+    turn: dict[str, Any] = {key: deepcopy(value) for key, value in message.items()}
+
+    content = turn.get("content")
+    if content is not None and not isinstance(content, str):
+        # Block-style content (thinking + text). Serialise so one budget
+        # covers both shapes.
+        content = json.dumps(content, default=str)
+        turn["content"] = content
+
+    if isinstance(content, str) and len(content) > ASSISTANT_TURN_MAX_CHARS:
+        turn["content"] = content[:ASSISTANT_TURN_MAX_CHARS] + "… [truncated]"
+        turn["truncated"] = True
+
+    # Structure beats content: if the turn is still too large for the writer,
+    # keep shrinking the content so `role` and `tool_calls` survive.
+    for _ in range(8):
+        if len(json.dumps(turn, default=str)) <= _ASSISTANT_TURN_MAX_SERIALISED:
+            break
+        body = turn.get("content")
+        if isinstance(body, str) and body:
+            turn["content"] = body[: max(1, len(body) // 2)] + "… [truncated]"
+            turn["truncated"] = True
+            continue
+        # Content is already minimal and it is the tool-call arguments that
+        # are oversized. Trim those rather than let the writer flatten it.
+        calls = turn.get("tool_calls")
+        if isinstance(calls, list) and calls:
+            for call in calls:
+                fn = call.get("function") if isinstance(call, dict) else None
+                if isinstance(fn, dict) and isinstance(fn.get("arguments"), str):
+                    args = fn["arguments"]
+                    fn["arguments"] = args[: max(1, len(args) // 2)] + "… [truncated]"
+            turn["truncated"] = True
+            continue
+        break
+
+    return turn
 
 
 def _render_history_for_llm(msg: dict[str, Any]) -> dict[str, Any]:
@@ -268,6 +352,11 @@ class AgentSession:
         # Append assistant message to conversation
         if assistant_message:
             self.messages.append(assistant_message)
+            # The turn is the one part of the reasoning chain that is not
+            # reconstructible from the other steps, so it is the only part
+            # worth persisting.
+            if _recording_assistant_turns():
+                step.tool_output = _capped_turn(assistant_message)
 
         return step
 
