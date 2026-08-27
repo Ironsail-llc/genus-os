@@ -15,6 +15,7 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.db.connection import get_connection
+from robothor.engine.analytics import GENUINE_TIMEOUT_SQL, INTERRUPTED_SQL
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -695,7 +696,8 @@ def get_agent_stats(
                 COUNT(*) as total_runs,
                 COUNT(*) FILTER (WHERE status = 'completed') as completed,
                 COUNT(*) FILTER (WHERE status = 'failed') as failed,
-                COUNT(*) FILTER (WHERE status = 'timeout') as timeouts,
+                COUNT(*) FILTER (WHERE {GENUINE_TIMEOUT_SQL}) as timeouts,
+                COUNT(*) FILTER (WHERE {INTERRUPTED_SQL}) as interrupted,
                 AVG(duration_ms) FILTER (WHERE status = 'completed') as avg_duration_ms,
                 SUM(input_tokens) as total_input_tokens,
                 SUM(output_tokens) as total_output_tokens,

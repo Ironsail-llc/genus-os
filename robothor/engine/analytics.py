@@ -26,6 +26,36 @@ from robothor.db.connection import get_connection
 
 logger = logging.getLogger(__name__)
 
+
+#: What the runner writes when a run is killed from outside — an engine
+#: restart, a daemon shutdown, a caller-level cancel. See runner.py.
+EXTERNAL_CANCEL_PREFIX = "Run cancelled externally"
+
+#: A timeout the agent actually earned. A restart cancels every in-flight
+#: run and the runner files each as `status='timeout'`, so counting the
+#: status alone means deploying lowers the grade of whatever was running:
+#: 89 of 147 timeouts in seven days on this instance (61%) were
+#: cancellations, 17 of them main's, whose manifest grades `timeout_rate`
+#: at weight 2.0. The benchmark scorer already learned this rule
+#: (test_harness_kill_is_not_a_grade); the goal metric had not.
+GENUINE_TIMEOUT_SQL = (
+    f"status = 'timeout' AND COALESCE(error_message, '') NOT LIKE '{EXTERNAL_CANCEL_PREFIX}%%'"
+)
+
+#: The other half, kept rather than discarded: a rising interrupted count is
+#: a real signal about the host, just not about the agent.
+INTERRUPTED_SQL = (
+    f"status = 'timeout' AND COALESCE(error_message, '') LIKE '{EXTERNAL_CANCEL_PREFIX}%%'"
+)
+
+
+def is_external_cancellation(error_message: str | None) -> bool:
+    """Was this run killed from outside rather than by its own clock?"""
+    if not error_message:
+        return False
+    return error_message.startswith(EXTERNAL_CANCEL_PREFIX)
+
+
 # ─── The production-run filter (one definition, every call site) ──────
 #
 # A null parent_run_id alone used to mean "top-level production run". It
@@ -219,7 +249,8 @@ def get_agent_stats(
                 COUNT(*) as total_runs,
                 COUNT(*) FILTER (WHERE status = 'completed') as completed,
                 COUNT(*) FILTER (WHERE status = 'failed') as failed,
-                COUNT(*) FILTER (WHERE status = 'timeout') as timeouts,
+                COUNT(*) FILTER (WHERE {GENUINE_TIMEOUT_SQL}) as timeouts,
+                COUNT(*) FILTER (WHERE {INTERRUPTED_SQL}) as interrupted,
                 COUNT(*) FILTER (WHERE budget_exhausted = true) as budget_exhausted,
                 AVG(duration_ms) FILTER (WHERE status IN ('completed', 'failed')) as avg_duration_ms,
                 AVG(input_tokens + output_tokens) FILTER (WHERE status = 'completed') as avg_tokens,
@@ -545,7 +576,8 @@ def get_fleet_health(
                 COUNT(*) as total_runs,
                 COUNT(*) FILTER (WHERE status = 'completed') as completed,
                 COUNT(*) FILTER (WHERE status = 'failed') as failed,
-                COUNT(*) FILTER (WHERE status = 'timeout') as timeouts,
+                COUNT(*) FILTER (WHERE {GENUINE_TIMEOUT_SQL}) as timeouts,
+                COUNT(*) FILTER (WHERE {INTERRUPTED_SQL}) as interrupted,
                 AVG(total_cost_usd) FILTER (WHERE status = 'completed') as avg_cost_usd,
                 SUM(total_cost_usd) as total_cost_usd,
                 MAX(created_at) as last_run_at
@@ -617,6 +649,7 @@ def get_fleet_health(
                 "completed": completed,
                 "failed": failed,
                 "timeouts": row["timeouts"] or 0,
+                "interrupted": row["interrupted"] or 0,
                 "success_rate": round(completed / total, 4) if total > 0 else None,
                 "avg_cost_usd": float(row["avg_cost_usd"]) if row.get("avg_cost_usd") else None,
                 "total_cost_usd": float(row["total_cost_usd"])
@@ -647,6 +680,7 @@ def get_fleet_health(
                 "completed": 0,
                 "failed": 0,
                 "timeouts": 0,
+                "interrupted": 0,
                 "success_rate": None,
                 "avg_cost_usd": None,
                 "total_cost_usd": None,
