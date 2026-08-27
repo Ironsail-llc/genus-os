@@ -110,3 +110,29 @@ class TestTheLoopCannotGoHollowAgain:
         assert "resume_interrupted_runs(runner)" in src, (
             "resume is called without a runner, so it cannot execute anything"
         )
+
+
+class TestResumeIsASystemAction:
+    """MANUAL is interactive and gets REJECTED without a verified identity.
+
+    This is the second way the same feature failed silently. After the loop was
+    made to actually call the runner, every resumed run was still refused at
+    runner.py:583 — "Rejected interactive run without verified identity" — which
+    returns normally, writes no row, and raises nothing. The daemon logged
+    "resumed 3" a second time while resuming nothing, and only a direct probe
+    of the execute path surfaced it.
+    """
+
+    def test_the_trigger_type_is_a_system_type(self):
+        from robothor.engine.models import TriggerType
+        from robothor.engine.runner import _SYSTEM_TRIGGER_TYPES
+
+        src = (Path(__file__).resolve().parents[1] / "daemon.py").read_text()
+        fn = src.split("async def _execute_resume", 1)[-1].split("\nasync def ", 1)[0]
+        used = [t for t in TriggerType if f"TriggerType.{t.name}" in fn]
+        assert used, "no trigger type named in _execute_resume"
+        for t in used:
+            assert t in _SYSTEM_TRIGGER_TYPES, (
+                f"resume uses {t.name}, which is interactive — runner.py:583 rejects it "
+                f"without a verified identity and the daemon reports success anyway"
+            )
