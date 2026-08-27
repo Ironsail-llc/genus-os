@@ -74,7 +74,10 @@ while :; do
   fi
 
   echo "Push rejected — ${BRANCH} moved. Re-deriving on top of it (attempt ${attempt})."
+  # FETCH_HEAD, not origin/<branch>: actions/checkout configures a narrow
+  # refspec, so the remote-tracking ref is not guaranteed to exist or to be
+  # updated by this fetch. FETCH_HEAD always names what we just fetched.
   git fetch -q origin "$BRANCH"
-  git reset -q --hard "origin/${BRANCH}"
+  git reset -q --hard FETCH_HEAD
   attempt=$((attempt + 1))
 done

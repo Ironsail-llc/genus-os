@@ -161,3 +161,28 @@ def test_a_genuine_noop_on_the_first_attempt_still_fails(tmp_path: Path):
     second = _run(work)
     assert second.returncode != 0
     assert "already promoted" in (second.stdout + second.stderr).lower()
+
+
+def test_recovers_without_a_remote_tracking_ref(tmp_path: Path):
+    """actions/checkout configures a narrow refspec.
+
+    The retry must not depend on ``origin/<branch>`` existing — in CI it may
+    never have been created. This deletes the remote-tracking ref before the
+    race, which is the closest local stand-in for that checkout.
+    """
+    origin, work = _seed(tmp_path)
+    _land_a_concurrent_merge(tmp_path, origin)
+    # Drop the fetch refspec as well as the ref. Deleting the ref alone is
+    # not a reproduction: a normal clone carries
+    # `+refs/heads/*:refs/remotes/origin/*`, so the next fetch just recreates
+    # it and the test passes against the broken code too.
+    subprocess.run(["git", "config", "--unset-all", "remote.origin.fetch"], cwd=work, check=True)
+    subprocess.run(["git", "update-ref", "-d", "refs/remotes/origin/main"], cwd=work, check=True)
+
+    result = _run(work)
+    assert result.returncode == 0, f"retry needed a tracking ref:\n{result.stderr}"
+
+    check = tmp_path / "verify"
+    subprocess.run(["git", "clone", "-q", str(origin), str(check)], check=True)
+    assert 'imageTag: "v1.57.0"' in (check / "helm/genus-os/values-production.yaml").read_text()
+    assert (check / "UNRELATED.md").exists()
