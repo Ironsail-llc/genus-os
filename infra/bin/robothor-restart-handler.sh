@@ -40,7 +40,6 @@ REQUEST_DIR="${ROBOTHOR_RESTART_REQUEST_DIR:-/run/robothor/restart-requests}"
 #     — losing those loses the operator's only route back in.
 ALLOWED=(
     robothor-engine
-    robothor-delphi-engine
     robothor-bridge
     robothor-app
 )

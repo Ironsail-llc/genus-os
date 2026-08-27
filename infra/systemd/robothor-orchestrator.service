@@ -8,6 +8,11 @@ Description=Robothor RAG Orchestrator
 After=network.target ollama.service postgresql.service docker.service
 Wants=ollama.service postgresql.service
 
+# Loopback, not 0.0.0.0. On 2026-08-27 this bound the wildcard with no
+# authentication and was verified reachable from a tailnet address (HTTP
+# 200 on /docs, a RAG pipeline with memory search) by 62 peers. Tailscale
+# bypasses UFW entirely, so the tailnet ACL was the only control in front
+# of it. cloudflared and the vision service both reach it via localhost.
 [Service]
 Type=simple
 User=robothor
@@ -15,7 +20,7 @@ Group=robothor
 WorkingDirectory=/opt/robothor
 ExecStartPre=/opt/robothor/scripts/decrypt-secrets.sh
 EnvironmentFile=-/run/robothor/secrets.env
-ExecStart=/opt/robothor/venv/bin/python -m uvicorn robothor.api.orchestrator:app --host 0.0.0.0 --port 9099
+ExecStart=/opt/robothor/venv/bin/python -m uvicorn robothor.api.orchestrator:app --host 127.0.0.1 --port 9099
 Restart=on-failure
 RestartSec=5
 # KillMode=mixed sends SIGTERM to the MAIN process (uvicorn) directly, then
