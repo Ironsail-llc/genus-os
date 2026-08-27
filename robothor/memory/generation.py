@@ -79,6 +79,68 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ── Credential pool (shared with the engine) ────────────────────────
+#
+# 2026-08-27: this module read os.environ['OPENROUTER_API_KEY'] directly, so
+# it could not see a spare key even once one existed, and it kept dialling a
+# credential the engine's pool had already retired. It was the single
+# highest-volume consumer of the dead key (1,135 remote fallbacks in 48h).
+# Sharing KeyPool means it rotates, and it inherits the engine's retirement
+# classification -- notably that a weekly cap is not retried every 15 min.
+
+_REMOTE_KEY_VAR = "OPENROUTER_API_KEY"
+_POOL: Any = None
+
+
+def _reset_key_pool() -> None:
+    """Drop the cached pool. For tests and for a secrets reload."""
+    global _POOL
+    _POOL = None
+
+
+def _key_pool() -> Any:
+    """The credential pool for remote generation, or None if unconfigured.
+
+    Built lazily: secrets land in tmpfs after import, so a pool constructed
+    at module scope would be permanently empty on a real box.
+    """
+    global _POOL
+    if _POOL is None:
+        from robothor.engine.key_pool import KeyPool, keys_from_env
+
+        keys = keys_from_env(_REMOTE_KEY_VAR)
+        if not keys:
+            return None
+        _POOL = KeyPool(keys)
+    return _POOL
+
+
+def _remote_api_key() -> str | None:
+    """The highest-priority credential still in rotation."""
+    pool = _key_pool()
+    if pool is None:
+        return None
+    key = pool.current()
+    return str(key) if key is not None else None
+
+
+def _retire_remote_key(key: str, *, status: int | None = None, detail: str = "") -> None:
+    """Take a credential out of rotation, classified the way the engine does."""
+    from robothor.engine.key_pool import Retirement
+
+    pool = _key_pool()
+    if pool is None:
+        return
+    lowered = (detail or "").lower()
+    if any(m in lowered for m in ("weekly limit", "daily limit", "monthly limit")):
+        reason = Retirement.QUOTA_EXHAUSTED_PERIODIC
+    elif status == 401:
+        reason = Retirement.AUTH_FAILED
+    else:
+        reason = Retirement.CREDIT_EXHAUSTED
+    pool.retire(key, reason)
+
+
 PROVIDER_ENV = "ROBOTHOR_MEMORY_GENERATION_PROVIDER"
 REMOTE_MODEL_ENV = "ROBOTHOR_MEMORY_GENERATION_REMOTE_MODEL"
 MIN_INTERVAL_ENV = "ROBOTHOR_MEMORY_GENERATION_MIN_INTERVAL_S"
@@ -467,12 +529,28 @@ async def _openrouter_chat(
     elif format == "json":
         payload["response_format"] = {"type": "json_object"}
 
+    api_key = _remote_api_key()
+    if api_key is None:
+        raise RuntimeError(
+            f"no {_REMOTE_KEY_VAR} credential is in rotation — every configured "
+            f"key is retired or none is set"
+        )
     headers = {
-        "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     async with httpx.AsyncClient(timeout=REMOTE_TIMEOUT_S) as client:
         resp = await client.post(OPENROUTER_API_URL, json=payload, headers=headers)
+        if resp.status_code in (401, 402, 403, 429):
+            # Retire before raising, so the next call rotates instead of
+            # dialling the same dead credential again.
+            body = ""
+            try:
+                body = resp.text[:500]
+            except Exception:
+                pass
+            if resp.status_code != 429:
+                _retire_remote_key(api_key, status=resp.status_code, detail=body)
         resp.raise_for_status()
         data = resp.json()
 
