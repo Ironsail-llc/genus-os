@@ -53,6 +53,26 @@ VALID_NEXT_ACTIONS = frozenset(
 )
 
 
+def _within(candidate: Path, root: Path) -> bool:
+    """Is `candidate` inside `root`? Containment, not string similarity.
+
+    `str.startswith` treats `/x/ws-evil` as inside `/x/ws`, which is how this
+    module's own documented traversal guard came to admit a sibling
+    directory: a manifest pointing `journal_file` at `../ws-evil/current.json`
+    loaded a journal the agent was never given, and its `next_action` became
+    the agent's resume preamble.
+
+    `relative_to` raises for anything outside, including traversal that
+    `resolve()` has already collapsed. The same rule is used in
+    `deliverables.missing_deliverables_note`.
+    """
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
 @dataclass
 class JournalState:
     """Cross-run intent state for a long-running research agent.
@@ -99,8 +119,10 @@ class JournalManager:
             full_path = (workspace / journal_path).resolve()
             workspace_resolved = workspace.resolve()
 
-            # Path traversal guard
-            if not str(full_path).startswith(str(workspace_resolved)):
+            # Path traversal guard. `relative_to`, not a string prefix:
+            # `/x/ws-evil` starts with `/x/ws`, so a sibling directory whose
+            # name merely begins with the workspace's passed the old check.
+            if not _within(full_path, workspace_resolved):
                 logger.error("Journal path traversal blocked: %s", _sanitize(journal_path))
                 return None
 
@@ -216,7 +238,7 @@ class JournalManager:
             full_path = (workspace / journal_path).resolve()
             workspace_resolved = workspace.resolve()
 
-            if not str(full_path).startswith(str(workspace_resolved)):
+            if not _within(full_path, workspace_resolved):
                 logger.error("Journal save path traversal blocked: %s", _sanitize(journal_path))
                 return False
 
@@ -270,7 +292,7 @@ class JournalManager:
             full_path = (workspace / journal_path).resolve()
             workspace_resolved = workspace.resolve()
 
-            if not str(full_path).startswith(str(workspace_resolved)):
+            if not _within(full_path, workspace_resolved):
                 logger.error("Journal clear path traversal blocked: %s", _sanitize(journal_path))
                 return False
 
