@@ -205,11 +205,8 @@ async def test_expansion_respects_person_scope(db_cursor, test_prefix, mock_get_
     """
     import uuid
 
-    from robothor.engine.tools.handlers.memory import _search_memory
-    from robothor.engine.tools.dispatch import ToolContext
-    from robothor.identity.context import IdentityContext
-    from robothor.memory.facts import search_facts
     from robothor.identity.scope import DataScope
+    from robothor.memory.facts import search_facts
 
     tenant = f"{test_prefix}-scoped"
     db_cursor.execute(
