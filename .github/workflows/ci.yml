@@ -92,6 +92,11 @@ jobs:
           cache: "pip"
       - run: pip install -e ".[dev,api,vision]" opencv-python-headless types-requests
       - run: mypy robothor/ --ignore-missing-imports
+      # bench/ decides every competitive number this project publishes about
+      # itself and was never typechecked. Production code only: its tests are
+      # 192 untyped-def errors of pure noise, and a gate that reports noise
+      # gets disabled within a week.
+      - run: mypy bench/wildclaw --ignore-missing-imports --exclude 'tests/'
 
   validate-agents:
     runs-on: ubuntu-latest

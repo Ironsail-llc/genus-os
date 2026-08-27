@@ -29,9 +29,10 @@ _PATH = Path(__file__).with_name("harness_baselines.json")
 @lru_cache(maxsize=1)
 def _data() -> dict[str, Any]:
     try:
-        return json.loads(_PATH.read_text(encoding="utf-8"))
+        loaded: dict[str, Any] = json.loads(_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    return loaded
 
 
 def harness_scores_for(model: str) -> dict[str, float]:
