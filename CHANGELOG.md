@@ -1,3 +1,9 @@
+## [1.58.1](https://github.com/Ironsail-llc/genus-os/compare/v1.58.0...v1.58.1) (2026-08-27)
+
+### Bug Fixes
+
+* **analytics:** deploying lowered the grade of whatever was running ([#438](https://github.com/Ironsail-llc/genus-os/issues/438)) ([2d95421](https://github.com/Ironsail-llc/genus-os/commit/2d9542139e6d89ba603384034f194e4dd085696e))
+
 ## [1.58.0](https://github.com/Ironsail-llc/genus-os/compare/v1.57.0...v1.58.0) (2026-08-27)
 
 ### Features
