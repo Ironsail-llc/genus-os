@@ -130,7 +130,57 @@ def stale_run_cutoff_seconds(agent_id: str | None = None) -> int:
     return max_wallclock_ceiling() + REAP_GRACE_SECONDS
 
 
-async def resume_interrupted_runs() -> int:
+#: Live resume tasks, held so the event loop cannot collect one mid-run.
+_RESUME_TASKS: set[asyncio.Task[Any]] = set()
+
+#: Mirrors resume.MAX_RESUME_ATTEMPTS for the log line.
+MAX_RESUME_ATTEMPTS_DISPLAY = 3
+
+
+def _charge_resume_attempt(run_id: str) -> bool:
+    """Charge one resume attempt. False means do not resume this run.
+
+    Separated from the loop so the loop's real work — executing the run — can
+    be tested without a database.
+    """
+    from robothor.db.connection import get_connection
+
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE agent_runs SET resume_attempts = COALESCE(resume_attempts, 0) + 1 "
+                "WHERE id = %s",
+                (run_id,),
+            )
+            conn.commit()
+        return True
+    except Exception as e:  # noqa: BLE001 - one uncharged run must not stop the rest
+        logger.warning("Could not charge resume attempt for %s: %s", run_id, e)
+        return False
+
+
+async def _execute_resume(runner: Any, candidate: Any) -> None:
+    """Actually continue the run. The step this function exists to perform.
+
+    Same call shape as the operator-facing resume endpoint (health.py), so
+    there is one way to resume a run rather than two that can drift.
+    """
+    from robothor.engine.models import TriggerType
+
+    try:
+        await runner.execute(
+            agent_id=candidate.agent_id,
+            message="Resume from checkpoint — continue where you left off.",
+            trigger_type=TriggerType.MANUAL,
+            trigger_detail=f"resume:{candidate.run_id}",
+            resume_from_run_id=candidate.run_id,
+        )
+    except Exception:
+        logger.exception("Resume of run %s failed", candidate.run_id)
+
+
+async def resume_interrupted_runs(runner: Any = None) -> int:
     """Resume runs a restart interrupted, before the reaper reaches them.
 
     Off unless ROBOTHOR_RESUME_IN_FLIGHT is set: this changes what a restart
@@ -182,29 +232,34 @@ async def resume_interrupted_runs() -> int:
     if not batch:
         return 0
 
+    if runner is None:
+        # Without a runner there is nothing to resume WITH. Returning 0 rather
+        # than counting is the whole point: this function used to charge the
+        # attempt, log "Resuming run ...", and return a count, having executed
+        # nothing — so the daemon reported "resumed 3 interrupted agent runs"
+        # while all three stayed `cancelled` forever.
+        logger.warning("Resume skipped: no runner available to execute with")
+        return 0
+
     started = 0
     for candidate in batch:
         # Charge the attempt BEFORE resuming: a run that dies during resume
         # must still have paid, or a crash loop resumes forever.
-        try:
-            with get_connection() as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    "UPDATE agent_runs SET resume_attempts = COALESCE(resume_attempts, 0) + 1 "
-                    "WHERE id = %s",
-                    (candidate.run_id,),
-                )
-                conn.commit()
-        except Exception as e:
-            logger.warning("Could not charge resume attempt for %s: %s", candidate.run_id, e)
+        if not _charge_resume_attempt(candidate.run_id):
             continue
         logger.info(
             "Resuming run %s (agent %s, attempt %d/%d)",
             candidate.run_id,
             _sanitize(candidate.agent_id),
             candidate.resume_attempts + 1,
-            3,
+            MAX_RESUME_ATTEMPTS_DISPLAY,
         )
+        # Launched, not awaited: these are full agent runs and the daemon is
+        # still coming up. Held in a module set because a bare create_task can
+        # be garbage-collected mid-flight (this repo has been bitten before).
+        task = asyncio.create_task(_execute_resume(runner, candidate))
+        _RESUME_TASKS.add(task)
+        task.add_done_callback(_RESUME_TASKS.discard)
         started += 1
     return started
 
@@ -668,20 +723,6 @@ async def main() -> int:
     # can be classified as 'daemon_restart' rather than 'post_llm_crash'.
     _set_daemon_start_ts()
 
-    # Resume before reaping: `_cleanup_stale_runs` marks every still-running
-    # row as timed out, which would destroy exactly what resume recovers.
-    try:
-        resumed = await resume_interrupted_runs()
-        if resumed:
-            logger.info("Startup: resumed %d interrupted agent runs", resumed)
-    except Exception as e:
-        logger.warning("Startup resume failed, continuing to reap: %s", _sanitize(e))
-
-    # Clean up stale runs from previous crash/restart
-    cleaned = await asyncio.to_thread(_cleanup_stale_runs)
-    if cleaned:
-        logger.info("Startup: cleaned %d stale agent runs", cleaned)
-
     # Link the operator's CRM row to tenant_users.person_id (idempotent).
     # Driven by ~/.robothor/owner.yaml; no-op if not configured.
     try:
@@ -707,6 +748,22 @@ async def main() -> int:
 
     # Create subsystems
     runner = AgentRunner(config)
+
+    # Resume BEFORE reaping: `_cleanup_stale_runs` marks every interrupted row
+    # terminal, which would destroy exactly what resume recovers. This block
+    # sits after the runner is constructed because resume needs something to
+    # resume WITH — when it ran earlier it had no runner, and quietly counted
+    # runs it never executed.
+    try:
+        resumed = await resume_interrupted_runs(runner)
+        if resumed:
+            logger.info("Startup: resumed %d interrupted agent runs", resumed)
+    except Exception as e:
+        logger.warning("Startup resume failed, continuing to reap: %s", _sanitize(e))
+
+    cleaned = await asyncio.to_thread(_cleanup_stale_runs)
+    if cleaned:
+        logger.info("Startup: cleaned %d stale agent runs", cleaned)
 
     # Initialize fleet pool for admission control
     from robothor.engine.pool import init_fleet_pool

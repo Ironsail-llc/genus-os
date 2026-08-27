@@ -1009,6 +1009,26 @@ class LLMClient:
                 )
             ),
         }
+
+        # Local models: state residency explicitly instead of inheriting the
+        # server's defaults. Until 2026-08-27 the engine sent neither, so the
+        # fleet's offline tier sat at its full 262144-token context (18.9GB of
+        # a shared pool) and expired on the server's 10m default — shorter than
+        # several agents' cron cadence, so every cron paid a ~34s cold load.
+        #
+        # num_ctx comes from the REGISTRY, not a separate knob: the proactive
+        # compaction threshold is derived from max_input_tokens, so a window
+        # smaller than the registry believes means the engine fills context
+        # past what the server allocated and the server truncates in silence.
+        # One number, two consumers. test_local_tier_residency pins it.
+        if is_local_model(model):
+            from robothor.config import get_config
+
+            kwargs["num_ctx"] = limits.max_input_tokens
+            try:
+                kwargs["keep_alive"] = get_config().ollama.keep_alive_engine
+            except Exception as e:  # noqa: BLE001 - residency is an optimisation
+                logger.debug("keep_alive unavailable, using server default: %s", e)
         # Pin OpenRouter routing for Anthropic models to the Anthropic-direct
         # backend. OpenRouter's default load-balancing also fans out to Google
         # Vertex and Amazon Bedrock, both of which reject assistant-prefill

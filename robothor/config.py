@@ -228,6 +228,12 @@ class OllamaConfig:
     keep_alive_reranker: str = "15m"
     keep_alive_generation: str = "5m"
     keep_alive_vision: str = "5m"
+    # The AGENT FLEET's own residency, which is a different question from the
+    # memory client's. The engine sent no keep_alive at all until 2026-08-27,
+    # so the fleet's offline tier inherited the server's 10m default — shorter
+    # than several agents' cron cadence, meaning every cron paid a ~34s cold
+    # load and the model could be evicted between calls by memory traffic.
+    keep_alive_engine: str = "30m"
 
     @property
     def base_url(self) -> str:
