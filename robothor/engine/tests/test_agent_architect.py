@@ -149,10 +149,35 @@ class TestManifestConfiguration:
             assert limits.max_input_tokens > 0
 
     def test_manifest_write_path_allowlist(self):
-        """Write path guardrail only allows the status file."""
+        """Every allowed write path is confined to the agent's memory dir.
+
+        This asserted one exact list — the state of a single instance on the
+        day it was written — while `docs/agents/*.yaml` is instance config by
+        rule 11. The module only RUNS where those manifests exist, so the
+        assertion could never fire in CI and was guaranteed to fail on any
+        instance that legitimately added a path. This one had added
+        `watchdog_log.md` and `autodream_log.md`, both of which the
+        memory-blocks test directly above already expects, and it had been
+        red on the box ever since.
+
+        The property worth pinning is not which files an operator chose but
+        that none of them escapes: relative, under `brain/memory/`, no
+        traversal, no absolute paths. That still fails loudly on a dangerous
+        widening, which is what the guardrail is for.
+        """
         manifest = _load_manifest_checked(MANIFEST_PATH)
         allowlist = manifest["v2"]["write_path_allowlist"]
-        assert allowlist == ["brain/memory/agent-architect-status.md"]
+
+        assert allowlist, "the write-path guardrail must not be empty"
+        assert "brain/memory/agent-architect-status.md" in allowlist, (
+            "the architect's own status file is what the guardrail exists to permit"
+        )
+        for entry in allowlist:
+            assert not Path(entry).is_absolute(), f"absolute write path: {entry}"
+            assert ".." not in Path(entry).parts, f"path traversal in write path: {entry}"
+            assert entry.startswith("brain/memory/"), (
+                f"write path escapes the agent's memory directory: {entry}"
+            )
 
     def test_manifest_cost_budget(self):
         """The loaded cost cap matches the manifest's declared value.
