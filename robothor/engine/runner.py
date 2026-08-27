@@ -516,6 +516,7 @@ def _resolve_sandbox_decision(config: AgentConfig, mode: str) -> str:
 #: enough to write out what has been gathered. A warning at 95% is one the
 #: agent cannot act on.
 
+
 class AgentRunner(
     LLMCallMixin,
     RunLifecycleMixin,
@@ -755,6 +756,7 @@ class AgentRunner(
         # Every budget from ONE derivation, scaled for the chain that serves this
         # run. A 0 budget still means "disabled" and stays 0.
         from robothor.engine.run_budget import watchdog_budgets_for
+
         _budgets = watchdog_budgets_for(agent_config)
         stall_timeout = _budgets.stall
         effective_hard_timeout = _budgets.hard
@@ -1570,7 +1572,8 @@ class AgentRunner(
                 declared_timeout_seconds=agent_config.timeout_seconds,
                 effective_ceiling=effective_hard_timeout,
                 last_activity=watchdog.last_activity_desc,
-                waiting_on=watchdog.waiting_on)
+                waiting_on=watchdog.waiting_on,
+            )
             reason = abort_reason or _outcome.reason
             logger.warning("Agent %s cancelled: %s", _sanitize(agent_id), _sanitize(reason))
             session.record_error(reason)
@@ -2020,6 +2023,7 @@ class AgentRunner(
         # ── [WALLCLOCK] the loop's own deadline — computed once, checked
         # every iteration. See the self-check below for why this exists.
         from robothor.engine.run_budget import chain_for, effective_wallclock_ceiling
+
         _wallclock_ceiling = effective_wallclock_ceiling(
             agent_config.timeout_seconds, chain_for(agent_config)
         )
