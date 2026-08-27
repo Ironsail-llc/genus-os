@@ -173,8 +173,11 @@ async def maybe_compress(
     if est < compress_at:
         return messages
 
-    if len(messages) <= KEEP_RECENT + 1:
-        return messages  # Not enough to compress
+    # The count floor used to live here TOO, and returned before compact()
+    # could act — so a 21-message, 225,015-token conversation reduced by 0.0%
+    # through this path even after compact() learned to shrink it. One rule,
+    # one place: compact() decides, and still leaves a genuinely short
+    # exchange alone.
 
     logger.info(
         "Compressing context: %d messages, ~%d tokens",
