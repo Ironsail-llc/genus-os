@@ -14,7 +14,6 @@ The legacy parse is last on purpose: it trusts a string inside
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
