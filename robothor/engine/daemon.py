@@ -55,9 +55,11 @@ def _sd_notify(state: str) -> None:
             sock.sendto(state.encode(), addr)
         finally:
             sock.close()
-    except Exception:
-        # Best-effort — never crash the daemon for a notification failure
-        pass
+    except Exception as e:  # noqa: BLE001 - never crash the daemon for sd_notify
+        # Best-effort, but not invisible: losing sd_notify means systemd stops
+        # seeing the watchdog ping and will eventually restart the engine, so
+        # the reason belongs in the log that gets read afterwards.
+        logger.debug("sd_notify failed (%s): %s", state, e)
 
 
 # Set on daemon startup so the reaper can distinguish runs killed by a daemon
@@ -1165,8 +1167,8 @@ async def main() -> int:
         set_transport(None)
         if live is not None:
             await live.close()
-    except Exception:  # noqa: BLE001 - shutdown must not raise
-        pass
+    except Exception as e:  # noqa: BLE001 - shutdown must not raise
+        logger.debug("Error closing live-steering channel during shutdown: %s", e)
 
     # Shutdown announcement (best-effort)
     try:
@@ -1590,7 +1592,15 @@ async def _watchdog(
                         "*Watchdog Alert*\n\nPostgreSQL unreachable for 3 consecutive checks.",
                     )
             except Exception:
-                pass
+                # A page that fails silently is worse than no page: the database
+                # outage and the failed alert then look identical from outside —
+                # nothing. The journal is monitored, so ERROR here is the last
+                # place this can still be seen.
+                logger.error(
+                    "Watchdog could not deliver the PostgreSQL-unreachable alert; "
+                    "the outage is UNREPORTED",
+                    exc_info=True,
+                )
 
 
 _CURIOSITY_COOLDOWN_SECONDS = 6 * 3600  # 6h minimum between reactive spawns
