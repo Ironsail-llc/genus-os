@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from robothor.engine.models import AgentConfig
@@ -94,8 +94,11 @@ def workspace_inventory(workspace: str | Path | None, limit: int = DEFAULT_LIMIT
 def inventory_context_hook(config: AgentConfig) -> str | None:
     """Warmup hook. Silent unless the manifest sets `v2.workspace_inventory`."""
     try:
-        v2: dict[str, Any] = getattr(config, "v2", None) or {}
-        if not v2.get("workspace_inventory"):
+        # AgentConfig has no generic `v2` dict — manifest v2 keys are mapped
+        # onto explicit fields. Reading a dict here returned None for every
+        # agent, so the feature was inert until this was caught by building a
+        # real preamble rather than by its unit tests.
+        if not getattr(config, "workspace_inventory", False):
             return None
         # AgentConfig carries no workspace field; the runner resolves it the
         # same way, agent-first then the instance default. Never a hardcoded

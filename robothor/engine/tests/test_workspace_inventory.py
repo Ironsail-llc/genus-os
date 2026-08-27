@@ -79,9 +79,8 @@ class TestOptIn:
         from robothor.engine.workspace_inventory import inventory_context_hook
 
         (tmp_path / "piece.png").write_bytes(b"\x89PNG")
-        cfg = AgentConfig(id="a", name="A")
+        cfg = AgentConfig(id="a", name="A", workspace_inventory=True)
         cfg.workspace = str(tmp_path)
-        cfg.v2 = {"workspace_inventory": True}
         out = inventory_context_hook(cfg)
         assert out and "piece.png" in out
 
@@ -107,3 +106,26 @@ class TestItIsRegistered:
         assert "workspace_inventory" in src, (
             "nothing registers the inventory hook, so warmup never runs it"
         )
+
+
+class TestTheManifestFlagSurvivesLoading:
+    """The bug this feature shipped with, until a real preamble was built.
+
+    `AgentConfig` has no generic `v2` dict — manifest v2 keys are mapped onto
+    explicit fields. The hook read `config.v2["workspace_inventory"]`, which
+    was None for every agent, so the whole feature was inert while its unit
+    tests passed.
+    """
+
+    def test_a_manifest_v2_flag_reaches_the_config(self):
+        from robothor.engine.config import manifest_to_agent_config
+
+        cfg = manifest_to_agent_config(
+            {"id": "x", "name": "X", "v2": {"workspace_inventory": True}}
+        )
+        assert cfg.workspace_inventory is True
+
+    def test_it_defaults_off(self):
+        from robothor.engine.config import manifest_to_agent_config
+
+        assert manifest_to_agent_config({"id": "x", "name": "X"}).workspace_inventory is False
