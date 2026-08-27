@@ -119,6 +119,12 @@ class FinalizationBudget:
 
     @property
     def exhausted(self) -> bool:
+        # `_min_useful` is derived from the total, so a caller passing 0 gets a
+        # floor of 0 and `0 < 0` is false — a zero budget would report itself
+        # spendable and attempt steps. Not reachable today (the one production
+        # caller takes the defaults) but the shape invites it.
+        if self._remaining <= 0:
+            return True
         return self._remaining < self._min_useful
 
     async def run(self, awaitable: Any, step: str) -> Any:
