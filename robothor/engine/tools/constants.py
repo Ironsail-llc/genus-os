@@ -101,16 +101,6 @@ BENCHMARK_TOOLS = frozenset(
     }
 )
 
-# Apollo.io contact enrichment & search tools
-APOLLO_TOOLS = frozenset(
-    {
-        "apollo_search_people",
-        "apollo_enrich_person",
-        "apollo_search_companies",
-        "apollo_enrich_company",
-    }
-)
-
 # JIRA Cloud API tools (dev team operations)
 JIRA_TOOLS = frozenset(
     {
@@ -264,8 +254,6 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "experiment_status",
         # Benchmark read-only tools
         "benchmark_compare",
-        # Apollo read-only tools (search is free, no side effects)
-        "apollo_search_people",
         # Skill tools (list is read-only; invoke_skill writes usage metadata)
         "list_skills",
         # MCP client read-only tools
