@@ -514,6 +514,29 @@ class LLMClient:
         """Read-only view over the per-task stall watchdog ContextVar."""
         return _active_watchdog_var.get()
 
+    @contextlib.contextmanager
+    def _watchdog_wait(self, label: str, budget: float) -> Any:
+        """Tell the watchdog this await is already bounded by `budget` seconds.
+
+        The whole point is that the run loop emits NO touch while a
+        non-streaming provider call is in flight, so a first token the engine
+        itself allows 600s for read as a 120s stall (2026-08-27, fleet-wide).
+
+        A context manager rather than a keepalive task: nothing to leak, no
+        interaction with the watchdog's own task.cancel(), no create_task GC
+        hazard, and exception-safe across an except arm with five exits.
+        No-ops when nothing is watching (sub-agents, out-of-loop callers).
+        """
+        wd = self._active_watchdog
+        if wd is None:
+            yield
+            return
+        wd.begin_wait(label, budget)
+        try:
+            yield
+        finally:
+            wd.end_wait()
+
     # ─── Credentials ─────────────────────────────────────────────────
 
     def _key_pool(self, model: str) -> KeyPool | None:
@@ -1206,13 +1229,16 @@ class LLMClient:
                         attempt_key = pool.current()
                         if attempt_key is not None:
                             kwargs["api_key"] = attempt_key
-                    async with asyncio.timeout(per_call_timeout):
-                        if is_codex_model(model):
-                            result = await codex_acompletion(**kwargs)
-                        else:
-                            result = await self._call_with_image_fallback(
-                                model=model, messages=kwargs.get("messages", []), kwargs=kwargs
-                            )
+                    with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
+                        async with asyncio.timeout(per_call_timeout):
+                            if is_codex_model(model):
+                                result = await codex_acompletion(**kwargs)
+                            else:
+                                result = await self._call_with_image_fallback(
+                                    model=model,
+                                    messages=kwargs.get("messages", []),
+                                    kwargs=kwargs,
+                                )
                     if _is_empty_completion(result):
                         # Not a finished answer. Raising routes this into the
                         # transient-retry path below rather than returning a
@@ -1456,8 +1482,9 @@ class LLMClient:
                         if attempt_key is not None:
                             kwargs["api_key"] = attempt_key
                     if is_codex_model(model):
-                        async with asyncio.timeout(per_call_timeout):
-                            result = await codex_acompletion(**kwargs)
+                        with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
+                            async with asyncio.timeout(per_call_timeout):
+                                result = await codex_acompletion(**kwargs)
                         content = str(result.choices[0].message.content or "")
                         if on_content and content:
                             await on_content(content)
@@ -1475,8 +1502,9 @@ class LLMClient:
                         return result
 
                     stream_start = time.monotonic()
-                    async with asyncio.timeout(per_call_timeout):
-                        stream = await litellm.acompletion(**kwargs)
+                    with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
+                        async with asyncio.timeout(per_call_timeout):
+                            stream = await litellm.acompletion(**kwargs)
 
                     chunks: list[Any] = []
                     accumulated_content = ""
