@@ -1,0 +1,39 @@
+{
+  "_meta": {
+    "source": "internlm/WildClawBench README \u2014 'Harness comparison', four scaffolds on the same 60 tasks and graders",
+    "note": "Aggregate 60-task scores in percent. Published by the benchmark authors, not measured here. Genus is absent because the authors did not run it; placing Genus in this table requires running our harness on one of these models, which is why the model column matters more than it looks.",
+    "why_this_file": "The project's competitive framing was OpenClaw-vs-Genus. These numbers say OpenClaw is the best harness on ZERO of four models and Hermes on three. Front-runner means beating Hermes, which is a higher bar than the one that has been measured against."
+  },
+  "harness_scores": {
+    "GPT-5.4": {
+      "OpenClaw": 50.3,
+      "Claude Code": 48.4,
+      "Codex": 56.8,
+      "Hermes Agent": 50.7
+    },
+    "GLM 5": {
+      "OpenClaw": 42.6,
+      "Claude Code": 31.0,
+      "Codex": 38.9,
+      "Hermes Agent": 46.4
+    },
+    "MiMo V2 Pro": {
+      "OpenClaw": 40.2,
+      "Claude Code": 29.9,
+      "Codex": 35.3,
+      "Hermes Agent": 48.1
+    },
+    "MiniMax M2.7": {
+      "OpenClaw": 33.8,
+      "Claude Code": 32.0,
+      "Codex": 35.8,
+      "Hermes Agent": 37.1
+    }
+  },
+  "best_harness_by_model": {
+    "GPT-5.4": "Codex",
+    "GLM 5": "Hermes Agent",
+    "MiMo V2 Pro": "Hermes Agent",
+    "MiniMax M2.7": "Hermes Agent"
+  }
+}
