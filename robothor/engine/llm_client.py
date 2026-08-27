@@ -138,6 +138,18 @@ _CREDIT_EXHAUSTED_MARKERS = (
     "not enough credits",
 )
 
+#: A cap tied to a CALENDAR window rather than a balance. Still "the
+#: account cannot pay", so these stay inside _CREDIT_EXHAUSTED_MARKERS and
+#: the chain still stops dialling — but topping up does not clear them, so
+#: the key must not be retried on the short spend-cap cooldown. Retrying a
+#: weekly cap every 900s revives it ~96 times a day and turns one dead
+#: credential into an all-day error storm across every agent.
+_PERIODIC_QUOTA_MARKERS = (
+    "weekly limit",
+    "daily limit",
+    "monthly limit",
+)
+
 
 #: Extra in-place retries for the on-device tier when it answers "busy".
 #: Every agent's chain ends in one local model served with a small parallel
@@ -174,6 +186,32 @@ def is_credit_exhausted(e: Exception) -> bool:
         return True
     msg = str(e).lower()
     return any(marker in msg for marker in _CREDIT_EXHAUSTED_MARKERS)
+
+
+def _retirement_reason(e: Exception, *, spent: bool) -> Retirement:
+    """Which retirement a failed credential earns.
+
+    Split by how the condition RECOVERS, not by how it presents: an auth
+    failure never recovers, a spend cap recovers on a top-up, a calendar
+    quota recovers when the provider's window rolls.
+    """
+    if not spent:
+        return Retirement.AUTH_FAILED
+    if is_periodic_quota_exhausted(e):
+        return Retirement.QUOTA_EXHAUSTED_PERIODIC
+    return Retirement.CREDIT_EXHAUSTED
+
+
+def is_periodic_quota_exhausted(e: Exception) -> bool:
+    """Is this cap tied to a calendar window rather than a spent balance?
+
+    Prose only, never status: a 402 says the balance is gone, which a
+    top-up fixes immediately. Only the provider's own wording distinguishes
+    "you are out of money" from "you are out of allowance until Monday",
+    and the two need different cooldowns.
+    """
+    msg = str(e).lower()
+    return any(marker in msg for marker in _PERIODIC_QUOTA_MARKERS)
 
 
 def is_auth_failure(e: Exception) -> bool:
@@ -502,7 +540,15 @@ class LLMClient:
                 # every deployment has today: let litellm resolve the
                 # environment itself.
                 return None
-            cache[var] = KeyPool(keys)
+            # The pool announces its own death: retire() fires this on the
+            # exhaustion transition, so one page is emitted per outage
+            # instead of one 'credential retired' log line per skipped
+            # model (452 of them on 2026-08-27, and no page).
+            from robothor.engine.provider_alerts import exhaustion_hook
+
+            cache[var] = KeyPool(
+                keys, on_exhausted=exhaustion_hook(var, pool_size=len(keys))
+            )
         return cache.get(var)
 
     # ─── Cost ────────────────────────────────────────────────────────
@@ -1191,7 +1237,7 @@ class LLMClient:
                         assert pool is not None
                         pool.retire(
                             attempt_key,
-                            Retirement.CREDIT_EXHAUSTED if spent else Retirement.AUTH_FAILED,
+                            _retirement_reason(e, spent=spent),
                         )
                         if not pool.exhausted() and rotations_left > 0:
                             rotations_left -= 1
@@ -1552,7 +1598,7 @@ class LLMClient:
                         assert pool is not None
                         pool.retire(
                             attempt_key,
-                            Retirement.CREDIT_EXHAUSTED if spent else Retirement.AUTH_FAILED,
+                            _retirement_reason(e, spent=spent),
                         )
                         if not pool.exhausted() and rotations_left > 0:
                             rotations_left -= 1
