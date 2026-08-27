@@ -435,6 +435,29 @@ class TestRegistry:
         assert outcome.kind == "tool_verify"
 
 
+def _pin_handlers(monkeypatch, handlers):
+    """Patch the dispatch handler map so it actually survives a lookup.
+
+    `_get_handlers()` rebuilds the map whenever `_handler_map_generation`
+    differs from the plugin loader's current generation. Patching only
+    `_handler_map` leaves the counter at its initial -1, so the very next
+    lookup throws the patch away and runs the REAL handler — which for
+    `gws_gmail_send` means shelling out to `gws` and returning
+    {"error": "gws exited with code 1"}.
+
+    These tests passed anyway, because in a full-suite run some earlier test
+    had already called `_get_handlers()` and left the counter warm. Run the
+    file on its own and they failed. That is an order-dependent test in the
+    file covering a verification control, so it was worth a fixture rather
+    than a second patch line copied three times.
+    """
+    from robothor.engine.tools import dispatch
+    from robothor.plugins import generation
+
+    monkeypatch.setattr(dispatch, "_handler_map", dict(handlers))
+    monkeypatch.setattr(dispatch, "_handler_map_generation", generation())
+
+
 class TestDispatchWiring:
     async def test_execute_tool_verifies_after_a_successful_handler(
         self, observe: None, evidence: Any, monkeypatch: pytest.MonkeyPatch
@@ -444,7 +467,7 @@ class TestDispatchWiring:
         async def _handler(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             return {"id": "msg-1"}
 
-        monkeypatch.setattr(dispatch, "_handler_map", {"gws_gmail_send": _handler})
+        _pin_handlers(monkeypatch, {"gws_gmail_send": _handler})
         with patch.object(verification, "_gws_read", return_value={"error": "Not Found"}):
             out = await dispatch._execute_tool(
                 "gws_gmail_send",
@@ -466,7 +489,7 @@ class TestDispatchWiring:
         async def _handler(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             return {"id": "msg-1"}
 
-        monkeypatch.setattr(dispatch, "_handler_map", {"gws_gmail_send": _handler})
+        _pin_handlers(monkeypatch, {"gws_gmail_send": _handler})
         boom = MagicMock(side_effect=RuntimeError("verification subsystem is down"))
         monkeypatch.setattr(verification, "verify_tool_result", boom)
         out = await dispatch._execute_tool(
