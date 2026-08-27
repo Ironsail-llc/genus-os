@@ -44,14 +44,34 @@ def test_steer_missing_session_returns_false():
     assert steer_session("no-such-run", "x") is False
 
 
-def test_runner_registers_and_consumes():
+def test_runner_registers_the_live_session():
+    """Without the registration there is nothing for interrupt_api to look up,
+    and every steer silently addresses a run that cannot be found."""
     from robothor.engine import runner
 
     src = inspect.getsource(runner)
     assert "session_registry.register(session)" in src
     assert "session_registry.unregister(session)" in src
+
+
+def test_the_loop_consumes_steers_and_interrupts():
+    """These moved out of `_run_loop` into `loop_guards` when that 1,059-line
+    method was decomposed. The check follows the code rather than being
+    dropped: what matters is that SOMETHING on the loop's path consumes them,
+    not which file it lives in."""
+    from robothor.engine import loop_guards
+
+    src = inspect.getsource(loop_guards)
     assert "consume_pending_steer()" in src
     assert "consume_interrupt()" in src
+
+
+def test_the_runner_actually_calls_those_guards():
+    """The other half: a guard module nothing invokes is the inert-control
+    pattern this codebase has shipped six times."""
+    from robothor.engine import runner
+
+    assert "check_iteration_guards(" in inspect.getsource(runner)
 
 
 def test_health_exposes_steer_and_interrupt_routes():
