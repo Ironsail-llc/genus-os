@@ -91,3 +91,25 @@ def test_omitting_the_reason_still_works(monkeypatch):
     sink = _capture(monkeypatch)
     tracking.log_tool_event(run_id="r1", tool_name="x", duration_ms=1, success=False)
     assert sink, "call raised or wrote nothing"
+
+
+def test_an_error_type_enum_is_normalised(monkeypatch):
+    """Callers must not need to know ErrorType's shape to log an event."""
+    from robothor.engine.error_recovery import ErrorType
+
+    sink = _capture(monkeypatch)
+    tracking.log_tool_event(
+        run_id="r1", tool_name="x", duration_ms=1, success=False,
+        error_type=ErrorType.TIMEOUT,
+    )
+    _sql, params = sink[0]
+    assert ErrorType.TIMEOUT.value in params
+
+
+def test_a_bare_string_error_type_still_works(monkeypatch):
+    sink = _capture(monkeypatch)
+    tracking.log_tool_event(
+        run_id="r1", tool_name="x", duration_ms=1, success=False, error_type="auth",
+    )
+    _sql, params = sink[0]
+    assert "auth" in params

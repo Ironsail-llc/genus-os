@@ -33,7 +33,7 @@ CAPS = {
     # +2: the deadline note now also takes the task text, so it can name the
     # deliverable that is missing. The composition itself was extracted to
     # deliverables.py rather than grown here.
-    "robothor/engine/runner.py": 2957,
+    "robothor/engine/runner.py": 2956,
     # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
     # Lowered again after phase 3b (_setup_handlers closures -> methods).
     "robothor/engine/telegram.py": 2000,

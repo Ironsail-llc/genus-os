@@ -429,6 +429,27 @@ def exec_allowlist_mode() -> EnforcementMode:
     )
 
 
+def deliverable_contract_mode() -> EnforcementMode:
+    """Rollout mode for task-deliverable verification.
+
+    Gated on ``ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED`` +
+    ``ROBOTHOR_DELIVERABLE_CONTRACT_MODE``.
+
+    The complement of ``completion_contract_mode``. That one asks whether the
+    agent's *claims* are backed by evidence in the trace; this one asks
+    whether the artifact the *task* named actually exists. An agent can pass
+    the first and fail the second by doing the work correctly and saving it
+    to the wrong path — measured on 2026-08-26 as -0.87 of a -1.04
+    competitive gap in which 7 of 10 tasks were at parity.
+
+    ``observe`` logs the verdict, ``alert`` tells the operator, ``enforce``
+    records it as a guardrail block. Default off.
+    """
+    return _enforcement_mode(
+        "ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED", "ROBOTHOR_DELIVERABLE_CONTRACT_MODE"
+    )
+
+
 def completion_contract_mode() -> EnforcementMode:
     """Rollout mode for evidence-based completion contracts.
 
