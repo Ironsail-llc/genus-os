@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse  # noqa: TC003
 import os
+from pathlib import Path
 from typing import Any
 
 # Service names for start/stop
@@ -360,7 +361,70 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     print()
     print(f"  Workspace:   {cfg.workspace}")
+
+    # Silently operating on another user's vault is the worst outcome in the
+    # new-user path; say so rather than printing a path they may not read.
+    try:
+        _home: Path | None = Path.home()
+    except RuntimeError:
+        _home = None
+    from robothor.engine.instance_env import DEFAULT_ENV_FILE
+
+    _note = describe_instance_ownership(
+        Path(cfg.workspace),
+        home=_home,
+        env_file=DEFAULT_ENV_FILE if DEFAULT_ENV_FILE.exists() else None,
+    )
+    if _note:
+        print()
+        print(f"  WARNING: {_note}")
     return 0
+
+
+def describe_instance_ownership(
+    workspace: Path,
+    *,
+    home: Path | None = None,
+    env_file: Path | None = None,
+) -> str | None:
+    """Warn when the resolved workspace belongs to someone other than the caller.
+
+    `robothor.cli.main()` adopts /etc/robothor/robothor.env so a CLI run sees
+    the daemon's guardrail flags instead of reading them back as off — that is
+    deliberate and load-bearing. A side effect is that it also adopts
+    ROBOTHOR_WORKSPACE.
+
+    Measured on a real box: a fresh clone of the public repo, installed into a
+    temp venv and run with `env -i` and a different HOME, reported the
+    operator's 118-table database, 15 vault secrets, and
+    Workspace: /home/philip/robothor. Postgres peer auth over the Unix socket
+    supplies the database; the system env file supplies the workspace.
+
+    Intended on a single-operator box. On a shared machine — which is what
+    "installable by other people" means — the second user silently gets the
+    first user's workspace, database and vault. This does not change the
+    behaviour, which would reintroduce the guardrail bypass; it says so.
+
+    Returns None when the workspace is the caller's own, or when ownership
+    cannot be determined (no HOME and no passwd entry is a real container
+    case, and status must print rather than traceback).
+    """
+    if home is None:
+        return None
+    try:
+        ws = Path(workspace).resolve()
+        h = Path(home).resolve()
+    except (OSError, RuntimeError):
+        return None
+    if ws == h or h in ws.parents:
+        return None
+
+    source = f" (set by {env_file})" if env_file else ""
+    return (
+        f"attached to an instance outside your home directory: {ws}{source}. "
+        f"Its database, vault and agents belong to whoever owns that workspace. "
+        f"Set ROBOTHOR_WORKSPACE to use your own."
+    )
 
 
 def _check_optional_service(name: str, port: int, health_path: str | None) -> None:
