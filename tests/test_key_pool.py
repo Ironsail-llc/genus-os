@@ -292,9 +292,9 @@ def test_a_key_returning_from_cooldown_rearms_the_exhaustion_alert():
     pool.retire("sk-alpha", Retirement.CREDIT_EXHAUSTED)
     assert pool.exhausted()
     clock.advance(CREDIT_COOLDOWN_SECONDS + 1)
-    assert not pool.exhausted()          # recovered
+    assert not pool.exhausted()  # recovered
     pool.retire("sk-alpha", Retirement.CREDIT_EXHAUSTED)
-    assert pool.exhausted()              # and died again
+    assert pool.exhausted()  # and died again
 
     assert len(fired) == 2, "a second, separate outage must page again"
 
@@ -308,6 +308,7 @@ def test_a_pool_with_no_callback_still_works():
 
 def test_a_raising_callback_never_breaks_dispatch():
     """Alerting is best-effort; it must not take the LLM path down with it."""
+
     def boom(reason):
         raise RuntimeError("telegram is down")
 

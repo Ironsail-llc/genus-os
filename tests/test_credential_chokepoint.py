@@ -41,9 +41,9 @@ ALLOWED = {"engine/llm_client.py", "engine/codex_provider.py"}
 #: completions, crm/dal), and matching it loosely flags modules that never
 #: touch a provider — which would make the ratchet noise and get muted.
 _DIAL = re.compile(
-    r"litellm\.a?completion\s*\("          # litellm, sync or async
+    r"litellm\.a?completion\s*\("  # litellm, sync or async
     r"|(?<![\w.])await\s+acompletion\s*\("  # bare imported acompletion
-    r"|Bearer \{os\.environ"                # raw HTTP auth header
+    r"|Bearer \{os\.environ"  # raw HTTP auth header
 )
 
 

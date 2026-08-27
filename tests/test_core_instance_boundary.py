@@ -25,9 +25,8 @@ HANDLERS = Path(__file__).resolve().parents[1] / "robothor" / "engine" / "tools"
 #: Integrations that are one operator's, not every operator's. Each is a
 #: known boundary violation awaiting extraction to a plugin.
 GRANDFATHERED: set[str] = {
-    "jira.py",       # COMMON-BUT-PLUGGABLE: one vendor behind no interface
+    "jira.py",  # COMMON-BUT-PLUGGABLE: one vendor behind no interface
     "github_api.py",  # COMMON-BUT-PLUGGABLE: same
-    "pf.py",          # INSTANCE-SPECIFIC: vessel sensors
 }
 
 #: Vendors that must not appear in core at all. Apollo was retired by
@@ -41,10 +40,7 @@ def _handler_files() -> set[str]:
 
 def test_no_banned_vendor_survives_in_core():
     present = _handler_files()
-    offenders = [
-        name for name in present
-        if any(v in name.lower() for v in BANNED_VENDORS)
-    ]
+    offenders = [name for name in present if any(v in name.lower() for v in BANNED_VENDORS)]
     assert not offenders, (
         f"a retired vendor integration is still in core: {offenders}. It was "
         "removed by decision, not by repair -- leaving it means agents are "
@@ -56,9 +52,7 @@ def test_banned_vendors_are_not_dispatched():
     """Deleting the file is not enough if dispatch still imports it."""
     dispatch = (HANDLERS.parent / "dispatch.py").read_text().lower()
     for vendor in BANNED_VENDORS:
-        assert vendor not in dispatch, (
-            f"dispatch.py still wires {vendor!r} into the tool surface"
-        )
+        assert vendor not in dispatch, f"dispatch.py still wires {vendor!r} into the tool surface"
 
 
 def test_banned_vendors_have_no_schemas():

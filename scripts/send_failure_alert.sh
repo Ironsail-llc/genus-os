@@ -18,6 +18,31 @@ set -u
 
 UNIT="${1:?usage: send_failure_alert.sh <unit-name>}"
 
+# ── Never page from a test run ────────────────────────────────────────────────
+# 2026-08-27: a suite run delivered three real Telegram alerts, including
+# "2 CORRUPT offsite (bytes differ from source): robothor_memory-20260712.sql.gz"
+# -- a FIXTURE filename that reads exactly like a data-integrity emergency, and
+# another naming a pytest tmpdir outright. tests/test_backup_offsite.py
+# subprocess-runs the real backup script with a clean env, so no pytest marker
+# arrives; this pager re-sources credentials itself and delivered anyway.
+#
+# model_breaker._in_pytest() already guards this class in Python, added after
+# 92 of 145 production escalation rows turned out to be pytest fixture models.
+# This is the shell equivalent, placed at the crossing point every caller uses
+# rather than in each caller.
+#
+# Deliberately NARROW: it suppresses only messages that name a pytest temp
+# directory, never a real unit failure. An alert path that guesses would be
+# worse than the spam.
+if [[ "$UNIT" == *"pytest-of-"* || "$UNIT" == *"/pytest-"* ]]; then
+    echo "send_failure_alert: refusing to page — message names a pytest temp path: $UNIT" >&2
+    exit 0
+fi
+if [[ -n "${ROBOTHOR_ALERT_SUPPRESS:-}" ]]; then
+    echo "send_failure_alert: suppressed by ROBOTHOR_ALERT_SUPPRESS: $UNIT" >&2
+    exit 0
+fi
+
 # ── Retry policy ──────────────────────────────────────────────────────────────
 # Overridable so tests run fast and callers with different latency budgets
 # (e.g. cron-wrapper.sh, which must not stall a cron job for 5 minutes) can

@@ -52,6 +52,24 @@ def schema_names(monkeypatch: pytest.MonkeyPatch) -> set[str]:
     return {d["name"] for d in get_tool_definitions()} | set(get_engine_schemas())
 
 
+def _plugin_provided() -> set[str]:
+    """Tool names supplied by an INSTALLED plugin, not by core.
+
+    Computed, never hardcoded: a plugin ships its handler through
+    ``genus.tools`` and its schema through ``genus.schemas``, so it is correct
+    for such a name to be absent from ``robothor/engine/tools/schemas.py``.
+    A static list here would rot the moment an instance installs or removes a
+    plugin, and the parity guard would then either nag or go blind.
+    """
+    try:
+        from robothor.plugins import load_plugins
+
+        loaded = load_plugins(reserved_names=set())
+        return set(loaded.tools) | set(loaded.schemas)
+    except Exception:  # noqa: BLE001 - a plugin must never break the guard
+        return set()
+
+
 @pytest.fixture
 def handler_names() -> set[str]:
     from robothor.engine.tools.dispatch import _collect_handlers
@@ -64,7 +82,7 @@ def test_every_handler_has_a_schema(handler_names: set[str], schema_names: set[s
     the registry drops names absent from ``_schemas`` (see
     ``ToolRegistry._get_filtered_names``), so 'implemented + green unit tests'
     can coexist with 'no agent can ever call it'."""
-    missing = handler_names - schema_names - INTERNAL_ONLY
+    missing = handler_names - schema_names - INTERNAL_ONLY - _plugin_provided()
     assert not missing, (
         f"Handlers with no schema entry in robothor/engine/tools/schemas.py "
         f"(unreachable by any agent): {sorted(missing)}. Register a schema, or "
@@ -116,7 +134,7 @@ def test_benchmark_readonly_names_are_registered(schema_names: set[str]) -> None
     Adapter-served tools are exempt (no static schema by design)."""
     from robothor.engine.tools.handlers.benchmark import _BENCHMARK_READONLY_TOOLS
 
-    missing = _BENCHMARK_READONLY_TOOLS - schema_names - ADAPTER_PROVIDED
+    missing = _BENCHMARK_READONLY_TOOLS - schema_names - ADAPTER_PROVIDED - _plugin_provided()
     assert not missing, (
         f"_BENCHMARK_READONLY_TOOLS names with no registered schema and no "
         f"ADAPTER_PROVIDED exemption: {sorted(missing)}"
