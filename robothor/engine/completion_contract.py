@@ -79,7 +79,10 @@ _NEGATION_RE = re.compile(
     r"\b(not|isn't|isnt|hasn't|hasnt|never"
     r"|will|won't|wont|would|should|shall"
     r"|going\s+to|plan\s+to|planning\s+to|intend|intending"
-    r"|about\s+to|need\s+to|trying\s+to|attempt)\b",
+    # `attempt` did not match "What I ATTEMPTED: Created a task ...", which is
+    # an agent reporting a failure in the sentence right after "I can't persist
+    # this to the CRM right now". Inflections included.
+    r"|about\s+to|need\s+to|trying\s+to|attempt(?:ed|ing|s)?)\b",
     re.IGNORECASE,
 )
 _NEGATION_WINDOW = 20
