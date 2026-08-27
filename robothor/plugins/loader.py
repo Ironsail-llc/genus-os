@@ -42,6 +42,14 @@ _GROUPS = {
     # registered from inside the package, so a third-party capability could
     # contribute a tool but nothing that runs on its own.
     "genus.jobs": "jobs",
+    # Arbitrary named services. The other groups name a KIND the platform
+    # knows about; this one does not, which is the point. DeepSeek Harness
+    # exposes 143 distinct `ctx.*` surfaces because service registration is
+    # its primitive rather than a list, and no number of named groups here
+    # catches that by growing. Breadth becomes a shape, not a count — while
+    # the contract version and reserved names still apply, which their
+    # architecture doc addresses for none of theirs.
+    "genus.services": "services",
     # Operator verbs. `robothor <verb>` was a fixed list of add_parser calls,
     # so an instance shipping its own operational command had to patch the
     # platform to expose it.
@@ -71,6 +79,7 @@ class PluginSet:
     hooks: dict[str, Any] = field(default_factory=dict)
     models: dict[str, Any] = field(default_factory=dict)
     jobs: dict[str, Any] = field(default_factory=dict)
+    services: dict[str, Any] = field(default_factory=dict)
     commands: dict[str, Any] = field(default_factory=dict)
     sandboxes: dict[str, Any] = field(default_factory=dict)
     loaded: list[Any] = field(default_factory=list)
@@ -84,6 +93,7 @@ class PluginSet:
             "genus.hooks": self.hooks,
             "genus.models": self.models,
             "genus.jobs": self.jobs,
+            "genus.services": self.services,
             "genus.commands": self.commands,
             "genus.sandboxes": self.sandboxes,
         }[group]
