@@ -38,16 +38,7 @@ CAPS = {
     # arrived with were hoisted to the module header (run_budget was already
     # imported there, so they bought nothing) — which paid back four of the
     # five lines this would otherwise have cost.
-    # 2515 -> 2522: Stage 5 propagates the CRM task id onto the run at INSERT
-    # time, so sub-agent runs stop landing with task_id NULL (0 of 44,611 rows
-    # had one). Seven lines: a four-line note and a two-line branch inside
-    # execute(). There is no cohesive cluster to extract here — the write has
-    # to happen where the run row is being assembled.
-    "robothor/engine/runner.py": 2522,
-    # 2545: a concurrent session ratcheted this to 2539 by lifting injection
-    # screening and journal resume out of execute(); the deliverable guard's call
-    # site adds the rest. Its 25 lines of logic went to loop_guards.py, so what
-    # remains here is a comment, a lazy import and a two-line branch.
+    "robothor/engine/runner.py": 2938,
     # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
     # Lowered again after phase 3b (_setup_handlers closures -> methods).
     "robothor/engine/telegram.py": 2000,
@@ -73,8 +64,10 @@ CAPS = {
     # TYPE_CHECKING import four; trimming to fit would have meant deleting
     # the docstring that says why watchdog_fired overrides the status.
     "robothor/engine/cancel_outcome.py": 86,
-    # admission.py's cap travels with the capacity PR that introduces the
-    # module; this branch does not carry it yet.
+    # Fleet admission (2026-08-27): extracted from the scheduler rather than
+    # growing it past its cap — the pool it drives had no production caller for
+    # its whole existence, and the wiring is a cohesive unit of its own.
+    "robothor/engine/admission.py": 82,
     # The finalization cluster (what a run may spend AFTER its loop ends)
     # was extracted here rather than growing run_budget past its cap.
     "robothor/engine/finalization_budget.py": 160,
