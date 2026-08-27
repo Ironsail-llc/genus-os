@@ -530,26 +530,25 @@ class LLMClient:
         var = env_var_for_model(model)
         if var is None:
             return None
-        cache: dict[str, KeyPool] = self.__dict__.setdefault("_key_pools", {})
-        if var not in cache:
-            keys = keys_from_env(var)
-            if not keys:
-                # No credential configured for this provider. Managing an
-                # empty pool would mean reporting it "exhausted" and skipping
-                # every model on it, when the correct behaviour is the one
-                # every deployment has today: let litellm resolve the
-                # environment itself.
-                return None
-            # The pool announces its own death: retire() fires this on the
-            # exhaustion transition, so one page is emitted per outage
-            # instead of one 'credential retired' log line per skipped
-            # model (452 of them on 2026-08-27, and no page).
-            from robothor.engine.provider_alerts import exhaustion_hook
+        # PROCESS-WIDE, not per-instance. A credential is a property of the
+        # process; caching pools on the client meant memory generation kept
+        # its own and went on dialling a key this pool had already retired.
+        #
+        # The pool announces its own death: retire() fires the hook on the
+        # exhaustion transition, so one page is emitted per outage instead of
+        # one 'credential retired' log line per skipped model (452 of them on
+        # 2026-08-27, and no page).
+        #
+        # None for an unconfigured provider is deliberate: managing an empty
+        # pool would mean reporting it "exhausted" and skipping every model on
+        # it, when the correct behaviour is the one every deployment has
+        # today — let litellm resolve the environment itself.
+        from robothor.engine.key_pool import shared_pool
+        from robothor.engine.provider_alerts import exhaustion_hook
 
-            cache[var] = KeyPool(
-                keys, on_exhausted=exhaustion_hook(var, pool_size=len(keys))
-            )
-        return cache.get(var)
+        return shared_pool(
+            var, on_exhausted=exhaustion_hook(var, pool_size=len(keys_from_env(var)))
+        )
 
     # ─── Cost ────────────────────────────────────────────────────────
 

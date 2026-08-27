@@ -89,30 +89,26 @@ logger = logging.getLogger(__name__)
 # classification -- notably that a weekly cap is not retried every 15 min.
 
 _REMOTE_KEY_VAR = "OPENROUTER_API_KEY"
-_POOL: Any = None
 
 
 def _reset_key_pool() -> None:
     """Drop the cached pool. For tests and for a secrets reload."""
-    global _POOL
-    _POOL = None
+    from robothor.engine.key_pool import reset_shared_pools
+
+    reset_shared_pools()
 
 
 def _key_pool() -> Any:
-    """The credential pool for remote generation, or None if unconfigured.
+    """The process-wide pool for this provider, or None if unconfigured.
 
-    Built lazily: secrets land in tmpfs after import, so a pool constructed
-    at module scope would be permanently empty on a real box.
+    Deliberately the SAME object the engine dispatches through. A private
+    pool here meant a key the engine had retired was still live to memory
+    generation, which was the highest-volume consumer of the dead credential
+    on 2026-08-27 (1,135 remote fallbacks in 48h).
     """
-    global _POOL
-    if _POOL is None:
-        from robothor.engine.key_pool import KeyPool, keys_from_env
+    from robothor.engine.key_pool import shared_pool
 
-        keys = keys_from_env(_REMOTE_KEY_VAR)
-        if not keys:
-            return None
-        _POOL = KeyPool(keys)
-    return _POOL
+    return shared_pool(_REMOTE_KEY_VAR)
 
 
 def _remote_api_key() -> str | None:

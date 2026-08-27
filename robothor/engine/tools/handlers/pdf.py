@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+# Dial through the credential pool. A direct litellm call lets the SDK
+# resolve the provider key from the environment, which on 2026-08-27 meant
+# this path kept hammering a credential the pool had already retired and
+# could not rotate to a spare. No-op for unpooled providers.
+from robothor.engine.pooled_completion import acompletion as pooled_acompletion
+
 if TYPE_CHECKING:
     from robothor.engine.tools.dispatch import ToolContext
 
@@ -98,7 +104,7 @@ async def _handle_analyze_pdf(
             try:
                 import litellm
 
-                response = await litellm.acompletion(
+                response = await pooled_acompletion(
                     model="gemini/gemini-2.5-flash",
                     messages=[
                         {
@@ -167,7 +173,7 @@ async def _handle_analyze_pdf(
             prompt = query or "Extract and describe all text and content from these PDF pages."
             content.append({"type": "text", "text": prompt})
 
-            response = await litellm.acompletion(
+            response = await pooled_acompletion(
                 model="gemini/gemini-2.5-flash",
                 messages=[{"role": "user", "content": content}],
                 temperature=0.1,
