@@ -1,0 +1,27 @@
+-- 111: drop the unfiltered hnsw index that was costing memory recall.
+--
+-- memory_facts carried TWO hnsw indexes on embedding:
+--   idx_facts_embedding         1,085 MB, no predicate
+--   idx_facts_embedding_active    306 MB, WHERE is_active
+--
+-- 82.4% of the table is superseded (140,155 of 170,059 rows), so the
+-- unfiltered graph is 82% dead rows -- and the planner preferred it.
+-- pgvector walks the graph and applies is_active AFTERWARDS, so the LIMIT
+-- is spent on candidates that are then discarded. Measured on production,
+-- identical query, LIMIT 20:
+--
+--   idx_facts_embedding         -> 9 rows,  "Rows Removed by Filter: 31", 5.53ms
+--   idx_facts_embedding_active  -> 20 rows, no filtering,                 5.31ms
+--
+-- Memory search was returning 55% fewer facts than requested, fleet-wide.
+-- Nothing surfaced it because a short result set is indistinguishable from
+-- a sparse corpus.
+--
+-- Safe to drop: every embedding query against memory_facts filters
+-- is_active (facts.py:928; active_only defaults True and no caller in the
+-- tree passes False), so this index served no query while costing hnsw
+-- maintenance on every insert and update.
+--
+-- Reclaims 1,085 MB -- 29% of the post-Delphi database.
+
+DROP INDEX IF EXISTS idx_facts_embedding;
