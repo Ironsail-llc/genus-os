@@ -49,6 +49,10 @@ _GROUPS = {
     # Sandbox runtimes. Unlike every other group here, an installed backend
     # is INERT until the operator names it — see sandbox.active_sandbox_backend.
     "genus.sandboxes": "sandboxes",
+    # Additional memory sources. Hermes ships eight providers and leads three
+    # of four published models; its design rule is the one worth copying —
+    # providers run ALONGSIDE built-in memory and never replace it.
+    "genus.memory": "providers",
 }
 
 
@@ -73,6 +77,7 @@ class PluginSet:
     jobs: dict[str, Any] = field(default_factory=dict)
     commands: dict[str, Any] = field(default_factory=dict)
     sandboxes: dict[str, Any] = field(default_factory=dict)
+    memory: dict[str, Any] = field(default_factory=dict)
     loaded: list[Any] = field(default_factory=list)
     failures: list[PluginFailure] = field(default_factory=list)
 
@@ -86,6 +91,7 @@ class PluginSet:
             "genus.jobs": self.jobs,
             "genus.commands": self.commands,
             "genus.sandboxes": self.sandboxes,
+            "genus.memory": self.memory,
         }[group]
 
 

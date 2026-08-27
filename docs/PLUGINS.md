@@ -43,6 +43,7 @@ available to any agent whose manifest lists it in `tools_allowed`.
 | `genus.jobs` | `jobs` | work that runs on a schedule, not on a tool call |
 | `genus.commands` | `commands` | operator verbs — `robothor <verb>` |
 | `genus.sandboxes` | `sandboxes` | alternative sandbox runtimes (**opt-in**, see below) |
+| `genus.memory` | `providers` | extra memory sources, merged **after** built-in recall |
 
 A tool normally ships in two groups: the handler and its schema. The engine
 keeps those in separate registries and so does the loader.
