@@ -13,9 +13,11 @@ Subsystems:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
+import signal
 import socket
 import sys
 import time
@@ -30,6 +32,7 @@ from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.scheduler import CronScheduler
 from robothor.engine.telegram import TelegramBot
 from robothor.engine.workflow import WorkflowEngine
+from robothor.plugins import reload_plugins
 
 logger = logging.getLogger(__name__)
 
@@ -454,6 +457,39 @@ def _select_log_renderer() -> Any:
     return structlog.processors.JSONRenderer()
 
 
+def _handle_plugin_reload_signal() -> int | None:
+    """Re-discover plugins on SIGHUP, without dropping in-flight work.
+
+    Installing a plugin previously required restarting the engine, which
+    cancels every running agent — on this fleet that shows up as a batch of
+    runs filed as timeouts and a silent operator. A reload only invalidates
+    the caches; the four registries rebuild lazily on their next read, so
+    nothing in flight is disturbed.
+
+    Never raises. A reload that fails must leave the daemon running on the
+    plugins it already had, not take it down.
+    """
+    try:
+        return reload_plugins()
+    except Exception as exc:  # noqa: BLE001 - a reload must never kill the daemon
+        logger.warning("Plugin reload failed, keeping the current set: %s", exc)
+        return None
+
+
+def _install_plugin_reload_signal() -> bool:
+    """Wire SIGHUP to a plugin reload. Returns whether it was installed.
+
+    Extracted from ``main`` so a test can actually execute it. Left inline it
+    ran only in a live daemon, and a NameError in these three lines would
+    have surfaced as the engine failing to start — the suite was green with
+    exactly that bug present.
+    """
+    with contextlib.suppress(Exception):  # not every platform has SIGHUP
+        asyncio.get_running_loop().add_signal_handler(signal.SIGHUP, _handle_plugin_reload_signal)
+        return True
+    return False
+
+
 async def main() -> int:
     """Start all engine subsystems. Returns the process exit code."""
     # Reject unsafe production authentication before touching the database,
@@ -765,6 +801,8 @@ async def main() -> int:
 
     # Alert delivery self-test (env-gated, best-effort) — see docstring.
     await _maybe_run_alert_selftest()
+
+    _install_plugin_reload_signal()
 
     # Wait for any task to complete (aiogram handles SIGTERM and stops polling,
     # which completes the telegram task — that's our shutdown trigger)

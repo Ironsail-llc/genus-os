@@ -34,6 +34,10 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._schemas: dict[str, dict[str, Any]] = {}
+        #: Names contributed by plugins, so a reload can withdraw them again.
+        self._plugin_schema_names: set[str] = set()
+        #: Plugin generation `_schemas` reflects; -1 until first registration.
+        self._schema_generation: int = -1
         self._adapter_routes: dict[str, str] = {}  # tool_name → adapter server name
         self._register_all()
 
@@ -75,6 +79,25 @@ class ToolRegistry:
         # taken AFTER the built-ins are registered, so it is the real one.
         self._register_plugin_schemas()
 
+    def _refresh_plugin_schemas_if_stale(self) -> None:
+        """Re-read plugin schemas when the plugin generation has moved.
+
+        Installing a plugin used to require a restart before the model was
+        told the tool existed. The loader's generation counter marks this
+        cache stale; the names a plugin contributed are tracked so they can
+        be withdrawn again when the plugin goes away, which a plain re-add
+        would never do.
+        """
+        from robothor.plugins import generation
+
+        current = generation()
+        if current == self._schema_generation:
+            return
+        for name in self._plugin_schema_names:
+            self._schemas.pop(name, None)
+        self._plugin_schema_names = set()
+        self._register_plugin_schemas()
+
     def _register_plugin_schemas(self) -> None:
         """Advertise plugin tools to the model. Never raises: one broken
         package must not stop the engine from starting."""
@@ -86,6 +109,9 @@ class ToolRegistry:
             logger.warning("Plugin schema registration skipped: %s", e)
             return
 
+        from robothor.plugins import generation
+
+        self._schema_generation = generation()
         registered: list[str] = []
         for name, schema in (plugins.schemas or {}).items():
             if name in self._schemas:
@@ -95,6 +121,7 @@ class ToolRegistry:
                 )
                 continue
             self._schemas[name] = schema
+            self._plugin_schema_names.add(name)
             registered.append(name)
 
         # A handler with no declared schema still has to be advertised, or the
@@ -243,6 +270,7 @@ class ToolRegistry:
         ``_deferred_allowed`` set the runner publishes via ``set_deferred_allowed``
         (see deferred_whitelist) — so tool_call cannot reach a denied tool.
         """
+        self._refresh_plugin_schemas_if_stale()
         names = self._get_filtered_names(config)
         if self.should_defer(config):
             seen: set[str] = set()
@@ -308,10 +336,12 @@ class ToolRegistry:
 
     def get_schema(self, name: str) -> dict[str, Any] | None:
         """Return the full OpenAI-function schema for one tool, or None."""
+        self._refresh_plugin_schemas_if_stale()
         return self._schemas.get(name)
 
     def build_readonly_for_agent(self, config: AgentConfig) -> list[dict[str, Any]]:
         """Return only read-only tool schemas for plan mode."""
+        self._refresh_plugin_schemas_if_stale()
         from robothor.engine.tools.constants import READONLY_TOOLS
 
         full_names = set(self.get_tool_names(config))
