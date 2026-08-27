@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse  # noqa: TC003
+import importlib.util
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -359,6 +361,17 @@ def cmd_status(args: argparse.Namespace) -> int:
     if camera_rtsp_port:
         _check_optional_service("Camera", camera_rtsp_port, None)
 
+    # Optional feature groups. The MCP server — 53 tools — was dead here for
+    # an unknown period because a long-lived venv never got a dependency a
+    # fresh install gets, and nothing said so.
+    _features = feature_dependency_status()
+    _absent = [f for f in _features if not f.available]
+    if _absent:
+        print()
+        print("  Optional features unavailable:")
+        for f in _absent:
+            print(f"    {f.name:12} — {f.hint}")
+
     print()
     print(f"  Workspace:   {cfg.workspace}")
 
@@ -379,6 +392,67 @@ def cmd_status(args: argparse.Namespace) -> int:
         print()
         print(f"  WARNING: {_note}")
     return 0
+
+
+@dataclass(frozen=True)
+class FeatureDependency:
+    """One optional feature group and whether its dependency is importable."""
+
+    name: str
+    probe_module: str
+    available: bool
+    hint: str
+
+
+#: extra -> the module to import to prove it works. The distribution name and
+#: the import name differ often enough that guessing is wrong: opencv-python
+#: imports as cv2, nats-py as nats. A probe that checks the wrong module
+#: reports a working feature as broken and trains the reader to ignore the
+#: line — the exact failure this exists to end.
+_FEATURE_PROBES: dict[str, str] = {
+    "api": "fastapi",
+    "vision": "cv2",
+    "federation": "nats",
+    "mcp": "mcp",
+    "rlm": "rlms",
+    "tui": "textual",
+}
+
+
+def feature_dependency_status() -> list[FeatureDependency]:
+    """Which optional feature groups can actually run in this environment.
+
+    The MCP server exposes 53 tools, every memory tool among them, and had been
+    dead here with `ModuleNotFoundError: No module named 'mcp'`. The package IS
+    declared — [mcp], and [all] includes it, so a fresh install gets it — but a
+    long-lived venv had drifted and never did. The feature worked for a new
+    user and was silently absent for the operator, and `status`, run many
+    times, never said so.
+
+    Informational rather than alarming: not every instance wants vision or
+    federation, so an absent extra reads as unavailable, not broken. What
+    matters is that it is visible and that the line carries the install
+    command, so acting on it needs no lookup.
+
+    Never raises. An optional dependency that explodes on import — native
+    wheels on the wrong architecture is a real case — must not take `status`
+    down with it.
+    """
+    rows: list[FeatureDependency] = []
+    for extra, module in sorted(_FEATURE_PROBES.items()):
+        try:
+            ok = importlib.util.find_spec(module) is not None
+        except Exception:  # noqa: BLE001 - status must print
+            ok = False
+        rows.append(
+            FeatureDependency(
+                name=extra,
+                probe_module=module,
+                available=ok,
+                hint="" if ok else f'pip install "genusos[{extra}]"',
+            )
+        )
+    return rows
 
 
 def describe_instance_ownership(
