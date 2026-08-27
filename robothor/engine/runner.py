@@ -85,6 +85,7 @@ from robothor.engine.run_budget import (
     proactive_compaction_threshold as proactive_compaction_threshold,
 )
 from robothor.engine.run_finalizer import RunFinalizationMixin
+from robothor.engine.run_identity import resolve_run_identity
 from robothor.engine.run_lifecycle import RunLifecycleMixin
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
@@ -603,39 +604,20 @@ class AgentRunner(
                 return session.fail("Authentication identity required for interactive run")
 
         # ── Identity — who is this run's message addressed to? ────────────
-        # Precedence: explicit `identity` kwarg > WEBCHAT DB resolution >
-        # legacy Telegram `|sender:` trigger_detail parse (back-compat until
-        # every caller passes `identity=` explicitly). A spawn_context-carried
-        # identity (sub-agent attribution only) is folded in further below,
-        # after spawn inheritance is resolved.
-        effective_identity = identity
-        if effective_identity is None:
-            if trigger_type == TriggerType.WEBCHAT and not _is_service_caller(
-                effective_user_role, effective_user_id
-            ):
-                from robothor.identity import resolve_identity
-
-                effective_identity = resolve_identity("webchat", effective_user_id, resolved_tenant)
-            elif (
-                trigger_type == TriggerType.TELEGRAM
-                and trigger_detail
-                and "|sender:" in trigger_detail
-            ):
-                from robothor.identity import IdentityContext as _IdentityContext
-
-                _legacy_sender = trigger_detail.split("|sender:", 1)[1]
-                effective_identity = _IdentityContext(
-                    tenant_id=resolved_tenant,
-                    channel="telegram",
-                    identifier=effective_user_id,
-                    verified=bool(effective_user_id and effective_user_role),
-                    display_name=_legacy_sender,
-                    role=effective_user_role or "",
-                )
-                logger.debug(
-                    "execute: using legacy sender parse fallback for identity (agent=%s)",
-                    _sanitize(agent_id),
-                )
+        # Precedence and its reasoning live in robothor/engine/run_identity.py:
+        # explicit kwarg > webchat DB resolution > legacy Telegram `|sender:`
+        # parse. A spawn_context-carried identity (sub-agent attribution only)
+        # is folded in further below, after spawn inheritance is resolved.
+        effective_identity = resolve_run_identity(
+            identity,
+            agent_id=agent_id,
+            trigger_type=trigger_type,
+            trigger_detail=trigger_detail,
+            user_id=effective_user_id,
+            user_role=effective_user_role,
+            tenant_id=resolved_tenant,
+            is_service_caller=_is_service_caller(effective_user_role, effective_user_id),
+        )
 
         # Per-run reasoning effort → extended-thinking budget (task-local).
         from robothor.engine.model_registry import set_reasoning_effort
