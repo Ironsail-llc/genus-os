@@ -457,6 +457,12 @@ def _select_log_renderer() -> Any:
     return structlog.processors.JSONRenderer()
 
 
+#: The running scheduler, so the SIGHUP handler can re-register plugin jobs.
+#: A module-level handle rather than a parameter because a signal handler
+#: takes no arguments and this is the only state it needs.
+_ACTIVE_SCHEDULER: Any = None
+
+
 def _handle_plugin_reload_signal() -> int | None:
     """Re-discover plugins on SIGHUP, without dropping in-flight work.
 
@@ -470,10 +476,22 @@ def _handle_plugin_reload_signal() -> int | None:
     plugins it already had, not take it down.
     """
     try:
-        return reload_plugins()
+        gen = reload_plugins()
     except Exception as exc:  # noqa: BLE001 - a reload must never kill the daemon
         logger.warning("Plugin reload failed, keeping the current set: %s", exc)
         return None
+
+    # Tools, schemas, guardrails, hooks and models rebuild lazily on next
+    # use. Scheduled jobs cannot — nothing reads them again until they fire —
+    # so the scheduler is told explicitly, or a job installed while the
+    # engine is up would never run.
+    scheduler = _ACTIVE_SCHEDULER
+    if scheduler is not None:
+        try:
+            scheduler.register_plugin_jobs()
+        except Exception as exc:  # noqa: BLE001 - keep the daemon up
+            logger.warning("Plugin jobs could not be re-registered: %s", exc)
+    return gen
 
 
 def _install_plugin_reload_signal() -> bool:
@@ -718,6 +736,8 @@ async def main() -> int:
         init_permission_manager(bot, config.default_chat_id)
         logger.info("Permission escalation manager wired to Telegram")
     scheduler = CronScheduler(config, runner, workflow_engine=workflow_engine)
+    global _ACTIVE_SCHEDULER
+    _ACTIVE_SCHEDULER = scheduler
     hooks = EventHooks(config, runner, workflow_engine=workflow_engine)
 
     # Channel-bus debouncer: submits fleet surfaces, fires CHANNEL_EVENT wake
