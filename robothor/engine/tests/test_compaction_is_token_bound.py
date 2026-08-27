@@ -143,7 +143,7 @@ class TestTheCallerDoesNotReImplementTheFloor:
         )
 
 
-class TestTheDefaultThresholdIsNeverRelied_On:
+class TestNoCallerRelinesOnTheDefaultThreshold:
     """COMPRESS_THRESHOLD is 80,000. The local tier's window is 65,536.
 
     Every production caller passes an explicit, model-aware threshold today
@@ -167,13 +167,13 @@ class TestTheDefaultThresholdIsNeverRelied_On:
                 tree = ast.parse(py.read_text())
             except SyntaxError:
                 continue
-            for n in ast.walk(tree):
-                if (
-                    isinstance(n, ast.Call)
-                    and getattr(n.func, "id", getattr(n.func, "attr", "")) == "maybe_compress"
-                    and not any(k.arg == "threshold" for k in n.keywords)
-                ):
-                    offenders.append(f"{py.name}:{n.lineno}")
+            offenders.extend(
+                f"{py.name}:{n.lineno}"
+                for n in ast.walk(tree)
+                if isinstance(n, ast.Call)
+                and getattr(n.func, "id", getattr(n.func, "attr", "")) == "maybe_compress"
+                and not any(k.arg == "threshold" for k in n.keywords)
+            )
         assert not offenders, (
             "maybe_compress called without an explicit threshold at "
             f"{offenders} — the 80,000 default is larger than the local tier's "
