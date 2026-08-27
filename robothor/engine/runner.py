@@ -53,6 +53,7 @@ from robothor.engine.context_budget import keep_context_within_budget
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
 from robothor.engine.deliverables import deadline_note, task_text_from  # noqa: E402
+from robothor.engine.error_actions import apply_error_recovery
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 
 # LLM dispatch/cost/streaming + the request-timeout constants now live in
@@ -2452,83 +2453,26 @@ class AgentRunner(
                     )
 
             # ── [ERROR RECOVERY] Attempt autonomous recovery before escalation ──
-            recovery_applied = False
-            if iteration_errors and not readonly_mode:
-                from robothor.engine.error_recovery import get_recovery_action
-
-                for err_tool, err_msg, err_type in iteration_errors:
-                    if err_type is None:
-                        continue
-                    consec = escalation.consecutive_errors if escalation else 1
-                    logger.debug(
-                        "Error recovery: tool=%s type=%s consecutive=%d spawns_used=%d",
-                        err_tool,
-                        err_type,
-                        consec,
-                        _helper_spawns_used,
-                    )
-                    action = get_recovery_action(
-                        error_type=err_type,
-                        consecutive_count=consec,
-                        agent_config=agent_config,
-                        tool_name=err_tool,
-                        error_msg=err_msg,
-                        helper_spawns_used=_helper_spawns_used,
-                    )
-                    if action is None:
-                        continue
-                    logger.debug("Error recovery: action=%s for %s", action.action, err_tool)
-
-                    if action.action == "backoff":
-                        await asyncio.sleep(action.delay_seconds)
-                        session.messages.append(
-                            {
-                                "role": ENGINE_CONTEXT_ROLE,
-                                "content": f"[SYSTEM] {action.message} Retrying now.",
-                            }
-                        )
-                        recovery_applied = True
-
-                    elif action.action == "retry":
-                        session.messages.append(
-                            {
-                                "role": ENGINE_CONTEXT_ROLE,
-                                "content": f"[SYSTEM] {action.message}",
-                            }
-                        )
-                        recovery_applied = True
-
-                    elif action.action == "spawn" and agent_config.can_spawn_agents:
-                        logger.debug("Error recovery: spawning helper for %s", err_tool)
-                        helper_result = await self._spawn_recovery_helper(
-                            agent_config=agent_config,
-                            session=session,
-                            action=action,
-                            spawn_context=spawn_context,
-                            trace=trace,
-                        )
-                        if helper_result:
-                            _helper_spawns_used += 1
-                            session.messages.append(
-                                {
-                                    "role": ENGINE_CONTEXT_ROLE,
-                                    "content": (
-                                        f"[ERROR RECOVERY — Helper agent result]\n"
-                                        f"{helper_result}\n\n"
-                                        "Use this information to adjust your approach."
-                                    ),
-                                }
-                            )
-                            recovery_applied = True
-
-                    elif action.action == "inject":
-                        session.messages.append(
-                            {
-                                "role": ENGINE_CONTEXT_ROLE,
-                                "content": f"[SYSTEM — Recovery guidance] {action.message}",
-                            }
-                        )
-                        recovery_applied = True
+            # robothor/engine/error_actions.py. `applied` suppresses the error
+            # feedback below: doing both tells the agent to analyse a failure
+            # the platform has just handled.
+            _recovery = await apply_error_recovery(
+                session,
+                agent_config,
+                iteration_errors=iteration_errors,
+                escalation=escalation,
+                readonly_mode=readonly_mode,
+                helper_spawns_used=_helper_spawns_used,
+                spawn_helper=lambda action: self._spawn_recovery_helper(
+                    agent_config=agent_config,
+                    session=session,
+                    action=action,
+                    spawn_context=spawn_context,
+                    trace=trace,
+                ),
+            )
+            recovery_applied = _recovery.applied
+            _helper_spawns_used = _recovery.helper_spawns_used
 
             # ── [ERROR FEEDBACK] Inject analysis prompt on errors ──
             if iteration_errors and agent_config.error_feedback and not recovery_applied:
