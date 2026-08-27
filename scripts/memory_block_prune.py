@@ -73,8 +73,13 @@ def prune(candidates: list[dict], *, apply: bool) -> dict:
                 "SELECT %s, %s, %s, %s, %s, %s, 'never_read', content "
                 "FROM agent_memory_blocks WHERE id = %s",
                 (
-                    c["tenant_id"], c["id"], c["block_name"], c["block_type"],
-                    c["chars"], c["write_count"], c["id"],
+                    c["tenant_id"],
+                    c["id"],
+                    c["block_name"],
+                    c["block_type"],
+                    c["chars"],
+                    c["write_count"],
+                    c["id"],
                 ),
             )
         cur.execute(
@@ -94,21 +99,26 @@ def main() -> int:
 
     report = live_tier_report()
     print("TIER 1 CONTEXT BUDGET")
-    print(f"  {report['total_blocks']} blocks, {report['total_chars']:,} chars, "
-          f"~{report['total_tokens']:,} tokens (mode: {report['mode']})")
+    print(
+        f"  {report['total_blocks']} blocks, {report['total_chars']:,} chars, "
+        f"~{report['total_tokens']:,} tokens (mode: {report['mode']})"
+    )
     for tier, s in sorted(report["by_tier"].items(), key=lambda kv: -kv[1]["tokens"]):
         print(f"    {tier:<14} {s['blocks']:>5} blocks  ~{s['tokens']:>9,} tok")
     print(f"  over budget: {len(report['over_budget'])} blocks")
     for b in report["over_budget"][:10]:
-        print(f"    {str(b['block_name'])[:44]:<44} {b['content_chars']:>8,} / "
-              f"{b['max_chars']:,} (+{b['overflow_chars']:,})")
+        print(
+            f"    {str(b['block_name'])[:44]:<44} {b['content_chars']:>8,} / "
+            f"{b['max_chars']:,} (+{b['overflow_chars']:,})"
+        )
 
     cands = find_candidates(args.min_age_days)
     print(f"\nWRITE-ONLY BLOCKS (never read, >{args.min_age_days}d old, unprotected)")
     print(f"  candidates: {len(cands)}, {sum(c['chars'] or 0 for c in cands):,} chars")
     for c in cands[:10]:
-        print(f"    {str(c['block_name'])[:44]:<44} {c['chars']:>8,} chars  "
-              f"{c['write_count']} writes")
+        print(
+            f"    {str(c['block_name'])[:44]:<44} {c['chars']:>8,} chars  {c['write_count']} writes"
+        )
 
     result = prune(cands, apply=args.apply)
     print(f"\n{'APPLIED' if args.apply else 'DRY RUN'}: {result}")

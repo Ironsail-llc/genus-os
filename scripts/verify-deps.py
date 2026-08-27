@@ -124,7 +124,7 @@ def main():
 
     # Check services manifest
     print()
-    with open(manifest_path) as f:
+    with manifest_path.open() as f:
         manifest = json.load(f)
     print(f"  Service manifest: {len(manifest.get('services', {}))} services defined")
 

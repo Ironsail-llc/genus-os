@@ -52,9 +52,7 @@ LEAK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # UUID literal. A match embedded in a longer digit/hex/hyphen run is an
     # identifier, not a phone number.
     (
-        re.compile(
-            r"(?<![\d.\-])\+?1?\s*[-.(]?\d{3}[-.)]\s*\d{3}[-.]?\d{4}(?![\d.\-])"
-        ),
+        re.compile(r"(?<![\d.\-])\+?1?\s*[-.(]?\d{3}[-.)]\s*\d{3}[-.]?\d{4}(?![\d.\-])"),
         "possible phone number — move to brain/CLAUDE.md or .env",
     ),
     # Street addresses

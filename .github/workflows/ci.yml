@@ -74,8 +74,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff==0.15.2
-      - run: ruff check robothor/
-      - run: ruff format --check robothor/
+      # bench/ and scripts/ were outside the gate, and scripts/ had quietly
+      # drifted to 4 lint errors and 5 unformatted files. The benchmark
+      # harness decides the project's competitive numbers and scripts/ holds
+      # the backup and release machinery — neither is less load-bearing than
+      # the package.
+      - run: ruff check robothor/ bench/ scripts/
+      - run: ruff format --check robothor/ bench/ scripts/
 
   typecheck:
     runs-on: ubuntu-latest
