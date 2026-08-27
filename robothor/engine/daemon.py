@@ -352,9 +352,16 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
         # now something the transport routes TO, not the thing held directly.
         from robothor.federation.transport import FederationTransport, set_transport
 
-        transport = FederationTransport(hub_url=nats_url)
+        # The engine's own credential for its own broker. Empty means an
+        # unauthenticated server, which is only safe on loopback — and is what
+        # this box ran until the leafnode listener was removed.
+        hub_auth: dict[str, Any] = {}
+        if fed_config.nats_user:
+            hub_auth = {"user": fed_config.nats_user, "password": fed_config.nats_password}
 
-        nats_mgr = NATSManager(nats_url)
+        transport = FederationTransport(hub_url=nats_url, hub_options=hub_auth)
+
+        nats_mgr = NATSManager(nats_url, **hub_auth)
         connected = await nats_mgr.connect()
         if connected:
             # Register the singleton HERE, not at the call site.

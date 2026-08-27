@@ -61,18 +61,28 @@ def create_run(run: AgentRun) -> str:
             cur.execute(
                 """
                 INSERT INTO agent_runs (
-                    id, tenant_id, agent_id, trigger_type, trigger_detail,
-                    correlation_id, status, started_at, model_used,
-                    system_prompt_chars, user_prompt_chars, tools_provided,
-                    delivery_mode, parent_run_id, nesting_depth, task_id,
-                    person_id
+                    id, tenant_id, user_id, user_role, agent_id, trigger_type,
+                    trigger_detail, correlation_id, status, started_at,
+                    model_used, system_prompt_chars, user_prompt_chars,
+                    tools_provided, delivery_mode, parent_run_id,
+                    nesting_depth, task_id, person_id
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s
                 )
                 """,
                 (
                     run.id,
                     run.tenant_id,
+                    # Who caused this run. The columns existed and AgentRun
+                    # carried the values, but neither create_run nor update_run
+                    # ever wrote them: all 6,144 runs in the 30 days to
+                    # 2026-08-27 have an empty user_role. Without this a
+                    # federation trigger is indistinguishable from any other
+                    # run, which makes the authorization model unauditable in
+                    # exactly the case it was built for.
+                    run.user_id,
+                    run.user_role,
                     run.agent_id,
                     run.trigger_type.value
                     if hasattr(run.trigger_type, "value")

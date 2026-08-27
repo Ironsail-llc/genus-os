@@ -105,9 +105,7 @@ async def test_the_stall_clock_pauses_rather_than_resets():
 @pytest.mark.asyncio
 async def test_an_in_flight_call_does_not_disarm_the_early_stall_guard():
     """A call in flight has produced nothing, so it is not output."""
-    wd = _StallWatchdog(
-        stall_timeout=0, hard_timeout=0, early_stall_timeout=1, tick_seconds=0.05
-    )
+    wd = _StallWatchdog(stall_timeout=0, hard_timeout=0, early_stall_timeout=1, tick_seconds=0.05)
 
     async def victim() -> None:
         wd.begin_wait("llm_inflight:m", 0.4)
@@ -189,9 +187,7 @@ async def test_a_fully_disabled_watchdog_is_not_woken_by_a_wait_window():
     is real. Production still gets overrun protection because the runner always
     passes a positive hard_timeout (the effective fleet ceiling).
     """
-    wd = _StallWatchdog(
-        stall_timeout=0, hard_timeout=0, early_stall_timeout=0, tick_seconds=0.05
-    )
+    wd = _StallWatchdog(stall_timeout=0, hard_timeout=0, early_stall_timeout=0, tick_seconds=0.05)
 
     async def victim() -> None:
         wd.begin_wait("llm_inflight:m", 0.1)

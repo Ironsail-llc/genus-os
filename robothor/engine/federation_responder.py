@@ -227,8 +227,19 @@ async def _handshake(
         except Exception:  # noqa: BLE001 - persistence must not undo the pairing
             logger.exception("Federation: could not persist activation of %s", connection.id)
 
+    # Signing the ack can fail for its own reasons (no identity on disk, an
+    # unreadable key). Outside the try it escaped to the NATS layer and the
+    # peer received the generic "handler failed" — which says nothing about
+    # what to fix, on the one code path an operator hits while pairing.
+    try:
+        ack = build_ack(config, connection)
+    except Exception as e:  # noqa: BLE001
+        _audit(HANDSHAKE_OP, principal_id, tenant_id, "error", f"ack: {type(e).__name__}")
+        logger.exception("Federation: activated %s but could not sign the ack", connection.id)
+        return _err(f"handshake verified but the ack could not be signed: {e}")
+
     _audit(HANDSHAKE_OP, principal_id, tenant_id, "ok", "activated")
-    return build_ack(config, connection)
+    return ack
 
 
 def _err(msg: str) -> bytes:

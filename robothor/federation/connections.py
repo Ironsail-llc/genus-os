@@ -169,6 +169,15 @@ def save_connection(conn: Connection) -> None:
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
+                -- The issuer writes its row BEFORE it knows who will redeem
+                -- the invite; the handshake is where it learns. Without these
+                -- four the identity it just verified is dropped on the floor,
+                -- and the connection has no peer key to verify anything
+                -- against after a restart.
+                peer_id = EXCLUDED.peer_id,
+                peer_name = EXCLUDED.peer_name,
+                peer_endpoint = EXCLUDED.peer_endpoint,
+                peer_public_key = EXCLUDED.peer_public_key,
                 state = EXCLUDED.state,
                 exports = EXCLUDED.exports,
                 imports = EXCLUDED.imports,

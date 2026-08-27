@@ -248,7 +248,9 @@ class _StallWatchdog:
                 # Time inside a bounded wait is attributed, not invented: the
                 # idle clock pauses and the early-stall clock discounts it,
                 # because another layer's ceiling already governs that await.
-                idle = max(0.0, now - self._last_activity - self._attributed_since_touch - wait_elapsed)
+                idle = max(
+                    0.0, now - self._last_activity - self._attributed_since_touch - wait_elapsed
+                )
                 progress_elapsed = max(0.0, elapsed - self._attributed_total - wait_elapsed)
                 self._trace(
                     f"tick elapsed={elapsed:.0f} idle={idle:.0f} hard={self._hard_timeout} "
