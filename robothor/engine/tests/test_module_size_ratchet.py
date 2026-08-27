@@ -38,7 +38,7 @@ CAPS = {
     # arrived with were hoisted to the module header (run_budget was already
     # imported there, so they bought nothing) — which paid back four of the
     # five lines this would otherwise have cost.
-    "robothor/engine/runner.py": 2957,
+    "robothor/engine/runner.py": 2938,
     # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
     # Lowered again after phase 3b (_setup_handlers closures -> methods).
     "robothor/engine/telegram.py": 2000,

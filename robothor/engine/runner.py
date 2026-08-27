@@ -87,6 +87,7 @@ from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 # ── Log-injection sanitizer ──
 # CodeQL py/log-injection: user-controlled values (model names, error
 # messages) must not inject newlines into log output.
+from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
 from robothor.engine.stall_watchdog import (
@@ -461,19 +462,6 @@ from robothor.engine.model_registry import register_pricing_with_litellm  # noqa
 register_pricing_with_litellm()
 
 
-def _agent_holds_exec(config: AgentConfig) -> bool:
-    """True if the agent can call the ``exec`` tool (i.e. touches the host shell).
-
-    An empty ``tools_allowed`` means the agent receives the full tool set
-    (including ``exec``); a ``tools_denied`` entry removes it.
-    """
-    denied = set(config.tools_denied or [])
-    if "exec" in denied:
-        return False
-    allowed = config.tools_allowed or []
-    return "exec" in allowed or not allowed
-
-
 def should_create_auto_task(config: AgentConfig, spawn_context: SpawnContext | None) -> bool:
     """True when this run should file its operator-facing ``auto_task`` CRM row.
 
@@ -494,21 +482,12 @@ def should_create_auto_task(config: AgentConfig, spawn_context: SpawnContext | N
     return not getattr(config, "is_benchmark", False)
 
 
-def _resolve_sandbox_decision(config: AgentConfig, mode: str) -> str:
-    """Decide sandboxing for a run. Returns 'docker' | 'observe' | 'host'.
-
-    'docker' = start a Docker sandbox; 'observe' = an exec-holding agent that
-    WOULD be sandboxed but runs on host (caller logs it); 'host' = run on host.
-    ``mode`` is ``sandbox_default_mode()``. Explicit manifest ``sandbox: docker``
-    always sandboxes; ``sandbox: host`` always opts out.
-    """
-    if config.sandbox == "docker":
-        return "docker"
-    if config.sandbox == "host":
-        return "host"
-    if mode != "off" and _agent_holds_exec(config):
-        return "docker" if mode == "enforce" else "observe"
-    return "host"
+# Sandbox policy lives in robothor/engine/sandbox_policy.py. Re-exported here
+# because callers and tests already import these names from the runner, and
+# because `sandbox: host` silently beating `enforce` deserved its own module
+# with its own tests rather than ten more lines in a god-object.
+_agent_holds_exec = agent_holds_exec
+_resolve_sandbox_decision = resolve_sandbox_decision
 
 
 #: Fraction of a run's wall-clock ceiling at which the agent is told to wrap
@@ -1372,7 +1351,9 @@ class AgentRunner(
                 # image degrades to the host via the try/except below.
                 from robothor.engine.feature_flags import sandbox_default_mode
 
-                _sb_decision = _resolve_sandbox_decision(agent_config, sandbox_default_mode())
+                _sb_decision = _resolve_sandbox_decision(
+                    agent_config, sandbox_default_mode(), agent_id=agent_id
+                )
                 if _sb_decision == "observe":
                     try:
                         from robothor.engine.tracking import log_guardrail_event
