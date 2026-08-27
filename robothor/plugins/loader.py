@@ -46,6 +46,9 @@ _GROUPS = {
     # so an instance shipping its own operational command had to patch the
     # platform to expose it.
     "genus.commands": "commands",
+    # Sandbox runtimes. Unlike every other group here, an installed backend
+    # is INERT until the operator names it — see sandbox.active_sandbox_backend.
+    "genus.sandboxes": "sandboxes",
 }
 
 
@@ -69,6 +72,7 @@ class PluginSet:
     models: dict[str, Any] = field(default_factory=dict)
     jobs: dict[str, Any] = field(default_factory=dict)
     commands: dict[str, Any] = field(default_factory=dict)
+    sandboxes: dict[str, Any] = field(default_factory=dict)
     loaded: list[Any] = field(default_factory=list)
     failures: list[PluginFailure] = field(default_factory=list)
 
@@ -81,6 +85,7 @@ class PluginSet:
             "genus.models": self.models,
             "genus.jobs": self.jobs,
             "genus.commands": self.commands,
+            "genus.sandboxes": self.sandboxes,
         }[group]
 
 
