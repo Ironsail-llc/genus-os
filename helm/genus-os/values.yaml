@@ -394,7 +394,9 @@ nats:
     tag: "2.10-alpine"
     pullPolicy: IfNotPresent
   clientPort: 4222
-  leafPort: 7422
+  # leafPort removed 2026-08-27: an unauthenticated leafnode listener binds into
+  # the global $G account alongside the engine's own client, including $JS.API.
+  # Federation v1 uses per-connection accounts over the client port instead.
   monitorPort: 8222
   jetstream:
     enabled: true

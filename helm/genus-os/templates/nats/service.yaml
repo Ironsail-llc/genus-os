@@ -11,9 +11,6 @@ spec:
     - name: client
       port: {{ .Values.nats.clientPort }}
       targetPort: client
-    - name: leaf
-      port: {{ .Values.nats.leafPort }}
-      targetPort: leaf
     - name: monitor
       port: {{ .Values.nats.monitorPort }}
       targetPort: monitor

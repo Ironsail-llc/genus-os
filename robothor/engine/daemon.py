@@ -513,7 +513,15 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
             return None
 
         if not nats_url:
-            logger.info("Federation: %d connections but no NATS URL configured", len(connections))
+            # Configured-but-dead. This is NOT the quiet case above: rows exist,
+            # so an operator believes this instance is federated. It has been in
+            # exactly this state since 2026-03-09 with nothing louder than an
+            # info line, which is why five months of total silence read as normal.
+            await _alert_federation_dead(
+                f"{len(connections)} federation connection(s) configured but no NATS "
+                f"URL is set, so none can attach. This instance is NOT federated. "
+                f"Set nats_url in federation.yaml or ROBOTHOR_NATS_URL."
+            )
             return None
 
         nats_mgr = NATSManager(nats_url)
@@ -533,13 +541,40 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
 
                         await nats_mgr.serve_requests(conn.id, make_command_handler(conn, runner))
         else:
-            logger.warning("Federation: NATS connection failed, federation disabled")
+            await _alert_federation_dead(
+                f"NATS connection to {nats_url} failed, so {len(connections)} "
+                f"configured federation connection(s) are dead. This instance is "
+                f"NOT federated."
+            )
             return None
 
         return nats_mgr
     except Exception as e:
-        logger.warning("Federation startup failed (non-fatal): %s", e)
+        # A crash here used to be a warning line. If connections are configured,
+        # the operator needs to know federation is down, not find out months later.
+        logger.exception("Federation startup failed (non-fatal)")
+        await _alert_federation_dead(f"Federation startup raised {type(e).__name__}: {e}")
         return None
+
+
+async def _alert_federation_dead(detail: str) -> None:
+    """Page when federation is configured but not carrying traffic.
+
+    Deliberately NOT fired when there are no connections at all -- an instance
+    that was never federated is not broken, and paging every single-box install
+    would train the operator to mute the channel. The signal is the gap between
+    "rows exist" and "transport attached".
+    """
+    try:
+        from robothor.engine.alerts import alert
+
+        await alert(
+            "critical",
+            "Federation is configured but not connected",
+            f"{detail}\n\nCheck: robothor federation status",
+        )
+    except Exception:  # noqa: BLE001 - an alert must never break daemon startup
+        logger.exception("could not alert on dead federation")
 
 
 async def _maybe_run_alert_selftest() -> None:
