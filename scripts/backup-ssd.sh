@@ -117,6 +117,55 @@ ollama list > "$BACKUP_ROOT/latest/ollama-models.txt" 2>> "$LOG"
 
 # ── Verification manifest ───────────────────────────────────────
 
+# ── Docker volumes ───────────────────────────────────────────────
+# Until 2026-08-27 this directory was created and left empty while the manifest
+# printed a HARDCODED `echo "  (none)"` -- so 4.3GB across 8 named volumes
+# (Impetus One's Postgres, uptime-kuma's config, kokoro's models,
+# programmatic-resources' pgdata) had NO backup at all, and the report stated
+# that as if there were nothing to protect. A manifest that prints a constant is
+# worse than one with a missing section.
+#
+# Runs BEFORE the manifest block below, which reads the .manifest it writes.
+backup_docker_volumes() {
+    local out="$BACKUP_ROOT/docker-volumes"
+    local man="$out/.manifest"
+    : > "$man"
+
+    # `command -v docker` only proves the BINARY exists. This service runs as a
+    # user deliberately not in the docker group, so the daemon socket needs
+    # sudo. The first version checked the binary, got permission denied from the
+    # daemon, and silently wrote an empty manifest. Probe the real capability.
+    local DOCKER="docker"
+    if ! docker volume ls >/dev/null 2>&1; then
+        if sudo -n docker volume ls >/dev/null 2>&1; then
+            DOCKER="sudo -n docker"
+        else
+            echo "  ERROR: cannot reach the docker daemon (tried direct and sudo -n)" >> "$man"
+            log "ERROR: docker volumes NOT backed up -- no daemon access"
+            return 1
+        fi
+    fi
+
+    local count=0 failed=0
+    while read -r vol; do
+        [ -n "$vol" ] || continue
+        # Anonymous volumes are 64 hex chars and docker recreates them.
+        if printf '%s' "$vol" | grep -qE '^[0-9a-f]{64}$'; then continue; fi
+        if $DOCKER run --rm -v "$vol":/src:ro -v "$out":/dst alpine:latest \
+             tar czf "/dst/${vol}.tar.gz" -C /src . 2>/dev/null; then
+            echo "  $vol: $(du -h "$out/${vol}.tar.gz" 2>/dev/null | cut -f1)" >> "$man"
+            count=$((count + 1))
+        else
+            echo "  $vol: FAILED" >> "$man"
+            failed=$((failed + 1))
+        fi
+    done < <($DOCKER volume ls --format '{{.Name}}')
+
+    log "Docker volumes: $count backed up, $failed failed"
+    [ "$failed" -eq 0 ]
+}
+backup_docker_volumes || log "WARNING: docker volume backup incomplete"
+
 {
     echo "# Robothor Backup Manifest — $TIMESTAMP"
     echo ""
@@ -134,7 +183,11 @@ ollama list > "$BACKUP_ROOT/latest/ollama-models.txt" 2>> "$LOG"
     done
     echo ""
     echo "## Docker Volumes"
-    echo "  (none)"
+    if [ -s "$BACKUP_ROOT/docker-volumes/.manifest" ]; then
+        cat "$BACKUP_ROOT/docker-volumes/.manifest"
+    else
+        echo "  (none backed up)"
+    fi
     echo ""
     echo "## SSD Space"
     df -h "$SSD_MOUNT" | tail -1
