@@ -280,6 +280,7 @@ def _describe_exception(e: BaseException) -> tuple[str, bool]:
             )
     return (f"{type(e).__name__}: {e}", True)
 
+
 def normalise_arguments(
     arguments: dict[str, Any], properties: dict[str, Any] | None
 ) -> dict[str, Any]:
