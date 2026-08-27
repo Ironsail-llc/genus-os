@@ -36,11 +36,15 @@ logger = logging.getLogger(__name__)
 class GuardState:
     """Guard state the loop carries between iterations.
 
-    Only the soft runaway alert needs it: the loop runs these checks every
+    Both fields are one-shot latches for things that must be SAID once while
+    the behaviour behind them continues: the loop runs its checks every
     iteration, and without a latch the 500K warning would fire on every one.
     """
 
     runaway_alerted: bool = False
+    #: Whether the agent has already been told a credential was found. The
+    #: REDACTION that accompanies it is not latched — only the notice is.
+    secret_notified: bool = False
 
 
 def check_iteration_guards(
