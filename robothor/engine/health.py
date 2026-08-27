@@ -835,12 +835,40 @@ def create_health_app(
                 raise RuntimeError(f"required agents missing: {', '.join(sorted(missing))}")
             return "ok"
 
+        async def check_federation() -> str:
+            """Federation is ready when every link that says it is running,
+            is. An instance with no connections is ready — most are.
+
+            Deliberately reports the gap between "rows exist" and "transport
+            attached", because that gap was invisible for five months and
+            `federation status` agreed with the wrong answer the whole time.
+            """
+            import asyncio
+
+            from robothor.federation.connections import load_connections
+            from robothor.federation.health import fleet_health
+
+            connections = await asyncio.to_thread(load_connections)
+            summary = fleet_health(connections)
+            if summary.healthy:
+                return "ok"
+            broken = [
+                f"{c.peer_name or c.id[:12]}: {h.verdict.value}"
+                for c, h in summary.links
+                if h.alarming
+            ]
+            raise RuntimeError(
+                f"{summary.alarming} of {summary.total} federation link(s) are not "
+                f"carrying traffic ({'; '.join(broken)})"
+            )
+
         try:
             checks: dict[str, Any] = {
                 "database": check_db,
                 "redis": check_redis,
                 "schedules": check_schedules,
                 "fleet": check_fleet,
+                "federation": check_federation,
             }
             body, status = await readiness_response("engine", __version__, checks)
             return JSONResponse(body, status_code=status)

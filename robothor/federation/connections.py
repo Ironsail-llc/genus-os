@@ -288,3 +288,29 @@ def delete_connection(connection_id: str) -> bool:
     except Exception as e:
         logger.warning("Failed to delete connection: %s", e)
         return False
+
+
+def touch_last_seen(connection_id: str, *, error: str = "") -> bool:
+    """Record that the transport for this link was verified alive just now.
+
+    Deliberately its own tiny write rather than a full `save_connection`: the
+    heartbeat runs for every link on a schedule, and it must not race a
+    concurrent export change by rewriting the whole row.
+    """
+    try:
+        from robothor.db.connection import get_connection
+
+        with get_connection() as db:
+            cur = db.cursor()
+            cur.execute(
+                "UPDATE federation_connections "
+                "SET last_seen_at = NOW(), last_error = %s, updated_at = NOW() "
+                "WHERE id = %s",
+                (error or None, connection_id),
+            )
+            touched: bool = cur.rowcount > 0
+            db.commit()
+        return touched
+    except Exception as e:
+        logger.warning("Failed to touch last_seen_at for %s: %s", connection_id, e)
+        return False

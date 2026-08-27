@@ -77,21 +77,47 @@ def cmd_federation(args: argparse.Namespace) -> int:
         if not identity:
             print("No instance identity. Run: robothor federation init")
             return 1
+        from robothor.federation.health import fleet_health
+
         print(f"Instance: {identity.display_name} ({identity.id[:12]}...)")
         print()
         connections = load_connections()
         if not connections:
             print("No connections.")
             return 0
-        for conn in connections:
+
+        # `state` records that a link was once established. It cannot say
+        # whether the transport exists now, and printing it alone is what made
+        # a five-month outage look like a healthy fleet. The verdict below
+        # comes from last_seen_at, which only the daemon writes and only when
+        # it has actually verified the wire.
+        summary = fleet_health(connections)
+        for conn, health in summary.links:
+            peer = conn.peer_name or "(unpaired)"
             print(
-                f"  {conn.peer_name:<24} {conn.state.value:<12} {conn.relationship.value:<8} {conn.id[:12]}..."
+                f"  {peer:<24} {conn.state.value:<10} {health.verdict.value:<15} "
+                f"{conn.relationship.value:<8} {conn.id[:12]}..."
             )
+            print(f"    {health.detail}")
+            if conn.last_error:
+                print(f"    last error: {conn.last_error}")
             if conn.exports:
                 print(f"    exports: {', '.join(conn.exports)}")
             if conn.imports:
                 print(f"    imports: {', '.join(conn.imports)}")
-        print(f"\n{len(connections)} connection(s)")
+
+        print(
+            f"\n{summary.total} connection(s), {summary.attached} carrying traffic"
+            + (f", {summary.alarming} NOT ATTACHED" if summary.alarming else "")
+        )
+        if summary.alarming:
+            print(
+                "\nThis instance is not federated on the links above, whatever "
+                "their state column says. Check the engine log for "
+                "'Federation:' lines, and that ROBOTHOR_NATS_URL and "
+                "ROBOTHOR_NATS_USER/PASSWORD are set for the daemon."
+            )
+            return 1
         return 0
 
     if sub == "list":

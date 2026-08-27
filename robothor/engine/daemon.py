@@ -418,6 +418,14 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
                         pairing += 1
                     else:
                         attached += 1
+                        # `last_seen_at` is the only honest answer to "is this
+                        # link alive?", and it is written ONLY where the
+                        # transport has actually been verified — here and in
+                        # the heartbeat. Anything looser turns it into a record
+                        # of the writer running.
+                        from robothor.federation.connections import touch_last_seen
+
+                        await asyncio.to_thread(touch_last_seen, conn.id)
                         if conn.direction == "inbound":
                             await nats_mgr.ensure_stream(conn.id)
 
@@ -456,6 +464,23 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
         logger.exception("Federation startup failed (non-fatal)")
         await _alert_federation_dead(f"Federation startup raised {type(e).__name__}: {e}")
         return None
+
+
+async def _federation_heartbeat() -> None:
+    """Keep `last_seen_at` truthful, and page when a link drops.
+
+    Runs unconditionally: an instance with no connections falls straight
+    through, and an instance whose transport died is exactly the case that went
+    unnoticed from 2026-03-09 to 2026-08-27.
+    """
+    from robothor.federation.heartbeat import heartbeat_loop
+
+    try:
+        await heartbeat_loop()
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        logger.exception("Federation heartbeat stopped")
 
 
 async def _alert_federation_dead(detail: str) -> None:
@@ -895,6 +920,7 @@ async def main() -> int:
         ),
         asyncio.create_task(_watchdog(config, scheduler, workflow_engine), name="watchdog"),
         asyncio.create_task(_autodream_loop(), name="autodream"),
+        asyncio.create_task(_federation_heartbeat(), name="federation-heartbeat"),
         asyncio.create_task(_curiosity_density_loop(scheduler), name="curiosity-density"),
         asyncio.create_task(_curator_loop(scheduler), name="curator"),
         asyncio.create_task(_extension_watcher_loop(), name="extensions"),

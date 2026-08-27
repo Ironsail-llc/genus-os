@@ -66,6 +66,7 @@ def test_ready_accepts_required_agent(tmp_path):
         patch("robothor.db.connection.get_connection"),
         patch("robothor.engine.tracking.list_schedules", return_value=[]),
         patch("robothor.engine.config.load_all_manifests", return_value=[{"id": "main"}]),
+        patch("robothor.federation.connections.load_connections", return_value=[]),
         patch("redis.asyncio.Redis", return_value=redis_client),
     ):
         response = _client(config).get("/ready")
