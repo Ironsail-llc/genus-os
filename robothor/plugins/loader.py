@@ -38,6 +38,10 @@ _GROUPS = {
     # times in one benchmark run here. Plugins extend coverage; they never
     # overwrite a curated entry (see model_registry.get_model_limits).
     "genus.models": "models",
+    # Background work. Everything the engine runs on a schedule was
+    # registered from inside the package, so a third-party capability could
+    # contribute a tool but nothing that runs on its own.
+    "genus.jobs": "jobs",
 }
 
 
@@ -59,6 +63,7 @@ class PluginSet:
     guardrails: dict[str, Any] = field(default_factory=dict)
     hooks: dict[str, Any] = field(default_factory=dict)
     models: dict[str, Any] = field(default_factory=dict)
+    jobs: dict[str, Any] = field(default_factory=dict)
     loaded: list[Any] = field(default_factory=list)
     failures: list[PluginFailure] = field(default_factory=list)
 
@@ -69,6 +74,7 @@ class PluginSet:
             "genus.guardrails": self.guardrails,
             "genus.hooks": self.hooks,
             "genus.models": self.models,
+            "genus.jobs": self.jobs,
         }[group]
 
 

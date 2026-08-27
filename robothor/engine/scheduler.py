@@ -57,7 +57,54 @@ logger = logging.getLogger(__name__)
 #: Prefix-based rather than an id allowlist on purpose: the registration sites
 #: are already namespaced, so a future ``memory:*`` job is protected by
 #: construction. An allowlist is the thing that rots.
-_SYSTEM_JOB_PREFIXES: tuple[str, ...] = ("workflow:", "memory:")
+_SYSTEM_JOB_PREFIXES: tuple[str, ...] = ("workflow:", "memory:", "plugin:")
+
+
+#: Prefix for jobs a plugin contributed. Namespaced into
+#: ``_SYSTEM_JOB_PREFIXES`` above so ``reconcile_schedules`` never culls
+#: them: reconcile rebuilds the live set from what the manifests declare,
+#: and a manifest cannot know about a plugin's job. That is precisely how
+#: ``memory:write-job-sweeper`` came to run for at most five minutes per
+#: engine lifetime.
+PLUGIN_JOB_PREFIX = "plugin:"
+
+
+def plugin_job_specs() -> dict[str, dict[str, Any]]:
+    """Schedulable jobs contributed by installed plugins.
+
+    Each entry needs a 5-field cron expression and a callable. Anything
+    malformed is dropped with a warning rather than raised — a third-party
+    package must not be able to stop the scheduler from starting, which is
+    the rule every other plugin seam here follows.
+    """
+    try:
+        from robothor.plugins import load_plugins
+
+        loaded = load_plugins(reserved_names=set())
+    except Exception as exc:  # noqa: BLE001 - plugins must not break scheduling
+        logger.warning("Plugin jobs unavailable: %s", exc)
+        return {}
+
+    specs: dict[str, dict[str, Any]] = {}
+    for name, spec in (loaded.jobs or {}).items():
+        if not isinstance(spec, dict):
+            logger.warning("Plugin job %r skipped: expected a mapping", name)
+            continue
+        cron = spec.get("cron")
+        func = spec.get("func")
+        if not isinstance(cron, str) or not cron.strip():
+            logger.warning("Plugin job %r skipped: no cron expression", name)
+            continue
+        if not callable(func):
+            logger.warning("Plugin job %r skipped: 'func' is not callable", name)
+            continue
+        try:
+            CronTrigger.from_crontab(cron)
+        except Exception as exc:  # noqa: BLE001 - a bad cron is the plugin's bug
+            logger.warning("Plugin job %r skipped: bad cron %r (%s)", name, cron, exc)
+            continue
+        specs[f"{PLUGIN_JOB_PREFIX}{name}"] = dict(spec)
+    return specs
 
 
 def _is_agent_job(job_id: str) -> bool:
@@ -458,6 +505,14 @@ class CronScheduler:
             logger.warning("could not register memory vault projection: %s", e)
 
         await self._register_workflow_cron_jobs()
+
+        # Jobs contributed by installed plugins. Namespaced under `plugin:`
+        # so reconcile leaves them alone; re-run on SIGHUP so a package
+        # installed while the engine is up starts on schedule.
+        try:
+            self.register_plugin_jobs()
+        except Exception as e:  # never let a plugin stop the scheduler booting
+            logger.warning("could not register plugin jobs: %s", e)
 
         # Catch up cron occurrences missed while the daemon was down. The
         # in-memory jobstore has no record of these — misfire_grace_time only
@@ -1285,6 +1340,50 @@ class CronScheduler:
                     pruned.append(job.id)
 
         return pruned
+
+    def register_plugin_jobs(self) -> int:
+        """Schedule every job installed plugins contribute; return the count.
+
+        Called at startup and again after a plugin reload, so it is
+        idempotent in both directions: an already-scheduled job is replaced
+        rather than duplicated, and a job whose plugin has been uninstalled
+        is removed. ``replace_existing`` covers the first; the withdrawal
+        sweep covers the second, which ``replace_existing`` alone cannot.
+        """
+        specs = plugin_job_specs()
+        wanted = set(specs)
+
+        # Clear every plugin job first, then add the current set. Not just
+        # the withdrawn ones, and not `replace_existing` alone: before the
+        # scheduler is started APScheduler holds additions as *pending*, and
+        # pending jobs are not de-duplicated by `replace_existing`, so the
+        # startup call followed by a reload would register each job twice.
+        for job in list(self.scheduler.get_jobs()):
+            if job.id.startswith(PLUGIN_JOB_PREFIX):
+                if job.id not in wanted:
+                    logger.info("Plugin job %s withdrawn — its plugin is gone", job.id)
+                with contextlib.suppress(Exception):
+                    job.remove()
+
+        registered = 0
+        for job_id, spec in specs.items():
+            try:
+                self.scheduler.add_job(
+                    spec["func"],
+                    trigger=CronTrigger.from_crontab(spec["cron"]),
+                    id=job_id,
+                    name=job_id,
+                    max_instances=1,
+                    coalesce=True,
+                    misfire_grace_time=spec.get("misfire_grace_time", 300),
+                    replace_existing=True,
+                )
+                registered += 1
+            except Exception as exc:  # noqa: BLE001 - one bad job, not all of them
+                logger.warning("Plugin job %s could not be scheduled: %s", job_id, exc)
+        if registered:
+            logger.info("Registered %d plugin job(s)", registered)
+        return registered
 
     def reconcile_schedules(self) -> list[str]:
         """Reconcile DB + in-memory jobs against current manifests.

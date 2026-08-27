@@ -40,6 +40,7 @@ available to any agent whose manifest lists it in `tools_allowed`.
 | `genus.guardrails` | `policies` | pre/post execution policies |
 | `genus.hooks` | `hooks` | lifecycle hooks |
 | `genus.models` | `models` | token limits and pricing for models the built-in table does not know |
+| `genus.jobs` | `jobs` | work that runs on a schedule, not on a tool call |
 
 A tool normally ships in two groups: the handler and its schema. The engine
 keeps those in separate registries and so does the loader.
@@ -98,6 +99,34 @@ A plain dict with the same keys works too, so a plugin need not import the
 dataclass. Entries are consulted **after** the curated registry and
 **before** litellm's bundled catalog: a plugin extends what the engine knows
 about, and can never overwrite a model the platform pinned deliberately.
+
+## A scheduled job
+
+Everything the engine runs on a schedule is registered from inside the
+package. A plugin can add its own:
+
+```python
+# acme_jobs/__init__.py
+async def nightly_sweep():
+    ...
+
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "jobs": {
+        "nightly_sweep": {"cron": "30 2 * * *", "func": nightly_sweep},
+    },
+}
+```
+
+Jobs are registered as `plugin:<name>`. That prefix is deliberate: the
+scheduler's reconcile rebuilds the live job set from what the agent
+manifests declare and removes everything else, and a manifest cannot know
+about a plugin's job. The `plugin:` namespace is exempt, so a contributed
+job is never culled — an earlier engine job that lacked such a namespace ran
+for at most five minutes per engine lifetime before anyone noticed.
+
+An entry needs a five-field cron expression and a callable. Anything
+malformed is skipped with a warning rather than raised.
 
 ## Reloading without a restart
 
