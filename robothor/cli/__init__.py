@@ -27,7 +27,7 @@ import contextlib
 import logging
 import re
 import sys
-from typing import Any
+from typing import Any, cast
 
 # Re-export public API for backward compatibility.
 # These are imported by robothor.setup and tests.
@@ -98,11 +98,17 @@ def _register_plugin_commands(parser: argparse.ArgumentParser) -> dict[str, dict
     if not commands:
         return {}
     for action in parser._actions:  # noqa: SLF001 - argparse exposes no public API
-        if isinstance(getattr(action, "choices", None), dict):
-            for verb, spec in commands.items():
-                with contextlib.suppress(Exception):
-                    action.add_parser(verb, help=str(spec.get("help", "")))
-            break
+        if not isinstance(getattr(action, "choices", None), dict):
+            continue
+        # argparse types every entry as `Action`, but the one holding a dict of
+        # choices is the subparsers action, which is what carries add_parser.
+        # Narrowing here rather than at the loop keeps the private-name use in
+        # one place.
+        subparsers = cast("argparse._SubParsersAction[argparse.ArgumentParser]", action)
+        for verb, spec in commands.items():
+            with contextlib.suppress(Exception):
+                subparsers.add_parser(verb, help=str(spec.get("help", "")))
+        break
     return commands
 
 
