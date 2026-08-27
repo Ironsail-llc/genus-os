@@ -22,8 +22,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from robothor.engine.error_actions import apply_error_recovery
 
 
