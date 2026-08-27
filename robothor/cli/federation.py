@@ -32,16 +32,38 @@ def cmd_federation(args: argparse.Namespace) -> int:
 
     if sub == "invite":
         from robothor.federation.config import FederationConfig
+        from robothor.federation.connections import load_connections
         from robothor.federation.identity import create_invite_token
         from robothor.federation.models import Relationship
+        from robothor.federation.provisioning import provision_broker, reload_broker
 
         config = FederationConfig.from_env()
         relationship = Relationship(args.relationship)
         token = create_invite_token(config, relationship=relationship, ttl_hours=args.ttl)
+
+        # Provision the broker account BEFORE printing the token. Until
+        # 2026-08-27 this step did not exist: the token was minted, the row was
+        # persisted, and no NATS account was created — so the peer would redeem
+        # it, do everything right, and be refused with an Authorization
+        # Violation. The whole accounts block is regenerated from the current
+        # connection list, so a revoked peer's credential goes away too.
+        provisioned = provision_broker(load_connections())
+        reloaded, detail = reload_broker()
+
         print(f"Invite token (expires in {args.ttl}h):\n")
         print(token.token)
         print(f"\nRelationship: {relationship.value}")
         print(f"Peer sees you as: {_invert_rel(relationship)}")
+        print(f"Connection ID:    {token.connection_id}")
+        print(f"\nBroker: {len(provisioned.peers)} account(s) in {provisioned.accounts_path}")
+        if reloaded:
+            print("        reloaded — the peer can connect now.")
+        else:
+            # Not a warning buried in a log: the operator is about to hand this
+            # token to someone, and it will not work until the broker has read
+            # the account.
+            print(f"        \033[31mNOT RELOADED\033[0m — {detail}")
+            return 1
         return 0
 
     if sub == "connect":

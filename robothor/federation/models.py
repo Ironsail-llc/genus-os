@@ -159,6 +159,9 @@ class InviteToken:
 
     token: str = ""  # base64-encoded blob
     connection_id: str = ""  # minted by the issuer; BOTH sides adopt it
+    #: How to reach the issuer's broker, and the credential minted for this
+    #: peer. Signed with the rest of the payload.
+    transport: dict[str, Any] = field(default_factory=dict)
     issuer_id: str = ""
     issuer_name: str = ""
     issuer_endpoint: str = ""

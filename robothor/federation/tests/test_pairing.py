@@ -132,3 +132,59 @@ def test_the_connection_id_is_covered_by_the_signature(parent_config, child_conf
 
     with pytest.raises(ValueError, match="signature"):
         decode_invite_token(tampered)
+
+
+# ── The token carries what the peer needs to actually connect ─────────
+#
+# Without this the operator hands over a token, the peer redeems it, and then
+# has no idea which broker to dial or what credential to present — so they ask,
+# and the credential travels by chat message instead of inside the signed blob
+# that was designed to carry exactly this.
+
+
+def test_the_token_carries_the_brokers_address(parent_config):
+    invite = create_invite_token(parent_config, relationship=Relationship.PARENT)
+    transport = _payload(invite.token)["transport"]
+
+    assert transport["kind"] == "nats"
+    assert transport["url"]
+
+
+def test_the_token_carries_the_credential_minted_for_this_peer(parent_config):
+    invite = create_invite_token(parent_config, relationship=Relationship.PARENT)
+    transport = _payload(invite.token)["transport"]
+
+    assert transport["user"] == f"fed_{invite.connection_id.replace('-', '_')}"
+    assert len(transport["password"]) >= 24
+
+
+def test_the_issuer_stores_the_same_credential_it_handed_out(parent_config, saved):
+    invite = create_invite_token(parent_config, relationship=Relationship.PARENT)
+    row = saved.get(invite.connection_id)
+
+    assert row.transport["password"] == _payload(invite.token)["transport"]["password"]
+
+
+def test_the_consumer_is_configured_to_dial_without_being_told_anything(
+    parent_config, child_config
+):
+    invite = create_invite_token(parent_config, relationship=Relationship.PARENT)
+    conn = consume_invite_token(child_config, invite.token)
+
+    assert conn.transport["url"]
+    assert conn.transport["user"] and conn.transport["password"]
+
+
+def test_the_credential_is_covered_by_the_signature(parent_config, child_config):
+    """Otherwise anyone could repoint a token at a broker they control."""
+    import base64 as _b64
+
+    invite = create_invite_token(parent_config, relationship=Relationship.PARENT)
+    bundle = json.loads(_b64.urlsafe_b64decode(invite.token))
+    payload = json.loads(bundle["payload_json"])
+    payload["transport"]["url"] = "nats://evil.example:4222"
+    bundle["payload_json"] = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    tampered = _b64.urlsafe_b64encode(json.dumps(bundle).encode()).decode()
+
+    with pytest.raises(ValueError, match="signature"):
+        decode_invite_token(tampered)

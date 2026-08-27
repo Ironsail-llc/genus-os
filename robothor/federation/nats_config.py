@@ -85,6 +85,44 @@ class PeerAccount:
         return command_subject(self.connection_id)
 
 
+def render_accounts_block(*, engine_password: str, peers: list[PeerAccount]) -> str:
+    """Just the ``accounts { ... }`` block, for a drop-in file.
+
+    Regenerated whole from the full connection list rather than appended to:
+    NATS declares an export on the EXPORTING account, so adding one peer edits
+    the ENGINE account as well as adding a new one, and an append-only scheme
+    would leave a revoked peer's credential live.
+    """
+    exports = "\n".join(
+        f'        {{ service: "{p.subject}", accounts: [{p.account}] }}' for p in peers
+    )
+    engine_block = [
+        f"  {ENGINE_ACCOUNT}: {{",
+        f'    users: [ {{ user: "engine", password: "{engine_password}" }} ]',
+    ]
+    if exports:
+        engine_block += ["    exports: [", exports, "    ]"]
+    engine_block += ["    jetstream: enabled", "  }"]
+
+    peer_blocks: list[str] = []
+    for p in peers:
+        peer_blocks += [
+            f"  {p.account}: {{",
+            "    users: [",
+            "      {",
+            f'        user: "{p.user}", password: "{p.password}",',
+            "        permissions: {",
+            f'          publish: {{ allow: ["{p.subject}"] }}',
+            '          subscribe: { allow: ["_INBOX.>"] }',
+            "        }",
+            "      }",
+            "    ]",
+            # No `jetstream` key: $JS.API.> is not addressable from a peer.
+            "  }",
+        ]
+    return "\n".join(["accounts {", *engine_block, *peer_blocks, "}", ""])
+
+
 def render_config(
     *,
     listen: str = "127.0.0.1:4222",
