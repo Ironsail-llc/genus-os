@@ -21,7 +21,7 @@ import signal
 import socket
 import sys
 import time
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from robothor.engine.config import EngineConfig
@@ -63,6 +63,71 @@ def _sd_notify(state: str) -> None:
 # Set on daemon startup so the reaper can distinguish runs killed by a daemon
 # restart from runs where the runner process itself crashed. ISO8601 string.
 _DAEMON_START_TS: str | None = None
+
+#: Head-room between a run's own wall-clock ceiling and the moment the reaper
+#: is willing to call it dead. Sized to cover FINALIZATION_TOTAL_BUDGET (a run
+#: may still be writing its summary after the loop ends) plus row-write latency.
+REAP_GRACE_SECONDS = 300
+
+
+#: Cheap floor for the candidate scan. The real decision is per-agent below;
+#: this only keeps the query from returning every young row.
+REAP_MIN_SCAN_SECONDS = 300
+
+
+def _is_orphan(started_at: Any, daemon_start_ts: str | None) -> bool:
+    """Did this run start before the current daemon booted?
+
+    If so nothing is executing it, whatever its age, and it can be reaped at
+    once — strictly faster than the flat 30 minutes this replaced. 60s of slack
+    so a run started during boot is not mistaken for one that outlived the
+    previous daemon. Unknown timestamps are NOT orphans: the age-based gate is
+    the safe default, because guessing here destroys live work.
+    """
+    if not daemon_start_ts or started_at is None:
+        return False
+    try:
+        boot = datetime.fromisoformat(daemon_start_ts)
+        if boot.tzinfo is None:
+            boot = boot.replace(tzinfo=UTC)
+        return bool(started_at < boot - timedelta(seconds=60))
+    except Exception:  # noqa: BLE001 - a malformed stamp must not reap anything
+        return False
+
+
+def stale_run_cutoff_seconds(agent_id: str | None = None) -> int:
+    """How old a LIVE `running` row must be before the reaper touches it.
+
+    Previously a hardcoded 30 minutes. On the local tier `main`'s SUCCESSFUL
+    runs average 33.5 minutes and reach 47.3, so the reaper was tombstoning
+    healthy work and `classify_reap_reason` was filing it as a crash — while
+    the watchdog that owns the run's clock believed it had up to 7200s.
+
+    PER AGENT, because a fleet-wide number cannot be right for a fleet whose
+    ceilings span two orders of magnitude: `benchmark-runner` declares
+    timeout_seconds: 28800 while `curator` declares 600. A single global cutoff
+    either reaps the benchmark mid-run or lets a wedged curator sit for hours.
+
+    With no agent (or an unloadable one) it falls back to the most generous
+    ceiling any run could hold. Erring long is deliberate: a late reap costs a
+    stale row, an early one destroys live work and lies about why.
+    """
+    from robothor.engine.run_budget import effective_wallclock_ceiling
+    from robothor.engine.watchdog_budgets import chain_for, max_wallclock_ceiling
+
+    if agent_id:
+        try:
+            from robothor.engine.config import load_agent_config
+
+            cfg = load_agent_config(agent_id, EngineConfig.from_env().manifest_dir)
+            if cfg is not None:
+                return (
+                    effective_wallclock_ceiling(cfg.timeout_seconds, models=chain_for(cfg))
+                    + REAP_GRACE_SECONDS
+                )
+        except Exception as e:  # noqa: BLE001 - an unreadable manifest must not stop the reap
+            logger.debug("Reap cutoff fell back to the fleet ceiling for %s: %s", agent_id, e)
+    return max_wallclock_ceiling() + REAP_GRACE_SECONDS
 
 
 async def resume_interrupted_runs() -> int:
@@ -274,16 +339,42 @@ def _cleanup_stale_runs() -> int:
 
         with get_connection() as conn:
             cur = conn.cursor()
+            # Two tiers, because one number cannot serve both cases.
+            #
+            # ORPHAN: a run that predates this daemon's boot has no process
+            # behind it, by definition. Reaped at once — strictly faster than
+            # the old flat 30 minutes. (60s of slack so a run started during
+            # boot is not mistaken for one that outlived the previous daemon.)
+            #
+            # LIVE: a run this daemon is still executing is reaped only past
+            # the ceiling its own watchdog would enforce, plus grace. Anything
+            # shorter means the reaper overrules the watchdog and calls healthy
+            # work a crash — which is exactly what the flat 30 minutes did to
+            # main's 33.5-minute average local-tier run.
             cur.execute(
                 "SELECT id, agent_id, started_at "
                 "FROM agent_runs "
-                "WHERE status='running' AND started_at < NOW() - INTERVAL '30 minutes'"
+                "WHERE status='running' AND ("
+                "  (%(boot)s IS NOT NULL"
+                "   AND started_at < %(boot)s::timestamptz - INTERVAL '60 seconds')"
+                "  OR started_at < NOW() - make_interval(secs => %(cutoff)s)"
+                ")",
+                {"boot": daemon_start_ts, "cutoff": REAP_MIN_SCAN_SECONDS},
             )
             stale = cur.fetchall()
             if not stale:
                 return wf_reaped
 
             for run_id, agent_id, started_at in stale:
+                # The scan floor is deliberately cheap; this is the real gate.
+                # An orphan (predating this boot) is reaped whatever its age —
+                # nothing is executing it. A live run is reaped only past ITS
+                # OWN agent's ceiling, so the reaper can never overrule the
+                # watchdog and call healthy work a crash.
+                if not _is_orphan(started_at, daemon_start_ts):
+                    age = (datetime.now(UTC) - started_at).total_seconds() if started_at else 0.0
+                    if age < stale_run_cutoff_seconds(str(agent_id or "")):
+                        continue
                 started_iso = started_at.isoformat() if started_at is not None else ""
                 category, message = classify_reap_reason(str(run_id), started_iso, daemon_start_ts)
                 cur.execute(

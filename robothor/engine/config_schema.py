@@ -108,6 +108,66 @@ def _check_last_resort_model(warnings: list[str]) -> None:
         )
 
 
+def _check_stall_budget_vs_llm_timeout(
+    warnings: list[str], where: str, model: Any, schedule: Any
+) -> None:
+    """A stall budget must exceed the per-call allowance for its own chain.
+
+    Otherwise the watchdog is GUARANTEED to fire on a call the LLM layer still
+    considers healthy — not occasionally, always. Six manifests carried 120s or
+    180s budgets tuned against cloud models; when the fleet fell back to the
+    local tier, where a single call is allowed 600s, the watchdog killed 33
+    healthy runs in a day.
+
+    Compared against the SCALED budget, because tier-aware budgets already
+    multiply the manifest number by the chain's slowest model. A raw 300 is a
+    scaled 900 on the local tier and is fine; a raw 120 is a scaled 360.
+
+    Hand-auditing found six of eight. This exists so nobody has to read YAML by
+    eye again.
+    """
+    if not isinstance(schedule, dict):
+        return
+    import os
+
+    from robothor.engine.llm_client import LLM_REQUEST_TIMEOUT, LLM_REQUEST_TIMEOUT_OLLAMA
+    from robothor.engine.model_registry import chain_tempo_factor
+
+    chain: list[str] = []
+    if isinstance(model, dict):
+        primary = model.get("primary")
+        if isinstance(primary, str) and primary:
+            chain.append(primary)
+        fallbacks = model.get("fallbacks")
+        if isinstance(fallbacks, list):
+            chain.extend([m for m in fallbacks if isinstance(m, str) and m])
+    # Every agent's chain is terminated by the instance's last-resort model
+    # (config._with_last_resort), so it belongs in the comparison even though
+    # no manifest names it.
+    last_resort = os.environ.get("ROBOTHOR_LAST_RESORT_MODEL", "").strip()
+    if last_resort and last_resort not in chain:
+        chain.append(last_resort)
+    if not chain:
+        return
+
+    allowance = max(
+        LLM_REQUEST_TIMEOUT_OLLAMA if m.startswith(("ollama_chat/", "ollama/")) else LLM_REQUEST_TIMEOUT
+        for m in chain
+    )
+    factor = chain_tempo_factor(chain)
+
+    for key in ("stall_timeout_seconds", "early_stall_timeout_seconds"):
+        raw = schedule.get(key)
+        if not isinstance(raw, int) or raw <= 0:
+            continue  # 0 disables the watchdog; that is a choice, not a defect
+        if raw * factor <= allowance:
+            warnings.append(
+                f"{where}.{key}={raw} scales to {int(raw * factor)}s, which is not more than the "
+                f"{allowance}s this chain allows a single LLM call — the watchdog will fire on "
+                f"healthy calls"
+            )
+
+
 def _check_model_block(warnings: list[str], where: str, model: Any) -> None:
     """Every model a manifest names must exist in the model registry.
 
@@ -213,10 +273,19 @@ def validate_manifest(data: dict[str, Any]) -> list[str]:
     # 2026-08-23 incident's broken entry was in the HEARTBEAT block.
     _check_model_block(warnings, "model", data.get("model"))
     _check_last_resort_model(warnings)
+    _check_stall_budget_vs_llm_timeout(
+        warnings, "schedule", data.get("model"), data.get("schedule")
+    )
     for section in ("heartbeat", "worker"):
         sub = data.get(section)
         if isinstance(sub, dict):
             _check_model_block(warnings, f"{section}.model", sub.get("model"))
+            # main's failure was in its heartbeat block, which carries its own
+            # budgets AND its own model block — the same place the 2026-08-23
+            # manifest incident hid.
+            _check_stall_budget_vs_llm_timeout(
+                warnings, section, sub.get("model") or data.get("model"), sub
+            )
 
     # Schedule ranges
     schedule = data.get("schedule", {})

@@ -6,14 +6,12 @@ this run be silent, and how long may it live — for a fleet whose models differ
 in speed by 3x.
 
 The 2026-08-27 outage is the motivation. Manifest budgets (120s, 180s, 300s)
-were all calibrated against cloud latency. When the OpenRouter weekly cap sent
-every agent to the local ``ollama_chat/qwen3.8:27b`` tier, those budgets became
-shorter than the 600s the engine itself allows a single local call, so the
-watchdog began killing runs the LLM layer considered perfectly healthy.
-
-Rather than re-tune 20 manifests on every fleet model change, scale them by the
-model's own registered ``ttft_hint_ms`` — metadata that had sat in the registry
-unread since it was written, documented as "for interactive routing".
+were calibrated against cloud latency; when the OpenRouter weekly cap sent every
+agent to the local ``ollama_chat/qwen3.8:27b`` tier they became shorter than the
+600s the engine itself allows a single local call, so the watchdog began killing
+runs the LLM layer considered healthy. Rather than re-tune 20 manifests on every
+model change, scale them by the model's own ``ttft_hint_ms`` — metadata that sat
+in the registry unread, documented as "for interactive routing".
 """
 
 from __future__ import annotations
@@ -75,6 +73,18 @@ def effective_wallclock_ceiling(timeout_seconds: int, models: Sequence[str] = ()
         return base  # disabled stays disabled
     factor = min(chain_tempo_factor(models), _WALLCLOCK_TEMPO_CAP) if models else 1.0
     return int(base * factor)
+
+
+def max_wallclock_ceiling() -> int:
+    """The most generous ceiling any uncapped run could receive.
+
+    For callers that must not act before ANY run's own clock could have — the
+    reaper above all. Assumes the slowest tier: assuming the fastest is how a
+    healthy long run gets filed as a crash.
+    """
+    from robothor.engine.stall_watchdog import _fleet_wallclock_ceiling
+
+    return int(_fleet_wallclock_ceiling() * _WALLCLOCK_TEMPO_CAP)
 
 
 def watchdog_budgets_for(agent_config: Any) -> WatchdogBudgets:

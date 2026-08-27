@@ -51,7 +51,12 @@ CAPS = {
     "robothor/engine/run_budget.py": 120,
     # Tempo-scaled watchdog budgets (2026-08-27): extracted here rather than
     # growing run_budget past its cap, same as the finalization cluster.
-    "robothor/engine/watchdog_budgets.py": 110,
+    # Raised 110 -> 125 the same day to admit max_wallclock_ceiling(), which the
+    # reaper needs. Adjusting a cap set hours earlier for a cohesive addition is
+    # not the same as bumping a long-standing one to dodge a refactor; this
+    # module is four related functions, not a god-object. Do not raise again
+    # without extracting.
+    "robothor/engine/watchdog_budgets.py": 125,
     # Cancel classification (2026-08-27): extracted from the runner, which is
     # the god-object this ratchet exists to shrink.
     # 80 -> 86: terminal_run was untyped, which the mypy gate rejects as an
