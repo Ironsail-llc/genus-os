@@ -55,6 +55,7 @@ from robothor.engine.context_budget import keep_context_within_budget
 from robothor.engine.deliverables import deadline_note, task_text_from  # noqa: E402
 from robothor.engine.error_actions import apply_error_recovery
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
+from robothor.engine.journal_resume import maybe_prepend_journal_resume
 
 # LLM dispatch/cost/streaming + the request-timeout constants now live in
 # llm_client.LLMClient (Phase A / Slice 1). AgentRunner delegates to an
@@ -1031,36 +1032,17 @@ class AgentRunner(
                 logger.debug("warmup_phase step record failed (%s): %s", _wp_name, _wp_err)
 
         # ── Cross-run journal resume ──────────────────────────────────────────
-        # If the agent has resume_on_start=true and a journal_file configured,
-        # load the journal and inject it as a preamble to the message so the
-        # agent wakes up knowing exactly where it left off.
-        if (
-            trigger_type in (TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW)
-            and agent_config.resume_on_start
-            and agent_config.journal_file
-        ):
-            try:
-                from robothor.engine.journal import JournalManager
-
-                journal_state = JournalManager.load(
-                    agent_id, agent_config.journal_file, self.config.workspace
-                )
-                if journal_state:
-                    journal_preamble = JournalManager.format_resume_preamble(journal_state)
-                    message = f"{journal_preamble}\n\n{message}"
-                    logger.info(
-                        "Journal resume injected for %s: experiment=%s iteration=%d next_action=%s",
-                        _sanitize(agent_id),
-                        _sanitize(journal_state.experiment_id),
-                        journal_state.iteration,
-                        _sanitize(journal_state.next_action),
-                    )
-            except Exception as e:
-                logger.warning(
-                    "Journal resume failed for %s (non-fatal): %s",
-                    _sanitize(agent_id),
-                    _sanitize(e),
-                )
+        # robothor/engine/journal_resume.py. Only CRON/HOOK/WORKFLOW resume:
+        # an interactive run already has a human saying what it wants, and a
+        # "here is where you left off" preamble would steer it back to
+        # yesterday's task.
+        message = maybe_prepend_journal_resume(
+            message,
+            agent_id=agent_id,
+            agent_config=agent_config,
+            trigger_type=trigger_type,
+            workspace=self.config.workspace,
+        )
 
         watchdog.touch("setup_phase_complete")
         t_setup_ms = int((time.monotonic() - t_setup_start) * 1000)
