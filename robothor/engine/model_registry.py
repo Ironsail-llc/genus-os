@@ -11,7 +11,10 @@ import re
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 from robothor.engine.sanitize import sanitize_log
 
@@ -19,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 # Default thinking budget for models that support extended thinking
 THINKING_BUDGET_TOKENS = 10_000
+
+#: The ttft_hint_ms every manifest budget was implicitly calibrated against.
+#: Equal to ModelLimits.ttft_hint_ms's own default, so a model nobody has
+#: measured is treated as "normal speed" rather than penalised.
+_TTFT_BASELINE_MS = 3000
 
 
 @dataclass(frozen=True)
@@ -653,3 +661,38 @@ def get_output_tokens(model_id: str, estimated_input_tokens: int = 0) -> int:
         return min(1024, limits.max_output_tokens)
 
     return min(limits.default_output_tokens, limits.max_output_tokens, remaining)
+
+
+def tempo_factor(model_id: str) -> float:
+    """How much slower than the calibration baseline this model answers.
+
+    Budgets in manifests were written against cloud latency. Rather than
+    re-tune 20 manifests every time the fleet changes model, scale them by the
+    model's own registered time-to-first-token.
+
+    Never returns less than 1.0: a manifest number is a FLOOR, and a fast model
+    must not silently shrink a budget an operator chose deliberately.
+    Unknown models fall back to the registry default, i.e. exactly 1.0.
+    """
+    try:
+        hint = get_model_limits(model_id).ttft_hint_ms
+    except Exception:  # noqa: BLE001 - an unknown model is baseline, not an error
+        return 1.0
+    if not hint or hint <= 0:
+        return 1.0
+    return max(1.0, hint / _TTFT_BASELINE_MS)
+
+
+def chain_tempo_factor(models: Sequence[str]) -> float:
+    """Tempo of the slowest model a run could fall through to.
+
+    Computed once from the WHOLE configured chain rather than retuned when the
+    chain advances. ``_with_last_resort`` guarantees the local tier terminates
+    every chain, so sizing by the slowest member means a cloud->local fallback
+    finds its budgets already correct. That beats a mid-run rescale three ways:
+    nothing mutates a deadline the run is already relying on, the loop's cached
+    wall-clock deadline stays valid, and there is no code path that can fail to
+    fire.
+    """
+    factors = [tempo_factor(m) for m in models if m]
+    return max(factors) if factors else 1.0

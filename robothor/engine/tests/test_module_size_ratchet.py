@@ -44,6 +44,9 @@ CAPS = {
     "robothor/engine/run_llm_calls.py": 450,
     "robothor/engine/tool_admission.py": 400,
     "robothor/engine/run_budget.py": 120,
+    # Tempo-scaled watchdog budgets (2026-08-27): extracted here rather than
+    # growing run_budget past its cap, same as the finalization cluster.
+    "robothor/engine/watchdog_budgets.py": 110,
     # The finalization cluster (what a run may spend AFTER its loop ends)
     # was extracted here rather than growing run_budget past its cap.
     "robothor/engine/finalization_budget.py": 160,

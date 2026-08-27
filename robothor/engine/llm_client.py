@@ -59,6 +59,20 @@ logger = logging.getLogger(__name__)
 # ``LLMClient._build_llm_kwargs``'s ``timeout``).
 STREAM_CHUNK_TIMEOUT = 90
 
+
+def stream_chunk_timeout(model: str) -> float:
+    """Per-chunk stream timeout, sized for the model producing the chunks.
+
+    The flat 90s was calibrated on cloud models. The local 27B's own registry
+    entry says ttft_hint_ms=9000 — the one budget here that genuinely is
+    per-model, and `model` is already in scope at the chunk loop, so this needs
+    no plumbing.
+    """
+    from robothor.engine.model_registry import tempo_factor
+
+    return STREAM_CHUNK_TIMEOUT * tempo_factor(model)
+
+
 # HTTP-level timeout passed to litellm.acompletion for the initial
 # request (stream creation for streaming, full response for
 # non-streaming). Must be longer than STREAM_CHUNK_TIMEOUT so a slow
@@ -1518,7 +1532,8 @@ class LLMClient:
                     while True:
                         try:
                             chunk = await asyncio.wait_for(
-                                chunk_iter.__anext__(), timeout=STREAM_CHUNK_TIMEOUT
+                                chunk_iter.__anext__(),
+                                timeout=stream_chunk_timeout(model),
                             )
                         except StopAsyncIteration:
                             break
