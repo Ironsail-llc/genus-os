@@ -60,11 +60,25 @@ _OUTPUT_VERB = r"(?:save|write|store|export|output|put|place|dump|emit)"
 #: -- the negative lookbehind keeps us off "://host/results/x.tsv".
 _PATH = r"(?<![\w:/.])((?:/|\.{1,2}/)?(?:[\w.\-]+/)*[\w.\-]+\.[A-Za-z][\w]{0,7})"
 
+#: What may sit between the preposition and the path. Real prompts do not put
+#: them adjacent: WildClawBench task_4 writes
+#:
+#:     ...and save them to:
+#:
+#:     - `/tmp_workspace/results/2022.tsv`
+#:
+#: an optional colon, a line break, a markdown bullet and backticks. Requiring
+#: the path on the SAME line is why that task's contract went unseen while the
+#: run reported "completed" having written nothing — the failure this module
+#: was built for, and the one it could not see.
+_GAP = r"(?:[ \t]*:)?[ \t]*(?:\r?\n[ \t]*)*(?:[-*+][ \t]+)?`?"
+
 _CONTRACT_PATTERNS = [
-    # "save them to X", "write the output to X", "export results into X"
-    re.compile(rf"{_OUTPUT_VERB}\b[^.\n]{{0,60}}?\b(?:to|into|in|at)\s+{_PATH}", re.IGNORECASE),
+    # "save them to X", "write the output to X", "export results into X",
+    # including "save them to:" followed by a bulleted path on the next line.
+    re.compile(rf"{_OUTPUT_VERB}\b[^.\n]{{0,60}}?\b(?:to|into|in|at)\b{_GAP}{_PATH}", re.IGNORECASE),
     # "save as X", "output as X"
-    re.compile(rf"{_OUTPUT_VERB}\b[^.\n]{{0,30}}?\bas\s+{_PATH}", re.IGNORECASE),
+    re.compile(rf"{_OUTPUT_VERB}\b[^.\n]{{0,30}}?\bas\b{_GAP}{_PATH}", re.IGNORECASE),
 ]
 
 #: Anything inside one of these is a URL, not a local deliverable.
@@ -139,17 +153,19 @@ def check_deliverables(required: list[str]) -> DeliverableReport:
     return DeliverableReport(required=list(required), missing=missing)
 
 
-def task_text_for_run(run: object) -> str:
+def task_text_for_run(run: object, session: object = None) -> str:
     """The task wording a deliverable contract can be read from.
 
-    Prefers the originating ``crm_task`` (title + objective): a delegated
-    task is where an explicit output path is actually written down. Returns
-    ``""`` when there is no task or it cannot be read — the contract then
-    finds nothing to require, which is the safe direction.
+    Prefers the originating ``crm_task`` (title + objective): a delegated task
+    is where an explicit output path is most often written down. Falls back to
+    the run's originating MESSAGE, because most runs have no crm_task at all —
+    every benchmark task included, which is precisely the population this
+    contract was built for and could not see. Returns ``""`` when neither is
+    available; the contract then requires nothing, which is the safe direction.
     """
     task_id = getattr(run, "task_id", None)
     if not task_id:
-        return ""
+        return str(getattr(session, "originating_message", "") or "")
     try:
         from robothor.crm import dal
 
@@ -157,18 +173,18 @@ def task_text_for_run(run: object) -> str:
     except Exception:  # noqa: BLE001 — a contract check must never break a run
         return ""
     if not task:
-        return ""
+        return str(getattr(session, "originating_message", "") or "")
     return " ".join(str(task.get(k) or "") for k in ("title", "objective", "next_action")).strip()
 
 
-def check_run_deliverables(run: object) -> DeliverableReport | None:
+def check_run_deliverables(run: object, session: object = None) -> DeliverableReport | None:
     """Verdict for one run, or None when the task named no deliverable.
 
     None is the common case and is deliberately distinct from "satisfied":
     the caller should log nothing at all rather than record a vacuous pass on
     every run in the fleet.
     """
-    required = required_deliverables(task_text_for_run(run))
+    required = required_deliverables(task_text_for_run(run, session))
     if not required:
         return None
     return check_deliverables(required)
