@@ -126,13 +126,21 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
     # silently sent every request to a model that did not exist on :11434 —
     # keep the tier where the client actually looks.
     "ollama_chat/qwen3.8:27b": ModelLimits(
-        # 65_536, not the model's full 262_144. The engine now sends num_ctx
-        # from THIS number, and Ollama allocates KV cache as
-        # num_ctx x OLLAMA_NUM_PARALLEL — at 262_144 the resident footprint was
-        # 18.9GB of a pool shared with a pinned embedder, a reranker and a
-        # 1.7B. Nothing on this fleet sends a 262k-token prompt.
-        # Must stay above proactive_compaction_threshold + max output, or the
-        # server truncates silently; test_local_tier_residency pins that.
+        # 65_536, not the model's full 262_144. The engine sends num_ctx from
+        # THIS number, so the two must agree or the server truncates in silence.
+        #
+        # MEASURED AFTER THE CHANGE, because the first justification for it was
+        # wrong: resident VRAM went 18.9GB -> 17.95GB, about 1GB. The weights
+        # dominate a 17.7GB model and the KV cache at q8_0 is small, so this is
+        # NOT a memory-reclamation lever and shrinking it further would buy
+        # almost nothing while risking truncation.
+        #
+        # The reason it earns its place is correctness: proactive compaction
+        # fires at min(0.5 x max_input_tokens, 80_000), so a registry number
+        # larger than the window the server actually allocated means the engine
+        # fills context past the end of it. Must stay above
+        # proactive_compaction_threshold + max output; test_local_tier_residency
+        # pins that invariant.
         max_input_tokens=65_536,
         max_output_tokens=32_768,
         default_output_tokens=8_192,
