@@ -41,6 +41,12 @@ schedule:
 # on a task that had scored full marks before. config_schema now reports a
 # key in the wrong block rather than ignoring it.
 v2:
+  # The competing harness front-loads the workspace; ours starts blind.
+  # task_3 hands the agent 16 files, all images, across 4 directories, and
+  # OpenClaw scores 1.0 on it while our run opens with directory listings.
+  # Stating what exists is capability parity with what they read by default,
+  # not a hint about the answer — the same reasoning as `view_image` above.
+  workspace_inventory: true
   rate_limit_per_minute: 300
 
 delivery:
