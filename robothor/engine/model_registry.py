@@ -11,6 +11,7 @@ import re
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Any
 
 from robothor.engine.sanitize import sanitize_log
 
@@ -389,6 +390,67 @@ def _registry_candidates(model_id: str) -> list[str]:
     return candidates
 
 
+#: Plugin-contributed model limits, and the plugin generation they reflect.
+_plugin_models: dict[str, ModelLimits] = {}
+_plugin_models_generation: int = -1
+
+
+def _coerce_limits(value: Any) -> ModelLimits | None:
+    """Accept a ModelLimits or a plain mapping; reject anything else.
+
+    Plugin authors should not have to import our dataclass to name a
+    context window, but a malformed entry must be dropped rather than
+    raised — one bad key in a third-party package cannot be allowed to
+    break every model lookup in the engine.
+    """
+    if isinstance(value, ModelLimits):
+        return value
+    if isinstance(value, dict):
+        try:
+            return ModelLimits(**value)
+        except (TypeError, ValueError) as exc:
+            logger.warning("Plugin model entry rejected: %s", exc)
+            return None
+    logger.warning(
+        "Plugin model entry rejected: expected ModelLimits or dict, got %s", type(value).__name__
+    )
+    return None
+
+
+def _plugin_model_limits() -> dict[str, ModelLimits]:
+    """Model coverage contributed by installed plugins, cached per generation.
+
+    Curated names are passed as reserved, so a package cannot overwrite an
+    entry the platform pinned deliberately — codex is priced at zero here
+    because plan quota governs it, and a plugin silently rewriting that
+    would corrupt this instance's cost accounting.
+    """
+    global _plugin_models, _plugin_models_generation
+    try:
+        from robothor.plugins import generation, load_plugins
+    except Exception:  # noqa: BLE001 - plugins are optional
+        return {}
+
+    current = generation()
+    if current == _plugin_models_generation:
+        return _plugin_models
+
+    resolved: dict[str, ModelLimits] = {}
+    try:
+        loaded = load_plugins(reserved_names=set(_MODEL_REGISTRY))
+        for name, value in (loaded.models or {}).items():
+            limits = _coerce_limits(value)
+            if limits is not None:
+                resolved[name] = limits
+    except Exception as exc:  # noqa: BLE001 - never break a model lookup
+        logger.warning("Plugin model registry unavailable: %s", exc)
+        resolved = {}
+
+    _plugin_models = resolved
+    _plugin_models_generation = current
+    return _plugin_models
+
+
 def get_model_limits(model_id: str) -> ModelLimits:
     """Look up model limits.
 
@@ -401,6 +463,17 @@ def get_model_limits(model_id: str) -> ModelLimits:
         limits = _MODEL_REGISTRY.get(candidate)
         if limits:
             return limits
+
+    # Plugin-contributed coverage. Deliberately AFTER the curated registry —
+    # a plugin extends what we know about, it never overrides a pin — and
+    # BEFORE litellm's catalog, since an instance that took the trouble to
+    # declare a model knows it better than a bundled table does.
+    plugin_models = _plugin_model_limits()
+    if plugin_models:
+        for candidate in _registry_candidates(model_id):
+            limits = plugin_models.get(candidate)
+            if limits:
+                return limits
 
     dynamic = _dynamic_model_limits(model_id)
     if dynamic is not None:
