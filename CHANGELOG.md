@@ -1,3 +1,24 @@
+## [1.58.0](https://github.com/Ironsail-llc/genus-os/compare/v1.57.0...v1.58.0) (2026-08-27)
+
+### Features
+
+* **cli:** status reports features whose dependency is missing ([#433](https://github.com/Ironsail-llc/genus-os/issues/433)) ([1cd5b95](https://github.com/Ironsail-llc/genus-os/commit/1cd5b95a3397bc29856fea746a0a5aef73e173bb))
+* **cli:** status says when you are on someone else's instance ([#428](https://github.com/Ironsail-llc/genus-os/issues/428)) ([1dfc4a4](https://github.com/Ironsail-llc/genus-os/commit/1dfc4a4d000fb01f1beab9d524e9d5384bd45895))
+* **engine:** a finished run can finally say what it was thinking ([#435](https://github.com/Ironsail-llc/genus-os/issues/435)) ([3d49496](https://github.com/Ironsail-llc/genus-os/commit/3d4949699eb57bbc8a4abddd36712d6cf41e8443))
+
+### Bug Fixes
+
+* **ci:** a release that races a merge lost its production deploy ([#436](https://github.com/Ironsail-llc/genus-os/issues/436)) ([0e1405f](https://github.com/Ironsail-llc/genus-os/commit/0e1405f209e33f51f07f6a2825641e5ff1ea5461)), closes [#431](https://github.com/Ironsail-llc/genus-os/issues/431)
+* **engine:** the grading layer went dark in the outage it measures ([#437](https://github.com/Ironsail-llc/genus-os/issues/437)) ([cb5fd92](https://github.com/Ironsail-llc/genus-os/commit/cb5fd92fa2379df65a2e8a33f96038f6cf946cfc))
+* **packaging:** sdist shipped 36 MB of ignored frontend build output ([#429](https://github.com/Ironsail-llc/genus-os/issues/429)) ([2a12f03](https://github.com/Ironsail-llc/genus-os/commit/2a12f0380e9641f33e912638493c4291fa111014))
+* **scheduler:** a late one-shot reported success and never fired ([#430](https://github.com/Ironsail-llc/genus-os/issues/430)) ([2c07883](https://github.com/Ironsail-llc/genus-os/commit/2c07883cb57201cd7b4f147412f5b4c02229bfc2))
+* **tools:** a missing argument told the model nothing actionable ([#431](https://github.com/Ironsail-llc/genus-os/issues/431)) ([73de818](https://github.com/Ironsail-llc/genus-os/commit/73de81894e042c04a8214498d0ff322cbab876cd))
+* **tools:** accept snake_case or camelCase tool arguments ([#432](https://github.com/Ironsail-llc/genus-os/issues/432)) ([ba302c8](https://github.com/Ironsail-llc/genus-os/commit/ba302c870d90c15b7e6b3007fb4ab05ea5875996)), closes [#431](https://github.com/Ironsail-llc/genus-os/issues/431)
+
+### Tests
+
+* **memory:** the eval could not tell retrieval from a coin flip ([#434](https://github.com/Ironsail-llc/genus-os/issues/434)) ([0757278](https://github.com/Ironsail-llc/genus-os/commit/0757278b96d39f501d6fda842498a40bfdd7ad1b))
+
 ## [1.57.0](https://github.com/Ironsail-llc/genus-os/compare/v1.56.0...v1.57.0) (2026-08-27)
 
 ### Features
