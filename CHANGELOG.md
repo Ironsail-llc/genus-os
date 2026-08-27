@@ -1,3 +1,9 @@
+## [1.58.2](https://github.com/Ironsail-llc/genus-os/compare/v1.58.1...v1.58.2) (2026-08-27)
+
+### Bug Fixes
+
+* **bench:** a night when nothing ran is not a score of zero ([#439](https://github.com/Ironsail-llc/genus-os/issues/439)) ([13530c3](https://github.com/Ironsail-llc/genus-os/commit/13530c362427fe3bcdc3c2bcff7db10df4bd92b1))
+
 ## [1.58.1](https://github.com/Ironsail-llc/genus-os/compare/v1.58.0...v1.58.1) (2026-08-27)
 
 ### Bug Fixes
