@@ -44,6 +44,11 @@ from robothor.engine.config import (
     load_agent_config,
 )
 
+# ── Log-injection sanitizer ──
+# CodeQL py/log-injection: user-controlled values (model names, error
+# messages) must not inject newlines into log output.
+from robothor.engine.context_budget import keep_context_within_budget
+
 # Re-exported for existing importers. The `as` form is what marks a name as
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
@@ -55,10 +60,6 @@ from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 # instance of it; the historical method surface is preserved via thin
 # delegators/aliases below so existing call sites keep working unchanged.
 from robothor.engine.llm_client import LLMClient  # noqa: E402
-
-# ── Log-injection sanitizer ──
-# CodeQL py/log-injection: user-controlled values (model names, error
-# messages) must not inject newlines into log output.
 from robothor.engine.loop_guards import GuardState, check_iteration_guards
 from robothor.engine.models import (
     AgentConfig,
@@ -2125,89 +2126,20 @@ class AgentRunner(
             ):
                 await self._send_progress_report(session, agent_config, _iteration)
 
-            # ── [EAGER COMPRESSION] Thin previous iterations' tool results ──
-            if agent_config.eager_tool_compression and _iteration > 0:
-                chars_saved = session.thin_previous_tool_results(
-                    protect_after_index=_pre_iteration_msg_idx,
-                )
-                if chars_saved > 0:
-                    logger.debug(
-                        "Eager tool compression saved ~%d tokens",
-                        chars_saved // 4,
-                    )
-
-            # ── [PROACTIVE COMPACTION] Compress before hitting the 75% cliff ──
-            if _iteration > 0:
-                try:
-                    from robothor.engine.context import estimate_tokens, maybe_compress
-                    from robothor.engine.model_registry import get_model_limits
-
-                    est_tokens = estimate_tokens(session.messages)
-                    # G2b: size against the model that will actually be tried
-                    # next (first non-broken), not the configured primary —
-                    # otherwise a run on a smaller-window fallback compacts at
-                    # the primary's (larger) threshold and can overflow.
-                    #
-                    # Checked EVERY iteration (was every 5th): at ~10K
-                    # tokens/iteration a 5-gap overshoots the budget by half
-                    # the budget again before anyone looks, and estimate_tokens
-                    # is a cheap length sum.
-                    model_limits = get_model_limits(LLMClient.sizing_model(models, broken_models))
-                    proactive_threshold = proactive_compaction_threshold(
-                        model_limits.max_input_tokens
-                    )
-                    if est_tokens > proactive_threshold:
-                        pre_len = len(session.messages)
-
-                        # Dispatch PRE_COMPACTION hook
-                        if hook_registry:
-                            with contextlib.suppress(Exception):
-                                await hook_registry.dispatch(
-                                    HookEvent.PRE_COMPACTION,
-                                    HookContext(
-                                        event=HookEvent.PRE_COMPACTION,
-                                        agent_id=agent_config.id,
-                                        run_id=session.run_id,
-                                        metadata={
-                                            "est_tokens": est_tokens,
-                                            "threshold": proactive_threshold,
-                                            "message_count": pre_len,
-                                        },
-                                    ),
-                                )
-
-                        session.messages[:] = await maybe_compress(
-                            session.messages,
-                            models,
-                            threshold=proactive_threshold,
-                        )
-                        logger.info(
-                            "Proactive compaction at iter %d: %d→%d messages "
-                            "(est %d tokens, threshold %d)",
-                            _iteration,
-                            pre_len,
-                            len(session.messages),
-                            est_tokens,
-                            proactive_threshold,
-                        )
-
-                        # Dispatch POST_COMPACTION hook
-                        if hook_registry:
-                            with contextlib.suppress(Exception):
-                                await hook_registry.dispatch(
-                                    HookEvent.POST_COMPACTION,
-                                    HookContext(
-                                        event=HookEvent.POST_COMPACTION,
-                                        agent_id=agent_config.id,
-                                        run_id=session.run_id,
-                                        metadata={
-                                            "pre_message_count": pre_len,
-                                            "post_message_count": len(session.messages),
-                                        },
-                                    ),
-                                )
-                except Exception as e:
-                    logger.warning("Proactive compaction failed: %s", _sanitize(e))
+            # ── [CONTEXT BUDGET] Thin, then compact, before the call ──
+            # Both steps live in robothor/engine/context_budget.py. It sizes
+            # against the model that will actually be tried next (G2b), runs
+            # every iteration, and never raises — losing compaction costs
+            # money, taking the run down with it costs the work.
+            await keep_context_within_budget(
+                session,
+                agent_config,
+                iteration=_iteration,
+                models=models,
+                broken_models=broken_models,
+                hook_registry=hook_registry,
+                pre_iteration_msg_idx=_pre_iteration_msg_idx,
+            )
 
             # ── [SCRATCHPAD] Inject working state summary ──
             if scratchpad and scratchpad.should_inject():
