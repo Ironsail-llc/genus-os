@@ -523,6 +523,58 @@ def _strip_historical_media(
     return out, stripped
 
 
+#: Messages at the tail left untouched by the token-bound fallback. The agent
+#: needs its immediate context verbatim; everything older is a candidate.
+SHRINK_KEEP_INTACT = 4
+
+#: How much of an oversized message survives, in characters. Enough to keep the
+#: shape and the first rows of a tool result recognisable.
+SHRINK_HEAD_CHARS = 2_000
+
+
+def _shrink_largest(
+    messages: list[dict[str, Any]], drain_to: int, keep_intact: int = SHRINK_KEEP_INTACT
+) -> tuple[list[dict[str, Any]], int]:
+    """Truncate the biggest old messages until the conversation fits.
+
+    The last resort when the count-based passes cannot run. It shrinks message
+    CONTENT and never removes a message, because dropping one would orphan a
+    tool_call/tool_result pair — the corruption `_validate_tool_pairs` exists
+    to clean up after.
+
+    Lossy and explicit. That is the point: the alternative is a conversation
+    handed to a server that allocated a third of the room it needs, and
+    truncated there in silence.
+    """
+    from robothor.engine.context import estimate_tokens
+
+    out = list(messages)
+    tail_start = max(0, len(out) - keep_intact)
+    # Biggest first: one 750KB tool result is worth more than twenty small ones.
+    order = sorted(
+        (i for i in range(1, tail_start)),
+        key=lambda i: len(_content_text(out[i].get("content"))),
+        reverse=True,
+    )
+    shrunk = 0
+    for i in order:
+        if estimate_tokens(out) <= drain_to:
+            break
+        text = _content_text(out[i].get("content"))
+        if len(text) <= SHRINK_HEAD_CHARS:
+            continue
+        out[i] = {
+            **out[i],
+            "content": (
+                text[:SHRINK_HEAD_CHARS]
+                + f"\n\n[... {len(text) - SHRINK_HEAD_CHARS:,} characters elided by compaction —"
+                " this result was too large to keep in full]"
+            ),
+        }
+        shrunk += 1
+    return out, shrunk
+
+
 async def compact(
     messages: list[dict[str, Any]],
     models: list[str] | None = None,
@@ -557,11 +609,38 @@ async def compact(
         )
 
     if len(messages) <= KEEP_RECENT + 1:
+        # The count-based passes below need more messages than this to work
+        # with. They used to return here unchanged, which meant compaction was
+        # gated on MESSAGE COUNT and never on tokens: measured 2026-08-27, a
+        # 21-message conversation of 225,015 tokens reduced by 0.0%. The shape
+        # is "few, enormous messages" — one 750KB tool result re-sent each turn
+        # — and it is the shape that most needs compacting.
+        #
+        # Falling through to a token-bound shrink instead. Only when there is
+        # something worth shrinking: a genuinely short exchange is still left
+        # alone, which is what the floor was protecting.
+        shrunk_messages, shrunk = _shrink_largest(messages, drain_to)
+        if not shrunk:
+            return CompactionResult(
+                messages=messages,
+                passes_used=0,
+                tokens_before=tokens_before,
+                tokens_after=tokens_before,
+            )
+        tokens_after = estimate_tokens(shrunk_messages)
+        logger.info(
+            "Compaction (token-bound): %s oversized message(s) shrunk, ~%d → ~%d tokens",
+            sanitize_log(shrunk),
+            tokens_before,
+            tokens_after,
+        )
         return CompactionResult(
-            messages=messages,
-            passes_used=0,
+            messages=shrunk_messages,
+            # 0 when nothing was reclaimed: a pass that frees no tokens must
+            # not read as success to the runner's "Proactive compaction" log.
+            passes_used=1 if tokens_after < tokens_before else 0,
             tokens_before=tokens_before,
-            tokens_after=tokens_before,
+            tokens_after=tokens_after,
         )
 
     # The WHOLE chain, not models[0]: compaction has to survive a dead primary
@@ -744,6 +823,28 @@ async def compact(
         est = estimate_tokens(result_msgs)
 
     logger.info("Pass 4 (progressive pruning): ~%d → ~%d tokens", tokens_before, est)
+
+    # Pass 5 — token-bound backstop. Every pass above reclaims by MESSAGE:
+    # thin, summarise, prune. None of them helps when the tokens are
+    # concentrated in a handful of enormous ones, and measured 2026-08-27 a
+    # 25-message / 270,019-token conversation still finished at 225,050 — over
+    # any window this fleet runs, including the local tier's 65,536.
+    #
+    # The engine sends num_ctx from that same registry number, so "compacted"
+    # while still three times the window is not a smaller prompt, it is a
+    # silently truncated one.
+    if est > drain_to:
+        result_msgs, shrunk = _shrink_largest(result_msgs, drain_to)
+        if shrunk:
+            est_after = estimate_tokens(result_msgs)
+            logger.info(
+                "Pass 5 (token-bound backstop): %s oversized message(s) shrunk, ~%d → ~%d tokens",
+                sanitize_log(shrunk),
+                est,
+                est_after,
+            )
+            est = est_after
+
     return CompactionResult(
         messages=result_msgs,
         facts_extracted=all_facts,
