@@ -225,13 +225,6 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Federation read-only tools
         "federation_query",
         "federation_sync_status",
-        # Contributed by the genus-plugin-pf plugin, not by core. The entry
-        # stays because the plugin CONTRACT has no way to declare a tool
-        # read-only -- genus.tools carries handlers and genus.schemas carries
-        # schemas, but safety classification is still core's table. Dropping
-        # this line would silently reclassify a read-only probe as a write
-        # tool. Remove it when the contract grows a read_only declaration.
-        "pf_system_status",
         # Git read-only tools
         "git_status",
         "git_diff",

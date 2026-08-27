@@ -339,21 +339,37 @@ class ToolRegistry:
         self._refresh_plugin_schemas_if_stale()
         return self._schemas.get(name)
 
+    def _readonly_names(self) -> set[str]:
+        """Core's table plus whatever installed plugins declared about their own tools.
+
+        A plugin ships handlers and schemas; before this, safety
+        classification stayed hardcoded here, so extracting an integration to
+        a plugin left a fact about that instance behind in core. A plugin that
+        declares nothing contributes nothing — absent means WRITE, which is
+        the safe default.
+        """
+        from robothor.engine.tools.constants import READONLY_TOOLS
+
+        names = set(READONLY_TOOLS)
+        try:
+            from robothor.plugins import load_plugins
+
+            names |= load_plugins(reserved_names=set()).read_only
+        except Exception as e:  # noqa: BLE001 - a plugin must not break plan mode
+            logger.warning("Plugin read-only declarations skipped: %s", e)
+        return names
+
     def build_readonly_for_agent(self, config: AgentConfig) -> list[dict[str, Any]]:
         """Return only read-only tool schemas for plan mode."""
         self._refresh_plugin_schemas_if_stale()
-        from robothor.engine.tools.constants import READONLY_TOOLS
-
         full_names = set(self.get_tool_names(config))
-        readonly_names = sorted(full_names & READONLY_TOOLS)
+        readonly_names = sorted(full_names & self._readonly_names())
         return [self._schemas[n] for n in readonly_names if n in self._schemas]
 
     def get_readonly_tool_names(self, config: AgentConfig) -> list[str]:
         """Return read-only tool names for plan mode."""
-        from robothor.engine.tools.constants import READONLY_TOOLS
-
         full_names = set(self.get_tool_names(config))
-        return sorted(full_names & READONLY_TOOLS)
+        return sorted(full_names & self._readonly_names())
 
     def get_tool_names(self, config: AgentConfig) -> list[str]:
         """Return filtered tool names for an agent."""

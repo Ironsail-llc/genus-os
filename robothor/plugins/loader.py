@@ -64,6 +64,10 @@ class PluginSet:
     hooks: dict[str, Any] = field(default_factory=dict)
     models: dict[str, Any] = field(default_factory=dict)
     jobs: dict[str, Any] = field(default_factory=dict)
+    #: Tool names the providing plugin declared read-only. Absent means
+    #: WRITE, which is the safe default and today's behaviour: a plugin
+    #: that says nothing must never be assumed harmless.
+    read_only: set[str] = field(default_factory=set)
     loaded: list[Any] = field(default_factory=list)
     failures: list[PluginFailure] = field(default_factory=list)
 
@@ -192,8 +196,38 @@ def load_plugins(
             )
             continue
 
+        # A plugin may classify its OWN tools as read-only. Safety
+        # classification used to be core's hardcoded table, so extracting an
+        # integration to a plugin left a fact about that instance behind in
+        # core -- the fork this seam exists to prevent.
+        declared_ro: set[str] = set()
+        if group == "genus.tools" and "read_only" in payload:
+            raw = payload.get("read_only")
+            if not isinstance(raw, list | tuple | set) or not all(isinstance(x, str) for x in raw):
+                result.failures.append(
+                    PluginFailure(name, group, "read_only must be a list of tool names — refused")
+                )
+                continue
+            foreign = sorted(set(raw) - set(contributions))
+            if foreign:
+                # Reclassifying a tool it does not provide is privilege
+                # escalation, not extension.
+                result.failures.append(
+                    PluginFailure(
+                        name,
+                        group,
+                        f"read_only names {foreign} are not provided by this plugin — refused",
+                    )
+                )
+                logger.warning(
+                    "Plugin %r tried to classify tool(s) it does not own: %s", name, foreign
+                )
+                continue
+            declared_ro = set(raw)
+
         # All-or-nothing: validated above, applied here.
         target.update(contributions)
+        result.read_only |= declared_ro
         result.loaded.append(ep)
         logger.info("Plugin %r loaded %d %s", name, len(contributions), _GROUPS[group])
 
