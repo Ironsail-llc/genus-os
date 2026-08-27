@@ -351,6 +351,10 @@ class AgentConfig:
     # ── v2 enhancements (all default off for backward compat) ──
     # Sub-agent spawning
     can_spawn_agents: bool = False
+    #: Tell the agent what files are in its workspace during warmup.
+    #: Off by default — an operator's workspace listing is neither small
+    #: nor useful, so this is opted into per agent.
+    workspace_inventory: bool = False
     max_nesting_depth: int = 2  # absolute cap: 3
     sub_agent_max_iterations: int = 10
     # Wall-clock cap for spawned child agents — 0 means no cap, child
