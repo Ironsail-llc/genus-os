@@ -74,4 +74,3 @@ def terminal_run(session, outcome, reason, diag, watchdog_fired):
     if outcome.status is RunStatus.CANCELLED and not watchdog_fired:
         return session.cancelled(reason=reason, traceback=diag)
     return session.timeout(reason=reason, traceback=diag)
-
