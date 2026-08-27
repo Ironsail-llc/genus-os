@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 import litellm
 
 from robothor.db.connection import current_tenant_scope
+from robothor.engine.cancel_outcome import _cancel_outcome, terminal_run
 from robothor.engine.config import (
     EngineConfig,
     _prompt_cache,
@@ -514,6 +515,7 @@ def _resolve_sandbox_decision(config: AgentConfig, mode: str) -> str:
 #: tool calls at the measured rate of roughly six seconds each, which is
 #: enough to write out what has been gathered. A warning at 95% is one the
 #: agent cannot act on.
+
 class AgentRunner(
     LLMCallMixin,
     RunLifecycleMixin,
@@ -753,7 +755,6 @@ class AgentRunner(
         # Every budget from ONE derivation, scaled for the chain that serves this
         # run. A 0 budget still means "disabled" and stays 0.
         from robothor.engine.run_budget import watchdog_budgets_for
-
         _budgets = watchdog_budgets_for(agent_config)
         stall_timeout = _budgets.stall
         effective_hard_timeout = _budgets.hard
@@ -1564,12 +1565,13 @@ class AgentRunner(
                 )
             # Cancelled from outside (circuit breaker, daemon shutdown,
             # or a caller-level wait_for). Name what we know.
-            ht = agent_config.timeout_seconds
-            reason = abort_reason or (
-                f"Circuit-breaker hard timeout ({ht}s); last activity: {watchdog.last_activity_desc}"
-                if ht > 0
-                else f"Run cancelled externally; last activity: {watchdog.last_activity_desc}"
-            )
+            _outcome = _cancel_outcome(
+                timed_out=isinstance(_cancel_exc, TimeoutError),
+                declared_timeout_seconds=agent_config.timeout_seconds,
+                effective_ceiling=effective_hard_timeout,
+                last_activity=watchdog.last_activity_desc,
+                waiting_on=watchdog.waiting_on)
+            reason = abort_reason or _outcome.reason
             logger.warning("Agent %s cancelled: %s", _sanitize(agent_id), _sanitize(reason))
             session.record_error(reason)
             # Diagnostic dump for the noon-storm investigation. Captures
@@ -1580,7 +1582,7 @@ class AgentRunner(
             # finalization_budget's module docstring for what that cost.
             _finish = asyncio.to_thread(
                 self._finish_run,
-                session.timeout(reason=reason, traceback=diag),
+                terminal_run(session, _outcome, reason, diag, bool(abort_reason)),
                 trace=trace,
                 agent_config=agent_config,
                 session=session,
@@ -2018,9 +2020,8 @@ class AgentRunner(
         # ── [WALLCLOCK] the loop's own deadline — computed once, checked
         # every iteration. See the self-check below for why this exists.
         from robothor.engine.run_budget import chain_for, effective_wallclock_ceiling
-
         _wallclock_ceiling = effective_wallclock_ceiling(
-            agent_config.timeout_seconds, models=chain_for(agent_config)
+            agent_config.timeout_seconds, chain_for(agent_config)
         )
         _wallclock_deadline = (
             time.monotonic() + _wallclock_ceiling if _wallclock_ceiling > 0 else None

@@ -164,7 +164,11 @@ class TestTheRunIsStillRecorded:
                 await task
 
         assert finished, "the run was cancelled without recording a terminal status"
-        assert finished[0].status == RunStatus.TIMEOUT
+        # 2026-08-27: an EXTERNAL cancel is no longer filed as a timeout. Both
+        # outcomes used to write status='timeout', which hid real timeouts from
+        # the timeout rate and left `resume` (selecting status='running')
+        # nothing to recover from a graceful restart.
+        assert finished[0].status == RunStatus.CANCELLED
         assert "cancelled" in (finished[0].error_message or "").lower()
 
 
