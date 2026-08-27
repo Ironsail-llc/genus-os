@@ -76,6 +76,52 @@ def sandbox_network() -> str:
     return os.environ.get("ROBOTHOR_SANDBOX_NETWORK", "none")
 
 
+#: Env var naming the sandbox backend to use. Empty (the default) means the
+#: built-in container runtime.
+SANDBOX_BACKEND_ENV = "ROBOTHOR_SANDBOX_BACKEND"
+
+
+def active_sandbox_backend() -> Any:
+    """The plugin backend the operator selected, or None for the built-in.
+
+    Every other plugin seam in Genus takes effect the moment a package is
+    installed. That is right for a tool or a model and wrong here: this
+    class is what confines untrusted execution, and a package able to
+    replace it by merely being present could replace it with a no-op while
+    nothing looked different. So installation is not selection — a backend
+    is inert until the operator names it in ``ROBOTHOR_SANDBOX_BACKEND``.
+
+    Naming one that is not installed raises rather than falling back. A
+    silent fall-back to the built-in runtime would turn a misconfigured
+    hardening step into an invisible downgrade, which is the failure this
+    whole seam exists to avoid.
+    """
+    name = os.environ.get(SANDBOX_BACKEND_ENV, "").strip()
+    if not name:
+        return None
+
+    try:
+        from robothor.plugins import load_plugins
+
+        loaded = load_plugins(reserved_names=set())
+        backends = loaded.sandboxes or {}
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            f"sandbox backend {name!r} requested but plugins failed to load: {exc}"
+        ) from exc
+
+    spec = backends.get(name)
+    if spec is None:
+        raise RuntimeError(
+            f"sandbox backend {name!r} is not installed "
+            f"(available: {sorted(backends) or 'none'}). Refusing to fall back "
+            "to the built-in runtime silently."
+        )
+    if not isinstance(spec, dict) or not callable(spec.get("build_argv")):
+        raise RuntimeError(f"sandbox backend {name!r} does not provide a callable build_argv")
+    return spec
+
+
 class SandboxMode(StrEnum):
     LOCAL = "local"
     DOCKER = "docker"
@@ -100,6 +146,15 @@ class Sandbox:
         container runtime — they are the whole security value of this class and
         were previously absent: no mount, no --network, no --user, no --cap-drop.
         """
+        backend = active_sandbox_backend()
+        if backend is not None:
+            # The operator selected a plugin runtime. It owns the whole argv:
+            # a backend that could only prepend flags could not express a
+            # different isolation model, which is the point of having one.
+            return list(
+                backend["build_argv"](workspace=workspace, run_id=self.run_id, cdp_port=cdp_port)
+            )
+
         binary = sandbox_binary()
         argv = [
             binary,

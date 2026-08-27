@@ -42,6 +42,7 @@ available to any agent whose manifest lists it in `tools_allowed`.
 | `genus.models` | `models` | token limits and pricing for models the built-in table does not know |
 | `genus.jobs` | `jobs` | work that runs on a schedule, not on a tool call |
 | `genus.commands` | `commands` | operator verbs — `robothor <verb>` |
+| `genus.sandboxes` | `sandboxes` | alternative sandbox runtimes (**opt-in**, see below) |
 
 A tool normally ships in two groups: the handler and its schema. The engine
 keeps those in separate registries and so does the loader.
@@ -152,6 +153,37 @@ Built-in verbs always win: the set is read off the parser itself and passed
 to the loader as reserved, so a package cannot claim `migrate`, `snapshot`
 or `serve`. The list is derived rather than hand-maintained, because a
 second copy would drift the first time a subcommand was added.
+
+## A sandbox runtime — the one group installation does not activate
+
+Every group above takes effect as soon as the package is installed. This one
+does not, and the difference is deliberate.
+
+The sandbox is what confines untrusted execution. A package able to replace
+it merely by being present could replace it with a no-op, and nothing would
+look any different. So an installed backend stays inert until the operator
+names it:
+
+```bash
+ROBOTHOR_SANDBOX_BACKEND=gvisor
+```
+
+```python
+# acme_sandbox/__init__.py
+def build_argv(*, workspace, run_id, cdp_port=None):
+    return ["runsc", "run", "--rootfs", workspace, run_id]
+
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "sandboxes": {"gvisor": {"build_argv": build_argv}},
+}
+```
+
+The backend owns the whole argv — a backend that could only prepend flags
+could not express a different isolation model, which is the point of having
+one. Naming a backend that is not installed **raises**; it never falls back
+to the built-in runtime, because a silent fall-back would turn a
+misconfigured hardening step into an invisible downgrade.
 
 ## Reloading without a restart
 
