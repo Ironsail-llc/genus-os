@@ -18,6 +18,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from croniter import croniter  # type: ignore[import-untyped,unused-ignore]
 
+from robothor.engine.admission import admit, complete, register
 from robothor.engine.config import (
     ManifestScan,
     load_manifest_dir,
@@ -618,6 +619,8 @@ class CronScheduler:
             if self._circuit_breaker_tripped(dedup_key, agent_config):
                 return
 
+            if not admit(agent_id, agent_config, self.config):
+                return
             # No scheduler-level wall-clock cap. When the agent has an
             # explicit timeout_seconds > 0 the runner's asyncio.timeout
             # handles it; otherwise the run goes until completion. A
@@ -625,6 +628,7 @@ class CronScheduler:
             # caught by the progress-based stall watchdog if the operator
             # opts in.
             try:
+                register(dedup_key, agent_id)  # released in the finally below
                 if agent_config.timeout_seconds > 0:
                     safety_timeout = agent_config.timeout_seconds + 120
                     async with asyncio.timeout(safety_timeout):
@@ -652,6 +656,7 @@ class CronScheduler:
                 self._record_timeout(dedup_key)
 
         finally:
+            complete(dedup_key)
             await release(dedup_key)
 
     def _circuit_breaker_tripped(self, dedup_key: str, agent_config: AgentConfig) -> bool:

@@ -39,6 +39,17 @@ KNOWN_DRIFT: dict[str, str] = {
         "if ROBOTHOR_COMPACTION_TRIGGER_TOKENS is ever raised or disabled this "
         "is the first entry that would overflow."
     ),
+    "ollama_chat/qwen3.8:27b": (
+        "registry 65,536 vs catalog 262,144 — DELIBERATE, and the only entry "
+        "here where the registry number is load-bearing rather than advisory. "
+        "The engine now sends num_ctx to Ollama FROM this value, and Ollama "
+        "allocates KV cache as num_ctx x OLLAMA_NUM_PARALLEL: at the catalog's "
+        "262,144 the resident footprint was 18.9GB of a pool shared with a "
+        "pinned embedder, a reranker and a 1.7B. Nothing on this fleet sends a "
+        "262k-token prompt. It must stay above proactive_compaction_threshold "
+        "plus max output or the server truncates in silence — "
+        "test_local_tier_residency pins that invariant."
+    ),
     "openrouter/google/gemini-3.1-pro-preview": (
         "registry 1,000,000 vs catalog 1,048,576 — we compact 5% early on a "
         "model the fleet has not used in the last 7 days."

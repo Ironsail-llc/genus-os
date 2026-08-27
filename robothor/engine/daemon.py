@@ -915,9 +915,16 @@ async def main() -> int:
     # Initialize fleet pool for admission control
     from robothor.engine.pool import init_fleet_pool
 
+    # One slot held back for interactive work. A cap alone still lets nightly
+    # sweeps fill every slot: measured 2026-08-27, an operator's Telegram turn
+    # took 1.2 min with the box idle and 17.9 min with two background runs in
+    # flight, because nothing knew a human was waiting. The reservation makes
+    # that inversion structurally impossible rather than merely unlikely.
+    _reserved = int(os.environ.get("ROBOTHOR_RESERVED_INTERACTIVE_SLOTS", "1"))
     init_fleet_pool(
         max_concurrent=config.max_concurrent_agents,
         hourly_cost_cap_usd=config.hourly_cost_cap_usd,
+        reserved_slots=max(0, min(_reserved, config.max_concurrent_agents - 1)),
     )
     logger.info(
         "Fleet pool: max_concurrent=%d, hourly_cost_cap=$%.2f",
