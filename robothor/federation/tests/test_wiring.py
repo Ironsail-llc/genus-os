@@ -151,3 +151,48 @@ class TestTheToolsAreReachable:
             "FEDERATION_TOOLS is defined and referenced by nothing in production "
             "— the tool class exists only in its own constant"
         )
+
+
+def _defines(path: pathlib.Path, name: str) -> bool:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return False
+    return any(
+        isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name == name
+        for n in ast.walk(tree)
+    )
+
+
+def _production_callers(name: str) -> set[pathlib.Path]:
+    """Production files that CALL ``name``, excluding the one that defines it.
+
+    Only the DEFINING module is excluded. Excluding a whole package would hide
+    exactly the case this guards: a helper reachable only from its own sibling,
+    with no command on the other end.
+    """
+    return {
+        path for path in _production_files() if name in _calls_in(path) and not _defines(path, name)
+    }
+
+
+class TestBrokerProvisioningIsReachable:
+    """`render_config` and `PeerAccount` were built, tested, and called only by
+    the soak. `robothor federation invite` created no NATS account at all, so
+    pairing ended at an Authorization Violation the operator had no way to
+    predict. That is the same shape as `set_nats_manager` having no production
+    caller — the defect this file exists to prevent recurring."""
+
+    def test_the_accounts_generator_has_a_production_caller(self):
+        assert _production_callers("render_accounts_block"), (
+            "nothing outside tests generates the broker accounts block, so "
+            "every invite hands out a credential the broker has never heard of"
+        )
+
+    def test_provisioning_has_a_production_caller(self):
+        assert _production_callers("provision_broker"), "provisioning exists but no command runs it"
+
+    def test_the_reload_has_a_production_caller(self):
+        assert _production_callers("reload_broker"), (
+            "a config nats-server has not read is a config that does nothing"
+        )

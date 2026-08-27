@@ -157,9 +157,25 @@ def create_invite_token(
     # 2026-03-09 without ever logging an error.
     connection_id = str(uuid.uuid4())
 
+    # The credential this peer will present to our broker, minted here so the
+    # signed token carries it. Without this the operator hands over a token and
+    # the peer still has to be told which broker to dial and what password to
+    # use — so the credential travels by chat message instead of inside the
+    # signed blob designed to carry exactly this.
+    from robothor.federation.provisioning import peer_credentials
+
+    pending = Connection(id=connection_id, transport={})
+    credentials = peer_credentials(pending)
+    transport: dict[str, Any] = {
+        "kind": "nats",
+        "url": config.public_endpoint or config.nats_url,
+        **credentials,
+    }
+
     token_data = {
         "v": 2,  # token format version
         "connection_id": connection_id,
+        "transport": transport,
         "issuer_id": identity.id,
         "issuer_name": identity.display_name,
         "issuer_endpoint": config.public_endpoint,
@@ -203,6 +219,7 @@ def create_invite_token(
             local_principal_id=f"federation:{connection_id}",
             local_principal_role=principal_role_for_peer(relationship),
             direction="inbound",  # we issued the invite, so the peer dials us
+            transport=dict(pending.transport),
             metadata={
                 # sha256 of the HMAC the consumer will present — precomputed
                 # here so the secret itself is never stored. See
@@ -224,6 +241,7 @@ def create_invite_token(
         issuer_public_key=identity.public_key,
         relationship=relationship,
         connection_secret=connection_secret,
+        transport=dict(transport),
         created_at=now.isoformat(),
         expires_at=expires.isoformat(),
     )
@@ -294,6 +312,7 @@ def decode_invite_token(token_str: str, *, verify_signature: bool = True) -> Inv
     return InviteToken(
         token=token_str,
         connection_id=payload["connection_id"],
+        transport=dict(payload.get("transport") or {}),
         issuer_id=payload["issuer_id"],
         issuer_name=payload["issuer_name"],
         issuer_endpoint=payload["issuer_endpoint"],
@@ -353,6 +372,7 @@ def consume_invite_token(
         local_principal_id=f"federation:{invite.connection_id}",
         local_principal_role=principal_role_for_peer(our_relationship),
         direction="outbound",  # we consumed the invite, so we dial them
+        transport=dict(invite.transport),
         metadata={
             "connection_secret_hash": hashlib.sha256(invite.connection_secret.encode()).hexdigest(),
         },
