@@ -208,6 +208,19 @@ async def _handshake(
         _audit(HANDSHAKE_OP, principal_id, tenant_id, "error", "no federation config")
         return _err("handshake unavailable — this instance has no federation identity")
 
+    # Gate 3 is only a boundary while row-level security is enforcing.
+    # Admitting a remote principal with RLS inert would ship the tenancy layer
+    # as a comment — checked here, at activation, because it is a property of
+    # the deployment rather than of the request.
+    from robothor.federation.rls_gate import RLSInertError, require_enforcing_rls
+
+    try:
+        require_enforcing_rls()
+    except RLSInertError as e:
+        _audit(HANDSHAKE_OP, principal_id, tenant_id, "denied", "rls inert")
+        logger.error("Federation: refusing to activate %s — %s", connection.id, e)
+        return _err(str(e))
+
     try:
         verify_handshake(config, connection, payload_bytes)
     except HandshakeError as e:

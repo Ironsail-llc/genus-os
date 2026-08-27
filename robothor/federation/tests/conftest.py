@@ -27,6 +27,19 @@ def _instance(tmp_path, name: str) -> FederationConfig:
     return config
 
 
+@pytest.fixture(autouse=True)
+def _allow_inert_rls(monkeypatch):
+    """These tests pair connections; they do not test the deployment gate.
+
+    Activation refuses when row-level security is inert, which it is under a
+    test runner connecting as a superuser. The gate has its own tests in
+    test_rls_gate.py, and the soak proves it fires against a real pairing —
+    so it is switched off here deliberately and visibly, rather than being
+    satisfied by accident.
+    """
+    monkeypatch.setenv("ROBOTHOR_FEDERATION_ALLOW_INERT_RLS", "1")
+
+
 @pytest.fixture
 def parent_config(tmp_path):
     return _instance(tmp_path, "parent")
