@@ -83,8 +83,7 @@ def _deliver(level: str, title: str, body: str) -> None:
 #: says "exhausted" makes the operator go find out which kind; these do not.
 _REASON_TEXT: dict[Retirement, str] = {
     Retirement.CREDIT_EXHAUSTED: (
-        "the account balance is spent — a top-up restores service without "
-        "restarting the engine"
+        "the account balance is spent — a top-up restores service without restarting the engine"
     ),
     Retirement.QUOTA_EXHAUSTED_PERIODIC: (
         "a calendar quota window is exhausted — a top-up will NOT fix this; "

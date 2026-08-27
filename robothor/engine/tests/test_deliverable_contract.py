@@ -21,8 +21,6 @@ skill taught agents to widen a regex.
 
 from __future__ import annotations
 
-import pytest
-
 from robothor.engine.deliverable_contract import (
     check_deliverables,
     required_deliverables,

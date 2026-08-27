@@ -62,6 +62,7 @@ OpenAI-style ``response_format`` json_schema and strips any inline
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import math
 import os
@@ -541,10 +542,8 @@ async def _openrouter_chat(
             # Retire before raising, so the next call rotates instead of
             # dialling the same dead credential again.
             body = ""
-            try:
+            with contextlib.suppress(Exception):
                 body = resp.text[:500]
-            except Exception:
-                pass
             if resp.status_code != 429:
                 _retire_remote_key(api_key, status=resp.status_code, detail=body)
         resp.raise_for_status()

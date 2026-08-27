@@ -20,13 +20,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from robothor.engine.sanitize import sanitize_log
-
 # Dial through the credential pool. A direct litellm call lets the SDK
 # resolve the provider key from the environment, which on 2026-08-27 meant
 # this path kept hammering a credential the pool had already retired and
 # could not rotate to a spare. No-op for unpooled providers.
 from robothor.engine.pooled_completion import acompletion as pooled_acompletion
+from robothor.engine.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +259,6 @@ async def _acompletion_over_chain(models: str | list[str], **kwargs: Any) -> Any
     summary degrades to a placeholder — so the loss is silent: the agent's
     context is replaced by "[Segment: N messages]" with zero retained facts.
     """
-    import litellm
 
     chain = [models] if isinstance(models, str) else list(models)
     last: Exception | None = None

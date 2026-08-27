@@ -106,8 +106,6 @@ async def search_perplexity(
     Returns same format as search_web() for interchangeability.
     """
     try:
-        import litellm
-
         response = await pooled_acompletion(
             model="perplexity/sonar-pro",
             messages=[{"role": "user", "content": query}],

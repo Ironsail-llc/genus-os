@@ -55,8 +55,12 @@ def _capture(monkeypatch):
 def test_the_failure_reason_is_persisted(monkeypatch):
     sink = _capture(monkeypatch)
     tracking.log_tool_event(
-        run_id="r1", tool_name="create_task", duration_ms=5, success=False,
-        error_type="unknown", error_message="Tool 'create_task' rejected: quota",
+        run_id="r1",
+        tool_name="create_task",
+        duration_ms=5,
+        success=False,
+        error_type="unknown",
+        error_message="Tool 'create_task' rejected: quota",
     )
     sql, params = sink[0]
     assert "error_message" in sql, "the reason column is not being written"
@@ -66,8 +70,12 @@ def test_the_failure_reason_is_persisted(monkeypatch):
 def test_a_long_reason_is_truncated(monkeypatch):
     sink = _capture(monkeypatch)
     tracking.log_tool_event(
-        run_id="r1", tool_name="exec", duration_ms=5, success=False,
-        error_type="unknown", error_message="x" * 5000,
+        run_id="r1",
+        tool_name="exec",
+        duration_ms=5,
+        success=False,
+        error_type="unknown",
+        error_message="x" * 5000,
     )
     _sql, params = sink[0]
     stored = next(p for p in params if isinstance(p, str) and p.startswith("x"))
@@ -79,7 +87,10 @@ def test_a_long_reason_is_truncated(monkeypatch):
 def test_a_successful_call_stores_no_reason(monkeypatch):
     sink = _capture(monkeypatch)
     tracking.log_tool_event(
-        run_id="r1", tool_name="read_file", duration_ms=5, success=True,
+        run_id="r1",
+        tool_name="read_file",
+        duration_ms=5,
+        success=True,
         error_message="should not be kept",
     )
     _sql, params = sink[0]
@@ -99,7 +110,10 @@ def test_an_error_type_enum_is_normalised(monkeypatch):
 
     sink = _capture(monkeypatch)
     tracking.log_tool_event(
-        run_id="r1", tool_name="x", duration_ms=1, success=False,
+        run_id="r1",
+        tool_name="x",
+        duration_ms=1,
+        success=False,
         error_type=ErrorType.TIMEOUT,
     )
     _sql, params = sink[0]
@@ -109,7 +123,11 @@ def test_an_error_type_enum_is_normalised(monkeypatch):
 def test_a_bare_string_error_type_still_works(monkeypatch):
     sink = _capture(monkeypatch)
     tracking.log_tool_event(
-        run_id="r1", tool_name="x", duration_ms=1, success=False, error_type="auth",
+        run_id="r1",
+        tool_name="x",
+        duration_ms=1,
+        success=False,
+        error_type="auth",
     )
     _sql, params = sink[0]
     assert "auth" in params

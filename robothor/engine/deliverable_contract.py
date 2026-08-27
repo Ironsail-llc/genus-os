@@ -62,13 +62,13 @@ _PATH = r"(?<![\w:/.])((?:/|\.{1,2}/)?(?:[\w.\-]+/)*[\w.\-]+\.[A-Za-z][\w]{0,7})
 
 _CONTRACT_PATTERNS = [
     # "save them to X", "write the output to X", "export results into X"
-    re.compile(rf"{_OUTPUT_VERB}\b[^.\n]{{0,60}}?\b(?:to|into|in|at)\s+{_PATH}", re.I),
+    re.compile(rf"{_OUTPUT_VERB}\b[^.\n]{{0,60}}?\b(?:to|into|in|at)\s+{_PATH}", re.IGNORECASE),
     # "save as X", "output as X"
-    re.compile(rf"{_OUTPUT_VERB}\b[^.\n]{{0,30}}?\bas\s+{_PATH}", re.I),
+    re.compile(rf"{_OUTPUT_VERB}\b[^.\n]{{0,30}}?\bas\s+{_PATH}", re.IGNORECASE),
 ]
 
 #: Anything inside one of these is a URL, not a local deliverable.
-_URL_RE = re.compile(r"\b[a-z][a-z0-9+.\-]*://\S+", re.I)
+_URL_RE = re.compile(r"\b[a-z][a-z0-9+.\-]*://\S+", re.IGNORECASE)
 
 
 def required_deliverables(task_text: str | None) -> list[str]:
@@ -158,9 +158,7 @@ def task_text_for_run(run: object) -> str:
         return ""
     if not task:
         return ""
-    return " ".join(
-        str(task.get(k) or "") for k in ("title", "objective", "next_action")
-    ).strip()
+    return " ".join(str(task.get(k) or "") for k in ("title", "objective", "next_action")).strip()
 
 
 def check_run_deliverables(run: object) -> DeliverableReport | None:
