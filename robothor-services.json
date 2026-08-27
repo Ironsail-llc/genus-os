@@ -1,7 +1,19 @@
 {
   "version": "1.0.0",
-  "description": "Genus OS service manifest — single source of truth for all service endpoints",
+  "description": "Genus OS service manifest \u2014 single source of truth for service endpoints. Hosts are CONNECT addresses (127.0.0.1), never bind addresses (0.0.0.0).",
   "services": {
+    "engine": {
+      "name": "Agent Engine",
+      "port": 18800,
+      "host": "127.0.0.1",
+      "health": "/ready",
+      "systemd_unit": "robothor-engine.service",
+      "tunnel_route": "engine.${INSTANCE_DOMAIN}",
+      "dependencies": [
+        "postgres",
+        "redis"
+      ]
+    },
     "bridge": {
       "name": "Bridge Service",
       "port": 9100,
@@ -9,34 +21,46 @@
       "health": "/health",
       "systemd_unit": "robothor-bridge.service",
       "tunnel_route": "bridge.${INSTANCE_DOMAIN}",
-      "dependencies": ["postgres", "redis"]
+      "dependencies": [
+        "postgres",
+        "redis"
+      ]
     },
     "orchestrator": {
       "name": "RAG Orchestrator",
       "port": 9099,
-      "host": "0.0.0.0",
+      "host": "127.0.0.1",
       "health": "/health",
       "systemd_unit": "robothor-orchestrator.service",
       "tunnel_route": "orchestrator.${INSTANCE_DOMAIN}",
-      "dependencies": ["postgres", "redis", "ollama"]
+      "dependencies": [
+        "postgres",
+        "redis",
+        "ollama"
+      ]
     },
     "vision": {
       "name": "Vision Service",
       "port": 8600,
-      "host": "0.0.0.0",
+      "host": "127.0.0.1",
       "health": "/health",
       "systemd_unit": "robothor-vision.service",
       "tunnel_route": "vision.${INSTANCE_DOMAIN}",
-      "dependencies": ["mediamtx"]
+      "dependencies": [
+        "mediamtx"
+      ]
     },
     "helm": {
       "name": "Helm Dashboard",
       "port": 3004,
-      "host": "0.0.0.0",
+      "host": "127.0.0.1",
       "health": "/api/health",
       "systemd_unit": "robothor-app.service",
       "tunnel_route": "app.${INSTANCE_DOMAIN}",
-      "dependencies": ["bridge", "orchestrator"]
+      "dependencies": [
+        "bridge",
+        "orchestrator"
+      ]
     },
     "ollama": {
       "name": "Ollama LLM Server",
@@ -52,7 +76,9 @@
       "port": 8554,
       "host": "127.0.0.1",
       "health": null,
-      "extra_ports": { "hls": 8890 },
+      "extra_ports": {
+        "hls": 8890
+      },
       "systemd_unit": "mediamtx-webcam.service",
       "tunnel_route": "cam.${INSTANCE_DOMAIN}",
       "dependencies": []
@@ -73,24 +99,6 @@
       "health": null,
       "systemd_unit": "postgresql.service",
       "tunnel_route": null,
-      "dependencies": []
-    },
-    "status": {
-      "name": "Status Server",
-      "port": 3000,
-      "host": "0.0.0.0",
-      "health": "/",
-      "systemd_unit": "robothor-status.service",
-      "tunnel_route": "${INSTANCE_DOMAIN}",
-      "dependencies": []
-    },
-    "status_dashboard": {
-      "name": "Status Dashboard",
-      "port": 3001,
-      "host": "0.0.0.0",
-      "health": "/",
-      "systemd_unit": "robothor-status-dashboard.service",
-      "tunnel_route": "status.${INSTANCE_DOMAIN}",
       "dependencies": []
     },
     "voice": {
@@ -136,24 +144,6 @@
       "health": "/v1/models",
       "systemd_unit": null,
       "tunnel_route": "tts.${INSTANCE_DOMAIN}",
-      "dependencies": []
-    },
-    "ops_dashboard": {
-      "name": "Ops Dashboard",
-      "port": 3003,
-      "host": "0.0.0.0",
-      "health": "/",
-      "systemd_unit": "robothor-dashboard.service",
-      "tunnel_route": "ops.${INSTANCE_DOMAIN}",
-      "dependencies": []
-    },
-    "privacy": {
-      "name": "Privacy Policy",
-      "port": 3002,
-      "host": "0.0.0.0",
-      "health": "/",
-      "systemd_unit": "robothor-privacy.service",
-      "tunnel_route": "privacy.${INSTANCE_DOMAIN}",
       "dependencies": []
     }
   }

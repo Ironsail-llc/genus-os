@@ -30,6 +30,21 @@ WorkingDirectory=/opt/robothor/crm/bridge
 ExecStart=/opt/robothor/crm/bridge/venv/bin/python bridge_service.py
 
 EnvironmentFile=/etc/robothor/robothor.env
+# GENUS_BRIDGE_SSO_SECRET and GENUS_OIDC_ISSUERS live in secrets.env, not
+# robothor.env. Without this line the bridge process had neither, so
+# routers/auth.py:48-52 read GENUS_BRIDGE_SSO_SECRET as None and :105-106
+# returned 403 on EVERY /auth/sso exchange. Cloudflare Access authenticated the
+# user at the edge, the JWT verified, the bridge refused, proxy.ts:54 saw no
+# bridgeAccess and :62-65 bounced them to /signin. Nobody could sign in from
+# 2026-07-26 until 2026-08-27.
+EnvironmentFile=-/run/robothor/secrets.env
+# GENUS_ENVIRONMENT=production is NOT set here yet, deliberately.
+# auth/runtime.py:104-112 requires THREE things in production:
+# GENUS_AUTH_SIGNING_KEY (>=32 bytes), GENUS_BRIDGE_SSO_SECRET, and
+# GENUS_OIDC_ISSUERS. Only the second exists on this box; setting the flag
+# without the other two crash-loops the bridge on startup
+# ("GENUS_AUTH_SIGNING_KEY is required in production"), which is the check
+# working correctly. See the follow-up commit that provisions the signing key.
 
 Restart=always
 RestartSec=5
