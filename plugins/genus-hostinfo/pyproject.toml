@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genus-hostinfo"
+version = "0.1.0"
+description = "Host thermal, GPU and memory state as a Genus tool"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6.0"]
+
+[project.entry-points."genus.tools"]
+hostinfo = "genus_hostinfo:PLUGIN"
+
+[project.entry-points."genus.schemas"]
+hostinfo = "genus_hostinfo:PLUGIN"
+
+[project.entry-points."genus.services"]
+hostinfo = "genus_hostinfo:PLUGIN"
+
+[tool.setuptools]
+packages = ["genus_hostinfo"]
+
+[tool.setuptools.package-data]
+genus_hostinfo = ["genus-plugin.yaml"]
