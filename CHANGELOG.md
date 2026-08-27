@@ -1,3 +1,13 @@
+## [1.57.0](https://github.com/Ironsail-llc/genus-os/compare/v1.56.0...v1.57.0) (2026-08-27)
+
+### Features
+
+* **models:** register deepseek-v4-flash as the cloud fallback ([#427](https://github.com/Ironsail-llc/genus-os/issues/427)) ([1cb6345](https://github.com/Ironsail-llc/genus-os/commit/1cb6345c6d977415aaf9797a8fb0eee9a087bc1e))
+
+### Tests
+
+* **plugins:** fail CI when an extension point has no consumer ([#426](https://github.com/Ironsail-llc/genus-os/issues/426)) ([47df89c](https://github.com/Ironsail-llc/genus-os/commit/47df89ce72109bbe5edba0bff1b563f895df85f4)), closes [#411](https://github.com/Ironsail-llc/genus-os/issues/411) [#421](https://github.com/Ironsail-llc/genus-os/issues/421) [#421](https://github.com/Ironsail-llc/genus-os/issues/421) [#424](https://github.com/Ironsail-llc/genus-os/issues/424) [#425](https://github.com/Ironsail-llc/genus-os/issues/425)
+
 ## [1.56.0](https://github.com/Ironsail-llc/genus-os/compare/v1.55.3...v1.56.0) (2026-08-26)
 
 ### Features
