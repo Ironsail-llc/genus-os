@@ -160,27 +160,44 @@ class SyncEvent:
     created_at: str = ""
 
 
-# ── Default export templates per relationship ────────────────────────
+# ── Capabilities ─────────────────────────────────────────────────────
+#
+# Read every name below as "what the PEER may do TO US". That direction is the
+# whole point, and the old vocabulary did not encode it.
+#
+# The previous set conflated reading with executing: `agent_runs` was the
+# required capability for BOTH `list_runs` and `trigger`, and it sat in
+# CHILD_DEFAULT_EXPORTS. A child therefore got the right to run arbitrary
+# agents on its parent BY DEFAULT — the exact inversion of the intended
+# hierarchy, where a parent has authority over its children and a child has
+# none over its parent.
 
-PARENT_DEFAULT_EXPORTS = [
-    "memory_search",
-    "crm_read",
-    "config_push",
-]
+CAP_REPORT_UP = "report_up"  # peer may push telemetry/escalations to us
+CAP_READ_HEALTH = "read_health"  # peer may read our liveness
+CAP_READ_RUNS = "read_runs"  # peer may LIST our runs
+CAP_TRIGGER_AGENT = "trigger_agent"  # peer may EXECUTE on us — never a default
+CAP_SEARCH_MEMORY = "search_memory"  # peer may query our memory
+CAP_PUSH_CONFIG = "push_config"  # peer may change our config — never a default
 
-CHILD_DEFAULT_EXPORTS = [
-    "health",
-    "agent_runs",
-    "sensor_data",
-    "alerts",
-    "escalation",
-]
+#: Capabilities that let a peer CHANGE this instance. Neither may ever appear
+#: in a default template; both require an explicit, audited grant.
+WRITE_CAPABILITIES = frozenset({CAP_TRIGGER_AGENT, CAP_PUSH_CONFIG})
 
-PEER_DEFAULT_EXPORTS: list[str] = []  # No defaults — fully negotiated
+#: What a CHILD peer may do to us: report upward, and nothing else. This is
+#: what makes "children have no control over the parent" the default rather
+#: than an opt-in.
+CHILD_DEFAULT_EXPORTS = [CAP_REPORT_UP]
+
+#: What a PARENT peer may do to us: read-only. A parent that got owned should
+#: have a blast radius the child's operator chose deliberately.
+PARENT_DEFAULT_EXPORTS = [CAP_READ_HEALTH, CAP_READ_RUNS]
+
+#: A symmetric peer negotiates everything explicitly.
+PEER_DEFAULT_EXPORTS: list[str] = []
 
 
 def default_exports_for(relationship: Relationship) -> list[str]:
-    """Return default export capabilities for a relationship type."""
+    """Default capabilities granted TO a peer of this relationship type."""
     if relationship == Relationship.PARENT:
         return list(PARENT_DEFAULT_EXPORTS)
     if relationship == Relationship.CHILD:

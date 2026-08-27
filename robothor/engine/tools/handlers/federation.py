@@ -24,7 +24,23 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 # Privileged ops that cross the wire to act on / read a peer must be authorized
 # by the capabilities the peer granted us (the connection's `imports`), not
 # merely by the connection being ACTIVE.
-_OP_REQUIRED_CAPABILITY = {"list_runs": "agent_runs", "trigger": "agent_runs"}
+#
+# `list_runs` and `trigger` used to share ONE capability, `agent_runs`, which
+# was also a child default. Reading what an instance did and making it do
+# something new are not the same authority, and collapsing them handed every
+# child the right to execute on its parent. They are separate now, and the
+# executing one is never a default.
+from robothor.federation.models import (  # noqa: E402
+    CAP_READ_HEALTH,
+    CAP_READ_RUNS,
+    CAP_TRIGGER_AGENT,
+)
+
+_OP_REQUIRED_CAPABILITY = {
+    "list_runs": CAP_READ_RUNS,
+    "trigger": CAP_TRIGGER_AGENT,
+    "health": CAP_READ_HEALTH,
+}
 
 
 def _authorize_op(connection: Any, op: str) -> str | None:

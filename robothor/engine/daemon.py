@@ -348,6 +348,19 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
         nats_mgr = NATSManager(nats_url)
         connected = await nats_mgr.connect()
         if connected:
+            # Register the singleton HERE, not at the call site.
+            # daemon.py:771 assigned the connected manager to a local variable
+            # and nothing ever called set_nats_manager(), so
+            # tools/handlers/federation.py's get_nats_manager() returned None
+            # forever: a peer could query US (the responder below gets the
+            # manager directly) but we could never query THEM. Outbound
+            # federation was dead for five months and no test noticed, because
+            # test_nats_request.py mocks the manager and calls the one function
+            # production never reached. Registering inside the function that
+            # creates it removes the possibility of forgetting.
+            from robothor.federation.nats import set_nats_manager
+
+            set_nats_manager(nats_mgr)
             logger.info(
                 "Federation: NATS connected, %d connections loaded",
                 len(connections),
@@ -362,6 +375,9 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
 
                         await nats_mgr.serve_requests(conn.id, make_command_handler(conn, runner))
         else:
+            from robothor.federation.nats import set_nats_manager
+
+            set_nats_manager(None)
             await _alert_federation_dead(
                 f"NATS connection to {nats_url} failed, so {len(connections)} "
                 f"configured federation connection(s) are dead. This instance is "
@@ -868,6 +884,16 @@ async def main() -> int:
     subsystem_crashed = _log_task_results(done)
 
     logger.info("Shutting down subsystems...")
+
+    # A stale singleton after shutdown would let a tool call reach a manager
+    # whose connection is gone, and report "transport not connected" as though
+    # federation were merely unconfigured.
+    try:
+        from robothor.federation.nats import set_nats_manager
+
+        set_nats_manager(None)
+    except Exception:  # noqa: BLE001 - shutdown must not raise
+        pass
 
     # Shutdown announcement (best-effort)
     try:
