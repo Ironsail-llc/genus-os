@@ -249,6 +249,32 @@ def current_tenant_scope() -> str | None:
     return _tenant_override.get()
 
 
+#: pgvector walks the hnsw graph BEFORE applying WHERE predicates, so a
+#: filtered vector search spends its LIMIT on candidates that are then thrown
+#: away. On 2026-08-27 a tenant holding 220 of 29,551 active facts got 12 rows
+#: for a LIMIT of 20 while the largest tenant got all 20 -- recall degraded in
+#: proportion to tenant size, and invisibly, because a short result set is
+#: indistinguishable from a sparse corpus.
+#:
+#: `relaxed_order` rather than `strict_order`: this engine re-ranks ANN
+#: candidates through RRF and a cross-encoder, so exact index ordering is
+#: discarded downstream and paying to preserve it buys nothing.
+ANN_ITERATIVE_SCAN_MODE = "relaxed_order"
+
+
+def _apply_ann_scan_mode(conn: object) -> None:
+    """Ask pgvector to keep scanning until a filtered LIMIT is satisfied.
+
+    Best-effort: pgvector < 0.8 has no such GUC, and a vector-search tuning
+    knob must never be able to fail a database checkout.
+    """
+    try:
+        with conn.cursor() as cur:  # type: ignore[attr-defined]
+            cur.execute(f"SET hnsw.iterative_scan = {ANN_ITERATIVE_SCAN_MODE}")
+    except Exception as exc:  # noqa: BLE001 -- tuning must not break the pool
+        logger.debug("could not set hnsw.iterative_scan: %s", exc)
+
+
 def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
     """Bind this connection to the current tenant for RLS.
 
@@ -377,6 +403,7 @@ def get_connection(
         if autocommit:
             conn.autocommit = True
         _apply_tenant_scope(conn)
+        _apply_ann_scan_mode(conn)
         yield conn
         if not autocommit:
             conn.commit()
