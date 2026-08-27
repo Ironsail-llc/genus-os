@@ -40,12 +40,17 @@ EXTERNAL_CANCEL_PREFIX = "Run cancelled externally"
 #: (test_harness_kill_is_not_a_grade); the goal metric had not.
 GENUINE_TIMEOUT_SQL = (
     f"status = 'timeout' AND COALESCE(error_message, '') NOT LIKE '{EXTERNAL_CANCEL_PREFIX}%%'"
+    " AND status <> 'cancelled'"
 )
 
 #: The other half, kept rather than discarded: a rising interrupted count is
 #: a real signal about the host, just not about the agent.
+#: Matches BOTH forms on purpose. New rows carry `status='cancelled'`; the
+#: thirty days of history written before that still say `timeout` plus the
+#: prefix, and dropping them would put a false cliff in every trend.
 INTERRUPTED_SQL = (
-    f"status = 'timeout' AND COALESCE(error_message, '') LIKE '{EXTERNAL_CANCEL_PREFIX}%%'"
+    "(status = 'cancelled' OR (status = 'timeout' AND COALESCE(error_message, '') "
+    f"LIKE '{EXTERNAL_CANCEL_PREFIX}%%'))"
 )
 
 
@@ -54,6 +59,12 @@ def is_external_cancellation(error_message: str | None) -> bool:
     if not error_message:
         return False
     return error_message.startswith(EXTERNAL_CANCEL_PREFIX)
+
+
+#: Terminal states that mean "interrupted, not finished" — the runs resume
+#: may pick up. `timeout` and `failed` are deliberately absent: a run that
+#: blew its own ceiling asked for the ceiling, not a retry.
+RESUMABLE_STATUSES: frozenset[str] = frozenset({"running", "cancelled"})
 
 
 # ─── The production-run filter (one definition, every call site) ──────

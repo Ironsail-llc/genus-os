@@ -86,9 +86,18 @@ async def resume_interrupted_runs() -> int:
 
         with get_connection() as conn:
             cur = conn.cursor()
+            # Both interrupted states, not just `running`. A hard kill leaves
+            # a row `running`; a GRACEFUL restart writes `cancelled` on the way
+            # down -- and that is the restart that actually happens. On
+            # 2026-08-27 a normal `systemctl restart` tombstoned five in-flight
+            # runs two seconds before the new daemon scanned, three of them
+            # holding checkpoints, and resume recovered none of them.
+            from robothor.engine.resume import RESUMABLE_STATUSES
+
             cur.execute(
                 "SELECT id, agent_id, COALESCE(resume_attempts, 0) FROM agent_runs "
-                "WHERE status = 'running' ORDER BY id"
+                "WHERE status = ANY(%s) ORDER BY id",
+                (sorted(RESUMABLE_STATUSES),),
             )
             rows = cur.fetchall()
     except Exception as e:

@@ -28,6 +28,17 @@ import logging
 import os
 from dataclasses import dataclass
 
+from robothor.engine.analytics import RESUMABLE_STATUSES as _RESUMABLE_STATUSES
+
+#: Statuses a run may be resumed from. `running` is a hard kill (SIGKILL, OOM,
+#: power loss) that never got to write a terminal row. `cancelled` is the
+#: GRACEFUL case, and it is the one that actually happens: on 2026-08-27 a
+#: normal `systemctl restart` tombstoned five in-flight runs at 16:11:43 --
+#: three of them holding checkpoints -- two seconds before the new daemon
+#: booted and scanned for `running` only. It recovered none of them. Selecting
+#: `running` alone made this feature fire only on the rarest kind of restart.
+RESUMABLE_STATUSES = _RESUMABLE_STATUSES
+
 logger = logging.getLogger(__name__)
 
 #: Times a single run may be resumed before it is left to the reaper. Two is

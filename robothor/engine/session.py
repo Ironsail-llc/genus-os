@@ -509,11 +509,19 @@ class AgentSession:
         self._finalize_symbol_graph()
         return self.run
 
-    def cancelled(self, reason: str | None = None) -> AgentRun:
-        """Mark the run as cancelled (e.g. operator interrupt)."""
+    def cancelled(self, reason: str | None = None, traceback: str | None = None) -> AgentRun:
+        """Mark the run as cancelled (e.g. operator interrupt, engine restart).
+
+        ``traceback`` carries the cancel diagnostic (who else was alive, the
+        watchdog's last touch) that `timeout()` already accepted. Without it,
+        moving external cancellation off `timeout` would have silently dropped
+        the noon-storm evidence.
+        """
         self.run.status = RunStatus.CANCELLED
         self.run.completed_at = datetime.now(UTC)
         self.run.error_message = reason or "Run cancelled"
+        if traceback:
+            self.run.error_traceback = traceback
         self.run.output_text = self.get_final_text() or None
         if self._start_time:
             self.run.duration_ms = int((time.monotonic() - self._start_time) * 1000)
