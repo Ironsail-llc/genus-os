@@ -139,13 +139,25 @@ class TestTheRunnerFeedsTheDetector:
     most of this codebase's silent controls.
     """
 
-    def test_the_runner_passes_result_and_input(self):
+    def test_the_recorder_passes_result_and_input(self):
+        """Moved to `tool_outcome` when the tool-execution block came out of
+        `_run_loop`. The check follows the code: what matters is that the
+        detector is fed, not which module does the feeding."""
         from pathlib import Path
 
-        import robothor.engine.runner as m
+        import robothor.engine.tool_outcome as m
 
         source = Path(m.__file__).read_text(encoding="utf-8")
         idx = source.index("scratchpad.record_tool_call(")
         call = source[idx : idx + 260]
-        assert "result=" in call, "the runner never passes the result — detector is inert"
-        assert "tool_input=" in call, "the runner never passes the arguments"
+        assert "result=" in call, "the result is never passed — detector is inert"
+        assert "tool_input=" in call, "the arguments are never passed"
+
+    def test_the_runner_still_calls_the_recorder(self):
+        """The other half. A recorder nothing invokes is the same inert shape
+        one module further out."""
+        from pathlib import Path
+
+        import robothor.engine.runner as m
+
+        assert "record_tool_outcome(" in Path(m.__file__).read_text(encoding="utf-8")
