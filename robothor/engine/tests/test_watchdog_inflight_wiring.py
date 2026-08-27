@@ -27,7 +27,7 @@ from robothor.engine.llm_client import (
     LLM_REQUEST_TIMEOUT_OLLAMA,
     LLMClient,
 )
-from robothor.engine.stall_watchdog import _StallWatchdog, _active_watchdog_var
+from robothor.engine.stall_watchdog import _active_watchdog_var, _StallWatchdog
 
 LOCAL = "ollama_chat/qwen3.8:27b"
 
