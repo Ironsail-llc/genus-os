@@ -271,3 +271,65 @@ class KeyPool:
         """Never prints a credential — this object appears in traceback frames."""
         live = sum(1 for k in self._keys if self._available(k))
         return f"<KeyPool {live}/{len(self._keys)} available {self.status()!r}>"
+
+
+# ── Process-wide pools ──────────────────────────────────────────────
+#
+# A credential is a property of the process, not of whoever happens to hold
+# a client object. Before this, LLMClient cached pools per instance and
+# memory/generation kept its own, so retiring a key in one left the other
+# still dialling a credential the provider had already rejected. On
+# 2026-08-27 that is precisely what kept 403s flowing after the engine's own
+# pool had correctly given up.
+
+_SHARED: dict[str, KeyPool] = {}
+
+
+def reset_shared_pools() -> None:
+    """Drop every cached pool. For tests and for a secrets reload."""
+    _SHARED.clear()
+
+
+def shared_pool(var: str, on_exhausted: Callable[[Retirement], None] | None = None) -> KeyPool | None:
+    """The one pool for ``var`` in this process, or None if unconfigured.
+
+    Built lazily: secrets land in tmpfs after import, so a pool constructed at
+    module scope would be permanently empty on a real box. Returning None for
+    an unconfigured provider preserves today's behaviour — litellm resolves
+    the environment itself — rather than reporting an empty pool "exhausted"
+    and skipping every model on it.
+    """
+    pool = _SHARED.get(var)
+    if pool is None:
+        keys = keys_from_env(var)
+        if not keys:
+            return None
+        pool = KeyPool(keys, on_exhausted=on_exhausted)
+        _SHARED[var] = pool
+    return pool
+
+
+def api_key_for_model(model: str) -> str | None:
+    """The credential this model should authenticate with right now.
+
+    None means "not pooled, or nothing left in rotation" — callers should then
+    fall through to their existing behaviour rather than inventing one.
+    """
+    var = env_var_for_model(model)
+    if var is None:
+        return None
+    pool = shared_pool(var)
+    if pool is None:
+        return None
+    key = pool.current()
+    return str(key) if key is not None else None
+
+
+def retire_for_model(model: str, key: str, reason: Retirement) -> None:
+    """Take a credential out of rotation for every caller in this process."""
+    var = env_var_for_model(model)
+    if var is None:
+        return
+    pool = shared_pool(var)
+    if pool is not None:
+        pool.retire(key, reason)

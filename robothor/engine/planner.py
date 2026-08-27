@@ -20,6 +20,12 @@ import litellm
 
 from robothor.engine.sanitize import sanitize_log
 
+# Dial through the credential pool. A direct litellm call lets the SDK
+# resolve the provider key from the environment, which on 2026-08-27 meant
+# this path kept hammering a credential the pool had already retired and
+# could not rotate to a spare. No-op for unpooled providers.
+from robothor.engine.pooled_completion import acompletion as pooled_acompletion
+
 if TYPE_CHECKING:
     from robothor.engine.escalation import EscalationManager
     from robothor.engine.scratchpad import Scratchpad
@@ -156,7 +162,7 @@ async def generate_plan(
 
     for m in models:
         try:
-            response = await litellm.acompletion(
+            response = await pooled_acompletion(
                 model=m,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
@@ -284,7 +290,7 @@ async def replan(
 
     for m in models:
         try:
-            response = await litellm.acompletion(
+            response = await pooled_acompletion(
                 model=m,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,

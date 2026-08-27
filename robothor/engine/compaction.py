@@ -22,6 +22,12 @@ from typing import Any
 
 from robothor.engine.sanitize import sanitize_log
 
+# Dial through the credential pool. A direct litellm call lets the SDK
+# resolve the provider key from the environment, which on 2026-08-27 meant
+# this path kept hammering a credential the pool had already retired and
+# could not rotate to a spare. No-op for unpooled providers.
+from robothor.engine.pooled_completion import acompletion as pooled_acompletion
+
 logger = logging.getLogger(__name__)
 
 RETAINED_CONTEXT_MARKER = "[RETAINED CONTEXT]"
@@ -266,7 +272,7 @@ async def _acompletion_over_chain(models: str | list[str], **kwargs: Any) -> Any
             break
         try:
             response = await asyncio.wait_for(
-                litellm.acompletion(model=model, **kwargs),
+                pooled_acompletion(model=model, **kwargs),
                 timeout=min(_timeout_for(model), remaining),
             )
         except Exception as e:  # noqa: PERF203 - the walk IS the error handling

@@ -29,13 +29,7 @@ ROOT = Path(__file__).resolve().parents[1] / "robothor"
 #: Modules that reach a provider without going through KeyPool.
 #: Every entry is a known gap. Shrink this set; never extend it.
 KNOWN_BYPASSES: set[str] = {
-    "engine/verifier.py",
-    "engine/planner.py",
-    "engine/compaction.py",
-    "engine/tools/handlers/benchmark.py",
     "cli/codex.py",
-    "engine/tools/handlers/pdf.py",
-    "rag/web_search.py",
 }
 
 #: The one module that is *supposed* to dial out, plus support modules that
@@ -53,20 +47,31 @@ _DIAL = re.compile(
 )
 
 
+#: Evidence that a dialer authenticates through the shared pool rather than
+#: letting the provider SDK resolve the environment on its own.
+_POOLED = re.compile(r"api_key_for_model|shared_pool|_key_pool\(|_remote_api_key")
+
+
 def _dialers() -> set[str]:
+    """Modules that reach a provider WITHOUT going through the pool.
+
+    A module that dials and also consults the pool is not a bypass — that is
+    the intended shape, and flagging it would make the ratchet unpassable and
+    therefore ignored.
+    """
     found = set()
     for path in ROOT.rglob("*.py"):
         rel = path.relative_to(ROOT).as_posix()
         if "/tests/" in rel or rel.startswith("tests/"):
             continue
         text = path.read_text(errors="ignore")
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("#") or stripped.startswith("*"):
-                continue
-            if _DIAL.search(line):
-                found.add(rel)
-                break
+        dials = any(
+            _DIAL.search(line)
+            for line in text.splitlines()
+            if not line.strip().startswith(("#", "*"))
+        )
+        if dials and not _POOLED.search(text):
+            found.add(rel)
     return found
 
 

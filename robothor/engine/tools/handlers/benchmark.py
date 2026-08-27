@@ -961,6 +961,16 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
     last_error = "judge returned an empty completion"
     for attempt in range(JUDGE_ATTEMPTS):
         try:
+            # Authenticate through the process-wide pool rather than letting
+            # litellm resolve the env. The bench pins `fallbacks: []` on
+            # purpose so the comparison holds the MODEL constant -- but that
+            # says nothing about credentials, and on 2026-08-27 a single
+            # capped key stopped the one instrument that answers the
+            # front-runner question. Rotation restores the run without
+            # varying what is being measured.
+            from robothor.engine.key_pool import api_key_for_model
+
+            judge_key = api_key_for_model(model)
             response = await litellm.acompletion(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
@@ -968,6 +978,7 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
                 max_tokens=JUDGE_MAX_TOKENS,
                 response_format={"type": "json_object"},
                 timeout=30,
+                **({"api_key": judge_key} if judge_key else {}),
             )
             content = response.choices[0].message.content
             if not content:
@@ -994,6 +1005,26 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
             return JudgeOutcome(score=sum(1 for s in scores if s) / len(rubric))
         except Exception as e:
             detail = str(e).replace("\n", "\\n")
+            # Retire a rejected credential before the next attempt, or all
+            # three attempts burn on the same dead key. Classified the way
+            # the engine does, so a weekly cap is not retried in 15 minutes.
+            try:
+                from robothor.engine.key_pool import Retirement, retire_for_model
+                from robothor.engine.llm_client import (
+                    is_credit_exhausted,
+                    is_periodic_quota_exhausted,
+                )
+
+                if judge_key and (is_credit_exhausted(e) or "401" in detail):
+                    retire_for_model(
+                        model,
+                        judge_key,
+                        Retirement.QUOTA_EXHAUSTED_PERIODIC
+                        if is_periodic_quota_exhausted(e)
+                        else Retirement.CREDIT_EXHAUSTED,
+                    )
+            except Exception:  # noqa: BLE001 — grading must not break on this
+                pass
             last_error = f"judge call failed: {detail}"
             logger.warning(
                 "Judge LLM call failed (attempt %d/%d): %s", attempt + 1, JUDGE_ATTEMPTS, detail
