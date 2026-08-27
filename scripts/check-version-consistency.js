@@ -88,7 +88,17 @@ if (!allowDeploymentLag) {
 const mismatches = [...versions].filter(([, version]) => version !== authoritative);
 if (mismatches.length > 0) {
   const detail = mismatches.map(([name, version]) => `  - ${name}: ${String(version)}`).join('\n');
-  throw new Error(`product version drift (expected ${authoritative}):\n${detail}`);
+  // A lagging deployment tag means a promotion was lost, and this gate runs
+  // first in the release workflow — so it also skips the promotion job that
+  // is the only thing able to clear the lag. Say how to break that cycle:
+  // the failure alone reads as "someone forgot to bump a version".
+  const lagging = mismatches.some(([name]) => name.endsWith('image tag'));
+  const recovery = lagging
+    ? '\n\nA lost promotion blocks every PR until it is cleared, including the fix.' +
+      `\nRecover with: node scripts/promote-release-values.js ${authoritative}` +
+      '\nthen commit the helm/ values to main as a chore(deploy) commit.'
+    : '';
+  throw new Error(`product version drift (expected ${authoritative}):\n${detail}${recovery}`);
 }
 
 console.log(

@@ -511,21 +511,11 @@ jobs:
         id: promote
         env:
           VERSION: ${{ needs.release.outputs.new_release_version }}
-        run: |
-          set -euo pipefail
-          node scripts/promote-release-values.js "$VERSION"
-          node scripts/check-version-consistency.js
-          git diff --check
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add helm/genus-os/values-production.yaml helm/genus-os/values-staging.yaml
-          if git diff --staged --quiet; then
-            echo "Release v${VERSION} is already promoted; refusing an ambiguous no-op."
-            exit 1
-          fi
-          git commit -m "chore(deploy): promote v${VERSION} [skip ci]"
-          git push origin HEAD:main
-          echo "promotion_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        # Retries against a moving main — see scripts/promote-release.sh.
+        # This job runs tens of minutes after checkout, so anything that
+        # merged in the meantime would otherwise reject the push and drop
+        # the promotion entirely.
+        run: bash scripts/promote-release.sh "$VERSION"
 
   comment-pr:
     name: Sticky PR comment
