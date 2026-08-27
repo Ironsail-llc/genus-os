@@ -37,6 +37,12 @@ spec:
           imagePullPolicy: {{ .Values.nats.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.global.securityContext | nindent 12 }}
+          # NOTE: no -c, so this deployment runs with NO accounts and NO auth.
+          # Acceptable only while nats.enabled is false by default and nothing
+          # federates. Federation v1 adds a ConfigMap-mounted config here; until
+          # then do NOT enable this chart's NATS on a reachable network.
+          # The leaf containerPort was removed 2026-08-27 -- an unauthenticated
+          # leafnode listener joins the global $G account, which includes $JS.API.
           args:
             - -js
             - --store_dir=/data
@@ -45,8 +51,6 @@ spec:
           ports:
             - name: client
               containerPort: {{ .Values.nats.clientPort }}
-            - name: leaf
-              containerPort: {{ .Values.nats.leafPort }}
             - name: monitor
               containerPort: {{ .Values.nats.monitorPort }}
           volumeMounts:
