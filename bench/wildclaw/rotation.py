@@ -101,13 +101,59 @@ def load_baselines() -> dict[str, Any]:
     return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
+class EmptyRunError(RuntimeError):
+    """The harness produced a summary, but no task ever reached a model.
+
+    A summary is not evidence that anything ran. When the provider refuses
+    every call — a capped key, a revoked credential — each task is graded
+    against an untouched workspace and the harness writes a well-formed
+    summary whose mean is 0.0. Appending that would put a fabricated zero in
+    the ledger, and the ledger's whole job is to average runs and report the
+    spread, so one such line corrupts every later verdict.
+
+    This is the module's own rule applied to its own inputs: a low score is a
+    result, only a failed RUN is a failure, and a run where no model answered
+    is a failed run.
+    """
+
+
+def _tasks_executed(results: list[dict[str, Any]]) -> int:
+    """How many tasks actually reached a model.
+
+    Tokens and request count are recorded per task and were never read. A
+    task that consumed neither did not run, whatever its score says.
+    """
+    executed = 0
+    for r in results:
+        usage = r.get("usage")
+        if not usage:
+            # No usage block at all is absence of evidence, not evidence of
+            # absence — older summaries predate it. Only claim a task did not
+            # run when the harness actually recorded that it consumed nothing.
+            executed += 1
+            continue
+        if (usage.get("input_tokens") or 0) > 0 or (usage.get("request_count") or 0) > 0:
+            executed += 1
+    return executed
+
+
 def ledger_entry(summary: dict[str, Any], baselines: dict[str, Any], when: str) -> dict[str, Any]:
-    """One ledger line: the run, its baseline, and the delta between them."""
+    """One ledger line: the run, its baseline, and the delta between them.
+
+    Raises ``EmptyRunError`` when nothing executed — see that class.
+    """
     category = summary.get("category", "")
     base = baselines.get(category) or {}
     baseline_mean = base.get("mean")
     mean = float(summary.get("mean_score", 0.0))
     results = summary.get("results") or []
+    executed = _tasks_executed(results)
+    if executed == 0:
+        raise EmptyRunError(
+            f"{category or 'run'}: no model answered — {executed} of {len(results)} tasks "
+            "consumed any tokens. Refusing to record a fabricated score; check the "
+            "provider credential."
+        )
     return {
         "when": when,
         "category": category,
@@ -117,6 +163,7 @@ def ledger_entry(summary: dict[str, Any], baselines: dict[str, Any], when: str) 
         "tasks_attempted": summary.get("tasks_attempted", 0),
         "tasks_graded": summary.get("tasks_graded", 0),
         "tasks_without_workspace": summary.get("tasks_without_workspace", 0),
+        "tasks_executed": executed,
         "harness_kills": sum(1 for r in results if r.get("harness_kill")),
         "per_task": {r["task_id"]: r["score"] for r in results if "task_id" in r},
     }
@@ -266,7 +313,14 @@ def main() -> int:
         return 1
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    entry = ledger_entry(summary, load_baselines(), when=now.isoformat(timespec="seconds"))
+    try:
+        entry = ledger_entry(summary, load_baselines(), when=now.isoformat(timespec="seconds"))
+    except EmptyRunError as exc:
+        # A summary full of zeros because nothing ran is a run failure, and
+        # the unit's OnFailure= turns that into a page. Recording it instead
+        # would put a fabricated score in the ledger for good.
+        print(f"{exc}", file=sys.stderr)
+        return 1
 
     args.out.mkdir(parents=True, exist_ok=True)
     ledger = args.out / "ledger.jsonl"
