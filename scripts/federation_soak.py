@@ -212,8 +212,9 @@ def role_init(workdir: Path) -> None:
 def role_invite(workdir: Path) -> None:
     """The CHILD issues the invite: 'you are my parent'.
 
-    That is Philip's organisational shape — Robothor becomes a principal
-    inside the subordinate instance, rather than the subordinate reaching up.
+    That is the operator's organisational shape — the parent instance becomes
+    a principal inside the subordinate one, rather than the subordinate
+    reaching up.
     """
     from robothor.federation.identity import create_invite_token
     from robothor.federation.models import Relationship
@@ -361,8 +362,8 @@ def role_pair(workdir: Path) -> None:
                 print(json.dumps({"error": "no reply"}))
                 sys.exit(3)
             if b"error" in reply:
-                print(json.dumps({"error": reply.decode()[:300]}))
-                sys.exit(3)
+                print(json.dumps({"error": reply.decode()[:400]}))
+                sys.exit(0 if a.get("expect_refusal") else 3)
             if not verify_ack(conn, reply):
                 print(json.dumps({"error": "ack did not verify"}))
                 sys.exit(3)
@@ -558,6 +559,37 @@ def soak() -> int:
             str(first),
         )
 
+        # Before pairing succeeds: prove the deployment gate is armed. With RLS
+        # inert the `tenant_scope` around every inbound op enforces nothing, so
+        # admitting a remote principal would ship the third layer as a comment.
+        # A control that has never refused anything is not a control.
+        blocked = out(
+            side(
+                "pair",
+                PARENT_DB,
+                workdir,
+                name="parent",
+                connection_id=connection_id,
+                secret=secret,
+                expect_refusal=True,
+            )
+        )
+        check(
+            "activation is REFUSED while row-level security is inert",
+            "ROBOTHOR_RLS_ENABLED" in str(blocked.get("error", "")),
+            "the RLS gate did not fire: " + str(blocked)[:300],
+        )
+        check(
+            "the refusal left the connection PENDING",
+            psql(CHILD_DB, f"SELECT state FROM federation_connections WHERE id='{connection_id}'")
+            == "pending",
+        )
+
+        # Now the operator's deliberate override, and pairing proceeds.
+        listener.terminate()
+        listener.wait(timeout=10)
+        listener = start_listener(workdir, nats_url, child_id, allow_inert_rls=True)
+        read_json_line(listener)
         paired = out(
             side(
                 "pair",
@@ -598,7 +630,7 @@ def soak() -> int:
         print("\n\033[1m4. Restart — attaching from persisted state\033[0m")
         listener.terminate()
         listener.wait(timeout=10)
-        listener = start_listener(workdir, nats_url, child_id)
+        listener = start_listener(workdir, nats_url, child_id, allow_inert_rls=True)
         after = read_json_line(listener)
         check(
             "the daemon re-attached the ACTIVE connection after a restart",
@@ -648,7 +680,7 @@ def soak() -> int:
         )
         listener.terminate()
         listener.wait(timeout=10)
-        listener = start_listener(workdir, nats_url, child_id)
+        listener = start_listener(workdir, nats_url, child_id, allow_inert_rls=True)
         read_json_line(listener)
         cap_only = out(
             side(
@@ -680,7 +712,7 @@ def soak() -> int:
         )
         listener.terminate()
         listener.wait(timeout=10)
-        listener = start_listener(workdir, nats_url, child_id)
+        listener = start_listener(workdir, nats_url, child_id, allow_inert_rls=True)
         read_json_line(listener)
         trig2 = out(
             side(
@@ -733,6 +765,48 @@ def soak() -> int:
             "a denial the operator cannot see afterwards is not a control",
         )
 
+        # ── 5b. The diagnostic tells the truth ───────────────────────
+        print("\n\033[1m5b. `federation status` reports the wire, not the column\033[0m")
+        seen = psql(
+            CHILD_DB,
+            f"SELECT last_seen_at IS NOT NULL FROM federation_connections WHERE id='{connection_id}'",
+        )
+        check(
+            "attaching records that the transport was verified",
+            seen == "t",
+            "without last_seen_at the new verdict reports every healthy link as dead",
+        )
+        status_live = run_status(workdir, CHILD_DB, nats_url, child_id)
+        check(
+            "a live link reports as carrying traffic",
+            "carrying traffic" in status_live.stdout and "NOT ATTACHED" not in status_live.stdout,
+            status_live.stdout[-400:],
+        )
+
+        # Kill the transport WITHOUT touching the row. This is the exact state
+        # the box was in for five months: state says active, nothing is
+        # attached, and the old status command agreed with the row.
+        listener.terminate()
+        listener.wait(timeout=10)
+        psql(
+            CHILD_DB,
+            f"UPDATE federation_connections SET last_seen_at = NOW() - interval '2 hours' WHERE id='{connection_id}'",
+        )
+        status_dead = run_status(workdir, CHILD_DB, nats_url, child_id)
+        check(
+            "a dead link reports as NOT ATTACHED even though state says active",
+            "NOT ATTACHED" in status_dead.stdout,
+            "this is the five-month outage the old status command called healthy: "
+            + status_dead.stdout[-400:],
+        )
+        check(
+            "the dead link makes the status command exit non-zero",
+            status_dead.returncode != 0,
+            "a monitor that greps exit codes saw success throughout the outage",
+        )
+        listener = start_listener(workdir, nats_url, child_id, allow_inert_rls=True)
+        read_json_line(listener)
+
         # ── 6. The asymmetry, proved three times ─────────────────────
         print("\n\033[1m6. Asymmetry — three independent layers\033[0m")
 
@@ -770,7 +844,7 @@ def soak() -> int:
         )
         listener.terminate()
         listener.wait(timeout=10)
-        listener = start_listener(workdir, nats_url, child_id)
+        listener = start_listener(workdir, nats_url, child_id, allow_inert_rls=True)
         read_json_line(listener)
         cap = out(
             side(
@@ -801,7 +875,7 @@ def soak() -> int:
         )
         listener.terminate()
         listener.wait(timeout=10)
-        listener = start_listener(workdir, nats_url, child_id)
+        listener = start_listener(workdir, nats_url, child_id, allow_inert_rls=True)
         read_json_line(listener)
         authz = out(
             side(
@@ -830,9 +904,35 @@ def soak() -> int:
                     proc.kill()
 
 
-def start_listener(workdir: Path, nats_url: str, instance_id: str) -> subprocess.Popen:
+def run_status(
+    workdir: Path, db: str, nats_url: str, instance_id: str
+) -> subprocess.CompletedProcess:
+    """`robothor federation status`, as the operator runs it."""
     env = {
         **os.environ,
+        "ROBOTHOR_DB_NAME": db,
+        "ROBOTHOR_WORKSPACE": str(workdir / "child"),
+        "ROBOTHOR_INSTANCE_ID": instance_id,
+        "ROBOTHOR_NATS_URL": nats_url,
+        "PYTHONPATH": str(REPO),
+    }
+    return subprocess.run(
+        [sys.executable, "-m", "robothor.cli", "federation", "status"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+
+
+def start_listener(
+    workdir: Path, nats_url: str, instance_id: str, *, allow_inert_rls: bool = False
+) -> subprocess.Popen:
+    env = {
+        **os.environ,
+        # Off by default so the soak can watch the RLS gate refuse a real
+        # pairing before the operator turns it off deliberately.
+        "ROBOTHOR_FEDERATION_ALLOW_INERT_RLS": "1" if allow_inert_rls else "",
         "ROBOTHOR_DB_NAME": CHILD_DB,
         "ROBOTHOR_SOAK_ARGS": json.dumps(
             {"name": "child", "nats_url": nats_url, "instance_id": instance_id}
