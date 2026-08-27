@@ -1422,9 +1422,9 @@ class AgentRunner(
                         # FAIL CLOSED. Under enforce the operator has been told
                         # that exec-holding agents run contained; quietly falling
                         # back to the host would give them containment they do
-                        # not have. (On this box the engine user is not in the
-                        # docker group, so start() cannot succeed at all — the
-                        # old behavior turned "enforce" into pure theater.)
+                        # not have. (The old "engine user isn't in the docker
+                        # group" note predates podman, which is rootless: a real
+                        # container starts fine — test_sandbox_actually_starts.py.)
                         # Under observe, degrading to the host IS the contract.
                         #
                         # But the global mode is only a *default*, for agents that
