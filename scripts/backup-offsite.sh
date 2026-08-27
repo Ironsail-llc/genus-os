@@ -141,6 +141,24 @@ if [[ -d "$DROPIN_DIR" ]]; then
         || fail "rclone copy of systemd drop-ins failed"
 fi
 
+# ── Docker volumes ──────────────────────────────────────────────────────────
+# Added 2026-08-27, alongside the local backup that first started capturing
+# these. Without this they exist ONLY on the local SSD -- the same drive that
+# dropped off the USB bus twice in three days (2026-08-24 and 2026-08-26). A
+# backup whose only copy lives on the flaky device is not a backup.
+#
+# Small enough to copy whole (~350MB across 8 volumes) rather than doing the
+# retention dance the dumps need at ~1.1GB each.
+VOLUME_DIR="${ROBOTHOR_OFFSITE_VOLUMES:-/mnt/robothor-backup/robothor/docker-volumes}"
+if [[ -d "$VOLUME_DIR" ]] && compgen -G "$VOLUME_DIR/*.tar.gz" >/dev/null; then
+    log "replicating docker volumes: $VOLUME_DIR -> $REMOTE/docker-volumes"
+    rclone sync "$VOLUME_DIR" "$REMOTE/docker-volumes" --include "*.tar.gz" \
+        --transfers 2 --checkers 4 >>"$LOG" 2>&1 \
+        || fail "rclone sync of docker volumes failed"
+else
+    log "no docker volume archives to replicate"
+fi
+
 # ── Verify the copy landed intact before trusting it ────────────────────────
 log "verifying replicated dumps"
 verify_offsite "post-upload verification FAILED — the offsite copy is not intact"
