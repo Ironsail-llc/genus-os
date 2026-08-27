@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from robothor.engine.federation_responder import make_command_handler
 
 
-def _conn(exports, *, role="federation_parent", tenant="default"):
+def _conn(exports, *, role="federation_parent", tenant="default", state="active"):
     """A connection now carries a PRINCIPAL, not just a capability list.
 
     Before 2026-08-27 an inbound op executed with no identity: runner.execute()
@@ -24,6 +24,11 @@ def _conn(exports, *, role="federation_parent", tenant="default"):
         local_principal_role=role,
         tenant_id=tenant,
         peer_name="probe",
+        # A connection only carries traffic once the handshake has activated
+        # it. Gate 0 reads this on every call, and a connection with no state
+        # at all is treated as inactive — see
+        # robothor/federation/tests/test_state_gate.py.
+        state=state,
     )
 
 

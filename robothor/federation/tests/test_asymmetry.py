@@ -24,10 +24,10 @@ from robothor.federation.models import (
     CAP_READ_RUNS,
     CAP_REPORT_UP,
     CAP_TRIGGER_AGENT,
+    CHILD_DEFAULT_EXPORTS,
     PARENT_DEFAULT_EXPORTS,
     PEER_DEFAULT_EXPORTS,
     WRITE_CAPABILITIES,
-    CHILD_DEFAULT_EXPORTS,
     Relationship,
     default_exports_for,
 )
@@ -108,6 +108,7 @@ class TestTheCapabilityGateRefuses:
         c.imports = list(imports)
         c.exports = list(exports)
         c.peer_name = "probe"
+        c.state = "active"  # gate 0: only an activated link carries traffic
         return c
 
     # ── OUTBOUND: what a peer granted us ──────────────────────────────

@@ -56,6 +56,11 @@ _OP_LOCAL_TOOL = {
 }
 
 
+#: The one op served before activation. Kept as a literal rather than an
+#: import so the responder does not pull the crypto stack in at import time.
+HANDSHAKE_OP = "handshake"
+
+
 def _principal(connection: Any) -> tuple[str, str, str]:
     """(principal_id, principal_role, tenant_id) for this connection.
 
@@ -70,8 +75,20 @@ def _principal(connection: Any) -> tuple[str, str, str]:
     return pid, role, tenant
 
 
-def make_command_handler(connection: Any, runner: Any) -> Any:
-    """Build an async ``(bytes) -> bytes`` handler serving one connection."""
+def make_command_handler(
+    connection: Any,
+    runner: Any,
+    *,
+    config: Any = None,
+    on_activate: Any = None,
+) -> Any:
+    """Build an async ``(bytes) -> bytes`` handler serving one connection.
+
+    ``config`` is the FederationConfig used to sign the handshake ack; without
+    it this connection can serve traffic but cannot complete a pairing.
+    ``on_activate`` is called with the connection once a handshake succeeds, so
+    the caller can persist the state transition it just earned.
+    """
 
     exports = set(getattr(connection, "exports", []) or [])
     principal_id, principal_role, tenant_id = _principal(connection)
@@ -83,6 +100,37 @@ def make_command_handler(connection: Any, runner: Any) -> Any:
             return b'{"error": "malformed request"}'
 
         op = payload.get("op")
+
+        # Gate 0 — is this connection allowed to carry traffic at all?
+        #
+        # Read the state on every call rather than capturing it: a successful
+        # handshake mutates the connection in place, and suspending a child has
+        # to stop traffic that is already flowing, not merely change a string
+        # that some earlier closure captured.
+        state = getattr(connection, "state", None)
+        state_value = getattr(state, "value", state)
+        if op == HANDSHAKE_OP:
+            if state_value == "active":
+                _audit(op, principal_id, tenant_id, "denied", "already active")
+                return _err(
+                    "connection is already active — re-pairing an established "
+                    "link goes through the operator, not the invite"
+                )
+            if state_value != "pending":
+                _audit(op, principal_id, tenant_id, "denied", f"state {state_value}")
+                return _err(f"connection is not active (state: {state_value})")
+            return await _handshake(
+                payload_bytes=data,
+                connection=connection,
+                config=config,
+                on_activate=on_activate,
+                principal_id=principal_id,
+                tenant_id=tenant_id,
+            )
+        if state_value != "active":
+            _audit(op, principal_id, tenant_id, "denied", f"state {state_value}")
+            return _err(f"connection is not active (state: {state_value})")
+
         required = _OP_REQUIRED_CAPABILITY.get(op)
         if required is None:
             return _err(f"unknown op: {op}")
@@ -136,6 +184,51 @@ def make_command_handler(connection: Any, runner: Any) -> Any:
         return out
 
     return handle
+
+
+async def _handshake(
+    *,
+    payload_bytes: bytes,
+    connection: Any,
+    config: Any,
+    on_activate: Any,
+    principal_id: str,
+    tenant_id: str,
+) -> bytes:
+    """Verify a peer's hello, activate the connection, and sign an ack.
+
+    This is the one op that runs before authorization, because it is what
+    establishes who the peer is. It grants nothing: `verify_handshake` writes
+    the peer's identity and the state transition, and deliberately not the
+    exports.
+    """
+    from robothor.federation.handshake import HandshakeError, build_ack, verify_handshake
+
+    if config is None:
+        _audit(HANDSHAKE_OP, principal_id, tenant_id, "error", "no federation config")
+        return _err("handshake unavailable — this instance has no federation identity")
+
+    try:
+        verify_handshake(config, connection, payload_bytes)
+    except HandshakeError as e:
+        # The peer gets the reason. Five months of silence is what the
+        # alternative looks like.
+        _audit(HANDSHAKE_OP, principal_id, tenant_id, "denied", str(e))
+        logger.warning("Federation handshake refused on %s: %s", connection.id, e)
+        return _err(f"handshake refused: {e}")
+    except Exception as e:  # noqa: BLE001
+        _audit(HANDSHAKE_OP, principal_id, tenant_id, "error", type(e).__name__)
+        logger.exception("Federation handshake failed on %s", connection.id)
+        return _err("handshake failed")
+
+    if on_activate is not None:
+        try:
+            on_activate(connection)
+        except Exception:  # noqa: BLE001 - persistence must not undo the pairing
+            logger.exception("Federation: could not persist activation of %s", connection.id)
+
+    _audit(HANDSHAKE_OP, principal_id, tenant_id, "ok", "activated")
+    return build_ack(config, connection)
 
 
 def _err(msg: str) -> bytes:

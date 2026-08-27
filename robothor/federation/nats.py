@@ -39,26 +39,52 @@ class NATSManager:
     from connected peers.
     """
 
-    def __init__(self, nats_url: str = "nats://127.0.0.1:4222") -> None:
+    #: Option keys that carry a secret and must never reach a log line.
+    _SECRET_OPTIONS = frozenset({"password", "token", "creds", "nkey_seed"})
+
+    def __init__(self, nats_url: str = "nats://127.0.0.1:4222", **options: Any) -> None:
         self._nats_url = nats_url
+        # Credentials to present on connect. `nats.connect(url)` presented
+        # nothing, which was invisible while the server had no `authorization`
+        # block: every client, including any leafnode, landed in the same
+        # global account with reach into JetStream.
+        self._options = {k: v for k, v in options.items() if v}
         self._nc: Any = None  # nats.aio.client.Client
         self._js: Any = None  # JetStream context
         self._subscriptions: dict[str, Any] = {}
 
+    def __repr__(self) -> str:
+        shown = {k: ("***" if k in self._SECRET_OPTIONS else v) for k, v in self._options.items()}
+        return f"NATSManager(url={self._nats_url!r}, options={shown})"
+
+    @property
+    def url(self) -> str:
+        return self._nats_url
+
     async def connect(self) -> bool:
-        """Connect to NATS server."""
+        """Connect to NATS server, presenting this endpoint's credential."""
         try:
             import nats
 
-            self._nc = await nats.connect(self._nats_url)
+            # Bounded by default. A bad credential against a server that DOES
+            # have an authorization block retries 60 times and blocks daemon
+            # startup for a minute; the operator wants to know now, and the
+            # transport reports the failure rather than swallowing it.
+            options = {"connect_timeout": 5, "max_reconnect_attempts": 10, **self._options}
+            self._nc = await nats.connect(self._nats_url, **options)
             self._js = self._nc.jetstream()
-            logger.info("Connected to NATS at %s", self._nats_url)
+            logger.info(
+                "Connected to NATS at %s (auth: %s)",
+                self._nats_url,
+                ", ".join(sorted(self._options)) or "none",
+            )
             return True
         except ImportError:
             logger.warning("nats-py not installed — federation transport unavailable")
             return False
         except Exception as e:
-            logger.warning("Failed to connect to NATS: %s", e)
+            # The exception repr can carry the credential on some auth errors.
+            logger.warning("Failed to connect to NATS at %s: %s", self._nats_url, type(e).__name__)
             return False
 
     async def disconnect(self) -> None:
