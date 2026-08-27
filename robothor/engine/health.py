@@ -883,7 +883,14 @@ def create_health_app(
                         COUNT(*) AS cnt,
                         array_agg(DISTINCT agent_id) AS agents
                     FROM agent_runs
-                    WHERE status = 'timeout'
+                    -- Both terminal states. External cancellation moved to
+                    -- 'cancelled' (2026-08-27) so resume could find it and the
+                    -- timeout RATE could stop counting deploys; filtering on
+                    -- 'timeout' alone would have made every interrupted run
+                    -- vanish from this panel instead. The rate is where the
+                    -- distinction belongs (analytics.GENUINE_TIMEOUT_SQL) --
+                    -- the operator's 24h view is where the count belongs.
+                    WHERE status IN ('timeout', 'cancelled')
                       AND started_at > NOW() - INTERVAL '24 hours'
                     GROUP BY reap_category
                     ORDER BY cnt DESC
