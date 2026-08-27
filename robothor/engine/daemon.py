@@ -169,10 +169,17 @@ async def _execute_resume(runner: Any, candidate: Any) -> None:
     from robothor.engine.models import TriggerType
 
     try:
+        # TriggerType.EVENT, not MANUAL. MANUAL is INTERACTIVE: runner.py:583
+        # gates it on a verified identity and, finding none, REJECTS the run —
+        # silently, returning normally without creating a row or raising. The
+        # operator-facing endpoint in health.py can use MANUAL because it has
+        # an authenticated caller to pass; the daemon at startup does not.
+        # Resume is a system action, so it takes a system trigger and inherits
+        # the service identity like every other daemon-initiated run.
         await runner.execute(
             agent_id=candidate.agent_id,
             message="Resume from checkpoint — continue where you left off.",
-            trigger_type=TriggerType.MANUAL,
+            trigger_type=TriggerType.EVENT,
             trigger_detail=f"resume:{candidate.run_id}",
             resume_from_run_id=candidate.run_id,
         )
