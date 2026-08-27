@@ -73,6 +73,7 @@ from robothor.engine.prompts import (
 from robothor.engine.run_budget import (  # noqa: E402
     DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
 )
+from robothor.engine.run_budget import chain_for, effective_wallclock_ceiling, watchdog_budgets_for
 from robothor.engine.run_budget import (
     deadline_warning as deadline_warning,
 )
@@ -755,8 +756,6 @@ class AgentRunner(
         # meaning a hang during warmup/adapter loading went undetected.
         # Every budget from ONE derivation, scaled for the chain that serves this
         # run. A 0 budget still means "disabled" and stays 0.
-        from robothor.engine.run_budget import watchdog_budgets_for
-
         _budgets = watchdog_budgets_for(agent_config)
         stall_timeout = _budgets.stall
         effective_hard_timeout = _budgets.hard
@@ -2022,8 +2021,6 @@ class AgentRunner(
         _deadline_warned = False  # one-shot latch for the wrap-up note
         # ── [WALLCLOCK] the loop's own deadline — computed once, checked
         # every iteration. See the self-check below for why this exists.
-        from robothor.engine.run_budget import chain_for, effective_wallclock_ceiling
-
         _wallclock_ceiling = effective_wallclock_ceiling(
             agent_config.timeout_seconds, chain_for(agent_config)
         )

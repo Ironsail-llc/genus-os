@@ -15,8 +15,12 @@ restart: the shutdown had already tombstoned the runs as timeouts.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from robothor.engine.models import RunStatus
+from robothor.engine.models import AgentRun, RunStatus
+
+if TYPE_CHECKING:
+    from robothor.engine.session import AgentSession
 
 
 @dataclass(frozen=True)
@@ -64,7 +68,13 @@ def _cancel_outcome(
     )
 
 
-def terminal_run(session, outcome, reason, diag, watchdog_fired):
+def terminal_run(
+    session: AgentSession,
+    outcome: _CancelOutcome,
+    reason: str | None,
+    diag: str | None,
+    watchdog_fired: bool,
+) -> AgentRun:
     """Write the terminal row matching the classification.
 
     ``watchdog_fired`` keeps the run's OWN watchdog authoritative: when it

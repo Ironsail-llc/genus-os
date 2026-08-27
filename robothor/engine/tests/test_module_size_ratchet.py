@@ -33,7 +33,12 @@ CAPS = {
     # +2: the deadline note now also takes the task text, so it can name the
     # deliverable that is missing. The composition itself was extracted to
     # deliverables.py rather than grown here.
-    "robothor/engine/runner.py": 2956,
+    # +1 for the cancel-classification call site. The classification itself
+    # went to cancel_outcome.py, and the two lazy run_budget imports it
+    # arrived with were hoisted to the module header (run_budget was already
+    # imported there, so they bought nothing) — which paid back four of the
+    # five lines this would otherwise have cost.
+    "robothor/engine/runner.py": 2957,
     # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
     # Lowered again after phase 3b (_setup_handlers closures -> methods).
     "robothor/engine/telegram.py": 2000,
@@ -49,7 +54,11 @@ CAPS = {
     "robothor/engine/watchdog_budgets.py": 110,
     # Cancel classification (2026-08-27): extracted from the runner, which is
     # the god-object this ratchet exists to shrink.
-    "robothor/engine/cancel_outcome.py": 80,
+    # 80 -> 86: terminal_run was untyped, which the mypy gate rejects as an
+    # untyped call in a typed context. The signature costs six lines and the
+    # TYPE_CHECKING import four; trimming to fit would have meant deleting
+    # the docstring that says why watchdog_fired overrides the status.
+    "robothor/engine/cancel_outcome.py": 86,
     # The finalization cluster (what a run may spend AFTER its loop ends)
     # was extracted here rather than growing run_budget past its cap.
     "robothor/engine/finalization_budget.py": 160,
