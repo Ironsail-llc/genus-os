@@ -181,6 +181,16 @@ exclude = [
   # explicitly so nothing under brain/ or local/ ships.
   "/brain/README.md",
   "/local/owner.env.example",
+  # The frontend's build output and vendored dependencies. These ARE ignored
+  # by git — but via app/.gitignore, a NESTED ignore file, and hatchling's
+  # "everything not VCS-ignored" sdist consults the repository-root .gitignore
+  # only. So `git check-ignore app/.next` says IGNORED while the sdist shipped
+  # it anyway: 1,026 of 2,970 files and ~36 MB of genusos 1.56.0 were Next.js
+  # chunks and .js.map source maps. Stated here because the packager cannot
+  # see the ignore that already exists.
+  "/app/.next",
+  "/app/node_modules",
+  "/app/tsconfig.tsbuildinfo",
 
 ]
 
