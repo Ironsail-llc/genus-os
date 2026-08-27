@@ -46,7 +46,17 @@ def compute_next_run(schedule: dict[str, Any], after: datetime) -> datetime | No
         fire_at = schedule.get("fire_at")
         if isinstance(fire_at, str):
             fire_at = datetime.fromisoformat(fire_at)
-        return fire_at if (fire_at and fire_at > after) else None
+        if not fire_at:
+            # Malformed is different from late: there is no moment to schedule.
+            return None
+        # A one-shot whose moment has passed fires on the next tick rather
+        # than being discarded. The previous `fire_at > after` dropped it to
+        # None, create_user_cronjob wrote next_run_at=NULL, the poller (which
+        # selects next_run_at <= now) never saw it, and the caller still got a
+        # job_id back — so "remind me at 3pm" asked at 3:01pm returned a
+        # confirmation and did nothing, with no error and no log line.
+        # The request was late, not wrong.
+        return max(after, fire_at)
     if kind == "cron":
         from apscheduler.triggers.cron import CronTrigger
 

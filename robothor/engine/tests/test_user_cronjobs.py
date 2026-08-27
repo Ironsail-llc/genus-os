@@ -28,10 +28,23 @@ class TestComputeNextRun:
         fire = after + timedelta(hours=2)
         assert user_cron.compute_next_run({"kind": "once", "fire_at": fire}, after) == fire
 
-    def test_once_past_returns_none(self):
+    def test_once_past_fires_on_the_next_tick(self):
+        """Was `is None`, which pinned a defect rather than a behaviour.
+
+        Returning None meant create_user_cronjob wrote next_run_at=NULL, the
+        poller (selecting next_run_at <= now) never saw the row, and the
+        caller still got a job_id back — so a one-shot asked for a moment that
+        had just passed reported success and never fired. A late request is
+        still a wanted request.
+        """
         after = datetime(2026, 6, 6, 12, 0, tzinfo=UTC)
         fire = after - timedelta(hours=1)
-        assert user_cron.compute_next_run({"kind": "once", "fire_at": fire}, after) is None
+        assert user_cron.compute_next_run({"kind": "once", "fire_at": fire}, after) == after
+
+    def test_once_without_fire_at_returns_none(self):
+        """Malformed stays refused: there is no moment to schedule."""
+        after = datetime(2026, 6, 6, 12, 0, tzinfo=UTC)
+        assert user_cron.compute_next_run({"kind": "once"}, after) is None
 
     def test_cron_returns_future_time(self):
         after = datetime(2026, 6, 6, 12, 0, tzinfo=UTC)
