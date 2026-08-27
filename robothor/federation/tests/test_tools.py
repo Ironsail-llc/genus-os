@@ -40,8 +40,12 @@ def _active_conn(conn_id: str = "conn-1", peer_name: str = "Peer") -> Connection
         peer_name=peer_name,
         state=ConnectionState.ACTIVE,
         relationship=Relationship.PEER,
-        exports=["health", "config_push"],
-        imports=["memory_search", "agent_runs"],
+        exports=["read_health"],
+        # 2026-08-27: was ["memory_search", "agent_runs"]. `agent_runs`
+        # covered BOTH list_runs and trigger, which is what let a child
+        # execute on its parent by default. Reading and executing are now
+        # separate capabilities and this fixture negotiates both explicitly.
+        imports=["search_memory", "read_runs", "trigger_agent"],
     )
 
 
@@ -88,7 +92,7 @@ class TestFederationQuery:
             )
         assert result["peer_name"] == "Peer"
         assert result["state"] == "active"
-        assert "health" in result["exports"]
+        assert "read_health" in result["exports"]
 
     @pytest.mark.asyncio
     async def test_query_runs_dispatches_over_nats(self, ctx):
@@ -115,7 +119,7 @@ class TestFederationQuery:
     async def test_query_runs_denied_without_capability(self, ctx):
         # A live connection that did NOT negotiate 'agent_runs' cannot list runs.
         conn = _active_conn()
-        conn.imports = ["memory_search"]  # no agent_runs
+        conn.imports = ["search_memory"]  # no read_runs
         with _mock_load_connections([conn]):
             result = await _federation_query({"connection_id": "conn-1", "query_type": "runs"}, ctx)
         assert "error" in result
@@ -178,7 +182,7 @@ class TestFederationTrigger:
     @pytest.mark.asyncio
     async def test_trigger_denied_without_capability(self, ctx):
         conn = _active_conn()
-        conn.imports = ["memory_search"]  # no agent_runs → trigger not authorized
+        conn.imports = ["search_memory"]  # no trigger_agent
         with _mock_load_connections([conn]):
             result = await _federation_trigger(
                 {"connection_id": "conn-1", "agent_id": "main", "message": "go"}, ctx
@@ -249,3 +253,35 @@ class TestFederationSyncStatus:
         with _mock_load_connections([]):
             result = await _federation_sync_status({"connection_id": "nope"}, ctx)
         assert "error" in result
+
+
+class TestReadingDoesNotImplyExecuting:
+    """The distinction the old single-capability model could not express.
+
+    Until 2026-08-27 `list_runs` and `trigger` both required `agent_runs`, so
+    granting a peer the right to SEE what an instance had done also granted the
+    right to make it do something new. A connection cannot be in this state any
+    more, and this is the test that says so.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_peer_granted_reads_cannot_trigger(self, ctx):
+        conn = _active_conn()
+        conn.imports = ["read_runs"]  # reads yes, execute no
+        with (
+            _mock_load_connections([conn]),
+            patch(
+                "robothor.engine.tools.handlers.federation._federation_request",
+                new_callable=AsyncMock,
+                return_value={"runs": []},
+            ),
+        ):
+            listed = await _federation_query({"connection_id": "conn-1", "query_type": "runs"}, ctx)
+            triggered = await _federation_trigger(
+                {"connection_id": "conn-1", "agent_id": "main", "message": "go"}, ctx
+            )
+        assert "error" not in listed, f"read was refused: {listed}"
+        assert "error" in triggered and "not authorized" in triggered["error"], (
+            "a peer granted only read_runs was allowed to trigger — reading and "
+            "executing have collapsed back into one capability"
+        )
