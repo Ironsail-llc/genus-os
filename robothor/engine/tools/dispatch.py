@@ -280,6 +280,55 @@ def _describe_exception(e: BaseException) -> tuple[str, bool]:
             )
     return (f"{type(e).__name__}: {e}", True)
 
+def normalise_arguments(
+    arguments: dict[str, Any], properties: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Match supplied argument names to declared parameters, ignoring case
+    and underscores.
+
+    The tool surface speaks two languages. Across the 172 tools that take
+    parameters: 82 are snake_case only, 26 are camelCase only, and one mixes
+    both within itself. So a model that has just called get_task({"id": ...})
+    sends `to_agent` to send_notification, which declares `toAgent`.
+
+    That failure is invisible. send_notification does not raise on an unknown
+    key — it uses defaults, hits a database CHECK constraint, and returns
+    "Failed to send notification". Nothing names the wrong argument, so the
+    model has nothing to correct toward and retries the same shape.
+
+    Normalising here fixes every tool at once and changes no schema, which is
+    why it is done rather than renaming 26 public tool interfaces.
+
+    Three rules keep it from guessing:
+      * an exact match always wins, even if an alias is also present;
+      * an argument with no declared match is passed through untouched — the
+        handler may legitimately accept extras;
+      * if two declared parameters normalise to the same key, neither is
+        chosen. Silently picking one would be worse than the original error.
+    """
+    if not properties or not arguments:
+        return arguments
+
+    def key(name: str) -> str:
+        return name.replace("_", "").lower()
+
+    by_key: dict[str, list[str]] = {}
+    for declared in properties:
+        by_key.setdefault(key(declared), []).append(declared)
+
+    out: dict[str, Any] = {}
+    for given, value in arguments.items():
+        if given in properties:
+            out[given] = value
+            continue
+        candidates = by_key.get(key(given), [])
+        if len(candidates) == 1 and candidates[0] not in arguments:
+            out[candidates[0]] = value
+        else:
+            # No match, or ambiguous: leave it exactly as sent.
+            out[given] = value
+    return out
+
 
 def _audit_tool_call(
     tool_name: str,
