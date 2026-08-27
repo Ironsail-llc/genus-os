@@ -20,6 +20,7 @@ import logging
 import os
 import time
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,29 @@ _active_watchdog_var: ContextVar[_StallWatchdog | None] = ContextVar(
 # Absolute per-run wall-clock ceiling applied to agents that declare
 # timeout_seconds=0 ("no cap"). Generous by design — a backstop against
 # runaway/slow runs, not a normal limit. Override via env.
+#: How far past its own declared bound a wait may run before the watchdog
+#: treats the provider as wedged. A window can only ever buy the ceiling the
+#: caller already applied (e.g. asyncio.timeout(LLM_REQUEST_TIMEOUT_OLLAMA)),
+#: plus this margin. Sized so a healthy call that finishes just after its
+#: deadline is not killed, while a timeout that never fires still is — the
+#: 1800s codex stall at llm_client.py:1155-1159 is the case this catches.
+WAIT_OVERRUN_FACTOR = 1.25
+
+
+@dataclass
+class _BoundedWait:
+    """An await that some other layer has already bounded.
+
+    ``budget`` is that layer's ceiling in seconds, not a wish: the watchdog
+    discounts time inside the window precisely because something else has
+    promised to end it.
+    """
+
+    label: str
+    budget: float
+    started: float
+
+
 _DEFAULT_FLEET_WALLCLOCK_CEILING = 3600
 
 
@@ -109,6 +133,14 @@ class _StallWatchdog:
         # Set on start() so callers can compute "time since run began" even
         # when the watchdog itself didn't trip (e.g. external cancellation).
         self._start_time: float = time.monotonic()
+        # The currently open bounded wait, if any. Single-slot: LLM calls in
+        # the run loop do not nest.
+        self._wait: _BoundedWait | None = None
+        # Wait time already closed. `_total` discounts the early-stall clock
+        # (which measures the whole run); `_since_touch` discounts the idle
+        # clock (which measures from the last progress signal).
+        self._attributed_total: float = 0.0
+        self._attributed_since_touch: float = 0.0
 
     def _trace(self, line: str) -> None:
         """Append one line to the env-named trace file; never raise.
@@ -138,6 +170,9 @@ class _StallWatchdog:
         the early-stall guard. Setup/warmup touches do not flip it.
         """
         self._last_activity = time.monotonic()
+        # Real progress restarts the idle clock, so previously-attributed
+        # wait time is no longer relevant to it.
+        self._attributed_since_touch = 0.0
         if description:
             self._last_activity_desc = description
             if not self._saw_output_signal and description.startswith(self._OUTPUT_TOUCH_PREFIXES):
@@ -146,6 +181,48 @@ class _StallWatchdog:
     @property
     def last_activity_desc(self) -> str:
         return self._last_activity_desc
+
+    def begin_wait(self, label: str, budget: float) -> None:
+        """Declare that the run is about to await something already bounded.
+
+        Deliberately not a ``touch()``: a call in flight has produced nothing,
+        so it must not flip ``_saw_output_signal`` and disarm the early-stall
+        guard. It only makes the time *attributable*.
+        """
+        self._wait = _BoundedWait(label=label, budget=float(budget), started=time.monotonic())
+
+    def end_wait(self) -> None:
+        """Close the open window, if any. Idempotent.
+
+        Does not touch: if the chain exhausted with nothing to show, the idle
+        clock must resume from before the call and the stall fire promptly.
+        """
+        wait = self._wait
+        if wait is None:
+            return
+        elapsed = max(0.0, time.monotonic() - wait.started)
+        self._attributed_total += elapsed
+        self._attributed_since_touch += elapsed
+        self._wait = None
+
+    @property
+    def waiting_on(self) -> str:
+        """Label of the open bounded wait, or "" when none is open."""
+        wait = self._wait
+        return wait.label if wait is not None else ""
+
+    @property
+    def attributed_wait_seconds(self) -> float:
+        """Total time this run spent inside closed bounded waits."""
+        return self._attributed_total
+
+    def _wait_suffix(self, now: float) -> str:
+        """Name the wait a run died inside, so the reason is not just
+        "last activity: session_started"."""
+        wait = self._wait
+        if wait is None:
+            return ""
+        return f"; waiting on {wait.label} for {now - wait.started:.0f}s"
 
     def start(self, monitored_task: asyncio.Task[Any]) -> None:
         """Start the watchdog background loop."""
@@ -165,9 +242,18 @@ class _StallWatchdog:
                 if monitored_task.done():
                     break
                 now = time.monotonic()
-                idle = now - self._last_activity
                 elapsed = now - self._start_time
-                self._trace(f"tick elapsed={elapsed:.0f} idle={idle:.0f} hard={self._hard_timeout}")
+                wait = self._wait
+                wait_elapsed = (now - wait.started) if wait is not None else 0.0
+                # Time inside a bounded wait is attributed, not invented: the
+                # idle clock pauses and the early-stall clock discounts it,
+                # because another layer's ceiling already governs that await.
+                idle = max(0.0, now - self._last_activity - self._attributed_since_touch - wait_elapsed)
+                progress_elapsed = max(0.0, elapsed - self._attributed_total - wait_elapsed)
+                self._trace(
+                    f"tick elapsed={elapsed:.0f} idle={idle:.0f} hard={self._hard_timeout} "
+                    f"wait={wait.label if wait else '-'}:{wait_elapsed:.0f}"
+                )
 
                 # Hard timeout (absolute safety net — should almost
                 # never fire; stall detection is the primary mechanism)
@@ -181,6 +267,34 @@ class _StallWatchdog:
                     self._abort_reason = (
                         f"Circuit-breaker hard timeout ({self._hard_timeout}s) "
                         f"after {elapsed:.0f}s; last activity: {self._last_activity_desc}"
+                        f"{self._wait_suffix(now)}"
+                    )
+                    self._cancelled = True
+                    self._abort_event.set()
+                    self._trace(f"CANCEL elapsed={elapsed:.0f} reason={self._abort_reason[:80]}")
+                    monitored_task.cancel()
+                    return
+
+                # Wait overrun — the provider blew the ceiling that was supposed
+                # to end this await. Without this, a window would be a way to
+                # disable the watchdog from inside; with it, a timeout that is
+                # silently ignored is caught EARLIER than the hard ceiling and
+                # the reason names the provider instead of "session_started".
+                if (
+                    wait is not None
+                    and wait.budget > 0
+                    and wait_elapsed > wait.budget * WAIT_OVERRUN_FACTOR
+                ):
+                    logger.warning(
+                        "Stall watchdog: %s exceeded its own %.3gs bound (%.0fs elapsed)",
+                        wait.label,
+                        wait.budget,
+                        wait_elapsed,
+                    )
+                    self._abort_reason = (
+                        f"Provider exceeded its own bound: {wait.label} ran "
+                        f"{wait_elapsed:.0f}s against a {wait.budget:.3g}s ceiling; "
+                        f"last activity: {self._last_activity_desc}"
                     )
                     self._cancelled = True
                     self._abort_event.set()
@@ -197,19 +311,21 @@ class _StallWatchdog:
                 if (
                     self._early_stall_timeout > 0
                     and not self._saw_output_signal
-                    and elapsed > self._early_stall_timeout
+                    and progress_elapsed > self._early_stall_timeout
                 ):
                     logger.warning(
-                        "Stall watchdog: early stall (%ds) — no LLM output after %.0fs; "
-                        "last_activity=%s",
+                        "Stall watchdog: early stall (%ds) — no LLM output after %.0fs "
+                        "unattributed (%.0fs wall); last_activity=%s",
                         self._early_stall_timeout,
+                        progress_elapsed,
                         elapsed,
                         self._last_activity_desc,
                     )
                     self._abort_reason = (
-                        f"Early stall: no LLM output after {elapsed:.0f}s "
+                        f"Early stall: no LLM output after {progress_elapsed:.0f}s "
                         f"(threshold {self._early_stall_timeout}s); "
                         f"last activity: {self._last_activity_desc}"
+                        f"{self._wait_suffix(now)}"
                     )
                     self._cancelled = True
                     self._abort_event.set()
@@ -228,6 +344,7 @@ class _StallWatchdog:
                     self._abort_reason = (
                         f"No progress for {idle:.0f}s (stall limit {self._stall_timeout}s); "
                         f"last activity: {self._last_activity_desc}"
+                        f"{self._wait_suffix(now)}"
                     )
                     self._cancelled = True
                     self._abort_event.set()
