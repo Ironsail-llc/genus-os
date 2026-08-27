@@ -14,6 +14,7 @@ Three rules, and each exists because of how this platform has failed before:
 
 from __future__ import annotations
 
+import importlib
 import logging
 from dataclasses import dataclass, field
 from importlib import metadata
@@ -62,6 +63,37 @@ class PluginSet:
             "genus.guardrails": self.guardrails,
             "genus.hooks": self.hooks,
         }[group]
+
+
+#: Bumped by :func:`reload_plugins`. Every cache built from plugin
+#: discovery records the value it was built at and rebuilds when it falls
+#: behind, which is what lets a per-instance cache — the guardrail engine's,
+#: the hook registry's — be invalidated without anyone tracking instances.
+_generation = 0
+
+
+def generation() -> int:
+    """The current plugin generation. Caches store this beside their data."""
+    return _generation
+
+
+def reload_plugins() -> int:
+    """Re-discover installed plugins without restarting the process.
+
+    Genus cached discovery in four places and invalidated none of them, so
+    installing a capability only took effect after a restart — which on this
+    fleet cancels every in-flight run. Bumping the counter marks all four
+    stale at once; each rebuilds lazily on its next read, so a reload costs
+    nothing until something actually asks.
+
+    ``importlib.invalidate_caches()`` is what makes a package installed since
+    interpreter start visible to entry-point discovery.
+    """
+    global _generation
+    importlib.invalidate_caches()
+    _generation += 1
+    logger.info("Plugin reload requested — generation now %d", _generation)
+    return _generation
 
 
 def _discover() -> list[Any]:

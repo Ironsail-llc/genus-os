@@ -236,12 +236,19 @@ def _collect_handlers() -> dict[str, Any]:
 
 # Lazily initialized handler map
 _handler_map: dict[str, Any] | None = None
+#: Plugin generation the map above was built at. A reload bumps the loader's
+#: counter and this falls behind, so the next lookup rebuilds.
+_handler_map_generation: int = -1
 
 
 def _get_handlers() -> dict[str, Any]:
-    global _handler_map
-    if _handler_map is None:
+    global _handler_map, _handler_map_generation
+    from robothor.plugins import generation
+
+    current = generation()
+    if _handler_map is None or _handler_map_generation != current:
         _handler_map = _collect_handlers()
+        _handler_map_generation = current
     return _handler_map
 
 
