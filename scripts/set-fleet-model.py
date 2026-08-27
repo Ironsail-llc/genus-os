@@ -44,7 +44,8 @@ _PRIMARY = re.compile(r"^(?P<indent>\s*)primary:\s*(?P<model>\S+)\s*$", re.MULTI
 
 
 #: Never touched. ``retired/`` agents are not scheduled, and agents like
-#: pf-watchdog run a deliberately LOCAL model (ollama_chat/qwen3:8b) that has
+#: pf-watchdog (RETIRED 2026-08-27) ran a deliberately LOCAL model
+#: (ollama_chat/qwen3:8b) that has
 #: nothing to do with which hosted model the fleet is on. A blanket rewrite
 #: would silently drag both onto the cloud model.
 _SKIP_DIRS = ("retired",)

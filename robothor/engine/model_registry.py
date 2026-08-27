@@ -126,7 +126,8 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         supports_thinking=False,
         ttft_hint_ms=9000,  # dense 27B on GB10 — slow, by design for disaster tier
     ),
-    # Local Qwen3 8B — pf-watchdog's configured primary. Pulled 2026-08-24;
+    # Local Qwen3 8B — was pf-watchdog's configured primary; that agent was
+    # retired 2026-08-27 and no live manifest requests this model. Pulled 2026-08-24;
     # before that the manifest named a model no local server carried.
     "ollama_chat/qwen3:8b": ModelLimits(
         max_input_tokens=40_960,
