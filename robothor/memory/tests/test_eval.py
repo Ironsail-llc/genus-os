@@ -265,8 +265,18 @@ class TestRunCaseOrchestration:
             k=5,
             seed=[{"fact_text": "Alice manages the Helios project.", "category": "project"}],
         )
+        order: list[str] = []
+
+        async def _seed(*a: object, **k: object) -> list[int]:
+            order.append("seed_case")
+            return [1]
+
+        def _refresh(*a: object, **k: object) -> None:
+            order.append("refresh_distractors")
+
         with (
-            patch("robothor.memory.eval._seed_case", new=AsyncMock(return_value=[1])) as seed,
+            patch("robothor.memory.eval._seed_case", new=AsyncMock(side_effect=_seed)) as seed,
+            patch("robothor.memory.eval._refresh_distractor_recency", new=_refresh),
             patch(
                 "robothor.memory.eval._retrieve",
                 new=AsyncMock(return_value=["Alice manages the Helios project."]),
@@ -278,6 +288,10 @@ class TestRunCaseOrchestration:
         retrieve.assert_awaited_once()
         assert res.passed is True
         assert res.case_id == "r1"
+        # The distractor refresh must run AFTER the case is seeded. Refreshing
+        # first is a no-op on rows that do not exist yet, which silently
+        # restores the single-row corpus the distractors exist to prevent.
+        assert order == ["seed_case", "refresh_distractors"]
 
     @pytest.mark.asyncio
     async def test_run_suite_aggregates_and_cleans_up(self, tmp_path: Path) -> None:
@@ -306,6 +320,8 @@ cases:
             patch("robothor.memory.eval._ensure_tenant") as ensure,
             patch("robothor.memory.eval._cleanup_tenant") as cleanup,
             patch("robothor.memory.eval._seed_case", new=AsyncMock(return_value=[])),
+            patch("robothor.memory.eval._seed_distractors", new=AsyncMock(return_value=0)),
+            patch("robothor.memory.eval._refresh_distractor_recency"),
             patch("robothor.memory.eval._retrieve", new=fake_retrieve),
         ):
             report = await run_suite(suite, tenant_id="memory-eval")
@@ -314,5 +330,7 @@ cases:
         assert report["passed"] == 1
         assert report["by_kind"]["recall"]["total"] == 2
         ensure.assert_called_once()
-        # per-case isolation: cleanup runs before each case + once in finally
-        assert cleanup.call_count == 3
+        # One full cleanup before the distractors are seeded (leftovers from a
+        # previous run would otherwise join the corpus), then one per case that
+        # keeps the distractors, then one in finally. 1 + 2 + 1.
+        assert cleanup.call_count == 4
