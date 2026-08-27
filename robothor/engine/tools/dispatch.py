@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
@@ -244,6 +245,42 @@ def _get_handlers() -> dict[str, Any]:
     return _handler_map
 
 
+#: An argument name looks like an identifier: short, no spaces. A KeyError on
+#: anything else came from inside the handler and is a real bug.
+_ARG_NAME_RE = re.compile(r"\A[a-z][a-z0-9_]{0,39}\Z")
+
+
+def _describe_exception(e: BaseException) -> tuple[str, bool]:
+    """Turn a handler exception into (message, crashed).
+
+    A missing argument is a bad CALL, not an engine crash, and the reader is a
+    model: it can recover from "missing required argument 'id'" on the next
+    turn, and cannot do anything with "KeyError: 'id'".
+
+    Found by walking the task lifecycle through the real registry —
+    `delete_task` does a bare ``args["id"]`` and surfaced
+    ``{"error": "KeyError: 'id'", "tool_crashed": true}``, while `get_task`
+    beside it returns a sentence naming the problem and the tool to call
+    instead. Forty-one bare ``args[...]`` accesses across the handler package
+    behave like the former. Fixing them individually would be forty-one edits
+    and a forty-second waiting to be written; every one of them already passes
+    through here.
+
+    Narrow on purpose. Only a KeyError whose key looks like an argument name
+    is reclassified — a KeyError from a cache lookup deep inside a handler is
+    still a crash, and still says so.
+    """
+    if isinstance(e, KeyError) and e.args:
+        key = e.args[0]
+        if isinstance(key, str) and _ARG_NAME_RE.match(key):
+            return (
+                f"missing required argument {key!r} — the call did not include it; "
+                f"check the tool's schema and retry with {key!r} set",
+                False,
+            )
+    return (f"{type(e).__name__}: {e}", True)
+
+
 def _audit_tool_call(
     tool_name: str,
     agent_id: str,
@@ -391,10 +428,15 @@ async def _execute_tool(
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
         return {"error": err_msg, "retryable": True}
     except Exception as e:
-        logger.exception("Tool %s raised unhandled exception", name)
-        err_msg = f"{type(e).__name__}: {e}"
+        err_msg, crashed = _describe_exception(e)
+        if crashed:
+            logger.exception("Tool %s raised unhandled exception", name)
+        else:
+            # A bad call, not a bug: one line, no traceback. Still audited as
+            # an error and still a failed call — only the message changes.
+            logger.warning("Tool %s: %s", name, err_msg)
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
-        return {"error": err_msg, "tool_crashed": True}
+        return {"error": err_msg, "tool_crashed": True} if crashed else {"error": err_msg}
     finally:
         if sandbox_token is not None:
             from robothor.crm.dal import reset_benchmark_sandbox
