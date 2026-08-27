@@ -63,3 +63,26 @@ def test_timeouts_endpoint_empty(app_client) -> None:
     assert body["categories"] == []
     assert body["total"] == 0
     assert body["uncategorized"] == 0
+
+
+class TestInterruptedRunsStayVisible:
+    """Moving external cancels off `timeout` must not empty the operator's panel.
+
+    2026-08-27: external cancellation now writes RunStatus.CANCELLED so `resume`
+    can find it and the timeout RATE stops counting deploys. But this endpoint
+    filtered `status = 'timeout'`, so the same change would have made every
+    interrupted run vanish from the 24h view — trading one honesty bug for a
+    blind spot. The panel counts both; the timeout *rate* (analytics.py) is
+    where the distinction belongs.
+    """
+
+    def test_the_query_counts_cancelled_runs_too(self):
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parents[1] / "health.py").read_text()
+        block = src.split("timeouts_last_24h", 1)[-1]
+        window = block[: block.find("GROUP BY reap_category")]
+        assert "cancelled" in window, (
+            "interrupted runs disappeared from the 24h panel when they stopped "
+            "being filed as timeouts"
+        )
