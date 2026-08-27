@@ -973,6 +973,13 @@ async def main() -> int:
     await _maybe_run_alert_selftest()
 
     _install_plugin_reload_signal()
+    # Tell agents that ask what is in their workspace. Opt-in per manifest —
+    # an operator's home directory is not a useful listing — but registered
+    # unconditionally so the manifest flag is all that is needed.
+    with contextlib.suppress(Exception):
+        from robothor.engine.workspace_inventory import register as _register_inventory
+
+        _register_inventory()
 
     # Wait for any task to complete (aiogram handles SIGTERM and stops polling,
     # which completes the telegram task — that's our shutdown trigger)

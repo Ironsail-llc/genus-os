@@ -1,3 +1,33 @@
+## [1.61.0](https://github.com/Ironsail-llc/genus-os/compare/v1.60.0...v1.61.0) (2026-08-27)
+
+### Features
+
+* **engine:** an agent can be told what is in its workspace ([#449](https://github.com/Ironsail-llc/genus-os/issues/449)) ([d769ed6](https://github.com/Ironsail-llc/genus-os/commit/d769ed684b7587a44dde795c13481c5bbe821a27))
+* **plugins:** a plugin can add a memory source beside the built-in one ([#448](https://github.com/Ironsail-llc/genus-os/issues/448)) ([fe560b9](https://github.com/Ironsail-llc/genus-os/commit/fe560b951bab246a06c283a69678f8f045cf417b))
+* **plugins:** an operator can select a different sandbox runtime ([#446](https://github.com/Ironsail-llc/genus-os/issues/446)) ([b4b3768](https://github.com/Ironsail-llc/genus-os/commit/b4b37688cc94f6881e885c39940b1d0ee681ce11)), closes [#445](https://github.com/Ironsail-llc/genus-os/issues/445) [#444](https://github.com/Ironsail-llc/genus-os/issues/444) [#443](https://github.com/Ironsail-llc/genus-os/issues/443) [#442](https://github.com/Ironsail-llc/genus-os/issues/442)
+* **plugins:** breadth as a primitive, not as a list of kinds ([#455](https://github.com/Ironsail-llc/genus-os/issues/455)) ([60ceef6](https://github.com/Ironsail-llc/genus-os/commit/60ceef6f83a5895bb912dee6c14aacefc8585e73))
+
+### Bug Fixes
+
+* **engine:** the journal's traversal guard did not contain ([#452](https://github.com/Ironsail-llc/genus-os/issues/452)) ([9c89b20](https://github.com/Ironsail-llc/genus-os/commit/9c89b20a299a561b50070ebe3280c388d15209d3))
+
+### Tests
+
+* **engine:** cover the finalization budget, and close a latent zero case ([#451](https://github.com/Ironsail-llc/genus-os/issues/451)) ([6a37258](https://github.com/Ironsail-llc/genus-os/commit/6a37258bfe6599ea92ef09bda949832d1343727c))
+* **engine:** cover the summary an operator reads when a run is cut short ([#454](https://github.com/Ironsail-llc/genus-os/issues/454)) ([794f0b9](https://github.com/Ironsail-llc/genus-os/commit/794f0b9d0d735290cc1736c9bcb0bac06ebcf2f9))
+* **health:** cover the contract that tells a rollout we are ready ([#453](https://github.com/Ironsail-llc/genus-os/issues/453)) ([a2d2b85](https://github.com/Ironsail-llc/genus-os/commit/a2d2b8519bd3d162b075ca80b7caabcec19b07fc))
+
+## [1.60.0](https://github.com/Ironsail-llc/genus-os/compare/v1.59.0...v1.60.0) (2026-08-27)
+
+### Features
+
+* **plugins:** a plugin can add an operator command ([#445](https://github.com/Ironsail-llc/genus-os/issues/445)) ([9f75e48](https://github.com/Ironsail-llc/genus-os/commit/9f75e487ff4535789b98901b00320d516a59ee4f)), closes [#444](https://github.com/Ironsail-llc/genus-os/issues/444) [#443](https://github.com/Ironsail-llc/genus-os/issues/443) [#442](https://github.com/Ironsail-llc/genus-os/issues/442)
+* **plugins:** a plugin can run on a schedule, not only on a tool call ([#444](https://github.com/Ironsail-llc/genus-os/issues/444)) ([901adf1](https://github.com/Ironsail-llc/genus-os/commit/901adf1dab69fb98ca9f314931fbfd09314465f0)), closes [#443](https://github.com/Ironsail-llc/genus-os/issues/443) [#442](https://github.com/Ironsail-llc/genus-os/issues/442)
+
+### Bug Fixes
+
+* **tools:** view_image gave up when the extension did not match ([#447](https://github.com/Ironsail-llc/genus-os/issues/447)) ([2663223](https://github.com/Ironsail-llc/genus-os/commit/2663223bd1c3a6eb4503aff278f93c395bbd1258))
+
 ## [1.59.0](https://github.com/Ironsail-llc/genus-os/compare/v1.58.2...v1.59.0) (2026-08-27)
 
 ### Features

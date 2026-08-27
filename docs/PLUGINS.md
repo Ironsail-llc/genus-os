@@ -41,6 +41,10 @@ available to any agent whose manifest lists it in `tools_allowed`.
 | `genus.hooks` | `hooks` | lifecycle hooks |
 | `genus.models` | `models` | token limits and pricing for models the built-in table does not know |
 | `genus.jobs` | `jobs` | work that runs on a schedule, not on a tool call |
+| `genus.services` | `services` | **any** named service — the group that names no kind |
+| `genus.commands` | `commands` | operator verbs — `robothor <verb>` |
+| `genus.sandboxes` | `sandboxes` | alternative sandbox runtimes (**opt-in**, see below) |
+| `genus.memory` | `providers` | extra memory sources, merged **after** built-in recall |
 
 A tool normally ships in two groups: the handler and its schema. The engine
 keeps those in separate registries and so does the loader.
@@ -127,6 +131,92 @@ for at most five minutes per engine lifetime before anyone noticed.
 
 An entry needs a five-field cron expression and a callable. Anything
 malformed is skipped with a warning rather than raised.
+
+## An operator command
+
+```python
+# acme_ops/__init__.py
+def run_drill(args):
+    ...
+    return 0
+
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "commands": {
+        "restore-drill": {"help": "Run a restore drill", "func": run_drill},
+    },
+}
+```
+
+`robothor restore-drill` then works and appears in `--help`. The handler
+receives the parsed `argparse` namespace and returns an exit code.
+
+Built-in verbs always win: the set is read off the parser itself and passed
+to the loader as reserved, so a package cannot claim `migrate`, `snapshot`
+or `serve`. The list is derived rather than hand-maintained, because a
+second copy would drift the first time a subcommand was added.
+
+## A sandbox runtime — the one group installation does not activate
+
+Every group above takes effect as soon as the package is installed. This one
+does not, and the difference is deliberate.
+
+The sandbox is what confines untrusted execution. A package able to replace
+it merely by being present could replace it with a no-op, and nothing would
+look any different. So an installed backend stays inert until the operator
+names it:
+
+```bash
+ROBOTHOR_SANDBOX_BACKEND=gvisor
+```
+
+```python
+# acme_sandbox/__init__.py
+def build_argv(*, workspace, run_id, cdp_port=None):
+    return ["runsc", "run", "--rootfs", workspace, run_id]
+
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "sandboxes": {"gvisor": {"build_argv": build_argv}},
+}
+```
+
+The backend owns the whole argv — a backend that could only prepend flags
+could not express a different isolation model, which is the point of having
+one. Naming a backend that is not installed **raises**; it never falls back
+to the built-in runtime, because a silent fall-back would turn a
+misconfigured hardening step into an invisible downgrade.
+
+## A named service — the group that names no kind
+
+Every group above names a kind the platform already knows about. This one
+does not, deliberately.
+
+```python
+# acme_vectors/__init__.py
+class VectorStore:
+    def search(self, q): ...
+
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "services": {"vector_store": VectorStore()},
+}
+```
+
+Anything can then reach it:
+
+```python
+from robothor.engine.services import get_service
+store = get_service("vector_store")      # None if nothing provides it
+```
+
+and a tool handler gets it from its context: `ctx.get_service("vector_store")`.
+
+Core owns a reserved set — `memory`, `scheduler`, `runner`, `session`, `llm`,
+`sandbox`, `guardrails`, `tools`, `config`, `db`. Registering one is a
+takeover, not an extension, and **the refusal is all-or-nothing**: a package
+declaring one reserved name loses every service it registered. A package
+reaching for `memory` has shown what it is willing to do.
 
 ## Reloading without a restart
 

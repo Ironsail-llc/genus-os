@@ -19,12 +19,13 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 OUT = Path(os.environ.get("BENCH_OUT", "/out"))
 WORKSPACE = os.environ.get("BENCH_WORKSPACE", "/tmp_workspace")
 
 
-async def _run(prompt: str, timeout_seconds: int) -> dict:
+async def _run(prompt: str, timeout_seconds: int) -> dict[str, Any]:
     from robothor.engine.config import EngineConfig, load_agent_config
     from robothor.engine.models import TriggerType
     from robothor.engine.runner import AgentRunner
@@ -56,10 +57,10 @@ async def _run(prompt: str, timeout_seconds: int) -> dict:
     # run; wrapping `register` observes it without changing any behaviour.
     from robothor.engine import session_registry
 
-    captured: list = []
+    captured: list[Any] = []
     original_register = session_registry.register
 
-    def _capture(session):
+    def _capture(session: Any) -> Any:
         captured.append(session)
         return original_register(session)
 
@@ -82,7 +83,7 @@ async def _run(prompt: str, timeout_seconds: int) -> dict:
     return {"run": run, "messages": messages, "elapsed": elapsed}
 
 
-def _persisted_steps(run_id: str) -> list[dict]:
+def _persisted_steps(run_id: str) -> list[dict[str, Any]]:
     """Every step this run recorded, from `agent_run_steps`.
 
     The complete record. `session.messages` is only the window the model is

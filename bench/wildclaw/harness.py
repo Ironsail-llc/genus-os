@@ -66,9 +66,10 @@ def _load_task(task_file: Path, repo: Path) -> dict[str, Any]:
     measured.
     """
     sys.path.insert(0, str(repo))
-    from src.utils.task_parser import parse_task_md  # type: ignore[import-not-found]
+    from src.utils.task_parser import parse_task_md
 
-    return parse_task_md(task_file)
+    parsed: dict[str, Any] = parse_task_md(task_file)
+    return parsed
 
 
 def _prepare_workspace(task: dict[str, Any], data_root: Path, repo: Path, dest: Path) -> bool:
@@ -146,7 +147,8 @@ def benchmark_preamble(timeout_seconds: int) -> str:
 
 def compose_prompt(task: dict[str, Any]) -> str:
     """What the agent is actually given: preamble first, then the task."""
-    return benchmark_preamble(task.get("timeout_seconds", 120)) + task["prompt"]
+    prompt: str = benchmark_preamble(task.get("timeout_seconds", 120)) + task["prompt"]
+    return prompt
 
 
 def _grader_needs_live_services(task: dict[str, Any]) -> bool:
@@ -546,7 +548,8 @@ def _read_grade(out_dir: Path) -> dict[str, Any]:
     for line in stdout.splitlines():
         if line.startswith("__SCORE__"):
             try:
-                return json.loads(line[len("__SCORE__") :])
+                score: dict[str, Any] = json.loads(line[len("__SCORE__") :])
+                return score
             except json.JSONDecodeError:
                 break
     err = (

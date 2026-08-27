@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -51,6 +52,55 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         return fn
 
     return decorator
+
+
+logger = logging.getLogger(__name__)
+
+#: A provider that hangs must not hang recall.
+PROVIDER_TIMEOUT = 5.0
+
+
+async def merge_plugin_memory(query: str, builtin: list[str], *, limit: int = 10) -> list[str]:
+    """Built-in recall, then anything installed providers contribute.
+
+    Order is the contract. Built-in rows keep their positions and contributed
+    rows are appended, so a package can add to what the operator remembers and
+    can never displace it — memory is the subsystem this platform is furthest
+    ahead on, and a takeover there would cost more than the feature is worth.
+
+    Every contributed row is prefixed with its provider so the agent can tell
+    an outside claim from its own memory. A provider that raises, hangs or
+    returns something that is not a list of strings is dropped: recall must
+    survive a bad third-party package, not fail with it.
+    """
+    try:
+        from robothor.plugins import load_plugins
+
+        loaded = load_plugins(reserved_names=set())
+        providers = loaded.memory or {}
+    except Exception as exc:  # noqa: BLE001 - recall must not depend on plugins
+        logger.warning("Memory providers unavailable: %s", exc)
+        return list(builtin)
+
+    if not providers:
+        return list(builtin)
+
+    merged = list(builtin)
+    for name, spec in providers.items():
+        search = spec.get("search") if isinstance(spec, dict) else None
+        if not callable(search):
+            logger.warning("Memory provider %r skipped: no callable 'search'", name)
+            continue
+        try:
+            rows = await asyncio.wait_for(search(query, limit), timeout=PROVIDER_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001 - one provider, not all recall
+            logger.warning("Memory provider %r failed: %s", name, exc)
+            continue
+        if not isinstance(rows, list):
+            logger.warning("Memory provider %r skipped: search did not return a list", name)
+            continue
+        merged.extend(f"[{name}] {row}" for row in rows if isinstance(row, str) and row)
+    return merged
 
 
 @_handler("search_memory")
@@ -114,7 +164,28 @@ async def _search_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                 ctx.tenant_id,
             )
 
-    return _format_results(results, query_class)
+    formatted = _format_results(results, query_class)
+
+    # Anything installed memory providers contribute, appended after the
+    # instance's own rows and attributed. Providers augment recall; they can
+    # never displace it — see merge_plugin_memory.
+    _facts = [r["fact"] for r in formatted["results"] if r.get("fact")]
+    _merged = await merge_plugin_memory(
+        str(args.get("query") or ""), _facts, limit=int(args.get("limit") or 10)
+    )
+    for extra in _merged[len(_facts) :]:
+        formatted["results"].append(
+            {
+                "id": None,
+                "fact": extra,
+                "category": "",
+                "source": "plugin",
+                "confidence": 0,
+                "similarity": 0,
+                "score": 0,
+            }
+        )
+    return formatted
 
 
 async def _recall_fallback(

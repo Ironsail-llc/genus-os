@@ -502,6 +502,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         safety_cap=int(schedule.get("safety_cap", v2.get("safety_cap", 200))),
         # v2 enhancements — sub-agent spawning
         can_spawn_agents=v2.get("can_spawn_agents", False),
+        workspace_inventory=bool(v2.get("workspace_inventory", False)),
         max_nesting_depth=min(int(v2.get("max_nesting_depth", 2)), 3),  # cap at 3
         sub_agent_max_iterations=int(v2.get("sub_agent_max_iterations", 10)),
         sub_agent_timeout_seconds=int(v2.get("sub_agent_timeout_seconds", 0)),
