@@ -2642,9 +2642,7 @@ class AgentRunner(
                         tool_name=tool_name,
                         duration_ms=tool_elapsed,
                         success=error_msg is None,
-                        error_type=error_type.value
-                        if error_type and hasattr(error_type, "value")
-                        else (str(error_type) if error_type else None),
+                        error_type=error_type,
                         error_message=error_msg,
                     )
 
