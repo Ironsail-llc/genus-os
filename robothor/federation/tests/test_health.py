@@ -110,7 +110,7 @@ def test_an_unparseable_timestamp_is_treated_as_never_seen():
 
 
 def test_a_naive_timestamp_does_not_crash_the_status_command():
-    naive = datetime.now().replace(tzinfo=None).isoformat()
+    naive = datetime.now(UTC).replace(tzinfo=None).isoformat()  # noqa: DTZ005
     health = link_health(_conn(ConnectionState.ACTIVE, last_seen=naive))
 
     assert health.verdict in (LinkVerdict.ATTACHED, LinkVerdict.STALE)
