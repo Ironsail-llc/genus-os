@@ -94,6 +94,7 @@ from robothor.engine.stall_watchdog import (
     _StallWatchdog,
 )
 from robothor.engine.tool_admission import ToolAdmissionMixin  # noqa: E402
+from robothor.engine.tool_outcome import record_tool_outcome
 from robothor.engine.tools import get_registry
 from robothor.engine.toolset_prep import prepare_toolset
 from robothor.engine.tracking import create_run, update_run
@@ -2414,52 +2415,20 @@ class AgentRunner(
                 if self._active_watchdog:
                     self._active_watchdog.touch(f"tool:{tool_name}")
 
-                # ── [ERROR CLASSIFICATION] Classify error type ──
-                error_type = None
-                if error_msg:
-                    from robothor.engine.error_recovery import classify_error
-
-                    error_type = classify_error(tool_name, error_msg)
-
-                # ── [TOOL EVENTS] Log tool invocation for observability ──
-                with contextlib.suppress(Exception):
-                    from robothor.engine.tracking import log_tool_event
-
-                    log_tool_event(
-                        run_id=session.run.id,
-                        tool_name=tool_name,
-                        duration_ms=tool_elapsed,
-                        success=error_msg is None,
-                        error_type=error_type,
-                        error_message=error_msg,
-                    )
-
-                # ── [SCRATCHPAD] Record tool call ──
-                if scratchpad:
-                    # Result and args feed the no-progress detector; without
-                    # them every call looks identical and it can never fire.
-                    scratchpad.record_tool_call(
-                        tool_name,
-                        error=error_msg,
-                        result=result,
-                        tool_input=tool_args,
-                    )
-
-                # ── [CIRCUIT BREAKER] Stop calling tools that keep failing ──
-                if error_msg:
-                    _tool_failures[tool_name] = _tool_failures.get(tool_name, 0) + 1
-                    if _tool_failures[tool_name] >= 3:
-                        session.messages.append(
-                            {
-                                "role": ENGINE_CONTEXT_ROLE,
-                                "content": (
-                                    f"[SYSTEM] Tool '{tool_name}' has failed "
-                                    f"{_tool_failures[tool_name]} times this run. "
-                                    "Do NOT call it again. Find an alternative "
-                                    "approach or skip this step and move on."
-                                ),
-                            }
-                        )
+                # ── [OUTCOME] Classify, log, record, count ──
+                # robothor/engine/tool_outcome.py. The scratchpad is given the
+                # result AND the args there — they feed the no-progress
+                # detector, and without them every call looks identical.
+                error_type = record_tool_outcome(
+                    session,
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    result=result,
+                    error_msg=error_msg,
+                    elapsed_ms=tool_elapsed,
+                    scratchpad=scratchpad,
+                    failures=_tool_failures,
+                )
 
                 # ── [TODO LIST] Emit event + verification nudge ──
                 if tool_name == "todo_write" and session.todo_list and not error_msg:
