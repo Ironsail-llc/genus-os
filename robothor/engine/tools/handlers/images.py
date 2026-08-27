@@ -48,6 +48,40 @@ _MIME_BY_FORMAT = {
 _REENCODE_TO_PNG = {"BMP", "TIFF", "GIF"}
 
 
+#: Extensions worth offering when the requested one does not exist. Derived
+#: from the formats this tool can actually decode, so the two cannot drift.
+_IMAGE_SUFFIXES: frozenset[str] = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+)
+
+
+def _same_stem_images(path: Path) -> list[Path]:
+    """Images beside `path` sharing its stem, for an extension that missed.
+
+    An agent asking for `figure.png` when the file is `figure.jpg` used to
+    get "no such file" and had to recover by guessing. Eleven of the twelve
+    Code Intelligence tasks are image tasks, so that recovery was being paid
+    for in the category where this harness trails furthest.
+
+    Only real files count — a directory named `assets.jpg` is not an image —
+    and the caller substitutes only when exactly one candidate exists. Two
+    candidates is a question for the agent, not a coin flip for the tool.
+    """
+    parent = path.parent
+    if not parent.is_dir():
+        return []
+    stem = path.stem
+    # iterdir, not glob: a stem containing `[` or `*` is a valid filename and
+    # a glob pattern, and the two disagree.
+    return sorted(
+        candidate
+        for candidate in parent.iterdir()
+        if candidate.stem == stem
+        and candidate.is_file()
+        and candidate.suffix.lower() in _IMAGE_SUFFIXES
+    )
+
+
 async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
     """Return an image file as content the agent's own model can see.
 
@@ -61,8 +95,22 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         return {"error": "path is required"}
 
     path = Path(raw_path).expanduser()
+    resolved_from: str | None = None
     if not path.is_file():
-        return {"error": f"no such file: {raw_path}"}
+        siblings = _same_stem_images(path)
+        if len(siblings) == 1:
+            resolved_from = str(siblings[0])
+            path = siblings[0]
+        elif siblings:
+            names = ", ".join(sorted(s.name for s in siblings))
+            return {
+                "error": (
+                    f"no such file: {raw_path} — several images share that name "
+                    f"({names}). Ask for the one you want."
+                )
+            }
+        else:
+            return {"error": f"no such file: {raw_path}"}
 
     try:
         from PIL import Image
@@ -105,7 +153,13 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
                 "width": work.size[0],
                 "height": work.size[1],
                 "path": str(path),
+                "resolved_from": resolved_from,
             }
+            if resolved_from:
+                result["note"] = (
+                    f"{raw_path} does not exist; read {Path(resolved_from).name} "
+                    "instead, which shares its name"
+                )
             if work.size != original:
                 result["original_width"] = original[0]
                 result["original_height"] = original[1]
