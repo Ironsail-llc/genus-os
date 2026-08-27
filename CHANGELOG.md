@@ -1,3 +1,14 @@
+## [1.59.0](https://github.com/Ironsail-llc/genus-os/compare/v1.58.2...v1.59.0) (2026-08-27)
+
+### Features
+
+* **plugins:** a plugin can teach the engine about a model ([#443](https://github.com/Ironsail-llc/genus-os/issues/443)) ([3fa5135](https://github.com/Ironsail-llc/genus-os/commit/3fa5135f735fe5cc911d906c407674feb1550ef5)), closes [#442](https://github.com/Ironsail-llc/genus-os/issues/442)
+* **plugins:** install a plugin without restarting the engine ([#442](https://github.com/Ironsail-llc/genus-os/issues/442)) ([b49fd61](https://github.com/Ironsail-llc/genus-os/commit/b49fd61e7c63ac8e1b9c1db801f85ca856ab694d))
+
+### Tests
+
+* **architect:** the write-path guard asserted one instance's config ([#441](https://github.com/Ironsail-llc/genus-os/issues/441)) ([349e8f6](https://github.com/Ironsail-llc/genus-os/commit/349e8f65f9db89066861d071090b85f592053fa4))
+
 ## [1.58.2](https://github.com/Ironsail-llc/genus-os/compare/v1.58.1...v1.58.2) (2026-08-27)
 
 ### Bug Fixes
