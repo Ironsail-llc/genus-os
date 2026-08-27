@@ -41,6 +41,7 @@ available to any agent whose manifest lists it in `tools_allowed`.
 | `genus.hooks` | `hooks` | lifecycle hooks |
 | `genus.models` | `models` | token limits and pricing for models the built-in table does not know |
 | `genus.jobs` | `jobs` | work that runs on a schedule, not on a tool call |
+| `genus.services` | `services` | **any** named service — the group that names no kind |
 | `genus.commands` | `commands` | operator verbs — `robothor <verb>` |
 | `genus.sandboxes` | `sandboxes` | alternative sandbox runtimes (**opt-in**, see below) |
 | `genus.memory` | `providers` | extra memory sources, merged **after** built-in recall |
@@ -185,6 +186,37 @@ could not express a different isolation model, which is the point of having
 one. Naming a backend that is not installed **raises**; it never falls back
 to the built-in runtime, because a silent fall-back would turn a
 misconfigured hardening step into an invisible downgrade.
+
+## A named service — the group that names no kind
+
+Every group above names a kind the platform already knows about. This one
+does not, deliberately.
+
+```python
+# acme_vectors/__init__.py
+class VectorStore:
+    def search(self, q): ...
+
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "services": {"vector_store": VectorStore()},
+}
+```
+
+Anything can then reach it:
+
+```python
+from robothor.engine.services import get_service
+store = get_service("vector_store")      # None if nothing provides it
+```
+
+and a tool handler gets it from its context: `ctx.get_service("vector_store")`.
+
+Core owns a reserved set — `memory`, `scheduler`, `runner`, `session`, `llm`,
+`sandbox`, `guardrails`, `tools`, `config`, `db`. Registering one is a
+takeover, not an extension, and **the refusal is all-or-nothing**: a package
+declaring one reserved name loses every service it registered. A package
+reaching for `memory` has shown what it is willing to do.
 
 ## Reloading without a restart
 

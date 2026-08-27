@@ -89,6 +89,18 @@ def get_deferred_allowed() -> frozenset[str] | None:
 class ToolContext:
     """Context passed to every tool handler."""
 
+    def get_service(self, name: str) -> Any:
+        """A named service an installed package provides, or None.
+
+        The counterpart to `ctx.get` in harnesses built on a service kernel.
+        Without it a package could register a capability that nothing running
+        inside the engine could reach, which is a registry rather than an
+        extension point.
+        """
+        from robothor.engine.services import get_service as _get
+
+        return _get(name)
+
     agent_id: str = ""
     run_id: str = ""  # current AgentRun id — lets handlers find per-run state
     tenant_id: str = field(default_factory=lambda: DEFAULT_TENANT)
