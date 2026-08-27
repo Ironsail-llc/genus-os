@@ -315,3 +315,31 @@ flags:
       teardown; (3) zero rows written to any other tenant by a benchmark run.
       Full ladder, evidence and rollback: docs/runbooks/BENCHMARK_SANDBOX.md.
 
+  - name: ROBOTHOR_PLUGIN_MANIFEST_MODE
+    owner: platform
+    mode: observe
+    planned_promotion: 2026-09-30
+    soak: |
+      Requires a distribution to ship genus-plugin.yaml declaring what it
+      contributes, and refuses it BEFORE ep.load() when it does not.
+
+      This is the plugin seam's only pre-execution control. Every other check
+      in loader.py — contract version, reserved names, clashes — runs AFTER
+      ep.load() has already imported the plugin's module into the daemon, so
+      each of those "fail-closed" refusals happens with the plugin's code
+      already executed inside the engine.
+
+      Starts in observe, not enforce, because requiring a manifest is a
+      BREAKING change to a shipped seam: every plugin published before it
+      existed would be refused on upgrade. observe logs which distributions
+      lack one so the blast radius is visible first.
+
+      IMPORTANT: observe does NOT protect. It still imports; it only says so.
+      The pre-execution guarantee exists solely in enforce, and
+      test_plugin_refusal_precedes_import pins both rungs so a dashboard
+      reading "observe" cannot imply containment it does not have.
+
+      Promotion evidence: zero genus.* entry points are installed on this
+      instance today (`load_plugins() -> loaded=[] tools=0`), so enforce is
+      currently a no-op here and the soak has to come from an instance that
+      actually installs one.

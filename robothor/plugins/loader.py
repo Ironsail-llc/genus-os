@@ -171,6 +171,36 @@ def load_plugins(
         if group not in _GROUPS:
             continue
 
+        # GOVERNANCE BEFORE EXECUTION. `ep.load()` below imports the
+        # distribution's module into this process; every other check in this
+        # function happens after that, so without this gate a "refused" plugin
+        # has already run arbitrary code inside the daemon. An undeclared
+        # distribution is refused here, before it executes.
+        from robothor.plugins.manifest import MANIFEST_NAME, manifest_mode, read_manifest
+
+        _mode = manifest_mode()
+        manifest = read_manifest(getattr(ep, "dist", None))
+        if manifest is None and _mode != "off":
+            if _mode == "enforce":
+                result.failures.append(
+                    PluginFailure(
+                        name,
+                        group,
+                        f"no {MANIFEST_NAME} in the distribution — refused before import",
+                    )
+                )
+                logger.warning(
+                    "Plugin %r ships no %s; refusing before import", name, MANIFEST_NAME
+                )
+                continue
+            logger.warning(
+                "Plugin %r ships no %s — importing anyway (mode=observe). The "
+                "pre-import guarantee applies only in enforce.",
+                name,
+                MANIFEST_NAME,
+            )
+        _declared = manifest.declares(_GROUPS[group]) if manifest else None
+
         try:
             payload = ep.load()
         except Exception as e:
@@ -206,6 +236,24 @@ def load_plugins(
         contributions = payload.get(_GROUPS[group])
         if not isinstance(contributions, dict) or not contributions:
             result.failures.append(PluginFailure(name, group, f"no {_GROUPS[group]!r} in payload"))
+            continue
+
+        # Hold the payload to what the distribution declared. This half is
+        # necessarily post-import — a module's exports cannot be read without
+        # executing it — but the manifest is what makes them reviewable BEFORE
+        # install, and undeclared names are never registered.
+        undeclared = (
+            sorted(k for k in contributions if k not in _declared)
+            if (_declared is not None and _mode == "enforce")
+            else []
+        )
+        if undeclared:
+            result.failures.append(
+                PluginFailure(
+                    name, group, f"undeclared in {MANIFEST_NAME}: {undeclared} — refused"
+                )
+            )
+            logger.warning("Plugin %r offered undeclared %s %s", name, group, undeclared)
             continue
 
         target = result._target(group)
