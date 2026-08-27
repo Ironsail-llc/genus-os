@@ -70,11 +70,7 @@ from robothor.engine.models import (
     TriggerType,
 )
 from robothor.engine.prompts import (
-    DEEP_PLAN_PREAMBLE,
-    DEEP_PLAN_SUFFIX,
     EXECUTION_MODE_PREAMBLE,
-    PLAN_MODE_PREAMBLE,
-    PLAN_MODE_SUFFIX,
 )
 from robothor.engine.run_budget import (  # noqa: E402
     DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
@@ -99,6 +95,7 @@ from robothor.engine.stall_watchdog import (
 )
 from robothor.engine.tool_admission import ToolAdmissionMixin  # noqa: E402
 from robothor.engine.tools import get_registry
+from robothor.engine.toolset_prep import prepare_toolset
 from robothor.engine.tracking import create_run, update_run
 
 #: Tools whose work is several sub-agent runs, so the agent-level per-tool cap
@@ -1091,43 +1088,23 @@ class AgentRunner(
             "hit" if _prompt_cache.get(agent_config.id) else "miss",
         )
 
-        # ── Load business adapters (external MCP servers) ──
-        try:
-            from robothor.engine.adapters import get_adapters_for_agent
-            from robothor.engine.mcp_client import configure_mcp_servers, register_adapter
-
-            # Wire up v2.mcp_servers from manifest (previously dead code)
-            if agent_config.mcp_servers:
-                configure_mcp_servers(agent_config.mcp_servers)
-
-            # Load and register business adapters
-            adapters = get_adapters_for_agent(agent_id)
-            for adapter in adapters:
-                register_adapter(adapter)
-            if adapters:
-                await self.registry.register_adapter_tools(adapters)
-        except Exception as e:
-            logger.warning("Adapter loading failed (non-fatal): %s", _sanitize(e))
+        # ── [TOOLSET] Adapters, then this run's tools and prompt wrapping ──
+        # robothor/engine/toolset_prep.py. Adapter loading is non-fatal there
+        # (a dead MCP server costs its own tools, not the run), and plan mode
+        # sandwiches the prompt — constraints BEFORE the identity, reminder
+        # AFTER — so plan rules are not buried mid-SOUL.md.
+        _prepared = await prepare_toolset(
+            self.registry,
+            agent_config,
+            agent_id=agent_id,
+            system_prompt=system_prompt,
+            readonly_mode=readonly_mode,
+            deep_plan=deep_plan,
+        )
+        tool_schemas = _prepared.tool_schemas
+        tool_names = _prepared.tool_names
+        system_prompt = _prepared.system_prompt
         watchdog.touch("adapters_loaded")
-
-        # Get filtered tools for this agent
-        if readonly_mode:
-            # Plan mode: sandwich pattern — prepend constraints BEFORE identity,
-            # append reminder AFTER, so plan rules aren't buried by SOUL.md directives.
-            tool_schemas = self.registry.build_readonly_for_agent(agent_config)
-            tool_names = self.registry.get_readonly_tool_names(agent_config)
-            if deep_plan:
-                system_prompt = DEEP_PLAN_PREAMBLE + system_prompt + DEEP_PLAN_SUFFIX
-            else:
-                # Inject actual tool names into the preamble
-                tool_list_str = (
-                    ", ".join(f"`{t}`" for t in sorted(tool_names)) if tool_names else "(none)"
-                )
-                preamble = PLAN_MODE_PREAMBLE.replace("{tool_names_placeholder}", tool_list_str)
-                system_prompt = preamble + system_prompt + PLAN_MODE_SUFFIX
-        else:
-            tool_schemas = self.registry.build_for_agent(agent_config)
-            tool_names = self.registry.get_tool_names(agent_config)
 
         watchdog.touch("tools_built")
         try:
