@@ -577,8 +577,12 @@ class TestReviewModelFromManifest:
         ):
             await review_run(evidence)
 
-        # The model passed to llm_call matches the manifest-resolved value.
-        assert mock_llm.call_args.kwargs["model"] == "openrouter/test/x"
+        # The manifest-resolved model is what gets TRIED FIRST. It is now a
+        # chain rather than a bare string, so that a failure falls through to
+        # the instance's offline tier instead of abstaining (2026-08-27).
+        chain = mock_llm.call_args.kwargs["model"]
+        assert isinstance(chain, list)
+        assert chain[0] == "openrouter/test/x"
 
 
 class TestAggregateFindings:
