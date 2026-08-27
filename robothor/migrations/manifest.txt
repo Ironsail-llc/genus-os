@@ -112,3 +112,4 @@ crm/106_workflow_approvals.sql
 crm/107_seed_service_role.sql
 crm/108_run_resume_attempts.sql
 crm/109_facts_entities_lower_gin.sql
+crm/110_tool_event_error_message.sql
