@@ -55,6 +55,18 @@ REVIEW_TIMEOUT_S = 25
 _review_model_cache: tuple[float, str] | None = None
 
 
+def review_chain(model: str | None = None) -> list[str]:
+    """The reviewer's model followed by the instance's offline tier.
+
+    Same defect as the judge: a single cloud model, and any failure
+    swallowed into ``None``. 59 review failures in one hour during the
+    2026-08-26 key cap, none of them reported.
+    """
+    from robothor.engine.llm_client import chain_with_last_resort
+
+    return chain_with_last_resort(model or _get_review_model())
+
+
 def _get_review_model() -> str:
     """Return buddy's `model.primary` from the manifest.
 
@@ -448,7 +460,7 @@ async def review_run(
     try:
         response = await llm_call(
             messages=[{"role": "user", "content": prompt}],
-            model=model,
+            model=review_chain(model),
             temperature=0.2,
             max_tokens=REVIEW_MAX_TOKENS,
             timeout=timeout_s,

@@ -557,6 +557,19 @@ def _fetch_agent_context(
     return ctx
 
 
+def judge_chain(model: str = JUDGE_MODEL) -> list[str]:
+    """The judge's model followed by the instance's offline tier.
+
+    A single cloud model meant the grading layer abstained for the whole of
+    the 2026-08-26 key cap — 90 failures in one hour, each swallowed into
+    ``None``. ``goal_achievement`` carries weight 3.0 in main's manifest and
+    simply had no data for the window it most needed to describe.
+    """
+    from robothor.engine.llm_client import chain_with_last_resort
+
+    return chain_with_last_resort(model)
+
+
 async def judge_agent_run(bundle: EvidenceBundle, *, model: str = JUDGE_MODEL) -> Judgment | None:
     """Call the judge LLM once for one run; parse + clamp. None to abstain."""
     from robothor.engine.llm_client import llm_call
@@ -565,7 +578,7 @@ async def judge_agent_run(bundle: EvidenceBundle, *, model: str = JUDGE_MODEL) -
     try:
         response = await llm_call(
             messages=[{"role": "user", "content": prompt}],
-            model=model,
+            model=judge_chain(model),
             temperature=0.0,
             json_mode=True,
             timeout=40,

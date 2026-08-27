@@ -287,7 +287,7 @@ _RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
 async def llm_call(
     messages: list[dict[str, Any]],
     *,
-    model: str,
+    model: str | list[str],
     temperature: float = 0.3,
     json_mode: bool = False,
     timeout: int | float = 120,
@@ -298,7 +298,10 @@ async def llm_call(
 
     Args:
         messages: Chat messages in OpenAI format.
-        model: Model identifier (litellm format).
+        model: Model identifier (litellm format), or a chain of them. A
+            chain is walked in order and the first model that answers wins,
+            which is how a caller outside the agent loop reaches the
+            instance's offline tier when the cloud provider is down.
         temperature: Sampling temperature.
         json_mode: If True, request ``response_format={"type": "json_object"}``.
         timeout: Per-attempt timeout in seconds.
@@ -311,8 +314,14 @@ async def llm_call(
     Raises:
         The last exception if all attempts are exhausted.
     """
+    chain = [model] if isinstance(model, str) else list(model)
+    if not chain:
+        # An empty chain would otherwise fall out of the loop and return
+        # None, which every caller here treats as "the model abstained".
+        raise ValueError("llm_call: no model to call")
+
     kwargs: dict[str, Any] = {
-        "model": model,
+        "model": chain[0],
         "messages": messages,
         "temperature": temperature,
     }
@@ -322,6 +331,7 @@ async def llm_call(
         kwargs["max_tokens"] = max_tokens
 
     async def _attempt() -> Any:
+        model = kwargs["model"]
         t0 = _time.monotonic()
         try:
             call = codex_acompletion if is_codex_model(model) else litellm.acompletion
@@ -342,12 +352,46 @@ async def llm_call(
             LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
             raise
 
-    return await retry_async(
-        _attempt,
-        max_attempts=max_retries,
-        retryable_exceptions=_RETRYABLE_EXCEPTIONS,
-        backoff_base=1.0,
-    )
+    last: Exception | None = None
+    for candidate in chain:
+        kwargs["model"] = candidate
+        try:
+            return await retry_async(
+                _attempt,
+                max_attempts=max_retries,
+                retryable_exceptions=_RETRYABLE_EXCEPTIONS,
+                backoff_base=1.0,
+            )
+        except Exception as exc:  # noqa: BLE001 - the next model is the point
+            last = exc
+            if candidate != chain[-1]:
+                logger.warning(
+                    "llm_call: %s failed (%s); trying the next model in the chain",
+                    candidate,
+                    exc,
+                )
+    assert last is not None  # the loop ran at least once
+    raise last
+
+
+def chain_with_last_resort(model: str) -> list[str]:
+    """One model, plus the instance's offline tier if it has one.
+
+    Callers outside the agent loop — the judge, Buddy's reviewer — used to
+    name a single cloud model and swallow any failure into ``None``. During
+    the 2026-08-26 key cap that produced 90 judge failures and 59 review
+    failures in a single hour, with nothing reported: the grading layer went
+    dark in exactly the outage it exists to measure, while the local tier
+    answering the agent's own turns sat unused.
+
+    ``ROBOTHOR_LAST_RESORT_MODEL`` is the same variable ``_with_last_resort``
+    appends to every agent chain, so these callers inherit the fleet's
+    offline tier rather than inventing one.
+    """
+    last_resort = os.environ.get("ROBOTHOR_LAST_RESORT_MODEL", "").strip()
+    if not last_resort or last_resort == model:
+        return [model]
+    return [model, last_resort]
 
 
 #: What the agent is told in place of a picture its model cannot see. Plain
