@@ -55,6 +55,11 @@ from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 # instance of it; the historical method surface is preserved via thin
 # delegators/aliases below so existing call sites keep working unchanged.
 from robothor.engine.llm_client import LLMClient  # noqa: E402
+
+# ── Log-injection sanitizer ──
+# CodeQL py/log-injection: user-controlled values (model names, error
+# messages) must not inject newlines into log output.
+from robothor.engine.loop_guards import GuardState, check_iteration_guards
 from robothor.engine.models import (
     AgentConfig,
     AgentRun,
@@ -83,10 +88,6 @@ from robothor.engine.run_budget import (
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_lifecycle import RunLifecycleMixin
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
-
-# ── Log-injection sanitizer ──
-# CodeQL py/log-injection: user-controlled values (model names, error
-# messages) must not inject newlines into log output.
 from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
@@ -2004,7 +2005,7 @@ class AgentRunner(
         _iteration = 0
         _pre_iteration_msg_idx = len(session.messages)
         _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
-        _runaway_alerted = False  # one-shot latch for 500K alert
+        _guard_state = GuardState()  # carries the 500K alert's one-shot latch
         _secret_notified = False  # one-shot latch for the credential-exposure note
         _deadline_warned = False  # one-shot latch for the wrap-up note
         # ── [WALLCLOCK] the loop's own deadline — computed once, checked
@@ -2017,118 +2018,22 @@ class AgentRunner(
         )
 
         while True:
-            # ── [WALLCLOCK] The loop bounds itself ──
-            # On 2026-08-25 a run blew through its 1200s ceiling to 3110s
-            # with THREE layers silent at once: the outer asyncio.timeout,
-            # the watchdog's task.cancel(), and the deadline warning. All
-            # three live BESIDE the loop — an outer context manager, a
-            # sibling task, a message injection — and can go silent
-            # together while the loop keeps iterating. This check is the
-            # loop reading its own clock: it cannot be cancelled, starved,
-            # or unhooked without also ending the loop it is part of.
-            if _wallclock_deadline is not None and time.monotonic() >= _wallclock_deadline:
-                _reason = (
-                    f"Circuit-breaker hard timeout ({_wallclock_ceiling}s) — "
-                    f"loop self-check; last activity: "
-                    f"{self._active_watchdog.last_activity_desc if self._active_watchdog else 'unknown'}"
-                )
-                logger.warning("Run loop self-check: %s", _reason)
-                if self._active_watchdog is not None:
-                    # Trip the watchdog's flag so the cooperative check below
-                    # ends the run and execute() maps it to TIMEOUT exactly
-                    # as if the watchdog had fired.
-                    self._active_watchdog.trip(_reason)
-                else:
-                    session.record_error(_reason)
-                    return
-            # ── [STEER / INTERRUPT] live operator influence (Rip 9) ──
-            # An external caller may have set a steer (inject + continue) or an
-            # interrupt (halt) on this session via session_registry.
-            _steer_text = session.consume_pending_steer()
-            if _steer_text:
-                session.messages.append(
-                    {"role": "user", "content": f"[operator steering update]\n{_steer_text}"}
-                )
-                logger.info("Live steer injected into run %s", session.run_id)
-            # ── [INTERRUPT] Operator halt requested via interrupt_api (Rip 9 / G3) ──
-            # Consume any pending interrupt and stop the run gracefully: record a
-            # distinct terminal state (CANCELLED, not COMPLETED/FAILED, verifier
-            # skipped) AND an outcome note so the halt is visible. The message may
-            # be "" when the operator halted without text, or None if no interrupt.
-            _interrupt_msg = session.consume_interrupt()
-            if _interrupt_msg is not None:
-                note = (
-                    f"Run interrupted by operator: {_interrupt_msg}"
-                    if _interrupt_msg
-                    else "Run interrupted by operator"
-                )
-                session.messages.append({"role": "user", "content": f"[operator interrupt] {note}"})
-                session.run.outcome_notes = (
-                    f"{session.run.outcome_notes}; {note}" if session.run.outcome_notes else note
-                )
-                session.mark_interrupted(note)
-                logger.info("Run %s interrupted by operator", session.run_id)
+            # ── [GUARDS] May the loop take another iteration? ──
+            # wallclock -> steer -> interrupt -> watchdog -> runaway, in that
+            # order, in robothor/engine/loop_guards.py. The order is
+            # load-bearing (the wallclock branch TRIPS the watchdog rather than
+            # returning, so execute() maps the run to TIMEOUT rather than
+            # ERROR) and could not be asserted anywhere while it lived inline
+            # in a 1,059-line method.
+            if check_iteration_guards(
+                session,
+                agent_config,
+                watchdog=self._active_watchdog,
+                wallclock_deadline=_wallclock_deadline,
+                wallclock_ceiling=_wallclock_ceiling,
+                state=_guard_state,
+            ):
                 return
-
-            # ── [WATCHDOG] Cooperative abort — catches stalls even when task.cancel() fails ──
-            if self._active_watchdog and self._active_watchdog.should_abort:
-                logger.warning(
-                    "Run loop aborting: watchdog flagged abort — %s",
-                    self._active_watchdog.abort_reason,
-                )
-                session.record_error(self._active_watchdog.abort_reason)
-                return
-
-            # ── [RUNAWAY] Fleet-wide token guard (500K alert, 5M hard cap) ──
-            _used_tokens = (session.run.input_tokens or 0) + (session.run.output_tokens or 0)
-            if _used_tokens >= RUNAWAY_TOKEN_HARD_CAP:
-                reason = f"runaway_token_cap_hit ({_used_tokens}/{RUNAWAY_TOKEN_HARD_CAP})"
-                logger.error(
-                    "Runaway-token hard cap hit: agent=%s run=%s tokens=%d",
-                    agent_config.id,
-                    session.run_id,
-                    _used_tokens,
-                )
-                # Fire-and-forget alert — don't block the stop path. Use the task
-                # registry's spawn (not bare create_task, which the loop only
-                # weakly references and can GC before it runs — losing exactly
-                # the alert we can least afford to lose; audit 2026-05-29).
-                try:
-                    from robothor.engine.alerts import alert as _alert
-                    from robothor.engine.task_registry import get_task_registry
-
-                    get_task_registry().spawn(
-                        _alert(
-                            "critical",
-                            f"Runaway-token hard cap: {agent_config.id}",
-                            f"run_id={session.run_id} tokens={_used_tokens:,} "
-                            f"model={session.run.model_used}",
-                        ),
-                        name=f"runaway-hardcap-alert:{agent_config.id}",
-                    )
-                except Exception:
-                    logger.debug("Runaway-token alert dispatch failed", exc_info=True)
-                session.run.budget_exhausted = True
-                session.record_error(reason)
-                return
-            if not _runaway_alerted and _used_tokens >= RUNAWAY_TOKEN_ALERT:
-                _runaway_alerted = True
-                logger.warning(
-                    "Runaway-token alert: agent=%s run=%s tokens=%d",
-                    agent_config.id,
-                    session.run_id,
-                    _used_tokens,
-                )
-                try:
-                    _send_soft_runaway_alert(
-                        agent_config.id,
-                        str(session.run_id),
-                        _used_tokens,
-                        session.run.model_used,
-                        session.run.total_cost_usd or 0.0,
-                    )
-                except Exception:
-                    logger.debug("Runaway-token alert dispatch failed", exc_info=True)
 
             # ── [SAFETY VALVE] Absolute iteration cap (infinite-loop protection) ──
             # safety_cap=0 is the manifest sentinel for "no cap" (main.yaml sets
