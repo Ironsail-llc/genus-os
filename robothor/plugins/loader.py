@@ -42,6 +42,10 @@ _GROUPS = {
     # registered from inside the package, so a third-party capability could
     # contribute a tool but nothing that runs on its own.
     "genus.jobs": "jobs",
+    # Operator verbs. `robothor <verb>` was a fixed list of add_parser calls,
+    # so an instance shipping its own operational command had to patch the
+    # platform to expose it.
+    "genus.commands": "commands",
 }
 
 
@@ -64,6 +68,7 @@ class PluginSet:
     hooks: dict[str, Any] = field(default_factory=dict)
     models: dict[str, Any] = field(default_factory=dict)
     jobs: dict[str, Any] = field(default_factory=dict)
+    commands: dict[str, Any] = field(default_factory=dict)
     loaded: list[Any] = field(default_factory=list)
     failures: list[PluginFailure] = field(default_factory=list)
 
@@ -75,6 +80,7 @@ class PluginSet:
             "genus.hooks": self.hooks,
             "genus.models": self.models,
             "genus.jobs": self.jobs,
+            "genus.commands": self.commands,
         }[group]
 
 

@@ -23,7 +23,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import logging
+import re
 import sys
+from typing import Any
 
 # Re-export public API for backward compatibility.
 # These are imported by robothor.setup and tests.
@@ -38,16 +42,78 @@ def _cmd_agent_setup() -> int:
     return _cmd_agent_setup_impl()
 
 
-def main(argv: list[str] | None = None) -> int:
-    # Adopt the instance's systemd environment before anything reads a flag.
-    # Without this a CLI run inherits only the caller's shell, so every
-    # rollout-gated guardrail reads back as off/observe while the daemon
-    # enforces it — a shell (or an agent shelling out) would silently bypass
-    # the controls. Explicitly-set variables still win.
-    from robothor.engine.instance_env import load_instance_env
+_VERB_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
-    load_instance_env()
+logger = logging.getLogger(__name__)
 
+
+def builtin_command_names() -> set[str]:
+    """Every verb the platform itself defines, read off the parser.
+
+    Derived, never hand-listed: these names are what a plugin is forbidden
+    to claim, and a stale copy would quietly let a package take over a verb
+    added after the copy was written.
+    """
+    parser = _build_parser()
+    for action in parser._actions:  # noqa: SLF001 - argparse exposes no public API
+        choices = getattr(action, "choices", None)
+        if isinstance(choices, dict):
+            return set(choices)
+    return set()
+
+
+def plugin_commands() -> dict[str, dict[str, Any]]:
+    """Operator verbs contributed by installed plugins.
+
+    Built-in verbs are passed to the loader as reserved. `migrate`,
+    `snapshot` and `serve` are the operator's recovery tools; a package
+    redefining one would be a takeover, not an extension.
+    """
+    try:
+        from robothor.plugins import load_plugins
+
+        loaded = load_plugins(reserved_names=builtin_command_names())
+    except Exception as exc:  # noqa: BLE001 - a plugin must not break the CLI
+        logger.warning("Plugin commands unavailable: %s", exc)
+        return {}
+
+    resolved: dict[str, dict[str, Any]] = {}
+    for verb, spec in (loaded.commands or {}).items():
+        if not isinstance(spec, dict):
+            logger.warning("Plugin command %r skipped: expected a mapping", verb)
+            continue
+        if not isinstance(verb, str) or not _VERB_RE.match(verb):
+            logger.warning("Plugin command %r skipped: not a usable command name", verb)
+            continue
+        if not callable(spec.get("func")):
+            logger.warning("Plugin command %r skipped: 'func' is not callable", verb)
+            continue
+        resolved[verb] = dict(spec)
+    return resolved
+
+
+def _register_plugin_commands(parser: argparse.ArgumentParser) -> dict[str, dict[str, Any]]:
+    """Add a subparser for each plugin verb. Returns what was registered."""
+    commands = plugin_commands()
+    if not commands:
+        return {}
+    for action in parser._actions:  # noqa: SLF001 - argparse exposes no public API
+        if isinstance(getattr(action, "choices", None), dict):
+            for verb, spec in commands.items():
+                with contextlib.suppress(Exception):
+                    action.add_parser(verb, help=str(spec.get("help", "")))
+            break
+    return commands
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Construct the CLI parser.
+
+    Extracted from ``main`` so the set of built-in verbs can be READ off
+    the parser rather than hand-copied. A second, hand-maintained list of
+    command names would drift the first time a subcommand was added, and
+    this project has been bitten three times by exactly that.
+    """
     parser = argparse.ArgumentParser(
         prog="robothor",
         description="Genus OS — An AI brain with persistent memory, vision, and self-healing.",
@@ -685,7 +751,35 @@ def main(argv: list[str] | None = None) -> int:
         _p.add_argument("--step", default="", help="Step ID (only needed if several are waiting)")
         _p.add_argument("--note", default="", help="Why — recorded with the decision")
 
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Adopt the instance's systemd environment before anything reads a flag.
+    # Without this a CLI run inherits only the caller's shell, so every
+    # rollout-gated guardrail reads back as off/observe while the daemon
+    # enforces it — a shell (or an agent shelling out) would silently bypass
+    # the controls. Explicitly-set variables still win.
+    from robothor.engine.instance_env import load_instance_env
+
+    load_instance_env()
+
+    parser = _build_parser()
+    plugin_verbs = _register_plugin_commands(parser)
+
     args = parser.parse_args(argv)
+
+    # Plugin verbs dispatch first only in the sense that they can never
+    # shadow a built-in — `plugin_commands` refuses reserved names — so
+    # placing this ahead of the chain costs the built-ins nothing and keeps
+    # the fall-through below untouched.
+    if args.command and args.command in plugin_verbs:
+        handler = plugin_verbs[args.command]["func"]
+        try:
+            return int(handler(args) or 0)
+        except Exception as exc:  # noqa: BLE001 - a plugin must not crash the CLI
+            logger.error("Command %r failed: %s", args.command, exc)
+            return 1
 
     if args.version or args.command == "version":
         from robothor import __version__

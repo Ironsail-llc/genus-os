@@ -41,6 +41,7 @@ available to any agent whose manifest lists it in `tools_allowed`.
 | `genus.hooks` | `hooks` | lifecycle hooks |
 | `genus.models` | `models` | token limits and pricing for models the built-in table does not know |
 | `genus.jobs` | `jobs` | work that runs on a schedule, not on a tool call |
+| `genus.commands` | `commands` | operator verbs — `robothor <verb>` |
 
 A tool normally ships in two groups: the handler and its schema. The engine
 keeps those in separate registries and so does the loader.
@@ -127,6 +128,30 @@ for at most five minutes per engine lifetime before anyone noticed.
 
 An entry needs a five-field cron expression and a callable. Anything
 malformed is skipped with a warning rather than raised.
+
+## An operator command
+
+```python
+# acme_ops/__init__.py
+def run_drill(args):
+    ...
+    return 0
+
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "commands": {
+        "restore-drill": {"help": "Run a restore drill", "func": run_drill},
+    },
+}
+```
+
+`robothor restore-drill` then works and appears in `--help`. The handler
+receives the parsed `argparse` namespace and returns an exit code.
+
+Built-in verbs always win: the set is read off the parser itself and passed
+to the loader as reserved, so a package cannot claim `migrate`, `snapshot`
+or `serve`. The list is derived rather than hand-maintained, because a
+second copy would drift the first time a subcommand was added.
 
 ## Reloading without a restart
 
