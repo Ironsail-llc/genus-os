@@ -245,7 +245,6 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         self.dp.message(Command("reset"))(self.cmd_reset)
         self.dp.message(Command("stop"))(self.cmd_stop)
         self.dp.message(Command("restart"))(self.cmd_restart)
-        self.dp.message(Command("restart_delphi"))(self.cmd_restart_delphi)
         self.dp.message(Command("context"))(self.cmd_context)
         self.dp.message(Command("status"))(self.cmd_status)
         self.dp.message(Command("export"))(self.cmd_export)
@@ -1815,9 +1814,6 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
                 BotCommand(command="agents", description="List active runs (steer/interrupt)"),
                 BotCommand(command="steer", description="Steer a live run: /steer [run_id] text"),
                 BotCommand(command="restart", description="Restart the engine (owner only)"),
-                BotCommand(
-                    command="restart_delphi", description="Restart the Delphi engine (owner only)"
-                ),
                 BotCommand(command="help", description="Show commands"),
             ]
             # Set for both default and private-chat scopes so DMs see the full menu

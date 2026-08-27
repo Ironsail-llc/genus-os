@@ -353,9 +353,6 @@ class TelegramHandlersMixin:
     async def cmd_restart(self, message: Message) -> None:
         await self._handle_restart_command(message, "robothor-engine.service")
 
-    async def cmd_restart_delphi(self, message: Message) -> None:
-        await self._handle_restart_command(message, "robothor-delphi-engine.service")
-
     async def cmd_context(self, message: Message) -> None:
         chat_id = str(message.chat.id)
         session = get_shared_session(self._session_key(chat_id))
