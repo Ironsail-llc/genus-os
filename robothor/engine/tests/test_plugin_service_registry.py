@@ -197,3 +197,32 @@ class TestRefusalIsAllOrNothing:
 
         install({"one": 1, "two": 2})
         assert get_service("one") == 1 and get_service("two") == 2
+
+
+class TestToolContextCanActuallyReachAService:
+    """`genus.services` had no consumer, which made it a registry not a seam.
+
+    `ToolContext.get_service` was written as "the counterpart to ctx.get in
+    harnesses built on a service kernel" — and nothing in the engine, in a
+    built-in handler, or even in this file ever called it. The tests reached
+    `robothor.engine.services.get_service` directly, so the group's ONLY
+    consumer path was never exercised. Nine wired groups beat ten with one
+    inert.
+    """
+
+    def test_a_handler_reaches_a_registered_service_through_its_context(self, install):
+        """Through ToolContext, the path a handler would actually use — not
+        robothor.engine.services.get_service, which is what every other test
+        here calls and is why the consumer path stayed unexercised."""
+        from robothor.engine.tools.dispatch import ToolContext
+
+        install({"answer": lambda: 42})
+        svc = ToolContext(agent_id="probe").get_service("answer")
+        assert svc is not None, "ToolContext cannot reach a registered service"
+        assert svc() == 42
+
+    def test_an_unregistered_service_is_none_not_an_error(self, install):
+        from robothor.engine.tools.dispatch import ToolContext
+
+        install({"answer": lambda: 42})
+        assert ToolContext(agent_id="probe").get_service("nothing_provides_this") is None

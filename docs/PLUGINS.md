@@ -224,3 +224,52 @@ reaching for `memory` has shown what it is willing to do.
 place. Tools, schemas, guardrails, hooks and models all pick up the change
 on their next use; runs already in flight are not disturbed. A plugin that
 has been uninstalled is withdrawn by the same reload.
+
+## Declaring what you contribute
+
+Ship a `genus-plugin.yaml` inside your package and list it as package data:
+
+```yaml
+# genus_acme/genus-plugin.yaml
+name: genus-acme-tools
+contract_version: 1
+handlers:
+  - coin_flip
+```
+
+```toml
+[tool.setuptools.package-data]
+genus_acme = ["genus-plugin.yaml"]
+```
+
+Genus reads this from the **packaging layer** — the installed distribution's
+file list — *before* importing your module. Every other check (contract
+version, reserved names, clashes) necessarily runs after `ep.load()`, which has
+already executed your module body inside the daemon. The manifest is the only
+one that can refuse a plugin without running it.
+
+Controlled by `ROBOTHOR_PLUGIN_MANIFEST_MODE`:
+
+| mode | behaviour |
+|---|---|
+| `off` | no manifest check |
+| `observe` (default) | logs distributions that ship none, **still imports them** |
+| `enforce` | refuses an unmanifested distribution before import |
+
+`observe` is the default because requiring a manifest is a breaking change for
+plugins published before it existed. **It does not protect** — it still imports,
+it only says so. The pre-execution guarantee exists solely in `enforce`.
+
+> **Editable installs (`pip install -e .`) cannot ship a manifest.** They expose
+> only a `.pth` shim to the packaging layer, so the file is invisible to it and
+> `enforce` will refuse the plugin. This is a real limitation of development
+> mode, not something to work around by importing the package to find its own
+> manifest — that would defeat the entire point. Use a normal install to test
+> under `enforce`.
+
+## A worked example
+
+`plugins/genus-hostinfo` is a first-party plugin carried in this repo: host
+thermal, GPU and memory state, which core deliberately does not ship because it
+is a fact about one machine. It is a complete, installable reference — manifest,
+entry points, schema, `read_only` declaration and tests.
