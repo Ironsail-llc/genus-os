@@ -29,6 +29,7 @@ from __future__ import annotations
 from robothor.engine.llm_client import (
     MAX_RATE_LIMIT_WAIT,
     is_credit_exhausted,
+    is_periodic_quota_exhausted,
     rate_limit_wait_seconds,
 )
 
@@ -146,3 +147,35 @@ class TestStatusBeatsProse:
     def test_a_statusless_rate_limit_still_waits(self):
         """Some providers raise bare exceptions; then prose is all there is."""
         assert rate_limit_wait_seconds(_Err("rate limit exceeded")) > 0
+
+
+class TestPeriodicQuotaIsNotASpendCap:
+    """A calendar cap and a spent balance recover on different clocks.
+
+    2026-08-27: "Key limit exceeded (weekly limit)" matched the credit
+    markers, so the pool retried it on the 900s spend-cap cooldown — ~96
+    revivals a day, each one a fresh burst of 403s through every agent's
+    chain. Both are still "the account cannot pay", so is_credit_exhausted
+    must keep returning True; only the RETIREMENT DURATION differs.
+    """
+
+    def test_weekly_limit_prose_classifies_as_periodic(self):
+        assert is_periodic_quota_exhausted(_Err("Key limit exceeded (weekly limit)"))
+
+    def test_daily_and_monthly_windows_too(self):
+        for msg in ("Key limit exceeded (daily limit)", "monthly limit reached"):
+            assert is_periodic_quota_exhausted(_Err(msg)), msg
+
+    def test_a_plain_spend_cap_is_not_periodic(self):
+        for msg in ("insufficient credit", "not enough credits", "payment required"):
+            assert not is_periodic_quota_exhausted(_Err(msg)), msg
+
+    def test_a_bare_402_is_not_periodic(self):
+        assert not is_periodic_quota_exhausted(_Err(status=402))
+
+    def test_a_periodic_cap_is_still_credit_exhausted(self):
+        """The chain must still stop dialling; only the cooldown changes."""
+        assert is_credit_exhausted(_Err("Key limit exceeded (weekly limit)"))
+
+    def test_a_rate_limit_is_neither(self):
+        assert not is_periodic_quota_exhausted(_Err("rate limit exceeded", status=429))
