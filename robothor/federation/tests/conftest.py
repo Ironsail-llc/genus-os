@@ -50,9 +50,17 @@ def child_config(tmp_path):
     return _instance(tmp_path, "child")
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def saved(monkeypatch):
-    """Capture connections written by the code under test, keyed by id."""
+    """Capture connections written by the code under test, keyed by id.
+
+    Autouse because `create_invite_token` and `consume_invite_token` now
+    persist a row, which turned this package's unit tests into tests that
+    need a live Postgres. They passed on a workstation that has one and
+    failed the CI unit lane, which has none. Capturing here keeps the whole
+    package DB-free; the tests that care about the write still request
+    `saved` by name and assert against it.
+    """
 
     class _Store(dict):
         def get(self, connection_id):  # type: ignore[override]
