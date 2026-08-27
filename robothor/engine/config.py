@@ -28,6 +28,7 @@ from robothor.engine.models import (
 logger = logging.getLogger(__name__)
 
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
+from robothor.engine.service_roles import resolve_service_role  # noqa: E402
 
 
 def _default_tenant() -> str:
@@ -474,7 +475,10 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         surface_to_channel=bool(delivery.get("surface_to_channel", True)),
         tools_allowed=manifest.get("tools_allowed", []),
         tools_denied=manifest.get("tools_denied", []),
-        service_role=manifest.get("role", manifest.get("service_role", "service")),
+        service_role=resolve_service_role(
+            str(manifest.get("id", "")),
+            manifest.get("role", manifest.get("service_role", "")),
+        ),
         reasoning_effort=str(model.get("reasoning_effort", "medium")),
         instruction_file=manifest.get("instruction_file", ""),
         bootstrap_files=manifest.get("bootstrap_files", []),
