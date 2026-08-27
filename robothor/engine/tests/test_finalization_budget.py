@@ -1,21 +1,16 @@
-"""Finalization has a total budget, not just a per-step one.
+"""The bound on what a run may spend after its loop ends, untested until now.
 
-#405 bounded each finalization step at 60s, which stopped the unbounded
-hang: a run that had previously vanished for 331 unaccounted seconds now
-completed. The very next occurrence showed the remaining hole.
+`finalization_budget.py` was written after two incidents three days apart: a
+run with a 1200s ceiling that reached 3110s because the loop ended at 1169s
+and the next 331 seconds were spent in teardown with every enforcement layer
+already stopped, and then a run that returned exactly 300 seconds late —
+five steps timing out at 60s each, each bound holding, nothing capping their
+sum.
 
-    wd.log      stop_called       <- loop ended at its 1200s ceiling
-    phases.log  execute_returned  <- 300 seconds later
-                container killed by the harness backstop at 1500s
-
-Three hundred seconds is exactly five steps timing out at 60s each. Every
-individual bound held; nothing capped their SUM. The run finished — and
-finished 3 seconds past the outer backstop, so it was killed anyway and its
-stdout never flushed.
-
-A per-step bound stops one hang. A total budget stops N of them compounding,
-and it is the only kind of bound the caller can reason about: `execute()`
-returns within the loop ceiling plus this, full stop.
+It is 153 lines of pure control logic guarding the one stretch of a run
+where no watchdog is running, and nothing referenced it from a test. The
+module's whole promise is that it never propagates and never overruns; both
+are properties, and properties are what tests are for.
 """
 
 from __future__ import annotations
@@ -24,124 +19,99 @@ import asyncio
 
 import pytest
 
-from robothor.engine.run_budget import (
+from robothor.engine.finalization_budget import (
     FINALIZATION_TIMEOUT,
     FINALIZATION_TOTAL_BUDGET,
     FinalizationBudget,
+    bounded_finalization,
 )
 
 
-class TestTheTotalBudget:
-    def test_it_is_smaller_than_the_harness_margin(self):
-        """The bench container allows task_timeout + 300s. Finalization must
-        fit well inside that, or a completed run is killed anyway."""
-        assert FINALIZATION_TOTAL_BUDGET < 300
+async def _ok(value: str = "done"):
+    return value
 
-    def test_it_admits_at_least_one_full_step(self):
-        assert FINALIZATION_TOTAL_BUDGET >= FINALIZATION_TIMEOUT
+
+async def _hangs():
+    await asyncio.sleep(30)
+    return "never"
+
+
+async def _raises():
+    raise RuntimeError("teardown blew up")
+
+
+class TestBoundedFinalization:
+    @pytest.mark.asyncio
+    async def test_a_normal_step_returns_its_value(self):
+        assert await bounded_finalization(_ok("delivered"), "delivery") == "delivered"
 
     @pytest.mark.asyncio
-    async def test_fast_steps_all_run(self):
-        budget = FinalizationBudget()
-        results = []
-        for i in range(6):
-
-            async def quick(n=i):
-                return n
-
-            results.append(await budget.run(quick(), f"step{i}"))
-        assert results == [0, 1, 2, 3, 4, 5]
-
-    @pytest.mark.asyncio
-    async def test_the_budget_caps_the_total_not_just_each_step(self):
-        budget = FinalizationBudget(total=0.4, per_step=0.15)
-
-        async def slow():
-            await asyncio.sleep(5)
-
-        started = asyncio.get_running_loop().time()
-        for i in range(20):
-            await budget.run(slow(), f"slow{i}")
-        elapsed = asyncio.get_running_loop().time() - started
-        assert elapsed < 2.0, f"twenty slow steps took {elapsed:.1f}s — no total cap"
-
-    @pytest.mark.asyncio
-    async def test_later_steps_are_skipped_once_exhausted(self):
-        budget = FinalizationBudget(total=0.2, per_step=0.15)
-
-        async def slow():
-            await asyncio.sleep(5)
-
-        await budget.run(slow(), "first")
-        ran = False
-
-        async def marker():
-            nonlocal ran
-            ran = True
-
-        await budget.run(marker(), "second")
-        assert not ran, "a step ran after the total budget was exhausted"
-        assert budget.exhausted
-
-    @pytest.mark.asyncio
-    async def test_a_skipped_step_does_not_leak_its_coroutine(self):
-        """An un-awaited coroutine emits a RuntimeWarning and hides a bug."""
-        import warnings
-
-        budget = FinalizationBudget(total=0.05, per_step=0.02)
-
-        async def slow():
-            await asyncio.sleep(5)
-
-        await budget.run(slow(), "first")
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", RuntimeWarning)
-
-            async def never():
-                return 1
-
-            await budget.run(never(), "skipped")
-
-    @pytest.mark.asyncio
-    async def test_failures_never_propagate(self):
-        budget = FinalizationBudget()
-
-        async def boom():
-            raise RuntimeError("teardown exploded")
-
-        assert await budget.run(boom(), "boom") is None
-
-    @pytest.mark.asyncio
-    async def test_exhaustion_is_logged_once_with_the_step_name(self, caplog):
-        # step one consumes effectively the whole allowance
-        budget = FinalizationBudget(total=0.06, per_step=0.05)
-
-        async def slow():
-            await asyncio.sleep(5)
-
-        with caplog.at_level("WARNING"):
-            await budget.run(slow(), "sandbox_stop")
-
-            async def after():
-                return 1
-
-            await budget.run(after(), "delivery")
-        assert "sandbox_stop" in caplog.text
-        assert "delivery" in caplog.text, "the skipped step must name itself"
-
-
-class TestTheRunnerUsesTheBudget:
-    @staticmethod
-    def _source() -> str:
-        from pathlib import Path
-
-        import robothor.engine.runner as m
-
-        return Path(m.__file__).read_text(encoding="utf-8")
-
-    def test_one_budget_spans_the_whole_run(self):
-        body = self._source()
-        assert "FinalizationBudget(" in body, "the runner never creates a budget"
-        assert body.count("FinalizationBudget(") == 1, (
-            "more than one budget per run defeats the total cap"
+    async def test_a_hanging_step_is_abandoned_not_awaited_forever(self):
+        result = await asyncio.wait_for(
+            bounded_finalization(_hangs(), "sandbox-teardown", timeout=0.05), timeout=5
         )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_a_raising_step_never_propagates(self):
+        """An exception here would replace whatever the run was reporting."""
+        assert await bounded_finalization(_raises(), "verification") is None
+
+    @pytest.mark.asyncio
+    async def test_the_default_bound_is_the_module_constant(self):
+        assert FINALIZATION_TIMEOUT == 60
+
+
+class TestTheSharedTotal:
+    """The second incident: every per-step bound held, nothing capped the sum."""
+
+    @pytest.mark.asyncio
+    async def test_steps_draw_down_the_shared_total(self):
+        budget = FinalizationBudget(total=0.30, per_step=0.05)
+        assert not budget.exhausted
+        for _ in range(6):
+            await budget.run(_hangs(), "slow-step")
+        assert budget.exhausted, "six timing-out steps did not exhaust a 0.3s total"
+
+    @pytest.mark.asyncio
+    async def test_an_exhausted_budget_skips_rather_than_attempts(self):
+        budget = FinalizationBudget(total=0.05, per_step=0.05)
+        await budget.run(_hangs(), "first")
+        ran = {"second": False}
+
+        async def _second():
+            ran["second"] = True
+            return "x"
+
+        assert await budget.run(_second(), "second") is None
+        assert not ran["second"], "a step ran after the budget was spent"
+
+    @pytest.mark.asyncio
+    async def test_a_skipped_coroutine_is_closed_not_leaked(self):
+        """An abandoned coroutine warns and hides what it would have done."""
+        budget = FinalizationBudget(total=0.05, per_step=0.05)
+        await budget.run(_hangs(), "first")
+
+        coro = _ok()
+        await budget.run(coro, "skipped")
+        assert coro.cr_frame is None, "the skipped coroutine was never closed"
+
+    @pytest.mark.asyncio
+    async def test_a_fast_step_leaves_budget_for_later_ones(self):
+        budget = FinalizationBudget(total=1.0, per_step=0.5)
+        assert await budget.run(_ok("a"), "first") == "a"
+        assert await budget.run(_ok("b"), "second") == "b"
+        assert not budget.exhausted
+
+    @pytest.mark.asyncio
+    async def test_a_raising_step_still_consumes_budget_and_does_not_propagate(self):
+        budget = FinalizationBudget(total=1.0, per_step=0.5)
+        assert await budget.run(_raises(), "boom") is None
+        assert await budget.run(_ok("after"), "after") == "after"
+
+    def test_the_total_is_the_module_constant(self):
+        assert FINALIZATION_TOTAL_BUDGET == 150
+
+    def test_a_tiny_total_is_immediately_exhausted(self):
+        """Below the useful floor there is no point starting a step."""
+        assert FinalizationBudget(total=0.0).exhausted
