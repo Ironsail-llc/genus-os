@@ -47,6 +47,9 @@ CAPS = {
     # Tempo-scaled watchdog budgets (2026-08-27): extracted here rather than
     # growing run_budget past its cap, same as the finalization cluster.
     "robothor/engine/watchdog_budgets.py": 110,
+    # Cancel classification (2026-08-27): extracted from the runner, which is
+    # the god-object this ratchet exists to shrink.
+    "robothor/engine/cancel_outcome.py": 80,
     # The finalization cluster (what a run may spend AFTER its loop ends)
     # was extracted here rather than growing run_budget past its cap.
     "robothor/engine/finalization_budget.py": 160,
