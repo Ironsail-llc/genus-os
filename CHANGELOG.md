@@ -1,3 +1,14 @@
+## [1.60.0](https://github.com/Ironsail-llc/genus-os/compare/v1.59.0...v1.60.0) (2026-08-27)
+
+### Features
+
+* **plugins:** a plugin can add an operator command ([#445](https://github.com/Ironsail-llc/genus-os/issues/445)) ([9f75e48](https://github.com/Ironsail-llc/genus-os/commit/9f75e487ff4535789b98901b00320d516a59ee4f)), closes [#444](https://github.com/Ironsail-llc/genus-os/issues/444) [#443](https://github.com/Ironsail-llc/genus-os/issues/443) [#442](https://github.com/Ironsail-llc/genus-os/issues/442)
+* **plugins:** a plugin can run on a schedule, not only on a tool call ([#444](https://github.com/Ironsail-llc/genus-os/issues/444)) ([901adf1](https://github.com/Ironsail-llc/genus-os/commit/901adf1dab69fb98ca9f314931fbfd09314465f0)), closes [#443](https://github.com/Ironsail-llc/genus-os/issues/443) [#442](https://github.com/Ironsail-llc/genus-os/issues/442)
+
+### Bug Fixes
+
+* **tools:** view_image gave up when the extension did not match ([#447](https://github.com/Ironsail-llc/genus-os/issues/447)) ([2663223](https://github.com/Ironsail-llc/genus-os/commit/2663223bd1c3a6eb4503aff278f93c395bbd1258))
+
 ## [1.59.0](https://github.com/Ironsail-llc/genus-os/compare/v1.58.2...v1.59.0) (2026-08-27)
 
 ### Features
