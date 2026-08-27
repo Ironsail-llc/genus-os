@@ -433,6 +433,25 @@ class ToolRegistry:
                 data-scoping (Task 5); every existing caller omitting this
                 gets the unaffected default.
         """
+        # Match supplied argument names to this tool's declared parameters,
+        # ignoring case and underscores. 82 tools are snake_case and 26 are
+        # camelCase, so a model that has just called get_task({"id": ...})
+        # sends `to_agent` to a tool declaring `toAgent` — and gets a generic
+        # failure with nothing naming the wrong key. Exact matches win;
+        # ambiguity is left alone. See normalise_arguments.
+        from robothor.engine.tools.dispatch import normalise_arguments
+
+        # getattr, not self._schemas: this method is exercised with stub
+        # registries that never build a schema map, and argument normalisation
+        # must never be the reason a tool call fails.
+        _schemas = getattr(self, "_schemas", None) or {}
+        _props = (
+            ((_schemas.get(tool_name) or {}).get("function") or {})
+            .get("parameters", {})
+            .get("properties")
+        )
+        arguments = normalise_arguments(arguments, _props)
+
         try:
             if timeout > 0:
                 async with asyncio.timeout(timeout):
