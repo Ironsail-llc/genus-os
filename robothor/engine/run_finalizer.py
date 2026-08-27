@@ -409,7 +409,7 @@ class RunFinalizationMixin:
             try:
                 from robothor.engine.deliverable_contract import check_run_deliverables
 
-                dreport = check_run_deliverables(run)
+                dreport = check_run_deliverables(run, session)
             except Exception as exc:  # noqa: BLE001 — never block finalization
                 logger.debug("deliverable contract check raised: %s", exc)
                 dreport = None

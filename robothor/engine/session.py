@@ -293,6 +293,12 @@ class AgentSession:
         self.run.started_at = datetime.now(UTC)
         self.run.system_prompt_chars = len(system_prompt)
         self.run.user_prompt_chars = len(user_message)
+        # Retained, not recoverable. agent_runs stores only the CHAR COUNT, and
+        # by finalization compaction may have dropped the first user message
+        # from `messages` — the run this matters for made 333 requests against
+        # 3.4M input tokens. The deliverable contract reads its requirement
+        # from this wording, so it has to survive the whole run.
+        self.originating_message = user_message
         self.run.tools_provided = tools_provided
         self.run.delivery_mode = delivery_mode
         self._start_time = time.monotonic()
