@@ -39,6 +39,7 @@ available to any agent whose manifest lists it in `tools_allowed`.
 | `genus.schemas` | `schemas` | the OpenAI-style function schema a tool needs |
 | `genus.guardrails` | `policies` | pre/post execution policies |
 | `genus.hooks` | `hooks` | lifecycle hooks |
+| `genus.models` | `models` | token limits and pricing for models the built-in table does not know |
 
 A tool normally ships in two groups: the handler and its schema. The engine
 keeps those in separate registries and so does the loader.
@@ -69,3 +70,38 @@ Plugin failures are logged at WARNING with the plugin name and the reason:
 Plugin 'acme' declares contract '0.9', this engine speaks '1.0' — refused
 Plugin 'acme' tried to shadow built-in(s) ['exec']
 ```
+
+## A model plugin
+
+The built-in table cannot know every model an instance runs. A plugin adds
+coverage without editing the engine:
+
+```python
+# acme_models/__init__.py
+from robothor.engine.model_registry import ModelLimits
+
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "models": {
+        "openrouter/acme/big-v1": ModelLimits(
+            max_input_tokens=400_000,
+            max_output_tokens=8_192,
+            default_output_tokens=4_096,
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+        ),
+    },
+}
+```
+
+A plain dict with the same keys works too, so a plugin need not import the
+dataclass. Entries are consulted **after** the curated registry and
+**before** litellm's bundled catalog: a plugin extends what the engine knows
+about, and can never overwrite a model the platform pinned deliberately.
+
+## Reloading without a restart
+
+`systemctl reload robothor-engine` (SIGHUP) re-reads installed plugins in
+place. Tools, schemas, guardrails, hooks and models all pick up the change
+on their next use; runs already in flight are not disturbed. A plugin that
+has been uninstalled is withdrawn by the same reload.
