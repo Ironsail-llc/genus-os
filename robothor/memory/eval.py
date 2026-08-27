@@ -488,7 +488,95 @@ def _ensure_tenant(tenant_id: str) -> None:
         )
 
 
-def _cleanup_tenant(tenant_id: str) -> None:
+#: Facts seeded alongside every case so that retrieval has to actually
+#: discriminate. Without them each case's corpus is <= k rows and top-k
+#: returns everything, which is how this suite scored 266/267 with the entire
+#: retrieval stack replaced by `ORDER BY created_at DESC LIMIT k` — no
+#: embeddings, no BM25, no fusion, no reranker. A gate whose discriminative
+#: power between 33 memory modules and one line of SQL is one case in 267 is
+#: not a gate.
+#:
+#: Deliberately off-topic: they must be plausible facts about a working
+#: instance, so they are realistic neighbours in embedding space, while never
+#: answering any case's question.
+_DISTRACTOR_CATEGORY = "__eval_distractor__"
+
+_DISTRACTOR_FACTS: tuple[str, ...] = (
+    "The office coffee machine is descaled on the first Monday of each month.",
+    "Backups rotate at 05:30 and keep seven generations offsite.",
+    "The staging environment uses a single shared database instance.",
+    "Invoices are numbered sequentially starting from 1000 each fiscal year.",
+    "The building's fire alarm is tested quarterly on a Wednesday morning.",
+    "Parking permits expire at the end of March.",
+    "The conference room projector needs an HDMI adapter for older laptops.",
+    "Expense reports over 500 require a second approver.",
+    "The support rota runs Monday to Friday with weekend cover on call.",
+    "Laptops are replaced on a three-year cycle.",
+    "The kitchen dishwasher runs automatically at 19:00.",
+    "New starters get a welcome pack on their first day.",
+    "The printer on the second floor jams with heavyweight paper.",
+    "Quarterly reviews are scheduled in the last two weeks of the quarter.",
+    "The visitor log is kept at reception for twelve months.",
+    "Server room temperature is held between 18 and 22 degrees.",
+    "The company uses a four-digit door code changed twice a year.",
+    "Stationery orders are placed on the last Friday of the month.",
+    "The lift is serviced every six months by an external contractor.",
+    "Recycling is collected on Tuesday mornings.",
+    "The window cleaner visits every eight weeks.",
+    "Meeting rooms can be booked up to four weeks in advance.",
+    "The first-aid kit is checked every February and August.",
+    "Guest wifi credentials rotate weekly.",
+    "The archive boxes are stored in the basement by year.",
+)
+
+
+async def _seed_distractors(tenant_id: str) -> int:
+    """Seed the off-topic corpus once per suite run.
+
+    Seeded once rather than per case because embedding 25 facts for each of
+    267 cases would dominate the run. `_refresh_distractor_recency` then makes
+    them the newest rows before each case, so recency cannot stand in for
+    relevance.
+    """
+    from robothor.memory.facts import store_facts_batch
+
+    payload = [
+        {
+            "fact_text": text,
+            "category": _DISTRACTOR_CATEGORY,
+            "importance_score": 0.5,
+            "entities": [],
+        }
+        for text in _DISTRACTOR_FACTS
+    ]
+    ids = await store_facts_batch(
+        payload,
+        source_content="eval distractor corpus",
+        source_type="eval_distractor",
+        tenant_id=tenant_id,
+    )
+    return len(ids or [])
+
+
+def _refresh_distractor_recency(tenant_id: str) -> None:
+    """Make the distractors the newest rows in the tenant.
+
+    This is what defeats a recency-only retriever. If the distractors were
+    merely present but older, `ORDER BY created_at DESC LIMIT k` would still
+    surface every case's freshly-seeded target and the suite would keep
+    certifying nothing.
+    """
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE memory_facts SET created_at = now() WHERE tenant_id = %s AND category = %s",
+            (tenant_id, _DISTRACTOR_CATEGORY),
+        )
+
+
+def _cleanup_tenant(tenant_id: str, *, keep_distractors: bool = False) -> None:
     """Delete all seeded facts for the eval tenant. Never touches DEFAULT_TENANT."""
     from robothor.constants import DEFAULT_TENANT
     from robothor.db.connection import get_connection
@@ -499,7 +587,13 @@ def _cleanup_tenant(tenant_id: str) -> None:
 
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("DELETE FROM memory_facts WHERE tenant_id = %s", (tenant_id,))
+        if keep_distractors:
+            cur.execute(
+                "DELETE FROM memory_facts WHERE tenant_id = %s AND (category IS DISTINCT FROM %s)",
+                (tenant_id, _DISTRACTOR_CATEGORY),
+            )
+        else:
+            cur.execute("DELETE FROM memory_facts WHERE tenant_id = %s", (tenant_id,))
 
 
 def _signal_updates(
@@ -638,8 +732,18 @@ async def _retrieve(case: EvalCase, tenant_id: str) -> list[str]:
 
 
 async def run_case(case: EvalCase, tenant_id: str) -> CaseResult:
-    """Seed → retrieve → score one case."""
+    """Seed → make distractors newest → retrieve → score one case.
+
+    The refresh sits between seeding and retrieval deliberately. Doing it
+    before `_seed_case` (the first version of this change) accomplishes
+    nothing: the case's own facts are then written afterwards and are newest
+    again, so `ORDER BY created_at DESC LIMIT k` still surfaces every target
+    and the suite still cannot tell the retrieval stack from one line of SQL.
+    Measured: with the refresh before seeding a null retriever scored 265/267;
+    after moving it here it scores far lower.
+    """
     await _seed_case(case, tenant_id)
+    _refresh_distractor_recency(tenant_id)
     top = await _retrieve(case, tenant_id)
     return score_case(case, top)
 
@@ -667,13 +771,22 @@ async def run_suite(
     _ensure_tenant(tenant_id)
 
     results: list[CaseResult] = []
+    # An off-topic corpus, seeded once and preserved across the per-case wipe.
+    # Without it every case's corpus is <= k rows, top-k returns all of them,
+    # and the suite cannot tell the retrieval stack from one line of SQL.
+    if cleanup:
+        _cleanup_tenant(tenant_id)
+    seeded = await _seed_distractors(tenant_id)
+    logger.info("eval: seeded %d distractor fact(s)", seeded)
     try:
         for case in cases:
-            # Per-case isolation: wipe the tenant before each case so an earlier
-            # case's seeds (esp. noise distractors) can't contaminate a later one
-            # and make results order-dependent. Disabled when cleanup=False (debug).
+            # Per-case isolation: wipe the case's own seeds so an earlier case
+            # can't contaminate a later one and make results order-dependent.
+            # The distractors survive — they are the point.
             if cleanup:
-                _cleanup_tenant(tenant_id)
+                _cleanup_tenant(tenant_id, keep_distractors=True)
+            # The recency refresh lives inside run_case, AFTER seeding — see
+            # its docstring for why doing it here instead is a no-op.
             results.append(await run_case(case, tenant_id))  # noqa: PERF401 — await in body
     finally:
         if cleanup:
