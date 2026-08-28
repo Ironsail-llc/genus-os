@@ -29,12 +29,15 @@ import logging
 import math
 import os
 import random
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+
+    from robothor.llm.local_gate import Lane
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +49,15 @@ _transport: httpx.AsyncBaseTransport | None = None
 # reload, a brief 5xx/429 blip) are short-lived, so two attempts is enough.
 CHAT_MAX_ATTEMPTS = 2
 CHAT_RETRY_DELAY_SECONDS = 3.0
+#: Spread applied to the retry above. A fixed delay makes every caller that hit a
+#: busy server retry in lockstep, which is how backpressure becomes a thundering
+#: herd against a device serving one inference slot.
+CHAT_RETRY_JITTER_FRACTION = 0.5
+
+
+def _chat_retry_delay() -> float:
+    spread = CHAT_RETRY_DELAY_SECONDS * CHAT_RETRY_JITTER_FRACTION
+    return max(0.0, CHAT_RETRY_DELAY_SECONDS + random.uniform(-spread, spread))
 
 # Embedding retry budget — sized to survive a multi-minute 5xx/timeout storm
 # (e.g. the model being evicted and reloaded) without burning the caller's
@@ -59,9 +71,30 @@ EMBED_BACKOFF_CAP_SECONDS = 45.0
 EMBED_BACKOFF_JITTER_FRACTION = 0.25
 
 
-def _client(timeout: float) -> httpx.AsyncClient:
-    """Construct the shared AsyncClient, honoring an injected test transport."""
+def _probe_client(timeout: float) -> httpx.AsyncClient:
+    """An UNGATED client, for cheap metadata calls only (``/api/tags``).
+
+    Availability probes must never queue behind inference: a probe that waits for a
+    busy GPU reports the model as missing, and callers degrade as though it were.
+    """
     return httpx.AsyncClient(timeout=timeout, transport=_transport)
+
+
+@asynccontextmanager
+async def _client(timeout: float, lane: Lane | None = None):
+    """One inference slot, then a client. Every request-bearing call goes through here.
+
+    This is the single funnel for local inference in this module, so gating it covers
+    the memory pipeline, chat history embedding, RAG generation and the self-model in
+    one place. See ``robothor/llm/local_gate.py`` for why heat, not money, is the
+    scarce resource being rationed.
+    """
+    from robothor.llm.local_gate import Lane as _Lane
+    from robothor.llm.local_gate import gate
+
+    async with gate().slot(lane=lane or _Lane.NORMAL):
+        async with httpx.AsyncClient(timeout=timeout, transport=_transport) as client:
+            yield client
 
 
 # Transport-level failures worth retrying: timeouts, connect/read/write resets
@@ -374,7 +407,7 @@ async def chat(
                     e,
                     CHAT_RETRY_DELAY_SECONDS,
                 )
-                await asyncio.sleep(CHAT_RETRY_DELAY_SECONDS)
+                await asyncio.sleep(_chat_retry_delay())
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             if status >= 500 or status == 429:
@@ -396,7 +429,7 @@ async def chat(
                         e,
                         CHAT_RETRY_DELAY_SECONDS,
                     )
-                    await asyncio.sleep(CHAT_RETRY_DELAY_SECONDS)
+                    await asyncio.sleep(_chat_retry_delay())
             else:
                 raise  # non-retryable 4xx
     raise last_error  # type: ignore[misc]
@@ -627,7 +660,7 @@ async def check_model_available(model: str | None = None) -> bool:
     """Check if a model is available in Ollama."""
     try:
         url = _ollama_url()
-        async with _client(5.0) as client:
+        async with _probe_client(5.0) as client:
             resp = await client.get(f"{url}/api/tags")
             resp.raise_for_status()
             models = [m["name"] for m in resp.json().get("models", [])]
@@ -642,7 +675,7 @@ async def detect_generation_model() -> str | None:
     global GENERATION_MODEL
     try:
         url = _ollama_url()
-        async with _client(5.0) as client:
+        async with _probe_client(5.0) as client:
             resp = await client.get(f"{url}/api/tags")
             resp.raise_for_status()
             models = [m["name"] for m in resp.json().get("models", [])]

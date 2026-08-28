@@ -943,25 +943,7 @@ async def main() -> int:
     if cleaned:
         logger.info("Startup: cleaned %d stale agent runs", cleaned)
 
-    # Initialize fleet pool for admission control
-    from robothor.engine.pool import init_fleet_pool
-
-    # One slot held back for interactive work. A cap alone still lets nightly
-    # sweeps fill every slot: measured 2026-08-27, an operator's Telegram turn
-    # took 1.2 min with the box idle and 17.9 min with two background runs in
-    # flight, because nothing knew a human was waiting. The reservation makes
-    # that inversion structurally impossible rather than merely unlikely.
-    _reserved = int(os.environ.get("ROBOTHOR_RESERVED_INTERACTIVE_SLOTS", "1"))
-    init_fleet_pool(
-        max_concurrent=config.max_concurrent_agents,
-        hourly_cost_cap_usd=config.hourly_cost_cap_usd,
-        reserved_slots=max(0, min(_reserved, config.max_concurrent_agents - 1)),
-    )
-    logger.info(
-        "Fleet pool: max_concurrent=%d, hourly_cost_cap=$%.2f",
-        config.max_concurrent_agents,
-        config.hourly_cost_cap_usd,
-    )
+    _init_fleet_capacity(config)
 
     # Initialize inter-agent messaging + teams so the send_agent_message /
     # receive_agent_messages / create_team / team_scratchpad_* tools work
@@ -1126,6 +1108,9 @@ async def main() -> int:
         asyncio.create_task(_curiosity_density_loop(scheduler), name="curiosity-density"),
         asyncio.create_task(_curator_loop(scheduler), name="curator"),
         asyncio.create_task(_extension_watcher_loop(), name="extensions"),
+        asyncio.create_task(
+            _capacity_governor_loop(config.max_concurrent_agents), name="capacity-governor"
+        ),
         asyncio.create_task(_elector.run(), name="leader"),
     ]
     if bot is not None:
@@ -1744,6 +1729,49 @@ async def _curator_loop(scheduler: Any) -> None:
             return
         except Exception as e:  # noqa: BLE001
             logger.warning("curator loop error: %s", e)
+
+
+def _init_fleet_capacity(config: EngineConfig) -> None:
+    """Build the fleet pool and size it to THIS machine before any run is admitted.
+
+    ``max_concurrent_agents`` is a cloud-shaped constant. On a device-bound instance
+    it is the wrong number from the first tick -- and the first tick is when cron
+    catch-up fires, which is precisely when the box is least able to absorb it.
+    """
+    from robothor.engine.capacity_governor import CapacityGovernor
+    from robothor.engine.pool import init_fleet_pool
+
+    # One slot held back for interactive work. A cap alone still lets nightly
+    # sweeps fill every slot: measured 2026-08-27, an operator's Telegram turn
+    # took 1.2 min with the box idle and 17.9 min with two background runs in
+    # flight, because nothing knew a human was waiting. The reservation makes
+    # that inversion structurally impossible rather than merely unlikely.
+    try:
+        reserved = int(os.environ.get("ROBOTHOR_RESERVED_INTERACTIVE_SLOTS", "1"))
+    except ValueError:
+        # A malformed knob must not stop a remote-only box from booting.
+        logger.warning("Invalid ROBOTHOR_RESERVED_INTERACTIVE_SLOTS — using 1")
+        reserved = 1
+
+    init_fleet_pool(
+        max_concurrent=config.max_concurrent_agents,
+        hourly_cost_cap_usd=config.hourly_cost_cap_usd,
+        reserved_slots=max(0, min(reserved, config.max_concurrent_agents - 1)),
+    )
+    applied = CapacityGovernor(cloud_max_concurrent=config.max_concurrent_agents).apply_once()
+    logger.info(
+        "Fleet pool: configured max_concurrent=%d, hourly_cost_cap=$%.2f, applied=%s",
+        config.max_concurrent_agents,
+        config.hourly_cost_cap_usd,
+        applied,
+    )
+
+
+async def _capacity_governor_loop(cloud_max_concurrent: int) -> None:
+    """Keep the fleet's limits matched to the device and its temperature."""
+    from robothor.engine.capacity_governor import run_forever
+
+    await run_forever(cloud_max_concurrent=cloud_max_concurrent)
 
 
 async def _extension_watcher_loop() -> None:

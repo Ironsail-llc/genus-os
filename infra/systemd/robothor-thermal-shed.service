@@ -1,0 +1,27 @@
+# Thermal SHEDDING — stops workload so the peer guard's reboot is never reached.
+#
+# robothor-thermal-guard.timer caps CPU frequency, pages at 90C and clean-reboots
+# at 94C. That reboot is correct as a last resort but it is not a fix: on
+# 2026-08-28 it fired three times in eight minutes because the workload restarted
+# each boot. This unit removes the workload instead.
+#
+# Long-running rather than a timer: it needs sustain windows and latched recovery
+# state, which a oneshot cannot carry across invocations.
+#
+# After=network.target, NOT multi-user.target — units ordered after
+# multi-user.target never start here when plymouth-quit-wait hangs.
+[Unit]
+Description=Robothor — thermal shedding (stops workload before the peer guard reboots)
+After=network.target
+StartLimitIntervalSec=0
+OnFailure=robothor-alert@%n.service
+
+[Service]
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/usr/local/bin/robothor-thermal-shed.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

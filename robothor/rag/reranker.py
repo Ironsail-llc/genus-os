@@ -123,35 +123,48 @@ async def rerank_pair(
     query: str,
     document: str,
 ) -> str:
-    """Score a single query-document pair. Returns 'yes' or 'no'."""
+    """Score a single query-document pair. Returns 'yes' or 'no'.
+
+    Takes one inference slot for the duration of the call. This is the leaf request,
+    never the batch: holding a slot around the surrounding ``gather`` would deadlock
+    the moment the batch needed the last slot.
+
+    The slot is acquired OUTSIDE the try below on purpose. Every other failure here
+    degrades to "no", but a gate refusal must not — marking every document
+    irrelevant silently destroys the ranking it was asked to improve. Letting it
+    propagate reaches ``rerank_with_fallback``, which falls back to cosine order.
+    """
+    from robothor.llm.local_gate import Lane, gate
+
     prompt = build_reranker_prompt(query, document)
-    try:
-        resp = await client.post(
-            f"{_ollama_url()}/api/generate",
-            json={
-                "model": RERANKER_MODEL,
-                "prompt": prompt,
-                "raw": True,
-                "stream": False,
-                "keep_alive": _keep_alive_reranker(),
-                # One token is enough for yes/no — the parser only checks the prefix.
-                "options": {"temperature": 0.0, "num_predict": 1},
-            },
-        )
-        resp.raise_for_status()
-        text = resp.json().get("response", "").strip().lower()
-        if "yes" in text:
-            return "yes"
-        return "no"
-    except Exception:
-        return "no"
+    async with gate().slot(lane=Lane.BACKGROUND):
+        try:
+            resp = await client.post(
+                f"{_ollama_url()}/api/generate",
+                json={
+                    "model": RERANKER_MODEL,
+                    "prompt": prompt,
+                    "raw": True,
+                    "stream": False,
+                    "keep_alive": _keep_alive_reranker(),
+                    # One token is enough for yes/no — the parser only checks the prefix.
+                    "options": {"temperature": 0.0, "num_predict": 1},
+                },
+            )
+            resp.raise_for_status()
+            text = resp.json().get("response", "").strip().lower()
+            if "yes" in text:
+                return "yes"
+            return "no"
+        except Exception:
+            return "no"
 
 
 async def rerank(
     query: str,
     results: list[dict[str, Any]],
     top_k: int = 10,
-    batch_size: int = 10,
+    batch_size: int | None = None,
 ) -> list[dict[str, Any]]:
     """Rerank search results using the cross-encoder.
 
@@ -189,6 +202,13 @@ async def rerank(
         max_candidates = 16
     if max_candidates > 0:
         results = results[:max_candidates]
+
+    # Queueing ten deep behind a two-slot server just moves the wait; size the
+    # batch to what the device actually serves.
+    if batch_size is None:
+        from robothor.llm.local_gate import gate as _gate
+
+        batch_size = max(1, int(_gate().snapshot()["slots"]))
 
     t0 = time.time()
     yes_results: list[dict[str, Any]] = []

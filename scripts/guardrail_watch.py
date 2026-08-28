@@ -370,6 +370,11 @@ HOST_SCRIPT_DRIFT_PAIRS: list[tuple[str, str]] = [
     # The thermal guard is a SAFETY control (Aug 2026 GPU event) that ran for
     # weeks with no repo mirror at all — a rebuilt box would have lost it.
     ("/usr/local/bin/robothor-thermal-guard.sh", "scripts/thermal-guard.sh"),
+    # The shedding half, and the crash-loop breaker that keeps a remote-only box
+    # reachable. Both are SAFETY controls; drift on either is silent until it matters.
+    ("/usr/local/bin/robothor-thermal-shed.sh", "scripts/thermal-shed.sh"),
+    ("/usr/local/bin/robothor-boot-guard.sh", "scripts/boot-guard.sh"),
+    ("/usr/local/bin/robothor-gpu-clock-cap.sh", "scripts/gpu-clock-cap.sh"),
     # /etc/logrotate.d/robothor existed with NO repo source and covered one
     # glob, so brain/memory_system/logs/ reached 205 MB unrotated. A rotation
     # policy nothing checks is one edit away from being that gap again.
