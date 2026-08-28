@@ -114,6 +114,11 @@ class ExecutionModeTracker:
         self._entered_local_at: float | None = None
         self._cloud_success_at: float | None = None
         self._last_model: str | None = None
+        # Publish the starting mode immediately. A labelled Prometheus series
+        # does not exist until it is written, so exporting only on transitions
+        # left /metrics with a declared gauge and no value -- "which mode are
+        # we in" was unanswerable right when it mattered, after a restart.
+        _export_mode(self._mode)
 
     def record_completion(self, model: str) -> None:
         """Register that a request completed on ``model``. The only mode input."""
