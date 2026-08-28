@@ -38,7 +38,7 @@ KNOWN_LARGE: dict[str, int] = {
     "runner.py::execute": 983,
     "runner.py::_run_loop": 775,
     "tools/handlers/gws.py::_handle_gws_tool": 453,
-    "daemon.py::main": 411,
+    "daemon.py::main": 397,  # -14: fleet capacity init extracted to _init_fleet_capacity
     "telegram.py::_run_interactive": 384,
     "tools/handlers/benchmark.py::_benchmark_run": 370,
     "analytics.py::get_agent_stats": 343,

@@ -63,6 +63,9 @@ install_one "${REPO_ROOT}/scripts/pg-basebackup.sh" "robothor-pg-basebackup.sh"
 install_one "${REPO_ROOT}/scripts/wal-offsite.sh" "robothor-wal-offsite.sh"
 install_one "${REPO_ROOT}/scripts/wal-archive.sh" "robothor-wal-archive.sh"
 install_one "${REPO_ROOT}/scripts/thermal-guard.sh" "robothor-thermal-guard.sh"
+install_one "${REPO_ROOT}/scripts/thermal-shed.sh" "robothor-thermal-shed.sh"
+install_one "${REPO_ROOT}/scripts/boot-guard.sh" "robothor-boot-guard.sh"
+install_one "${REPO_ROOT}/scripts/gpu-clock-cap.sh" "robothor-gpu-clock-cap.sh"
 
 # ── Group-membership check ────────────────────────────────────────────────────
 # Today's live incident's root cause: pg-basebackup.sh runs as `postgres` and

@@ -33,6 +33,7 @@ import random
 import time
 import time as _time
 from collections.abc import Awaitable, Callable  # noqa: TC003
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 import litellm
@@ -173,6 +174,19 @@ _PERIODIC_QUOTA_MARKERS = (
 LOCAL_CAPACITY_RETRIES = 4
 LOCAL_CAPACITY_RETRY_JITTER = 3.0
 
+
+def _local_capacity_delay() -> float:
+    """How long to wait after the on-device tier says "busy".
+
+    The queue drains on its own, so a calm wait beats hammering a server that is
+    already full. It is SPREAD rather than flat: a credential cap sends the whole
+    fleet to the local tier within one tick, and a fixed delay re-synchronises
+    every agent onto a single beat, refilling the queue the instant it drains. The
+    arrival rate then stays correlated no matter how deep the queue is — which is
+    how backpressure became the thermal event of 2026-08-28 rather than absorbing it.
+    """
+    return random.uniform(LOCAL_CAPACITY_RETRY_JITTER * 0.5, LOCAL_CAPACITY_RETRY_JITTER * 1.5)
+
 #: Statuses a local inference server uses for "queue full, come back".
 _CAPACITY_STATUSES = frozenset({503, 529})
 
@@ -196,6 +210,58 @@ def _record_execution_mode(model: str) -> None:
 def is_local_model(model: str) -> bool:
     """Is this served on-device, with no credential and no provider account?"""
     return model.startswith(("ollama_chat/", "ollama/"))
+
+
+async def _releasing_stream(stream: Any, cm: Any) -> Any:
+    """Yield a stream's chunks, releasing its inference slot when it ends.
+
+    A streaming call holds the GPU for as long as it is CONSUMED, not for as long
+    as ``acompletion`` takes to return. Gating only the call would report the slot
+    free while the device was still decoding — which is how three "gated" streams
+    reached 90C on 2026-08-28.
+    """
+    try:
+        async for chunk in stream:
+            yield chunk
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+async def _gated_acompletion(model: str, kwargs: dict[str, Any]) -> Any:
+    """``litellm.acompletion``, holding a local slot for the whole stream."""
+    if not is_local_model(model):
+        return await litellm.acompletion(**kwargs)
+
+    from robothor.llm.local_gate import Lane, gate
+
+    cm = gate().slot(lane=Lane.NORMAL)
+    await cm.__aenter__()
+    try:
+        stream = await litellm.acompletion(**kwargs)
+    except BaseException:
+        await cm.__aexit__(None, None, None)
+        raise
+    return _releasing_stream(stream, cm)
+
+
+@asynccontextmanager
+async def _local_slot(model: str, lane: Any = None):
+    """Hold a local inference slot for one call; a no-op for cloud models.
+
+    Cloud fan-out stays unguarded — someone else's datacentre is not our heat
+    budget. On-device work is rationed in watts (docs/runbooks/THERMAL.md).
+
+    A refusal raises ``LocalCapacityBusyError`` (status 503), which
+    ``is_capacity_error`` below already recognises, so it routes into the existing
+    LOCAL_CAPACITY_RETRIES path and deliberately does NOT open the breaker.
+    """
+    if not is_local_model(model):
+        yield
+        return
+    from robothor.llm.local_gate import Lane, gate
+
+    async with gate().slot(lane=lane or Lane.NORMAL):
+        yield
 
 
 def is_capacity_error(e: Exception) -> bool:
@@ -1157,21 +1223,27 @@ class LLMClient:
         model cannot see and to inspect the file programmatically, and the
         SAME model is retried once. Every other failure is re-raised untouched
         so the normal fallback and breaker logic still owns it.
+
+        Holds one local inference slot for the call. The gate belongs here rather
+        than in ``_call_llm``: every local model reaches litellm through this
+        method (codex is never local), and the image retry then stays inside the
+        slot it already holds instead of queueing for a second one.
         """
-        try:
-            return await litellm.acompletion(**kwargs)
-        except Exception as e:
-            if not is_image_unsupported_error(e):
-                raise
-            stripped, changed = strip_image_blocks(messages)
-            if not changed:
-                raise
-            logger.warning(
-                "Model %s cannot accept images — retrying without them; "
-                "the agent is told to inspect the file programmatically",
-                _sanitize(model),
-            )
-            return await litellm.acompletion(**{**kwargs, "messages": stripped})
+        async with _local_slot(model):
+            try:
+                return await litellm.acompletion(**kwargs)
+            except Exception as e:
+                if not is_image_unsupported_error(e):
+                    raise
+                stripped, changed = strip_image_blocks(messages)
+                if not changed:
+                    raise
+                logger.warning(
+                    "Model %s cannot accept images — retrying without them; "
+                    "the agent is told to inspect the file programmatically",
+                    _sanitize(model),
+                )
+                return await litellm.acompletion(**{**kwargs, "messages": stripped})
 
     # ─── Non-streaming call ──────────────────────────────────────────
 
@@ -1383,9 +1455,7 @@ class LLMClient:
                         continue
                     if attempt < attempts - 1 and _is_transient_model_error(e):
                         if is_local_model(model) and is_capacity_error(e):
-                            # The queue drains on its own; a flat, calmer wait
-                            # beats hammering the server that is already full.
-                            delay = LOCAL_CAPACITY_RETRY_JITTER
+                            delay = _local_capacity_delay()
                         else:
                             delay = random.uniform(
                                 TRANSIENT_RETRY_JITTER_MIN, TRANSIENT_RETRY_JITTER_MAX
@@ -1555,7 +1625,7 @@ class LLMClient:
                     stream_start = time.monotonic()
                     with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
                         async with asyncio.timeout(per_call_timeout):
-                            stream = await litellm.acompletion(**kwargs)
+                            stream = await _gated_acompletion(model, kwargs)
 
                     chunks: list[Any] = []
                     accumulated_content = ""

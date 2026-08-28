@@ -1,0 +1,24 @@
+# Hardware ceiling on GPU heat. The thermal guards react; this one prevents.
+#
+# GB10 exposes no GPU power limit, so the SM clock is the only bound available.
+# Measured 2026-08-28: uncapped the 27B plateaus at 86C and 69W, at 1500 MHz it
+# plateaus at 76C and 28W for ~10% less generation throughput. See
+# docs/runbooks/THERMAL.md and scripts/gpu-clock-cap.sh.
+#
+# Ordered before anything that can put load on the GPU. Failing to apply is a
+# real fault on a remote-only box, so it pages rather than passing silently.
+[Unit]
+Description=Robothor — GPU clock cap (bounds inference heat in hardware)
+After=network.target
+Before=ollama.service robothor-engine.service
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/usr/local/bin/robothor-gpu-clock-cap.sh
+
+[Install]
+WantedBy=multi-user.target
