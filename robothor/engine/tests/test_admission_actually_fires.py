@@ -41,16 +41,52 @@ def _pool_at_capacity():
     init_fleet_pool(max_concurrent=3, hourly_cost_cap_usd=5.0)
 
 
+@pytest.fixture
+def _enforcing(monkeypatch):
+    """The gate promoted to enforce. Default is `off`, which is the state
+    FleetPool spent its whole existence in; a test that does not promote it
+    would certify that inertness."""
+    monkeypatch.delenv("ROBOTHOR_DISABLE_ALL_GUARDRAILS", raising=False)
+    monkeypatch.setenv("ROBOTHOR_ADMISSION_ENABLED", "1")
+    monkeypatch.setenv("ROBOTHOR_ADMISSION_MODE", "enforce")
+
+
 class TestItRefusesARealRun:
     @pytest.mark.asyncio
     async def test_a_background_agent_is_not_executed_when_the_slot_is_reserved(
-        self, _pool_at_capacity
+        self, _pool_at_capacity, _enforcing, monkeypatch
     ):
-        from robothor.engine.admission import admit
+        import robothor.engine.admission as adm
 
+        monkeypatch.setattr(adm, "_record_deferral", lambda *a, **k: None)
         cfg = _cfg()
         # The real gate, the real pool, a real background classification.
-        assert admit("crm-dedup", cfg, None) is False
+        assert adm.admit("crm-dedup", cfg, None) is False
+
+    @pytest.mark.asyncio
+    async def test_the_same_run_is_admitted_while_the_gate_is_off(
+        self, _pool_at_capacity, monkeypatch
+    ):
+        """Default-off must preserve today's behaviour exactly."""
+        import robothor.engine.admission as adm
+
+        monkeypatch.delenv("ROBOTHOR_ADMISSION_ENABLED", raising=False)
+        assert adm.admit("crm-dedup", _cfg(), None) is True
+
+    @pytest.mark.asyncio
+    async def test_observe_records_the_deferral_but_runs_the_agent(
+        self, _pool_at_capacity, monkeypatch
+    ):
+        """The shadow row is what promotion evidence is made of."""
+        import robothor.engine.admission as adm
+
+        monkeypatch.delenv("ROBOTHOR_DISABLE_ALL_GUARDRAILS", raising=False)
+        monkeypatch.setenv("ROBOTHOR_ADMISSION_ENABLED", "1")
+        monkeypatch.setenv("ROBOTHOR_ADMISSION_MODE", "observe")
+        rows = []
+        monkeypatch.setattr(adm, "_record_deferral", lambda *a, **k: rows.append(a))
+        assert adm.admit("crm-dedup", _cfg(), None) is True
+        assert len(rows) == 1
 
     @pytest.mark.asyncio
     async def test_the_refusal_names_the_reservation(self, _pool_at_capacity):

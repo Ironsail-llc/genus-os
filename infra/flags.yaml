@@ -343,3 +343,14 @@ flags:
       instance today (`load_plugins() -> loaded=[] tools=0`), so enforce is
       currently a no-op here and the soak has to come from an instance that
       actually installs one.
+
+  - name: ROBOTHOR_ADMISSION_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: 2026-09-10
+    soak: |
+      Wired 2026-08-27 after FleetPool spent its whole existence with zero
+      production callers. Observe records the deferral it WOULD have made, so
+      promotion rests on agent_guardrail_events rows rather than on faith.
+      Gate on: non-zero observed rows, and no interactive run ever deferred.
+
