@@ -80,7 +80,11 @@ def _measure() -> dict[str, int]:
 def test_no_new_oversized_function():
     """A function over the threshold must be decomposed, not merely moved."""
     measured = _measure()
-    new = {k: v for k, v in measured.items() if v > MAX_NEW_FUNCTION_LINES and k not in KNOWN_LARGE}
+    new = {
+        k: v
+        for k, v in measured.items()
+        if v > MAX_NEW_FUNCTION_LINES and k not in KNOWN_LARGE
+    }
     assert not new, (
         f"new function(s) over {MAX_NEW_FUNCTION_LINES} lines: {new}. Extract a "
         "cohesive step instead — moving it to another module satisfies the file "
@@ -91,7 +95,9 @@ def test_no_new_oversized_function():
 def test_known_large_functions_do_not_grow():
     """The ones already over the line may only shrink."""
     measured = _measure()
-    grew = {k: (cap, measured[k]) for k, cap in KNOWN_LARGE.items() if measured.get(k, 0) > cap}
+    grew = {
+        k: (cap, measured[k]) for k, cap in KNOWN_LARGE.items() if measured.get(k, 0) > cap
+    }
     assert not grew, f"function(s) grew past their pinned size (cap, actual): {grew}"
 
 
@@ -104,11 +110,17 @@ def test_the_pins_track_reality():
         for k, cap in KNOWN_LARGE.items()
         if k in measured and cap > measured[k] * 1.10
     }
-    assert not loose, f"pin(s) more than 10% above actual — tighten them (cap, actual): {loose}"
+    assert not loose, (
+        f"pin(s) more than 10% above actual — tighten them (cap, actual): {loose}"
+    )
 
 
 def test_resolved_entries_are_removed():
     """An entry whose function is gone, or now under the threshold, is noise."""
     measured = _measure()
-    stale = [k for k in KNOWN_LARGE if k not in measured or measured[k] <= MAX_NEW_FUNCTION_LINES]
+    stale = [
+        k
+        for k in KNOWN_LARGE
+        if k not in measured or measured[k] <= MAX_NEW_FUNCTION_LINES
+    ]
     assert not stale, f"remove from KNOWN_LARGE — no longer oversized: {stale}"
