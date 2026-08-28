@@ -82,6 +82,13 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
     "ROBOTHOR_COMPLETION_CONTRACTS_MODE": EvidenceSource(
         "agent_guardrail_events", "guardrail_name = 'completion_contract'"
     ),
+    # Admission writes this row on the SHADOW path too, so observe produces
+    # real evidence rather than silence -- which is the whole reason FleetPool
+    # could sit with zero production callers and look indistinguishable from a
+    # control that simply never needed to fire.
+    "ROBOTHOR_ADMISSION_MODE": EvidenceSource(
+        "agent_guardrail_events", "guardrail_name = 'execution_mode_admission'"
+    ),
     "ROBOTHOR_RIP_7_MODE": EvidenceSource(
         "memory_facts_audit",
         "reason = 'pre_update_drift_detected'",
