@@ -295,6 +295,18 @@ def check_stale_goals() -> None:
 DROPIN_MIRROR_DIR = REPO_ROOT / "infra" / "systemd" / "robothor-engine.service.d"
 DROPIN_LIVE_DIR = Path("/etc/systemd/system/robothor-engine.service.d")
 
+#: Every unit whose drop-ins are mirrored and drift-checked, as
+#: (repo mirror dir, live dir). The engine was the only entry for a long time,
+#: which is why the local model server's thermal containment and model
+#: residency lived only in /etc — a rebuilt box would have lost both silently.
+DROPIN_UNITS: tuple[tuple[Path, Path], ...] = (
+    (DROPIN_MIRROR_DIR, DROPIN_LIVE_DIR),
+    (
+        REPO_ROOT / "infra" / "systemd" / "ollama.service.d",
+        Path("/etc/systemd/system/ollama.service.d"),
+    ),
+)
+
 
 def dropin_conf_pairs(
     mirror_dir: Path = DROPIN_MIRROR_DIR, live_dir: Path = DROPIN_LIVE_DIR
@@ -304,9 +316,18 @@ def dropin_conf_pairs(
     Kept separate from check_dropin_drift() so discovery is testable without
     touching /etc, per the injectable-pairs pattern below.
     """
-    if not mirror_dir.exists():
-        return []
-    return [(str(live_dir / p.name), str(p)) for p in sorted(mirror_dir.glob("*.conf"))]
+    if mirror_dir is not DROPIN_MIRROR_DIR or live_dir is not DROPIN_LIVE_DIR:
+        # Explicit override (tests, or a caller checking one unit).
+        if not mirror_dir.exists():
+            return []
+        return [(str(live_dir / p.name), str(p)) for p in sorted(mirror_dir.glob("*.conf"))]
+
+    pairs: list[tuple[str, str]] = []
+    for mirror, live in DROPIN_UNITS:
+        if not mirror.exists():
+            continue
+        pairs.extend((str(live / p.name), str(p)) for p in sorted(mirror.glob("*.conf")))
+    return pairs
 
 
 def check_dropin_drift(pairs: list[tuple[str, str]] | None = None) -> None:
