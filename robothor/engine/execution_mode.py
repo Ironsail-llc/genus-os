@@ -80,6 +80,16 @@ def _override() -> ExecutionMode | None:
         return None
 
 
+def _export_mode(mode: ExecutionMode) -> None:
+    """Publish the mode to metrics. Never raises; never load-bearing."""
+    try:
+        from robothor.engine.metrics import set_execution_mode
+
+        set_execution_mode(str(mode))
+    except Exception:  # pragma: no cover - telemetry only
+        logger.debug("Could not export execution mode", exc_info=True)
+
+
 class ExecutionModeTracker:
     """Observes completions and reports which mode the fleet is operating in."""
 
@@ -125,6 +135,7 @@ class ExecutionModeTracker:
                     "device economics now apply (slots, heat, resident memory)",
                     self._local_streak,
                 )
+                _export_mode(self._mode)
             return
 
         self._local_streak = 0
@@ -153,6 +164,7 @@ class ExecutionModeTracker:
             self._cloud_success_at = None
             self._local_streak = 0
             logger.warning("Execution mode -> CLOUD: cloud served a request and stayed quiet")
+            _export_mode(self._mode)
 
     def snapshot(self) -> dict[str, object]:
         """A JSON-safe view for ``/health``, including why the mode is what it is."""
