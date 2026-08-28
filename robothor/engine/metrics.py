@@ -9,7 +9,11 @@ The ``/metrics`` endpoint is registered in health.py.
 
 from __future__ import annotations
 
+import logging
+
 from prometheus_client import Counter, Gauge, Histogram
+
+logger = logging.getLogger(__name__)
 
 # ── Agent Runs ──────────────────────────────────────────────────────────
 
@@ -30,6 +34,52 @@ ACTIVE_AGENTS = Gauge(
     "robothor_active_agents",
     "Number of agents currently running",
 )
+
+# ── Execution mode ─────────────────────────────────────────────────────
+
+#: Which economics are in force. A gauge per mode rather than one numeric code,
+#: so a dashboard can graph "time spent local" without decoding an enum.
+EXECUTION_MODE = Gauge(
+    "robothor_execution_mode",
+    "1 for the execution mode currently in force, 0 for the others",
+    ["mode"],
+)
+
+#: Work the admission gate held back. Labelled by mode so a SHADOW deferral in
+#: observe is countable separately from a real one in enforce -- that
+#: distinction is the evidence a promotion decision rests on.
+ADMISSION_DEFERRALS_TOTAL = Counter(
+    "robothor_admission_deferrals_total",
+    "Runs deferred (or, in observe, that would have been) by admission control",
+    ["mode", "priority"],
+)
+
+_EXECUTION_MODES = ("cloud", "local")
+
+
+def set_execution_mode(mode: str) -> None:
+    """Record the mode in force, clearing the others.
+
+    Both modes reading 1 would make every dashboard built on this lie, so this
+    always writes all of them. Never raises: telemetry must not be able to
+    break the thing it observes.
+    """
+    try:
+        for known in _EXECUTION_MODES:
+            EXECUTION_MODE.labels(mode=known).set(1 if known == mode else 0)
+    except Exception:  # pragma: no cover - metrics are never load-bearing
+        logger.debug("Could not set execution mode gauge", exc_info=True)
+
+
+def record_admission_deferral(mode: str | None, priority: str | None) -> None:
+    """Count one deferral. Never raises."""
+    try:
+        ADMISSION_DEFERRALS_TOTAL.labels(
+            mode=str(mode or "unknown"), priority=str(priority or "unknown")
+        ).inc()
+    except Exception:  # pragma: no cover - metrics are never load-bearing
+        logger.debug("Could not record admission deferral", exc_info=True)
+
 
 # ── LLM Calls ──────────────────────────────────────────────────────────
 

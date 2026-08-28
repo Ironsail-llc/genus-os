@@ -39,6 +39,9 @@ def record_deferral(agent_id: str, reason: str, mode: str, priority: str) -> Non
             error_message=f"Deferred by admission control: {reason}",
         )
     )
+    from robothor.engine.metrics import record_admission_deferral
+
+    record_admission_deferral(mode, priority)
     log_guardrail_event(
         run_id,
         "execution_mode_admission",
