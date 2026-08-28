@@ -195,3 +195,31 @@ def _spawn_hard_cap_alert(session: Any, agent_config: Any, used: int) -> None:
         )
     except Exception:
         logger.debug("Runaway-token alert dispatch failed", exc_info=True)
+
+
+def nudge_for_missing_deliverable(session: Any) -> bool:
+    """The agent stopped; does it still owe an artifact the task named?
+
+    True means "do not end this iteration" — a message has been appended and
+    the loop should continue. This is a guard in the same sense as the others
+    here: it answers whether the run may finish, and the answer is no while a
+    named deliverable is absent and the nudge budget is unspent.
+
+    It has to live on this path rather than in `run_finalizer`, where the same
+    verdict already lands: the finalizer runs AFTER the loop and can record a
+    missing artifact but never prevent one. WildClawBench task_4 spent 333
+    requests and 704 seconds, reported "completed", and wrote nothing.
+
+    The budget is kept on the SESSION so the loop needs no counter of its own.
+    """
+    from robothor.engine.deliverable_contract import deliverable_nudge
+    from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+    used = int(getattr(session, "_deliverable_nudges", 0) or 0)
+    nudge = deliverable_nudge(session, used)
+    if not nudge:
+        return False
+    session._deliverable_nudges = used + 1
+    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": nudge})
+    logger.info("Deliverable nudge: the artifact the task named is absent")
+    return True
