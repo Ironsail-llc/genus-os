@@ -82,3 +82,31 @@ class TestTheGaugeFollowsTheTracker:
             t.record_completion("ollama_chat/qwen3.8:27b")
         assert metrics.EXECUTION_MODE.labels(mode="local")._value.get() == 1
         assert metrics.EXECUTION_MODE.labels(mode="cloud")._value.get() == 0
+
+
+class TestTheGaugeHasAValueBeforeAnythingHappens:
+    def test_a_fresh_tracker_publishes_its_starting_mode(self, monkeypatch):
+        """Found by scraping /metrics after a restart, not by a passing test.
+
+        A labelled Prometheus series does not exist until a label combination is
+        written. Exporting only on a TRANSITION meant the metric appeared with
+        HELP and TYPE and no value at all, so 'which mode are we in' was
+        unanswerable from metrics until the mode happened to change -- which,
+        during a steady 29-hour outage, is never.
+        """
+        monkeypatch.delenv("ROBOTHOR_EXECUTION_MODE", raising=False)
+        from prometheus_client import REGISTRY
+
+        from robothor.engine.execution_mode import ExecutionModeTracker
+
+        for mode in ("cloud", "local"):
+            REGISTRY.get_sample_value("robothor_execution_mode", {"mode": mode})
+
+        ExecutionModeTracker()
+        cloud = REGISTRY.get_sample_value("robothor_execution_mode", {"mode": "cloud"})
+        local = REGISTRY.get_sample_value("robothor_execution_mode", {"mode": "local"})
+        assert cloud is not None and local is not None, (
+            "the gauge publishes no series until a transition; a scrape after "
+            "restart reports no mode at all"
+        )
+        assert cloud == 1 and local == 0
