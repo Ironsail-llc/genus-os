@@ -150,7 +150,12 @@ async def test_injection_enforce_returns_failed_run_not_raise(
     monkeypatch.setenv("ROBOTHOR_INJECTION_SCAN_MODE", "enforce")
 
     with (
-        patch("robothor.engine.runner.create_run") as mock_create,
+        # The runner binds `create_run` at import, so its own uses need the
+        # runner patch; the injection screen imports it lazily from tracking,
+        # so the block path needs that one. Both, or the assertion below reads
+        # the wrong call site.
+        patch("robothor.engine.runner.create_run"),
+        patch("robothor.engine.tracking.create_run") as mock_create,
         patch("robothor.engine.runner.update_run"),
         patch("robothor.engine.run_finalizer.create_step"),
     ):

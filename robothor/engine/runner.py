@@ -55,6 +55,7 @@ from robothor.engine.context_budget import keep_context_within_budget
 from robothor.engine.deliverables import deadline_note, task_text_from  # noqa: E402
 from robothor.engine.error_actions import apply_error_recovery
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
+from robothor.engine.injection_screen import screen_run_prompt
 from robothor.engine.journal_resume import maybe_prepend_journal_resume
 
 # LLM dispatch/cost/streaming + the request-timeout constants now live in
@@ -892,96 +893,37 @@ class AgentRunner(
         watchdog.touch("warmup_complete")
 
         # ── [INJECTION] Scan the assembled system-run prompt ──
-        # Cron/hook/workflow runs are unattended; recalled memory, skills, or
-        # context files folded into the prompt above could carry an injection.
-        # Gated by ROBOTHOR_INJECTION_SCAN_* (observe logs; enforce aborts).
-        if trigger_type in (
-            TriggerType.CRON,
-            TriggerType.HOOK,
-            TriggerType.WORKFLOW,
-        ):
-            from robothor.engine.cron_safety import (
-                CronPromptInjectionBlockedError,
-                screen_cron_prompt,
+        # robothor/engine/injection_screen.py. Cron/hook/workflow runs are
+        # unattended; recalled memory, skills or context files folded into the
+        # prompt above could carry an injection. The screen owns the ordering
+        # that makes a block auditable (terminal row inserted BEFORE the
+        # guardrail event, which is an FK to it); teardown stays here, because
+        # the watchdog token and _finish_run belong to the runner.
+        _screen = await screen_run_prompt(
+            session,
+            agent_id=agent_id,
+            trigger_type=trigger_type,
+            system_prompt=system_prompt,
+            message=message,
+        )
+        if _screen.blocked:
+            # The watchdog started before setup is normally torn down by the
+            # try/finally around the main run loop — but this return sits above
+            # that try entirely. Without an explicit stop the watchdog is
+            # orphaned: it keeps monitoring whatever task is
+            # asyncio.current_task() here (the daemon's own loop task, on an
+            # inline cron fire) and cancels it ~150s later, taking the whole
+            # daemon down (Aug 5/9).
+            watchdog.stop()
+            with contextlib.suppress(Exception):
+                _active_watchdog_var.reset(_wd_token)
+            return self._finish_run(
+                _screen.blocked_run,
+                trace=None,
+                agent_config=agent_config,
+                session=session,
+                spawn_context=spawn_context,
             )
-
-            try:
-                _inj_finding = screen_cron_prompt(
-                    f"{system_prompt}\n{message}", context=f"{trigger_type.value}:{agent_id}"
-                )
-            except CronPromptInjectionBlockedError as _inj_exc:
-                # A blocked run must leave a complete trail. Ordering matters:
-                #   1. mark the run FAILED, then INSERT it — _finish_run's
-                #      persistence is a *background* task, which a short-lived
-                #      caller (CLI) exits before it lands, stranding the row in
-                #      'pending'. Inserting the already-terminal state is the
-                #      one write guaranteed to survive.
-                #   2. log the guardrail event only after the row exists —
-                #      agent_guardrail_events.run_id is an FK to agent_runs, so
-                #      logging first violates it and the audit event is lost.
-                # Both were live defects: enforce-mode blocks were invisible to
-                # the soak report and left 'pending' runs behind.
-                _blocked_run = session.fail(f"Blocked by injection scan: {_inj_exc}")
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(create_run, _blocked_run)
-                try:
-                    from robothor.engine.tracking import log_guardrail_event
-
-                    log_guardrail_event(
-                        run_id=_blocked_run.id,
-                        guardrail_name="injection_scan",
-                        action="blocked",
-                        tool_name=None,
-                        reason=str(_inj_exc),
-                        mode="enforce",
-                        step_number=0,
-                    )
-                except Exception as _audit_exc:
-                    # A security control fired; losing its audit trail is itself
-                    # an incident. Never swallow this silently.
-                    logger.error(
-                        "injection_scan blocked run %s but the guardrail event "
-                        "could not be recorded: %s",
-                        _sanitize(_blocked_run.id),
-                        _sanitize(_audit_exc),
-                    )
-                # The watchdog started before setup (above) is normally torn
-                # down by the try/finally around the main run loop — but this
-                # return sits above that try entirely. Without an explicit
-                # stop here the watchdog is orphaned: it keeps monitoring
-                # whatever task is asyncio.current_task() at this point (the
-                # daemon's own loop task, on an inline cron fire) and cancels
-                # it ~150s later, taking the whole daemon down (Aug 5/9).
-                watchdog.stop()
-                with contextlib.suppress(Exception):
-                    _active_watchdog_var.reset(_wd_token)
-                return self._finish_run(
-                    _blocked_run,
-                    trace=None,
-                    agent_config=agent_config,
-                    session=session,
-                    spawn_context=spawn_context,
-                )
-            if _inj_finding:
-                try:
-                    from robothor.engine.tracking import log_guardrail_event
-
-                    log_guardrail_event(
-                        run_id=session.run.id,
-                        guardrail_name="injection_scan",
-                        action="observed",
-                        tool_name=None,
-                        reason=_inj_finding,
-                        mode="observe",
-                        step_number=0,
-                    )
-                except Exception as _audit_exc:  # noqa: BLE001
-                    # A control fired; losing its audit trail is itself an
-                    # incident. Never let this write fail silently.
-                    logger.error(
-                        "guardrail event could not be recorded: %s",
-                        _sanitize(_audit_exc),
-                    )
 
         # ── Warmup phase instrumentation ──────────────────────────────────────
         # Record setup milestones as warmup_phase steps so stalls are visible
