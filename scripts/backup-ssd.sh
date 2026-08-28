@@ -77,6 +77,14 @@ fi
 if [ -d /etc/robothor ]; then
     sudo cp /etc/robothor/age.key "$BACKUP_ROOT/latest/credentials/age.key" 2>> "$LOG" || true
     sudo cp /etc/robothor/secrets.enc.json "$BACKUP_ROOT/latest/credentials/secrets.enc.json" 2>> "$LOG" || true
+    # robothor.env is the instance's entire operational posture — every flag the
+    # engine reads at boot, including ROBOTHOR_LAST_RESORT_MODEL, which is the
+    # only reason the fleet keeps answering when the cloud provider is capped.
+    # It lives outside $HOME, so the repo rsync above never saw it: this backup
+    # covered the KEYS to the instance and not the instance's CONFIGURATION,
+    # and a rebuild would have come back silently mis-postured: guardrails off,
+    # offline tier unset, contracts disabled.
+    sudo cp /etc/robothor/robothor.env "$BACKUP_ROOT/latest/credentials/robothor.env" 2>> "$LOG" || true
 fi
 
 # ── PostgreSQL dumps (30-day retention) ─────────────────────────
