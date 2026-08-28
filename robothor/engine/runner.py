@@ -103,6 +103,7 @@ from robothor.engine.tool_outcome import record_tool_outcome
 from robothor.engine.tools import get_registry
 from robothor.engine.toolset_prep import prepare_toolset
 from robothor.engine.tracking import create_run, update_run
+from robothor.engine.warmup_steps import record_warmup_steps
 
 #: Tools whose work is several sub-agent runs, so the agent-level per-tool cap
 #: (120s by default) is far too short. Kept at a 600s floor.
@@ -926,52 +927,20 @@ class AgentRunner(
             )
 
         # ── Warmup phase instrumentation ──────────────────────────────────────
-        # Record setup milestones as warmup_phase steps so stalls are visible
-        # in agent_run_steps instead of only in watchdog touch logs.
-        # Per-section timings from build_warmth_preamble let us pinpoint
-        # exactly which warmup section (history, memory_blocks, context_files,
-        # peers, breadcrumbs, preferences, agent_hooks) stalled — crucial for
-        # diagnosing fleet-wide warmup stalls (FIX-WARMUP-STALL task).
-        _warmup_phase_steps: list[tuple[str, int, dict[str, Any]]] = [
-            (
-                "system_prompt_build",
-                t_sys_prompt_ms,
-                {"cached": "hit" if _prompt_cache.get(agent_config.id) else "miss"},
-            ),
-            (
-                "warmup_preamble_build",
-                t_warmup_ms,
-                {
-                    "kind": warmup_kind or "none",
-                    "chars": len(warmup_preamble) if warmup_preamble else 0,
-                },
-            ),
-        ]
-        # Inject per-section timings as individual warmup_phase steps so we
-        # can pinpoint stalls at section granularity, not just total warmup ms.
-        for _sec_name, _sec_elapsed in _warmup_section_timings.items():
-            _warmup_phase_steps.append(
-                (
-                    f"warmup_section:{_sec_name}",
-                    int(_sec_elapsed * 1000),
-                    {"section": _sec_name, "slow": _sec_elapsed > 0.5},
-                )
-            )
-        for _wp_name, _wp_ms, _wp_meta in _warmup_phase_steps:
-            try:
-                _wp_step = RunStep(
-                    id=str(_uuid.uuid4()),
-                    run_id=session.run.id,
-                    step_number=0,  # pre-iteration; grader ignores step_number for warmup_phase
-                    step_type=StepType.WARMUP_PHASE,
-                    tool_name=_wp_name,
-                    tool_input={},
-                    tool_output=_wp_meta,
-                    duration_ms=_wp_ms,
-                )
-                session.run.steps.append(_wp_step)
-            except Exception as _wp_err:
-                logger.debug("warmup_phase step record failed (%s): %s", _wp_name, _wp_err)
+        # robothor/engine/warmup_steps.py. Warmup runs before the first
+        # iteration, so a stall there shows nothing in agent_run_steps — only
+        # watchdog touch logs, which nobody reads until it is already too late.
+        # Section granularity is the point: "warmup took 40s" says nothing,
+        # "memory_blocks took 39 of them" says everything.
+        record_warmup_steps(
+            session,
+            prompt_ms=t_sys_prompt_ms,
+            prompt_cached=bool(_prompt_cache.get(agent_config.id)),
+            warmup_ms=t_warmup_ms,
+            warmup_kind=warmup_kind or "",
+            warmup_chars=len(warmup_preamble) if warmup_preamble else 0,
+            section_timings=_warmup_section_timings,
+        )
 
         # ── Cross-run journal resume ──────────────────────────────────────────
         # robothor/engine/journal_resume.py. Only CRON/HOOK/WORKFLOW resume:
