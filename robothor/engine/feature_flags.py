@@ -381,6 +381,18 @@ def _enforcement_mode(enabled_var: str, mode_var: str) -> EnforcementMode:
     return "observe"
 
 
+def execution_mode_admission_mode() -> EnforcementMode:
+    """Rollout mode for fleet admission control (the FleetPool gate).
+
+    Gated on ``ROBOTHOR_ADMISSION_ENABLED`` + ``ROBOTHOR_ADMISSION_MODE``.
+    ``observe`` computes the verdict and records the deferral it WOULD have
+    made while still running the agent; ``enforce`` actually defers background
+    work when the device is full. Default ``off`` reproduces the behaviour
+    FleetPool had for its whole existence: none.
+    """
+    return _enforcement_mode("ROBOTHOR_ADMISSION_ENABLED", "ROBOTHOR_ADMISSION_MODE")
+
+
 def sandbox_default_mode() -> EnforcementMode:
     """Rollout mode for defaulting exec-holding agents into the Docker sandbox.
 

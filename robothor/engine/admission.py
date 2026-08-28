@@ -35,6 +35,45 @@ def _pool() -> Any:
         return None
 
 
+def admission_mode() -> str:
+    """The rollout mode for this gate. Indirected so tests can drive it."""
+    try:
+        from robothor.engine.feature_flags import execution_mode_admission_mode
+
+        return execution_mode_admission_mode()
+    except Exception:  # noqa: BLE001 - an unreadable flag must not refuse work
+        return "off"
+
+
+def _record_deferral(agent_id: str, reason: str, mode: str, priority: str) -> None:
+    """Leave a row saying the gate fired. Best-effort, never raises.
+
+    A guardrail event needs a run to point at (``run_id`` is an FK), so this
+    writes a terminal SKIPPED run first -- the shape ``runner.py`` already uses
+    for refusals. ``observed`` marks the shadow verdict in observe mode, which
+    is what makes promotion evidence-based instead of hopeful.
+    """
+    from robothor.engine.models import AgentRun, RunStatus, TriggerType
+    from robothor.engine.tracking import create_run, log_guardrail_event
+
+    run_id = create_run(
+        AgentRun(
+            agent_id=agent_id,
+            trigger_type=TriggerType.CRON,
+            trigger_detail=f"admission:{mode}",
+            status=RunStatus.SKIPPED,
+            error_message=f"Deferred by admission control: {reason}",
+        )
+    )
+    log_guardrail_event(
+        run_id,
+        "execution_mode_admission",
+        "blocked" if mode == "enforce" else "observed",
+        reason=f"{priority}: {reason}",
+        mode=mode,
+    )
+
+
 def admit(agent_id: str, agent_config: Any, engine_config: Any = None) -> bool:
     """Ask for a slot. False means skip this tick.
 
@@ -43,6 +82,10 @@ def admit(agent_id: str, agent_config: Any, engine_config: Any = None) -> bool:
     stale_after_minutes machinery treats it as a missed fire and coalesces it.
     A deferred agent is retried, not lost. No new queue, no new table.
     """
+    mode = admission_mode()
+    if mode == "off":
+        return True
+
     pool = _pool()
     if pool is None:
         return True
@@ -55,9 +98,17 @@ def admit(agent_id: str, agent_config: Any, engine_config: Any = None) -> bool:
     except Exception:  # noqa: BLE001
         logger.exception("Admission check failed for %s — admitting", agent_id)
         return True
-    if not allowed:
-        logger.warning("Deferring %s (%s): %s", agent_id, priority.value, reason)
-    return allowed
+    if allowed:
+        return True
+
+    priority_label = getattr(priority, "value", str(priority))
+    logger.warning("Deferring %s (%s) [%s]: %s", agent_id, priority_label, mode, reason)
+    try:
+        _record_deferral(agent_id, reason, mode, priority_label)
+    except Exception:  # noqa: BLE001 - evidence is telemetry, not a verdict
+        logger.debug("Could not record admission deferral for %s", agent_id, exc_info=True)
+
+    return mode != "enforce"
 
 
 def register(run_key: str, agent_id: str) -> None:
