@@ -189,9 +189,7 @@ def load_plugins(
                         f"no {MANIFEST_NAME} in the distribution — refused before import",
                     )
                 )
-                logger.warning(
-                    "Plugin %r ships no %s; refusing before import", name, MANIFEST_NAME
-                )
+                logger.warning("Plugin %r ships no %s; refusing before import", name, MANIFEST_NAME)
                 continue
             logger.warning(
                 "Plugin %r ships no %s — importing anyway (mode=observe). The "
@@ -249,9 +247,7 @@ def load_plugins(
         )
         if undeclared:
             result.failures.append(
-                PluginFailure(
-                    name, group, f"undeclared in {MANIFEST_NAME}: {undeclared} — refused"
-                )
+                PluginFailure(name, group, f"undeclared in {MANIFEST_NAME}: {undeclared} — refused")
             )
             logger.warning("Plugin %r offered undeclared %s %s", name, group, undeclared)
             continue

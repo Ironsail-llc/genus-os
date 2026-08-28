@@ -129,9 +129,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     # init
-    subparsers.add_parser(
-        "plugin", help="List installed plugins and why any were refused"
-    )
+    subparsers.add_parser("plugin", help="List installed plugins and why any were refused")
     init_parser = subparsers.add_parser("init", help="Interactive setup wizard")
     init_parser.add_argument("--yes", "-y", action="store_true", help="Non-interactive mode")
     init_parser.add_argument("--docker", action="store_true", help="Use Docker for infrastructure")

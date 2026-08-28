@@ -62,7 +62,10 @@ class _FakeEP:
 
 
 def _good_payload():
-    return {"genus_contract_version": CONTRACT_VERSION, "handlers": {"weather_lookup": lambda: None}}
+    return {
+        "genus_contract_version": CONTRACT_VERSION,
+        "handlers": {"weather_lookup": lambda: None},
+    }
 
 
 class TestAnUndeclaredContributionNeverImports:

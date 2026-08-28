@@ -44,9 +44,7 @@ def _fat(pairs: int, chars: int = 90_000) -> list[dict]:
 
 
 def _compact(msgs, threshold=20_000, drain_to=10_000):
-    return asyncio.run(
-        compact(msgs, models=_MODEL, threshold=threshold, drain_to=drain_to)
-    )
+    return asyncio.run(compact(msgs, models=_MODEL, threshold=threshold, drain_to=drain_to))
 
 
 class TestTheCountFloorNoLongerBlocksIt:

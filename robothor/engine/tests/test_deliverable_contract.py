@@ -116,7 +116,9 @@ class TestRunLevelWiring:
         """None, not 'satisfied' — a vacuous pass on every run is noise."""
         import robothor.engine.deliverable_contract as dc
 
-        monkeypatch.setattr(dc, "task_text_for_run", lambda run, session=None: "Summarise the papers")
+        monkeypatch.setattr(
+            dc, "task_text_for_run", lambda run, session=None: "Summarise the papers"
+        )
         assert dc.check_run_deliverables(object()) is None
 
     def test_a_named_but_absent_deliverable_fails(self, monkeypatch, tmp_path):

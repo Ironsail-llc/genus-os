@@ -87,9 +87,7 @@ class FleetPool:
         with self._lock:
             return self._hourly_cost_total()
 
-    def can_start(
-        self, agent_id: str, priority: Priority = Priority.CRITICAL
-    ) -> tuple[bool, str]:
+    def can_start(self, agent_id: str, priority: Priority = Priority.CRITICAL) -> tuple[bool, str]:
         """Check if a new run can start.
 
         Returns (allowed, reason). If not allowed, reason explains why.

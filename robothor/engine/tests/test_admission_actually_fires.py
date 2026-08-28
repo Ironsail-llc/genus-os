@@ -54,9 +54,7 @@ class TestItRefusesARealRun:
 
     @pytest.mark.asyncio
     async def test_the_refusal_names_the_reservation(self, _pool_at_capacity):
-        allowed, reason = _pool_at_capacity.can_start(
-            "crm-dedup", priority=Priority.BACKGROUND
-        )
+        allowed, reason = _pool_at_capacity.can_start("crm-dedup", priority=Priority.BACKGROUND)
         assert not allowed
         assert "reserved" in reason.lower()
 
@@ -116,9 +114,7 @@ class TestAdmissionFailsOpen:
     async def test_a_raising_classifier_admits(self):
         from robothor.engine import admission
 
-        with patch(
-            "robothor.engine.agent_priority.classify", side_effect=RuntimeError("boom")
-        ):
+        with patch("robothor.engine.agent_priority.classify", side_effect=RuntimeError("boom")):
             init_fleet_pool(max_concurrent=1, hourly_cost_cap_usd=0.0)
             try:
                 assert admission.admit("x", _cfg(), None) is True

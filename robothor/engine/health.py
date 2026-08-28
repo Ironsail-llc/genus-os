@@ -34,6 +34,33 @@ def validate_engine_auth_configuration() -> None:
     )
 
 
+def _execution_mode_block() -> dict[str, Any]:
+    """Which economics are in force, and why we believe the numbers.
+
+    Reported rather than asserted: a capability probe that cannot be inspected
+    is indistinguishable from a guess, so every host number carries its source.
+    Never raises -- a sensor problem must not take down the health endpoint
+    that would be used to diagnose it.
+    """
+    try:
+        from robothor.engine.execution_mode import tracker
+        from robothor.engine.host_profile import detect_host_profile
+        from robothor.engine.mode_policy import policy_for
+
+        snapshot = tracker().snapshot()
+        host = detect_host_profile()
+        policy = policy_for(tracker().mode(), host)
+        return {
+            "available": True,
+            **snapshot,
+            "host": host.describe(),
+            "policy": policy.describe(),
+        }
+    except Exception:
+        logger.warning("Execution-mode block unavailable", exc_info=True)
+        return {"available": False}
+
+
 def create_health_app(
     config: EngineConfig, runner: AgentRunner | None = None, workflow_engine: Any = None
 ) -> Any:
@@ -728,6 +755,7 @@ def create_health_app(
                 "tenant_id": config.tenant_id,
                 "bot_configured": bool(config.bot_token),
                 "agents": agents,
+                "execution_mode": _execution_mode_block(),
             }
         except Exception:
             logger.exception("Health check failed")

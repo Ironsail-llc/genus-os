@@ -62,7 +62,9 @@ class TestTheLoopActuallyUsesIt:
 
     def test_the_runner_consults_it_before_returning(self):
         src = (Path(__file__).resolve().parents[1] / "runner.py").read_text()
-        assert "nudge_for_missing_deliverable" in src, "the run loop never asks about the deliverable"
+        assert "nudge_for_missing_deliverable" in src, (
+            "the run loop never asks about the deliverable"
+        )
         # It must be consulted on the no-tool-calls path, which is where the
         # agent declares itself finished.
         branch = src.split("if not assistant_msg.tool_calls:", 1)[-1].split("# ── Execute", 1)[0]

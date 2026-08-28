@@ -177,6 +177,22 @@ LOCAL_CAPACITY_RETRY_JITTER = 3.0
 _CAPACITY_STATUSES = frozenset({503, 529})
 
 
+def _record_execution_mode(model: str) -> None:
+    """Tell the mode tracker what actually served this request.
+
+    Mode is telemetry: it must never be able to fail a call that succeeded, so
+    every failure here is swallowed. Called from BOTH breaker success paths --
+    streaming and not -- because a signal wired to one is half-blind for agents
+    that only ever take the other.
+    """
+    try:
+        from robothor.engine.execution_mode import record_completion
+
+        record_completion(model)
+    except Exception:  # pragma: no cover - telemetry must never break a call
+        logger.debug("Execution-mode signal failed for %s", model, exc_info=True)
+
+
 def is_local_model(model: str) -> bool:
     """Is this served on-device, with no credential and no provider account?"""
     return model.startswith(("ollama_chat/", "ollama/"))
@@ -1279,6 +1295,7 @@ class LLMClient:
                         # run that silently produced nothing.
                         raise EmptyCompletionError(f"{model} returned no content and no tool call")
                     breaker.record_success(model)
+                    _record_execution_mode(model)
                     return result
                 except Exception as e:
                     last_error = e
@@ -1641,6 +1658,7 @@ class LLMClient:
                     # than any cron does; without this only failures ever
                     # reach the breaker, so it can open and never clear.
                     get_model_breaker().record_success(model)
+                    _record_execution_mode(model)
                     return litellm.stream_chunk_builder(chunks)
                 except TimeoutError as te:
                     self._handle_model_error(
