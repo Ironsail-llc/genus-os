@@ -90,6 +90,25 @@ def _export_mode(mode: ExecutionMode) -> None:
         logger.debug("Could not export execution mode", exc_info=True)
 
 
+def _page_entered(mode: ExecutionMode) -> None:
+    """Tell the operator the economics changed. Never breaks a completion."""
+    try:
+        from robothor.engine.execution_mode_alerts import alert_mode_entered
+
+        alert_mode_entered(str(mode))
+    except Exception:  # pragma: no cover - a page is never load-bearing
+        logger.debug("Could not page mode entry", exc_info=True)
+
+
+def _page_left(mode: ExecutionMode, duration_seconds: float) -> None:
+    try:
+        from robothor.engine.execution_mode_alerts import alert_mode_left
+
+        alert_mode_left(str(mode), duration_seconds=duration_seconds)
+    except Exception:  # pragma: no cover
+        logger.debug("Could not page mode exit", exc_info=True)
+
+
 class ExecutionModeTracker:
     """Observes completions and reports which mode the fleet is operating in."""
 
@@ -141,6 +160,7 @@ class ExecutionModeTracker:
                     self._local_streak,
                 )
                 _export_mode(self._mode)
+                _page_entered(self._mode)
             return
 
         self._local_streak = 0
@@ -164,7 +184,11 @@ class ExecutionModeTracker:
         if self._mode is not ExecutionMode.LOCAL or self._cloud_success_at is None:
             return
         if self._clock() - self._cloud_success_at >= self._quiet_window:
+            was_local_for = (
+                self._clock() - self._entered_local_at if self._entered_local_at else 0.0
+            )
             self._mode = ExecutionMode.CLOUD
+            _page_left(ExecutionMode.LOCAL, was_local_for)
             self._entered_local_at = None
             self._cloud_success_at = None
             self._local_streak = 0
