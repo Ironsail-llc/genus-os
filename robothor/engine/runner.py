@@ -63,7 +63,11 @@ from robothor.engine.journal_resume import maybe_prepend_journal_resume
 # instance of it; the historical method surface is preserved via thin
 # delegators/aliases below so existing call sites keep working unchanged.
 from robothor.engine.llm_client import LLMClient  # noqa: E402
-from robothor.engine.loop_guards import GuardState, check_iteration_guards
+from robothor.engine.loop_guards import (
+    GuardState,
+    check_iteration_guards,
+    nudge_for_missing_deliverable,
+)
 from robothor.engine.models import (
     AgentConfig,
     AgentRun,
@@ -2068,6 +2072,9 @@ class AgentRunner(
                             ),
                         }
                     )
+                    continue
+
+                if nudge_for_missing_deliverable(session):  # still owes an artifact
                     continue
                 return
 

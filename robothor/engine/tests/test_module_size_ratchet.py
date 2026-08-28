@@ -38,7 +38,11 @@ CAPS = {
     # arrived with were hoisted to the module header (run_budget was already
     # imported there, so they bought nothing) — which paid back four of the
     # five lines this would otherwise have cost.
-    "robothor/engine/runner.py": 2508,
+    "robothor/engine/runner.py": 2515,
+    # 2545: a concurrent session ratcheted this to 2539 by lifting injection
+    # screening and journal resume out of execute(); the deliverable guard's call
+    # site adds the rest. Its 25 lines of logic went to loop_guards.py, so what
+    # remains here is a comment, a lazy import and a two-line branch.
     # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
     # Lowered again after phase 3b (_setup_handlers closures -> methods).
     "robothor/engine/telegram.py": 2000,

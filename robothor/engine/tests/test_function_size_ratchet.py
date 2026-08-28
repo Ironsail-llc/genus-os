@@ -36,7 +36,7 @@ KNOWN_LARGE: dict[str, int] = {
     "tools/schemas.py::get_engine_schemas": 3520,
     "health.py::create_health_app": 1476,
     "runner.py::execute": 983,
-    "runner.py::_run_loop": 772,
+    "runner.py::_run_loop": 775,
     "tools/handlers/gws.py::_handle_gws_tool": 453,
     "daemon.py::main": 411,
     "telegram.py::_run_interactive": 384,
