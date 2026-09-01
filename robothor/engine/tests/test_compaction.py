@@ -30,7 +30,9 @@ class TestExtractToolSummary:
         data = {f"key_{i}": f"value_{i}" for i in range(10)}
         content = json.dumps(data) + " " * 500
         result = extract_tool_summary(content)
-        assert "10 keys" in result
+        # New format: shows up to 3 key-value pairs + remaining count
+        assert "key_0" in result
+        assert "+7 more keys" in result
 
     def test_json_array(self):
         data = [{"id": i, "name": f"item_{i}"} for i in range(20)]
@@ -53,7 +55,24 @@ class TestExtractToolSummary:
         content = "x" * 600  # No JSON, no error keyword
         result = extract_tool_summary(content)
         assert result.endswith("...")
-        assert len(result) <= 84  # 80 + "..."
+        assert len(result) <= 120  # TOOL_SUMMARY_MIN_CHARS + "..."
+
+    def test_dict_values_in_summary(self):
+        """Dict summaries include actual values, not just key names."""
+        data = {"person_id": "abc-123", "name": "John Smith", "email": "john@example.com"}
+        content = json.dumps(data) + " " * 200  # pad to exceed min chars
+        result = extract_tool_summary(content)
+        assert "abc-123" in result
+        assert "John Smith" in result
+
+    def test_small_dict_no_truncation(self):
+        """Dicts with ≤3 keys show all values without +N more keys suffix."""
+        data = {"a": "hello", "b": "world"}
+        content = json.dumps(data) + " " * 200
+        result = extract_tool_summary(content)
+        assert "hello" in result
+        assert "world" in result
+        assert "more keys" not in result
 
 
 # ── TestExtractFacts ──────────────────────────────────────────────────
@@ -134,7 +153,7 @@ class TestExtractFacts:
         assert facts == []
 
 
-# ── TestSummarizeSegment ──────────────────────────────────────────────
+# ── TestSummarizeSegment ─────────────────────────────────────────────
 
 
 class TestSummarizeSegment:
@@ -172,7 +191,7 @@ class TestSummarizeSegment:
         assert "Segment:" in result
 
 
-# ── TestCompact ───────────────────────────────────────────────────────
+# ── TestCompact ────────────────────────────────────────────────────────
 
 
 def _make_large_conversation(n_pairs: int = 100, content_size: int = 3000) -> list[dict[str, Any]]:

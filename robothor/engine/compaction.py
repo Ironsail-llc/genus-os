@@ -108,6 +108,11 @@ def extract_tool_summary(content: str) -> str:
 
     Heuristic-based (no LLM call). For tool results > TOOL_SUMMARY_MIN_CHARS,
     produces a compact summary preserving the key signal.
+
+    Dict results include actual value previews (not just key names) so the
+    agent can see there is real data and knows to read_file the full result
+    when needed.  This fixes the "recursive chain of {2-3 keys} summaries"
+    problem where summaries showed only field names with no values.
     """
     if not content or not isinstance(content, str):
         return content or ""
@@ -126,7 +131,16 @@ def extract_tool_summary(content: str) -> str:
                 val = parsed[keys[0]]
                 val_preview = str(val)[:60]
                 return f"{{{keys[0]!r}: {val_preview}{'...' if len(str(val)) > 60 else ''}}}"
-            return f"{{{len(keys)} keys: {', '.join(keys[:5])}}}"
+            # Show up to 3 key-value pairs so the agent sees actual data
+            parts = []
+            for k in keys[:3]:
+                val = str(parsed[k])
+                val_preview = val[:40] + ('...' if len(val) > 40 else '')
+                parts.append(f'{k}: {val_preview}')
+            preview = ', '.join(parts)
+            if len(keys) > 3:
+                return f"{{{preview}, +{len(keys) - 3} more keys}}"
+            return f"{{{preview}}}"
         if isinstance(parsed, list):
             preview = str(parsed[0])[:60] if parsed else ""
             return f"[{len(parsed)} items{': ' + preview + '...' if preview else ''}]"
@@ -140,8 +154,6 @@ def extract_tool_summary(content: str) -> str:
 
     # Default: first 80 chars
     return stripped[:80] + ("..." if len(stripped) > 80 else "")
-
-
 #: Per-tool-result budget when feeding fact extraction. Enough for a table
 #: or a coordinate dump, small enough that forty of them stay inside the
 #: summariser's own window.
