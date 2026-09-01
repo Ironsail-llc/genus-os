@@ -1,0 +1,28 @@
+# Minimal fixtures for agent-architect benchmark sandbox.
+#
+# The presence of this file enables benchmark sandbox mode, which adds
+# SANDBOX_WRITE_TOOLS (create_task, update_task, resolve_task, etc.) to the
+# benchmark allow-list. Without it, dispatch-routing and cross-pollination
+# cases fail on the harness (create_task denied), not on the agent.
+#
+# The actual row data is minimal — the agent-architect tasks exercise fleet
+# analysis and dispatch, not CRM data quality.
+
+version: 1
+
+fixtures:
+  sample_person:
+    table: crm_people
+    values:
+      first_name: Jordan
+      last_name: Tester
+      email: jordan@example.com
+      job_title: Engineer
+      city: Boston
+
+  sample_company:
+    table: crm_companies
+    values:
+      name: Example Corp
+      domain_name: example.com
+      address_city: Boston
