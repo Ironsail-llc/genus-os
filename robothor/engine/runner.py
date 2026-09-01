@@ -1195,6 +1195,13 @@ class AgentRunner(
             else:
                 session.run.token_budget = spawn_context.remaining_token_budget
 
+        # Stage 5 — propagate the CRM task this run is advancing so the
+        # agent_runs row carries it from INSERT time. Previously only the
+        # auto-task path set task_id (after a separate INSERT + UPDATE),
+        # leaving all sub-agent runs with NULL task_id — 0 of 44,611 rows.
+        if spawn_context and spawn_context.parent_task_id:
+            session.run.task_id = spawn_context.parent_task_id
+
         # Watchdog was created and started before setup phase (see above).
         # Stall timeout is the primary protection — kills on inactivity, not
         # elapsed wall-clock time.  Hard timeout only needed as fallback when
