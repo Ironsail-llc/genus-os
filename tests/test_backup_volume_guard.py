@@ -93,10 +93,14 @@ class Box:
         self.backup_state_dir = tmp_path / "backup-state"
         self.backup_state_dir.mkdir()
 
+        # The real crypttab names a keyfile: a timer has no console, so column
+        # 3 is the only way the container can ever be reopened. `none` there is
+        # a real configuration, and a materially different one — see
+        # ``no_keyfile`` and the tests that use it.
+        self.keyfile = tmp_path / "backup.key"
+        self.keyfile.write_text("not-a-real-key\n")
         self.crypttab = tmp_path / "crypttab"
-        self.crypttab.write_text(
-            f"# <name>  <device>  <keyfile>  <options>\n{MAPPER}  UUID={UUID}  none  luks,noauto\n"
-        )
+        self._write_crypttab(str(self.keyfile))
 
         self.device = self.dev_dir / UUID
         self.check_log = tmp_path / "check.log"
@@ -169,6 +173,17 @@ class Box:
         )
 
     # -- fixtures --------------------------------------------------------
+    def _write_crypttab(self, keyfile: str) -> None:
+        self.crypttab.write_text(
+            f"# <name>  <device>  <keyfile>  <options>\n"
+            f"{MAPPER}  UUID={UUID}  {keyfile}  luks,noauto\n"
+        )
+
+    def no_keyfile(self, column3: str = "none") -> None:
+        """crypttab column 3 says the container is unlocked interactively —
+        which a systemd timer cannot do."""
+        self._write_crypttab(column3)
+
     def plug_in(self) -> None:
         """The USB device is present on the bus."""
         self.device.write_text("")
@@ -483,6 +498,71 @@ def test_a_free_live_mapper_is_healed_under_its_own_name(box: Box):
     assert len(box.pages) == 1
     assert "auto-recovered" in box.pages[0]
     assert f"remapped as {MAPPER})" in box.pages[0], box.pages[0]
+
+
+@pytest.mark.parametrize("column3", ["none", "-", "/etc/robothor/does-not-exist.key"])
+def test_without_a_usable_keyfile_the_guard_tears_nothing_down(box: Box, column3: str):
+    """The heal's first act was to unmount and close; the reopen came later.
+
+    If crypttab's third column is ``none``/``-``/unreadable, that reopen
+    prompts on a console the timer does not have, fails, and the guard has
+    converted a DEGRADED volume — wedged, but with its mapping intact — into
+    an ABSENT one that nothing but a human can restore. The check belongs
+    before the teardown, not after it.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    box.no_keyfile(column3)
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_DM_DEPS="8:16",  # stale: a reopen is unavoidable
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert box.ran("umount") == [], (
+        f"unmounted a volume it could not put back:\n{box.argv}"
+    )
+    assert box.ran("cryptsetup close") == [], (
+        f"closed a container it has no key to reopen:\n{box.argv}"
+    )
+    assert box.ran("cryptsetup open") == []
+    assert box.ran("mount") == []
+
+    assert len(box.pages) == 1, f"expected exactly one page, got {box.pages}"
+    assert f"no non-interactive keyfile in crypttab (column 3 = {column3})" in box.pages[0]
+    assert "refusing to tear down a mapping I cannot rebuild" in box.pages[0]
+    assert "fix crypttab or reboot" in box.pages[0]
+
+
+def test_a_live_mapping_is_remounted_rather_than_closed_and_reopened(box: Box):
+    """The cheapest repair that can work, tried first.
+
+    When the node already there is backed by the device on the bus and nothing
+    holds it, the container does not need closing and the key does not need
+    using: put the existing mapping back at its path. Closing and reopening it
+    is strictly more that can go wrong, and it needs a key this path should not
+    have to depend on.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    box.no_keyfile()  # deliberately: this path must not need one
+    result = box.run(
+        FAKE_CHECK_RCS="1 0",
+        FAKE_DM_DEPS="8:17",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="0",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran("cryptsetup open") == [], f"reopened a live mapping:\n{box.argv}"
+    assert box.ran("cryptsetup close") == [], f"closed a live mapping:\n{box.argv}"
+    assert box.ran("fsck.ext4") == [], f"fsck'd a filesystem that only needed remounting:\n{box.argv}"
+    assert box.ran(f"mount {box.mapper_dir / MAPPER} {box.mount}"), (
+        f"never put the existing mapping back:\n{box.argv}"
+    )
+    assert len(box.pages) == 1
+    assert "auto-recovered" in box.pages[0]
 
 
 def test_no_free_mapper_name_refuses_and_says_reboot(box: Box):
