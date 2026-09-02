@@ -21,6 +21,12 @@ SEND = REPO_ROOT / "scripts" / "send_failure_alert.sh"
 INSTALL = REPO_ROOT / "scripts" / "install_onfailure_alerts.sh"
 ALERT_UNIT = REPO_ROOT / "infra" / "systemd" / "robothor-alert@.service"
 
+# A base URL that cannot be reached and cannot be mistaken for the real API.
+# Pinned in run_send's own env below: the fake curl is what normally stops the
+# send, and a case that forgets to install one would otherwise POST fixture
+# text to api.telegram.org with whatever token was in scope.
+STUB_API_BASE = "http://127.0.0.1:1"
+
 
 def fake_curl(tmp_path: Path) -> Path:
     """A curl stand-in that records its argv and succeeds."""
@@ -71,10 +77,15 @@ def fake_journal(tmp_path: Path, payload: bytes) -> Path:
 
 
 def curl_call_count(log: Path) -> int:
-    """Each invocation writes exactly one Telegram API URL arg; count those."""
+    """Each invocation writes exactly one Telegram API URL arg; count those.
+
+    Counted by the ENDPOINT, not the host: the base URL is a pinned stub
+    (STUB_API_BASE), and counting "api.telegram.org" would silently return 0
+    for every call — a send-count assertion that can only ever pass.
+    """
     if not log.exists():
         return 0
-    return log.read_text().count("api.telegram.org")
+    return log.read_text().count("/sendMessage")
 
 
 def stamp_files(tmp_path: Path) -> list[Path]:
@@ -136,6 +147,9 @@ def run_send(
         # directory therefore pages the operator with fixture text on the next
         # tick — see test_run_send_default_env_never_spools_to_the_real_dir.
         "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+        # Second seam on delivery, independent of the fake curl: see
+        # STUB_API_BASE above.
+        "ROBOTHOR_TELEGRAM_API_BASE": STUB_API_BASE,
         # The journal tail comes from a fixture, never from this box. The live
         # journal is not reproducible between runs and is not guaranteed to be
         # valid UTF-8 — on 2026-09-02 it was not, and TestConsequenceLine died
@@ -184,7 +198,7 @@ def test_send_posts_unit_name_to_telegram(tmp_path: Path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     args = log.read_text()
-    assert "api.telegram.org/bottok123/sendMessage" in args
+    assert f"{STUB_API_BASE}/bottok123/sendMessage" in args
     assert "robothor-engine.service" in args
     assert "42" in args
 
@@ -253,7 +267,7 @@ def test_run_send_sources_only_the_explicit_fake_secrets_file(tmp_path: Path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     args = log.read_text()
-    assert "api.telegram.org/bottok123/sendMessage" in args
+    assert f"{STUB_API_BASE}/bottok123/sendMessage" in args
     assert not _REAL_TOKEN_SHAPE.search(args), (
         f"curl args must contain only the fake token, found a real-shaped "
         f"one: {args!r}"

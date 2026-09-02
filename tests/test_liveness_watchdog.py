@@ -61,6 +61,9 @@ UNIT_DIR = REPO_ROOT / "infra" / "systemd"
 # returns nothing and no host journal content is pulled into a test.
 FAKE_UNIT = "robothor-nonexistent-probe-target.service"
 
+# A base URL that cannot be reached and cannot be mistaken for the real API.
+STUB_API_BASE = "http://127.0.0.1:1"
+
 
 # ── fakes ────────────────────────────────────────────────────────────────────
 
@@ -152,6 +155,9 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
             # delivered to the operator by the next real tick.
             "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
             "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+            # The fake curl on PATH is what normally stops the send; this is
+            # the seam that stops it when a test forgets to install one.
+            "ROBOTHOR_TELEGRAM_API_BASE": STUB_API_BASE,
             "ROBOTHOR_ALERT_MAX_ATTEMPTS": "1",
             "ROBOTHOR_ALERT_RETRY_DELAY": "0",
             "ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123",

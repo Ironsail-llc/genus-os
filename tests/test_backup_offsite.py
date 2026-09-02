@@ -453,6 +453,17 @@ class TestTheMarkerHelper:
         env = {
             "PATH": os.environ["PATH"],
             "ROBOTHOR_BACKUP_STATE_DIR": str(_state_dir(tmp_path)),
+            # backup-state.sh does not page today. It is sourced by scripts
+            # that do, one edit away from calling fail(), and this file is
+            # scanned per call site precisely so that edit cannot arrive
+            # unpinned — see
+            # tests/test_alert_never_pages_from_tests.py::test_every_subprocess_call_in_a_pager_reaching_test_pins_the_sender_seams.
+            "ROBOTHOR_ALERT_SUPPRESS": "1",
+            "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+            "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+            "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+            "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+            "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-cooldown-fallback"),
         }
         env.update(env_extra)
         return subprocess.run(

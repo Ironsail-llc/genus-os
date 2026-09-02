@@ -86,6 +86,9 @@ FAKE_TOKEN_ENV = {
     "ROBOTHOR_TELEGRAM_CHAT_ID": "42",
 }
 
+# A base URL that cannot be reached and cannot be mistaken for the real API.
+STUB_API_BASE = "http://127.0.0.1:1"
+
 
 # ── fake curl helpers ────────────────────────────────────────────────────────
 
@@ -142,6 +145,13 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
         # fixture text minutes later — the 2026-08-27 accident with a longer
         # fuse. Pin it per test.
         "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+        # Delivery is neutralised by the fake curl on PATH — but only for the
+        # tests that install one. A case that forgets it (or an edit that
+        # stops installing it) would POST a fixture page to the real API with
+        # whatever token was in scope, so the base URL is pinned as well:
+        # two independent seams, because the one that is easy to forget is
+        # the one that pages.
+        "ROBOTHOR_TELEGRAM_API_BASE": STUB_API_BASE,
         # Fast by default; individual tests override.
         "ROBOTHOR_ALERT_RETRY_DELAY": "0",
         "ROBOTHOR_ALERT_MAX_ATTEMPTS": "1",

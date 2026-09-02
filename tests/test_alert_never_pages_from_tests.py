@@ -21,6 +21,7 @@ Guard the path every caller crosses, not the one today's caller uses.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -46,10 +47,24 @@ def test_the_backup_test_uses_the_stub_api_seam():
     )
 
 
-# The scripts that reach the sender, directly or through one hop.
-PAGER_SCRIPTS = (
-    r"backup-offsite\.sh|send_failure_alert\.sh|cron-wrapper\.sh|liveness_probe\.sh"
-)
+def pager_script_names() -> tuple[str, ...]:
+    """The scripts that reach the sender, derived — never hand-maintained.
+
+    The list used to be four names typed into this file, and it was already
+    two short: ``thermal-guard.sh`` and ``boot-guard.sh`` both call the sender
+    and were invisible to the scan. A hand-maintained list of what a mechanism
+    covers drifts from what the mechanism actually is (2026-08-22: three
+    separate "hardcoded names" defects turned out to be one), so ask the tree:
+    every scripts/*.sh that mentions the sender, plus the sender itself.
+    """
+    names = {PAGER.name}
+    for script in sorted((REPO / "scripts").glob("*.sh")):
+        if PAGER.name in script.read_text(errors="ignore"):
+            names.add(script.name)
+    return tuple(sorted(names))
+
+
+PAGER_SCRIPTS = "|".join(re.escape(name) for name in pager_script_names())
 
 # What a test that can reach the sender must pin. All three are real, shared,
 # durable paths on a live box:
@@ -138,4 +153,341 @@ def test_no_test_invokes_the_pager_against_the_real_api():
     assert not offenders, (
         f"these tests drive a script that can page the operator without "
         f"redirecting or suppressing delivery: {sorted(offenders)}"
+    )
+
+
+def test_the_derived_script_list_covers_every_caller_of_the_sender():
+    """The two the hand-written list missed, named explicitly.
+
+    A derivation that silently starts matching nothing passes forever, so
+    assert on the callers that were invisible before it existed — a future
+    test of thermal-guard.sh or boot-guard.sh is now inside the ratchet on
+    the day it is written, not on the day someone remembers this file.
+    """
+    names = pager_script_names()
+    for expected in (
+        "send_failure_alert.sh",
+        "liveness_probe.sh",
+        "cron-wrapper.sh",
+        "backup-offsite.sh",
+        "thermal-guard.sh",
+        "boot-guard.sh",
+    ):
+        assert expected in names, f"{expected} calls the sender but is not in the scan"
+
+
+# ── Per-call-site pinning ────────────────────────────────────────────────────
+#
+# The file-level check above answers "does this FILE mention the pins", which
+# is exactly the question that let today's 14:40 page through:
+# test_missing_remote_config_fails_loudly built its own env= dict inline,
+# among siblings that went through a pinned helper, so every pin appeared in
+# the file and none of them reached that subprocess. The file was clean and
+# the operator's phone rang.
+#
+# So the pins are checked where they are actually applied: per env= dict, per
+# subprocess call.
+REQUIRED_CALL_PINS = REQUIRED_PINS + (
+    # /run/robothor/secrets.env is real and readable on a live box: with no
+    # override the sender recovers the operator's ACTUAL Telegram credentials
+    # and delivers, whatever the API base says.
+    "ROBOTHOR_SECRETS_FILE",
+    # And with credentials in hand, this is what keeps the POST off
+    # api.telegram.org.
+    "ROBOTHOR_TELEGRAM_API_BASE",
+)
+
+# subprocess entry points that take env=.
+_SUBPROCESS_CALLS = ("run", "Popen", "check_output", "check_call", "call")
+
+
+def _call_name(func: ast.expr) -> str | None:
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return None
+
+
+class _EnvPinAudit:
+    """Resolve the ``env=`` expression of every subprocess call in one file.
+
+    Accepts the shapes a test legitimately uses: a dict literal carrying the
+    pins itself, a helper whose own literal carries them (``base_env(...)``,
+    ``run_send(...)``), and a merge of one of those (``dict(base, ...)``,
+    ``{**base, ...}``). Rejects an env= dict that pins nothing and inherits
+    nothing — the shape that pages.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.tree = ast.parse(path.read_text(errors="ignore"))
+        self.parents: dict[ast.AST, ast.AST] = {}
+        for node in ast.walk(self.tree):
+            for child in ast.iter_child_nodes(node):
+                self.parents[child] = node
+        # NAME = {...} shared between tests: module constants and class
+        # attributes ONLY. A local of the same name inside some other test is
+        # not what this call site inherits — reading one as if it were made a
+        # fully pinned helper look unpinned, which is how a ratchet trains
+        # people to widen it.
+        self.dict_names: dict[str, ast.Dict] = {}
+        # A function is a pinning helper if any single dict literal in its
+        # body carries every pin — that is the dict its callers inherit.
+        self.helpers: dict[str, set[str]] = {}
+        self.functions: list[ast.FunctionDef] = []
+        shared: list[ast.stmt] = list(self.tree.body)
+        for node in self.tree.body:
+            if isinstance(node, ast.ClassDef):
+                shared.extend(node.body)
+        for node in shared:
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.dict_names[target.id] = node.value
+        for node in ast.walk(self.tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.functions.append(node)
+        self.helpers = {func.name: set() for func in self.functions}
+        # A helper can be built out of another helper (``env = dict(BASE)``,
+        # ``return base_env(...)``), so settle it by iteration rather than in
+        # one pass — a single pass blesses only the helper that spells the
+        # dict out itself, and reports every caller of the wrapper as an
+        # offender.
+        required = set(REQUIRED_CALL_PINS)
+        for _ in range(len(self.functions) + 1):
+            changed = False
+            for func in self.functions:
+                best = self.helpers[func.name]
+                candidates: list[set[str]] = []
+                for node in ast.walk(func):
+                    if isinstance(node, ast.Dict):
+                        candidates.append(self._dict_keys(node, set()))
+                    elif isinstance(node, ast.Return) and node.value is not None:
+                        candidates.append(self._resolve(node.value, set()) or set())
+                for keys in candidates:
+                    if len(keys & required) > len(best & required):
+                        best, changed = keys, True
+                self.helpers[func.name] = best
+            if not changed:
+                break
+
+    # ── resolution ───────────────────────────────────────────────────────────
+
+    def _dict_keys(self, node: ast.Dict, seen: set[str]) -> set[str]:
+        keys: set[str] = set()
+        for key, value in zip(node.keys, node.values):
+            if key is None:  # {**other, ...}
+                keys |= self._resolve(value, seen) or set()
+            elif isinstance(key, ast.Constant) and isinstance(key.value, str):
+                keys.add(key.value)
+        return keys
+
+    def _resolve(self, node: ast.expr | None, seen: set[str]) -> set[str] | None:
+        """Env keys the expression is known to carry; None = cannot tell."""
+        if node is None:
+            return None
+        if isinstance(node, ast.Dict):
+            return self._dict_keys(node, seen)
+        if isinstance(node, ast.Name):
+            if node.id in seen:
+                return None
+            # A local binding wins over a module constant of the same name —
+            # that is what Python does, and `env` is a name every test uses.
+            local = self._resolve_local(node, seen)
+            if local is not None:
+                return local
+            if node.id in self.dict_names:
+                return self._dict_keys(self.dict_names[node.id], seen | {node.id})
+            return None
+        if isinstance(node, ast.Call):
+            name = _call_name(node.func)
+            if name == "dict":
+                keys: set[str] = set()
+                for arg in node.args:
+                    keys |= self._resolve(arg, seen) or set()
+                for kw in node.keywords:
+                    if kw.arg is None:
+                        keys |= self._resolve(kw.value, seen) or set()
+                    else:
+                        keys.add(kw.arg)
+                return keys
+            if name in self.helpers:
+                return set(self.helpers[name])
+            return None
+        return None
+
+    def _enclosing(self, node: ast.AST) -> ast.FunctionDef | None:
+        cur = self.parents.get(node)
+        while cur is not None:
+            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return cur
+            cur = self.parents.get(cur)
+        return None
+
+    def _params(self, func: ast.FunctionDef) -> list[str]:
+        args = func.args
+        return [a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)]
+
+    def _resolve_local(self, name_node: ast.Name, seen: set[str]) -> set[str] | None:
+        """A local variable: every assignment to it must carry the pins."""
+        func = self._enclosing(name_node)
+        if func is None:
+            return None
+        keys: set[str] | None = None
+        for node in ast.walk(func):
+            if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == name_node.id for t in node.targets
+            ):
+                got = self._resolve(node.value, seen | {name_node.id})
+                if got is None:
+                    return None
+                keys = got if keys is None else (keys & got)
+        return keys
+
+    # ── the audit ────────────────────────────────────────────────────────────
+
+    def offenders(self) -> list[str]:
+        """``file:line`` for every subprocess call whose env= misses a pin."""
+        out: list[str] = []
+        for node in ast.walk(self.tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if _call_name(node.func) not in _SUBPROCESS_CALLS:
+                continue
+            env = next((kw.value for kw in node.keywords if kw.arg == "env"), None)
+            if env is None:
+                # No env= at all: the child inherits the suite's own
+                # environment, which carries no ROBOTHOR_* pins to lose.
+                continue
+            out.extend(self._check(env, node))
+        return sorted(set(out))
+
+    def _check(self, env: ast.expr, call: ast.Call) -> list[str]:
+        missing_at = []
+        # env=<a parameter of this helper>: the pins have to be at the call
+        # sites instead — run_send(tmp_path, env) is only as safe as its
+        # callers.
+        func = self._enclosing(env)
+        if (
+            isinstance(env, ast.Name)
+            and func is not None
+            and env.id in self._params(func)
+        ):
+            index = self._params(func).index(env.id)
+            for site in ast.walk(self.tree):
+                if not isinstance(site, ast.Call):
+                    continue
+                if _call_name(site.func) != func.name:
+                    continue
+                passed: ast.expr | None = None
+                if len(site.args) > index:
+                    passed = site.args[index]
+                for kw in site.keywords:
+                    if kw.arg == env.id:
+                        passed = kw.value
+                if passed is None:
+                    continue
+                keys = self._resolve(passed, set())
+                missing = [p for p in REQUIRED_CALL_PINS if p not in (keys or set())]
+                if missing:
+                    missing_at.append(f"{self.path.name}:{passed.lineno} {missing}")
+            return missing_at
+        keys = self._resolve(env, set())
+        missing = [p for p in REQUIRED_CALL_PINS if p not in (keys or set())]
+        if missing:
+            missing_at.append(f"{self.path.name}:{env.lineno} {missing}")
+        return missing_at
+
+
+def env_pin_offenders(path: Path) -> list[str]:
+    return _EnvPinAudit(path).offenders()
+
+
+_FIXTURE = '''
+import subprocess
+
+BASE = {
+    "ROBOTHOR_ALERT_SPOOL_DIR": "/tmp/fixture/spool",
+    "ROBOTHOR_ALERT_STATE_DIR": "/tmp/fixture/state",
+    "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": "/tmp/fixture/fallback",
+    "ROBOTHOR_SECRETS_FILE": "/tmp/fixture/no-such-secrets.env",
+    "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+}
+
+
+def helper(**extra):
+    env = dict(BASE)
+    env.update(extra)
+    return env
+
+
+def run_via_helper():
+    subprocess.run(["bash", "send_failure_alert.sh", "u"], env=helper(HOME="/tmp"))
+
+
+def run_via_splat():
+    subprocess.run(["bash", "send_failure_alert.sh", "u"], env={**BASE, "HOME": "/tmp"})
+
+
+def run_via_local():
+    env = helper()
+    subprocess.run(["bash", "send_failure_alert.sh", "u"], env=env)
+
+
+def run_with_its_own_dict():
+    subprocess.run(
+        ["bash", "send_failure_alert.sh", "u"],
+        env={
+            "HOME": "/tmp",
+            "ROBOTHOR_ALERT_SUPPRESS": "1",
+            "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+        },
+    )
+'''
+
+
+def test_the_scan_finds_an_unpinned_call_site_among_pinned_siblings(tmp_path: Path):
+    """The shape that paged the operator at 14:40 today.
+
+    Three call sites inherit the pins; the fourth builds its own env= dict
+    with only ROBOTHOR_TELEGRAM_API_BASE in it. Every required pin appears
+    somewhere in the file, so a substring check over the file text sees
+    nothing wrong.
+    """
+    fixture = tmp_path / "test_fixture_unpinned.py"
+    fixture.write_text(_FIXTURE)
+
+    offenders = env_pin_offenders(fixture)
+
+    assert len(offenders) == 1, (
+        f"expected exactly the one unpinned call site, got {offenders}"
+    )
+    bad_line = int(offenders[0].split(":")[1].split()[0])
+    lines = _FIXTURE.splitlines()
+    start = next(i for i, l in enumerate(lines, 1) if "run_with_its_own_dict" in l)
+    assert bad_line >= start, (
+        f"the offender was reported at line {bad_line}, outside the unpinned "
+        f"function that starts at {start}"
+    )
+    assert "ROBOTHOR_ALERT_SPOOL_DIR" in offenders[0], (
+        "the report must name the pins that are missing, not just the line"
+    )
+
+
+def test_every_subprocess_call_in_a_pager_reaching_test_pins_the_sender_seams():
+    """Per call site, not per file.
+
+    A page spooled by the suite is delivered for real by root's next 5-minute
+    liveness drain, and the sender re-sources credentials from tmpfs itself,
+    so a subprocess that inherits none of the pins pages the operator however
+    clean the rest of the file is.
+    """
+    offenders: list[str] = []
+    for path, _text in tests_that_can_reach_the_pager():
+        offenders.extend(env_pin_offenders(path))
+    assert not offenders, (
+        "these subprocess call sites run a script that can page without "
+        "pinning the sender's durable state — each is one fixture failure "
+        "away from the operator's phone:\n  " + "\n  ".join(offenders)
     )
