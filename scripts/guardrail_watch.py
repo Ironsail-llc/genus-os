@@ -475,13 +475,24 @@ def check_memory_scoping_is_not_vacuous() -> None:
 #: The one spelling of the marker directory, shared with scripts/backup-state.sh.
 BACKUP_STATE_DIR_DEFAULT = "/var/lib/robothor/backup-state"
 
-#: marker file -> (label, budget in hours). Nightly tiers get 26h (a 24h cycle
-#: plus room for a late run); the base backup is weekly, and a stale one costs
-#: restore TIME rather than data, so it carries a much wider 8-day budget.
-BACKUP_SLO_BUDGET_HOURS: tuple[tuple[str, str, int], ...] = (
-    ("last-local-dump", "S4 backup freshness: local dump", 26),
-    ("last-offsite-ok", "S4 backup freshness: offsite", 26),
-    ("last-basebackup", "S4 backup freshness: basebackup", 192),
+#: The one implementation of the DB-free SLOs, shared with the hourly pager.
+SLO_PROBE = REPO_ROOT / "scripts" / "slo_probe.sh"
+
+#: marker file -> (label, budget env var, default hours). Nightly tiers get 26h
+#: (a 24h cycle plus room for a late run); the base backup is weekly, and a
+#: stale one costs restore TIME rather than data, so it carries a much wider
+#: 8-day budget. The env var names are scripts/slo_probe.sh's own: a budget set
+#: once in /etc/robothor/robothor.env has to move BOTH surfaces, or the daily
+#: report measures something the dead-man does not.
+BACKUP_SLO_BUDGETS: tuple[tuple[str, str, str, int], ...] = (
+    ("last-local-dump", "S4 backup freshness: local dump", "ROBOTHOR_SLO_LOCAL_DUMP_MAX_HOURS", 26),
+    ("last-offsite-ok", "S4 backup freshness: offsite", "ROBOTHOR_SLO_OFFSITE_MAX_HOURS", 26),
+    (
+        "last-basebackup",
+        "S4 backup freshness: basebackup",
+        "ROBOTHOR_SLO_BASEBACKUP_MAX_HOURS",
+        192,
+    ),
 )
 
 #: Statuses that are not an outcome. `cancelled` is an operator or scheduler
@@ -527,10 +538,71 @@ def _marker_age_hours(path: Path, now: dt.datetime) -> float | None:
     return (now - when).total_seconds() / 3600
 
 
+def budget_hours(env_var: str, default: int) -> int:
+    """A budget from the environment, under scripts/slo_probe.sh's own name.
+
+    An unparseable value falls back to the default and says so: a typo in
+    robothor.env must never quietly widen a budget to infinity, which is a
+    dead-man that reports every backup as fresh.
+    """
+    raw = os.environ.get(env_var, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"  ({env_var}={raw!r} is not an integer — using the {default}h default)")
+        return default
+
+
+def probe_report_slos(probe: Path | None = None) -> list[Slo]:
+    """Run ``scripts/slo_probe.sh --report`` and render what IT measured.
+
+    Deliberately a subprocess rather than a second implementation. This
+    surface used to read the last-good markers only, while the probe takes the
+    worse of (marker, newest file) and adds a readdir and a volume probe — and
+    the 2026-08-27 volume drop is exactly the state those two answer
+    differently. The markers live on NVMe and stay fresh forever, so the daily
+    report said OK for two days while the pager said BREACH.
+
+    Falls back to the marker-only reading when the probe cannot run, and says
+    so: a daily report that goes silent because a shell script moved is the
+    inert-control failure in a new costume.
+    """
+    probe = probe or SLO_PROBE
+    if not probe.exists():
+        print(f"  (SLO probe missing at {probe} — falling back to the markers alone)")
+        return backup_freshness_slos()
+    try:
+        result = subprocess.run(
+            ["bash", str(probe), "--report"], capture_output=True, text=True, timeout=300
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  (SLO probe could not run: {exc} — falling back to the markers alone)")
+        return backup_freshness_slos()
+
+    out = []
+    for line in result.stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) == 5 and fields[0] == "SLO":
+            out.append(Slo(fields[1], fields[2], fields[3], fields[4]))
+    if not out:
+        print(f"  (SLO probe reported nothing, exit {result.returncode} — falling back)")
+        for line in result.stderr.splitlines()[-5:]:
+            print(f"    {line}")
+        return backup_freshness_slos()
+    return out
+
+
 def backup_freshness_slos(
     state_dir: Path | str | None = None, now: dt.datetime | None = None
 ) -> list[Slo]:
-    """S4 — how old is the newest good backup, per tier. No database needed."""
+    """S4 from the markers alone — the fallback for when the probe cannot run.
+
+    scripts/slo_probe.sh is the primary measurement (see probe_report_slos);
+    this reads the same markers with the same budgets and no database, so a
+    box whose probe is missing still gets an answer rather than a blank.
+    """
     root = Path(
         state_dir
         if state_dir is not None
@@ -538,7 +610,8 @@ def backup_freshness_slos(
     )
     now = now or dt.datetime.now().astimezone()
     out = []
-    for marker, label, budget in BACKUP_SLO_BUDGET_HOURS:
+    for marker, label, env_var, default in BACKUP_SLO_BUDGETS:
+        budget = budget_hours(env_var, default)
         target = f"< {budget}h"
         age = _marker_age_hours(root / marker, now)
         if age is None:
@@ -728,13 +801,11 @@ def write_slo_digest(subject: str, body: str) -> bool:
 def check_slos() -> None:
     """Report every SLO, then leave one digest row if any of them breached."""
     print("\n=== SLOs ===")
-    # DB-free first, and unconditionally — see the module comment above.
-    slos = backup_freshness_slos()
+    # DB-free first, and unconditionally — see the module comment above. S4, S5
+    # and S8 all come from the hourly probe's --report mode, so the daily
+    # surface and the pager can never disagree about what they measured.
+    slos = probe_report_slos()
     slos += db_slos()
-    # The two that are enforced elsewhere; listed so the section is a complete
-    # roster rather than a subset nobody can audit.
-    slos.append(Slo("S5 liveness", "100%", "enforced by robothor-liveness.timer", "OK"))
-    slos.append(Slo("S8 guardrail-watch ran", "daily", "this report is the evidence", "OK"))
     print(format_slo_report(slos))
 
     breached = [s for s in slos if s.status == "BREACH"]

@@ -36,12 +36,13 @@ it or be steered by it.
 from __future__ import annotations
 
 import datetime as dt
+import gzip
 import importlib.util
+import os
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import pytest
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -66,6 +67,44 @@ def fresh_markers(state_dir: Path, age_hours: float = 1) -> Path:
     for name in MARKERS:
         write_marker(state_dir, name, age_hours)
     return state_dir
+
+
+def write_dump(dump_dir: Path, age_hours: float = 1) -> Path:
+    """A dump file the probe's readdir half can find, aged on disk."""
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    path = dump_dir / "robothor_memory-fixture.sql.gz"
+    path.write_bytes(gzip.compress(b"fixture"))
+    when = time.time() - age_hours * 3600
+    os.utime(path, (when, when))
+    return path
+
+
+def probe_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Pin every seam scripts/slo_probe.sh reads.
+
+    The daily surface now RUNS the probe, so an unpinned test would read the
+    live backup volume at /mnt/robothor-backup and this box's real units.
+    Returns the dump directory.
+    """
+    dumps = tmp_path / "dumps"
+    monkeypatch.setenv("ROBOTHOR_BACKUP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ROBOTHOR_SLO_LOCAL_DUMP_DIR", str(dumps))
+    monkeypatch.setenv("ROBOTHOR_SLO_VOLUME_CHECK_CMD", "/bin/true")
+    monkeypatch.setenv("ROBOTHOR_SLO_RCLONE_CMD", "/bin/false")
+    monkeypatch.setenv("ROBOTHOR_SLO_SYSTEMCTL_CMD", "/bin/false")
+    monkeypatch.setenv("ROBOTHOR_SLO_DB_CHECKS", "0")
+    # Report mode pages nobody by construction; this is the belt to that
+    # braces, because a regression here would page the operator from a test.
+    monkeypatch.setenv("ROBOTHOR_SLO_ALERT_CMD", "/bin/true")
+    monkeypatch.setenv("ROBOTHOR_ALERT_SUPPRESS", "1")
+    return dumps
+
+
+def healthy_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    dumps = probe_env(monkeypatch, tmp_path)
+    fresh_markers(tmp_path)
+    write_dump(dumps)
+    return dumps
 
 
 def by_name(slos: list, needle: str):
@@ -127,8 +166,134 @@ class TestBackupFreshnessIsMeasuredWithoutADatabase:
         assert not gw.BACKUP_STATE_DIR_DEFAULT.startswith("/home/")
 
         # ...and the env var overrides it, so nothing here reads the live dir.
+        probe_env(monkeypatch, tmp_path)
         monkeypatch.setenv("ROBOTHOR_BACKUP_STATE_DIR", str(fresh_markers(tmp_path)))
         assert {s.status for s in gw.backup_freshness_slos()} == {"OK"}
+
+
+# ── one implementation, two surfaces ─────────────────────────────────────────
+
+
+class TestTheDailySurfaceRunsTheProbe:
+    """The daily report used to read the markers ONLY, while the hourly pager
+    took the worse of (marker, newest file) and added a readdir plus a volume
+    probe. The 2026-08-27 volume drop is precisely the state those two answer
+    differently: the markers live on NVMe and stay fresh forever, so the daily
+    report said OK while the pager said BREACH."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_as_root(self) -> None:
+        if os.geteuid() == 0:
+            pytest.skip("root ignores directory permissions; the EIO case cannot be staged")
+
+    def test_an_unreadable_dump_directory_breaches_the_daily_report(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        dumps = healthy_tree(monkeypatch, tmp_path)
+        dumps.chmod(0o000)
+        try:
+            slos = gw.probe_report_slos()
+            slo = by_name(slos, "local dump")
+            assert slo.status == "BREACH", (
+                "a fresh marker on NVMe must not vouch for a dump directory "
+                "nobody can read — that is the outage, reported as health"
+            )
+        finally:
+            dumps.chmod(0o755)
+
+    def test_an_unusable_volume_breaches_the_daily_report(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """backup-volume-check.sh exits 1 for "not usable", which makes the
+        backup units SKIP. The daily report had no opinion about it at all."""
+        healthy_tree(monkeypatch, tmp_path)
+        monkeypatch.setenv("ROBOTHOR_SLO_VOLUME_CHECK_CMD", "/bin/false")
+        assert by_name(gw.probe_report_slos(), "volume").status == "BREACH"
+
+    def test_a_healthy_tree_is_all_ok(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        healthy_tree(monkeypatch, tmp_path)
+        slos = gw.probe_report_slos()
+        backup = [s for s in slos if "S4" in s.name]
+        assert backup and {s.status for s in backup} == {"OK"}, [
+            (s.name, s.status, s.measured) for s in slos
+        ]
+
+    def test_the_report_mode_pages_nobody(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A daily surface that pages would double every S4 page the hourly
+        probe already sends."""
+        healthy_tree(monkeypatch, tmp_path)
+        (tmp_path / "last-local-dump").unlink()
+        (tmp_path / "dumps" / "robothor_memory-fixture.sql.gz").unlink()
+        alert_log = tmp_path / "would-have-paged.txt"
+        alert = tmp_path / "fake-alert.sh"
+        alert.write_text(f'#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" >> "{alert_log}"\n')
+        alert.chmod(0o755)
+        monkeypatch.setenv("ROBOTHOR_SLO_ALERT_CMD", str(alert))
+
+        assert by_name(gw.probe_report_slos(), "local dump").status == "BREACH"
+        assert not alert_log.exists(), "--report measures; it must never interrupt anyone"
+
+    def test_a_missing_probe_falls_back_to_the_markers(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A daily report that goes silent because a shell script moved is the
+        inert-control failure again. Degrade to the marker-only reading and
+        say so."""
+        healthy_tree(monkeypatch, tmp_path)
+        slos = gw.probe_report_slos(tmp_path / "no-such-probe.sh")
+        assert by_name(slos, "local dump").status == "OK"
+        assert "fall" in capsys.readouterr().out.lower()
+
+
+class TestABudgetIsOneEnvVarForBothSurfaces:
+    """docs/runbooks/SLOS.md claimed budgets were environment variables read by
+    both surfaces. Only the shell probe read them; the daily report carried its
+    own hardcoded tuple, so a budget changed per the runbook moved one surface
+    and not the other."""
+
+    def test_one_env_var_moves_the_probe_and_the_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        healthy_tree(monkeypatch, tmp_path)
+        write_marker(tmp_path, "last-local-dump", age_hours=5)
+        write_dump(tmp_path / "dumps", age_hours=5)
+
+        assert by_name(gw.probe_report_slos(), "local dump").status == "OK"
+        assert by_name(gw.backup_freshness_slos(tmp_path), "local dump").status == "OK"
+
+        monkeypatch.setenv("ROBOTHOR_SLO_LOCAL_DUMP_MAX_HOURS", "4")
+
+        assert by_name(gw.probe_report_slos(), "local dump").status == "BREACH", (
+            "the hourly probe must honour the budget from the environment"
+        )
+        fallback = by_name(gw.backup_freshness_slos(tmp_path), "local dump")
+        assert fallback.status == "BREACH", (
+            "so must the daily surface, under the SAME variable name — a "
+            "budget set per the runbook that moves only one is the defect"
+        )
+        assert "4" in fallback.target
+
+    def test_the_offsite_and_basebackup_budgets_are_env_driven_too(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        fresh_markers(tmp_path, age_hours=5)
+        monkeypatch.setenv("ROBOTHOR_SLO_OFFSITE_MAX_HOURS", "4")
+        monkeypatch.setenv("ROBOTHOR_SLO_BASEBACKUP_MAX_HOURS", "4")
+        slos = gw.backup_freshness_slos(tmp_path)
+        assert by_name(slos, "offsite").status == "BREACH"
+        assert by_name(slos, "basebackup").status == "BREACH"
+
+    def test_a_nonsense_budget_falls_back_to_the_default(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A typo in robothor.env must not silently make every backup fresh."""
+        fresh_markers(tmp_path, age_hours=100)
+        monkeypatch.setenv("ROBOTHOR_SLO_LOCAL_DUMP_MAX_HOURS", "twenty-six")
+        assert by_name(gw.backup_freshness_slos(tmp_path), "local dump").status == "BREACH"
 
 
 # ── the report ───────────────────────────────────────────────────────────────
@@ -154,7 +319,10 @@ class TestOneDigestRowPerRun:
     @staticmethod
     def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[tuple[str, str]]:
         written: list[tuple[str, str]] = []
-        monkeypatch.setenv("ROBOTHOR_BACKUP_STATE_DIR", str(tmp_path))
+        # check_slos() now RUNS scripts/slo_probe.sh, so every seam it reads
+        # has to be pinned here too — an unpinned run would readdir the live
+        # backup volume at /mnt/robothor-backup.
+        write_dump(probe_env(monkeypatch, tmp_path))
         monkeypatch.setattr(gw, "send_telegram", lambda text: False)
         monkeypatch.setattr(
             gw, "write_slo_digest", lambda subject, body: (written.append((subject, body)), True)[1]
@@ -208,7 +376,7 @@ class TestUnevaluatedIsNotOk:
     def test_a_database_outage_does_not_hide_the_backup_slos(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        monkeypatch.setenv("ROBOTHOR_BACKUP_STATE_DIR", str(tmp_path))
+        write_dump(probe_env(monkeypatch, tmp_path))
         monkeypatch.setattr(gw, "send_telegram", lambda text: False)
         monkeypatch.setattr(gw, "write_slo_digest", lambda subject, body: True)
         monkeypatch.setattr(
@@ -235,7 +403,7 @@ class TestUnevaluatedIsNotOk:
         """They are neither OK nor a page — reporting them as breaches would
         make a DB blip page about backups."""
         written: list = []
-        monkeypatch.setenv("ROBOTHOR_BACKUP_STATE_DIR", str(tmp_path))
+        write_dump(probe_env(monkeypatch, tmp_path))
         monkeypatch.setattr(gw, "send_telegram", lambda text: False)
         monkeypatch.setattr(
             gw, "write_slo_digest", lambda subject, body: (written.append(body), True)[1]

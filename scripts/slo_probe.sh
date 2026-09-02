@@ -46,7 +46,20 @@
 #   in the environment; the sender turns that into a re-page, not a storm.
 #   Dedup lives in exactly one place, as it does for liveness_probe.sh.
 #
-# Usage: slo_probe.sh            (no arguments; everything is env-driven)
+# Usage: slo_probe.sh            page for every breached SLO
+#        slo_probe.sh --report   measure the DB-free SLOs, print one row each
+#                                on stdout, page NOBODY, exit 0
+#
+# --report EXISTS SO THERE IS ONE IMPLEMENTATION
+#   The daily surface (scripts/guardrail_watch.py) used to read the last-good
+#   markers only, while this probe takes the WORSE of (marker, newest file) and
+#   adds a readdir and a volume probe. The 2026-08-27 volume drop is exactly
+#   the state those two answer differently: the markers live on NVMe and stay
+#   fresh forever, so the daily report said OK while the pager said BREACH. The
+#   daily report now runs this script instead of measuring it a second way.
+#
+#   Row format, tab-separated: SLO<TAB>name<TAB>target<TAB>measured<TAB>status
+#   where status is OK | BREACH | UNEVALUATED.
 #
 # Exit: 0 every evaluated SLO is inside budget, or every breach was
 #         successfully handed to the sender
@@ -92,7 +105,25 @@
 #                                      USB device blocks readdir forever
 set -uo pipefail
 
-log() { echo "slo_probe: $*"; }
+REPORT=0
+if [[ "${1:-}" == "--report" ]]; then
+    REPORT=1
+    shift
+fi
+if (( $# > 0 )); then
+    echo "slo_probe: usage: slo_probe.sh [--report]" >&2
+    exit 2
+fi
+
+# In report mode stdout carries the machine-readable rows and nothing else, so
+# the running commentary moves to stderr rather than disappearing.
+log() {
+    if (( REPORT )); then
+        echo "slo_probe: $*" >&2
+    else
+        echo "slo_probe: $*"
+    fi
+}
 err() { echo "slo_probe: $*" >&2; }
 
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
@@ -151,6 +182,12 @@ NOW="$(date +%s)"
 UNDELIVERED=0
 UNEVALUATED=0
 
+# One row per SLO the DB-free half evaluated, for --report. Collected in both
+# modes: a row that only exists in report mode is a second implementation
+# again, and would drift the same way.
+ROWS=()
+emit() { ROWS+=("$(printf 'SLO\t%s\t%s\t%s\t%s' "$1" "$2" "$3" "$4")"); }
+
 # ── Paging ───────────────────────────────────────────────────────────────────
 # One page per SLO, keyed `slo:<name>` rather than by a systemd unit. A
 # unit-keyed stamp would let an unrelated unit's page mute this one — the
@@ -162,6 +199,12 @@ UNEVALUATED=0
 page() {
     local key="$1" cooldown="$2" body="$3"
     local argv
+    if (( REPORT )); then
+        # --report measures; it never interrupts anyone. The daily surface
+        # calling this must not double every page the hourly timer sends.
+        log "would page ${key} (report mode: not sending)"
+        return 0
+    fi
     read -r -a argv <<<"$ALERT_CMD"
     if ROBOTHOR_ALERT_COOLDOWN_SECONDS="$cooldown" "${argv[@]}" "$key" "$body"; then
         log "page for ${key} handed to the sender successfully"
@@ -204,10 +247,20 @@ check_volume() {
     read -r -a argv <<<"$VOLUME_CHECK_CMD"
     "${argv[@]}" "$DUMP_DIR" >/dev/null 2>&1
     rc=$?
+    local label="S4 backup freshness: volume"
     case "$rc" in
-        0) log "backup volume at ${DUMP_DIR}: healthy" ;;
-        255) breach "the backup volume probe could not run against ${DUMP_DIR} (exit 255) — volume health is UNKNOWN" ;;
-        *) breach "the backup volume at ${DUMP_DIR} is NOT usable (volume check exit ${rc}) — the backup units are being skipped, not failing" ;;
+        0)
+            log "backup volume at ${DUMP_DIR}: healthy"
+            emit "$label" "usable" "healthy" "OK"
+            ;;
+        255)
+            breach "the backup volume probe could not run against ${DUMP_DIR} (exit 255) — volume health is UNKNOWN"
+            emit "$label" "usable" "UNKNOWN — the volume probe could not run" "BREACH"
+            ;;
+        *)
+            breach "the backup volume at ${DUMP_DIR} is NOT usable (volume check exit ${rc}) — the backup units are being skipped, not failing"
+            emit "$label" "usable" "not usable (volume check exit ${rc})" "BREACH"
+            ;;
     esac
 }
 
@@ -216,6 +269,7 @@ check_volume() {
 #    speak for a directory on a disk that is gone.
 check_local_dump() {
     local readable=1 file_epoch="" mark_epoch="" newest="" age
+    local label="S4 backup freshness: local dump" target="< ${LOCAL_MAX_HOURS}h"
     if ! timeout "$PROBE_TIMEOUT" ls -A "$DUMP_DIR" >/dev/null 2>&1; then
         readable=0
         breach "cannot read the local dump directory ${DUMP_DIR} (readdir failed or timed out after ${PROBE_TIMEOUT}s) — stat() still answers on a dropped USB device, so this is the ONLY signal that the volume is gone"
@@ -232,6 +286,9 @@ check_local_dump() {
     if [[ -z "$file_epoch" && -z "$mark_epoch" ]]; then
         if (( readable )); then
             breach "no *.sql.gz in ${DUMP_DIR} and no last-local-dump marker — there is NO restorable nightly dump"
+            emit "$label" "$target" "no dump and no marker — nothing restorable" "BREACH"
+        else
+            emit "$label" "$target" "the dump directory could not be read" "BREACH"
         fi
         return
     fi
@@ -246,9 +303,12 @@ check_local_dump() {
     age="$(hours_since "$age")"
     if (( age > LOCAL_MAX_HOURS )); then
         breach "newest local dump is ${age}h old (budget ${LOCAL_MAX_HOURS}h) — at least one nightly dump did not happen"
+        emit "$label" "$target" "${age}h" "BREACH"
     elif (( readable )); then
         log "local dump: ${age}h old (budget ${LOCAL_MAX_HOURS}h) — OK"
+        emit "$label" "$target" "${age}h" "OK"
     else
+        emit "$label" "$target" "marker reads ${age}h, but the directory could not be read" "BREACH"
         # The breach above already stands. Saying "OK" on the next line would
         # be the marker vouching for a directory nobody can read — the exact
         # inversion this probe exists to prevent, printed in the operator's own
@@ -262,6 +322,7 @@ check_local_dump() {
 #    dir was lost.
 check_offsite() {
     local epoch="" listing age
+    local label="S4 backup freshness: offsite" target="< ${OFFSITE_MAX_HOURS}h"
     epoch="$(marker_epoch last-offsite-ok)" || epoch=""
 
     if [[ -z "$epoch" && -n "$REMOTE" ]]; then
@@ -276,14 +337,17 @@ check_offsite() {
 
     if [[ -z "$epoch" ]]; then
         breach "offsite copy freshness is UNKNOWN — no successful offsite run recorded and the remote could not be listed; a box loss may have NO recoverable copy"
+        emit "$label" "$target" "unknown — no successful run recorded" "BREACH"
         return
     fi
 
     age="$(hours_since "$epoch")"
     if (( age > OFFSITE_MAX_HOURS )); then
         breach "newest offsite copy is ${age}h old (budget ${OFFSITE_MAX_HOURS}h) — a box loss restores from that generation"
+        emit "$label" "$target" "${age}h" "BREACH"
     else
         log "offsite: ${age}h old (budget ${OFFSITE_MAX_HOURS}h) — OK"
+        emit "$label" "$target" "${age}h" "OK"
     fi
 }
 
@@ -292,16 +356,20 @@ check_offsite() {
 #    backup grows the restore TIME rather than losing data.
 check_basebackup() {
     local epoch="" age
+    local label="S4 backup freshness: basebackup" target="< ${BASEBACKUP_MAX_HOURS}h"
     epoch="$(marker_epoch last-basebackup)" || epoch=""
     if [[ -z "$epoch" ]]; then
         breach "basebackup freshness is UNKNOWN — no successful base backup has ever been recorded; PITR has no starting point"
+        emit "$label" "$target" "unknown — no successful run recorded" "BREACH"
         return
     fi
     age="$(hours_since "$epoch")"
     if (( age > BASEBACKUP_MAX_HOURS )); then
         breach "newest basebackup is ${age}h old (budget ${BASEBACKUP_MAX_HOURS}h) — PITR must replay every WAL segment since then, and the restore time grows nightly"
+        emit "$label" "$target" "${age}h" "BREACH"
     else
         log "basebackup: ${age}h old (budget ${BASEBACKUP_MAX_HOURS}h) — OK"
+        emit "$label" "$target" "${age}h" "OK"
     fi
 }
 
@@ -362,15 +430,18 @@ unevaluated() {
 
 check_guardrail_watch() {
     local out result stamp epoch age
+    local label="S8 guardrail-watch ran" target="< ${GUARDRAIL_WATCH_MAX_HOURS}h, Result=success"
     out="$(show_props robothor-guardrail-watch.service ExecMainExitTimestamp,Result)"
     if [[ -z "$out" ]]; then
         unevaluated "S8" "systemctl could not answer for robothor-guardrail-watch.service"
+        emit "$label" "$target" "systemctl could not answer" "UNEVALUATED"
         return
     fi
     result="$(prop_of "$out" Result)"
     stamp="$(prop_of "$out" ExecMainExitTimestamp)"
 
     if ! epoch="$(stamp_epoch "$stamp")"; then
+        emit "$label" "$target" "no completed run on this box" "BREACH"
         page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
             "S8 BREACHED: robothor-guardrail-watch.service has no completed run on this box. The daily SLO report, the drop-in/host-script drift checks and instance manifest validation have never produced a result here. Runbook: docs/runbooks/SLOS.md (S8)." || true
         return
@@ -378,28 +449,34 @@ check_guardrail_watch() {
     age="$(hours_since "$epoch")"
 
     if [[ "$result" != "success" ]]; then
+        emit "$label" "$target" "last run ${age}h ago, Result=${result}" "BREACH"
         page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
             "S8 BREACHED: robothor-guardrail-watch.service last finished ${age}h ago with Result=${result}. The daily report is failing, so the drift checks and manifest validation it carries are not reaching anyone. Runbook: docs/runbooks/SLOS.md (S8)." || true
     elif (( age > GUARDRAIL_WATCH_MAX_HOURS )); then
+        emit "$label" "$target" "last completed ${age}h ago" "BREACH"
         page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
             "S8 BREACHED: robothor-guardrail-watch.service last completed ${age}h ago (budget ${GUARDRAIL_WATCH_MAX_HOURS}h). A daily watchdog that stops running reports nothing and fails nothing — this is the only signal left. Runbook: docs/runbooks/SLOS.md (S8)." || true
     else
         log "  S8 guardrail-watch: last completed ${age}h ago, Result=${result} (budget ${GUARDRAIL_WATCH_MAX_HOURS}h) — OK"
+        emit "$label" "$target" "last completed ${age}h ago, Result=${result}" "OK"
     fi
 }
 
 check_liveness() {
     local out tout result stamp epoch age
+    local label="S5 liveness" target="timer fired < ${LIVENESS_MAX_HOURS}h ago, Result=success"
     out="$(show_props robothor-liveness.service Result)"
     tout="$(show_props robothor-liveness.timer LastTriggerUSec)"
     if [[ -z "$out" || -z "$tout" ]]; then
         unevaluated "S5" "systemctl could not answer for the robothor-liveness units"
+        emit "$label" "$target" "systemctl could not answer" "UNEVALUATED"
         return
     fi
     result="$(prop_of "$out" Result)"
     stamp="$(prop_of "$tout" LastTriggerUSec)"
 
     if ! epoch="$(stamp_epoch "$stamp")"; then
+        emit "$label" "$target" "the timer has never fired" "BREACH"
         page "slo:liveness-stale" "$LIVENESS_COOLDOWN" \
             "S5 BREACHED: robothor-liveness.timer has never fired on this box. The engine watchdog that survives a hard kill is not watching. Runbook: docs/runbooks/SLOS.md (S5)." || true
         return
@@ -407,19 +484,31 @@ check_liveness() {
     age="$(hours_since "$epoch")"
 
     if [[ "$result" != "success" ]]; then
+        emit "$label" "$target" "last run Result=${result}, timer fired ${age}h ago" "BREACH"
         page "slo:liveness-stale" "$LIVENESS_COOLDOWN" \
             "S5 BREACHED: robothor-liveness.service last ran with Result=${result} (timer last fired ${age}h ago). The watchdog itself is failing, so a dead engine would page nobody. Runbook: docs/runbooks/SLOS.md (S5)." || true
     elif (( age > LIVENESS_MAX_HOURS )); then
+        emit "$label" "$target" "timer last fired ${age}h ago" "BREACH"
         page "slo:liveness-stale" "$LIVENESS_COOLDOWN" \
             "S5 BREACHED: robothor-liveness.timer last fired ${age}h ago (budget ${LIVENESS_MAX_HOURS}h) — it runs every 5 minutes. A timer that stops firing fails nothing, so nothing else would say this. Runbook: docs/runbooks/SLOS.md (S5)." || true
     else
         log "  S5 liveness: timer fired ${age}h ago, last run Result=${result} — OK"
+        emit "$label" "$target" "timer fired ${age}h ago, Result=${result}" "OK"
     fi
 }
 
 log "=== S5 liveness / S8 guardrail-watch freshness ==="
 check_liveness
 check_guardrail_watch
+
+if (( REPORT )); then
+    # Everything above is DB-free, which is the whole contract of --report: the
+    # daily surface has its own database section and must not pay for a second
+    # connection here, and a database outage is exactly when the backup age
+    # matters most. Rows out, exit 0 — a report is not a verdict.
+    printf '%s\n' ${ROWS[@]+"${ROWS[@]}"}
+    exit 0
+fi
 
 # ── S2 / S6: the DB-backed SLOs ──────────────────────────────────────────────
 # Read-only, and deliberately last: a database outage must never stop the

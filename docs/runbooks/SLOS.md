@@ -10,6 +10,15 @@ Two surfaces, deliberately different:
 | `scripts/slo_probe.sh` | `robothor-slo.timer` | hourly | **Pages** for the three SLOs that must interrupt someone. |
 | `scripts/guardrail_watch.py` `check_slos()` | `robothor-guardrail-watch.timer` | daily | Prints the `=== SLOs ===` section for **all** of them and leaves one `alert_digest` row for the heartbeat. |
 
+The daily surface does not measure S4, S5 or S8 a second way: it runs
+`scripts/slo_probe.sh --report`, which evaluates every database-free SLO,
+prints one tab-separated row each and pages nobody. Before that, the daily
+report read the last-good markers *only* while the probe took the worse of
+(marker, newest file) plus a readdir and a volume probe — so on 2026-08-27 the
+daily report said `OK` for two days about a volume the pager was calling a
+BREACH. The markers live on NVMe; they stay fresh forever after the disk they
+describe falls off the bus.
+
 ## Why a dead-man and not just OnFailure=
 
 Every unit in the backup chain pages via `OnFailure=`. On 2026-08-27 the
@@ -161,10 +170,39 @@ Procedure and measured baselines: [`RESTORE_DRILL.md`](RESTORE_DRILL.md).
 
 ## Changing a budget
 
-Budgets are environment variables with defaults in `scripts/slo_probe.sh` and
-`scripts/guardrail_watch.py` (`BACKUP_SLO_BUDGET_HOURS`). Set them in
-`/etc/robothor/robothor.env` so both surfaces agree; a budget changed in one
-place is a dead-man measuring something the daily report does not.
+Every budget is an environment variable, and both surfaces read it under the
+**same name** — the daily report runs the probe, and its marker-only fallback
+(`backup_freshness_slos()`, used when the probe is missing) reads the same
+variables:
+
+| Variable | Default | SLO |
+|---|---|---|
+| `ROBOTHOR_SLO_LOCAL_DUMP_MAX_HOURS` | `26` | S4 local dump |
+| `ROBOTHOR_SLO_OFFSITE_MAX_HOURS` | `26` | S4 offsite |
+| `ROBOTHOR_SLO_BASEBACKUP_MAX_HOURS` | `192` (8d) | S4 basebackup |
+| `ROBOTHOR_SLO_GUARDRAIL_WATCH_MAX_HOURS` | `26` | S8 |
+| `ROBOTHOR_SLO_LIVENESS_MAX_HOURS` | `1` | S5 |
+
+Set them in `/etc/robothor/robothor.env`, which both units load with
+`EnvironmentFile=`:
+
+```bash
+# widen the offsite budget to two days
+echo 'ROBOTHOR_SLO_OFFSITE_MAX_HOURS=48' | sudo tee -a /etc/robothor/robothor.env
+sudo systemctl start robothor-slo.service   # confirm the new budget in the journal
+```
+
+A value that is not an integer falls back to the default **and says so** in the
+report. A typo that silently widened a budget to infinity would be a dead-man
+that reports every backup as fresh — the failure this whole file exists to
+prevent.
+
+The cooldowns are variables too, in seconds:
+`ROBOTHOR_SLO_BACKUP_COOLDOWN_SECONDS` (12h),
+`ROBOTHOR_SLO_HEARTBEAT_COOLDOWN_SECONDS` (12h),
+`ROBOTHOR_SLO_LLM_COOLDOWN_SECONDS` (6h),
+`ROBOTHOR_SLO_GUARDRAIL_COOLDOWN_SECONDS` (12h) and
+`ROBOTHOR_SLO_LIVENESS_COOLDOWN_SECONDS` (12h).
 
 Related: [`PAGING.md`](PAGING.md) for how a page is delivered and deduped,
 [`OFFSITE_BACKUP.md`](OFFSITE_BACKUP.md) and [`PITR.md`](PITR.md) for the
