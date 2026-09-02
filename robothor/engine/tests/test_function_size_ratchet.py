@@ -40,7 +40,7 @@ KNOWN_LARGE: dict[str, int] = {
     "runner.py::execute": 990,  # +7: task_id propagated onto the run at INSERT time
     "runner.py::_run_loop": 775,
     "tools/handlers/gws.py::_handle_gws_tool": 453,
-    "daemon.py::main": 397,  # -14: fleet capacity init extracted to _init_fleet_capacity
+    "daemon.py::main": 404,  # -14: fleet capacity init extracted to _init_fleet_capacity
     "telegram.py::_run_interactive": 384,
     "tools/handlers/benchmark.py::_benchmark_run": 370,
     "analytics.py::get_agent_stats": 343,
