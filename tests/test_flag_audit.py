@@ -604,6 +604,20 @@ def _guardrail_watch():
     return mod
 
 
+def _stub_sibling_checks(monkeypatch, gw):
+    """Default every check `main()` calls to a safe pass, matching each
+    check's real signature, so a test driving `main()` for one check does not
+    also run its siblings for real. `check_instance_doctor` hits the live
+    box and `send_telegram` has real credentials on it — a test that forgets
+    to stub either does not just fail loud, it pages the operator or shells
+    out to instance_doctor.sh. Call this first, then override whichever
+    check this test actually targets.
+    """
+    monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: True)
+    monkeypatch.setattr(gw, "check_instance_doctor", lambda script=None: True)
+    monkeypatch.setattr(gw, "send_telegram", lambda text: False)
+
+
 def test_check_flag_truth_runs_before_the_db_dependent_section(monkeypatch, capsys):
     """The truth table needs no database to produce its file-layer columns, so
     it belongs in main()'s DB-free half — the 2026-08-16 lesson: a DB outage
@@ -612,6 +626,7 @@ def test_check_flag_truth_runs_before_the_db_dependent_section(monkeypatch, caps
     gw = _guardrail_watch()
     order: list[str] = []
 
+    _stub_sibling_checks(monkeypatch, gw)
     monkeypatch.setattr(gw, "check_soak_deadlines", lambda: order.append("soak"))
     monkeypatch.setattr(gw, "check_dropin_drift", lambda: order.append("dropin"))
     monkeypatch.setattr(gw, "check_host_script_drift", lambda: order.append("host"))
@@ -634,6 +649,7 @@ def test_check_flag_truth_runs_before_the_db_dependent_section(monkeypatch, caps
 
 def test_main_exits_non_zero_when_the_flag_truth_table_drifts(monkeypatch, capsys):
     gw = _guardrail_watch()
+    _stub_sibling_checks(monkeypatch, gw)
     for name in (
         "check_soak_deadlines",
         "check_dropin_drift",
@@ -812,6 +828,7 @@ def test_main_audits_the_file_layers_without_the_db_then_again_with_it(monkeypat
         order.append("flags")
         return True
 
+    _stub_sibling_checks(monkeypatch, gw)
     monkeypatch.setattr(gw, "check_flag_truth", fake_truth)
     monkeypatch.setattr(gw, "check_soak_deadlines", lambda: None)
     monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
@@ -833,6 +850,7 @@ def test_main_fails_when_only_the_db_pass_of_the_audit_finds_drift(monkeypatch, 
     pass is not allowed to fail the run, an unversioned DB pin never pages."""
     gw = _guardrail_watch()
     results = iter([True, False])
+    _stub_sibling_checks(monkeypatch, gw)
     monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: next(results))
     monkeypatch.setattr(gw, "check_soak_deadlines", lambda: None)
     monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)

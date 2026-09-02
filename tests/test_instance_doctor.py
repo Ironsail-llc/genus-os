@@ -456,6 +456,18 @@ def _fake_doctor(tmp_path: Path, exit_code: int, message: str = "seeded") -> Pat
     return stub
 
 
+def _stub_sibling_checks(monkeypatch, gw):
+    """Default every check `main()` calls to a safe pass, matching each
+    check's real signature, so a test driving `main()` to exercise the doctor
+    wiring does not also spawn the real flag_audit.py subprocess or let a nag
+    reach this box's live Telegram credentials. Call first, then override
+    check_instance_doctor — the check this file actually targets.
+    """
+    monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: True)
+    monkeypatch.setattr(gw, "check_instance_doctor", lambda script=None: True)
+    monkeypatch.setattr(gw, "send_telegram", lambda text: False)
+
+
 def test_guardrail_watch_reports_doctor_findings(tmp_path: Path, capsys):
     ok = gw.check_instance_doctor(script=_fake_doctor(tmp_path, 1, "FINDING [symlink] x"))
     assert ok is False
@@ -476,7 +488,7 @@ def test_missing_doctor_is_not_health(tmp_path: Path, capsys):
 def test_doctor_runs_in_the_db_free_block(monkeypatch, capsys):
     """It needs no database, so a postgres outage must not take it down —
     the 2026-08-16 failure mode this ordering exists to prevent."""
-    monkeypatch.setattr(gw, "send_telegram", lambda text: False)
+    _stub_sibling_checks(monkeypatch, gw)
     monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
     monkeypatch.setattr(gw, "check_host_script_drift", lambda pairs=None: None)
     monkeypatch.setattr(gw, "check_instance_manifests", lambda: True)
@@ -499,7 +511,7 @@ def test_doctor_runs_in_the_db_free_block(monkeypatch, capsys):
 def test_doctor_findings_fail_the_watch(monkeypatch):
     """Findings must reach the operator: rc=1 fires the unit's OnFailure pager.
     The suppression path is the allow file, not a swallowed exit code."""
-    monkeypatch.setattr(gw, "send_telegram", lambda text: False)
+    _stub_sibling_checks(monkeypatch, gw)
     monkeypatch.setattr(gw, "check_soak_deadlines", lambda: None)
     monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
     monkeypatch.setattr(gw, "check_host_script_drift", lambda pairs=None: None)
