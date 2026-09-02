@@ -22,7 +22,7 @@ import socket
 import sys
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from robothor.engine.config import EngineConfig
 from robothor.engine.health import serve_health, validate_engine_auth_configuration
@@ -33,6 +33,9 @@ from robothor.engine.scheduler import CronScheduler
 from robothor.engine.telegram import TelegramBot
 from robothor.engine.workflow import WorkflowEngine
 from robothor.plugins import reload_plugins
+
+if TYPE_CHECKING:
+    from robothor.engine.resume import ResumeCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -187,20 +190,17 @@ async def _execute_resume(runner: Any, candidate: Any) -> None:
         logger.exception("Resume of run %s failed", candidate.run_id)
 
 
-async def resume_interrupted_runs(runner: Any = None) -> int:
-    """Resume runs a restart interrupted, before the reaper reaches them.
+def _resume_scan() -> list[ResumeCandidate]:
+    """Every interrupted run the database knows about. [] when the scan fails.
 
-    Off unless ROBOTHOR_RESUME_IN_FLIGHT is set: this changes what a restart
-    does to live work. Returns how many were started.
-
-    Ordering matters — this must run BEFORE `_cleanup_stale_runs`, which
-    marks every still-`running` row as timed out. Reaping first would destroy
-    exactly the runs this exists to save.
+    A named seam, not just tidiness: this is the ONE step in resume that needs
+    a database, and while it was inline the only way for a test to reach the
+    rest of the function was to patch an attribute that did not exist. A
+    `monkeypatch.setattr(..., raising=False)` on a missing name patches
+    nothing, so the resume test ran this query against whatever database the
+    test host happened to have configured.
     """
-    from robothor.engine.resume import ResumeCandidate, resume_batch, resume_enabled
-
-    if not resume_enabled():
-        return 0
+    from robothor.engine.resume import RESUMABLE_STATUSES, ResumeCandidate
 
     try:
         from robothor.db.connection import get_connection
@@ -214,8 +214,6 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
             # 2026-08-27 a normal `systemctl restart` tombstoned five in-flight
             # runs two seconds before the new daemon scanned, three of them
             # holding checkpoints, and resume recovered none of them.
-            from robothor.engine.resume import RESUMABLE_STATUSES
-
             cur.execute(
                 "SELECT id, agent_id, COALESCE(resume_attempts, 0) FROM agent_runs "
                 "WHERE status = ANY(%s) ORDER BY id",
@@ -224,9 +222,9 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
             rows = cur.fetchall()
     except Exception as e:
         logger.warning("Resume scan failed: %s", _sanitize(e))
-        return 0
+        return []
 
-    candidates = [
+    return [
         ResumeCandidate(
             run_id=str(r[0]),
             agent_id=str(r[1] or ""),
@@ -235,7 +233,24 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
         )
         for r in rows
     ]
-    batch = resume_batch(candidates)
+
+
+async def resume_interrupted_runs(runner: Any = None) -> int:
+    """Resume runs a restart interrupted, before the reaper reaches them.
+
+    Off unless ROBOTHOR_RESUME_IN_FLIGHT is set: this changes what a restart
+    does to live work. Returns how many were started.
+
+    Ordering matters — this must run BEFORE `_cleanup_stale_runs`, which
+    marks every still-`running` row as timed out. Reaping first would destroy
+    exactly the runs this exists to save.
+    """
+    from robothor.engine.resume import resume_batch, resume_enabled
+
+    if not resume_enabled():
+        return 0
+
+    batch = resume_batch(_resume_scan())
     if not batch:
         return 0
 

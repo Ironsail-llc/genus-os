@@ -47,7 +47,7 @@ class TestTheLoopActuallyExecutes:
         import robothor.engine.resume as resume_mod
 
         monkeypatch.setattr(resume_mod, "resume_batch", lambda c: [candidate])
-        monkeypatch.setattr(daemon, "_resume_scan", lambda: [candidate], raising=False)
+        monkeypatch.setattr(daemon, "_resume_scan", lambda: [candidate])
         monkeypatch.setattr(daemon, "_charge_resume_attempt", lambda rid: True)
 
         runner = AsyncMock()
@@ -61,6 +61,23 @@ class TestTheLoopActuallyExecutes:
         kwargs = runner.execute.await_args.kwargs
         assert kwargs.get("resume_from_run_id") == candidate.run_id
         assert kwargs.get("agent_id") == candidate.agent_id
+
+    def test_the_scan_is_a_real_seam_that_returns_a_list(self, monkeypatch):
+        """`_resume_scan` must exist and swallow a dead database.
+
+        The test above patched it with `raising=False`, which patches NOTHING
+        when the attribute is absent — the scan then ran for real against
+        whatever database the test host had. The seam has to be an attribute
+        that is actually there, and it has to return [] rather than raise when
+        the DB is unreachable, because resume runs at daemon startup.
+        """
+        import robothor.db.connection as conn_mod
+
+        def _dead(*a, **kw):
+            raise OSError("no database")
+
+        monkeypatch.setattr(conn_mod, "get_connection", _dead)
+        assert daemon._resume_scan() == []
 
     @pytest.mark.asyncio
     async def test_nothing_is_counted_when_there_is_no_runner(self, monkeypatch):
