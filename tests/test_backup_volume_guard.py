@@ -105,6 +105,7 @@ class Box:
         self.device = self.dev_dir / UUID
         self.check_log = tmp_path / "check.log"
         self.check_count = tmp_path / "check.count"
+        self.mount_count = tmp_path / "mount.count"
         self.alert_log = tmp_path / "alert.log"
 
         self._install_stubs()
@@ -119,7 +120,17 @@ class Box:
     def _install_stubs(self) -> None:
         self._stub("findmnt", 'exit "${FAKE_MOUNTED_RC:-0}"')
         self._stub("umount", 'exit "${FAKE_UMOUNT_RC:-0}"')
-        self._stub("mount", 'exit "${FAKE_MOUNT_RC:-0}"')
+        # FAKE_MOUNT_RC is a LIST, one rc per invocation (last value repeats),
+        # because one heal can legitimately mount twice: the cheap remount of
+        # the mapping already there, then again after a repair.
+        self._stub(
+            "mount",
+            f'n=$(cat "{self.mount_count}" 2>/dev/null || echo 0); n=$((n + 1))\n'
+            f'printf "%s" "$n" > "{self.mount_count}"\n'
+            'read -r -a rcs <<<"${FAKE_MOUNT_RC:-0}"\n'
+            "i=$((n - 1)); (( i >= ${#rcs[@]} )) && i=$(( ${#rcs[@]} - 1 ))\n"
+            'exit "${rcs[$i]}"',
+        )
         self._stub("fsck.ext4", 'exit "${FAKE_FSCK_RC:-0}"')
         self._stub("smartctl", 'printf "%s\\n" "${FAKE_SMART_OUT:-SMART Health Status: OK}"')
         self._stub("systemctl", 'printf "%s\\n" "${FAKE_UNIT_STATE:-inactive}"')
@@ -146,7 +157,11 @@ class Box:
             '  open)   rc="${FAKE_OPEN_RC:-0}"\n'
             '          [ "$rc" = 0 ] && : > "$FAKE_MAPPER_DIR/$3"\n'
             '          exit "$rc" ;;\n'
-            '  close)  rm -f "$FAKE_MAPPER_DIR/$2"; exit "${FAKE_CLOSE_RC:-0}" ;;\n'
+            # A close that FAILS leaves the node exactly where it was — that
+            # kernel reference is the whole reason a new name is needed.
+            '  close)  rc="${FAKE_CLOSE_RC:-0}"\n'
+            '          [ "$rc" = 0 ] && rm -f "$FAKE_MAPPER_DIR/$2"\n'
+            '          exit "$rc" ;;\n'
             "esac\n"
             "exit 0",
         )
@@ -233,6 +248,7 @@ class Box:
         # FAKE_CHECK_RCS describes ONE guard run (probe, then post-heal
         # re-probe), so the invocation counter resets per run.
         self.check_count.unlink(missing_ok=True)
+        self.mount_count.unlink(missing_ok=True)
         return subprocess.run(
             ["bash", str(GUARD)],
             capture_output=True,
@@ -589,6 +605,169 @@ def test_a_running_backup_unit_blocks_the_heal(box: Box):
     assert box.ran("cryptsetup open") == []
     assert len(box.pages) == 1
     assert "activating" in box.pages[0]
+
+
+# ── every way the heal can refuse or fail ────────────────────────────────────
+#
+# One test per failure seam. A heal has seven external steps and every one of
+# them can fail; a suite that only ever drives the happy path is asserting that
+# the guard works when nothing goes wrong, which is not the case it exists for.
+
+
+def test_a_disk_smart_calls_failed_is_never_remounted(box: Box):
+    """The firmware has given up on the disk. Mounting it again to keep taking
+    backups onto it is worse than having no backup volume at all — and an fsck
+    on a dying disk can finish the job."""
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_SMART_OUT="SMART Health Status: FAILED",
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran("cryptsetup open") == [], f"opened a dying disk:\n{box.argv}"
+    assert box.ran("fsck.ext4") == [], f"fsck'd a dying disk:\n{box.argv}"
+    assert box.ran("mount") == []
+    assert box.ran("umount") == [], f"unmounted a disk it had already refused:\n{box.argv}"
+    assert len(box.pages) == 1
+    assert "SMART reports /dev/sdb as FAILED" in box.pages[0]
+
+
+def test_a_device_that_is_not_a_luks_container_is_never_touched(box: Box):
+    """``ROBOTHOR_VOLUME_GUARD_MAPPER`` and the crypttab can be wrong, and a
+    by-uuid path can be reused by a different disk. The guard refuses anything
+    it cannot identify as its own container — fsck against the wrong device is
+    unrecoverable."""
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(FAKE_CHECK_RCS="1", FAKE_ISLUKS_RC="1", FAKE_DM_DEPS="8:16", FAKE_MAJMIN="8:17")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran("cryptsetup open") == []
+    assert box.ran("fsck.ext4") == []
+    assert box.ran("mount") == []
+    assert box.ran("umount") == []
+    assert len(box.pages) == 1
+    assert "is not a LUKS container" in box.pages[0]
+
+
+def test_a_failed_open_stops_before_the_fsck(box: Box):
+    """A wrong or unreadable key, or a container the kernel will not map. The
+    mapper path would not exist; ``fsck.ext4`` against it would either do
+    nothing or find something else there."""
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_OPEN_RC="1",
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran(f"cryptsetup open {box.device} {MAPPER}-1"), f"never tried:\n{box.argv}"
+    assert box.ran("fsck.ext4") == [], f"fsck'd a mapping that was never opened:\n{box.argv}"
+    assert box.ran("mount") == []
+    assert len(box.pages) == 1
+    assert "cryptsetup open failed" in box.pages[0]
+
+
+def test_a_failed_mount_closes_the_mapping_this_run_opened(box: Box):
+    """A fresh mapper node left behind by every failed tick is a name burned,
+    and nine burned names is a reboot. The guard must not manufacture the
+    condition it exists to recover from — and it must not page 'recovered'."""
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_MOUNT_RC="1",
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran(f"mount {box.mapper_dir / (MAPPER + '-1')} {box.mount}"), box.argv
+    assert box.ran(f"cryptsetup close {MAPPER}-1"), (
+        f"left the mapping it had just opened behind:\n{box.argv}"
+    )
+    assert len(box.pages) == 1
+    page = box.pages[0]
+    assert "auto-recovered" not in page, f"paged a recovery that did not happen: {page}"
+    assert "BACKUP VOLUME DOWN" in page
+    assert f"mount {box.mapper_dir / (MAPPER + '-1')} at {box.mount} failed" in page
+
+
+def test_a_failed_umount_stops_before_anything_is_closed(box: Box):
+    """If the volume cannot be released, everything after it is being done to a
+    mount that is still live. Stop at the first step."""
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_UMOUNT_RC="1",
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="0",  # otherwise closeable: the umount is what stops it
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran("umount"), box.argv
+    assert box.ran("cryptsetup close") == [], f"closed under a live mount:\n{box.argv}"
+    assert box.ran("cryptsetup open") == []
+    assert box.ran("fsck.ext4") == []
+    assert box.ran("mount") == []
+    assert len(box.pages) == 1
+    assert f"umount -l {box.mount} failed" in box.pages[0]
+
+
+def test_a_close_that_fails_is_not_fatal_the_new_name_is_the_point(box: Box):
+    """The stale node usually CANNOT be closed — that kernel reference is the
+    entire reason the container is reopened under ``<name>-1``. A failed close
+    must therefore not abort the heal."""
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1 0",
+        FAKE_CLOSE_RC="1",
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="0",  # looks closeable; the close fails anyway
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran(f"cryptsetup close {MAPPER}"), f"never tried the close:\n{box.argv}"
+    assert box.ran(f"cryptsetup open {box.device} {MAPPER}-1"), (
+        f"a failed close aborted the heal:\n{box.argv}"
+    )
+    assert len(box.pages) == 1
+    assert f"remapped as {MAPPER}-1" in box.pages[0]
+
+
+def test_a_live_mapping_that_will_not_remount_is_repaired_under_its_own_name(box: Box):
+    """The fall-back from the cheap path. The node is the device's own and
+    free, but the plain remount fails — ext4 needs the preen first. The
+    container is still not reopened: the mapping is already correct, so it is
+    fsck'd and mounted under the ORIGINAL name rather than stacking a second
+    mapping on the same disk."""
+    box.plug_in()
+    box.stale_mapper()
+    box.no_keyfile()  # this path must not need a key
+    result = box.run(
+        FAKE_CHECK_RCS="1 0",
+        FAKE_MOUNT_RC="1 0",  # the cheap remount fails, the repaired one works
+        FAKE_DM_DEPS="8:17",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="0",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "reusing it" in result.stdout, result.stdout
+    assert box.ran("cryptsetup open") == [], f"reopened a live mapping:\n{box.argv}"
+    assert box.ran(f"fsck.ext4 -p {box.mapper_dir / MAPPER}"), f"never repaired it:\n{box.argv}"
+    assert len(box.ran(f"mount {box.mapper_dir / MAPPER} {box.mount}")) == 2, (
+        f"expected the cheap remount and then the repaired one:\n{box.argv}"
+    )
+    assert len(box.pages) == 1
+    assert "auto-recovered" in box.pages[0]
+    assert f"remapped as {MAPPER})" in box.pages[0]
 
 
 # ── back to healthy ──────────────────────────────────────────────────────────
