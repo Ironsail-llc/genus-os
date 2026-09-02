@@ -475,9 +475,22 @@ smart_gate() {
 MOUNTED_NAME=""
 identify_mounted_source() {
     MOUNTED_NAME=""
-    findmnt -rn -o TARGET --mountpoint "$MOUNT" >/dev/null 2>&1 || return 0
-    local mounted_source name
-    mounted_source="$(findmnt -rn -o SOURCE --mountpoint "$MOUNT" 2>/dev/null | head -n 1)"
+    local mounted_source name rc=0
+    # ONE question, and BOTH halves of the answer are load-bearing. findmnt
+    # exits non-zero for a mountpoint with nothing on it and for a genuine
+    # failure alike (findmnt(8): "1 on any error"), so the status alone cannot
+    # tell "nothing is mounted" from "I could not ask" — only the empty output
+    # can. Folding the second into the first walked the heal straight past the
+    # gate that establishes WHOSE filesystem is at the path, and the close and
+    # reopen below then happened under it. The volume is already down; a tick
+    # refused here costs ten minutes and nothing else.
+    mounted_source="$(findmnt -rn -o SOURCE --mountpoint "$MOUNT" 2>/dev/null)" || rc=$?
+    if ((rc > 1)) || { ((rc != 0)) && [[ -n "$mounted_source" ]]; }; then
+        HEAL_REASON="could not ask findmnt what is mounted at ${MOUNT} (exit ${rc}) — refusing to guess"
+        return 1
+    fi
+    [[ -n "$mounted_source" ]] || return 0
+    mounted_source="$(head -n 1 <<<"$mounted_source")"
     name="$(mapper_node_name "$mounted_source")"
     if [[ -z "$name" ]]; then
         HEAL_REASON="something other than the backup mapper is mounted at ${MOUNT} (${mounted_source:-unknown}) — refusing to unmount it"

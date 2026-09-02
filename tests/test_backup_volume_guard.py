@@ -119,17 +119,26 @@ class Box:
         )
 
     def _install_stubs(self) -> None:
-        # findmnt answers two different questions during one heal: "is anything
-        # mounted at the path" (-o TARGET, output discarded) and "what is it"
-        # (-o SOURCE). FAKE_MOUNT_SOURCE defaults to the guard's OWN mapper, so
-        # every other test drives the normal path.
+        # findmnt is asked ONE question: what is mounted at the path.
+        # FAKE_MOUNT_SOURCE defaults to the guard's OWN mapper, so every other
+        # test drives the normal path; it may hold several newline-separated
+        # rows, which is what stacked mounts look like.
+        #
+        # FAKE_MOUNTED_RC is findmnt's exit status, and the stub prints nothing
+        # unless it is 0 — as the real one does. That matters, because findmnt
+        # exits 1 both for "nothing is mounted there" and for a genuine error
+        # (findmnt(8) EXIT STATUS), so only the OUTPUT separates the two and a
+        # fake that printed a row while exiting non-zero would let the guard
+        # pass a test the real tool cannot.
         self._stub(
             "findmnt",
-            'case " $* " in\n'
-            '  *" SOURCE "*) printf "%s\\n" "${FAKE_MOUNT_SOURCE:-'
+            'if [ "${FAKE_MOUNTED_RC:-0}" = 0 ]; then\n'
+            '  case " $* " in\n'
+            '    *" SOURCE "*) printf "%s\\n" "${FAKE_MOUNT_SOURCE:-'
             f"$FAKE_MAPPER_DIR/{MAPPER}"
             '}" ;;\n'
-            "esac\n"
+            "  esac\n"
+            "fi\n"
             'exit "${FAKE_MOUNTED_RC:-0}"',
         )
         self._stub("umount", 'exit "${FAKE_UMOUNT_RC:-0}"')
@@ -901,6 +910,38 @@ def test_a_foreign_filesystem_at_the_mountpoint_is_never_unmounted(box: Box):
         f"something other than the backup mapper is mounted at {box.mount} "
         f"(/dev/sda1) — refusing to unmount it" in box.pages[0]
     ), box.pages[0]
+
+
+def test_a_findmnt_that_could_not_answer_does_not_read_as_nothing_mounted(box: Box):
+    """"I could not ask" is not an answer of "nothing".
+
+    findmnt exits non-zero for a mountpoint with nothing on it AND for a real
+    failure — a missing binary, a hung /proc/self/mountinfo read. Folding both
+    into "nothing is mounted there" means the heal walks past the one gate that
+    tells it whose filesystem is at the path, and then closes and reopens the
+    container underneath whatever really was. Refuse the tick instead: the
+    volume is already down, and the next one costs ten minutes.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_MOUNTED_RC="127",  # findmnt is not there at all
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="0",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert box.ran("umount") == [], f"unmounted on a guess:\n{box.argv}"
+    assert box.ran("cryptsetup close") == [], f"closed on a guess:\n{box.argv}"
+    assert box.ran("cryptsetup open") == [], f"reopened on a guess:\n{box.argv}"
+    assert box.ran("fsck.ext4") == []
+    assert box.ran("mount") == []
+
+    assert len(box.pages) == 1, f"expected exactly one page, got {box.pages}"
+    assert f"could not ask findmnt what is mounted at {box.mount}" in box.pages[0], box.pages[0]
+    assert "refusing to guess" in box.pages[0], box.pages[0]
 
 
 @pytest.mark.parametrize(
