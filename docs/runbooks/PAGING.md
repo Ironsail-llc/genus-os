@@ -46,6 +46,47 @@ repeat pages per unit for `ROBOTHOR_ALERT_COOLDOWN_SECONDS` (default 1h) and
 only stamps that cooldown after a *delivered* send. Do not restore the start
 limit; `tests/test_liveness_watchdog.py` fails if it comes back.
 
+## Two ways to call the sender
+
+```bash
+send_failure_alert.sh <unit>            # the sender composes the page
+send_failure_alert.sh <key> "<body>"    # the caller composes the page
+```
+
+**One argument** is the `OnFailure=` shape: `<unit>` is both the dedup key and
+the headline, and the page is built from it — `🔴 <unit> FAILED on <host>`, the
+consequence line for that unit, the timestamp, and the tail of that unit's
+journal.
+
+**Two arguments** and the *body is the page*. Nothing is prepended to it; the
+only thing added is a `<timestamp> on <host>` trailer. `<key>` is then a dedup
+key and nothing else — it never appears in the message. That matters because
+the composed shape actively contradicts some callers: a RECOVERY notice sent
+with one argument paged as `🔴 backup-volume-recovered FAILED` above its own ✅
+line, and a key outside the consequence map appended `(no consequence mapped —
+add one in send_failure_alert.sh)`, a note for whoever maintains this script,
+to the operator's phone.
+
+The cooldown still keys on `<key>`, so pick a stable one per condition: pages
+for the same key inside `ROBOTHOR_ALERT_COOLDOWN_SECONDS` (1h) are suppressed,
+and a key that varies per run defeats that.
+
+The form exists for the backup volume guard, whose `backup-volume-degraded` /
+`backup-volume-recovered` notices are the case that broke the composed shape:
+a ✅ recovery paged under a `🔴 ... FAILED` headline, with a maintenance note
+where the consequence line belongs.
+
+`scripts/thermal-guard.sh` and `scripts/boot-guard.sh` still use the single
+argument, passing their whole message as the key
+(`"THERMAL-CRITICAL 96C — clean reboot now"`). That works — it is also the
+shape this form replaces, since the sender then wraps that message in a
+headline, an unmapped consequence line, and the journal tail of a unit that
+does not exist. Moving them over is a `<stable key> "<message>"` change, and
+the stable key is what gives them an hour of dedup.
+
+Whatever composes the body, the fixture-path guard reads it as well as the
+key, so a body built from a path cannot page a pytest tmpdir.
+
 ## The spool: a page DNS ate is late, not lost
 
 Since 2026-08-31 the journal carries 63 `curl_rc=6` lines — `Could not resolve
@@ -108,6 +149,10 @@ engine still clears the backlog. The drain:
 | `ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS` | `86400` | age at which a page is quarantined unsent |
 | `ROBOTHOR_ALERT_JOURNAL_CMD` | `journalctl` | journal reader for the page's tail (a test seam) |
 
+Two dotfiles live alongside the pages: `.dropped` (truncation notices owed
+to the operator) and `.stuck` (one line saying why the queue is not moving —
+see below). Neither is a page and neither is drained.
+
 Anything in `poison/` is a page that was **never delivered**. Read it, then
 delete it — nothing else will:
 
@@ -127,6 +172,67 @@ refusal to the message body.
 ls -l /var/lib/robothor/alert-spool           # anything here is a page still owed
 sudo scripts/send_failure_alert.sh --drain    # deliver it now
 ```
+
+### When you will hear that the spool is stuck
+
+`--drain` exits 0 whatever happens, and it has to: a backlog is not an
+incident, and failing the liveness unit over one would fire that unit's own
+`OnFailure=` page about the outage that filled the spool. The consequence used
+to be that a revoked token, or a queue nothing had moved in a day, produced
+journal lines and nothing else — the spool promises a page is *late*, not
+lost, and a queue that cannot move breaks that promise in silence.
+
+So the queue reports on itself, in two steps:
+
+1. A drain that gives up mid-queue writes one line to
+   `/var/lib/robothor/alert-spool/.stuck` — the timestamp, the head page, and
+   the `curl_rc` / HTTP status it stopped on. It is written only when the head
+   page has burned **half** the attempt budget (24 of 48 ≈ 2h of ticks) or has
+   been queued past **half** the age cap (12h). Below that this is a DNS blip
+   and the next tick clears it. Any **delivered** page removes the marker, as
+   does a drain that finds the queue empty.
+2. `scripts/liveness_probe.sh` reads that marker on every 5-minute tick. Once
+   it has stood for 30 minutes (`ROBOTHOR_LIVENESS_STUCK_AGE_SECONDS`) it
+   counts as a probe failure on its own key, `alert-spool-stuck` — its own
+   counter, so a healthy engine cannot reset it — and after the usual
+   `ROBOTHOR_LIVENESS_FAILURE_THRESHOLD` consecutive ticks it pages:
+
+   ```
+   🔴 alert spool STUCK 47m: 2026-09-02T14:40:12+01:00 1756... undelivered
+      after 24/48 attempts (curl_rc=0 http_status=401)
+   ```
+
+   Deliberately one short line: the delivery path is the thing that is broken,
+   so the smallest page is the one most likely to get through. If even that
+   send fails, the probe exits non-zero and `robothor-liveness.service`'s own
+   `OnFailure=` is what carries it — that hook, not this page, is the real
+   floor.
+
+Worst case the operator hears about a stuck spool ~35 minutes after it goes
+stuck, and a stuck spool is by definition at least 2h (attempts) or 12h (age)
+into the outage that caused it.
+
+When that page arrives:
+
+```bash
+cat  /var/lib/robothor/alert-spool/.stuck      # what the drain stopped on
+ls -l /var/lib/robothor/alert-spool/*.attempts # how hard it has tried, per page
+ls -l /var/lib/robothor/alert-spool/poison/    # pages already given up on
+```
+
+- `http_status=401` or `403` — the bot token is wrong or revoked. Check
+  `ROBOTHOR_TELEGRAM_BOT_TOKEN` in `/run/robothor/secrets.env`, rotate it with
+  BotFather, re-encrypt, `scripts/decrypt-secrets.sh`, then
+  `sudo scripts/send_failure_alert.sh --drain`. The marker clears itself on
+  the first delivered page.
+- `curl_rc=6` — DNS. The spool is doing its job; nothing to fix but the
+  network.
+- `http_status=400` on page after page — the pages themselves are being
+  refused; they are in `poison/`, and reading one shows what Telegram would
+  not take.
+- A marker with an EMPTY spool means nothing could clear it — almost always a
+  `.stuck` owned by the other account in the 1777 dir. The drain says so in
+  the journal (`could not clear ... (not owner)`); remove it as that user.
 
 **Tests must pin `ROBOTHOR_ALERT_SPOOL_DIR`.** A cooldown stamp written by a
 test only suppresses a page; a spooled file is a page the next tick will
@@ -174,6 +280,8 @@ systemctl list-timers robothor-liveness.timer
 | `ROBOTHOR_LIVENESS_STATE_DIR` | `/run/robothor/liveness` | consecutive-failure counter (tmpfs: resets on reboot) |
 | `ROBOTHOR_LIVENESS_PROBE_CMD` | — | replaces the curl probe (tests, non-HTTP probes) |
 | `ROBOTHOR_LIVENESS_ALERT_CMD` | `send_failure_alert.sh` | replaces the sender; the unit name is appended |
+| `ROBOTHOR_ALERT_SPOOL_DIR` | `/var/lib/robothor/alert-spool` | the spool this tick drains, and where it reads `.stuck` |
+| `ROBOTHOR_LIVENESS_STUCK_AGE_SECONDS` | `1800` | how long a `.stuck` marker may stand before it is a probe failure |
 
 Set them in `/etc/robothor/robothor.env` (the unit's `EnvironmentFile=`).
 
@@ -181,6 +289,12 @@ An undelivered page is not treated as success: the probe checks the sender's
 exit status, logs `page for <unit> was NOT delivered`, fails the unit (which
 fires its own `OnFailure=`), and leaves the counter armed so the next tick
 retries.
+
+The tick answers two questions, not one: *is the engine answering* (keyed on
+`ROBOTHOR_LIVENESS_UNIT`) and *is the alert spool moving* (keyed on
+`alert-spool-stuck`). Separate counters, because sharing one would let a
+recovering engine reset the spool's count every tick. See
+[When you will hear that the spool is stuck](#when-you-will-hear-that-the-spool-is-stuck).
 
 ### Probe it — do not trust the silence
 

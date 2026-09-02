@@ -66,10 +66,10 @@ fi
 #
 # The BODY is checked, not just the key. With two arguments the body IS the
 # page and the key is only a dedup label, so a caller that composes its body
-# from a path — scripts/backup-volume-check.sh names the volume it found
-# unmounted — puts the fixture path there and nowhere else. A guard written
-# for the one-argument shape never saw it. Both are checked, so neither
-# shape can carry a tmpdir to the operator.
+# from a path — the backup volume guard names the volume it found unmounted —
+# puts the fixture path there and nowhere else. A guard written for the
+# one-argument shape never saw it. Both are checked, so neither shape can
+# carry a tmpdir to the operator.
 if [[ "$UNIT$BODY" == *"pytest-of-"* || "$UNIT$BODY" == *"/pytest-"* ]]; then
     echo "send_failure_alert: refusing to page — message names a pytest temp path: $UNIT" >&2
     exit 0
@@ -129,6 +129,19 @@ POISON_DIR="${SPOOL_DIR}/poison"
 # outage ends. Appended to, never overwritten: two drops in the same outage
 # are two lines and one total.
 DROPPED_NOTE="${SPOOL_DIR}/.dropped"
+# ── A queue nothing can move has to have a surface ───────────────────────────
+# `--drain` exits 0 whatever happens and drain_spool() returns 0 by design: a
+# backlog is not an incident, and failing the liveness unit here would fire an
+# OnFailure page about the very outage that filled the spool. The cost was
+# that a dead credential, or a day-old queue, produced nothing but journal
+# lines on a box nobody reads — the spool promises a page is LATE, not lost,
+# and a queue that cannot move breaks that promise in silence.
+#
+# So a drain that gives up mid-queue leaves ONE line here saying why, and any
+# delivered page clears it. scripts/liveness_probe.sh turns a marker that has
+# survived 30 minutes into a page on its own key — the sender may itself be
+# what is broken, so the last word is that unit's OnFailure=.
+STUCK_NOTE="${SPOOL_DIR}/.stuck"
 # ~48 ticks of the 5-minute liveness timer ≈ 4h. A page nothing has managed to
 # deliver in 4h is not going out; holding the queue open for it costs more than
 # it is worth.
@@ -475,6 +488,29 @@ quarantine_spooled() {
     return 1
 }
 
+# One line, with the time it was raised: this is read by an operator at 3am
+# and by the liveness probe, and both want the reason, not a log to grep.
+note_stuck() {
+    if ! printf '%s %s\n' "$(date -Is)" "$1" >"$STUCK_NOTE" 2>/dev/null; then
+        # The spool is 1777 sticky: another account may own the marker. Say so
+        # rather than pretending the queue is healthy.
+        echo "send_failure_alert: could not write ${STUCK_NOTE} (not owner) —" \
+             "a stuck spool will not be visible to the liveness probe" >&2
+    fi
+}
+
+# Cleared by a DELIVERY, never by an attempt — the marker exists to outlive
+# the outage, and a probe that pages about a queue which is moving again is
+# exactly the fatigue this pager keeps relearning.
+clear_stuck() {
+    [[ -e "$STUCK_NOTE" ]] || return 0
+    rm -f "$STUCK_NOTE" 2>/dev/null || true
+    if [[ -e "$STUCK_NOTE" ]]; then
+        echo "send_failure_alert: could not clear ${STUCK_NOTE} (not owner) —" \
+             "the stuck-spool page will repeat" >&2
+    fi
+}
+
 # How many times this exact file has already failed to go out. The counter is
 # a sidecar rather than a rewrite of the page, so the bytes the operator will
 # eventually read are never touched by bookkeeping.
@@ -496,7 +532,13 @@ drain_spool() {
     shopt -s nullglob
     files=("${SPOOL_DIR}"/*.msg)
     shopt -u nullglob
-    (( ${#files[@]} )) || return 0
+    if (( ${#files[@]} == 0 )); then
+        # Nothing left to deliver: the last page may have left the queue by
+        # being quarantined rather than delivered, and a marker with nothing
+        # behind it pages about nothing.
+        clear_stuck
+        return 0
+    fi
 
     # ── Drain only what this account can actually delete ─────────────────────
     # The spool is 1777 sticky, so root's units and the operator's cron jobs
@@ -588,7 +630,7 @@ drain_spool() {
     # delivery path for good, and counting it as spooled overstates the
     # backlog by exactly the pages nothing will ever retry.
     local f base epoch queued text delivered=0 now attempts code
-    local left=${#files[@]}
+    local left=${#files[@]} head_age=0
     now="$(date +%s)"
     for f in "${files[@]}"; do
         base="$(basename "$f")"
@@ -657,6 +699,7 @@ ${text}"; then
             fi
             rm -f "${f}.attempts" 2>/dev/null || true
             delivered=$(( delivered + 1 ))
+            clear_stuck
             if [[ -n "$drop_notice" ]]; then
                 # Told once. Clearing only AFTER a delivered page is the whole
                 # point: a counter cleared on the attempt would lose the notice
@@ -695,6 +738,19 @@ ${text}"; then
         # against a dead endpoint delivers nothing and loses the ordering.
         attempts=$(( attempts + 1 ))
         printf '%s\n' "$attempts" >"${f}.attempts" 2>/dev/null || true
+        # ── Is this a blip, or is the queue stuck? ───────────────────────────
+        # Half the budget spent on the head of the queue, or a head page that
+        # has been waiting half the age cap, is no longer an outage anyone is
+        # waiting out: it is a credential to rotate or a page to read out of
+        # poison/. Below that, this is a DNS blip and the next tick handles
+        # it — marking it would train the operator to ignore the marker.
+        head_age=0
+        [[ "$epoch" =~ ^[0-9]+$ ]] && head_age=$(( now - epoch ))
+        if (( attempts >= (SPOOL_MAX_ATTEMPTS + 1) / 2 )); then
+            note_stuck "${base} undelivered after ${attempts}/${SPOOL_MAX_ATTEMPTS} attempts (curl_rc=${LAST_CURL_RC} http_status=${LAST_HTTP_CODE:-none})"
+        elif (( head_age > SPOOL_MAX_AGE / 2 )); then
+            note_stuck "${base} queued $(( head_age / 3600 ))h ago and still undelivered (curl_rc=${LAST_CURL_RC} http_status=${LAST_HTTP_CODE:-none})"
+        fi
         echo "send_failure_alert: spool drain stopped at ${base}" \
              "(curl_rc=${LAST_CURL_RC} http_status=${LAST_HTTP_CODE:-none};" \
              "attempt ${attempts}/${SPOOL_MAX_ATTEMPTS});" \

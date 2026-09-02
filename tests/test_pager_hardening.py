@@ -25,6 +25,7 @@ Fixes under test here:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -1184,6 +1185,7 @@ class TestARejectedPageDoesNotWedgeTheSpool:
             f"longer spooled, and nothing will retry it:\n{out}"
         )
 
+
 def test_the_drain_skips_spool_files_the_current_user_does_not_own():
     """Only root drains another account's pages.
 
@@ -1529,10 +1531,10 @@ def test_the_entry_guard_refuses_a_pytest_path_in_the_body(tmp_path: Path):
     ever looked at the unit name.
 
     So the caller that passes a clean dedup key and a body composed from a
-    path — scripts/backup-volume-check.sh, which reports the volume it found
-    unmounted — walked straight past a guard written for the one-argument
-    shape. Under pytest that body is a tmpdir, which is exactly the text the
-    guard exists to keep off the operator's phone.
+    path — the backup volume guard, reporting the volume it found unmounted —
+    walks straight past a guard written for the one-argument shape. Under
+    pytest that body is a tmpdir, which is exactly the text the guard exists
+    to keep off the operator's phone.
     """
     log = install_fake_curl(tmp_path)
     result = subprocess.run(
@@ -1570,3 +1572,94 @@ def test_a_real_body_still_pages(tmp_path: Path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert curl_calls(log) == 1, "a genuine two-argument page was suppressed"
+
+
+# ── a stuck spool has to have an operator-visible surface ────────────────────
+
+
+def stuck_note(tmp_path: Path) -> Path:
+    return spool_dir(tmp_path) / ".stuck"
+
+
+class TestAStuckSpoolMarksItself:
+    """`--drain` exits 0 whatever happens, and drain_spool() returns 0 by
+    design — a drain that cannot run is a backlog, not an incident, and
+    failing the liveness unit here would fire an OnFailure page about the very
+    outage that filled the spool.
+
+    The cost is that a dead credential or a day-old queue produces nothing but
+    journal lines on a box nobody is reading. The spool's promise is that a
+    page is LATE, not lost; a queue nothing can move breaks that promise
+    silently, which is the failure mode this whole file exists to refuse.
+
+    So the drain leaves a marker when it gives up mid-queue, and the liveness
+    probe (tests/test_liveness_watchdog.py) turns a marker that has survived
+    30 minutes into a page of its own.
+    """
+
+    def test_one_failed_drain_is_not_stuck(self, tmp_path: Path):
+        """A blip is not a stuck queue — the same discipline as the probe's
+        consecutive-failure counting."""
+        install_status_curl(tmp_path, ["401"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-OLDEST")
+        env = base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_MAX_ATTEMPTS="4", **FAKE_TOKEN_ENV)
+        run_drain(tmp_path, env)
+        assert not stuck_note(tmp_path).exists(), (
+            "one failed drain raised the alarm — an alarm that fires on every "
+            "DNS blip is one the operator learns to ignore"
+        )
+
+    def test_half_the_attempt_budget_marks_the_spool_stuck(self, tmp_path: Path):
+        """Two 401s against a 4-attempt budget: the token is wrong, and no
+        amount of retrying will fix it."""
+        install_status_curl(tmp_path, ["401"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-OLDEST")
+        env = base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_MAX_ATTEMPTS="4", **FAKE_TOKEN_ENV)
+        run_drain(tmp_path, env)
+        run_drain(tmp_path, env)
+
+        note = stuck_note(tmp_path)
+        assert note.exists(), (
+            "half the retry budget spent on the head of the queue and nothing "
+            "says so anywhere an operator will look"
+        )
+        text = note.read_text()
+        assert text.strip().count("\n") == 0, f"the marker must be one line: {text!r}"
+        assert "401" in text, f"the marker must name why the queue is not moving: {text!r}"
+        assert re.search(r"\d{4}-\d{2}-\d{2}T", text), (
+            f"the marker must say when it was raised: {text!r}"
+        )
+
+    def test_an_old_head_page_marks_the_spool_stuck_before_the_budget(self, tmp_path: Path):
+        """The budget is ~4h of ticks; the age cap is a day. A queue whose head
+        has been waiting half a day is stuck whatever the attempt count says —
+        a drain that only runs occasionally never spends its budget."""
+        install_status_curl(tmp_path, ["500"])
+        write_spooled(tmp_path, int(time.time()) - 50_000, "PAGE-OLD")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert stuck_note(tmp_path).exists(), (
+            "the head page has been queued past half the age cap and the spool "
+            "still reports itself healthy"
+        )
+
+    def test_a_delivered_page_clears_the_marker(self, tmp_path: Path):
+        """Cleared by a DELIVERY, not by an attempt: the marker exists to
+        outlive the outage's log lines, and a probe that pages about a queue
+        which is moving again is the fatigue this pager keeps relearning."""
+        install_status_curl(tmp_path, ["200"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-OLDEST")
+        stuck_note(tmp_path).write_text("2026-09-02T14:40:00+00:00 head page stuck\n")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert not stuck_note(tmp_path).exists(), (
+            "the spool drained and the stuck marker survived it — the liveness "
+            "probe will page about a queue that is empty"
+        )
+
+    def test_an_empty_spool_clears_the_marker(self, tmp_path: Path):
+        """The last page can also leave the queue by being quarantined, and a
+        marker with nothing behind it pages about nothing."""
+        install_status_curl(tmp_path, ["200"])
+        spool_dir(tmp_path).mkdir(parents=True, exist_ok=True)
+        stuck_note(tmp_path).write_text("2026-09-02T14:40:00+00:00 head page stuck\n")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert not stuck_note(tmp_path).exists()

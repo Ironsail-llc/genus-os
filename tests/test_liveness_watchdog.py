@@ -634,3 +634,152 @@ class TestTheTickDrainsTheAlertSpool:
         result = run_probe(env)
         assert result.returncode == 0, result.stdout + result.stderr
         assert "--drain" in alert_log.read_text()
+
+
+# ── a stuck spool is a failure with no other way out ─────────────────────────
+
+
+def write_stuck_marker(tmp_path: Path, *, age_seconds: int, reason: str) -> Path:
+    """The marker scripts/send_failure_alert.sh leaves when a drain gives up
+    mid-queue. Aged by mtime, which is what the probe reads."""
+    spool = tmp_path / "alert-spool"
+    spool.mkdir(parents=True, exist_ok=True)
+    note = spool / ".stuck"
+    note.write_text(f"2026-09-02T14:40:00+00:00 {reason}\n")
+    when = time.time() - age_seconds
+    os.utime(note, (when, when))
+    return note
+
+
+class TestAStuckSpoolPagesOnItsOwnKey:
+    """The drain cannot report itself.
+
+    `--drain` exits 0 whatever happens — deliberately: a backlog is not an
+    incident, and failing the tick would fire an OnFailure= page about the
+    outage that filled the spool. So a dead credential produced journal lines
+    and nothing else, and the pages behind it were neither delivered nor
+    missed by anyone.
+
+    The sender now marks a queue it cannot move, and this probe is what turns
+    that marker into a page: same counting discipline, same sender, and the
+    same OnFailure= fallback underneath — which is the part that matters,
+    because the sender may itself be what is broken.
+    """
+
+    def test_a_stale_marker_pages_on_its_own_key(self, tmp_path: Path):
+        alert_log = install_recording_alert(tmp_path)
+        install_fake_curl(tmp_path)
+        write_stuck_marker(
+            tmp_path, age_seconds=40 * 60, reason="401 on every attempt"
+        )
+        env = base_env(
+            tmp_path,
+            ROBOTHOR_LIVENESS_FAILURE_THRESHOLD="1",
+            ROBOTHOR_LIVENESS_ALERT_CMD=str(tmp_path / "bin" / "fake-alert.sh"),
+            **ALIVE,
+        )
+        result = run_probe(env)
+        args = alert_log.read_text()
+        assert "alert-spool-stuck" in args, (
+            "a spool stuck for 40 minutes paged nobody — the drain's own exit "
+            f"status cannot report it:\n{args}\n{result.stdout}{result.stderr}"
+        )
+        assert result.returncode == 0, (
+            "the engine is healthy and the page went out; the tick has nothing "
+            "to fail about"
+        )
+
+    def test_the_stuck_page_is_short_and_says_why(self, tmp_path: Path):
+        """The delivery path is the thing that is broken. A page composed of a
+        journal tail and a consequence map is the least likely to fit through
+        what is left of it."""
+        alert_log = install_recording_alert(tmp_path)
+        install_fake_curl(tmp_path)
+        write_stuck_marker(
+            tmp_path, age_seconds=40 * 60, reason="401 on every attempt"
+        )
+        run_probe(
+            base_env(
+                tmp_path,
+                ROBOTHOR_LIVENESS_FAILURE_THRESHOLD="1",
+                ROBOTHOR_LIVENESS_ALERT_CMD=str(tmp_path / "bin" / "fake-alert.sh"),
+                **ALIVE,
+            )
+        )
+        # argv: --drain on the first call, then <key> <body> on the second.
+        args = [a for a in alert_log.read_text().splitlines() if a != "--drain"]
+        assert args[0] == "alert-spool-stuck", args
+        body = args[1]
+        assert "401" in body, f"the page must carry the reason the drain recorded: {body!r}"
+        assert len(body) <= 200, f"the stuck page is not short: {body!r}"
+        assert "\n" not in body
+
+    def test_a_fresh_marker_does_not_page(self, tmp_path: Path):
+        """A spool that went stuck two minutes ago is a spool the next tick may
+        well drain. Paging on it is how a pager gets muted."""
+        alert_log = install_recording_alert(tmp_path)
+        install_fake_curl(tmp_path)
+        write_stuck_marker(tmp_path, age_seconds=120, reason="500 from Telegram")
+        result = run_probe(
+            base_env(
+                tmp_path,
+                ROBOTHOR_LIVENESS_FAILURE_THRESHOLD="1",
+                ROBOTHOR_LIVENESS_ALERT_CMD=str(tmp_path / "bin" / "fake-alert.sh"),
+                **ALIVE,
+            )
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "alert-spool-stuck" not in alert_log.read_text()
+
+    def test_no_marker_pages_nobody(self, tmp_path: Path):
+        alert_log = install_recording_alert(tmp_path)
+        install_fake_curl(tmp_path)
+        spool_a_page(tmp_path)
+        result = run_probe(
+            base_env(
+                tmp_path,
+                ROBOTHOR_LIVENESS_FAILURE_THRESHOLD="1",
+                ROBOTHOR_LIVENESS_ALERT_CMD=str(tmp_path / "bin" / "fake-alert.sh"),
+                **ALIVE,
+            )
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "alert-spool-stuck" not in alert_log.read_text()
+
+    def test_a_stuck_page_the_sender_cannot_deliver_fails_the_unit(self, tmp_path: Path):
+        """The last fallback. If the sender cannot deliver the news that the
+        sender is broken, the unit has to go `failed` so systemd's own
+        OnFailure= hook is what carries it."""
+        install_recording_alert(tmp_path, exit_code=1)
+        install_fake_curl(tmp_path)
+        write_stuck_marker(tmp_path, age_seconds=40 * 60, reason="401 on every attempt")
+        result = run_probe(
+            base_env(
+                tmp_path,
+                ROBOTHOR_LIVENESS_FAILURE_THRESHOLD="1",
+                ROBOTHOR_LIVENESS_ALERT_CMD=str(tmp_path / "bin" / "fake-alert.sh"),
+                **ALIVE,
+            )
+        )
+        assert result.returncode != 0, (
+            "the stuck-spool page was not delivered and the tick exited 0 — "
+            "nothing is left to notice"
+        )
+
+    def test_the_stuck_key_counts_separately_from_the_engine(self, tmp_path: Path):
+        """Sharing the engine's counter would let one mute the other: a
+        recovering engine would reset the spool's count on every tick, and the
+        spool's failures would push the engine's toward a page."""
+        install_recording_alert(tmp_path)
+        install_fake_curl(tmp_path)
+        write_stuck_marker(tmp_path, age_seconds=40 * 60, reason="401 on every attempt")
+        env = base_env(
+            tmp_path,
+            ROBOTHOR_LIVENESS_ALERT_CMD=str(tmp_path / "bin" / "fake-alert.sh"),
+            **ALIVE,
+        )
+        run_probe(env)
+        counters = sorted(p.name for p in (tmp_path / "liveness").iterdir())
+        assert len(counters) == 2, (
+            f"the stuck spool and the watched unit share a counter: {counters}"
+        )
