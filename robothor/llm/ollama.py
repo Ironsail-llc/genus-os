@@ -59,6 +59,7 @@ def _chat_retry_delay() -> float:
     spread = CHAT_RETRY_DELAY_SECONDS * CHAT_RETRY_JITTER_FRACTION
     return max(0.0, CHAT_RETRY_DELAY_SECONDS + random.uniform(-spread, spread))
 
+
 # Embedding retry budget — sized to survive a multi-minute 5xx/timeout storm
 # (e.g. the model being evicted and reloaded) without burning the caller's
 # whole request budget. 5 attempts of base=2s * factor=3 (capped at 45s,

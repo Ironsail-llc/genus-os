@@ -41,9 +41,7 @@ def mode(monkeypatch):
 @pytest.fixture
 def temp(monkeypatch):
     def set_c(c):
-        monkeypatch.setattr(
-            "robothor.engine.thermal_pressure.read_max_temperature_c", lambda: c
-        )
+        monkeypatch.setattr("robothor.engine.thermal_pressure.read_max_temperature_c", lambda: c)
 
     set_c(50.0)
     return set_c

@@ -190,6 +190,7 @@ def _local_capacity_delay() -> float:
     """
     return random.uniform(LOCAL_CAPACITY_RETRY_JITTER * 0.5, LOCAL_CAPACITY_RETRY_JITTER * 1.5)
 
+
 #: Statuses a local inference server uses for "queue full, come back".
 _CAPACITY_STATUSES = frozenset({503, 529})
 
