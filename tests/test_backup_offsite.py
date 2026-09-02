@@ -478,3 +478,51 @@ class TestEveryBackupJobRecordsItsMarker:
             f"{script} never records {marker}; the freshness guard cannot tell "
             "a job that stopped running from one that is merely quiet"
         )
+
+
+class TestAMissingHelperFailsBeforeTheWork:
+    """backup-offsite.sh runs `set -uo pipefail` WITHOUT -e.
+
+    That is deliberate (the retention and verification steps decide their own
+    failure handling), but it means a `source` of a missing
+    scripts/backup-state.sh does not stop the script — it carries on, does the
+    whole replication, and then dies on the last line with "backup_state_record:
+    command not found" and exit 127. A successful backup reported as a failed
+    one is a page for nothing, which is the exact behaviour this branch exists
+    to end.
+    """
+
+    def test_it_refuses_to_start_without_the_marker_helper(self, tmp_path: Path):
+        lone = tmp_path / "scripts"
+        lone.mkdir()
+        shutil.copy2(SCRIPT, lone / SCRIPT.name)  # deliberately no backup-state.sh
+
+        src = _make_source(tmp_path)
+        dest = tmp_path / "remote"
+        result = subprocess.run(
+            ["bash", str(lone / SCRIPT.name)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env={
+                "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "HOME": str(tmp_path),
+                "ROBOTHOR_OFFSITE_REMOTE": str(dest),
+                "ROBOTHOR_OFFSITE_SOURCE": str(src),
+                "ROBOTHOR_OFFSITE_LOG": str(tmp_path / "offsite.log"),
+                "ROBOTHOR_ALERT_SUPPRESS": "1",
+                "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+                "ROBOTHOR_BACKUP_STATE_DIR": str(_state_dir(tmp_path)),
+            },
+        )
+
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert not dest.exists(), (
+            "the script replicated everything and only then noticed it could "
+            "not load backup-state.sh — an hour of upload followed by a page "
+            f"for a backup that worked\n{result.stdout}{result.stderr}"
+        )
+        assert "backup-state.sh" in result.stdout + result.stderr, (
+            "the page must name the missing file, not read as "
+            f"'command not found'\n{result.stdout}{result.stderr}"
+        )

@@ -41,10 +41,6 @@ LOG="${ROBOTHOR_OFFSITE_LOG:-$_default_log}"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
 
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-# Last-good markers: a freshness guard needs to know when this last WORKED,
-# not only whether the most recent run failed. See scripts/backup-state.sh.
-# shellcheck source=scripts/backup-state.sh
-source "$SCRIPT_DIR/backup-state.sh"
 
 fail() {
     log "FAILED: $*"
@@ -54,6 +50,17 @@ fail() {
     fi
     exit 1
 }
+
+# Last-good markers: a freshness guard needs to know when this last WORKED,
+# not only whether the most recent run failed. See scripts/backup-state.sh.
+#
+# Loaded HERE, before any work, and fatally. This script runs `set -uo pipefail`
+# without -e, so a failed `source` does not stop it: it would replicate
+# everything, then die on the final backup_state_record with "command not found"
+# and exit 127 — an hour of upload followed by a page for a backup that worked.
+# shellcheck source=scripts/backup-state.sh
+source "$SCRIPT_DIR/backup-state.sh" \
+    || fail "cannot load $SCRIPT_DIR/backup-state.sh — the last-good marker helper is missing from this install"
 
 command -v rclone >/dev/null 2>&1 || fail "rclone is not installed"
 [[ -n "$REMOTE" ]] || fail "ROBOTHOR_OFFSITE_REMOTE is not set — no offsite destination configured"
