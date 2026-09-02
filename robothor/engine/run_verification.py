@@ -575,8 +575,13 @@ _FIRST_PERSON_RE = re.compile(r"\b(?:i|we|i['’]ve|i['’]m|we['’]ve)\b", re.
 #: PROPOSING, not a log of work it did. The governing offer ("Would you like
 #: me to...") is often in a different sentence, so clause scoping alone cannot
 #: reach it — the imperative mood is the local signal.
+#: One `\s*` per side of the marker, and the marker's own trailing space kept
+#: INSIDE the optional group. Written as `^\s*(?:...)?\s*` it had two
+#: quantifiers competing for the same leading whitespace, which is N+1 ways to
+#: split a run of N spaces before the alternation fails — 20,000 spaces took
+#: over 30 seconds. The `\d+` is bounded too: a list marker is not 40 digits.
 _IMPERATIVE_STEP_RE = re.compile(
-    r"^\s*(?:[-*•]|\d+[.)])?\s*"
+    r"^\s*(?:(?:[-*•]|\d{1,3}[.)])\s*)?"
     r"(?:confirm|verify|check|ensure|set|update|create|send|add|mark|log|file|"
     r"record|review|look\s+up|fetch|open|close|assign)\b",
     re.IGNORECASE,

@@ -41,3 +41,45 @@ class TestTheAdverbIsStillDropped:
     def test_no_trailing_word_at_all_is_handled(self):
         assert not _subject_is_someone_else("")
         assert not _subject_is_someone_else("   ")
+
+
+class TestTheImperativeStepPatternIsLinear:
+    """`^\\s*(?:[-*•]|\\d+[.)])?\\s*` splits a leading whitespace run between two
+    quantifiers, so a line of N spaces that fails to match costs O(N**2). At
+    20,000 spaces the original pattern took ~3 seconds; the rewrite moves the
+    inner `\\s*` inside the optional group, leaving exactly one way to consume
+    the leading run.
+    """
+
+    def test_a_long_whitespace_run_does_not_blow_up(self):
+        import time
+
+        from robothor.engine.run_verification import _IMPERATIVE_STEP_RE
+
+        hostile = " " * 20_000 + "!"
+        started = time.perf_counter()
+        assert _IMPERATIVE_STEP_RE.match(hostile) is None
+        assert time.perf_counter() - started < 0.2, (
+            "the imperative-step pattern backtracks polynomially on leading whitespace"
+        )
+
+    def test_the_shapes_it_exists_to_match_still_match(self):
+        from robothor.engine.run_verification import _IMPERATIVE_STEP_RE
+
+        for line in (
+            "Confirm the record is updated",
+            "  confirm the record",
+            "- Confirm the record",
+            "* verify the row",
+            "• check the flag",
+            "1. Set the flag to true",
+            "12) update the record",
+            "  3.  Look up the contact",
+        ):
+            assert _IMPERATIVE_STEP_RE.match(line), line
+
+    def test_a_report_of_finished_work_still_does_not_match(self):
+        from robothor.engine.run_verification import _IMPERATIVE_STEP_RE
+
+        for line in ("I updated the record", "The record was updated", "Updates were sent"):
+            assert _IMPERATIVE_STEP_RE.match(line) is None, line
