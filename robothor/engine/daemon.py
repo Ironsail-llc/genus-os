@@ -1189,8 +1189,8 @@ async def main() -> int:
         set_transport(None)
         if live is not None:
             await live.close()
-    except Exception:  # noqa: BLE001 - shutdown must not raise
-        pass
+    except Exception as e:  # noqa: BLE001 - shutdown must not raise
+        logger.debug("Error closing live-steering channel during shutdown: %s", e)
 
     # Shutdown announcement (best-effort)
     try:
