@@ -23,6 +23,23 @@
 # measurements, and never above 2000 MHz without them.
 set -uo pipefail
 
+# ── PATH: fixed, and NOT inherited ───────────────────────────────────────────
+# The unit that starts this loads EnvironmentFile=, and the instance file there
+# carries the OPERATOR's PATH: user-writable directories first (~/.local/bin,
+# ~/.npm-global/bin) and no /usr/sbin or /sbin at all. Both halves are bugs for
+# something running as root — it must not execute a user-writable binary, and
+# dmsetup, cryptsetup, fsck.ext4, smartctl and runuser all live in /usr/sbin,
+# where "not found" reaches a script that reads output as an empty ANSWER
+# rather than as an error (2026-09-02, scripts/backup-volume-guard.sh).
+#
+# So the PATH is SET, not extended, and it is the same line in every root
+# script. ROBOTHOR_EXTRA_PATH is a TEST-ONLY leading directory, where the suites
+# put their stub binaries — it is never set in a unit or in
+# /etc/robothor/robothor.env. Anything from the workspace venv is called by
+# absolute path (SCRIPT_DIR), never found on PATH.
+# See infra/systemd/README.md.
+export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 CAP_MHZ=${ROBOTHOR_GPU_CLOCK_CAP_MHZ:-1500}
 MIN_MHZ=${ROBOTHOR_GPU_CLOCK_MIN_MHZ:-300}
 
