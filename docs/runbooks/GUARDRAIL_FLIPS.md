@@ -5,8 +5,20 @@ The engine's guardrail/feature-flag posture lives in a systemd drop-in:
 - **Live**: `/etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf`
 - **Mirror (source of truth for review/audit)**: `infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf`
 
-`scripts/check_dropin_drift.sh` compares the two (exit 0 in sync, 1 drift, 2 missing).
-The daily guardrail-watch report runs it, so unversioned live edits surface within 24h.
+`scripts/check_dropin_drift.sh` compares the two (exit 0 in sync, 1 drift or
+`STALE` backup copies or a `SHADOWED` variable, 2 missing/unresolvable).
+The daily guardrail-watch report runs it, so unversioned live edits surface
+within 24h.
+
+> **Drift is REPORTED, not PAGED.** `guardrail_watch.check_dropin_drift()`
+> prints each comparison's output and returns nothing —
+> `scripts/guardrail_watch.py`'s exit code is built from `check_flag_truth`,
+> `check_instance_manifests` and `check_instance_doctor` only. So a drifted
+> drop-in shows up in the daily report and nowhere else: no non-zero rc, no
+> `OnFailure=`, no Telegram. The same is true of
+> `check_host_script_drift()`. **Someone has to read the report** — or the
+> drift sits in `/etc` indefinitely with every control still green. (The flag
+> *audit* is different: see below.)
 
 ## Flip procedure (observe → enforce, or any mode/flag change)
 
@@ -102,10 +114,22 @@ Note the wider `SHADOW-LAYER:envfile` rule: `check_dropin_drift.sh` reports
 **only** in `robothor.env` passes it silently — nothing in git says the control
 is on, and a rebuilt box would come up without it.
 
-`guardrail_watch` runs this daily (`check_flag_truth`) and exits non-zero on
-`MISMATCH`/`SHADOW-LAYER`, so the unit's `OnFailure=` pager fires. The fix is
-always the same: keep each flag in exactly one place — prefer the versioned
-drop-in — then update `infra/flags.yaml` to match.
+`guardrail_watch` runs this daily (`check_flag_truth`) and **does** exit
+non-zero on `MISMATCH`/`SHADOW-LAYER`, so the unit's `OnFailure=` pager fires.
+This is the one drift-shaped finding that reaches a phone, and it is worth
+being precise about why: `check_flag_truth`'s result is carried into
+`main()`'s return value, whereas `check_dropin_drift()` and
+`check_host_script_drift()` return `None` and only print. A `SHADOWED` verdict
+from `check_dropin_drift.sh` is therefore report-only; the same collision seen
+by `flag_audit.py` as `SHADOW-LAYER:envfile` pages.
+
+A non-zero rc from `flag_audit.py` that carries **no table on stdout** is
+treated as "the audit could not run" rather than as drift — a missing
+`infra/flags.yaml` or a drifted evidence schema used to page as though a
+guardrail had moved, which sends the operator to the wrong place.
+
+The fix is always the same: keep each flag in exactly one place — prefer the
+versioned drop-in — then update `infra/flags.yaml` to match.
 
 
 ## Rollback (< 2 minutes)
