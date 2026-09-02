@@ -5,11 +5,15 @@
 
 set -euo pipefail
 
-SSD_MOUNT="/mnt/robothor-backup"
+# The destination and the log are overridable so this script can be driven
+# under test. The defaults are the production values and are unchanged: without
+# a seam the only way to test that the volume probe actually gates the backup is
+# to run the real backup at the real encrypted volume.
+SSD_MOUNT="${ROBOTHOR_BACKUP_MOUNT:-/mnt/robothor-backup}"
 BACKUP_ROOT="$SSD_MOUNT/robothor"
 DATE=$(date +%Y%m%d)
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-LOG="$HOME/robothor/scripts/backup.log"
+LOG="${ROBOTHOR_BACKUP_LOG:-$HOME/robothor/scripts/backup.log}"
 MANIFEST="$BACKUP_ROOT/backup-manifest.txt"
 MIN_FREE_GB=10
 

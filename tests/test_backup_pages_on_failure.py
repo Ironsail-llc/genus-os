@@ -35,6 +35,17 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UNIT_DIR = REPO_ROOT / "infra" / "systemd"
 
+
+def _code_lines(body: str) -> list[str]:
+    """Shell source minus comments.
+
+    Grepping a script for a call it also DOCUMENTS proves nothing: the
+    assertion below was satisfied by backup-ssd.sh's comment about
+    backup-volume-check.sh, so deleting the actual call would have left it
+    green.
+    """
+    return [line for line in body.splitlines() if not line.lstrip().startswith("#")]
+
 SERVICE = UNIT_DIR / "robothor-backup-local.service"
 TIMER = UNIT_DIR / "robothor-backup-local.timer"
 
@@ -86,21 +97,21 @@ class TestTheScriptStillGuardsTheMount:
         scripts/backup-volume-check.sh, which does a real readdir and a real
         write.
         """
-        body = (REPO_ROOT / "scripts" / "backup-ssd.sh").read_text()
-        assert "backup-volume-check.sh" in body, (
+        code = _code_lines((REPO_ROOT / "scripts" / "backup-ssd.sh").read_text())
+        assert any("backup-volume-check.sh" in line for line in code), (
             "`mountpoint -q` passes on a wedged emergency_ro volume — the "
-            "backup then runs, writes nothing, and fails"
+            "backup then runs, writes nothing, and fails. (Comment lines do "
+            "not count: this assertion was satisfied by the comment that "
+            "MENTIONS the probe, so deleting the call would not have failed it)"
         )
-        assert "exit 1" in body
+        assert any("exit 1" in line for line in code)
 
     def test_basebackup_guards_the_volume_the_same_way(self) -> None:
-        body = (REPO_ROOT / "scripts" / "pg-basebackup.sh").read_text()
-        assert "backup-volume-check.sh" in body
-        code = [
-            line
-            for line in body.splitlines()
-            if not line.lstrip().startswith("#")
-        ]
+        code = _code_lines((REPO_ROOT / "scripts" / "pg-basebackup.sh").read_text())
+        assert any("backup-volume-check.sh" in line for line in code), (
+            "the only mention of the probe was in a comment — the call could "
+            "be deleted without failing this test"
+        )
         assert not [line for line in code if "mountpoint -q" in line], (
             "a stat()-only guard next to the real one is a guard that will be "
             "trusted when the real one is removed"
@@ -572,3 +583,120 @@ class TestWalOffsiteRefusesToGuessWhenTheProbeIsBroken:
             + result.stderr
         )
         assert "skipping basebackup replication" in result.stdout, result.stdout
+
+
+class TestTheVolumeProbeActuallyGatesTheLocalBackup:
+    """Grepping backup-ssd.sh for the probe's name proves only that the name
+    appears in it.
+
+    So this drives the script. A fake probe on the ``ROBOTHOR_VOLUME_CHECK``
+    seam answers 1 (the volume is wedged) or 0 (it is fine), and the assertions
+    are about what lands on the destination — nothing at all in the first case,
+    a real dump in the second.
+
+    Everything the backup shells out to is stubbed, and the destination is a
+    tmp_path. That last part is load-bearing: this box has the real encrypted
+    volume mounted at /mnt/robothor-backup, writable by the user running the
+    suite, and backup-ssd.sh would happily rsync into it.
+    """
+
+    SCRIPT = REPO_ROOT / "scripts" / "backup-ssd.sh"
+
+    @staticmethod
+    def _stub(path: Path, body: str) -> None:
+        path.write_text(f"#!/usr/bin/env bash\n{body}\n")
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+    def _run(self, tmp_path: Path, probe_exit: int):
+        # A test that runs the real backup against the real mount would write
+        # into the live encrypted volume. If the seam is ever removed, fail
+        # here rather than finding out afterwards.
+        code = "\n".join(_code_lines(self.SCRIPT.read_text()))
+        assert "ROBOTHOR_BACKUP_MOUNT" in code, (
+            "backup-ssd.sh has no destination seam, so this test cannot run "
+            "without pointing the real backup at the real /mnt/robothor-backup"
+        )
+
+        mount = tmp_path / "mnt"
+        mount.mkdir()
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".bashrc").write_text("# fixture\n")
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        # rsync creates its destination, which the manifest's `du` then reads.
+        self._stub(bin_dir / "rsync", 'mkdir -p "${@: -1}"')
+        # The script sudo's for /etc and the docker socket; neither is this
+        # test's subject, and neither may touch the box running the suite.
+        self._stub(bin_dir / "sudo", "exit 0")
+        self._stub(bin_dir / "docker", "exit 1")
+        self._stub(bin_dir / "pg_dump", 'echo "-- fixture dump"')
+        self._stub(bin_dir / "crontab", 'echo "# fixture crontab"')
+        self._stub(bin_dir / "ollama", 'echo "fixture-model"')
+        # Keep the free-space guard hermetic: 95GB, in df's KB.
+        self._stub(bin_dir / "df", 'echo "avail"; echo "99999999"')
+
+        probe_log = tmp_path / "probe-args.txt"
+        probe = tmp_path / "fake-volume-check.sh"
+        self._stub(
+            probe, f'printf \'%s\\n\' "$@" >> "{probe_log}"\nexit {probe_exit}'
+        )
+
+        result = subprocess.run(
+            ["bash", str(self.SCRIPT)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env={
+                "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                "HOME": str(home),
+                "ROBOTHOR_BACKUP_MOUNT": str(mount),
+                "ROBOTHOR_BACKUP_LOG": str(tmp_path / "backup.log"),
+                "ROBOTHOR_VOLUME_CHECK": str(probe),
+                "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
+            },
+        )
+        return result, mount, probe_log
+
+    def test_a_wedged_volume_stops_the_backup_before_it_writes_anything(
+        self, tmp_path: Path
+    ) -> None:
+        result, mount, _ = self._run(tmp_path, probe_exit=1)
+
+        assert result.returncode != 0, (
+            "the probe said the volume was unusable and the backup ran anyway\n"
+            + result.stdout
+            + result.stderr
+        )
+        assert list(mount.iterdir()) == [], (
+            "the backup wrote to a volume its own probe had just rejected: "
+            f"{[p.name for p in mount.iterdir()]}"
+        )
+        assert not (tmp_path / "state" / "last-local-dump").exists(), (
+            "a backup that never ran recorded itself as successful"
+        )
+
+    def test_the_probe_is_asked_for_write_access_to_the_mount(
+        self, tmp_path: Path
+    ) -> None:
+        _, mount, probe_log = self._run(tmp_path, probe_exit=1)
+        args = probe_log.read_text().split()
+        assert "--rw" in args, (
+            "a read-only probe passes on an emergency_ro volume — this job "
+            f"WRITES\n{args}"
+        )
+        assert str(mount) in args, args
+
+    def test_a_healthy_volume_lets_the_backup_through(self, tmp_path: Path) -> None:
+        result, mount, _ = self._run(tmp_path, probe_exit=0)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        dumps = sorted((mount / "robothor" / "db").glob("*.sql.gz"))
+        assert dumps, (
+            "the probe passed and no dump was produced — the guard is not a "
+            f"guard, it is a wall\n{result.stdout}{result.stderr}"
+        )
+        marker = tmp_path / "state" / "last-local-dump"
+        assert marker.exists(), result.stdout + result.stderr
+        assert dumps[-1].name in marker.read_text(), marker.read_text()
