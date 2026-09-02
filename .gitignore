@@ -194,6 +194,12 @@ brain/.aider.chat.history.md
 .claude/
 .plan
 robothor.db
+# The bridge's local SQLite scratch DB, same class as robothor.db above: it is
+# instance state a dev run creates, not platform code, and it showed up as an
+# untracked file in every `git status` on this branch.
+crm/crm.db
+# Operator working notes. Instance data by the CLAUDE.md table, like brain/.
+/notes/
 test-results/
 scripts/seed_dev_team_identities.py
 
