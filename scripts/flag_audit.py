@@ -79,6 +79,7 @@ DEBUG_ENV_KEYS: tuple[str, ...] = (
     "ROBOTHOR_ALERT_SELFTEST",
     "ROBOTHOR_DISABLE_ALL_RIPS",
     "ROBOTHOR_DISABLE_ALL_GUARDRAILS",
+    "ROBOTHOR_EXTRA_PATH",
 )
 
 #: The global kill switch ``_enforcement_mode`` consults before anything else.

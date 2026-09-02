@@ -315,6 +315,30 @@ def test_debug_env_keys_appear_only_when_set(tmp_path):
     assert debug[0].effective == "1"
 
 
+def test_robothor_extra_path_is_a_debug_env_key(tmp_path):
+    """ROBOTHOR_EXTRA_PATH is a root front-of-PATH lever documented as
+    test-only (infra/systemd/README.md) — if a live process ever has it set,
+    the daily audit must surface it under DEBUG-ENV like the other panic
+    switches, not silently miss it because it isn't a governed flag."""
+    manifest = _manifest(tmp_path, [{"name": "ROBOTHOR_RBAC_MODE", "mode": "enforce"}])
+    env_file = tmp_path / "robothor.env"
+    env_file.write_text("")
+    environ = tmp_path / "environ"
+    environ.write_bytes(b"ROBOTHOR_RBAC_MODE=enforce\x00ROBOTHOR_EXTRA_PATH=/x\x00")
+
+    rows = fa.audit(
+        flags_yaml=manifest,
+        env_file=env_file,
+        dropin_dir=tmp_path / "none",
+        environ_path=environ,
+        db=None,
+        today=TODAY,
+    )
+    debug = [r for r in rows if "DEBUG-ENV" in r.tags]
+    assert [r.flag for r in debug] == ["ROBOTHOR_EXTRA_PATH"]
+    assert debug[0].effective == "/x"
+
+
 def test_missing_environ_file_degrades_to_the_file_layers(tmp_path):
     """A watchdog that cannot read the running process must say so, not
     silently report the files as if they were live."""

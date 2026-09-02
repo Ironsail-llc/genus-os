@@ -114,7 +114,9 @@ suite puts stub binaries, which is how those suites still interpose a fake
 set it would be handing root a directory ahead of `/usr/sbin`, which is the
 thing this line exists to prevent. Anything from the workspace venv is called
 by absolute path (via `SCRIPT_DIR` or `ROBOTHOR_WORKSPACE`), never found on
-PATH.
+PATH. `scripts/flag_audit.py` lists it in `DEBUG_ENV_KEYS`, so if a live
+process ever has it set, the audit flags it under `DEBUG-ENV` instead of the
+leak going unnoticed.
 
 Each such script then runs a `require_tools` preflight naming the tools it
 cannot answer a question without, and exits non-zero if one is missing — the
