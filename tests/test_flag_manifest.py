@@ -84,7 +84,7 @@ def test_overdue_entries_name_what_is_blocking_them():
     """Re-dating a missed promotion without writing down why is how a deadline
     becomes wallpaper. Any entry still in observe/alert past its own
     planned_promotion must say, in its soak note, what has to happen first."""
-    today = dt.date.today()
+    today = dt.datetime.now(tz=dt.UTC).date()
     data = yaml.safe_load(MANIFEST.read_text())
     silent = []
     for entry in data["flags"]:
