@@ -41,6 +41,16 @@
 # Exit: 0 healthy, 1 unhealthy (=> skipped), 2 usage, 255 probe unusable.
 #
 # Environment:
+#   ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT
+#                                  1 (default) => PATH must live on a mount of
+#                                  its own. An unmounted /mnt/robothor-backup is
+#                                  an empty directory on the root filesystem
+#                                  that reads and writes perfectly, so without
+#                                  this the backup lands on the root disk and
+#                                  looks like success. Set to 0 only for an
+#                                  instance whose backup directory is genuinely
+#                                  on the root filesystem (and in tests, which
+#                                  cannot create a mount unprivileged).
 #   ROBOTHOR_VOLUME_PROBE_TIMEOUT  seconds allowed per step (default 20). A
 #                                  dropped USB device blocks readdir forever;
 #                                  without this the probe inherits the hang
@@ -85,6 +95,7 @@ TARGET="${1:-}"
 [[ -n "$TARGET" ]] || usage
 [[ $# -eq 1 ]] || usage
 
+REQUIRE_SEPARATE_MOUNT="${ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT:-1}"
 TIMEOUT="${ROBOTHOR_VOLUME_PROBE_TIMEOUT:-20}"
 if [[ ! "$TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     say "ROBOTHOR_VOLUME_PROBE_TIMEOUT=${TIMEOUT} is not a positive integer"
@@ -111,13 +122,27 @@ if [[ ! -d "$TARGET" ]]; then
     unhealthy "$TARGET does not exist or is not a directory"
 fi
 
-# ── 2. Is it on a mount, and what shape is that mount in? ────────────────────
-# findmnt --target resolves the path to the mount that contains it and prints
-# the combined VFS + filesystem options. `emergency_ro` is what ext4 sets when
-# the underlying device disappears mid-write — the disk is gone but every
-# stat() still succeeds.
-if ! OPTIONS=$(timeout "$TIMEOUT" findmnt -n -o OPTIONS --target "$TARGET" 2>/dev/null); then
+# ── 2. Is the volume actually mounted? ───────────────────────────────────────
+# findmnt --target resolves a path to the mount CONTAINING it. When the backup
+# volume is not mounted, /mnt/robothor-backup is just an empty directory on the
+# root filesystem: it stats, reads and writes fine, so every check below passes
+# and the "backup" silently fills the root disk while looking like success.
+# That is the `mountpoint -q` guard this probe replaces, generalised so it can
+# be pointed at a path INSIDE the volume rather than at the mount point itself.
+if ! MOUNT_TARGET=$(timeout "$TIMEOUT" findmnt -n -o TARGET --target "$TARGET" 2>/dev/null); then
     unhealthy "findmnt could not resolve a mount for $TARGET (timed out, or the volume is not mounted)"
+fi
+MOUNT_TARGET="${MOUNT_TARGET//[[:space:]]/}"
+
+if [[ "$REQUIRE_SEPARATE_MOUNT" == "1" && "$MOUNT_TARGET" == "/" ]]; then
+    unhealthy "$TARGET is on the root filesystem — the backup volume is not mounted"
+fi
+
+# ── 3. What shape is that mount in? ──────────────────────────────────────────
+# `emergency_ro` is what ext4 sets when the underlying device disappears
+# mid-write — the disk is gone but every stat() still succeeds.
+if ! OPTIONS=$(timeout "$TIMEOUT" findmnt -n -o OPTIONS --target "$TARGET" 2>/dev/null); then
+    unhealthy "findmnt could not read the mount options for $TARGET"
 fi
 OPTIONS="${OPTIONS//[[:space:]]/}"
 
@@ -132,14 +157,14 @@ if [[ "$MODE" == "--rw" ]]; then
     esac
 fi
 
-# ── 3. A real readdir ────────────────────────────────────────────────────────
+# ── 4. A real readdir ────────────────────────────────────────────────────────
 # The one syscall emergency_ro actually breaks. Nothing above this line can
 # distinguish a healthy volume from a wedged one.
 if ! timeout "$TIMEOUT" ls -A "$TARGET" >/dev/null 2>&1; then
     unhealthy "cannot read the contents of $TARGET (readdir failed or timed out after ${TIMEOUT}s)"
 fi
 
-# ── 4. A real write ──────────────────────────────────────────────────────────
+# ── 5. A real write ──────────────────────────────────────────────────────────
 if [[ "$MODE" == "--rw" ]]; then
     if ! PROBE_FILE=$(timeout "$TIMEOUT" mktemp "${TARGET}/.robothor-volume-probe.XXXXXX" 2>/dev/null); then
         unhealthy "cannot create a file in $TARGET — a backup written here would go nowhere"

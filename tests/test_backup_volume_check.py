@@ -61,6 +61,11 @@ def _run(
         # start doing so silently.
         "ROBOTHOR_ALERT_SUPPRESS": "1",
         "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+        # A pytest tmp_path is on the root filesystem and an unprivileged test
+        # cannot create a real mount, so the "is the volume mounted at all?"
+        # step is relaxed here. TestAnUnmountedVolumeIsNotAHealthyOne runs
+        # WITHOUT this override and is what proves the step is armed by default.
+        "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0",
     }
     env.update(env_extra or {})
     return subprocess.run(
@@ -255,3 +260,60 @@ class TestUsage:
             "a misconfigured ExecCondition= must be distinguishable from an "
             f"unhealthy volume\nargs={args}\n" + _output(result)
         )
+
+
+class TestAnUnmountedVolumeIsNotAHealthyOne:
+    """The `mountpoint -q` guard this probe replaces must not be weakened.
+
+    When the encrypted volume is not mounted at all, /mnt/robothor-backup is
+    just an empty directory on the root filesystem. It stats fine, reads fine
+    and writes fine — so mount options, readdir and the write probe all pass.
+    A backup written there looks like success and silently fills the root disk;
+    pg-basebackup.sh has carried a comment about exactly that since 2026-07-14.
+
+    findmnt --target resolves a path to the mount CONTAINING it, so an
+    unmounted /mnt/robothor-backup resolves to `/`. That is the signal.
+
+    Every other test here sets ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT=0,
+    because a pytest tmp_path is on the root filesystem and an unprivileged
+    test cannot create a real mount. This case deliberately does NOT set it:
+    it is the one that proves the guard is armed by default rather than being
+    a flag nobody turns on.
+    """
+
+    def test_a_directory_on_the_root_filesystem_is_unhealthy_by_default(
+        self, tmp_path: Path
+    ) -> None:
+        vol = tmp_path / "vol"
+        vol.mkdir()
+
+        result = subprocess.run(
+            [BASH, str(SCRIPT), "--rw", str(vol)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={"PATH": os.environ["PATH"]},  # nothing overridden
+        )
+
+        assert result.returncode == SKIP, (
+            "an unmounted backup volume passed every check — a base backup "
+            "written there goes to the root disk and looks like success\n"
+            + result.stdout
+            + result.stderr
+        )
+        assert "root filesystem" in (result.stdout + result.stderr), (
+            "the journal line must say the volume is not mounted, not just "
+            "'unhealthy'\n" + result.stdout + result.stderr
+        )
+
+    def test_the_check_can_be_relaxed_for_an_instance_without_a_separate_volume(
+        self, tmp_path: Path
+    ) -> None:
+        vol = tmp_path / "vol"
+        vol.mkdir()
+        result = _run(
+            "--rw",
+            str(vol),
+            env_extra={"ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0"},
+        )
+        assert result.returncode == 0, _output(result)

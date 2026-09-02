@@ -161,6 +161,9 @@ class TestWalOffsiteSurvivesAnOffsiteFailure:
             "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
             "ROBOTHOR_OFFSITE_REMOTE": "remote:bucket",
             "ROBOTHOR_DB_NAME": "robothor_memory",
+            # tmp_path is on the root filesystem; see
+            # tests/test_backup_volume_check.py for what guards this step.
+            "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0",
         }
         result = subprocess.run(
             ["bash", str(self.SCRIPT)],
@@ -244,6 +247,9 @@ class TestWalOffsiteDegradesWhenTheBackupVolumeIsWedged:
             "ROBOTHOR_OFFSITE_REMOTE": "remote:bucket",
             "ROBOTHOR_DB_NAME": "robothor_memory",
             "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
+            # tmp_path is on the root filesystem; see
+            # tests/test_backup_volume_check.py for what guards this step.
+            "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0",
         }
         try:
             result = subprocess.run(
@@ -339,6 +345,9 @@ class TestTheBaseBackupRecordsWhenItLastWorked:
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "ROBOTHOR_BASEBACKUP_DIR": str(dest),
             "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
+            # tmp_path is on the root filesystem; see
+            # tests/test_backup_volume_check.py for what guards this step.
+            "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0",
         }
         return subprocess.run(
             ["bash", str(self.SCRIPT)],
