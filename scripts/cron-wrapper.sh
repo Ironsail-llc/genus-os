@@ -83,8 +83,7 @@ fi
 # over the fixed value, so every command this wrapper runs — including the
 # cron job itself — would have inherited the operator's user-writable
 # directories, as root, which is the whole thing the prelude prevents. The
-# fixed value is put back; an instance that needs its own tool directory says
-# so with ROBOTHOR_EXTRA_PATH, which is honoured here exactly as above.
+# fixed value — exactly what the line at the top produced — is put back.
 PATH="$ROBOTHOR_FIXED_PATH"
 export PATH
 
