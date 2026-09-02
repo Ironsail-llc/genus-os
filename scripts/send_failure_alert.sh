@@ -3,7 +3,13 @@
 # Invoked by robothor-alert@<unit>.service (OnFailure= hook), so this must
 # stay dependency-free: bash + curl only, credentials from the environment.
 #
-# Usage: send_failure_alert.sh <unit-name>
+# Usage: send_failure_alert.sh <unit-name> [body]
+#
+# <unit-name> is both the headline and the dedup key. The optional [body]
+# replaces the journal tail for callers that already know what went wrong
+# (thermal-guard.sh, boot-guard.sh): those page under a pseudo-unit that
+# journalctl has nothing for, so the tail was always "<journal unavailable>".
+# Every existing caller passes one argument and is unaffected.
 #
 # systemd fires OnFailure= exactly ONCE per failure — if this script cannot
 # deliver the page, the page is gone forever. That is precisely what happened
@@ -16,7 +22,8 @@
 # few seconds later.
 set -u
 
-UNIT="${1:?usage: send_failure_alert.sh <unit-name>}"
+UNIT="${1:?usage: send_failure_alert.sh <unit-name> [body]}"
+BODY="${2:-}"
 
 # ── Never page from a test run ────────────────────────────────────────────────
 # 2026-08-27: a suite run delivered three real Telegram alerts, including
@@ -125,6 +132,60 @@ source_secrets() {
 
 HOST="$(hostname -s 2>/dev/null || echo unknown-host)"
 
+# ── What the operator has actually LOST ──────────────────────────────────────
+# Pages read "🔴 <unit> FAILED on <host>" and nothing else. That is a fact
+# about systemd, not about the operator's data: ~50 of them were scrolled past
+# while every backup path was down, because the text gave no way to tell "a
+# log shipper is a few minutes behind" from "there is no restorable copy of
+# the database tonight". The consequence goes on line 2, inside Telegram's
+# notification preview, so it is legible without opening the message.
+BACKUP_STATE_DIR="${ROBOTHOR_BACKUP_STATE_DIR:-/var/lib/robothor/backup-state}"
+
+# The newest successful run recorded by the backup scripts. An EMPTY value
+# where a timestamp belongs reads as "recent"; it means the opposite, so say
+# so out loud.
+backup_marker() {
+    local file="${BACKUP_STATE_DIR}/$1" value=""
+    if [[ -r "$file" ]]; then
+        value="$(head -n 1 "$file" 2>/dev/null | tr -d '\r' | cut -c1-120)"
+    fi
+    printf '%s' "${value:-unknown (no successful run recorded)}"
+}
+
+# First match wins, so the specific patterns come before the general ones.
+# Matched as substrings because the same key arrives in three shapes: a
+# systemd unit ("robothor-wal-offsite.service"), a cron pseudo-unit
+# ("cron: ... wal-offsite.sh (exit 1)"), and a script's own label
+# ("offsite-backup: ...").
+consequence_for() {
+    case "$1" in
+        *wal-offsite*)
+            echo "PITR recovery point aging past 15 min — WAL has stopped shipping; last good ship: $(backup_marker last-wal-offsite-ok)" ;;
+        *backup-local*)
+            echo "Nightly dump did NOT happen; newest good: $(backup_marker last-local-dump); +24h dump-tier RPO/night" ;;
+        *backup-offsite*|*offsite-backup*)
+            echo "Offsite NOT refreshed; a box loss restores from $(backup_marker last-offsite-ok)" ;;
+        *basebackup*)
+            echo "No fresh base backup; PITR must replay every WAL since $(backup_marker last-basebackup) — restore time growing nightly" ;;
+        *backup-verify*)
+            echo "Backups are UNVERIFIED — a corrupt archive would now go unnoticed until a restore is attempted" ;;
+        *engine*)
+            echo "Agents are DOWN — no scheduled runs, no heartbeat, no delivery until this is back" ;;
+        *bridge*)
+            echo "Inbound/outbound channel bridge is down — messages to and from the operator are not moving" ;;
+        *orchestrator*)
+            echo "Workflows are not being scheduled or advanced; approvals and queued work sit untouched" ;;
+        *nats*)
+            echo "The message fabric is down — agent mail and federation traffic are dropping, not queuing" ;;
+        *vision*)
+            echo "Vision capture is down — no camera events; presence and face recognition are blind" ;;
+        *liveness*)
+            echo "The liveness watchdog itself is down — nothing is checking whether the engine is alive" ;;
+        *)
+            echo "(no consequence mapped — add one)" ;;
+    esac
+}
+
 # ── Bounded retry loop ────────────────────────────────────────────────────────
 attempt=0
 while (( attempt < MAX_ATTEMPTS )); do
@@ -144,15 +205,22 @@ while (( attempt < MAX_ATTEMPTS )); do
         continue
     fi
 
-    # Rebuilt each attempt: the journal tail sharpens as the failure plays out.
-    JOURNAL="$(journalctl -u "$UNIT" -n 5 --no-pager -o cat 2>/dev/null | tail -c 500 || true)"
-    TEXT="🔴 ${UNIT} FAILED on ${HOST}
-$(date -Is)
-
-Last journal lines:
+    # Rebuilt each attempt: the journal tail sharpens as the failure plays
+    # out, and a backup marker can land while the loop waits out the boot
+    # window.
+    DETAIL="$BODY"
+    if [[ -z "$DETAIL" ]]; then
+        JOURNAL="$(journalctl -u "$UNIT" -n 5 --no-pager -o cat 2>/dev/null | tail -c 500 || true)"
+        DETAIL="Last journal lines:
 ${JOURNAL:-<journal unavailable>}
 
 Check: systemctl status ${UNIT}"
+    fi
+    TEXT="🔴 ${UNIT} FAILED on ${HOST}
+$(consequence_for "$UNIT")
+$(date -Is)
+
+${DETAIL}"
 
     # --retry inside curl covers transient blips within an attempt; the outer
     # loop covers the minutes-long boot-DNS window.
@@ -175,6 +243,11 @@ Check: systemctl status ${UNIT}"
         # Telegram is down) does not suppress the retry on the next failure.
         mkdir -p "$STATE_DIR" 2>/dev/null || true
         touch "$STAMP_FILE" 2>/dev/null || true
+        # Say so. A successful send printed NOTHING, so a cron log carried no
+        # evidence a page had ever gone out — an entirely silent pager and a
+        # quiet night looked identical in the logs, and only the failures were
+        # ever visible.
+        echo "send_failure_alert: delivered page for ${UNIT} (http ${http_code})"
         exit 0
     fi
     # Name the status: a 401 means rotate the token, a 000 means the network is

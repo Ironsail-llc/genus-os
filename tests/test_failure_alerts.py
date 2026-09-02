@@ -69,8 +69,22 @@ def stamp_files(tmp_path: Path) -> list[Path]:
     return sorted(p for p in state_dir.iterdir() if p.is_file())
 
 
+def page_text(log: Path) -> str:
+    """The Telegram message body exactly as the sender composed it.
+
+    The fake curl writes one argv entry per line, so the multi-line
+    ``text=`` payload spans several lines; the API URL is the final argv
+    entry, and nothing follows it.
+    """
+    raw = log.read_text()
+    assert "\ntext=" in raw, f"no text= payload recorded in {raw!r}"
+    body = raw.split("\ntext=", 1)[1]
+    # Drop the trailing API-URL argv line (and the trailing newline).
+    return body.rsplit("\n", 2)[0]
+
+
 def run_send(
-    tmp_path: Path, unit: str, env_extra: dict[str, str]
+    tmp_path: Path, unit: str, env_extra: dict[str, str], body: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     env = {
         "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
@@ -80,6 +94,10 @@ def run_send(
         # run pointed at it would leave a stamp that could suppress a real
         # page later.
         "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+        # Same reasoning for the backup markers the consequence line quotes:
+        # the default dir is real on this box, and a test must not read the
+        # operator's actual backup state into an assertion.
+        "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "backup-state"),
         # These tests predate the boot-window retry loop and assert on exact
         # curl call counts — pin a single fast attempt so they keep testing
         # what they always tested. The retry behavior itself is covered in
@@ -88,9 +106,10 @@ def run_send(
         "ROBOTHOR_ALERT_RETRY_DELAY": "0",
     }
     env.update(env_extra)
-    return subprocess.run(
-        ["bash", str(SEND), unit], capture_output=True, text=True, timeout=30, env=env
-    )
+    argv = ["bash", str(SEND), unit]
+    if body is not None:
+        argv.append(body)
+    return subprocess.run(argv, capture_output=True, text=True, timeout=30, env=env)
 
 
 def test_scripts_exist_and_are_executable():
@@ -259,3 +278,152 @@ class TestCooldownDedup:
             "two unit names that sanitize to the same key must not share a "
             "cooldown — each is a distinct unit and must page independently"
         )
+
+
+class TestConsequenceLine:
+    """A page must name the CONSEQUENCE, not just the unit.
+
+    Every page read "🔴 <unit> FAILED on <host>" — a unit name is a fact
+    about systemd, not about what the operator has lost. ~50 of them were
+    ignored while every backup path was down, because nothing in the text
+    distinguished "a log shipper is behind" from "there is no restorable
+    copy of the database tonight".
+    """
+
+    ENV = {"ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123", "ROBOTHOR_TELEGRAM_CHAT_ID": "42"}
+
+    def page_for(self, tmp_path: Path, unit: str, **env_extra: str) -> str:
+        log = fake_curl(tmp_path)
+        env = dict(self.ENV)
+        env.update(env_extra)
+        result = run_send(tmp_path, unit, env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return page_text(log)
+
+    def test_wal_offsite_names_the_pitr_recovery_point(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-wal-offsite.service")
+        assert "PITR" in text
+        assert "15 min" in text
+
+    def test_backup_local_names_the_dump_and_the_rpo_cost(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-backup-local.service")
+        assert "dump" in text
+        assert "RPO" in text
+
+    def test_backup_offsite_names_what_a_box_loss_would_restore_from(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-backup-offsite.service")
+        assert "Offsite NOT refreshed" in text
+        assert "box loss" in text
+
+    def test_engine_says_the_agents_are_down(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-engine.service")
+        assert "Agents are DOWN" in text
+
+    def test_an_unmapped_unit_says_so_instead_of_inventing_one(self, tmp_path: Path):
+        """A wrong consequence is worse than an absent one — the default has
+        to read as a gap in the map, and as a chore to close it."""
+        text = self.page_for(tmp_path, "robothor-something-new.service")
+        assert "no consequence mapped" in text
+
+    def test_the_consequence_is_the_second_line_of_the_page(self, tmp_path: Path):
+        """Telegram truncates the preview; the consequence must be visible
+        without opening the message."""
+        text = self.page_for(tmp_path, "robothor-engine.service")
+        lines = text.splitlines()
+        assert lines[0].startswith("🔴 robothor-engine.service FAILED on ")
+        assert "Agents are DOWN" in lines[1]
+
+    def test_the_marker_file_supplies_the_newest_good_backup(self, tmp_path: Path):
+        state = tmp_path / "backup-state"
+        state.mkdir()
+        (state / "last-local-dump").write_text("2026-08-30T02:15:04+00:00\n")
+        text = self.page_for(tmp_path, "robothor-backup-local.service")
+        assert "2026-08-30T02:15:04+00:00" in text
+
+    def test_a_missing_marker_says_unknown_rather_than_blank(self, tmp_path: Path):
+        """A blank where a timestamp belongs reads as "recent"; it is the
+        opposite — nothing has ever succeeded."""
+        text = self.page_for(tmp_path, "robothor-backup-offsite.service")
+        assert "unknown (no successful run recorded)" in text
+
+    def test_the_offsite_scripts_own_alert_key_is_mapped(self, tmp_path: Path):
+        """scripts/backup-offsite.sh pages with "offsite-backup: ..." — the
+        map must recognise the key its real caller actually sends, not only
+        the systemd unit name."""
+        text = self.page_for(tmp_path, "offsite-backup: 2 CORRUPT archives")
+        assert "no consequence mapped" not in text
+        assert "Offsite NOT refreshed" in text
+
+
+class TestBodyOverride:
+    """``send_failure_alert.sh <key> [body]``: callers that already know what
+    went wrong (thermal-guard, boot-guard) can say it, instead of the pager
+    tailing a journal for a pseudo-unit that has none."""
+
+    ENV = {"ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123", "ROBOTHOR_TELEGRAM_CHAT_ID": "42"}
+
+    def test_the_body_replaces_the_journal_tail(self, tmp_path: Path):
+        log = fake_curl(tmp_path)
+        result = run_send(
+            tmp_path,
+            "robothor-engine.service",
+            dict(self.ENV),
+            body="Restore drill FAILED: pg_restore exited 1 on the newest dump",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        text = page_text(log)
+        assert "Restore drill FAILED: pg_restore exited 1 on the newest dump" in text
+        assert "Last journal lines:" not in text
+
+    def test_the_first_argument_is_still_the_dedup_key(self, tmp_path: Path):
+        """Two different bodies under one key are one incident, and must
+        page once — otherwise a per-tick body defeats the cooldown."""
+        log = fake_curl(tmp_path)
+        env = dict(self.ENV)
+        first = run_send(tmp_path, "thermal-guard", env, body="THERMAL-CRITICAL 96C")
+        assert first.returncode == 0, first.stdout + first.stderr
+        assert curl_call_count(log) == 1
+        second = run_send(tmp_path, "thermal-guard", env, body="THERMAL-CRITICAL 97C")
+        assert second.returncode == 0, second.stdout + second.stderr
+        assert curl_call_count(log) == 1
+        assert "suppressed duplicate page for thermal-guard" in (second.stdout + second.stderr)
+
+    def test_one_argument_callers_still_get_the_journal_tail(self, tmp_path: Path):
+        """Backward compatibility: every existing caller passes one argument."""
+        log = fake_curl(tmp_path)
+        result = run_send(tmp_path, "robothor-engine.service", dict(self.ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        text = page_text(log)
+        assert "Last journal lines:" in text
+        assert "Check: systemctl status robothor-engine.service" in text
+
+    def test_the_body_keeps_the_header_and_the_consequence(self, tmp_path: Path):
+        log = fake_curl(tmp_path)
+        result = run_send(tmp_path, "robothor-engine.service", dict(self.ENV), body="custom detail")
+        assert result.returncode == 0, result.stdout + result.stderr
+        lines = page_text(log).splitlines()
+        assert lines[0].startswith("🔴 robothor-engine.service FAILED on ")
+        assert "Agents are DOWN" in lines[1]
+
+
+class TestDeliveryIsAnnounced:
+    """A successful send printed nothing, so a cron log carried no evidence
+    a page had gone out — only the failures were visible, which made an
+    entirely silent pager indistinguishable from a quiet night."""
+
+    ENV = {"ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123", "ROBOTHOR_TELEGRAM_CHAT_ID": "42"}
+
+    def test_a_delivered_page_is_logged_with_its_http_status(self, tmp_path: Path):
+        fake_curl(tmp_path)
+        result = run_send(tmp_path, "robothor-engine.service", dict(self.ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (
+            "send_failure_alert: delivered page for robothor-engine.service (http 200)"
+            in result.stdout + result.stderr
+        )
+
+    def test_an_undelivered_page_is_not_announced_as_delivered(self, tmp_path: Path):
+        fake_curl_failing(tmp_path)
+        result = run_send(tmp_path, "robothor-engine.service", dict(self.ENV))
+        assert result.returncode != 0
+        assert "delivered page for" not in result.stdout + result.stderr
