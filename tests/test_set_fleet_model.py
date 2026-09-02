@@ -331,3 +331,29 @@ class TestArgumentContract:
         out = capsys.readouterr().out
         assert "agent-a.yaml" in out
         assert "no fallbacks" in out.lower()
+
+    def test_a_style_the_tool_cannot_rewrite_is_reported_not_silent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ):
+        """An anchor/alias is left alone — but the operator has to be told."""
+        mod = load_tool(tmp_path, monkeypatch)
+        path = write(
+            agents_dir(tmp_path) / "agent-a.yaml",
+            "id: agent-a\nchain: &chain\n  - ollama_chat/qwen3.8:27b\n"
+            "model:\n  primary: openrouter/stealth/ox-alpha\n  fallbacks: *chain\n",
+        )
+        original = path.read_text()
+
+        assert run(mod, "--fallbacks", CHAIN, "--apply") == 0
+
+        assert path.read_text() == original
+        assert "not applied" in capsys.readouterr().out.lower()
+
+    def test_empty_chain_clears_a_block_list(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """An empty block sequence is not valid YAML for a list — collapse to []."""
+        mod = load_tool(tmp_path, monkeypatch)
+        path = write(agents_dir(tmp_path) / "agent-b.yaml", BLOCK)
+
+        assert run(mod, "--fallbacks", "", "--apply") == 0
+
+        assert yaml.safe_load(path.read_text())["model"]["fallbacks"] == []

@@ -95,17 +95,18 @@ def _render(value: str, *, flow: bool) -> str:
     return f'"{escaped}"'
 
 
-def rewrite_fallbacks_text(text: str, fallbacks: list[str]) -> str | None:
-    """Return *text* with every ``fallbacks:`` list set to *fallbacks*.
+def rewrite_fallbacks_text(text: str, fallbacks: list[str]) -> tuple[str | None, int]:
+    """Return ``(new text or None, count of occurrences left alone)``.
 
-    Returns None when nothing changed (no such key, or already correct). Each
-    occurrence keeps its own style — an inline flow list stays inline, a block
-    sequence stays a block — so the diff is the list and nothing else.
+    The text is None when nothing changed (no such key, or already correct).
+    Each occurrence keeps its own style — an inline flow list stays inline, a
+    block sequence stays a block — so the diff is the list and nothing else.
     """
     lines = text.splitlines(keepends=True)
     out: list[str] = []
     i = 0
     changed = False
+    unhandled = 0
     while i < len(lines):
         raw = lines[i]
         body = raw.rstrip("\r\n")
@@ -131,14 +132,20 @@ def rewrite_fallbacks_text(text: str, fallbacks: list[str]) -> str | None:
 
         stripped = rest.strip()
         if stripped and not stripped.startswith("#"):
-            # An anchor, a plain scalar, something this tool does not model.
-            # Leave it exactly as it is rather than guess.
+            # An anchor, an alias, a plain scalar — something this tool does
+            # not model. Left exactly as it is, and COUNTED, because a chain
+            # that quietly missed a manifest is the failure mode this whole
+            # script exists to prevent.
+            unhandled += 1
             out.append(raw)
             i += 1
             continue
 
         # Block sequence: keep the key line verbatim, replace the item lines.
-        out.append(raw)
+        comment = f"  {stripped}" if stripped else ""
+        key_line = f"{indent}fallbacks: []{comment}{eol}" if not fallbacks else raw
+        out.append(key_line)
+        changed = changed or key_line != raw
         i += 1
         item_indent = f"{indent}  "
         old_items: list[str] = []
@@ -149,13 +156,14 @@ def rewrite_fallbacks_text(text: str, fallbacks: list[str]) -> str | None:
             item_indent = item.group("indent")
             old_items.append(lines[i])
             i += 1
+        # An empty block sequence is not a YAML list; it parses as null. The
+        # only valid way to write "no fallbacks" is the flow form, so an empty
+        # chain collapses the key line above and drops the items.
         new_items = [f"{item_indent}- {_render(f, flow=False)}{eol}" for f in fallbacks]
         changed = changed or new_items != old_items
         out.extend(new_items)
 
-    if not changed:
-        return None
-    return "".join(out)
+    return ("".join(out) if changed else None), unhandled
 
 
 def _verify(original: str, updated: str, fallbacks: list[str]) -> str | None:
@@ -221,7 +229,12 @@ def rewrite_fallbacks(path: Path, fallbacks: list[str], *, apply: bool) -> str |
     text = path.read_text()
     if not any(_FALLBACKS.match(line) for line in text.splitlines()):
         return "no fallbacks: line — chain NOT applied"
-    updated = rewrite_fallbacks_text(text, fallbacks)
+    updated, unhandled = rewrite_fallbacks_text(text, fallbacks)
+    if unhandled:
+        return (
+            f"{unhandled} fallbacks: value(s) in a style this tool does not "
+            "rewrite (anchor/alias?) — chain NOT applied, edit by hand"
+        )
     if updated is None:
         return None
     error = _verify(text, updated, fallbacks)
