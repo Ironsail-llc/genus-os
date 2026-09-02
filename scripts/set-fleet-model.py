@@ -199,20 +199,36 @@ def rewrite_fallbacks_text(text: str, fallbacks: list[str]) -> Rewrite:
         changed = changed or key_line != raw
         i += 1
         item_indent = f"{indent}  "
-        old_items: list[str] = []
+        old_block: list[str] = []
+        # Comments interleaved with the items are the WHY of the chain, so they
+        # are carried across rather than dropped — and rather than stopping the
+        # scan, which used to orphan every item below them into the new list.
+        lead_comments: list[str] = []
+        tail_comments: list[str] = []
+        saw_item = False
         while i < len(lines):
-            item = _BLOCK_ITEM.match(lines[i].rstrip("\r\n"))
-            if not item or len(item.group("indent")) <= len(indent):
-                break
-            item_indent = item.group("indent")
-            old_items.append(lines[i])
-            i += 1
+            line_body = lines[i].rstrip("\r\n")
+            item = _BLOCK_ITEM.match(line_body)
+            if item and len(item.group("indent")) > len(indent):
+                item_indent = item.group("indent")
+                old_block.append(lines[i])
+                saw_item = True
+                i += 1
+                continue
+            comment = _COMMENT_LINE.match(line_body)
+            if comment and len(comment.group("indent")) > len(indent):
+                old_block.append(lines[i])
+                (tail_comments if saw_item else lead_comments).append(lines[i])
+                i += 1
+                continue
+            break
         # An empty block sequence is not a YAML list; it parses as null. The
         # only valid way to write "no fallbacks" is the flow form, so an empty
         # chain collapses the key line above and drops the items.
         new_items = [f"{item_indent}- {_render(f, flow=False)}{eol}" for f in fallbacks]
-        changed = changed or new_items != old_items
-        out.extend(new_items)
+        new_block = lead_comments + new_items + tail_comments
+        changed = changed or new_block != old_block
+        out.extend(new_block)
 
     return Rewrite("".join(out) if changed else None, unhandled, keys, prose)
 

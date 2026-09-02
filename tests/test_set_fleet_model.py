@@ -497,3 +497,58 @@ class TestExitStatus:
         assert run(mod, "--fallbacks", CHAIN, "--apply") == 0
 
         assert "did NOT get the chain" not in capsys.readouterr().out
+
+
+BLOCK_WITH_COMMENT = """\
+id: agent-b
+name: Agent B
+
+model:
+  primary: openrouter/stealth/ox-alpha
+  fallbacks:
+    - openrouter/xiaomi/mimo-v2.5-pro
+    # offline tier — the box keeps answering when the API is capped
+    - ollama_chat/qwen3.8:27b
+  payload_alias: mimo
+"""
+
+
+class TestInterleavedComments:
+    """A comment BETWEEN block items used to orphan every item after it.
+
+    ``_BLOCK_ITEM`` did not match the comment line, so the loop stopped there
+    and the remaining ``- model`` lines were copied out below the new chain —
+    still part of the same YAML sequence. The list came out wrong, and the
+    only report was the verifier's misleading "fallbacks did not take".
+    """
+
+    def test_the_chain_replaces_every_item_and_the_comment_survives(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        mod = load_tool(tmp_path, monkeypatch)
+        path = write(agents_dir(tmp_path) / "agent-b.yaml", BLOCK_WITH_COMMENT)
+
+        assert run(mod, "--fallbacks", CHAIN, "--apply") == 0
+
+        text = path.read_text()
+        assert yaml.safe_load(text)["model"]["fallbacks"] == CHAIN_LIST
+        assert "# offline tier — the box keeps answering when the API is capped" in text
+        assert "  payload_alias: mimo" in text
+        # The old items are gone, not pushed below the new ones.
+        assert "mimo-v2.5-pro" not in text
+
+    def test_a_trailing_comment_after_the_last_item_is_kept(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        mod = load_tool(tmp_path, monkeypatch)
+        source = (
+            "id: agent-b\nmodel:\n  fallbacks:\n    - openrouter/xiaomi/mimo-v2.5-pro\n"
+            "    # keep this chain short\n  payload_alias: mimo\n"
+        )
+        path = write(agents_dir(tmp_path) / "agent-b.yaml", source)
+
+        assert run(mod, "--fallbacks", CHAIN, "--apply") == 0
+
+        text = path.read_text()
+        assert yaml.safe_load(text)["model"]["fallbacks"] == CHAIN_LIST
+        assert "    # keep this chain short\n  payload_alias: mimo\n" in text
