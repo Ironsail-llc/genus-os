@@ -1738,7 +1738,10 @@ def get_timeline(identifier: str) -> dict:
         if r.status_code == 200:
             timeline["memory_facts"] = r.json().get("results", [])
     except Exception:
-        pass
+        # Best-effort enrichment: the timeline is still returned without it.
+        # Logged so an unreachable memory service is visible as itself rather
+        # than as a contact who suddenly has no history.
+        logger.debug("Memory facts unavailable for timeline %s", identifier, exc_info=True)
 
     conn.close()
     return timeline

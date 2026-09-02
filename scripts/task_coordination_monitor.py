@@ -107,8 +107,14 @@ def check():
                         age_min = (now - ct).total_seconds() / 60
                         if age_min < 30:  # Created in last 30 min
                             recent_agent.append(e)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # An escalation with an unreadable timestamp is one this
+                        # check silently did not look at. Say so: "no recent
+                        # agent escalations" and "I could not read the dates"
+                        # are different findings.
+                        log(
+                            f"    (skipped escalation with unreadable createdAt={created!r}: {exc})"
+                        )
             if recent_agent:
                 log(
                     f"  WARNING: {len(recent_agent)} recent agent-written escalation(s) — cutover may not be complete"

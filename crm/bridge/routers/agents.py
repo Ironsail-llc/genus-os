@@ -210,7 +210,10 @@ def _load_display_names() -> dict[str, str]:
                 if data and "id" in data and "name" in data:
                     names[data["id"]] = data["name"]
             except Exception:
-                pass
+                # One unparseable manifest must not cost the others their
+                # display names, but it should not be invisible either — the
+                # symptom is an agent that shows up under its raw id.
+                logger.debug("Could not read display name from %s", f.name, exc_info=True)
     except ImportError:
         logger.debug("PyYAML not available, using agent_id as display name")
     return names
