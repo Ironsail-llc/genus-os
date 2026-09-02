@@ -122,7 +122,7 @@ require_tools() {
         exit 1
     fi
 }
-require_tools date stat sha256sum cut tr
+require_tools date stat sha256sum cut tr cat head
 
 log() { echo "liveness_probe: $*"; }
 err() { echo "liveness_probe: $*" >&2; }

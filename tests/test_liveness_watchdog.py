@@ -499,6 +499,31 @@ class TestLivenessUnitsAreIndependentOfOnFailure:
         assert "WantedBy=timers.target" in directives(unit_text("robothor-liveness.timer"))
 
 
+# ── preflight completeness ────────────────────────────────────────────────────
+
+
+def test_probe_preflights_every_tool_it_shells_out_to():
+    """``cat`` reads the stuck-note reason and ``head`` trims it to one line —
+    neither is in the ``require_tools`` preflight, so a missing one would read
+    as a blank reason instead of a named, loud failure at start-up."""
+    line = next(
+        (
+            stripped
+            for stripped in (raw.strip() for raw in PROBE.read_text().splitlines())
+            if stripped.startswith("require_tools ")
+        ),
+        None,
+    )
+    assert line is not None, "liveness_probe.sh has no preflight at all"
+    required = set(line.split()) - {"require_tools"}
+    missing = {"cat", "head"} - required
+    assert not missing, (
+        f"liveness_probe.sh calls {sorted(missing)} but does not preflight "
+        f"{sorted(missing)} — a missing one would read as a blank reason "
+        "rather than a named, loud failure"
+    )
+
+
 # ── shell hygiene ────────────────────────────────────────────────────────────
 
 
