@@ -58,6 +58,45 @@ PID=$(systemctl show robothor-engine -p MainPID --value)
 tr '\0' '\n' < /proc/$PID/environ | grep YOUR_FLAG
 ```
 
+## `scripts/flag_audit.py` — the whole truth table in one command
+
+The one-flag `grep` above is the manual version of the audit. Run it for every
+flag at once, straight from the engine's own `/proc/<MainPID>/environ`:
+
+```sh
+python scripts/flag_audit.py          # aligned table; exit 1 on drift
+python scripts/flag_audit.py --json   # same data, machine-readable
+python scripts/flag_audit.py --no-db  # file layers only, no database needed
+```
+
+Per flag it prints the manifest's mode, the drop-in, the env file, the
+`feature_flags` DB pin, the **effective** value, and **which layer won** —
+plus 7-day evidence rows by action, the last fire, and the last probe. It is
+read-only (SELECTs only; it never touches `/etc`, the database or the engine)
+and degrades rather than lying: no database prints `?` in the evidence columns
+and says so.
+
+Tags:
+
+| Tag | Meaning |
+|-----|---------|
+| `MISMATCH` | the running process disagrees with `infra/flags.yaml` |
+| `SHADOW-LAYER:db` | a `feature_flags` row governs — every file layer is inert |
+| `SHADOW-LAYER:envfile` | `robothor.env` governs — a drop-in flip would do nothing, and nothing in git records this posture |
+| `SHADOW-LAYER:environ` | the value came from neither file (`systemctl set-environment`, the unit itself, the launching shell) |
+| `OVERDUE` | still in a pre-promotion mode past its `planned_promotion` |
+| `DEBUG-ENV` | a panic switch or self-test hook is set on this box |
+
+Note the wider `SHADOW-LAYER:envfile` rule: `check_dropin_drift.sh` reports
+`SHADOWED` only when a name is in **both** files, so a guardrail living
+**only** in `robothor.env` passes it silently — nothing in git says the control
+is on, and a rebuilt box would come up without it.
+
+`guardrail_watch` runs this daily (`check_flag_truth`) and exits non-zero on
+`MISMATCH`/`SHADOW-LAYER`, so the unit's `OnFailure=` pager fires. The fix is
+always the same: keep each flag in exactly one place — prefer the versioned
+drop-in — then update `infra/flags.yaml` to match.
+
 
 ## Rollback (< 2 minutes)
 
