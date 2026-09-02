@@ -54,17 +54,71 @@ SCRATCH_DB = f"robothor_restore_drill_test_{os.getpid()}"
 FIXED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
+#: Opt a cluster in to the live half of this file. Unset means "no live
+#: database", whatever is listening on this box.
+#:
+#: A reachability probe is not a gate. `@pytest.mark.integration` does not
+#: de-select anything either: run_tests.sh's default expression is
+#: `not slow and not llm and not e2e`, and `integration` is not in it. So the
+#: live class selected itself on any box with a running PostgreSQL — which on
+#: the operator's box means createdb/dropdb against the operator's own
+#: cluster on every default run, and two concurrent runs left orphan
+#: robothor_restore_drill_test_* databases with backends wedged on DROP
+#: DATABASE. An explicit DSN says both "yes, this cluster" and WHICH one.
+ADMIN_DSN_ENV = "ROBOTHOR_TEST_ADMIN_DSN"
+
+#: libpq connection keywords worth carrying, and the environment variable each
+#: one travels in. The drill shells out to bare `psql`/`createdb`/`dropdb`, so
+#: this is how a DSN reaches them.
+_DSN_TO_PG_ENV = {
+    "host": "PGHOST",
+    "port": "PGPORT",
+    "user": "PGUSER",
+    "password": "PGPASSWORD",
+    "dbname": "PGDATABASE",
+}
+
+
+def admin_pg_env() -> dict[str, str]:
+    """The libpq environment for the opted-in cluster; empty when none is."""
+    dsn = os.environ.get(ADMIN_DSN_ENV, "").strip()
+    if not dsn:
+        return {}
+    from psycopg2.extensions import parse_dsn
+
+    parsed = parse_dsn(dsn)
+    return {
+        env: str(value)
+        for key, env in _DSN_TO_PG_ENV.items()
+        if (value := parsed.get(key)) not in (None, "")
+    }
+
+
+def admin_env() -> dict[str, str]:
+    """os.environ aimed at the opted-in cluster, for this file's own psql calls."""
+    return {**os.environ, **admin_pg_env()}
+
+
 @functools.cache
 def database_is_reachable() -> bool:
     """Asked lazily, from inside the one class that needs a server.
 
     At module scope this ran a `psql` against the operator's cluster during
     COLLECTION — every `pytest --collect-only`, every unrelated test run.
+
+    Gated on ADMIN_DSN_ENV, not on whether something answers: see the note
+    there. Reachability is then checked against THAT cluster, so a stale or
+    wrong DSN skips instead of failing halfway through a drill.
     """
+    if not admin_pg_env():
+        return False
     if not all(shutil.which(t) for t in ("psql", "createdb", "dropdb")):
         return False
     probe = subprocess.run(
-        ["psql", "-d", "postgres", "-tAc", "SELECT 1"], capture_output=True, timeout=30
+        ["psql", "-d", "postgres", "-tAc", "SELECT 1"],
+        capture_output=True,
+        timeout=30,
+        env=admin_env(),
     )
     return probe.returncode == 0
 
@@ -130,6 +184,10 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
             "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
         }
     )
+    # Aim the drill's bare psql/createdb/dropdb at the opted-in cluster. Empty
+    # unless ADMIN_DSN_ENV is set, in which case nothing here connects at all —
+    # every other class in this file drives the drill through install_fake_pg.
+    env.update(admin_pg_env())
     env.update(extra)
     return env
 
@@ -200,6 +258,55 @@ class TestTheDefaultRunNeverTouchesTheOperatorsCluster:
             "(and de-selectable) as an integration test, not merely gated on "
             f"whether a server happens to answer: {marks}"
         )
+
+    def test_the_default_selection_does_not_deselect_integration_tests(self):
+        """Why the marker alone is not enough.
+
+        run_tests.sh builds `not slow and not llm and not e2e` for a default
+        run — `integration` is absent from it, and so is the pre-commit
+        expression it mirrors. tests/conftest_integration.py said these tests
+        are "skipped in pre-commit"; nothing was skipping them.
+        """
+        src = (REPO_ROOT / "run_tests.sh").read_text()
+        assert 'MARK_EXPR="not slow and not llm and not e2e"' in src, (
+            "run_tests.sh's default marker expression changed — recheck "
+            "whether @pytest.mark.integration now de-selects this class"
+        )
+        assert "not integration" not in src, (
+            "run_tests.sh now excludes integration tests; the DSN gate below "
+            "can be reconsidered, but do not remove it while a bare `pytest` "
+            "still selects them"
+        )
+
+    def test_the_live_db_class_is_gated_on_an_explicit_admin_dsn(self, monkeypatch):
+        """No DSN, no live database — whatever is listening locally.
+
+        The gate used to be `psql -d postgres -tAc 'SELECT 1'`: a probe that
+        answers YES on the operator's own cluster, which is exactly the
+        cluster this class must never create and drop databases on.
+        """
+        monkeypatch.delenv(ADMIN_DSN_ENV, raising=False)
+        database_is_reachable.cache_clear()
+        try:
+            assert database_is_reachable() is False, (
+                "the live-DB class selects itself on any box with a listening "
+                "PostgreSQL — on the operator's box that is the operator's "
+                f"cluster. Set {ADMIN_DSN_ENV} to opt a cluster in."
+            )
+        finally:
+            database_is_reachable.cache_clear()
+
+    def test_the_admin_dsn_is_what_the_live_class_connects_through(self, monkeypatch):
+        """Opting a cluster in must also AIM the drill at it — a gate that
+        only decides whether to run, while the commands still connect wherever
+        libpq defaults to, moves the hazard rather than removing it."""
+        monkeypatch.setenv(
+            ADMIN_DSN_ENV, "host=127.0.0.1 port=59999 user=drill dbname=postgres"
+        )
+        pg = admin_pg_env()
+        assert pg.get("PGHOST") == "127.0.0.1"
+        assert pg.get("PGPORT") == "59999"
+        assert pg.get("PGUSER") == "drill"
 
     def test_collection_alone_does_not_query_a_server(self):
         """The reachability probe used to be a module-level `psql` — it ran
@@ -281,21 +388,32 @@ class TestADropdbThatHangsIsNotAHungUnit:
 class TestAFixtureDumpRestoresAndIsVerified:
     """The ONE class here that needs a live PostgreSQL server.
 
-    Marked `integration`, the repo's convention for a live-DB test, because
-    reachability alone is not a gate: the default selection
-    (`-m "not slow and not llm and not e2e"`) happily ran `createdb`/`dropdb`
-    on the operator's own cluster, and two concurrent runs left orphan
-    `robothor_restore_drill_test_*` databases with backends wedged on DROP
-    DATABASE. Every other class in this file drives the drill through
-    `install_fake_pg`, which touches no server at all.
+    Marked `integration`, the repo's convention for a live-DB test — but the
+    marker is not what keeps it out of a default run, because the default
+    selection (`-m "not slow and not llm and not e2e"`) does not exclude
+    `integration` at all. Nor is reachability: it happily ran
+    `createdb`/`dropdb` on the operator's own cluster, and two concurrent runs
+    left orphan `robothor_restore_drill_test_*` databases with backends wedged
+    on DROP DATABASE. The gate is ADMIN_DSN_ENV, which the operator sets to
+    name a cluster the suite may create and drop databases on — and everything
+    below connects through it. Every other class in this file drives the drill
+    through `install_fake_pg`, which touches no server at all.
     """
 
     @pytest.fixture(autouse=True)
     def _a_scratch_database_of_its_own(self):
         if not database_is_reachable():
-            pytest.skip("no reachable PostgreSQL server for the drill")
+            pytest.skip(
+                f"no opted-in PostgreSQL server for the drill — set {ADMIN_DSN_ENV} "
+                "to the DSN of a cluster this suite may create and drop databases on"
+            )
         yield
-        subprocess.run(["dropdb", "--if-exists", SCRATCH_DB], capture_output=True, timeout=60)
+        subprocess.run(
+            ["dropdb", "--if-exists", SCRATCH_DB],
+            capture_output=True,
+            timeout=60,
+            env=admin_env(),
+        )
 
     def test_the_dump_restores_and_the_verify_query_runs(self, tmp_path: Path):
         write_fixture_dump(tmp_path / "dumps" / "robothor_memory-20260101.sql.gz")
@@ -329,6 +447,7 @@ class TestAFixtureDumpRestoresAndIsVerified:
             capture_output=True,
             text=True,
             timeout=60,
+            env=admin_env(),
         )
         assert SCRATCH_DB not in listing.stdout, (
             "a drill that leaves its scratch database behind fills the disk one month at a time"
