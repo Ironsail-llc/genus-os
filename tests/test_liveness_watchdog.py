@@ -141,6 +141,10 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
             # Sender isolation — the real cooldown dir is /run/robothor, and a
             # stamp written there by a test could suppress a REAL page later.
             "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+            # And its fallback: when the primary is not writable the sender
+            # drops to /tmp/robothor-alert-cooldown-<uid>, a real shared path
+            # this box uses for production pages.
+            "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-cooldown-fallback"),
             # The probe drains the sender's spool on every tick, and the
             # sender spools any page it could not deliver. Both ends of that
             # loop have to point at this test's tmpdir: the real spool is

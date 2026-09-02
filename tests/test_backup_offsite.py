@@ -54,6 +54,20 @@ def _run(tmp_path: Path, src: Path, dest: Path, **env_extra) -> subprocess.Compl
         # offsite" that reads like a data-integrity emergency.
         "ROBOTHOR_ALERT_SUPPRESS": "1",
         "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",  # never resolves
+        # The pager writes DURABLE state of its own, and suppression is not a
+        # substitute for pinning it: ROBOTHOR_ALERT_SUPPRESS covers the call
+        # sites that set it, and every case below that reaches the sender
+        # WITHOUT it (see test_missing_remote_config_fails_loudly) would
+        # otherwise spool a fixture page into /var/lib/robothor/alert-spool,
+        # which root's liveness tick delivers for real five minutes later, and
+        # stamp a cooldown that suppresses a genuine page for an hour.
+        "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+        "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+        "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-cooldown-fallback"),
+        # /run/robothor/secrets.env is real and readable on a live box: with
+        # no override the sender recovers the operator's actual Telegram
+        # credentials and pages for real, whatever the API base says.
+        "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
         # The last-good marker lands on NVMe, not on the backup volume, so a
         # wedged volume cannot erase the evidence of when it last worked.
         # Redirect it here or the suite writes into /var/lib/robothor.
@@ -139,6 +153,18 @@ def test_missing_remote_config_fails_loudly(tmp_path: Path):
             "HOME": str(tmp_path),
             "ROBOTHOR_OFFSITE_SOURCE": str(src),
             "ROBOTHOR_OFFSITE_LOG": str(tmp_path / "offsite.log"),
+            # This case reaches fail(), which runs the REAL pager. With no
+            # secrets override the sender recovers the operator's actual
+            # credentials from /run/robothor/secrets.env and delivers
+            # "offsite-backup: ROBOTHOR_OFFSITE_REMOTE is not set" to their
+            # phone; with no spool pin an undelivered one is parked in
+            # /var/lib/robothor/alert-spool for root's next drain to send.
+            "ROBOTHOR_ALERT_SUPPRESS": "1",
+            "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+            "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+            "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+            "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+            "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-cooldown-fallback"),
         },
     )
     assert result.returncode != 0
@@ -578,6 +604,10 @@ class TestAMissingHelperFailsBeforeTheWork:
                 "ROBOTHOR_OFFSITE_LOG": str(tmp_path / "offsite.log"),
                 "ROBOTHOR_ALERT_SUPPRESS": "1",
                 "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+                "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+                "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+                "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+                "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-cooldown-fallback"),
                 "ROBOTHOR_BACKUP_STATE_DIR": str(_state_dir(tmp_path)),
             },
         )
