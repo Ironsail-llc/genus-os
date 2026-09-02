@@ -58,9 +58,6 @@ DESKTOP_TOOLS = frozenset(
 # Federation tools
 FEDERATION_TOOLS = frozenset({"federation_query", "federation_trigger", "federation_sync_status"})
 
-# Princess Freya (PF) vessel tools
-PF_TOOLS = frozenset({"pf_system_status"})
-
 # Skill tools
 SKILL_TOOLS = frozenset({"invoke_skill", "list_skills", "create_skill", "update_skill"})
 
@@ -228,7 +225,12 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Federation read-only tools
         "federation_query",
         "federation_sync_status",
-        # PF vessel read-only tools
+        # Contributed by the genus-plugin-pf plugin, not by core. The entry
+        # stays because the plugin CONTRACT has no way to declare a tool
+        # read-only -- genus.tools carries handlers and genus.schemas carries
+        # schemas, but safety classification is still core's table. Dropping
+        # this line would silently reclassify a read-only probe as a write
+        # tool. Remove it when the contract grows a read_only declaration.
         "pf_system_status",
         # Git read-only tools
         "git_status",
