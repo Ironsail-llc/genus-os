@@ -984,3 +984,63 @@ def test_an_operator_pin_that_contradicts_the_manifest_still_fails(tmp_path):
     assert "PINNED:db@operator:u-123" in row.tags
     assert "MISMATCH" in row.tags
     assert fa.has_drift(rows)
+
+
+# --- an invalid value is clamped, exactly as the reader clamps it -----------
+
+
+def test_effective_value_clamps_an_out_of_range_mode_like_the_reader_does():
+    """ROBOTHOR_RIP_13_MODE only honors observe/enforce
+    (feature_flags.symbolic_memory_mode drops anything else and returns
+    observe). Printing `alert` as the effective value describes a system that
+    does not exist — the exact class of defect this audit exists to find.
+    """
+    gates = fa.mode_gate_map()
+    notes: list[str] = []
+    resolved = {"ROBOTHOR_RIP_13_ENABLED": "1", "ROBOTHOR_RIP_13_MODE": "alert"}
+
+    assert fa.effective_value("ROBOTHOR_RIP_13_MODE", resolved, gates, notes=notes) == "observe"
+    assert any("ROBOTHOR_RIP_13_MODE" in n and "alert" in n for n in notes), (
+        "the raw value must be printed — a silently clamped flag is a flag "
+        "whose /etc line nobody knows is dead"
+    )
+
+
+def test_effective_value_leaves_a_valid_value_alone_and_notes_nothing():
+    gates = fa.mode_gate_map()
+    notes: list[str] = []
+    resolved = {"ROBOTHOR_RIP_13_ENABLED": "1", "ROBOTHOR_RIP_13_MODE": "enforce"}
+    assert fa.effective_value("ROBOTHOR_RIP_13_MODE", resolved, gates, notes=notes) == "enforce"
+    assert notes == []
+
+
+def test_cli_notes_the_raw_value_of_a_clamped_flag(tmp_path, capsys):
+    """Set only in the versioned drop-in, so nothing else in the table can
+    fail the run: the clamp alone decides the exit code here."""
+    manifest = _manifest(tmp_path, [{"name": "ROBOTHOR_RIP_13_MODE", "mode": "observe"}])
+    env_file = tmp_path / "robothor.env"
+    env_file.write_text("")
+    dropin = _dropin(tmp_path, ["ROBOTHOR_RIP_13_ENABLED=1", "ROBOTHOR_RIP_13_MODE=alert"])
+
+    rc = fa.main(
+        [
+            "--no-db",
+            "--flags-yaml",
+            str(manifest),
+            "--env-file",
+            str(env_file),
+            "--dropin-dir",
+            str(dropin),
+            "--environ",
+            str(tmp_path / "none"),
+        ]
+    )
+    out = capsys.readouterr().out
+
+    assert "alert" in out
+    assert "not one of observe, enforce" in out, "the note must name the valid set"
+    # Clamped to observe, which is what the manifest records — so the run does
+    # not fail on a MISMATCH the engine never had.
+    row_line = next(ln for ln in out.splitlines() if ln.startswith("ROBOTHOR_RIP_13_MODE"))
+    assert "observe" in row_line
+    assert rc == 0

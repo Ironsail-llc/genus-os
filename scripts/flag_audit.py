@@ -269,13 +269,40 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in _TRUE_VALUES
 
 
-def effective_value(flag: str, resolved: dict[str, str], gates: dict[str, ModeGate]) -> str:
+def _valid_values_for(flag: str) -> tuple[str, ...]:
+    """The flag's value set, from the one place that defines it.
+
+    ``robothor.flags.store.valid_values_for`` is what the bridge validates
+    writes against and what ``feature_flags`` clamps reads to. Asking it
+    (rather than hand-listing a ladder here) is the same rule the gate map
+    follows: a parallel copy would drift from the code that reads the flag,
+    and this table would then describe a system that does not exist.
+    """
+    from robothor.flags.store import valid_values_for
+
+    return valid_values_for(flag)
+
+
+def effective_value(
+    flag: str,
+    resolved: dict[str, str],
+    gates: dict[str, ModeGate],
+    *,
+    notes: list[str] | None = None,
+) -> str:
     """What ``feature_flags`` computes for *flag* given a resolved environment.
 
     Mirrors ``_enforcement_mode``: the panic switch wins over everything, a
     falsy ``*_ENABLED`` companion means ``off`` no matter what the mode says,
     and an enabled flag with no ``*_MODE`` set lands on the reader's default
     (``observe`` for the generic ladder).
+
+    Including the clamp. Every reader coerces an out-of-range value rather
+    than honoring it — ``symbolic_memory_mode`` returns ``observe`` for a
+    RIP-13 flag set to ``alert``, silently — so printing the raw value as
+    "effective" would report a mode the engine has never run. The raw value is
+    not thrown away either: it goes into *notes*, because an /etc line that
+    does nothing is precisely what an operator needs told.
     """
     if _truthy(resolved.get(PANIC_KEY)):
         return "off"
@@ -285,9 +312,18 @@ def effective_value(flag: str, resolved: dict[str, str], gates: dict[str, ModeGa
     if gate is not None and gate.enabled_var and not _truthy(resolved.get(gate.enabled_var)):
         return "off"
     raw = (resolved.get(flag) or "").strip().lower()
-    if raw:
-        return raw
-    return gate.default if gate is not None else "observe"
+    if not raw:
+        return gate.default if gate is not None else "observe"
+    valid = _valid_values_for(flag)
+    if raw not in valid:
+        if notes is not None:
+            notes.append(
+                f"{flag} is set to '{raw}', which is not one of "
+                f"{', '.join(valid)} — the engine clamps it to 'observe', so that "
+                "line governs nothing. Fix the value or remove it."
+            )
+        return "observe"
+    return raw
 
 
 def expected_from_manifest(flag: str, yaml_mode: str | None) -> str | None:
@@ -497,12 +533,15 @@ def audit(
     environ_path: Path | None = None,
     db: DbState | None = None,
     today: dt.date | None = None,
+    notes: list[str] | None = None,
 ) -> list[FlagRow]:
     """One row per governed/manifested flag, plus any debug key that is set.
 
     ``db=None`` means "no database": the evidence columns come back ``?`` and
     no pin can be seen, which the caller must state rather than presenting a
-    partial table as complete.
+    partial table as complete. *notes* is an out-parameter: anything the table
+    itself cannot say (an out-of-range value the engine clamps) is appended
+    for the caller to print beneath it.
     """
     from robothor.flags.store import GOVERNED_FLAGS
 
@@ -533,6 +572,7 @@ def audit(
             resolved=resolved,
             gates=gates,
             today=today,
+            notes=notes,
         )
         for flag in names
     ]
@@ -551,10 +591,11 @@ def _build_row(
     resolved: dict[str, str],
     gates: dict[str, ModeGate],
     today: dt.date,
+    notes: list[str] | None = None,
 ) -> FlagRow:
     db_pin = db.pins.get(flag) if db else None
     yaml_mode = str(manifest_entry["mode"]) if manifest_entry and "mode" in manifest_entry else None
-    effective = effective_value(flag, resolved, gates)
+    effective = effective_value(flag, resolved, gates, notes=notes)
     layer = _winning_layer(flag, db_pin=db_pin, environ=environ, envfile=envfile, dropin=dropin)
 
     db_pin_actor = db.pin_actors.get(flag) if db else None
@@ -806,6 +847,7 @@ def main(argv: list[str] | None = None) -> int:
         dropin_dir=args.dropin_dir,
         environ_path=environ_path,
         db=db,
+        notes=notes,
     )
     drift = has_drift(rows)
 
