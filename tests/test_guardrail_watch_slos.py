@@ -93,6 +93,11 @@ def probe_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("ROBOTHOR_SLO_RCLONE_CMD", "/bin/false")
     monkeypatch.setenv("ROBOTHOR_SLO_SYSTEMCTL_CMD", "/bin/false")
     monkeypatch.setenv("ROBOTHOR_SLO_DB_CHECKS", "0")
+    # The daily surface also counts the credential pool and reads the alert
+    # unit's journal. Both are live reads on this box, and both would make the
+    # verdict depend on how many keys the operator happens to have loaded.
+    monkeypatch.setenv("ROBOTHOR_SLO_KEY_POOL_CMD", "/bin/echo 2")
+    monkeypatch.setenv("ROBOTHOR_SLO_JOURNALCTL_CMD", "/bin/true")
     # Report mode pages nobody by construction; this is the belt to that
     # braces, because a regression here would page the operator from a test.
     monkeypatch.setenv("ROBOTHOR_SLO_ALERT_CMD", "/bin/true")
@@ -294,6 +299,136 @@ class TestABudgetIsOneEnvVarForBothSurfaces:
         fresh_markers(tmp_path, age_hours=100)
         monkeypatch.setenv("ROBOTHOR_SLO_LOCAL_DUMP_MAX_HOURS", "twenty-six")
         assert by_name(gw.backup_freshness_slos(tmp_path), "local dump").status == "BREACH"
+
+
+# ── the halves of S2, S3 and S6 that were never measured ─────────────────────
+
+
+def install_fake_journalctl(tmp_path: Path, lines: list[str], exit_code: int = 0) -> Path:
+    script = tmp_path / "bin" / "journalctl"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    body = "".join(f"echo {line!r}\n" for line in lines)
+    script.write_text(f"#!/usr/bin/env bash\n{body}exit {exit_code}\n")
+    script.chmod(0o755)
+    return script
+
+
+class TestTheHeartbeatDeliveryLag:
+    """S2 is "heartbeat delivery", and a heartbeat delivered ten minutes late
+    is a briefing nobody acted on. Only the delivered COUNT was measured."""
+
+    def test_a_lag_of_a_minute_breaches(self) -> None:
+        slo = gw.heartbeat_slo(delivered=12, beats=12, worst_lag_seconds=60.0)
+        assert slo.status == "BREACH"
+        assert "60" in slo.measured
+
+    def test_a_lag_inside_a_minute_is_ok(self) -> None:
+        assert gw.heartbeat_slo(delivered=12, beats=12, worst_lag_seconds=3.0).status == "OK"
+
+    def test_an_unknown_lag_does_not_invent_a_breach(self) -> None:
+        """Nothing delivered in the window yet is not evidence of a slow one."""
+        assert gw.heartbeat_slo(delivered=12, beats=12, worst_lag_seconds=None).status == "OK"
+
+    def test_zero_beats_still_breaches_however_fast_delivery_was(self) -> None:
+        assert gw.heartbeat_slo(delivered=0, beats=0, worst_lag_seconds=None).status == "BREACH"
+
+    def test_the_target_names_the_lag_budget(self) -> None:
+        assert "60s" in gw.heartbeat_slo(delivered=1, beats=1, worst_lag_seconds=1.0).target
+
+
+class TestThePagerDeliveryJournalHalf:
+    """S3 counted alert_fallback rows only. The sender logs a page it could not
+    deliver to the journal, and a page lost before any row is written is the
+    one that matters most — 432 alerts once went nowhere exactly that way."""
+
+    def test_journal_failures_count_toward_the_breach(self) -> None:
+        slo = gw.pager_slo(fallback_rows=0, journal_failures=3)
+        assert slo.status == "BREACH"
+        assert "3" in slo.measured and "journal" in slo.measured.lower()
+
+    def test_a_clean_pager_is_ok(self) -> None:
+        assert gw.pager_slo(fallback_rows=0, journal_failures=0).status == "OK"
+
+    def test_an_unreadable_journal_says_unknown_rather_than_zero(self) -> None:
+        slo = gw.pager_slo(fallback_rows=0, journal_failures=None)
+        assert "unknown" in slo.measured.lower()
+        assert slo.status == "OK", "an unreadable journal is not itself a lost page"
+
+    def test_the_journal_is_read_through_a_seam(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        journal = install_fake_journalctl(
+            tmp_path,
+            [
+                "robothor-alert: failed to send after 3 attempts",
+                "robothor-alert: sent",
+                "robothor-alert: failed to send (HTTP 401)",
+            ],
+        )
+        monkeypatch.setenv("ROBOTHOR_SLO_JOURNALCTL_CMD", str(journal))
+        assert gw.alert_journal_failures() == 2
+
+    def test_a_journalctl_that_cannot_answer_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("ROBOTHOR_SLO_JOURNALCTL_CMD", str(tmp_path / "no-such-journalctl"))
+        assert gw.alert_journal_failures() is None, (
+            "a journal that could not be read is unknown, never zero — zero is "
+            "the answer that says the pager is healthy"
+        )
+
+
+class TestTheCredentialPoolSize:
+    """One capped OpenRouter key took the whole fleet down on 2026-08-27 —
+    every model shares the pool — and the spare slot was empty. A pool of one
+    is a single point of failure nothing had ever counted."""
+
+    def test_a_pool_of_one_breaches_the_daily_report(self) -> None:
+        slo = gw.credential_pool_slo(1)
+        assert slo.status == "BREACH"
+        assert "pool size 1" in slo.measured
+
+    def test_a_pool_of_two_is_ok(self) -> None:
+        assert gw.credential_pool_slo(2).status == "OK"
+
+    def test_an_uncountable_pool_is_unevaluated_not_ok(self) -> None:
+        assert gw.credential_pool_slo(None).status == "UNEVALUATED"
+
+    def test_the_pool_is_counted_through_a_seam(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        script = tmp_path / "bin" / "count-keys"
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text("#!/usr/bin/env bash\necho 4\n")
+        script.chmod(0o755)
+        monkeypatch.setenv("ROBOTHOR_SLO_KEY_POOL_CMD", str(script))
+        assert gw.credential_pool_size() == 4
+
+    def test_the_default_command_actually_counts_the_key_pool(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The command is run, not quoted: an invocation nobody executes is
+        how a control ends up inert with a green test beside it."""
+        monkeypatch.delenv("ROBOTHOR_SLO_KEY_POOL_CMD", raising=False)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "fixture-key-1")
+        monkeypatch.setenv("OPENROUTER_API_KEY_2", "fixture-key-2")
+        monkeypatch.delenv("OPENROUTER_API_KEY_3", raising=False)
+        assert gw.credential_pool_size() == 2
+
+    def test_the_pool_size_is_a_digest_line_and_never_a_page(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        write_dump(probe_env(monkeypatch, tmp_path))
+        fresh_markers(tmp_path)
+        sent: list[str] = []
+        monkeypatch.setattr(gw, "send_telegram", lambda text: sent.append(text) or True)
+        monkeypatch.setattr(gw, "credential_pool_size", lambda: 1)
+
+        slos = gw.check_slos()
+
+        assert by_name(slos, "credential pool").status == "BREACH"
+        assert "pool size 1" in capsys.readouterr().out
+        assert sent == [], "the pool size is a digest line, not a page"
 
 
 # ── the report ───────────────────────────────────────────────────────────────

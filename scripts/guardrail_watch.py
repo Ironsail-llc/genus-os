@@ -18,6 +18,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import shlex
 import subprocess
 import sys
 import urllib.parse
@@ -622,8 +623,120 @@ def backup_freshness_slos(
     return out
 
 
+#: S2 is "heartbeat DELIVERY". A heartbeat that ran on time and reached the
+#: operator ten minutes later is a briefing nobody acted on, so the lag is part
+#: of the objective, not a footnote to it.
+HEARTBEAT_LAG_BUDGET_SECONDS = 60
+
+#: S6: every model shares one credential pool (2026-08-27 — one capped
+#: OpenRouter key stopped the whole fleet, and the spare slot was empty). A
+#: pool of one is a single point of failure; this is a digest line, never a
+#: page, because a thin pool is a risk rather than an outage.
+MIN_CREDENTIAL_POOL = 2
+
+
 def _pct(bad: int, total: int) -> str:
     return f"{100 * bad / total:.1f}% ({bad}/{total})" if total else "no runs"
+
+
+def heartbeat_slo(delivered: int, beats: int, worst_lag_seconds: float | None) -> Slo:
+    """S2 — did the operator-facing agent run, AND did the result arrive?"""
+    if worst_lag_seconds is None:
+        lag = "lag unknown"
+        lag_breach = False
+    else:
+        lag = f"worst lag {worst_lag_seconds:.0f}s"
+        lag_breach = worst_lag_seconds >= HEARTBEAT_LAG_BUDGET_SECONDS
+    breached = beats == 0 or 100 * delivered / beats < 95 or lag_breach
+    return Slo(
+        "S2 heartbeat delivery",
+        f">= 95% delivered, lag < {HEARTBEAT_LAG_BUDGET_SECONDS}s",
+        f"{delivered}/{beats} in 24h, {lag} over 7d",
+        "BREACH" if breached else "OK",
+    )
+
+
+def alert_journal_failures(since: str = "-7d") -> int | None:
+    """Pages the sender logged as undeliverable, from the alert unit's journal.
+
+    The other half of S3. ``alert_fallback`` rows only exist for a page that
+    got as far as writing one; a send that failed outright says so in the
+    journal and nowhere else — which is how 432 alerts once went nowhere.
+    Returns None when the journal cannot be read: unknown is not zero, and
+    zero is the answer that means the pager is healthy.
+    """
+    cmd = os.environ.get("ROBOTHOR_SLO_JOURNALCTL_CMD", "journalctl")
+    argv = [*shlex.split(cmd), "-u", "robothor-alert@*", "--since", since, "-o", "cat"]
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  (the alert journal could not be read: {exc})")
+        return None
+    if result.returncode != 0:
+        print(f"  (the alert journal could not be read: journalctl exit {result.returncode})")
+        return None
+    return sum(1 for line in result.stdout.splitlines() if "failed to send" in line)
+
+
+def pager_slo(fallback_rows: int, journal_failures: int | None) -> Slo:
+    """S3 — every page that did not reach the operator, from both halves."""
+    if journal_failures is None:
+        journal = "journal unknown"
+        lost = fallback_rows
+    else:
+        journal = f"{journal_failures} 'failed to send' in the journal"
+        lost = fallback_rows + journal_failures
+    return Slo(
+        "S3 pager delivery",
+        "0 lost pages / 7d",
+        f"{fallback_rows} alert_fallback rows, {journal}",
+        "BREACH" if lost else "OK",
+    )
+
+
+def credential_pool_size() -> int | None:
+    """How many keys the OpenRouter pool actually holds.
+
+    A subprocess, not an import: the engine's import graph crashing must fail
+    THIS measurement rather than the whole daily report. None when it cannot
+    be counted — an uncountable pool is UNEVALUATED, not OK.
+    """
+    cmd = os.environ.get("ROBOTHOR_SLO_KEY_POOL_CMD", "")
+    argv = (
+        shlex.split(cmd)
+        if cmd
+        else [
+            sys.executable,
+            "-c",
+            "from robothor.engine.key_pool import keys_from_env; "
+            "print(len(keys_from_env('OPENROUTER_API_KEY')))",
+        ]
+    )
+    try:
+        result = subprocess.run(
+            argv, capture_output=True, text=True, timeout=60, cwd=str(REPO_ROOT)
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  (the credential pool could not be counted: {exc})")
+        return None
+    try:
+        return int(result.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        print(f"  (the credential pool could not be counted: exit {result.returncode})")
+        return None
+
+
+def credential_pool_slo(size: int | None) -> Slo:
+    if size is None:
+        return Slo(
+            "S6 credential pool", f">= {MIN_CREDENTIAL_POOL} keys", "uncountable", "UNEVALUATED"
+        )
+    return Slo(
+        "S6 credential pool",
+        f">= {MIN_CREDENTIAL_POOL} keys",
+        f"pool size {size}",
+        "BREACH" if size < MIN_CREDENTIAL_POOL else "OK",
+    )
 
 
 def db_slos() -> list[Slo]:
@@ -638,6 +751,10 @@ def db_slos() -> list[Slo]:
         Slo("S6 LLM availability", "'all models failed' < 1%/day", "", "UNEVALUATED"),
         Slo("S7 workflows", "bad <= 10%", "", "UNEVALUATED"),
     ]
+    # Read before the connection is opened: the journal half of S3 needs no
+    # database, and a page the sender could not deliver is exactly the news an
+    # operator needs on a morning when the database is also down.
+    journal_failures = alert_journal_failures()
     try:
         with get_connection() as conn:
             cur = conn.cursor()
@@ -679,13 +796,21 @@ def db_slos() -> list[Slo]:
                 (agent,),
             )
             delivered, beats = cur.fetchone()
+            # ...and how late the delivered ones were. A heartbeat that ran on
+            # time and arrived ten minutes later is a briefing nobody acted on.
+            cur.execute(
+                """
+                SELECT max(EXTRACT(EPOCH FROM (delivered_at - completed_at)))
+                FROM agent_runs
+                WHERE started_at >= now() - interval '7 days'
+                  AND agent_id = %s AND trigger_detail LIKE 'heartbeat:%%'
+                  AND delivered_at IS NOT NULL AND completed_at IS NOT NULL
+                """,
+                (agent,),
+            )
+            (worst_lag,) = cur.fetchone()
             out.append(
-                Slo(
-                    "S2 heartbeat delivery",
-                    ">= 95% delivered",
-                    f"{delivered}/{beats} in 24h",
-                    "BREACH" if beats == 0 or 100 * delivered / beats < 95 else "OK",
-                )
+                heartbeat_slo(delivered, beats, float(worst_lag) if worst_lag is not None else None)
             )
 
             # S3 — every alert_fallback row is a page that was NOT delivered
@@ -698,14 +823,7 @@ def db_slos() -> list[Slo]:
                 """
             )
             (lost,) = cur.fetchone()
-            out.append(
-                Slo(
-                    "S3 pager delivery",
-                    "0 lost pages / 7d",
-                    f"{lost} alert_fallback rows",
-                    "BREACH" if lost else "OK",
-                )
-            )
+            out.append(pager_slo(lost, journal_failures))
 
             # S6 — two different outages wear the same face here: every model
             # exhausted (one shared credential pool), and everything quietly
@@ -798,24 +916,26 @@ def write_slo_digest(subject: str, body: str) -> bool:
         return False
 
 
-def check_slos() -> None:
+def check_slos() -> list[Slo]:
     """Report every SLO, then leave one digest row if any of them breached."""
     print("\n=== SLOs ===")
     # DB-free first, and unconditionally — see the module comment above. S4, S5
     # and S8 all come from the hourly probe's --report mode, so the daily
     # surface and the pager can never disagree about what they measured.
     slos = probe_report_slos()
+    slos.append(credential_pool_slo(credential_pool_size()))
     slos += db_slos()
     print(format_slo_report(slos))
 
     breached = [s for s in slos if s.status == "BREACH"]
     if not breached:
         print("  every evaluated SLO is inside target")
-        return
+        return slos
     body = "\n".join(f"{s.name}: {s.measured} (target {s.target})" for s in breached)
     print(f"  <-- {len(breached)} SLO(s) breached; see docs/runbooks/SLOS.md")
     if write_slo_digest(f"SLO breach x{len(breached)}", body):
         print("  (digest row written for the heartbeat)")
+    return slos
 
 
 def _run_db_dependent_checks() -> None:

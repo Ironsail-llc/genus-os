@@ -44,11 +44,12 @@ tomorrow.
 | # | SLO | Measured from | Target | On breach |
 |---|---|---|---|---|
 | S1 | Run success | `agent_runs`, 7d, terminal statuses only, `benchmark:%` excluded | bad ≤ 5% | digest |
-| S2 | Heartbeat delivery | `agent_runs`, 24h, main's `heartbeat:%` runs with `delivered_at` | ≥ 95% delivered | **page** (12h cooldown) when 0 ran in 24h |
-| S3 | Pager delivery | `crm_agent_notifications`, 7d, `alert_fallback` rows | 0 lost pages | digest |
+| S2 | Heartbeat delivery | `agent_runs`, 24h, main's `heartbeat:%` runs with `delivered_at`, plus the worst `delivered_at - completed_at` over 7d | ≥ 95% delivered **and** lag < 60s | **page** (12h cooldown) when 0 ran in 24h |
+| S3 | Pager delivery | `crm_agent_notifications`, 7d, `alert_fallback` rows **+** `failed to send` lines in `robothor-alert@*`'s journal over 7d | 0 lost pages | digest |
 | **S4** | **Backup freshness (dead-man)** | `scripts/backup-state.sh` markers + a readdir of the dump dir + `backup-volume-check.sh --ro` | local dump < 26h, offsite < 26h, basebackup < 8d | **page** `slo:backup-freshness` (12h cooldown → re-pages daily until fixed) |
 | S5 | Liveness | `systemctl show robothor-liveness.service -p Result` + the timer's `LastTriggerUSec`, read hourly | last fired < 1h, last run `success` | **page** `slo:liveness-stale` (12h cooldown) |
 | S6 | LLM availability | `agent_runs`, 24h: `All models failed` share, `ollama_chat/%` share | all-failed < 1%/day, local fallback < 30% | **page** `slo:llm-availability` (6h cooldown) at ≥ 5 all-failed in an hour |
+| S6 | Credential pool | `keys_from_env('OPENROUTER_API_KEY')` — the pool every model shares | ≥ 2 keys | digest line `pool size N`, never a page |
 | S7 | Workflows | `workflow_runs`, 7d, worst workflow | bad ≤ 10% | digest |
 | S8 | Guardrail-watch ran | `systemctl show robothor-guardrail-watch.service -p ExecMainExitTimestamp,Result`, read hourly | completed < 26h ago, `success` | **page** `slo:guardrail-watch-stale` (12h cooldown) |
 
@@ -121,6 +122,11 @@ A 403 is not a 401 on OpenRouter — a capped key answers 403 while the
 credential is still valid. Spare keys ride `OPENROUTER_API_KEY_2` and up; the
 walk stops at the first gap, so a hole in the numbering hides every key after
 it.
+
+The daily report counts that pool and prints `pool size N`. A pool of one is
+the 2026-08-27 outage waiting to happen — one capped key stopped every model,
+because every model shares the pool, and the spare slot was empty. It breaches
+in the digest and never pages: a thin pool is a risk, not an outage.
 
 ### `slo:liveness-stale` — S5
 
