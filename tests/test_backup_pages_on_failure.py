@@ -583,26 +583,57 @@ class TestWalOffsiteRefusesToGuessWhenTheProbeIsBroken:
         probe = tmp_path / "fake-volume-check.sh"
         self._stub(probe, f"exit {probe_exit}")
 
+        env = {
+            **_pager_pins(tmp_path),
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            # The script SETS its PATH (a root unit must not inherit the operator's
+            # user-writable directories), so the stub directory reaches it through the
+            # one documented seam — see infra/systemd/README.md.
+            "ROBOTHOR_EXTRA_PATH": str(bin_dir),
+            "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
+            "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
+            "ROBOTHOR_OFFSITE_REMOTE": "remote:bucket",
+            "ROBOTHOR_DB_NAME": "robothor_memory",
+            "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
+            "ROBOTHOR_VOLUME_CHECK": str(probe),
+            "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0",
+        }
+        # env_extra was accepted and then dropped on the floor — the dict below
+        # was built inline in the subprocess call, so every override a caller
+        # passed was silently ignored.
+        for key, value in (env_extra or {}).items():
+            if value is None:
+                env.pop(key, None)
+            else:
+                env[key] = value
+
         return subprocess.run(
             ["bash", str(self.SCRIPT)],
             capture_output=True,
             text=True,
             timeout=120,
-            env={
-                **_pager_pins(tmp_path),
-                "PATH": f"{bin_dir}:{os.environ['PATH']}",
-                # The script SETS its PATH (a root unit must not inherit the operator's
-                # user-writable directories), so the stub directory reaches it through the
-                # one documented seam — see infra/systemd/README.md.
-                "ROBOTHOR_EXTRA_PATH": str(bin_dir),
-                "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
-                "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
-                "ROBOTHOR_OFFSITE_REMOTE": "remote:bucket",
-                "ROBOTHOR_DB_NAME": "robothor_memory",
-                "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
-                "ROBOTHOR_VOLUME_CHECK": str(probe),
-                "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0",
-            },
+            env=env,
+        )
+
+    def test_a_missing_probe_fails_the_unit(self, tmp_path: Path):
+        """"Not installed" is the same "I cannot answer" as exit 255.
+
+        The 255 branch degrades AND fails. The missing-probe branch only
+        degraded: no basebackup replication, no WAL prune, exit 0 — a unit
+        that looks healthy on every timer tick while doing neither of the two
+        jobs it exists for. That is permanent silent degradation, and it is
+        the state a botched install or a moved script leaves behind.
+        """
+        result = self._run(
+            tmp_path, 0, {"ROBOTHOR_VOLUME_CHECK": str(tmp_path / "no-such-probe.sh")}
+        )
+        assert "volume probe not found" in result.stdout + result.stderr, (
+            "the missing probe was not the path taken\n" + result.stdout + result.stderr
+        )
+        assert result.returncode != 0, (
+            "a missing volume probe degraded the unit and exited 0, so nothing "
+            "replicates a base backup or prunes WAL and no timer tick ever "
+            "says so\n" + result.stdout + result.stderr
         )
 
     def test_a_broken_probe_fails_the_unit(self, tmp_path: Path):

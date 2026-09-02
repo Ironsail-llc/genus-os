@@ -102,8 +102,13 @@ fail() { log "ERROR: $*"; exit 1; }
 OFFSITE_FAILED=0
 VOLUME_DOWN=0
 if [[ ! -x "$VOLUME_CHECK" ]]; then
+    # Same "I cannot answer the question" as exit 255, so the same answer:
+    # degrade AND fail. Degrading alone left this unit replicating no base
+    # backup and pruning no WAL, exiting 0 every tick — permanently silent,
+    # which is exactly the shape a botched install or a moved script leaves.
     log "ERROR: volume probe not found at $VOLUME_CHECK"
     VOLUME_DOWN=1
+    OFFSITE_FAILED=1
 else
     VOLUME_CHECK_RC=0
     "$VOLUME_CHECK" --ro "$BASEBACKUP_DIR" || VOLUME_CHECK_RC=$?
