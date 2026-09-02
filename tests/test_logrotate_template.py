@@ -199,11 +199,31 @@ def test_backup_log_defaults_outside_the_git_tree():
     """scripts/backup.log was being written INSIDE the checkout, where it is one
     `git add -A` away from being committed — and no logrotate glob covers it."""
     body = BACKUP.read_text()
-    assert 'ROBOTHOR_BACKUP_LOG:-/var/log/robothor/backup.log' in body, (
-        "backup-ssd.sh must default its log to /var/log/robothor/, which the "
-        "logrotate config covers"
+    assert 'ROBOTHOR_LOG_DIR:-/var/log/robothor' in body, (
+        "backup-ssd.sh must default its log directory to /var/log/robothor/, "
+        "which the logrotate config covers"
     )
-    assert "scripts/backup.log" not in body
+    assert '_default_log="${_log_dir}/backup.log"' in body, body
+
+
+def test_the_in_tree_log_survives_only_as_the_unwritable_fallback():
+    """The default is used by a bare `>>` under `set -euo pipefail`, so a box
+    with no writable /var/log/robothor would lose the whole backup to its log
+    destination. The old in-tree path is the fallback and nothing else — one
+    mention, inside the guarded branch.
+
+    That the fallback actually runs the backup is proved by driving the script:
+    tests/test_backup_pages_on_failure.py::
+    TestTheVolumeProbeActuallyGatesTheLocalBackup::
+    test_an_unwritable_log_directory_does_not_abort_the_backup
+    """
+    lines = [ln for ln in BACKUP.read_text().splitlines() if "scripts/backup.log" in ln]
+    assert len(lines) == 1, lines
+    assert lines[0].strip().startswith("_default_log="), lines
+    assert lines[0].startswith("    "), (
+        "the in-tree path is at top level, so it is the default rather than "
+        f"the fallback: {lines[0]!r}"
+    )
 
 
 def test_backup_log_is_gitignored():

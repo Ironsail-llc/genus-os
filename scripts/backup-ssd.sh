@@ -16,7 +16,22 @@ TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 # Default outside the checkout: written inside it, this log was one `git add -A`
 # away from being committed, and no logrotate glob covered it. /var/log/robothor
 # is the directory infra/logrotate/robothor.conf rotates.
-LOG="${ROBOTHOR_BACKUP_LOG:-/var/log/robothor/backup.log}"
+#
+# But the log is used by a bare `>>` under `set -euo pipefail`, so on an
+# instance where that directory is absent or unwritable the FIRST log line
+# kills the script — before the volume probe, before the free-space guard,
+# before anything. A log destination must never be able to cancel the backup.
+# Same pattern as scripts/backup-offsite.sh: create it, prove the file is
+# writable, otherwise fall back to the old in-tree path and say so on stderr.
+_log_dir="${ROBOTHOR_LOG_DIR:-/var/log/robothor}"
+_default_log="${_log_dir}/backup.log"
+if [[ -z "${ROBOTHOR_BACKUP_LOG:-}" ]] \
+   && ! { mkdir -p "$_log_dir" 2>/dev/null && touch "$_default_log" 2>/dev/null; }; then
+    _default_log="${ROBOTHOR_WORKSPACE:-${HOME:-/tmp}/robothor}/scripts/backup.log"
+    echo "backup-ssd: ${_log_dir} is not writable — logging to ${_default_log}" >&2
+    mkdir -p "$(dirname "$_default_log")" 2>/dev/null || true
+fi
+LOG="${ROBOTHOR_BACKUP_LOG:-$_default_log}"
 MANIFEST="$BACKUP_ROOT/backup-manifest.txt"
 MIN_FREE_GB=10
 

@@ -32,6 +32,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UNIT_DIR = REPO_ROOT / "infra" / "systemd"
 
@@ -523,7 +525,12 @@ class TestWalOffsiteRefusesToGuessWhenTheProbeIsBroken:
         path.write_text(f"#!/usr/bin/env bash\n{body}\n")
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
-    def _run(self, tmp_path: Path, probe_exit: int):
+    def _run(
+        self,
+        tmp_path: Path,
+        probe_exit: int,
+        env_extra: dict[str, str | None] | None = None,
+    ):
         archive_dir = tmp_path / "wal_archive"
         archive_dir.mkdir()
         (archive_dir / "000000010000000000000003").write_text("wal")
@@ -607,7 +614,12 @@ class TestTheVolumeProbeActuallyGatesTheLocalBackup:
         path.write_text(f"#!/usr/bin/env bash\n{body}\n")
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
-    def _run(self, tmp_path: Path, probe_exit: int):
+    def _run(
+        self,
+        tmp_path: Path,
+        probe_exit: int,
+        env_extra: dict[str, str | None] | None = None,
+    ):
         # A test that runs the real backup against the real mount would write
         # into the live encrypted volume. If the seam is ever removed, fail
         # here rather than finding out afterwards.
@@ -643,19 +655,26 @@ class TestTheVolumeProbeActuallyGatesTheLocalBackup:
             probe, f'printf \'%s\\n\' "$@" >> "{probe_log}"\nexit {probe_exit}'
         )
 
+        env: dict[str, str] = {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "ROBOTHOR_BACKUP_MOUNT": str(mount),
+            "ROBOTHOR_BACKUP_LOG": str(tmp_path / "backup.log"),
+            "ROBOTHOR_VOLUME_CHECK": str(probe),
+            "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
+        }
+        for key, value in (env_extra or {}).items():
+            if value is None:
+                env.pop(key, None)
+            else:
+                env[key] = value
+
         result = subprocess.run(
             ["bash", str(self.SCRIPT)],
             capture_output=True,
             text=True,
             timeout=120,
-            env={
-                "PATH": f"{bin_dir}:{os.environ['PATH']}",
-                "HOME": str(home),
-                "ROBOTHOR_BACKUP_MOUNT": str(mount),
-                "ROBOTHOR_BACKUP_LOG": str(tmp_path / "backup.log"),
-                "ROBOTHOR_VOLUME_CHECK": str(probe),
-                "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
-            },
+            env=env,
         )
         return result, mount, probe_log
 
@@ -700,3 +719,61 @@ class TestTheVolumeProbeActuallyGatesTheLocalBackup:
         marker = tmp_path / "state" / "last-local-dump"
         assert marker.exists(), result.stdout + result.stderr
         assert dumps[-1].name in marker.read_text(), marker.read_text()
+
+    @pytest.mark.skipif(
+        os.geteuid() == 0, reason="root ignores the directory mode this test sets"
+    )
+    def test_an_unwritable_log_directory_does_not_abort_the_backup(
+        self, tmp_path: Path
+    ) -> None:
+        """The log default moved to /var/log/robothor/backup.log, and it is
+        used by a bare `>>` under `set -euo pipefail`. On an instance where
+        that directory is absent or unwritable the FIRST log line kills the
+        script — before the volume probe, before the free-space guard, before
+        anything. A log destination must never be able to cancel the backup.
+
+        scripts/backup-offsite.sh already solved this: create the directory,
+        prove the file is writable, otherwise fall back to the old in-tree path
+        and say so on stderr.
+        """
+        # Without the seam this test would drive the real backup at the real
+        # /var/log/robothor. Fail here rather than writing to it.
+        code = "\n".join(_code_lines(self.SCRIPT.read_text()))
+        assert "ROBOTHOR_LOG_DIR" in code, (
+            "backup-ssd.sh has no log-directory seam, so this test cannot run "
+            "without pointing it at the real /var/log/robothor"
+        )
+
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        locked.chmod(0o500)
+        try:
+            result, mount, _ = self._run(
+                tmp_path,
+                probe_exit=0,
+                env_extra={
+                    "ROBOTHOR_BACKUP_LOG": None,
+                    "ROBOTHOR_LOG_DIR": str(locked / "robothor"),
+                },
+            )
+        finally:
+            locked.chmod(0o700)
+
+        assert result.returncode == 0, (
+            "an unwritable log directory aborted the whole backup\n"
+            + result.stdout
+            + result.stderr
+        )
+        assert sorted((mount / "robothor" / "db").glob("*.sql.gz")), (
+            "the backup did not run\n" + result.stdout + result.stderr
+        )
+        fallback = tmp_path / "home" / "robothor" / "scripts" / "backup.log"
+        assert fallback.exists(), (
+            "no fallback log was written, so the run left no record at all\n"
+            + result.stdout
+            + result.stderr
+        )
+        assert fallback.read_text().strip(), "the fallback log is empty"
+        assert str(fallback) in result.stderr, (
+            "a silently relocated log is a log nobody finds\n" + result.stderr
+        )
