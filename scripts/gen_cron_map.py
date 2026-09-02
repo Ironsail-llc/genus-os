@@ -362,20 +362,22 @@ def _read(source: str | None, command: list[str]) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--crontab-file", help="read crontab text from this file instead of `crontab -l`")
+    parser.add_argument(
+        "--crontab-file", help="read crontab text from this file instead of `crontab -l`"
+    )
     parser.add_argument(
         "--timers-file", help="read `systemctl list-timers` text from this file instead of systemd"
     )
-    parser.add_argument("--workspace", help="resolve relative crontab targets against this directory")
+    parser.add_argument(
+        "--workspace", help="resolve relative crontab targets against this directory"
+    )
     parser.add_argument(
         "--no-db", action="store_true", help="skip the agent_schedules rows (no database needed)"
     )
     args = parser.parse_args(argv)
 
     crontab_text = _read(args.crontab_file, ["crontab", "-l"])
-    timers_text = _read(
-        args.timers_file, ["systemctl", "list-timers", "--all", "--no-legend"]
-    )
+    timers_text = _read(args.timers_file, ["systemctl", "list-timers", "--all", "--no-legend"])
 
     schedules: list[dict[str, object]] | None = None
     db_failed = False

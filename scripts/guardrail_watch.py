@@ -399,9 +399,7 @@ def check_instance_doctor(script: Path | None = None) -> bool:
         print(f"  FAIL: {Path(doctor).name} missing — install truth was NOT checked")
         return False
     try:
-        result = subprocess.run(
-            ["bash", str(doctor)], capture_output=True, text=True, timeout=300
-        )
+        result = subprocess.run(["bash", str(doctor)], capture_output=True, text=True, timeout=300)
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"  FAIL: instance doctor could not run: {exc}")
         return False
