@@ -48,7 +48,14 @@
 #                       the units being inspected, so state is reported unknown
 #                       rather than guessed)
 #   ROBOTHOR_WORKSPACE / ROBOTHOR_SERVICE_USER / ROBOTHOR_SERVICE_HOME /
-#   ROBOTHOR_ENV_FILE   passed through to scripts/render-unit.sh
+#   ROBOTHOR_ENV_FILE   passed through to scripts/render-unit.sh.
+#                       ROBOTHOR_WORKSPACE additionally extends the template
+#                       search path with <workspace>/infra/systemd, so that
+#                       instance-land templates — gitignored by design, and so
+#                       present only in the workspace checkout — are compared
+#                       rather than reported as untemplated when the doctor is
+#                       run from another checkout. This checkout's templates
+#                       win any name collision.
 #
 # Exit: 0 = no findings, 1 = findings (the summary line carries the count),
 #       2 = usage error.
@@ -100,6 +107,69 @@ BIN_DIR="${ROOT}/usr/local/bin"
 if [[ -n "$ROOT" && -z "${ROBOTHOR_ENV_FILE:-}" ]]; then
     export ROBOTHOR_ENV_FILE="${ROOT}/etc/robothor/robothor.env"
 fi
+
+# ── template search path ──────────────────────────────────────────────────────
+# SRC_DIR is the infra/systemd of whatever checkout this script was RUN from,
+# and that is not the only place a unit template legitimately lives. Some units
+# are instance-land and their templates are gitignored on purpose (.gitignore
+# carries /infra/systemd/delphi-*.service and
+# /infra/systemd/robothor-delphi-engine.*, per CLAUDE.md rule 11), so they
+# exist only in the workspace checkout that serves the box. Run out of a branch
+# worktree or a fresh clone, the doctor could not see them and reported
+# `no-template` for a unit that HAS one — a finding whose remedy had already
+# been carried out, and which an operator can only silence by allow-listing a
+# unit that is in fact templated. Two wrong answers: a false finding, and a
+# suppression that then hides a real one.
+#
+# So the lookup is a search path rather than one directory: this checkout
+# first, then the workspace's infra/systemd when it resolves somewhere else.
+# This checkout wins a name collision — the tracked platform template is the
+# authority, or a stale workspace copy would decide whether a reviewed change
+# looks like drift.
+doctor_env_lookup() {  # KEY -> value from the renderer's env file, or ""
+    local key="$1" file="${ROBOTHOR_ENV_FILE:-${ROOT}/etc/robothor/robothor.env}" line
+    [[ -r "$file" ]] || return 0
+    line="$(grep -E "^${key}=" "$file" | tail -n 1)" || true
+    printf '%s' "${line#*=}"
+}
+
+TEMPLATE_DIRS=("$SRC_DIR")
+_ws="${ROBOTHOR_WORKSPACE:-$(doctor_env_lookup ROBOTHOR_WORKSPACE)}"
+if [[ -n "$_ws" && -d "${_ws}/infra/systemd" ]]; then
+    _ws_src="$(cd "${_ws}/infra/systemd" && pwd -P)"
+    _own_src="$(cd "$SRC_DIR" && pwd -P)"
+    [[ "$_ws_src" != "$_own_src" ]] && TEMPLATE_DIRS+=("$_ws_src")
+fi
+
+# First template directory that carries this relative path, or nothing.
+template_for() {  # NAME|DIR/NAME -> path, exit 1 when no directory has it
+    local rel="$1" dir
+    for dir in "${TEMPLATE_DIRS[@]}"; do
+        if [[ -e "${dir}/${rel}" ]]; then
+            printf '%s' "${dir}/${rel}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Every template across the search path, once, first directory winning. Printed
+# one relative path per line so callers can read it with `while read`.
+template_index() {
+    local dir src rel
+    for dir in "${TEMPLATE_DIRS[@]}"; do
+        for src in "$dir"/robothor-*.service "$dir"/robothor-*.timer "$dir"/robothor-*.path \
+                   "$dir"/robothor-*.service.d/*.conf; do
+            [[ -e "$src" ]] || continue
+            if [[ "$src" == *.conf ]]; then
+                rel="$(basename "$(dirname "$src")")/$(basename "$src")"
+            else
+                rel="$(basename "$src")"
+            fi
+            printf '%s\n' "$rel"
+        done
+    done | awk '!seen[$0]++'
+}
 
 FINDINGS=0
 log() { echo "[instance-doctor] $*"; }
@@ -218,7 +288,7 @@ report_comparison() {  # rc out kind name
     detail "$2"
 }
 
-log "root=${ROOT:-/}  templates=${SRC_DIR}"
+log "root=${ROOT:-/}  templates=${TEMPLATE_DIRS[*]}"
 if [[ -z "$SYSTEMCTL" ]]; then
     log "NOTE: no systemctl seam — enabled/active state reported as unknown,"
     log "NOTE: and the enabled-vs-active check is skipped (not silently passed)."
@@ -226,40 +296,33 @@ fi
 
 # ── (a) template → live ───────────────────────────────────────────────────────
 section "template vs live"
-for src in "$SRC_DIR"/robothor-*.service "$SRC_DIR"/robothor-*.timer "$SRC_DIR"/robothor-*.path; do
-    name="$(basename "$src")"
-    live="${SYSTEM_DIR}/${name}"
-    if is_masked "$live"; then
-        continue
-    fi
-    if [[ -L "$live" ]]; then
-        continue  # reported by the symlink check below; a diff would repeat it
-    fi
-    if [[ ! -e "$live" ]]; then
-        finding "not-installed" "${name}: template exists, nothing installed (run scripts/install-units.sh)"
-        continue
-    fi
-    out="$(diff_against_template "$live" "$src")"
-    report_comparison "$?" "$out" "unit" "$name"
-done
-
-for src in "$SRC_DIR"/robothor-*.service.d/*.conf; do
-    rel="$(basename "$(dirname "$src")")/$(basename "$src")"
+while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    src="$(template_for "$rel")"
     live="${SYSTEM_DIR}/${rel}"
+    if [[ "$rel" == */* ]]; then
+        kind="drop-in"
+    else
+        kind="unit"
+        is_masked "$live" && continue
+        # A symlinked unit is reported by the symlink check below; diffing it
+        # here would report the same fact twice.
+        [[ -L "$live" ]] && continue
+    fi
     if [[ ! -e "$live" ]]; then
-        finding "not-installed" "${rel}: drop-in template exists, nothing installed"
+        finding "not-installed" "${rel}: ${kind} template exists, nothing installed (run scripts/install-units.sh)"
         continue
     fi
     out="$(diff_against_template "$live" "$src")"
-    report_comparison "$?" "$out" "drop-in" "$rel"
-done
+    report_comparison "$?" "$out" "$kind" "$rel"
+done < <(template_index)
 
 # ── (b) live without template ─────────────────────────────────────────────────
 section "live units with no template"
 for live in "$SYSTEM_DIR"/robothor-*.service "$SYSTEM_DIR"/robothor-*.timer "$SYSTEM_DIR"/robothor-*.path; do
     name="$(basename "$live")"
     is_masked "$live" && continue
-    [[ -e "$SRC_DIR/$name" ]] && continue
+    template_for "$name" >/dev/null && continue
     is_allowed "$name" && continue
     enabled="$(unit_state "$name" is-enabled)"
     active="$(unit_state "$name" is-active)"
@@ -274,7 +337,7 @@ for live in "$SYSTEM_DIR"/robothor-*.service.d/*.conf; do
     # onfailure.conf is generated by scripts/install_onfailure_alerts.sh, which
     # IS the repo's source of truth for it; there is deliberately no mirror.
     [[ "$conf" == "onfailure.conf" ]] && continue
-    [[ -e "$SRC_DIR/$rel" ]] && continue
+    template_for "$rel" >/dev/null && continue
     is_allowed "$rel" && continue
     finding "unmirrored-dropin" \
         "${rel}: hand-written drop-in with no repo mirror — unversioned production config"

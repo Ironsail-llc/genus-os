@@ -251,6 +251,76 @@ def test_an_unrenderable_mirror_is_not_reported_as_drift(installed_root: Path):
     )
 
 
+# ── instance-land templates ──────────────────────────────────────────────────
+# Some unit templates are deliberately gitignored: .gitignore carries
+# /infra/systemd/delphi-*.service and /infra/systemd/robothor-delphi-engine.*,
+# because those units are instance-land (CLAUDE.md rule 11). They therefore
+# exist ONLY in the workspace checkout that serves the box. The doctor binds
+# its template directory to the checkout it is RUN from, so run out of a
+# branch worktree or a fresh clone it could not see them and called a unit it
+# had a template for "no-template" — a finding whose remedy (write a template)
+# had already been carried out, and which an operator can only silence by
+# allow-listing a unit that is in fact templated.
+
+
+def _instance_template(tmp_path: Path, name: str, body: str) -> Path:
+    """A workspace checkout whose infra/systemd carries one gitignored unit."""
+    workspace = tmp_path / "workspace"
+    src = workspace / "infra" / "systemd"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / name).write_text(body)
+    return workspace
+
+
+def test_a_template_only_in_the_workspace_is_compared_not_called_untemplated(
+    installed_root: Path, tmp_path: Path
+):
+    """A template exists, so the unit gets COMPARED with it. Proved by seeding
+    a difference: if the doctor merely stopped saying no-template it would
+    report nothing at all, and silence is what it must never produce."""
+    body = "[Unit]\nDescription=Instance only\n\n[Service]\nExecStart=/bin/true\n"
+    workspace = _instance_template(tmp_path, "robothor-instance-only.service", body)
+    live = system_dir(installed_root) / "robothor-instance-only.service"
+    live.write_text(body + "# unversioned live edit\n")
+
+    result = run_doctor(installed_root, base_env(ROBOTHOR_WORKSPACE=str(workspace)))
+
+    lines = [ln for ln in result.stdout.splitlines() if "robothor-instance-only.service" in ln]
+    assert lines, "the unit was not examined at all\n" + result.stdout
+    assert not any("no-template" in ln for ln in lines), lines
+    assert any("template-drift" in ln for ln in lines), lines
+    assert "unversioned live edit" in result.stdout, "the diff itself must be shown"
+
+
+def test_a_workspace_template_that_matches_live_is_not_a_finding(
+    installed_root: Path, tmp_path: Path
+):
+    body = "[Unit]\nDescription=Instance only\n\n[Service]\nExecStart=/bin/true\n"
+    workspace = _instance_template(tmp_path, "robothor-instance-only.service", body)
+    (system_dir(installed_root) / "robothor-instance-only.service").write_text(body)
+
+    result = run_doctor(installed_root, base_env(ROBOTHOR_WORKSPACE=str(workspace)))
+
+    assert "robothor-instance-only.service" not in result.stdout, result.stdout
+
+
+def test_this_checkouts_template_wins_over_the_workspaces(
+    installed_root: Path, tmp_path: Path
+):
+    """The overlay exists for units the checkout does not carry. Where both do,
+    the tracked platform template is the authority — otherwise a stale
+    workspace copy would decide whether a reviewed change looks like drift."""
+    workspace = _instance_template(
+        tmp_path, "robothor-liveness.timer", "[Timer]\nOnCalendar=yearly\n"
+    )
+
+    result = run_doctor(installed_root, base_env(ROBOTHOR_WORKSPACE=str(workspace)))
+
+    assert "robothor-liveness.timer" not in result.stdout, (
+        "a stale workspace copy overrode the tracked template\n" + result.stdout
+    )
+
+
 # ── the allow file ───────────────────────────────────────────────────────────
 
 
