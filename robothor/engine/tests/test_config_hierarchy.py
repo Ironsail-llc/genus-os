@@ -308,6 +308,40 @@ class TestValidationWarningLogging:
         assert sum("planing_enabled" in r.getMessage() for r in caplog.records) == 1
 
 
+class TestValidationWarningLogIsolation:
+    """The dedupe set is a module GLOBAL, so it leaks between tests.
+
+    Whichever test runs second used to see zero records — the first test's
+    entry was still in ``_logged_validation_warnings`` — and the honest way to
+    prove the reset works is two tests that neither know about each other nor
+    call the reset themselves. The autouse fixture in the repo conftest is
+    what makes both pass.
+    """
+
+    MANIFEST = {
+        "id": "agent-a",
+        "name": "Agent A",
+        "v2": {"planing_enabled": True},  # typo → one stable warning
+    }
+
+    def _load_and_count(self, tmp_path: Path, caplog) -> int:
+        import logging
+
+        import robothor.engine.config as config_mod
+
+        (tmp_path / "agent-a.yaml").write_text(yaml.dump(self.MANIFEST))
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.config"):
+            config_mod.load_agent_config("agent-a", tmp_path)
+        return sum("planing_enabled" in r.getMessage() for r in caplog.records)
+
+    def test_first_test_logs_the_warning_once(self, tmp_path: Path, caplog):
+        assert self._load_and_count(tmp_path, caplog) == 1
+
+    def test_second_test_logs_the_warning_once_too(self, tmp_path: Path, caplog):
+        """Identical to the test above — and that is the point."""
+        assert self._load_and_count(tmp_path, caplog) == 1
+
+
 # ─── Explain Config ──────────────────────────────────────────────────
 
 

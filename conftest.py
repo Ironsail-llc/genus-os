@@ -129,3 +129,24 @@ def _isolate_shared_key_pools():
     reset_shared_pools()
     yield
     reset_shared_pools()
+
+
+@pytest.fixture(autouse=True)
+def _reset_validation_warning_log():
+    """Never let one test's config warnings suppress the next test's.
+
+    ``robothor.engine.config`` remembers every ``(agent, warning)`` it has
+    logged for the life of the PROCESS — correct in production, where the
+    loader runs on every schedule tick and the fleet was emitting ~350
+    identical lines a day.
+
+    Under pytest that memory is cross-test contamination in the direction
+    that hides defects: the second test to load the same manifest sees NO
+    warning and passes for the wrong reason. Reset on both sides of every
+    test, the same way shared key pools are.
+    """
+    from robothor.engine.config import reset_validation_warning_log
+
+    reset_validation_warning_log()
+    yield
+    reset_validation_warning_log()
