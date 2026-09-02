@@ -18,6 +18,8 @@ the file itself is one `cd` away from committing instance data.
 from __future__ import annotations
 
 import importlib.util
+import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -120,6 +122,22 @@ def test_target_is_resolved_against_the_lines_own_cd(tmp_path: Path):
     assert "MISSING" not in nested, nested
 
 
+def test_unexpanded_cd_variable_is_not_resolved(tmp_path: Path):
+    """`cd $W && ./x.sh` cannot be resolved: $W is a crontab assignment this
+    generator does not expand. Resolving `./x.sh` against the workspace anyway
+    invents a directory the job never ran in, and prints either a MISSING that
+    is false or an `ok` that was never checked."""
+    ws = workspace(tmp_path)
+    text = "0 4 * * * cd $W && ./x.sh\n"
+    out = gcm.render(crontab_text=text, timers_text="", schedules=None, workspace=ws)
+    line = next(line for line in out.splitlines() if "x.sh" in line)
+    assert "MISSING" not in line, line
+    assert "ok" not in line, (
+        "an unresolvable cd target was reported as present — a positive fact "
+        f"nothing checked\n{line}"
+    )
+
+
 # ── systemd timers ───────────────────────────────────────────────────────────
 
 
@@ -177,17 +195,49 @@ def test_agent_schedules_section_says_when_it_was_skipped(tmp_path: Path):
     assert "not read" in section.lower() or "skipped" in section.lower(), section
 
 
+def test_a_failed_crontab_read_is_not_an_empty_crontab(tmp_path: Path):
+    """`crontab -l` failing and the operator having no cron jobs are different
+    facts. `None` means NOT READ, exactly as it does for the schedule rows."""
+    ws = workspace(tmp_path)
+    out = gcm.render(crontab_text=None, timers_text="", schedules=None, workspace=ws)
+    section = out.split("## Crontab", 1)[1].split("## Systemd timers", 1)[0]
+    assert "No active crontab entries." not in section, section
+    assert "not read" in section.lower(), section
+
+
+def test_a_failed_timers_read_is_not_no_timers(tmp_path: Path):
+    ws = workspace(tmp_path)
+    out = gcm.render(crontab_text="", timers_text=None, schedules=None, workspace=ws)
+    section = out.split("## Systemd timers", 1)[1].split("## Agent schedules", 1)[0]
+    assert "No `robothor-*` or `delphi-*` timers." not in section, section
+    assert "not read" in section.lower(), section
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 
-def run_cli(tmp_path: Path, *args: str):
+def run_cli(tmp_path: Path, *args: str, env: dict[str, str] | None = None):
     return subprocess.run(
         [sys.executable, str(GEN), *args],
         capture_output=True,
         text=True,
         timeout=60,
         cwd=str(tmp_path),
+        env=env,
     )
+
+
+def failing_stub(tmp_path: Path, name: str) -> dict[str, str]:
+    """An env whose PATH finds a `name` that exits 1 — a box with no crontab,
+    or one whose systemd is not answering."""
+    bin_dir = tmp_path / "stub-bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / name
+    stub.write_text(f"#!/usr/bin/env bash\necho '{name}: boom' >&2\nexit 1\n")
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+    return env
 
 
 def test_cli_renders_from_files_without_a_database(tmp_path: Path):
@@ -230,6 +280,33 @@ def test_cli_writes_nothing_to_disk(tmp_path: Path):
     assert result.returncode == 0, result.stdout + result.stderr
     after = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
     assert before == after, "gen_cron_map.py must not create files"
+
+
+def test_cli_exits_nonzero_when_the_crontab_cannot_be_read(tmp_path: Path):
+    """A generator that fails to read an input, prints a positive fact about
+    it and exits 0 puts that fact into CRON_MAP.md with nothing to catch it.
+    The exit code is the only thing the redirecting caller can check."""
+    ws = workspace(tmp_path)
+    result = run_cli(
+        tmp_path, "--timers-file", "/dev/null", "--workspace", str(ws), "--no-db",
+        env=failing_stub(tmp_path, "crontab"),
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    section = result.stdout.split("## Crontab", 1)[1].split("## Systemd", 1)[0]
+    assert "No active crontab entries." not in section, section
+
+
+def test_cli_exits_nonzero_when_the_timers_cannot_be_read(tmp_path: Path):
+    ws = workspace(tmp_path)
+    cron_file = tmp_path / "crontab.txt"
+    cron_file.write_text(crontab_for(ws))
+    result = run_cli(
+        tmp_path, "--crontab-file", str(cron_file), "--workspace", str(ws), "--no-db",
+        env=failing_stub(tmp_path, "systemctl"),
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    section = result.stdout.split("## Systemd timers", 1)[1]
+    assert "No `robothor-*` or `delphi-*` timers." not in section, section
 
 
 def test_no_instance_data_in_the_generator():

@@ -25,6 +25,10 @@ file itself is one `cd` away from committing instance data.
 
 Usage:
   gen_cron_map.py [--crontab-file F] [--timers-file F] [--workspace DIR] [--no-db]
+
+Exit: 0 = every source was read, 1 = at least one source could not be read
+(the document says so in-band too, but the caller redirecting into CRON_MAP.md
+reads an exit code, not prose). `--no-db` is a deliberate skip, not a failure.
 """
 
 from __future__ import annotations
@@ -120,10 +124,20 @@ def parse_crontab(text: str) -> tuple[list[str], list[CronEntry]]:
     return assignments, entries
 
 
-def missing_targets(entry: CronEntry, workspace: Path) -> list[str]:
-    """Targets of this entry that are not on disk."""
+def missing_targets(entry: CronEntry, workspace: Path) -> list[str] | None:
+    """Targets of this entry that are not on disk, or None when unresolvable.
+
+    `cd $W && ./x.sh` cannot be checked: `$W` is a crontab assignment this
+    generator does not expand, so the directory the job actually runs in is
+    unknown. Resolving `./x.sh` against the workspace instead would invent a
+    location, and print either a MISSING that is false or an `ok` that nothing
+    verified. None says the check did not happen — the same distinction the
+    schedule section already draws between "no rows" and "not read".
+    """
     base = workspace
     if entry.base_dir:
+        if "$" in entry.base_dir:
+            return None
         candidate = Path(entry.base_dir)
         base = candidate if candidate.is_absolute() else workspace / candidate
     missing = []
@@ -219,13 +233,19 @@ def _cell(value: object) -> str:
 
 
 def render(
-    crontab_text: str,
-    timers_text: str,
+    crontab_text: str | None,
+    timers_text: str | None,
     schedules: list[dict[str, object]] | None,
     workspace: Path,
 ) -> str:
-    """The whole document. `schedules=None` means the rows were NOT read."""
-    assignments, entries = parse_crontab(crontab_text)
+    """The whole document.
+
+    `None` means the input was NOT READ, for every one of the three sources.
+    "the read failed" and "there is nothing scheduled" are different facts, and
+    only one of them is safe to print into a document the operator trusts to
+    tell them what runs on this box.
+    """
+    assignments, entries = parse_crontab(crontab_text or "")
     lines: list[str] = [
         "# Cron Map",
         "",
@@ -250,24 +270,36 @@ def render(
             missing = missing_targets(entry, workspace)
             if not entry.targets:
                 status = "-"
+            elif missing is None:
+                status = "_not checked_ — the `cd` target is an unexpanded variable"
             elif missing:
                 status = "**MISSING**: " + ", ".join(f"`{m}`" for m in missing)
             else:
                 status = "ok"
             lines.append(f"| `{_cell(entry.schedule)}` | `{_cell(entry.command)}` | {status} |")
+    elif crontab_text is None:
+        lines.append(
+            "_Not read_ — `crontab -l` failed, so the operator's crontab was "
+            "not read. This is not the same as 'no cron jobs are scheduled'."
+        )
     else:
         lines.append("No active crontab entries.")
     lines.append("")
 
     lines.append("## Systemd timers")
     lines.append("")
-    rows = parse_timers(timers_text)
+    rows = parse_timers(timers_text or "")
     if rows:
         lines.append("| Next run | Left | Timer | Activates |")
         lines.append("|---|---|---|---|")
         lines.extend(
             f"| {_cell(r.next_run)} | {_cell(r.left)} | `{r.unit}` | `{r.activates}` |"
             for r in rows
+        )
+    elif timers_text is None:
+        lines.append(
+            "_Not read_ — `systemctl list-timers` failed, so the timers were "
+            "not read. This is not the same as 'there are no timers'."
         )
     else:
         lines.append("No `robothor-*` or `delphi-*` timers.")
@@ -298,20 +330,27 @@ def render(
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 
-def _read(source: str | None, command: list[str]) -> str:
+def _read(source: str | None, command: list[str]) -> str | None:
+    """The input's text, or None when it could not be read.
+
+    Returning "" for a failed read would render as "No active crontab
+    entries." — a positive fact about a source nobody managed to consult,
+    printed into the document the operator trusts to say what runs here.
+    """
     if source is not None:
         return Path(source).read_text()
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"gen_cron_map: could not run {command[0]}: {exc}", file=sys.stderr)
-        return ""
+        return None
     if result.returncode != 0:
         print(
             f"gen_cron_map: {' '.join(command)} exited {result.returncode}: "
             f"{result.stderr.strip()}",
             file=sys.stderr,
         )
+        return None
     return result.stdout
 
 
@@ -333,6 +372,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     schedules: list[dict[str, object]] | None = None
+    db_failed = False
     if not args.no_db:
         try:
             schedules = fetch_schedules()
@@ -340,9 +380,15 @@ def main(argv: list[str] | None = None) -> int:
             # Loud and in-band: the section will say the rows were not read,
             # which is a different statement from "no agents are scheduled".
             print(f"gen_cron_map: agent_schedules unavailable: {exc}", file=sys.stderr)
+            db_failed = True
 
     workspace = Path(args.workspace) if args.workspace else default_workspace()
     sys.stdout.write(render(crontab_text, timers_text, schedules, workspace))
+    # The document says so in-band, but the caller redirecting this into
+    # CRON_MAP.md reads an exit code, not prose. A partial map that exits 0 is
+    # indistinguishable from a complete one.
+    if crontab_text is None or timers_text is None or db_failed:
+        return 1
     return 0
 
 
