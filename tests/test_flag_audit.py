@@ -1044,3 +1044,46 @@ def test_cli_notes_the_raw_value_of_a_clamped_flag(tmp_path, capsys):
     row_line = next(ln for ln in out.splitlines() if ln.startswith("ROBOTHOR_RIP_13_MODE"))
     assert "observe" in row_line
     assert rc == 0
+
+
+# --- systemd's real Environment= syntax -------------------------------------
+
+
+def test_parse_dropin_dir_reads_several_assignments_on_one_line(tmp_path):
+    """`Environment=A=1 B=2` is valid systemd and sets BOTH. Partitioning on
+    the first `=` read it as one flag whose value was `1 B=2`, so the second
+    flag was invisible to the audit and the first had a value the engine never
+    saw."""
+    d = tmp_path / "dropin"
+    d.mkdir()
+    (d / "a.conf").write_text(
+        "[Service]\nEnvironment=ROBOTHOR_RBAC_ENABLED=1 ROBOTHOR_RBAC_MODE=enforce\n"
+    )
+    assert fa.parse_dropin_dir(d) == {
+        "ROBOTHOR_RBAC_ENABLED": "1",
+        "ROBOTHOR_RBAC_MODE": "enforce",
+    }
+
+
+def test_parse_dropin_dir_reads_quoted_assignments(tmp_path):
+    """systemd's own quoted form, and a value containing a space."""
+    d = tmp_path / "dropin"
+    d.mkdir()
+    (d / "a.conf").write_text(
+        "[Service]\n"
+        'Environment="ROBOTHOR_RBAC_ENABLED=1" "ROBOTHOR_RBAC_MODE=enforce"\n'
+        'Environment="ROBOTHOR_NOTE=two words"\n'
+    )
+    assert fa.parse_dropin_dir(d) == {
+        "ROBOTHOR_RBAC_ENABLED": "1",
+        "ROBOTHOR_RBAC_MODE": "enforce",
+        "ROBOTHOR_NOTE": "two words",
+    }
+
+
+def test_parse_dropin_dir_survives_an_unbalanced_quote(tmp_path):
+    """A hand-edited drop-in must not take the whole audit down."""
+    d = tmp_path / "dropin"
+    d.mkdir()
+    (d / "a.conf").write_text('[Service]\nEnvironment=ROBOTHOR_RBAC_MODE="enforce\n')
+    assert fa.parse_dropin_dir(d) == {"ROBOTHOR_RBAC_MODE": "enforce"}

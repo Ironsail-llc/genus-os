@@ -44,6 +44,7 @@ import argparse
 import ast
 import datetime as dt
 import json
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -146,6 +147,14 @@ def parse_dropin_dir(path: Path) -> dict[str, str]:
     Only ``*.conf`` is read, because only ``*.conf`` is what systemd loads. The
     live directory carries ``upgrade-rip-flags.conf.bak-*`` files; treating one
     as a layer would invent state the engine has never seen.
+
+    One directive may carry SEVERAL assignments — ``Environment=A=1 B=2`` and
+    the quoted ``Environment="A=1" "B=2"`` are both valid systemd and both set
+    two variables. Partitioning on the first ``=`` read those as one flag whose
+    value was ``1 B=2``: the second flag was invisible to the audit and the
+    first was reported with a value the engine never received. systemd splits
+    the directive with shell-like word splitting, so ``shlex`` is the parser
+    that agrees with it (and it strips the quotes on the way).
     """
     out: dict[str, str] = {}
     if not path.is_dir():
@@ -155,10 +164,19 @@ def parse_dropin_dir(path: Path) -> dict[str, str]:
             line = raw.strip()
             if not line.startswith("Environment="):
                 continue
-            assignment = line.removeprefix("Environment=").strip().strip('"').strip("'")
-            name, sep, value = assignment.partition("=")
-            if sep and name:
-                out[name.strip()] = value.strip().strip('"').strip("'")
+            directive = line.removeprefix("Environment=").strip()
+            try:
+                tokens = shlex.split(directive)
+                unquote = False
+            except ValueError:
+                # A hand-edited drop-in with an unbalanced quote must not take
+                # the whole audit down; read what can be read and move on.
+                tokens = directive.split()
+                unquote = True
+            for token in tokens:
+                name, sep, value = token.partition("=")
+                if sep and name.strip():
+                    out[name.strip()] = value.strip('"').strip("'") if unquote else value
     return out
 
 
