@@ -47,8 +47,19 @@ flags:
   - name: ROBOTHOR_SANDBOX_DEFAULT_MODE
     owner: ops
     mode: observe
-    planned_promotion: "2026-09-01"
+    planned_promotion: "2026-09-16"
     soak: >
+      BLOCKER: per-agent settlement first (main/crm-hygiene/email-analyst keep
+      host with reason; conversation-inbox/vision-monitor lose exec;
+      auto-agent declares docker), then enforce governs only future agents.
+      Four of the six exec-holding agents declare `sandbox: host`, and that
+      opt-out is honoured BEFORE the mode is consulted, so flipping this today
+      would containerise two agents and leave the four with the widest blast
+      radius exactly as they are — while the dashboard read `enforce`. The
+      flag is not the decision; the six manifests are. Once they are settled,
+      this mode is only a default for agents that never asked. Originally
+      dated 2026-09-01.
+
       The infrastructure this flag depends on now EXISTS (#207). Everything the
       previous note said was missing has been built:
 
@@ -129,6 +140,58 @@ flags:
       accepting an agent's claim that it finished something with no evidence — is
       strictly worse than an open task with a next step on it.
 
+  - name: ROBOTHOR_DELIVERABLE_CONTRACT_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-09-30"
+    soak: |
+      The complement of ROBOTHOR_COMPLETION_CONTRACTS_MODE. That one asks
+      whether the agent's CLAIMS are backed by evidence in its own trace; this
+      one asks whether the artifact the TASK named actually exists. An agent
+      passes the first and fails the second by doing the work correctly and
+      saving it to the wrong path — measured 2026-08-26 as -0.87 of a -1.04
+      competitive gap in which 7 of 10 tasks were already at parity. One
+      misdelivered artifact, not a capability deficit, is most of the gap.
+      (robothor/engine/feature_flags.py: deliverable_contract_mode)
+
+      Ladder: observe logs the verdict, alert tells the operator, enforce
+      records it as a guardrail block. Evidence lands in
+      agent_guardrail_events under guardrail_name = 'deliverable_contract'
+      (robothor/flags/evidence.py; written by
+      robothor/engine/run_finalizer.py).
+
+      This entry did not exist until 2026-09-02, and neither did the runbook.
+      The flag was set ONLY in /etc/robothor/robothor.env — flag_audit.py's
+      SHADOW-LAYER:envfile — so nothing in git recorded that the control was
+      on and a rebuilt instance would have come up without it. It now ships in
+      the versioned drop-in at the value it was already running.
+
+      DO NOT PROMOTE ON THIS EVIDENCE. There is exactly ONE observed row on
+      record. That is enough to prove the writer is wired and not enough to
+      characterise anything:
+
+        SELECT action, count(*) FROM agent_guardrail_events
+        WHERE guardrail_name = 'deliverable_contract'
+        GROUP BY 1;
+
+      Know WHY the table is quiet before reading anything into it. Probed
+      against production 2026-08-27: of 4,000 crm_tasks over 60 days, ZERO
+      named an explicit output path — delegated tasks here are written in
+      prose. The contracts live in prompt-borne task specs, which is why
+      task_text_for_run falls back to the run's originating message. Wired to
+      crm_tasks alone this would be a guard on an empty table, the mistake
+      this instance has made six times (feedback-probe-dont-trust-silence).
+
+      Gate for alert: (1) >= 20 observed verdicts across at least three
+      different agents, (2) every `observed` row hand-checked against the run
+      that produced it — a deliverable the task never actually named is a
+      checker bug and the dominant false-positive class here, (3) the
+      -0.87-shaped failure reproduced in production data, not only in the
+      benchmark that found it. Before enforce, additionally: >= 7 days at
+      alert with no operator-reported false block, since enforce is the rung
+      that stops a run from closing its task.
+      Runbook: docs/runbooks/DELIVERABLE_CONTRACT.md
+
   - name: ROBOTHOR_RIP_7_MODE
     owner: ops
     mode: enforce
@@ -145,8 +208,23 @@ flags:
   - name: ROBOTHOR_RIP_13_MODE
     owner: ops
     mode: observe
-    planned_promotion: "2026-07-20"
-    soak: symbolic short-term memory; same overdue ladder as RIP 7
+    planned_promotion: "2026-09-20"
+    soak: |
+      Symbolic short-term memory. Originally dated 2026-07-20 on the theory
+      that it rode RIP 7's ladder. It does not, and the ladder was never the
+      obstacle.
+
+      BLOCKER: decide off-with-reason vs wire evidence; cannot promote a blind
+      control. There are ZERO evidence rows, ever: nothing in the codebase
+      writes guardrail_name = 'rip_13_symbolic_memory'. The compaction path
+      only logger.info()s its token savings
+      (robothor/engine/session.py:_finalize_symbol_graph), so the
+      EvidenceSource declared for this flag names a predicate no writer
+      satisfies — an honest zero, as robothor/flags/evidence.py says, not a
+      wrong-table bug. Promoting it would move a dashboard reading and prove
+      nothing. Two acceptable outcomes by the date: emit a real row per
+      compaction and then soak it, or set the flag to off with the reason
+      recorded here. Re-dating it a third time is not one of them.
 
   - name: ROBOTHOR_RIP_1_ENABLED
     owner: ops
@@ -175,8 +253,17 @@ flags:
   - name: ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE
     owner: ops
     mode: observe
-    planned_promotion: "2026-08-28"
+    planned_promotion: "2026-09-20"
     soak: >
+      BLOCKER: probe must produce a row first; then enforce (analytics-only).
+      The observe reporter (robothor/engine/analytics.py) has written zero
+      evidence rows since the flag shipped, so the contamination figure this
+      rung exists to publish has never actually been published — there is
+      nothing to check a hand-run query against, which was the entire
+      precondition. Run one deliberate probe, confirm a row, then flip. The
+      blast radius is analytics only: no agent behaviour changes at any rung.
+      Originally dated 2026-08-28.
+
       Benchmark sub-runs recorded parent_run_id NULL, so `parent_run_id IS NULL`
       — the predicate twelve analytics queries used to mean "top-level
       production run" — counted them as production work: 2,685 of 4,267 runs
@@ -318,7 +405,7 @@ flags:
   - name: ROBOTHOR_PLUGIN_MANIFEST_MODE
     owner: platform
     mode: observe
-    planned_promotion: 2026-09-30
+    promotion: n/a-on-this-instance
     soak: |
       Requires a distribution to ship genus-plugin.yaml declaring what it
       contributes, and refuses it BEFORE ep.load() when it does not.
@@ -342,15 +429,52 @@ flags:
       Promotion evidence: zero genus.* entry points are installed on this
       instance today (`load_plugins() -> loaded=[] tools=0`), so enforce is
       currently a no-op here and the soak has to come from an instance that
-      actually installs one.
+      actually installs one. Hence `promotion: n/a-on-this-instance` rather
+      than a date: a deadline nothing here can ever satisfy would nag forever
+      and teach the reader to ignore the nag. Permanent observe is the
+      decision, and this is where it is written down. An instance that does
+      install a plugin re-dates it.
 
   - name: ROBOTHOR_ADMISSION_MODE
     owner: ops
-    mode: observe
-    planned_promotion: 2026-09-10
+    mode: enforce
+    promoted: "2026-08-27"
     soak: |
       Wired 2026-08-27 after FleetPool spent its whole existence with zero
       production callers. Observe records the deferral it WOULD have made, so
       promotion rests on agent_guardrail_events rows rather than on faith.
-      Gate on: non-zero observed rows, and no interactive run ever deferred.
+      The gate was: non-zero observed rows, and no interactive run ever
+      deferred.
+
+      THIS ENTRY IS THE MANIFEST CATCHING UP WITH THE BOX, NOT LEADING IT.
+      The flag has run at enforce since 2026-08-27, set in
+      /etc/robothor/robothor.env — a layer the drop-in mirror test cannot see
+      (docs/runbooks/GUARDRAIL_FLIPS.md). flag_audit.py tagged it MISMATCH
+      because this file still said observe. The operator's decision is that
+      enforce stays, so the mode is recorded here and the assignment moves
+      into the versioned drop-in, where a rebuilt instance reproduces it.
+
+      Evidence, read 2026-09-02 (priority is a prefix of `reason`, not a
+      column — see robothor/engine/admission_evidence.py):
+
+        SELECT split_part(reason, ':', 1) AS priority, count(*)
+        FROM agent_guardrail_events
+        WHERE guardrail_name = 'execution_mode_admission'
+          AND created_at >= '2026-08-28' AND created_at < '2026-08-31'
+        GROUP BY 1 ORDER BY 2 DESC;
+
+      52 rows across 2026-08-28..30. The first half of the gate is met and
+      then some: the mechanism demonstrably fires, which is precisely what
+      FleetPool could never show.
+
+      The second half is NOT met, and that is recorded rather than rounded
+      off: 14 of the 52 are `critical:` — work that should never have been
+      deferred, deferred at a single free slot. That is a starvation defect in
+      the pool's reservation arithmetic (robothor/engine/pool.py), which a
+      sibling change fixes; it is not an argument for admitting less. At
+      observe those same 14 would have been recorded and run anyway, so
+      dropping back to observe would hide the defect rather than avoid it.
+      Re-run the query above once the pool fix has soaked and confirm the
+      `critical:` count is zero. If it is not, that is a bug report, not a
+      flag flip.
 
