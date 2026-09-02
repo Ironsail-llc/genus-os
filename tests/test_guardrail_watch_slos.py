@@ -683,3 +683,55 @@ class TestMainRunsTheSloSectionBeforeTheDatabaseSection:
         assert "SENTINEL-SLOS-OK" in out, "the SLO section must run before the DB section"
         assert out.index("SENTINEL-SLOS-OK") < out.index("DATABASE")
         assert exit_code != 0
+
+
+# ── the runbook and the code say the same thing ──────────────────────────────
+
+
+class TestTheRunbookMatchesTheCode:
+    """A runbook that describes behaviour the code does not have is worse than
+    no runbook: it is read at 3am, by someone deciding whether silence means
+    healthy. SLOS.md said the daily surface "leaves one `alert_digest` row
+    covering both" — full stop — while check_db_slos() writes a row only when
+    something breached. An operator checking for the row on a clean morning
+    would find none and conclude the report had stopped running."""
+
+    SLOS_MD = REPO_ROOT / "docs" / "runbooks" / "SLOS.md"
+
+    def test_a_clean_run_writes_no_digest_row_and_the_runbook_says_so(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        written: list = []
+        write_dump(probe_env(monkeypatch, tmp_path))
+        fresh_markers(tmp_path)
+        monkeypatch.setattr(gw, "send_telegram", lambda text: False)
+        monkeypatch.setattr(gw, "db_slos", lambda: [])
+        monkeypatch.setattr(
+            gw, "write_slo_digest", lambda subject, body: (written.append(body), True)[1]
+        )
+
+        gw.check_db_slos(gw.check_slos())
+
+        assert written == [], "the behaviour under test: no breach, no row"
+        text = self.SLOS_MD.read_text()
+        assert "leaves one `alert_digest` row covering both. |" not in text, (
+            "the summary table claims a row every run; the code writes one "
+            "only when something breached"
+        )
+        assert "only when something breached" in text, (
+            "SLOS.md must state the condition, not just the row"
+        )
+
+    def test_the_test_only_database_mute_is_documented(self) -> None:
+        """`ROBOTHOR_SLO_DB_CHECKS=0` retires half the dead-man in silence.
+        A knob like that has to be findable in the runbook by name."""
+        text = self.SLOS_MD.read_text()
+        assert "ROBOTHOR_SLO_DB_CHECKS" in text, (
+            "an undocumented mute is one nobody knows to look for when S2 and "
+            "S6 have been quiet for a month"
+        )
+        window = text[text.index("ROBOTHOR_SLO_DB_CHECKS") - 400 :]
+        assert "never" in window and "production" in window, (
+            "the runbook must say this is test-only and must never be set in "
+            "production"
+        )

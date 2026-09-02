@@ -164,9 +164,9 @@ REMOTE="${ROBOTHOR_OFFSITE_REMOTE:-}"
 ALERT_CMD="${ROBOTHOR_SLO_ALERT_CMD:-/usr/bin/env bash ${SCRIPT_DIR}/send_failure_alert.sh}"
 
 # pg_hba.conf uses peer auth on the Unix socket and pg_ident maps an OS
-# ACCOUNT onto a database ROLE. Those are two different names: on the reference
-# box the role is `robothor_app`, which has no passwd entry at all, while the
-# OS accounts pg_ident maps onto it are the service user and `postgres`.
+# ACCOUNT onto a database ROLE. Those are two different names: the role
+# typically has no passwd entry at all, while the OS accounts pg_ident maps
+# onto it are the service user and `postgres`.
 #
 # So the hop takes the OS account and carries the role across in PGUSER.
 # Handing the role to `runuser -u` instead fails with "user <role> does not
@@ -663,7 +663,13 @@ db_query() {
 check_db_slos() {
     log "=== S2 heartbeat delivery / S6 LLM availability ==="
     if [[ "$DB_CHECKS" == "0" ]]; then
-        log "  (disabled by ROBOTHOR_SLO_DB_CHECKS=0)"
+        # Loud, and on stderr, because this switch retires half the dead-man
+        # in silence: S2 and S6 stop being measured, nothing pages, and that
+        # is indistinguishable from two SLOs that are permanently fine. It
+        # exists for tests/test_slo_probe.py, which must never query the live
+        # database. A parenthetical in the journal is how a mute like this
+        # survives for months.
+        err "!! ROBOTHOR_SLO_DB_CHECKS=0 — S2 (heartbeat delivery) and S6 (LLM availability) are NOT being measured. This mute is for tests only and must NEVER be set in production; see docs/runbooks/SLOS.md."
         return
     fi
 

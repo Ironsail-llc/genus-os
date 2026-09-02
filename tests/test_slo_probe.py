@@ -883,6 +883,31 @@ class TestAnUnevaluatedSloIsLoud:
         env = base_env(tmp_path)
         assert run_probe(env).returncode == 0
 
+    def test_the_disabled_switch_says_so_loudly(self, tmp_path: Path):
+        """The mute exists for THIS test file — every test above pins it,
+        because the probe would otherwise query the live database.
+
+        Set on a real box it silently retires half the dead-man: S2 and S6
+        stop being measured and nothing pages, which is indistinguishable from
+        two SLOs that are permanently fine. A one-line parenthetical in the
+        journal is how a switch like that survives for months, so it announces
+        itself in the same words the runbook uses.
+        """
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+
+        result = run_probe(env)
+
+        assert result.returncode == 0
+        assert "ROBOTHOR_SLO_DB_CHECKS=0" in result.stderr, (
+            "a mute that only whispers on stdout gets skimmed past — the "
+            f"warning belongs on stderr: {result.stdout + result.stderr}"
+        )
+        loud = result.stderr
+        assert "S2" in loud and "S6" in loud, "name the SLOs that stopped being measured"
+        assert "NOT" in loud, "say plainly that they are not being measured"
+        assert "production" in loud, "say plainly where this must never be set"
+
 
 class TestTheQueryRunsAsAnAccountPeerAuthAccepts:
     """pg_hba uses peer auth on the Unix socket: the OS user must equal the PG

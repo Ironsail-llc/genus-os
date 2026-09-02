@@ -8,7 +8,7 @@ Two surfaces, deliberately different:
 | Surface | Unit | Cadence | What it does |
 |---|---|---|---|
 | `scripts/slo_probe.sh` | `robothor-slo.timer` | hourly | **Pages** for the three SLOs that must interrupt someone. |
-| `scripts/guardrail_watch.py` `check_slos()` + `check_db_slos()` | `robothor-guardrail-watch.timer` | daily | Prints `=== SLOs (database-free) ===` for S4/S5/S8/pool size, then `=== SLOs (database-backed) ===` for S1/S2/S3/S6/S7, and leaves one `alert_digest` row covering both. |
+| `scripts/guardrail_watch.py` `check_slos()` + `check_db_slos()` | `robothor-guardrail-watch.timer` | daily | Prints `=== SLOs (database-free) ===` for S4/S5/S8/pool size, then `=== SLOs (database-backed) ===` for S1/S2/S3/S6/S7, and — only when something breached — leaves exactly one `alert_digest` row covering both. A clean morning writes no row. |
 
 The daily surface does not measure S4, S5 or S8 a second way: it runs
 `scripts/slo_probe.sh --report`, which evaluates every database-free SLO,
@@ -245,6 +245,29 @@ A value that is not an integer falls back to the default **and says so** in the
 report. A typo that silently widened a budget to infinity would be a dead-man
 that reports every backup as fresh — the failure this whole file exists to
 prevent.
+
+## `ROBOTHOR_SLO_DB_CHECKS=0` — the test-only mute
+
+`scripts/slo_probe.sh` reads this switch, and `0` stops it evaluating **S2**
+(heartbeat delivery) and **S6** (LLM availability) at all. It exists for
+`tests/test_slo_probe.py`, which drives the probe on this box and must never
+query the live database.
+
+**It must never be set in production.** Nothing about a muted SLO looks like a
+muted SLO: S2 and S6 simply stop being measured, nothing pages, and the daily
+report carries no row for them — which is indistinguishable from two targets
+that are permanently fine. That is the inert-control shape this whole file
+exists to prevent, so the probe announces the mute on **stderr** on every run:
+
+```
+slo_probe: !! ROBOTHOR_SLO_DB_CHECKS=0 — S2 (heartbeat delivery) and S6 (LLM
+availability) are NOT being measured. This mute is for tests only and must
+NEVER be set in production; see docs/runbooks/SLOS.md.
+```
+
+If that line is in `journalctl -u robothor-slo.service`, remove the variable
+from `/etc/robothor/robothor.env` and restart the unit. To silence a *noisy*
+SLO, widen its budget instead — a budget is still a measurement.
 
 The cooldowns are variables too, in seconds:
 `ROBOTHOR_SLO_BACKUP_COOLDOWN_SECONDS` (12h),
