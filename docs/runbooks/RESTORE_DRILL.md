@@ -27,6 +27,30 @@ binary reported as a restore failure is the one wrong conclusion this drill
 must never reach — see [`SLOS.md`](SLOS.md), "Both scripts build their own
 PATH", for the exact line and for `ROBOTHOR_EXTRA_PATH`, the test-only seam.
 
+### `dropdb` is bounded
+
+`dropdb` blocks for as long as **any** backend is still connected to the
+target, and it waits forever. Both of the drill's drops — the one before the
+restore and the one in the EXIT trap — therefore run under
+`timeout ${ROBOTHOR_RESTORE_DRILL_DROP_TIMEOUT:-300}`. A blown budget names
+`dropdb`, exits non-zero (so the unit's `OnFailure=` pages) and **leaves the
+scratch database in place**; without the cap the drill sat there until
+`TimeoutStartSec=7200`, which reads as a drill that never finished rather
+than a cleanup that could not complete.
+
+The timeout latches: once a drop has been shown to hang, the EXIT trap does
+not retry it and buy a second full budget on the way out. To clear the
+leftover, find what is holding it and drop it by hand:
+
+```sh
+psql -d postgres -c "SELECT pid, state, query FROM pg_stat_activity WHERE datname = 'robothor_restore_drill'"
+dropdb robothor_restore_drill
+```
+
+The most common holder is a second drill (or a test run) overlapping this
+one. The live-DB tests carry `@pytest.mark.integration` for that reason —
+run them deliberately, not as part of a default `pytest`.
+
 It is **not** `robothor-backup-verify.timer`. That is `backup-offsite.sh` with
 `ROBOTHOR_OFFSITE_VERIFY_ONLY=1`: an rclone byte-comparison, which proves the
 bytes match and nothing about whether they reconstitute a database.

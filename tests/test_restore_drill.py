@@ -32,12 +32,14 @@ SAFETY
 
 from __future__ import annotations
 
+import functools
 import gzip
 import os
 import re
 import shutil
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -52,18 +54,19 @@ SCRATCH_DB = f"robothor_restore_drill_test_{os.getpid()}"
 FIXED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
+@functools.cache
 def database_is_reachable() -> bool:
+    """Asked lazily, from inside the one class that needs a server.
+
+    At module scope this ran a `psql` against the operator's cluster during
+    COLLECTION — every `pytest --collect-only`, every unrelated test run.
+    """
     if not all(shutil.which(t) for t in ("psql", "createdb", "dropdb")):
         return False
     probe = subprocess.run(
         ["psql", "-d", "postgres", "-tAc", "SELECT 1"], capture_output=True, timeout=30
     )
     return probe.returncode == 0
-
-
-needs_db = pytest.mark.skipif(
-    not database_is_reachable(), reason="no reachable PostgreSQL server for the drill"
-)
 
 
 # ── fakes ────────────────────────────────────────────────────────────────────
@@ -127,13 +130,6 @@ def run_drill(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.fixture(autouse=True)
-def _drop_scratch_db():
-    yield
-    if database_is_reachable():
-        subprocess.run(["dropdb", "--if-exists", SCRATCH_DB], capture_output=True, timeout=60)
-
-
 # ── the empty-glob guard ─────────────────────────────────────────────────────
 
 
@@ -179,11 +175,118 @@ class TestTheDrillCannotTouchTheLiveDatabase:
         assert "robothor_restore_drill" in DRILL.read_text()
 
 
+class TestTheDefaultRunNeverTouchesTheOperatorsCluster:
+    """Reachability is not a gate. `-m "not slow and not llm and not e2e"` —
+    what the pre-commit hook runs — selected the live-DB class on any box with
+    a running PostgreSQL, so an ordinary test run did `createdb`/`dropdb` on
+    the operator's own cluster. Two concurrent runs left orphan
+    `robothor_restore_drill_test_*` databases and backends wedged on DROP
+    DATABASE."""
+
+    def test_the_live_db_class_carries_the_integration_marker(self):
+        marks = {m.name for m in getattr(TestAFixtureDumpRestoresAndIsVerified, "pytestmark", ())}
+        assert "integration" in marks, (
+            "the one class that creates a real database must be selectable "
+            "(and de-selectable) as an integration test, not merely gated on "
+            f"whether a server happens to answer: {marks}"
+        )
+
+    def test_collection_alone_does_not_query_a_server(self):
+        """The reachability probe used to be a module-level `psql` — it ran
+        during collection, on every `--collect-only` and every unrelated
+        run."""
+        source = Path(__file__).read_text()
+        assert "@functools.cache" in source and "def database_is_reachable" in source, (
+            "database_is_reachable must be lazy and cached"
+        )
+        assert "not database_is_reachable()" not in source.split("def database_is_reachable")[0], (
+            "nothing may call database_is_reachable() at import time"
+        )
+
+
+class TestADropdbThatHangsIsNotAHungUnit:
+    """`dropdb` blocks for as long as any backend is still connected to the
+    target. That is not hypothetical here: it is what wedged 27 backends when
+    two runs overlapped. Unbounded, the drill then sits there until systemd's
+    `TimeoutStartSec` kills it — which reads as a drill that never finished
+    rather than a cleanup that could not complete, and the two want different
+    things from an operator."""
+
+    @staticmethod
+    def _install_wedged_dropdb(tmp_path: Path) -> Path:
+        dropdb = tmp_path / "bin" / "wedged-dropdb.sh"
+        dropdb.parent.mkdir(parents=True, exist_ok=True)
+        dropdb.write_text("#!/usr/bin/env bash\nsleep 120\n")
+        dropdb.chmod(dropdb.stat().st_mode | stat.S_IEXEC)
+        return dropdb
+
+    def test_a_dropdb_that_never_returns_aborts_non_zero_and_says_so(self, tmp_path: Path):
+        write_fixture_dump(tmp_path / "dumps" / "robothor_memory-fixture.sql.gz")
+        notify_log = install_recording_notify(tmp_path)
+        seams = install_fake_pg(tmp_path)
+        seams["ROBOTHOR_RESTORE_DRILL_DROPDB"] = str(self._install_wedged_dropdb(tmp_path))
+        env = base_env(
+            tmp_path, ROBOTHOR_RESTORE_DRILL_DROP_TIMEOUT="1", **seams
+        )
+
+        result = run_drill(env)
+
+        output = result.stdout + result.stderr
+        assert result.returncode != 0, (
+            f"a cleanup that timed out must fail the unit so OnFailure pages: {output}"
+        )
+        assert "dropdb" in output and "1s" in output, (
+            f"the failure must name dropdb and the budget it blew: {output}"
+        )
+        assert notify_log.exists() and "dropdb" in notify_log.read_text(), (
+            "the operator has to be told which half of the drill got stuck"
+        )
+
+    def test_the_timeout_is_not_paid_twice(self, tmp_path: Path):
+        """The EXIT trap drops the scratch database too. Once the drop has
+        been shown to hang, retrying it there just buys a second full timeout
+        on the way out — two budgets instead of one, still ending in
+        `TimeoutStartSec`."""
+        write_fixture_dump(tmp_path / "dumps" / "robothor_memory-fixture.sql.gz")
+        install_recording_notify(tmp_path)
+        seams = install_fake_pg(tmp_path)
+        seams["ROBOTHOR_RESTORE_DRILL_DROPDB"] = str(self._install_wedged_dropdb(tmp_path))
+        env = base_env(
+            tmp_path, ROBOTHOR_RESTORE_DRILL_DROP_TIMEOUT="3", **seams
+        )
+
+        start = time.monotonic()
+        run_drill(env)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 6, (
+            f"the drill paid the drop timeout more than once ({elapsed:.1f}s of a 3s budget)"
+        )
+
+
 # ── the drill itself ─────────────────────────────────────────────────────────
 
 
-@needs_db
+@pytest.mark.integration
 class TestAFixtureDumpRestoresAndIsVerified:
+    """The ONE class here that needs a live PostgreSQL server.
+
+    Marked `integration`, the repo's convention for a live-DB test, because
+    reachability alone is not a gate: the default selection
+    (`-m "not slow and not llm and not e2e"`) happily ran `createdb`/`dropdb`
+    on the operator's own cluster, and two concurrent runs left orphan
+    `robothor_restore_drill_test_*` databases with backends wedged on DROP
+    DATABASE. Every other class in this file drives the drill through
+    `install_fake_pg`, which touches no server at all.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _a_scratch_database_of_its_own(self):
+        if not database_is_reachable():
+            pytest.skip("no reachable PostgreSQL server for the drill")
+        yield
+        subprocess.run(["dropdb", "--if-exists", SCRATCH_DB], capture_output=True, timeout=60)
+
     def test_the_dump_restores_and_the_verify_query_runs(self, tmp_path: Path):
         write_fixture_dump(tmp_path / "dumps" / "robothor_memory-20260101.sql.gz")
         log = install_recording_notify(tmp_path)
@@ -237,6 +340,22 @@ class TestAFixtureDumpRestoresAndIsVerified:
 # ── the offsite path ─────────────────────────────────────────────────────────
 
 
+def install_fake_pg(tmp_path: Path) -> dict[str, str]:
+    """psql/createdb/dropdb stand-ins, so the temp-file behaviour can be tested
+    on a box with no PostgreSQL and without touching a real database."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    psql = bin_dir / "fake-psql.sh"
+    # Every count query answers 5, so the drill takes its success path.
+    psql.write_text("#!/usr/bin/env bash\ncat >/dev/null 2>&1 || true\necho 5\n")
+    psql.chmod(psql.stat().st_mode | stat.S_IEXEC)
+    return {
+        "ROBOTHOR_RESTORE_DRILL_PSQL": str(psql),
+        "ROBOTHOR_RESTORE_DRILL_CREATEDB": "/bin/true",
+        "ROBOTHOR_RESTORE_DRILL_DROPDB": "/bin/true",
+    }
+
+
 class TestOffsiteIsThePreferredSource:
     def test_the_remote_is_tried_before_the_local_copy(self, tmp_path: Path):
         """A box-loss restores from offsite, so that is the path worth
@@ -254,6 +373,7 @@ class TestOffsiteIsThePreferredSource:
                 tmp_path,
                 ROBOTHOR_OFFSITE_REMOTE="fixture:bucket",
                 ROBOTHOR_RESTORE_DRILL_RCLONE_CMD=str(fake),
+                **install_fake_pg(tmp_path),
             )
         )
         assert rclone_log.exists() and "lsf" in rclone_log.read_text(), (
@@ -265,28 +385,18 @@ class TestOffsiteIsThePreferredSource:
         never runs. Fall back, and say which source was used."""
         write_fixture_dump(tmp_path / "dumps" / "robothor_memory-20260101.sql.gz")
         install_recording_notify(tmp_path)
-        result = run_drill(base_env(tmp_path, ROBOTHOR_OFFSITE_REMOTE="fixture:bucket"))
+        result = run_drill(
+            base_env(
+                tmp_path,
+                ROBOTHOR_OFFSITE_REMOTE="fixture:bucket",
+                **install_fake_pg(tmp_path),
+            )
+        )
         combined = result.stdout + result.stderr
         assert "local" in combined.lower(), "the source actually used must be named"
 
 
 # ── the drill leaves nothing behind ──────────────────────────────────────────
-
-
-def install_fake_pg(tmp_path: Path) -> dict[str, str]:
-    """psql/createdb/dropdb stand-ins, so the temp-file behaviour can be tested
-    on a box with no PostgreSQL and without touching a real database."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    psql = bin_dir / "fake-psql.sh"
-    # Every count query answers 5, so the drill takes its success path.
-    psql.write_text("#!/usr/bin/env bash\ncat >/dev/null 2>&1 || true\necho 5\n")
-    psql.chmod(psql.stat().st_mode | stat.S_IEXEC)
-    return {
-        "ROBOTHOR_RESTORE_DRILL_PSQL": str(psql),
-        "ROBOTHOR_RESTORE_DRILL_CREATEDB": "/bin/true",
-        "ROBOTHOR_RESTORE_DRILL_DROPDB": "/bin/true",
-    }
 
 
 class TestTheDrillLeavesNoTemporaryFilesBehind:

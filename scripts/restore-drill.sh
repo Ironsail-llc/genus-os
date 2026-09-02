@@ -48,6 +48,9 @@
 #   ROBOTHOR_RESTORE_DRILL_PSQL       psql
 #   ROBOTHOR_RESTORE_DRILL_CREATEDB   createdb
 #   ROBOTHOR_RESTORE_DRILL_DROPDB     dropdb
+#   ROBOTHOR_RESTORE_DRILL_DROP_TIMEOUT  seconds a dropdb may block (300).
+#                                     dropdb waits forever on a database that
+#                                     still has a backend connected
 #   ROBOTHOR_RESTORE_DRILL_NOTIFY_CMD replaces the built-in notifier; called as
 #                                     CMD <subject> <body>
 #   ROBOTHOR_DB_NAME                  the LIVE database, refused as a target
@@ -104,6 +107,7 @@ RCLONE_CMD="${ROBOTHOR_RESTORE_DRILL_RCLONE_CMD:-rclone}"
 PSQL="${ROBOTHOR_RESTORE_DRILL_PSQL:-psql}"
 CREATEDB="${ROBOTHOR_RESTORE_DRILL_CREATEDB:-createdb}"
 DROPDB="${ROBOTHOR_RESTORE_DRILL_DROPDB:-dropdb}"
+DROP_TIMEOUT="${ROBOTHOR_RESTORE_DRILL_DROP_TIMEOUT:-300}"
 NOTIFY_CMD="${ROBOTHOR_RESTORE_DRILL_NOTIFY_CMD:-}"
 
 FETCHED=""
@@ -157,17 +161,46 @@ Runbook: docs/runbooks/RESTORE_DRILL.md"
     exit 1
 }
 
+# ── dropdb, bounded ──────────────────────────────────────────────────────────
+# `dropdb` blocks for as long as ANY backend is still connected to the target,
+# and it waits forever. Two overlapping runs are enough to produce that: 27
+# backends wedged on DROP DATABASE while the drill sat there. Unbounded, the
+# unit then dies at TimeoutStartSec, which reads as "the drill never finished"
+# — a very different page from "the cleanup could not complete", and only one
+# of them is true.
+#
+# So the drop is capped and a blown cap is loud and non-zero (the unit's
+# OnFailure= pages), never a hang. DROP_TIMED_OUT latches: the EXIT trap drops
+# the same database, and retrying a drop already shown to hang just buys a
+# second full budget on the way out.
+DROP_TIMED_OUT=0
+drop_scratch_db() {
+    (( DROP_TIMED_OUT )) && return 1
+    local rc=0
+    timeout "$DROP_TIMEOUT" "$DROPDB" --if-exists "$DRILL_DB" >/dev/null 2>&1 || rc=$?
+    # 124 is timeout's own verdict; 137 is the SIGKILL it escalates to.
+    if (( rc == 124 || rc == 137 )); then
+        DROP_TIMED_OUT=1
+        err "dropdb on ${DRILL_DB} did not return within ${DROP_TIMEOUT}s — something still holds a connection to it. The scratch database is still there and has to be dropped by hand; see docs/runbooks/RESTORE_DRILL.md."
+        return 1
+    fi
+    return 0
+}
+
 cleanup() {
+    # The status the script was going to exit with, before any cleanup ran.
+    local rc=$?
+
     # Every part is best-effort and every part matters: an orphan scratch
     # database fills the disk one month at a time, a fetched dump is a full
     # copy of the production data sitting in a work directory, and a monthly
     # unit that leaks one temp file per run leaks twelve a year — including
     # from the abort paths, which is where a broken drill spends its time.
-    "$DROPDB" --if-exists "$DRILL_DB" >/dev/null 2>&1 || true
+    drop_scratch_db || rc=1
     [[ -n "$FETCHED" && -f "$FETCHED" ]] && rm -f "$FETCHED"
     [[ -n "$ERROR_LOG" && -f "$ERROR_LOG" ]] && rm -f "$ERROR_LOG"
     [[ "$WORK_DIR_IS_OURS" == 1 && -n "$WORK_DIR" && -d "$WORK_DIR" ]] && rm -rf "$WORK_DIR"
-    return 0
+    exit "$rc"
 }
 
 # ── 1. Refuse anything but a scratch target ──────────────────────────────────
@@ -198,7 +231,10 @@ require_tool() {
     command -v "${argv[0]}" >/dev/null 2>&1 || MISSING+=("${what} — ${argv[0]}")
 }
 
-for tool in date find sort head cut mktemp stat gunzip rm; do
+# `timeout` is load-bearing, not decoration: it is what keeps a wedged dropdb
+# from running out the unit's TimeoutStartSec. `env` is what the notifier and
+# the seams are invoked through.
+for tool in date find sort head cut mktemp stat gunzip rm timeout env; do
     require_tool "core utility" "$tool"
 done
 require_tool "the restore (ROBOTHOR_RESTORE_DRILL_PSQL)" "$PSQL"
@@ -283,7 +319,9 @@ DUMP_BYTES="$(stat -c %s "$DUMP" 2>/dev/null || echo 0)"
 log "drilling ${DUMP_NAME} (${DUMP_BYTES} bytes) from ${SOURCE}"
 
 # ── 3. Timed restore into the scratch database ───────────────────────────────
-"$DROPDB" --if-exists "$DRILL_DB" >/dev/null 2>&1 || true
+if ! drop_scratch_db; then
+    abort "the scratch database ${DRILL_DB} could not be dropped before the restore (dropdb did not return within ${DROP_TIMEOUT}s). Nothing was restored — this is a stuck cleanup, not a backup that failed to restore."
+fi
 if ! "$CREATEDB" "$DRILL_DB" 2>&1; then
     abort "could not create the scratch database ${DRILL_DB} — the drill could not run"
 fi
