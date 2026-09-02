@@ -18,8 +18,10 @@ workspace path differs per instance — hardcoding one would be CLAUDE.md rule 1
 
 from __future__ import annotations
 
+import grp
 import importlib.util
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -36,6 +38,12 @@ GITIGNORE = REPO_ROOT / ".gitignore"
 
 WS = "/srv/genus"
 USER = "alice"
+
+#: An `su` directive is resolved by logrotate at CONFIG-PARSE time — an account
+#: that does not exist on this machine is a hard parse error, not a warning. So
+#: the tests that actually run logrotate render against real accounts.
+REAL_USER = pwd.getpwuid(os.getuid()).pw_name
+REAL_GROUP = grp.getgrgid(os.getgid()).gr_name
 
 _spec = importlib.util.spec_from_file_location(
     "guardrail_watch", REPO_ROOT / "scripts" / "guardrail_watch.py"
@@ -60,14 +68,34 @@ def base_env(**overrides: str) -> dict[str, str]:
     return env
 
 
-def render(dest: Path) -> subprocess.CompletedProcess[str]:
+def render(dest: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(RENDER), str(TEMPLATE), str(dest)],
         capture_output=True,
         text=True,
         timeout=30,
-        env=base_env(),
+        env=env or base_env(),
     )
+
+
+def directives(text: str) -> str:
+    """Config minus comment lines — render-unit.sh passes comments through
+    unrendered by design, and they may DISCUSS a placeholder."""
+    return "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+
+
+def stanza_for(text: str, path_fragment: str) -> str:
+    """The `{ ... }` block whose path list contains path_fragment."""
+    blocks, current = [], []
+    for line in directives(text).splitlines():
+        current.append(line)
+        if line.strip() == "}":
+            blocks.append("\n".join(current))
+            current = []
+    for block in blocks:
+        if path_fragment in block.split("{", 1)[0]:
+            return block
+    raise AssertionError(f"no stanza for {path_fragment} in:\n{text}")
 
 
 # ── the template ─────────────────────────────────────────────────────────────
@@ -99,6 +127,58 @@ def test_template_policy():
         assert directive in body, f"missing directive: {directive}"
 
 
+def test_the_workspace_stanza_declares_su():
+    """logrotate refuses to rotate a directory whose parent is writable by a
+    group other than root — it skips the stanza and says so only in a log
+    nobody reads:
+
+        error: skipping ".../brain/memory_system/logs/…" because parent
+        directory has insecure permissions ... Set "su" directive
+
+    The workspace logs are owned by the SERVICE account with group write (they
+    are written by the services), which is exactly that shape. `su` tells
+    logrotate which account to rotate as, and is the documented remedy.
+    """
+    workspace = stanza_for(TEMPLATE.read_text(), "brain/memory_system/logs")
+    assert "su robothor robothor" in workspace, workspace
+
+
+def test_the_var_log_stanza_declares_no_su():
+    """/var/log/robothor is root-owned. `su` there would drop the rotation to
+    an unprivileged account for no reason."""
+    stanza = stanza_for(TEMPLATE.read_text(), "/var/log/robothor")
+    assert "su " not in stanza, stanza
+
+
+def test_the_su_directive_uses_the_placeholder_account():
+    """CLAUDE.md rule 1: `robothor` is the placeholder the renderer fills, not
+    an account name this file may hardcode."""
+    for line in directives(TEMPLATE.read_text()).splitlines():
+        if line.strip().startswith("su "):
+            assert line.split() == ["su", "robothor", "robothor"], line
+
+
+def test_render_substitutes_the_su_account(tmp_path: Path):
+    dest = tmp_path / "robothor"
+    env = base_env(ROBOTHOR_SERVICE_USER=REAL_USER, ROBOTHOR_SERVICE_GROUP=REAL_GROUP)
+    result = render(dest, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    workspace = stanza_for(dest.read_text(), "brain/memory_system/logs")
+    assert f"su {REAL_USER} {REAL_GROUP}" in workspace, workspace
+    assert "su robothor robothor" not in dest.read_text()
+
+
+def test_the_service_group_defaults_to_the_service_user(tmp_path: Path):
+    """Most instances have no separate group; the renderer must not require
+    one to be configured before logs can rotate."""
+    dest = tmp_path / "robothor"
+    env = base_env(ROBOTHOR_SERVICE_USER=REAL_USER)
+    env.pop("ROBOTHOR_SERVICE_GROUP", None)
+    result = render(dest, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"su {REAL_USER} {REAL_USER}" in dest.read_text()
+
+
 def test_template_carries_no_instance_path():
     """CLAUDE.md rule 1 — the workspace is a placeholder the renderer fills."""
     assert "/home/" not in TEMPLATE.read_text()
@@ -125,7 +205,10 @@ def test_rendered_config_parses(tmp_path: Path):
     """A logrotate config that does not parse rotates nothing, and says so only
     in a log nobody reads."""
     dest = tmp_path / "robothor"
-    assert render(dest).returncode == 0
+    # A real account: `su` is resolved when the config is PARSED, so an unknown
+    # user is a hard error rather than something only a rotation would hit.
+    env = base_env(ROBOTHOR_SERVICE_USER=REAL_USER, ROBOTHOR_SERVICE_GROUP=REAL_GROUP)
+    assert render(dest, env).returncode == 0
     result = subprocess.run(
         ["logrotate", "-d", "-s", str(tmp_path / "state"), str(dest)],
         capture_output=True,
@@ -134,6 +217,48 @@ def test_rendered_config_parses(tmp_path: Path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "error" not in result.stderr.lower(), result.stderr
+    assert "error" not in result.stdout.lower(), result.stdout
+
+
+@pytest.mark.skipif(shutil.which("logrotate") is None, reason="logrotate not installed")
+def test_a_group_writable_workspace_log_dir_is_not_skipped(tmp_path: Path):
+    """The live failure: the brain log directory is owned by the service
+    account with group write (mode 2775), and logrotate skipped every file
+    under it — "parent directory has insecure permissions ... Set su
+    directive" — so nothing there rotated at all.
+
+    NOTE this check only fires when logrotate runs as root, which is how it
+    runs on the box (and how CI containers run it). Under an unprivileged test
+    runner the assertion cannot fail on its own; what it still catches there is
+    an `su` line that breaks parsing or names an account that does not exist.
+    """
+    workspace = tmp_path / "workspace"
+    logs = workspace / "brain" / "memory_system" / "logs"
+    logs.mkdir(parents=True)
+    logs.chmod(0o2775)
+    (logs / "job.log").write_text("a line\n")
+    (logs / "job.jsonl").write_text('{"a": 1}\n')
+
+    dest = tmp_path / "robothor"
+    env = base_env(
+        ROBOTHOR_WORKSPACE=str(workspace),
+        ROBOTHOR_SERVICE_USER=REAL_USER,
+        ROBOTHOR_SERVICE_GROUP=REAL_GROUP,
+    )
+    assert render(dest, env).returncode == 0
+
+    result = subprocess.run(
+        ["logrotate", "-d", "-s", str(tmp_path / "state"), str(dest)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    combined = result.stdout + result.stderr
+    assert "insecure permissions" not in combined, combined
+    skipped = [ln for ln in combined.splitlines() if "skipping" in ln and str(logs) in ln]
+    assert not skipped, skipped
+    assert str(logs / "job.log") in combined, "the workspace log was never considered\n" + combined
+    assert result.returncode == 0, combined
 
 
 # ── installation ─────────────────────────────────────────────────────────────

@@ -26,8 +26,10 @@ values use exactly these placeholder spellings, substituted at install time:
 |---|---|---|
 | `/opt/robothor` | workspace root (the repo checkout) | `$ROBOTHOR_WORKSPACE` |
 | `/home/robothor` | the service user's home | `$ROBOTHOR_SERVICE_HOME` (or the user's passwd entry) |
-| `User=robothor` / `Group=robothor` (exact lines) | the service account | `$ROBOTHOR_SERVICE_USER` |
+| `User=robothor` (exact line) | the service account | `$ROBOTHOR_SERVICE_USER` |
+| `Group=robothor` (exact line) | the service account's group | `$ROBOTHOR_SERVICE_GROUP` (defaults to `$ROBOTHOR_SERVICE_USER`) |
 | `robothor robothor` in the USER/GROUP **columns** of an `infra/tmpfiles/*.conf` row | the service account | `$ROBOTHOR_SERVICE_USER`, via `render-unit.sh --tmpfiles` |
+| `su robothor robothor` in a logrotate stanza | the account logrotate rotates as | `$ROBOTHOR_SERVICE_USER` / `$ROBOTHOR_SERVICE_GROUP` |
 
 Rules (enforced by `tests/test_install_units.py`):
 

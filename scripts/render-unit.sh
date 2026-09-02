@@ -12,7 +12,9 @@
 #   /opt/robothor    the workspace           -> $ROBOTHOR_WORKSPACE
 #   /home/robothor   the service user's home -> $ROBOTHOR_SERVICE_HOME
 #   User=robothor    the service account     -> User=$ROBOTHOR_SERVICE_USER
-#   Group=robothor   (exact lines only)      -> Group=$ROBOTHOR_SERVICE_USER
+#   Group=robothor   (exact lines only)      -> Group=$ROBOTHOR_SERVICE_GROUP
+#   su robothor robothor  a logrotate(8) su directive
+#                                            -> su $ROBOTHOR_SERVICE_USER $ROBOTHOR_SERVICE_GROUP
 # Legacy spellings still rendered (but rejected in new templates by
 # tests/test_install_units.py): ${ROBOTHOR_WORKSPACE} and %h.
 #
@@ -26,6 +28,9 @@
 #                          rendering User=root would be the %h incident again.
 #   ROBOTHOR_SERVICE_HOME  optional — service user's home; derived from the
 #                          user's passwd entry when unset
+#   ROBOTHOR_SERVICE_GROUP optional — the service account's group; defaults to
+#                          ROBOTHOR_SERVICE_USER, which is the shape of every
+#                          instance that has not deliberately split the two
 #   ROBOTHOR_ENV_FILE      optional — file to read unset vars from
 #                          (default /etc/robothor/robothor.env)
 #
@@ -70,9 +75,14 @@ env_file_lookup() {
 WORKSPACE="${ROBOTHOR_WORKSPACE:-$(env_file_lookup ROBOTHOR_WORKSPACE || true)}"
 SERVICE_USER="${ROBOTHOR_SERVICE_USER:-$(env_file_lookup ROBOTHOR_SERVICE_USER || true)}"
 SERVICE_HOME="${ROBOTHOR_SERVICE_HOME:-$(env_file_lookup ROBOTHOR_SERVICE_HOME || true)}"
+SERVICE_GROUP="${ROBOTHOR_SERVICE_GROUP:-$(env_file_lookup ROBOTHOR_SERVICE_GROUP || true)}"
 
 [[ -n "$WORKSPACE" ]] || die "ROBOTHOR_WORKSPACE is not set and not found in ${ENV_FILE}"
 [[ -n "$SERVICE_USER" ]] || die "ROBOTHOR_SERVICE_USER is not set and not found in ${ENV_FILE}"
+# A separate group is the exception, not the rule: on a single-account instance
+# the service group IS the service user. Requiring it to be configured would
+# mean a box that never set it renders nothing at all.
+: "${SERVICE_GROUP:=$SERVICE_USER}"
 
 # The service home is only needed when the template references it.
 if grep -q -e '%h' -e '/home/robothor' "$SRC"; then
@@ -89,6 +99,7 @@ fi
 # never rescanned, so a workspace like /home/robothor/repo cannot be mangled
 # by the home substitution, and awk regex/'&' semantics never touch the data.
 export RENDER_WS="$WORKSPACE" RENDER_USER="$SERVICE_USER" RENDER_HOME="$SERVICE_HOME"
+export RENDER_GROUP="$SERVICE_GROUP"
 export RENDER_TMPFILES="$TMPFILES"
 rendered="$(awk '
 function lsub(s, pat, rep,    out, i, n) {
@@ -100,8 +111,9 @@ function lsub(s, pat, rep,    out, i, n) {
     return out s
 }
 BEGIN {
-    WSENT = "\001W\002"; USENT = "\001U\002"; HSENT = "\001H\002"
+    WSENT = "\001W\002"; USENT = "\001U\002"; HSENT = "\001H\002"; GSENT = "\001G\002"
     ws = ENVIRON["RENDER_WS"]; su = ENVIRON["RENDER_USER"]; home = ENVIRON["RENDER_HOME"]
+    grp = ENVIRON["RENDER_GROUP"]
     tmpf = (ENVIRON["RENDER_TMPFILES"] == "1")
 }
 {
@@ -123,11 +135,22 @@ BEGIN {
     s = lsub(s, "${ROBOTHOR_WORKSPACE}", WSENT)
     s = lsub(s, "/opt/robothor", WSENT)
     if (s == "User=robothor")  s = "User=" USENT
-    if (s == "Group=robothor") s = "Group=" USENT
+    if (s == "Group=robothor") s = "Group=" GSENT
+    # logrotate(8) su USER GROUP: a positional directive, so the exact-line
+    # rules above cannot see it. Without this the placeholder ships verbatim,
+    # logrotate resolves it at parse time, and the whole config is rejected
+    # with an unknown-user error -- or worse, on a box that HAS an account by
+    # that name, the logs rotate as the wrong one.
+    if (s ~ /^[ \t]*su[ \t]+robothor[ \t]+robothor[ \t]*$/) {
+        indent = s
+        sub(/su[ \t]+robothor.*$/, "", indent)
+        s = indent "su " USENT " " GSENT
+    }
     s = lsub(s, "/home/robothor", HSENT)
     s = lsub(s, "%h", HSENT)
     s = lsub(s, WSENT, ws)
     s = lsub(s, USENT, su)
+    s = lsub(s, GSENT, grp)
     s = lsub(s, HSENT, home)
     print s
 }' "$SRC")"
@@ -153,8 +176,18 @@ if leftover="$(grep -n '%h' <<<"$directives")"; then
     fail_lines '%h (== /root in system units)' "$leftover"
 fi
 if [[ "$SERVICE_USER" != "robothor" ]] \
-    && leftover="$(grep -nE '^(User|Group)=robothor$' <<<"$directives")"; then
+    && leftover="$(grep -nE '^User=robothor$' <<<"$directives")"; then
     fail_lines 'placeholder service account' "$leftover"
+fi
+if [[ "$SERVICE_GROUP" != "robothor" ]] \
+    && leftover="$(grep -nE '^Group=robothor$' <<<"$directives")"; then
+    fail_lines 'placeholder service group' "$leftover"
+fi
+# The logrotate su directive gets its own gate for the same reason it gets its
+# own substitution: the anchored greps above cannot see a positional account.
+if [[ "$SERVICE_USER" != "robothor" || "$SERVICE_GROUP" != "robothor" ]] \
+    && leftover="$(grep -nE '^[[:space:]]*su[[:space:]]+robothor[[:space:]]+robothor[[:space:]]*$' <<<"$directives")"; then
+    fail_lines 'placeholder account in a logrotate su directive' "$leftover"
 fi
 # The tmpfiles account columns get their own gate for the same reason they get
 # their own substitution: the ^(User|Group)= grep above cannot see them. awk
