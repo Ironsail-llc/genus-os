@@ -314,6 +314,19 @@ def _pinned_cooldown_dir(tmp_path: Path) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     return d
 
+
+def _pinned_dir(tmp_path: Path, name: str) -> Path:
+    """Pre-create one of the sender's durable directories inside tmp_path.
+
+    Same reasoning as the cooldown dir above: the sender falls back to a real,
+    shared path whenever the pinned one is missing or unusable, so the pin has
+    to name a directory that already exists.
+    """
+    d = tmp_path / name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
     """Hermetic: no live volume, no live marker dir, no live cooldown state,
     no real Telegram endpoint, no database."""
@@ -342,6 +355,16 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
             # Sender isolation — a stamp written into the real /run/robothor
             # cooldown dir by a test could suppress a REAL page later.
             "ROBOTHOR_ALERT_STATE_DIR": str(_pinned_cooldown_dir(tmp_path)),
+            # A page this probe cannot deliver is SPOOLED, not dropped, and the
+            # real spool (/var/lib/robothor/alert-spool) is drained every five
+            # minutes by root's liveness tick — so an unpinned spool does not
+            # avoid paging the operator with a fixture failure, it delays it.
+            "ROBOTHOR_ALERT_SPOOL_DIR": str(_pinned_dir(tmp_path, "alert-spool")),
+            # And where the cooldown stamp lands when the primary state dir is
+            # not writable, which is every cron-driven page on this box.
+            "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(
+                _pinned_dir(tmp_path, "alert-fallback")
+            ),
             "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
             "ROBOTHOR_ALERT_MAX_ATTEMPTS": "1",
             "ROBOTHOR_ALERT_RETRY_DELAY": "0",
