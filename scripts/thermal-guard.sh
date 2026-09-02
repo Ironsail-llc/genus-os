@@ -51,6 +51,7 @@ require_tools() {
     fi
 }
 require_tools cat date stat systemctl
+
 WARN_C=${ROBOTHOR_THERMAL_WARN_C:-90}
 CRIT_C=${ROBOTHOR_THERMAL_CRIT_C:-94}
 THROTTLE_C=${ROBOTHOR_THERMAL_THROTTLE_C:-85}
