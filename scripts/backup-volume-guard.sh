@@ -490,7 +490,20 @@ identify_mounted_source() {
         return 1
     fi
     [[ -n "$mounted_source" ]] || return 0
-    mounted_source="$(head -n 1 <<<"$mounted_source")"
+
+    # A mountpoint can hold a STACK, and findmnt prints a row per layer. Only
+    # the TOP one is what `umount -l <path>` detaches, and it is not the row a
+    # `head -n 1` identifies — so the guard would vet one filesystem and
+    # detach another, with the gate that exists to prevent exactly that having
+    # signed it off. Nothing here can say which layer is ours, so none of them
+    # is touched.
+    local -a sources
+    mapfile -t sources <<<"$mounted_source"
+    if ((${#sources[@]} > 1)); then
+        HEAL_REASON="${#sources[@]} filesystems stacked at ${MOUNT} (${sources[*]}) — refusing to unmount any of them"
+        return 1
+    fi
+    mounted_source="${sources[0]}"
     name="$(mapper_node_name "$mounted_source")"
     if [[ -z "$name" ]]; then
         HEAL_REASON="something other than the backup mapper is mounted at ${MOUNT} (${mounted_source:-unknown}) — refusing to unmount it"

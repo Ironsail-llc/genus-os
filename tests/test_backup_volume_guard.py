@@ -944,6 +944,38 @@ def test_a_findmnt_that_could_not_answer_does_not_read_as_nothing_mounted(box: B
     assert "refusing to guess" in box.pages[0], box.pages[0]
 
 
+def test_two_filesystems_stacked_at_the_mountpoint_are_never_unmounted(box: Box):
+    """A mountpoint can hold a STACK, and findmnt then prints a row each.
+
+    Taking the first row and unmounting the path is aimed at the LAST one —
+    ``umount`` pops the top of the stack, which is the row findmnt printed
+    last. So the guard would check the identity of one filesystem and detach a
+    different one, and the check that exists precisely to stop that would have
+    signed it off. Nothing here can tell which of them belongs to this guard,
+    so none of them is touched.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        # ours, with somebody's rescue image mounted over the top of it
+        FAKE_MOUNT_SOURCE=f"{box.mapper_dir / MAPPER}\n/dev/sda1",
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="0",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert box.ran("umount") == [], f"unmounted one of a stack:\n{box.argv}"
+    assert box.ran("cryptsetup close") == []
+    assert box.ran("cryptsetup open") == []
+    assert box.ran("fsck.ext4") == []
+    assert box.ran("mount") == []
+
+    assert len(box.pages) == 1, f"expected exactly one page, got {box.pages}"
+    assert f"2 filesystems stacked at {box.mount}" in box.pages[0], box.pages[0]
+
+
 @pytest.mark.parametrize(
     "source",
     [
