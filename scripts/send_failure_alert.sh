@@ -446,6 +446,30 @@ drain_spool() {
     shopt -u nullglob
     (( ${#files[@]} )) || return 0
 
+    # ── Drain only what this account can actually delete ─────────────────────
+    # The spool is 1777 sticky, so root's units and the operator's cron jobs
+    # both write here and NEITHER can unlink the other's files. A non-root
+    # drain that picks up a root-owned page delivers it, fails to remove it,
+    # and delivers it again five minutes later — forever, while the log
+    # reports a clean delivery each time. Root drains everything; everyone
+    # else leaves other people's pages to root's own tick.
+    local f keep=() foreign=0
+    if (( EUID != 0 )); then
+        for f in "${files[@]}"; do
+            if [[ -O "$f" ]]; then
+                keep+=("$f")
+            else
+                foreign=$(( foreign + 1 ))
+            fi
+        done
+        if (( foreign )); then
+            echo "send_failure_alert: leaving ${foreign} spool file(s) owned by another" \
+                 "account to root's drain — this user could not delete them after sending" >&2
+        fi
+        files=("${keep[@]}")
+        (( ${#files[@]} )) || return 0
+    fi
+
     source_secrets
     if [[ -z "${ROBOTHOR_TELEGRAM_BOT_TOKEN:-}" || -z "${ROBOTHOR_TELEGRAM_CHAT_ID:-}" ]]; then
         echo "send_failure_alert: ${#files[@]} page(s) spooled in ${SPOOL_DIR}, but there are" \
@@ -457,13 +481,29 @@ drain_spool() {
     # hundreds of stale pages the moment the network returned. Keep the newest
     # SPOOL_CAP and say out loud how many were dropped — a silent truncation
     # would be the pager lying about what it had.
-    local dropped=0 i
+    local dropped=0 i over=0
     if (( ${#files[@]} > SPOOL_CAP )); then
-        dropped=$(( ${#files[@]} - SPOOL_CAP ))
-        for (( i = 0; i < dropped; i++ )); do
-            rm -f "${files[i]}" 2>/dev/null || true
+        over=$(( ${#files[@]} - SPOOL_CAP ))
+        # The `rm` is CHECKED. `rm -f ... || true` on a file this account does
+        # not own removed nothing while the pager announced N pages dropped —
+        # a truncation notice for a truncation that never happened, and the
+        # same files back on the next tick.
+        keep=()
+        for (( i = 0; i < ${#files[@]}; i++ )); do
+            if (( i < over )); then
+                if rm -f "${files[i]}" 2>/dev/null && [[ ! -e "${files[i]}" ]]; then
+                    rm -f "${files[i]}.attempts" 2>/dev/null || true
+                    dropped=$(( dropped + 1 ))
+                    continue
+                fi
+                echo "send_failure_alert: cannot remove over-cap spool file ${files[i]}" \
+                     "(not owner) — keeping it" >&2
+            fi
+            keep+=("${files[i]}")
         done
-        files=("${files[@]:dropped}")
+        files=("${keep[@]}")
+    fi
+    if (( dropped )); then
         echo "send_failure_alert: alert spool over the ${SPOOL_CAP}-page cap —" \
              "${dropped} older pages dropped" >&2
         if ! post_telegram "⏳ ${dropped} older pages dropped from the alert spool on ${HOST} (over the ${SPOOL_CAP}-page cap)"; then
@@ -522,7 +562,17 @@ drain_spool() {
         # of it.
         if post_telegram "⏳ DELAYED (queued ${queued}):
 ${text}"; then
-            rm -f "$f" 2>/dev/null || true
+            # The unlink is CHECKED, and its failure stops the drain. In the
+            # 1777 sticky spool this account cannot delete a file it does not
+            # own: `rm -f ... || true` then counted a delivery, so the same
+            # page went out again on every drain while the log announced a
+            # clean delivery each time. Nothing after this file is counted —
+            # every one of them would be a page the operator gets twice.
+            if ! rm -f "$f" 2>/dev/null || [[ -e "$f" ]]; then
+                echo "send_failure_alert: cannot remove delivered spool file ${f}" \
+                     "(not owner) — stopping drain to avoid re-sending" >&2
+                break
+            fi
             rm -f "${f}.attempts" 2>/dev/null || true
             delivered=$(( delivered + 1 ))
             continue

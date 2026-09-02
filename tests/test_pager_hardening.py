@@ -1140,6 +1140,96 @@ class TestARejectedPageDoesNotWedgeTheSpool:
         assert poisoned(tmp_path) == []
 
 
+def test_the_drain_skips_spool_files_the_current_user_does_not_own():
+    """Only root drains another account's pages.
+
+    The spool is 1777 sticky: root's units and the operator's cron jobs both
+    write into it, and sticky means neither can unlink the other's files. A
+    non-root drain that picks up a root-owned page therefore delivers it,
+    fails to remove it, and delivers it again on the next tick — forever.
+    Root's own 5-minute drain is what clears those.
+
+    Asserted against the source: a file owned by another uid cannot be created
+    from an unprivileged test, and this must not become a test that only runs
+    under sudo. The behaviour it guards — the delivered-file unlink check —
+    is exercised for real in
+    TestTheDrainNeverCountsAPageItCannotRemove.
+    """
+    src = SEND.read_text()
+    assert '-O "$f"' in src, (
+        "the drain does not check spool-file ownership, so the operator's "
+        "drain will re-send root's pages on every tick"
+    )
+    assert "EUID" in src, "the ownership filter must not apply to root, which drains everything"
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="root can unlink anything; this is the operator's case"
+)
+class TestTheDrainNeverCountsAPageItCannotRemove:
+    """`rm -f "$f" ... || true`, then count a delivery.
+
+    In the 1777 sticky spool the operator's account cannot delete a
+    root-spooled file. The drain deleted-and-shrugged, counted the page as
+    delivered, and logged success — so the same page went out again on every
+    operator-run drain, and the log said everything was fine.
+    """
+
+    def test_a_delivered_page_that_cannot_be_removed_stops_the_drain(self, tmp_path: Path):
+        log = install_status_curl(tmp_path, ["200"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-UNDELETABLE")
+        write_spooled(tmp_path, SPOOLED_EPOCH_NEWER, "PAGE-BEHIND-IT")
+        spool_dir(tmp_path).chmod(0o500)  # readable, listable, NOT writable
+        try:
+            result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        finally:
+            spool_dir(tmp_path).chmod(0o700)
+        out = result.stdout + result.stderr
+        assert "cannot remove delivered spool file" in out, (
+            f"the failed unlink was swallowed; the page will be re-sent forever: {out}"
+        )
+        assert curl_calls(log) == 1, (
+            "the drain carried on past a page it could not remove — every page "
+            "it 'delivers' from here is one it will deliver again next tick"
+        )
+
+    def test_it_does_not_report_pages_it_will_send_again_as_drained(self, tmp_path: Path):
+        install_status_curl(tmp_path, ["200"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-UNDELETABLE")
+        spool_dir(tmp_path).chmod(0o500)
+        try:
+            result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        finally:
+            spool_dir(tmp_path).chmod(0o700)
+        out = result.stdout + result.stderr
+        assert "drained 1 spooled page" not in out, (
+            "a page still on disk was counted as drained — the log reads as a "
+            "clean delivery of a page the operator is about to receive again"
+        )
+
+    def test_an_over_cap_page_that_cannot_be_removed_is_named_not_counted(
+        self, tmp_path: Path
+    ):
+        """Same unchecked `rm` on the cap-drop path: it announced N pages
+        dropped while dropping none of them."""
+        install_status_curl(tmp_path, ["200"])
+        for i in range(5):
+            write_spooled(tmp_path, SPOOLED_EPOCH_OLDER + i, f"PAGE-{i}")
+        spool_dir(tmp_path).chmod(0o500)
+        try:
+            result = run_drain(
+                tmp_path, base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_CAP="2", **FAKE_TOKEN_ENV)
+            )
+        finally:
+            spool_dir(tmp_path).chmod(0o700)
+        out = result.stdout + result.stderr
+        assert "cannot remove over-cap spool file" in out, out
+        assert "3 older pages dropped" not in out, (
+            "the pager announced a truncation it did not perform"
+        )
+        assert len(spooled(tmp_path)) == 5, "pages vanished from a read-only spool dir"
+
+
 class TestSpoolCap:
     def test_the_spool_is_capped_and_says_what_it_dropped(self, tmp_path: Path):
         log = install_fake_curl(tmp_path)
