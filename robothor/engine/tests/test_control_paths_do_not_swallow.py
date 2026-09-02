@@ -62,8 +62,6 @@ class TestNothingOnAControlPathFailsSilently:
 
     def test_no_control_module_swallows_silently(self):
         offenders = {
-            name: lines
-            for name in _CONTROL_PATHS
-            if (lines := _silent_swallows(_ENGINE / name))
+            name: lines for name in _CONTROL_PATHS if (lines := _silent_swallows(_ENGINE / name))
         }
         assert not offenders, f"silent swallows on control paths: {offenders}"
