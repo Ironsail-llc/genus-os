@@ -30,15 +30,21 @@ on a checkout that has no benchmark suite.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from robothor.engine.deliverable_contract import required_deliverables
 
+#: The benchmark checkout is instance data, so its location is an env var and
+#: never a path in platform code — `WILDCLAW_REPO` is the same variable the
+#: bench rotation reads (bench/wildclaw/README.md). Unset is the normal state
+#: of CI and of a fresh checkout, and skips only the tests that need the file.
+_WILDCLAW = os.environ.get("WILDCLAW_REPO")
 _REAL_TASK = Path(
-    "/home/philip/robothor-bench/WildClawBench/tasks/01_Productivity_Flow/"
-    "01_Productivity_Flow_task_4_2022_conference_papers.md"
+    _WILDCLAW or "",
+    "tasks/01_Productivity_Flow/01_Productivity_Flow_task_4_2022_conference_papers.md",
 )
 
 
@@ -75,7 +81,14 @@ class TestItDoesNotOverReach:
 
 
 class TestAgainstTheRealFailingTask:
-    @pytest.mark.skipif(not _REAL_TASK.exists(), reason="benchmark suite is instance data")
+    # Class-scoped, not module-scoped: the inline-shape tests above are the
+    # platform's guarantee on a checkout with no benchmark suite, and skipping
+    # them alongside this one would leave the contract untested in CI.
+    pytestmark = pytest.mark.skipif(
+        not (_WILDCLAW and _REAL_TASK.is_file()),
+        reason="benchmark suite is instance data; set WILDCLAW_REPO to run",
+    )
+
     def test_the_task_that_scored_zero_declares_a_deliverable(self):
         found = required_deliverables(_REAL_TASK.read_text())
         assert "/tmp_workspace/results/2022.tsv" in found, (
