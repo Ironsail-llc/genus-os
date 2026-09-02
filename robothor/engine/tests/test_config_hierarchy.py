@@ -307,6 +307,23 @@ class TestValidationWarningLogging:
         assert sum("not_real" in r.getMessage() for r in caplog.records) == 1
         assert sum("planing_enabled" in r.getMessage() for r in caplog.records) == 1
 
+    def test_the_dedupe_key_names_the_agent_the_log_line_names(
+        self, tmp_path: Path, caplog, monkeypatch
+    ):
+        """Key and log line must agree on the id, or they dedupe different things."""
+        import logging
+
+        import robothor.engine.config as config_mod
+
+        monkeypatch.setattr(config_mod, "_sanitize", lambda value: f"scrubbed-{value}")
+        manifest_dir = self._write(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.config"):
+            config_mod.load_agent_config("agent-a", manifest_dir)
+
+        record = next(r for r in caplog.records if "planing_enabled" in r.getMessage())
+        assert "scrubbed-agent-a" in record.getMessage()
+        assert {key[0] for key in config_mod._logged_validation_warnings} == {"scrubbed-agent-a"}
+
 
 class TestValidationWarningLogIsolation:
     """The dedupe set is a module GLOBAL, so it leaks between tests.
