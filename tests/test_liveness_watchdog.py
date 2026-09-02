@@ -140,6 +140,12 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
             # Sender isolation — the real cooldown dir is /run/robothor, and a
             # stamp written there by a test could suppress a REAL page later.
             "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+            # The probe drains the sender's spool on every tick, and the
+            # sender spools any page it could not deliver. Both ends of that
+            # loop have to point at this test's tmpdir: the real spool is
+            # durable (/var/lib) and a page left there by a test WILL be
+            # delivered to the operator by the next real tick.
+            "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
             "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
             "ROBOTHOR_ALERT_MAX_ATTEMPTS": "1",
             "ROBOTHOR_ALERT_RETRY_DELAY": "0",
@@ -365,7 +371,11 @@ class TestUndeliveredPageIsNotSuccess:
 
         recovered = run_probe(env)
         assert recovered.returncode == 0, recovered.stdout + recovered.stderr
-        assert send_attempts(log) == 2, "the next tick must retry the page immediately"
+        # Two sends on this tick, not one: the failed page was also spooled,
+        # so the tick drains that copy (marked "⏳ DELAYED") and then raises
+        # the fresh page. Duplication is the deliberate trade — for a pager,
+        # one page twice beats one page never.
+        assert send_attempts(log) == 3, "the next tick must retry the page immediately"
 
 
 # ── unit templates ───────────────────────────────────────────────────────────
@@ -547,3 +557,60 @@ class TestFleetGuardWatchesSemanticsNotAliveness:
         text = self.FLEET_TIMER.read_text()
         assert "OnBootSec=" in text
         assert "OnUnitActiveSec=" in text
+
+
+# ── the tick is also the spool drain ─────────────────────────────────────────
+# The sender parks a page it could not deliver (DNS down: 63 `curl_rc=6` lines
+# since 2026-08-31) in a durable spool. Something has to come back for it, and
+# the callers that lose pages — cron-wrapper.sh, backup-offsite.sh,
+# thermal-guard.sh, boot-guard.sh — have no retrying unit behind them. This
+# timer does: it runs as root every 5 minutes, ordered After=network-online,
+# which is exactly the shape a drain needs.
+
+
+def spool_a_page(tmp_path: Path, text: str = "PAGE-SPOOLED", epoch: int = 1756000000) -> Path:
+    spool = tmp_path / "alert-spool"
+    spool.mkdir(parents=True, exist_ok=True)
+    path = spool / f"{epoch}-robothor-spooled.service.deadbeef.1.msg"
+    path.write_text(text + "\n")
+    return path
+
+
+class TestTheTickDrainsTheAlertSpool:
+    def test_a_healthy_tick_still_drains_a_spooled_page(self, tmp_path: Path):
+        """The engine is fine, so nothing pages — but a page stranded by an
+        earlier DNS outage must go out anyway. Without this the spool is only
+        drained by the NEXT failure, which may be days away."""
+        log = install_fake_curl(tmp_path)
+        spooled = spool_a_page(tmp_path)
+        result = run_probe(base_env(tmp_path, **ALIVE))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert send_attempts(log) == 1, "the tick did not drain the spool"
+        assert "PAGE-SPOOLED" in log.read_text()
+        assert not spooled.exists(), "a delivered spool file must be deleted"
+
+    def test_a_drain_that_cannot_deliver_does_not_fail_the_tick(self, tmp_path: Path):
+        """Telegram is still unreachable. The engine is healthy, so this tick
+        has nothing to report — failing it would fire the probe's own
+        OnFailure= page about a backlog that is simply still waiting."""
+        install_fake_curl(tmp_path)
+        spooled = spool_a_page(tmp_path)
+        env = base_env(tmp_path, FAKE_CURL_SEND_RC="1", **ALIVE)
+        result = run_probe(env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert spooled.exists(), "an undelivered page must stay spooled"
+
+    def test_the_drain_uses_the_sender_seam(self, tmp_path: Path):
+        """One sender, one seam: the drain goes through
+        ROBOTHOR_LIVENESS_ALERT_CMD like the page does, so an instance that
+        overrides the sender does not silently lose the drain."""
+        alert_log = install_recording_alert(tmp_path)
+        install_fake_curl(tmp_path)
+        env = base_env(
+            tmp_path,
+            ROBOTHOR_LIVENESS_ALERT_CMD=str(tmp_path / "bin" / "fake-alert.sh"),
+            **ALIVE,
+        )
+        result = run_probe(env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "--drain" in alert_log.read_text()

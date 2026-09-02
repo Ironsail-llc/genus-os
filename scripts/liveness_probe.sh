@@ -54,6 +54,17 @@
 #                                        (tests, non-HTTP probes)
 #   ROBOTHOR_LIVENESS_ALERT_CMD          replaces the default sender; the unit
 #                                        name is appended as its last argument
+#                                        (and `--drain` for the spool drain)
+#
+# THE TICK IS ALSO THE SPOOL DRAIN
+#   The sender parks a page it could not deliver in a durable spool (DNS loss
+#   produced 63 `curl_rc=6` lines since 2026-08-31). Something has to come back
+#   for it, and the callers that lose pages — cron-wrapper.sh,
+#   backup-offsite.sh, thermal-guard.sh, boot-guard.sh — have no retrying unit
+#   behind them. This one does: root, every 5 minutes, After=network-online.
+#   So the FIRST thing each tick does is `send_failure_alert.sh --drain`,
+#   before the probe and regardless of its outcome — a healthy engine is
+#   exactly when a stranded page would otherwise sit unnoticed for days.
 set -u
 
 log() { echo "liveness_probe: $*"; }
@@ -118,6 +129,20 @@ send_page() {
     read -r -a argv <<<"$ALERT_CMD"
     "${argv[@]}" "$UNIT"
 }
+
+# Best-effort by construction: a spool that could not be drained is a backlog
+# still waiting, not an incident. Failing the unit here would fire its own
+# OnFailure= page about the very outage that filled the spool.
+drain_spool() {
+    local argv
+    read -r -a argv <<<"$ALERT_CMD"
+    if "${argv[@]}" --drain; then
+        return 0
+    fi
+    err "the alert spool drain reported a failure — spooled pages are still waiting"
+}
+
+drain_spool
 
 count="$(read_count)"
 
