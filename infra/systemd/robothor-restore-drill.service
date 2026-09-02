@@ -51,3 +51,8 @@ Nice=10
 IOSchedulingClass=idle
 
 NoNewPrivileges=yes
+# The drill fetches a full copy of the production database into a temp
+# directory. PrivateTmp gives it a /tmp of its own that systemd tears down with
+# the unit, so even a hard-killed run cannot leave that copy in the shared /tmp
+# — the same containment robothor-slo.service carries.
+PrivateTmp=yes

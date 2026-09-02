@@ -262,6 +262,79 @@ class TestOffsiteIsThePreferredSource:
         assert "local" in combined.lower(), "the source actually used must be named"
 
 
+# ── the drill leaves nothing behind ──────────────────────────────────────────
+
+
+def install_fake_pg(tmp_path: Path) -> dict[str, str]:
+    """psql/createdb/dropdb stand-ins, so the temp-file behaviour can be tested
+    on a box with no PostgreSQL and without touching a real database."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    psql = bin_dir / "fake-psql.sh"
+    # Every count query answers 5, so the drill takes its success path.
+    psql.write_text("#!/usr/bin/env bash\ncat >/dev/null 2>&1 || true\necho 5\n")
+    psql.chmod(psql.stat().st_mode | stat.S_IEXEC)
+    return {
+        "ROBOTHOR_RESTORE_DRILL_PSQL": str(psql),
+        "ROBOTHOR_RESTORE_DRILL_CREATEDB": "/bin/true",
+        "ROBOTHOR_RESTORE_DRILL_DROPDB": "/bin/true",
+    }
+
+
+class TestTheDrillLeavesNoTemporaryFilesBehind:
+    """A monthly unit that leaks one temp directory per run leaks twelve a
+    year, and the fetched dump inside it is a full copy of production. The
+    error log is the same story with a smaller file."""
+
+    def test_the_work_dir_and_error_log_are_removed_on_success(self, tmp_path: Path):
+        scratch = tmp_path / "tmp"
+        scratch.mkdir()
+        write_fixture_dump(tmp_path / "dumps" / "robothor_memory-fixture.sql.gz")
+        install_recording_notify(tmp_path)
+        env = base_env(tmp_path, **install_fake_pg(tmp_path))
+        # No configured work dir: the script makes its own with mktemp -d.
+        env["ROBOTHOR_RESTORE_DRILL_WORK_DIR"] = ""
+        env["TMPDIR"] = str(scratch)
+
+        result = run_drill(env)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert list(scratch.iterdir()) == [], (
+            f"the drill left temporary files behind: {[p.name for p in scratch.iterdir()]}"
+        )
+
+    def test_nothing_is_left_behind_when_the_drill_aborts(self, tmp_path: Path):
+        """The abort paths are where a leak actually accumulates: a drill that
+        fails every month for a year leaks twelve directories, not one."""
+        scratch = tmp_path / "tmp"
+        scratch.mkdir()
+        install_recording_notify(tmp_path)
+        env = base_env(tmp_path, **install_fake_pg(tmp_path))
+        env["ROBOTHOR_RESTORE_DRILL_WORK_DIR"] = ""
+        env["TMPDIR"] = str(scratch)
+
+        result = run_drill(env)  # no dump anywhere
+
+        assert result.returncode != 0
+        assert list(scratch.iterdir()) == [], (
+            f"an aborted drill left temporary files behind: {[p.name for p in scratch.iterdir()]}"
+        )
+
+    def test_a_configured_work_dir_is_not_deleted(self, tmp_path: Path):
+        """Only a directory this run created may be removed — a work dir the
+        operator configured may be a real directory with other things in it."""
+        work = tmp_path / "work"
+        work.mkdir()
+        (work / "keep-me").write_text("operator data\n")
+        write_fixture_dump(tmp_path / "dumps" / "robothor_memory-fixture.sql.gz")
+        install_recording_notify(tmp_path)
+        env = base_env(tmp_path, **install_fake_pg(tmp_path))
+        env["ROBOTHOR_RESTORE_DRILL_WORK_DIR"] = str(work)
+
+        assert run_drill(env).returncode == 0
+        assert (work / "keep-me").exists(), "a configured work dir is not the drill's to delete"
+
+
 # ── unit templates ───────────────────────────────────────────────────────────
 
 
@@ -300,6 +373,13 @@ class TestRestoreDrillUnits:
         timeouts = [line for line in lines if line.startswith("TimeoutStartSec=")]
         assert timeouts, "TimeoutStartSec must be set explicitly"
         assert int(re.sub(r"\D", "", timeouts[0]) or 0) >= 3600
+
+    def test_the_drill_gets_a_private_tmp(self):
+        """The drill fetches a full copy of the production database into a
+        temp directory. PrivateTmp gives it a namespace of its own, so a
+        crashed run cannot leave that copy in the shared /tmp — the same
+        containment robothor-slo.service carries."""
+        assert "PrivateTmp=yes" in directives(unit_text("robothor-restore-drill.service"))
 
     def test_timer_runs_monthly_and_catches_up(self):
         lines = directives(unit_text("robothor-restore-drill.timer"))

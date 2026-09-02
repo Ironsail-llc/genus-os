@@ -207,7 +207,7 @@ def install_fake_systemctl(tmp_path: Path, units: dict[str, dict[str, str]] | No
         '[ "${1:-}" = show ] || exit 1\n'
         'unit="$2"\n'
         'props="$4"\n'
-        "IFS=, read -ra want <<<\"$props\"\n"
+        'IFS=, read -ra want <<<"$props"\n'
         'for prop in "${want[@]}"; do\n'
         '    case "${unit}=${prop}" in\n'
         f"{arms}"
@@ -299,8 +299,13 @@ def run_probe(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def with_recording_alert(tmp_path: Path, env: dict[str, str]) -> Path:
-    log = install_recording_alert(tmp_path)
+def with_recording_alert(tmp_path: Path, env: dict[str, str], exit_code: int = 0) -> Path:
+    """Point the probe's pager seam at the recording stub.
+
+    ``exit_code=1`` is a sender that could not deliver — the case where the
+    probe has to fail its own unit.
+    """
+    log = install_recording_alert(tmp_path, exit_code)
     env["ROBOTHOR_SLO_ALERT_CMD"] = str(tmp_path / "bin" / "fake-alert.sh")
     return log
 
@@ -490,8 +495,7 @@ class TestAnUndeliveredPageIsNotSuccess:
         write_marker(tmp_path / "backup-state", "last-local-dump", age_hours=27)
         write_dump(tmp_path / "dumps", age_hours=27)
         env = base_env(tmp_path)
-        with_recording_alert(tmp_path, env)
-        install_recording_alert(tmp_path, exit_code=1)
+        with_recording_alert(tmp_path, env, exit_code=1)
         result = run_probe(env)
         assert result.returncode != 0
         assert "not delivered" in (result.stdout + result.stderr).lower()
@@ -563,9 +567,7 @@ class TestTheLivenessSlo:
         with_units(tmp_path, env, units)
         log = with_recording_alert(tmp_path, env)
         run_probe(env)
-        assert log.exists(), (
-            "a 5-minute timer that last fired 4h ago is not watching anything"
-        )
+        assert log.exists(), "a 5-minute timer that last fired 4h ago is not watching anything"
         assert "slo:liveness-stale" in log.read_text()
 
     def test_a_failing_liveness_probe_pages(self, tmp_path: Path):

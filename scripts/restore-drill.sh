@@ -72,6 +72,12 @@ DROPDB="${ROBOTHOR_RESTORE_DRILL_DROPDB:-dropdb}"
 NOTIFY_CMD="${ROBOTHOR_RESTORE_DRILL_NOTIFY_CMD:-}"
 
 FETCHED=""
+ERROR_LOG=""
+# A work dir this run created with mktemp -d is ours to delete; one the
+# operator configured is not — it may be a real directory with other things in
+# it, and a cleanup that cannot tell the difference is a cleanup nobody dares
+# enable.
+WORK_DIR_IS_OURS=0
 
 # ── The result always reaches someone ────────────────────────────────────────
 # Written as an `info` notification, which robothor/engine/alerts.py routes to
@@ -117,11 +123,15 @@ Runbook: docs/runbooks/RESTORE_DRILL.md"
 }
 
 cleanup() {
-    # Both halves are best-effort and both matter: an orphan scratch database
-    # fills the disk one month at a time, and a fetched dump is a full copy of
-    # the production data sitting in a work directory.
+    # Every part is best-effort and every part matters: an orphan scratch
+    # database fills the disk one month at a time, a fetched dump is a full
+    # copy of the production data sitting in a work directory, and a monthly
+    # unit that leaks one temp file per run leaks twelve a year — including
+    # from the abort paths, which is where a broken drill spends its time.
     "$DROPDB" --if-exists "$DRILL_DB" >/dev/null 2>&1 || true
     [[ -n "$FETCHED" && -f "$FETCHED" ]] && rm -f "$FETCHED"
+    [[ -n "$ERROR_LOG" && -f "$ERROR_LOG" ]] && rm -f "$ERROR_LOG"
+    [[ "$WORK_DIR_IS_OURS" == 1 && -n "$WORK_DIR" && -d "$WORK_DIR" ]] && rm -rf "$WORK_DIR"
     return 0
 }
 
@@ -138,6 +148,11 @@ if [[ "$DRILL_DB" != *drill* ]]; then
     err "refusing to run the drill against ${DRILL_DB} — the scratch database name must contain 'drill', because this script ends by dropping it"
     exit 1
 fi
+
+# Installed here: after the name guards (so the dropdb in cleanup can only ever
+# reach a validated scratch name) and BEFORE anything is created, so the work
+# directory and the error log are covered on every abort path too.
+trap cleanup EXIT
 
 # ── 2. Find a dump: offsite first, local as the fallback ─────────────────────
 DUMP=""
@@ -174,7 +189,11 @@ find_local() {
 }
 
 if [[ -z "$WORK_DIR" ]]; then
-    WORK_DIR="$(mktemp -d 2>/dev/null)" || WORK_DIR=""
+    if WORK_DIR="$(mktemp -d 2>/dev/null)"; then
+        WORK_DIR_IS_OURS=1
+    else
+        WORK_DIR=""
+    fi
 fi
 
 if [[ -n "$REMOTE" ]]; then
@@ -198,8 +217,6 @@ DUMP_BYTES="$(stat -c %s "$DUMP" 2>/dev/null || echo 0)"
 log "drilling ${DUMP_NAME} (${DUMP_BYTES} bytes) from ${SOURCE}"
 
 # ── 3. Timed restore into the scratch database ───────────────────────────────
-trap cleanup EXIT
-
 "$DROPDB" --if-exists "$DRILL_DB" >/dev/null 2>&1 || true
 if ! "$CREATEDB" "$DRILL_DB" 2>&1; then
     abort "could not create the scratch database ${DRILL_DB} — the drill could not run"
