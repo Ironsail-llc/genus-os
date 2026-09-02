@@ -17,10 +17,11 @@ Telegram via `scripts/send_failure_alert.sh`.
 sudo scripts/install-units.sh
 sudo systemctl daemon-reload
 
-# 2. Wire the critical units:
-sudo scripts/install_onfailure_alerts.sh \
-    robothor-engine.service robothor-bridge.service robothor-orchestrator.service \
-    robothor-nats.service
+# 2. Wire anything the repo does not already carry a drop-in for.
+#    install-units.sh installs robothor-*.service.d/*.conf too, so
+#    robothor-engine, -bridge, -orchestrator and -vision are already wired by
+#    step 1 (each has a mirrored onfailure.conf). Name only the rest:
+sudo scripts/install_onfailure_alerts.sh robothor-nats.service
 sudo systemctl daemon-reload
 ```
 
@@ -40,8 +41,11 @@ sudo systemctl start robothor-alert@manual-test
 Scope deliberately small (a handful of core units) to avoid alert fatigue;
 timers' oneshot services can be added case-by-case once the baseline is quiet.
 Add any instance-land units of your own to the same command — the installer
-only ships `robothor-*` templates, but `install_onfailure_alerts.sh` will wire
-`OnFailure=` onto whatever you name.
+only ships `robothor-*` templates and refuses to touch anything else, but
+`install_onfailure_alerts.sh` writes a `<unit>.d/onfailure.conf` for whatever
+unit names you give it. Prefer mirroring the drop-in into
+`infra/systemd/<unit>.service.d/` for a platform unit, so `install-units.sh`
+keeps it and `check_dropin_drift.sh` can see it drift.
 
 ## What a page means
 
