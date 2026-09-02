@@ -23,6 +23,7 @@ import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import NamedTuple
 
 import yaml
 
@@ -460,6 +461,292 @@ def check_memory_scoping_is_not_vacuous() -> None:
         send_telegram(msg)
 
 
+# ── SLOs ─────────────────────────────────────────────────────────────────────
+# The daily, non-paging surface for the reliability targets. scripts/slo_probe.sh
+# is the hourly pager for the three that must interrupt someone; this section
+# reports ALL of them and leaves exactly one alert_digest row for the heartbeat.
+#
+# The backup tier is measured from the last-good markers on NVMe, with no
+# database involved, and it is reported FIRST. A database outage is one of the
+# conditions under which an operator most needs to know the backup age, so that
+# measurement must not be downstream of a connection — the same lesson main()
+# learned about the drift checks on 2026-08-16.
+
+#: The one spelling of the marker directory, shared with scripts/backup-state.sh.
+BACKUP_STATE_DIR_DEFAULT = "/var/lib/robothor/backup-state"
+
+#: marker file -> (label, budget in hours). Nightly tiers get 26h (a 24h cycle
+#: plus room for a late run); the base backup is weekly, and a stale one costs
+#: restore TIME rather than data, so it carries a much wider 8-day budget.
+BACKUP_SLO_BUDGET_HOURS: tuple[tuple[str, str, int], ...] = (
+    ("last-local-dump", "S4 backup freshness: local dump", 26),
+    ("last-offsite-ok", "S4 backup freshness: offsite", 26),
+    ("last-basebackup", "S4 backup freshness: basebackup", 192),
+)
+
+#: Statuses that are not an outcome. `cancelled` is an operator or scheduler
+#: decision, not a failure (#438), and the non-terminal ones have not happened
+#: yet — counting either as a denominator makes the success rate a measure of
+#: how busy the box is.
+_NON_OUTCOME_STATUSES = ("pending", "running", "cancelled", "skipped", "awaiting_approval")
+
+
+class Slo(NamedTuple):
+    """One reliability target and what this run actually measured for it.
+
+    ``status`` is deliberately three-valued. "Could not evaluate" is NOT "OK":
+    a check that has only ever been seen staying silent is indistinguishable
+    from one that cannot fire, which is how six built-and-wired controls turned
+    out to be inert.
+    """
+
+    name: str
+    target: str
+    measured: str
+    status: str  # "OK" | "BREACH" | "UNEVALUATED"
+
+
+def _marker_age_hours(path: Path, now: dt.datetime) -> float | None:
+    """Hours since a backup-state marker, or None when it cannot be read.
+
+    Format is scripts/backup-state.sh's: ``<date -Is> <identifier>``. An
+    absent, empty or unparseable marker returns None — never a fresh-looking
+    number. An absent marker reads as "recent" to anything that only checks for
+    a non-empty string; it means the opposite.
+    """
+    try:
+        first = path.read_text().splitlines()[0].strip()
+    except (OSError, IndexError):
+        return None
+    try:
+        when = dt.datetime.fromisoformat(first.split(" ", 1)[0])
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.astimezone()
+    return (now - when).total_seconds() / 3600
+
+
+def backup_freshness_slos(
+    state_dir: Path | str | None = None, now: dt.datetime | None = None
+) -> list[Slo]:
+    """S4 — how old is the newest good backup, per tier. No database needed."""
+    root = Path(
+        state_dir
+        if state_dir is not None
+        else os.environ.get("ROBOTHOR_BACKUP_STATE_DIR", BACKUP_STATE_DIR_DEFAULT)
+    )
+    now = now or dt.datetime.now().astimezone()
+    out = []
+    for marker, label, budget in BACKUP_SLO_BUDGET_HOURS:
+        target = f"< {budget}h"
+        age = _marker_age_hours(root / marker, now)
+        if age is None:
+            out.append(Slo(label, target, "unknown — no successful run recorded", "BREACH"))
+        else:
+            status = "BREACH" if age > budget else "OK"
+            out.append(Slo(label, target, f"{age:.0f}h", status))
+    return out
+
+
+def _pct(bad: int, total: int) -> str:
+    return f"{100 * bad / total:.1f}% ({bad}/{total})" if total else "no runs"
+
+
+def db_slos() -> list[Slo]:
+    """The SLOs that need a read-only query. Never raises: an unreachable
+    database yields UNEVALUATED rows, not missing ones."""
+    from robothor.db.connection import get_connection
+
+    placeholder = [
+        Slo("S1 run success", "bad <= 5%", "", "UNEVALUATED"),
+        Slo("S2 heartbeat delivery", ">= 95% delivered", "", "UNEVALUATED"),
+        Slo("S3 pager delivery", "0 lost pages / 7d", "", "UNEVALUATED"),
+        Slo("S6 LLM availability", "'all models failed' < 1%/day", "", "UNEVALUATED"),
+        Slo("S7 workflows", "bad <= 10%", "", "UNEVALUATED"),
+    ]
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            out = []
+
+            # S1 — terminal outcomes only, benchmark harness runs excluded:
+            # a benchmark suite deliberately drives agents into failure, so
+            # counting it makes the fleet's reliability track the test plan.
+            cur.execute(
+                """
+                SELECT count(*) FILTER (WHERE status IN ('failed', 'timeout')), count(*)
+                FROM agent_runs
+                WHERE started_at >= now() - interval '7 days'
+                  AND status <> ALL(%s)
+                  AND COALESCE(trigger_detail, '') NOT LIKE 'benchmark:%%'
+                """,
+                (list(_NON_OUTCOME_STATUSES),),
+            )
+            bad, total = cur.fetchone()
+            out.append(
+                Slo(
+                    "S1 run success",
+                    "bad <= 5%",
+                    _pct(bad, total),
+                    "BREACH" if total and 100 * bad / total > 5 else "OK",
+                )
+            )
+
+            # S2 — a heartbeat that ran but was never delivered is invisible to
+            # the operator, which is the same as not having run.
+            agent = os.environ.get("ROBOTHOR_SLO_HEARTBEAT_AGENT", "main")
+            cur.execute(
+                """
+                SELECT count(*) FILTER (WHERE delivered_at IS NOT NULL), count(*)
+                FROM agent_runs
+                WHERE started_at >= now() - interval '24 hours'
+                  AND agent_id = %s AND trigger_detail LIKE 'heartbeat:%%'
+                """,
+                (agent,),
+            )
+            delivered, beats = cur.fetchone()
+            out.append(
+                Slo(
+                    "S2 heartbeat delivery",
+                    ">= 95% delivered",
+                    f"{delivered}/{beats} in 24h",
+                    "BREACH" if beats == 0 or 100 * delivered / beats < 95 else "OK",
+                )
+            )
+
+            # S3 — every alert_fallback row is a page that was NOT delivered
+            # and had to be left for the next briefing instead.
+            cur.execute(
+                """
+                SELECT count(*) FROM crm_agent_notifications
+                WHERE created_at >= now() - interval '7 days'
+                  AND notification_type = 'alert_fallback'
+                """
+            )
+            (lost,) = cur.fetchone()
+            out.append(
+                Slo(
+                    "S3 pager delivery",
+                    "0 lost pages / 7d",
+                    f"{lost} alert_fallback rows",
+                    "BREACH" if lost else "OK",
+                )
+            )
+
+            # S6 — two different outages wear the same face here: every model
+            # exhausted (one shared credential pool), and everything quietly
+            # riding the local fallback tier.
+            cur.execute(
+                """
+                SELECT count(*) FILTER (WHERE error_message ILIKE '%%All models failed%%'),
+                       count(*) FILTER (WHERE model_used LIKE 'ollama_chat/%%'),
+                       count(*)
+                FROM agent_runs
+                WHERE started_at >= now() - interval '24 hours'
+                """
+            )
+            all_failed, local, runs = cur.fetchone()
+            share = 100 * all_failed / runs if runs else 0
+            local_share = 100 * local / runs if runs else 0
+            out.append(
+                Slo(
+                    "S6 LLM availability",
+                    "'all models failed' < 1%/day, local fallback < 30%",
+                    f"{share:.1f}% all-failed, {local_share:.0f}% local fallback ({runs} runs)",
+                    "BREACH" if share >= 1 or local_share >= 30 else "OK",
+                )
+            )
+
+            # S7 — per workflow, because one broken pipeline hides inside a
+            # healthy fleet average.
+            cur.execute(
+                """
+                SELECT workflow_id,
+                       count(*) FILTER (WHERE status IN ('failed', 'timeout')), count(*)
+                FROM workflow_runs
+                WHERE started_at >= now() - interval '7 days'
+                  AND status <> ALL(%s)
+                GROUP BY workflow_id ORDER BY 1
+                """,
+                (list(_NON_OUTCOME_STATUSES),),
+            )
+            rows = cur.fetchall()
+            worst = max(
+                ((w, b, t) for w, b, t in rows if t), key=lambda r: r[1] / r[2], default=None
+            )
+            if worst is None:
+                out.append(Slo("S7 workflows", "bad <= 10%", "no workflow runs", "OK"))
+            else:
+                workflow, bad, total = worst
+                out.append(
+                    Slo(
+                        "S7 workflows",
+                        "bad <= 10%",
+                        f"worst: {workflow} {_pct(bad, total)}",
+                        "BREACH" if 100 * bad / total > 10 else "OK",
+                    )
+                )
+            return out
+    except Exception as exc:
+        print(f"  (SLO queries could not run: {exc})")
+        return placeholder
+
+
+def format_slo_report(slos: list[Slo]) -> str:
+    # Spelled out, never abbreviated. "UNEVAL" is the kind of shorthand a
+    # reader skims past as a variant of OK, and the whole point of the third
+    # state is that it is not one.
+    return "\n".join(
+        f"  {s.status:<11} {s.name}: {s.measured or '-'} (target {s.target})" for s in slos
+    )
+
+
+def write_slo_digest(subject: str, body: str) -> bool:
+    """One ``alert_digest`` row for the whole run, read by main's heartbeat.
+
+    One row, not one per breach: four breached SLOs on a bad morning must not
+    become four notification rows racing each other into the briefing.
+    """
+    try:
+        from robothor.crm.dal import send_notification
+
+        return bool(
+            send_notification(
+                from_agent="guardrail-watch",
+                to_agent="main",
+                notification_type="alert_digest",
+                subject=subject,
+                body=body,
+            )
+        )
+    except Exception as exc:
+        print(f"  (could not write the SLO digest row: {exc})")
+        return False
+
+
+def check_slos() -> None:
+    """Report every SLO, then leave one digest row if any of them breached."""
+    print("\n=== SLOs ===")
+    # DB-free first, and unconditionally — see the module comment above.
+    slos = backup_freshness_slos()
+    slos += db_slos()
+    # The two that are enforced elsewhere; listed so the section is a complete
+    # roster rather than a subset nobody can audit.
+    slos.append(Slo("S5 liveness", "100%", "enforced by robothor-liveness.timer", "OK"))
+    slos.append(Slo("S8 guardrail-watch ran", "daily", "this report is the evidence", "OK"))
+    print(format_slo_report(slos))
+
+    breached = [s for s in slos if s.status == "BREACH"]
+    if not breached:
+        print("  every evaluated SLO is inside target")
+        return
+    body = "\n".join(f"{s.name}: {s.measured} (target {s.target})" for s in breached)
+    print(f"  <-- {len(breached)} SLO(s) breached; see docs/runbooks/SLOS.md")
+    if write_slo_digest(f"SLO breach x{len(breached)}", body):
+        print("  (digest row written for the heartbeat)")
+
+
 def _run_db_dependent_checks() -> None:
     """Everything here needs a live database connection.
 
@@ -577,6 +864,7 @@ def main() -> int:
     check_dropin_drift()
     check_host_script_drift()
     doctor_ok = check_instance_doctor()
+    check_slos()
     manifests_ok = check_instance_manifests()
 
     try:
