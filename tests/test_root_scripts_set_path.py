@@ -285,8 +285,16 @@ def test_cron_wrapper_does_not_hand_the_operator_PATH_to_the_command_it_wraps(
             "PATH": os.environ["PATH"],
             "ROBOTHOR_INSTANCE_ENV": str(instance_env),
             "ROBOTHOR_SECRETS_FILE": str(secrets),
+            # The wrapped command succeeds, so nothing here pages — but this
+            # wrapper CAN page, and a page the suite spools is delivered for
+            # real by the next liveness drain. Every sender, spool and state
+            # seam is pinned under tmp_path
+            # (tests/test_alert_never_pages_from_tests.py).
             "ROBOTHOR_ALERT_SUPPRESS": "1",
             "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+            "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+            "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-state"),
+            "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-fallback"),
         },
     )
     assert result.returncode == 0, result.stdout + result.stderr
