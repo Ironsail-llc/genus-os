@@ -101,6 +101,55 @@ def check_soak_deadlines() -> None:
         print("  (nag sent to Telegram)")
 
 
+def check_flag_truth() -> bool:
+    """Print the per-flag truth table and fail when a layer is shadowed.
+
+    ``check_soak_deadlines`` above nags about the manifest's *intent*;
+    ``check_dropin_drift`` below compares the drop-in against its repo mirror.
+    Neither answers the question an operator actually has — *which layer is
+    governing this flag in the process that is running right now* — and the
+    gap is not theoretical: this instance runs ADMISSION at ``enforce`` from
+    ``/etc/robothor/robothor.env`` while ``infra/flags.yaml`` records
+    ``observe``, and a dozen ``feature_flags`` rows pin flags over both.
+
+    Run as a subprocess, like ``check_instance_manifests``: the audit imports
+    the flag store and touches the database, and a crash in that import must
+    fail THIS CHECK rather than take the whole watch down. Returns False on
+    drift so ``main()`` exits non-zero and the unit's ``OnFailure=`` pager
+    fires. The audit is read-only — SELECTs only, no writes anywhere.
+    """
+    script = Path(__file__).resolve().parent / "flag_audit.py"
+    print("\n=== flag truth table ===")
+    if not script.exists():
+        print("  FAIL: flag_audit.py missing — the layer audit could not run")
+        return False
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            cwd=str(REPO_ROOT),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  FAIL: flag audit could not run: {exc}")
+        return False
+
+    for line in result.stdout.rstrip().splitlines():
+        print(f"  {line}")
+    if result.returncode == 0:
+        return True
+    nag = (
+        "⚠️ FLAG LAYERS DISAGREE — a flag is set in more than one "
+        "place, or the running engine does not match infra/flags.yaml. "
+        "Run scripts/flag_audit.py for the table."
+    )
+    print(f"  {nag}")
+    if send_telegram(nag):
+        print("  (nag sent to Telegram)")
+    return False
+
+
 # A session goal that has not moved in this long is finished, wrong, or
 # abandoned — all three deserve the operator's attention. Six of them sat in
 # REVIEW for 2-5 weeks before anyone noticed (2026-07-13).
@@ -435,6 +484,7 @@ def main() -> int:
     # reached anyone, no report, nothing. A DB outage must never take the
     # DB-free checks down with it.
     check_soak_deadlines()
+    flags_ok = check_flag_truth()
     check_dropin_drift()
     check_host_script_drift()
     manifests_ok = check_instance_manifests()
@@ -453,9 +503,11 @@ def main() -> int:
         )
         return 1
 
-    if not manifests_ok:
-        # The fleet's manifests are the fleet. A failing validation must reach
-        # the operator; rc=1 fires the unit's OnFailure= pager.
+    if not manifests_ok or not flags_ok:
+        # The fleet's manifests are the fleet, and a guardrail whose effective
+        # mode is not the one the manifest records is a control nobody is
+        # actually running. Either must reach the operator; rc=1 fires the
+        # unit's OnFailure= pager.
         return 1
     return 0
 
