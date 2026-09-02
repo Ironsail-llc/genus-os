@@ -279,6 +279,12 @@ Every other tool has a named seam (`ROBOTHOR_SLO_ID_CMD`,
 `ROBOTHOR_SLO_RUNUSER_CMD`, `ROBOTHOR_SLO_PSQL_CMD`, …). Point the seam at an
 absolute path rather than widening the PATH to reach it.
 
+`readlink` and `dirname` run before that preflight, so both scripts check the
+result immediately: if `SCRIPT_DIR` is empty or `scripts/backup-state.sh` is
+not readable beside it, they print the path they resolved and **exit 2**. The
+probe would otherwise `source` nothing, carry on with every marker helper
+undefined (`set -uo pipefail`, no `-e`) and page a false S4.
+
 Each script then **preflights every external tool it needs** with `command -v`
 before measuring anything, and exits non-zero naming the ones that do not
 resolve:

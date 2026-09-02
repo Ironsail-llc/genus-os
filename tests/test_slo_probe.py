@@ -1236,6 +1236,38 @@ class TestTheToolsAreResolvedBeforeAnythingIsMeasured:
             "must not page as one"
         )
 
+    def test_a_probe_that_cannot_find_its_own_directory_says_so(self, tmp_path: Path):
+        """`readlink` and `dirname` run BEFORE the preflight, so nothing has
+        checked they resolved. `source "${SCRIPT_DIR}/backup-state.sh"` then
+        fails, and with `set -uo pipefail` (no `-e`) the probe carries on with
+        every marker helper undefined — which is a run that measures a healthy
+        volume as an S4 breach and pages for it. A false S4 page is exactly
+        the outcome this dead-man exists to be trusted not to produce.
+        """
+        healthy_tree(tmp_path)
+        lonely = tmp_path / "lonely"
+        lonely.mkdir()
+        shutil.copy(PROBE, lonely / PROBE.name)
+
+        env = base_env(tmp_path)
+        log = with_recording_alert(tmp_path, env)
+
+        result = subprocess.run(
+            ["bash", str(lonely / PROBE.name)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+
+        assert result.returncode == 2, (
+            f"a probe that cannot read its own helpers must exit 2: {result.stdout + result.stderr}"
+        )
+        assert "backup-state.sh" in result.stderr, (
+            f"the failure must name what it could not read: {result.stderr}"
+        )
+        assert not log.exists(), "a broken checkout is not an SLO breach and must not page"
+
     def test_a_missing_tool_stops_the_run_before_anything_is_measured(self, tmp_path: Path):
         """Half a measurement is worse than none: it puts OK rows in the daily
         report for tiers the probe never actually reached."""

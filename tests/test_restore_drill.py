@@ -464,6 +464,35 @@ class TestTheToolsAreResolvedBeforeTheDrillStarts:
                 "the notification must carry the real reason too"
             )
 
+    def test_a_drill_that_cannot_find_its_own_directory_says_so(self, tmp_path: Path):
+        """`readlink` and `dirname` run before the preflight, and REPO_ROOT is
+        derived from them — it is where the built-in notifier looks for the
+        interpreter. A drill that cannot locate its own checkout must say so
+        and exit, not go on to create a scratch database and report a verdict
+        nobody can deliver."""
+        write_fixture_dump(tmp_path / "dumps" / "robothor_memory-fixture.sql.gz")
+        lonely = tmp_path / "lonely"
+        lonely.mkdir()
+        shutil.copy(DRILL, lonely / DRILL.name)
+
+        env = base_env(tmp_path, **install_fake_pg(tmp_path))
+
+        result = subprocess.run(
+            ["bash", str(lonely / DRILL.name)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+
+        assert result.returncode == 2, (
+            f"a drill that cannot read its own checkout must exit 2: {result.stdout + result.stderr}"
+        )
+        assert "backup-state.sh" in result.stderr, (
+            f"the failure must name what it could not read: {result.stderr}"
+        )
+        assert "drill PASSED" not in result.stdout
+
     def test_the_path_is_fixed_and_an_inherited_directory_is_not_consulted(
         self, tmp_path: Path
     ):

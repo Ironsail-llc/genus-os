@@ -166,6 +166,17 @@ err() { echo "slo_probe: $*" >&2; }
 
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 
+# Checked immediately, because `readlink` and `dirname` run BEFORE the tool
+# preflight below and nothing has yet confirmed they resolved. If they did not,
+# `source` fails — and with `set -uo pipefail` (no `-e`) the probe carries on
+# with every marker helper undefined, measures a healthy volume as an S4 breach
+# and pages for it. A false S4 page is precisely what this dead-man exists to
+# be trusted not to produce, so a checkout it cannot read is exit 2 and no page.
+if [[ -z "$SCRIPT_DIR" || ! -r "${SCRIPT_DIR}/backup-state.sh" ]]; then
+    err "cannot read ${SCRIPT_DIR:-<unresolved>}/backup-state.sh — the probe could not locate its own checkout (readlink/dirname resolved to '${SCRIPT_DIR:-}'). Nothing was measured and nothing was paged: this is a broken install, not an SLO breach."
+    exit 2
+fi
+
 # shellcheck source=scripts/backup-state.sh
 source "${SCRIPT_DIR}/backup-state.sh"
 

@@ -84,6 +84,17 @@ export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/l
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# Checked immediately, because `readlink` and `dirname` run BEFORE the tool
+# preflight below. REPO_ROOT is where the built-in notifier looks for the
+# interpreter, so a SCRIPT_DIR that did not resolve means a drill that creates
+# a scratch database, restores into it and then has nowhere to deliver the
+# verdict. `backup-state.sh` is the sibling that proves this really is the
+# scripts directory of a checkout and not whatever `dirname ""` returned.
+if [[ -z "$SCRIPT_DIR" || ! -r "${SCRIPT_DIR}/backup-state.sh" ]]; then
+    err "cannot read ${SCRIPT_DIR:-<unresolved>}/backup-state.sh — the drill could not locate its own checkout (readlink/dirname resolved to '${SCRIPT_DIR:-}'). Nothing was created and nothing was restored: this is a broken install, not a backup that failed to restore."
+    exit 2
+fi
+
 DRILL_DB="${ROBOTHOR_RESTORE_DRILL_DB:-robothor_restore_drill}"
 LIVE_DB="${ROBOTHOR_DB_NAME:-robothor_memory}"
 REMOTE="${ROBOTHOR_OFFSITE_REMOTE:-}"
