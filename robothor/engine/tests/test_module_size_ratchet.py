@@ -38,7 +38,12 @@ CAPS = {
     # arrived with were hoisted to the module header (run_budget was already
     # imported there, so they bought nothing) — which paid back four of the
     # five lines this would otherwise have cost.
-    "robothor/engine/runner.py": 2515,
+    # 2515 -> 2522: Stage 5 propagates the CRM task id onto the run at INSERT
+    # time, so sub-agent runs stop landing with task_id NULL (0 of 44,611 rows
+    # had one). Seven lines: a four-line note and a two-line branch inside
+    # execute(). There is no cohesive cluster to extract here — the write has
+    # to happen where the run row is being assembled.
+    "robothor/engine/runner.py": 2522,
     # 2545: a concurrent session ratcheted this to 2539 by lifting injection
     # screening and journal resume out of execute(); the deliverable guard's call
     # site adds the rest. Its 25 lines of logic went to loop_guards.py, so what
