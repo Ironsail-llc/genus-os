@@ -310,7 +310,14 @@ class Box:
         env = {k: v for k, v in os.environ.items() if not k.startswith(("ROBOTHOR_", "FAKE_"))}
         env.update(
             {
+                # The guard SETS its PATH rather than inheriting one (a root
+                # unit must not take binaries from the operator's
+                # user-writable directories), so the stub directory reaches it
+                # through ROBOTHOR_EXTRA_PATH — the test-only leading entry,
+                # never set in a unit. PATH is still set here because Python
+                # needs it to find `bash` itself.
                 "PATH": f"{self.bin}:{os.environ['PATH']}",
+                "ROBOTHOR_EXTRA_PATH": str(self.bin),
                 "HOME": str(self.root),
                 "ROBOTHOR_BACKUP_MOUNT": str(self.mount),
                 "ROBOTHOR_VOLUME_GUARD_STATE_DIR": str(self.state_dir),
@@ -1621,3 +1628,205 @@ def test_the_guard_is_shellcheck_clean_and_parses():
         timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ── the PATH the unit actually runs with ─────────────────────────────────────
+#
+# Every robothor-*.service loads EnvironmentFile=/etc/robothor/robothor.env,
+# and that instance file sets a PATH of the operator's shape:
+#
+#     PATH=<user bins>:/usr/local/bin:/usr/bin:/bin
+#
+# No /usr/sbin, no /sbin — which is where dmsetup, cryptsetup, fsck.ext4,
+# smartctl and runuser live. Under systemd the guard therefore could not run
+# `dmsetup deps` at all: the empty output of a command that was never found
+# read as "this node is backed by nothing", the guard concluded its own live
+# mapper "is not backed by the device", refused to heal, and paged DOWN —
+# while the same script run from a shell healed the volume correctly.
+#
+# Two defects, and the second is why the first was invisible for a whole
+# outage: `exec 9>"$LOCK_FILE" 2>/dev/null` redirects stderr for the REST of
+# the script (an exec with only redirections is permanent), so every
+# "command not found" and every refusal reason went to /dev/null.
+#
+# The fix does not extend that PATH, it REPLACES it: the operator value begins
+# with user-writable directories (~/.local/bin, ~/.npm-global/bin) and this
+# unit runs as root. ROBOTHOR_EXTRA_PATH is a TEST-ONLY leading entry — never
+# set in a unit or the env file — and it is how these tests still interpose
+# their stubs now that nothing is inherited.
+
+OPERATOR_PATH = "/usr/local/bin:/usr/bin:/bin"
+
+SBIN_STUBS = ("dmsetup", "cryptsetup", "fsck.ext4", "smartctl")
+
+# The tools the guard cannot answer a question without. smartctl is NOT here:
+# a missing smartctl is a gate that did not run, which the guard already says
+# out loud, not a reason to refuse a heal.
+REQUIRED_TOOLS = (
+    "dmsetup",
+    "cryptsetup",
+    "findmnt",
+    "lsblk",
+    "mount",
+    "umount",
+    "fsck.ext4",
+    "flock",
+    "timeout",
+)
+
+
+def test_a_refusal_reason_reaches_stderr(box: Box):
+    """The guard's own account of what it refused to do must survive to the
+    journal.
+
+    ``exec 9>"$LOCK_FILE" 2>/dev/null`` applied that ``2>/dev/null`` to the
+    whole script, so the one line that says WHY the volume is unusable — and
+    every "command not found" underneath it — was discarded. The page still
+    went out; the evidence needed to fix it did not."""
+    result = box.run(FAKE_CHECK_RCS="1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "is NOT usable" in result.stderr, (
+        "the refusal reason never reached stderr — the lock line silenced the "
+        f"rest of the script\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
+def test_a_lock_that_cannot_be_opened_says_so_on_stderr(box: Box):
+    """The one message that explains a guard running without serialisation is
+    printed AFTER the redirect that swallowed it. A directory where the lock
+    file belongs is the cheapest way to fail the open."""
+    box.state_dir.parent.mkdir(parents=True, exist_ok=True)
+    lock = Path(f"{str(box.state_dir).rstrip('/')}.lock")
+    lock.mkdir(parents=True, exist_ok=True)
+
+    result = box.run(FAKE_CHECK_RCS="1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "running WITHOUT serialisation" in result.stderr, (
+        "a guard that could not take its own lock said nothing about it\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    # And it kept going: an unopenable lock must not turn into "another run
+    # holds it", which would exit 0 forever without probing the volume.
+    assert len(box.pages) == 1, f"the guard stopped instead of probing: {box.pages}"
+
+
+def test_the_preflight_names_the_missing_tool_and_touches_nothing(box: Box, tmp_path: Path):
+    """A tool the guard cannot find must fail the run — loudly, by name, and
+    before any side effect.
+
+    Every tool in REQUIRED_TOOLS exists on any box this runs on (that is what
+    the PATH prelude guarantees), so the missing one is injected at the real
+    call site: the first name in the guard's own preflight list is replaced
+    with one that cannot resolve. What is under test is that call site."""
+    source = GUARD.read_text()
+    marker = "require_tools dmsetup "
+    assert marker in source, "the guard has no dmsetup preflight to exercise"
+    absent = "robothor-absent-dmsetup"
+    copy = tmp_path / "guard-missing-tool" / GUARD.name
+    copy.parent.mkdir(parents=True, exist_ok=True)
+    copy.write_text(source.replace(marker, f"require_tools {absent} ", 1))
+    # The guard sources its sibling library before it does anything else.
+    shutil.copy(GUARD.parent / "backup-state.sh", copy.parent / "backup-state.sh")
+
+    box.plug_in()
+    box.stale_mapper()
+    result = subprocess.run(
+        ["bash", str(copy)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=box.env(FAKE_CHECK_RCS="1 0"),
+    )
+    assert result.returncode == 1, (
+        f"a guard missing a tool exited {result.returncode} — it would decide "
+        f"the empty output of a command that does not exist\n{result.stdout}{result.stderr}"
+    )
+    assert absent in result.stderr, (
+        f"the missing tool was not named\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert box.pages == [], f"paged from a run that could not ask the question: {box.pages}"
+    assert box.ran("umount") == [], f"unmounted with a tool missing:\n{box.argv}"
+    assert box.ran("cryptsetup") == [], f"touched the mapper with a tool missing:\n{box.argv}"
+
+
+def test_the_preflight_covers_every_tool_the_guard_cannot_work_without(box: Box):
+    """The list is the point. A preflight that checks four of the nine tools
+    leaves the other five to fail the way dmsetup did — silently, as empty
+    output."""
+    line = [
+        stripped
+        for stripped in (raw.strip() for raw in GUARD.read_text().splitlines())
+        if stripped.startswith("require_tools ")
+    ]
+    assert line, "the guard has no preflight at all"
+    required = set(" ".join(line).split()) - {"require_tools"}
+    assert set(REQUIRED_TOOLS) <= required, (
+        f"the preflight does not check {sorted(set(REQUIRED_TOOLS) - required)}"
+    )
+    assert "smartctl" not in required, (
+        "smartctl is the OPTIONAL gate — requiring it turns a box with no "
+        "smartmontools into a box with no backup volume guard"
+    )
+
+
+@pytest.mark.skipif(
+    not all(shutil.which(tool, path="/usr/sbin:/sbin") for tool in SBIN_STUBS),
+    reason="this box has no real /usr/sbin copy of the tools to find",
+)
+def test_the_sbin_tools_are_found_under_the_PATH_the_unit_hands_over(box: Box):
+    """The live defect, pinned: the PATH the unit actually supplies.
+
+    ``<user bins>:/usr/local/bin:/usr/bin:/bin`` — no /usr/sbin — and the four
+    tools that live there are removed from the stub directory, so nothing but
+    the script's own fixed PATH can find them. The volume is down with the
+    device off the bus, so no heal is attempted and the real dmsetup is never
+    asked anything; what is under test is that the guard gets past its
+    preflight at all and pages the truth."""
+    for stub in SBIN_STUBS:
+        (box.bin / stub).unlink()
+
+    result = box.run(FAKE_CHECK_RCS="1", PATH=f"{box.bin}:{OPERATOR_PATH}")
+    assert "not found on PATH" not in result.stderr, (
+        "the guard could not find its tools under the PATH its own unit gives "
+        f"it — /usr/sbin is missing from it\nstderr:\n{result.stderr}"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(box.pages) == 1, f"expected the DOWN page, got {box.pages}"
+    assert "device absent from USB" in box.pages[0]
+
+
+def test_a_user_writable_directory_on_the_inherited_PATH_is_never_consulted(
+    box: Box, tmp_path: Path
+):
+    """The operator PATH does not merely LACK /usr/sbin — it begins with
+    ~/.local/bin and ~/.npm-global/bin, which the operator can write. This runs
+    as root. A guard that appended the system directories to an inherited PATH
+    would still take its dmsetup from the first entry that had one, so the
+    inherited value is not extended: it is replaced."""
+    evil = tmp_path / "user-writable"
+    evil.mkdir()
+    marker = tmp_path / "root-ran-a-user-binary"
+    # flock, deliberately: the test stubs do not shadow it, so this copy is
+    # reached if and only if the inherited PATH is consulted at all. It answers
+    # like a real one so the run continues either way — what is asserted is
+    # whether root ran it.
+    _script(evil / "flock", f'#!/usr/bin/env bash\n: > "{marker}"\nexit 0\n')
+    for tool in ("dmsetup", "cryptsetup", "mount", "umount", "findmnt"):
+        _script(evil / tool, f'#!/usr/bin/env bash\n: > "{marker}"\nexit 0\n')
+
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1 0",
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+        PATH=f"{evil}:{os.environ['PATH']}",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not marker.exists(), (
+        f"the guard ran {marker.name} — root executed a binary out of a "
+        "user-writable directory it inherited on PATH"
+    )
+    # and the heal it was supposed to do still happened, through the stubs
+    assert box.ran(f"umount -l {box.mount}"), f"the heal never ran:\n{box.argv}"

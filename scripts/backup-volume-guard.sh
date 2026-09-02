@@ -107,6 +107,54 @@
 #       scripts/liveness_probe.sh: an undelivered page is not success).
 set -uo pipefail
 
+# ── PATH: fixed, and NOT inherited ───────────────────────────────────────────
+# This runs as root from a unit that loads
+# EnvironmentFile=/etc/robothor/robothor.env, and the instance file there
+# carries the OPERATOR's PATH: it begins with user-writable directories
+# (~/.local/bin, ~/.npm-global/bin) and contains no /usr/sbin and no /sbin.
+# Both halves are bugs. A root unit that inherits it can execute a
+# user-writable binary as root; and dmsetup, cryptsetup, fsck.ext4, smartctl
+# and runuser all live in /usr/sbin, where "not found" reaches a script that
+# reads OUTPUT as an empty answer rather than as an error — which is exactly
+# how `dmsetup deps` printing nothing turned this guard's own live mapping
+# into "not backed by the device" and refused a heal that works by hand.
+#
+# So the PATH is SET, not extended, and it is the same line in every root
+# script. ROBOTHOR_EXTRA_PATH is a TEST-ONLY leading directory, where the suites
+# put their stub binaries — it is never set in a unit or in
+# /etc/robothor/robothor.env. Anything from the workspace venv is called by
+# absolute path (SCRIPT_DIR), never found on PATH.
+# See infra/systemd/README.md.
+export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# ── The tools this guard cannot answer a question without ────────────────────
+# Checked up front, because the failure mode of a missing one is not an error:
+# `dmsetup deps` that was never found prints NOTHING and this script reads
+# output, so "the tool is absent" arrives as "the node is backed by nothing" —
+# which is exactly how a healthy live mapping got called a corpse and the heal
+# was refused. Exit 1 rather than 0: this unit has its own
+# OnFailure=robothor-alert@%n.service, so a guard that cannot ask the question
+# pages instead of reporting a volume it never examined.
+#
+# `timeout` is here for scripts/backup-volume-check.sh, the probe this guard
+# shells out to: without it the probe answers 255 and every tick is a page.
+# smartctl is deliberately NOT here — a missing smartctl is a gate that did not
+# run, which smart_gate() says out loud, and not a reason to refuse a heal.
+require_tools() {
+    local tool missing=0
+    for tool in "$@"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "backup-volume-guard: required tool not found on PATH: ${tool}" >&2
+            missing=1
+        fi
+    done
+    if ((missing)); then
+        echo "backup-volume-guard: PATH=${PATH}" >&2
+        exit 1
+    fi
+}
+require_tools dmsetup cryptsetup findmnt lsblk mount umount fsck.ext4 flock timeout
+
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # Last-good markers. Sourced, not reimplemented: the format and the "unknown
@@ -183,7 +231,17 @@ state_clear() { rm -f "${STATE_DIR}/$1" 2>/dev/null || true; }
 # volume the other one just mounted.
 LOCK_FILE="${STATE_DIR%/}.lock"
 lock_held=1
-exec 9>"$LOCK_FILE" 2>/dev/null || lock_held=0
+# NO `2>/dev/null` on this line, and no `{ ...; } 2>/dev/null` around it
+# either. `exec` with only redirections applies them to the SHELL, permanently:
+# the redirect that was meant to hide one "cannot create" message sent the rest
+# of the script's stderr to /dev/null for the whole run. Every "command not
+# found" and every refusal reason went with it, which is why an outage where
+# the guard could not find dmsetup at all read, in the journal, as a guard that
+# had looked and decided. bash prints its own diagnostic if the open fails, and
+# that diagnostic is wanted: it names the path and the reason.
+if ! exec 9>"$LOCK_FILE"; then
+    lock_held=0
+fi
 if ((lock_held == 0)); then
     # Say so instead of skipping. `flock -n 9` on a closed descriptor fails
     # exactly like a held lock, and treating that as "another run has it" would
