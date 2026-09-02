@@ -17,6 +17,15 @@ though `psql` exited 0. Run it by hand with
 `sudo systemctl start robothor-restore-drill.service`, or read
 [`SLOS.md`](SLOS.md) for how it fits alongside the backup-freshness dead-man.
 
+Before it creates anything, the script resolves every tool it needs
+(`psql`, `createdb`, `dropdb`, `rclone` when a remote is set) with `command -v`
+and aborts naming the ones that are missing. The unit loads
+`/etc/robothor/robothor.env`, whose `PATH` has no `/usr/sbin` and no `/sbin`, so
+the script appends those directories first
+(`ROBOTHOR_RESTORE_DRILL_PATH_FALLBACK`). A missing binary reported as a
+restore failure is the one wrong conclusion this drill must never reach — see
+[`SLOS.md`](SLOS.md), "The unit's PATH has no `sbin`".
+
 It is **not** `robothor-backup-verify.timer`. That is `backup-offsite.sh` with
 `ROBOTHOR_OFFSITE_VERIFY_ONLY=1`: an rclone byte-comparison, which proves the
 bytes match and nothing about whether they reconstitute a database.

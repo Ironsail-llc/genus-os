@@ -415,3 +415,66 @@ def test_drill_carries_no_instance_paths():
     text = DRILL.read_text()
     for home in re.findall(r"/home/[A-Za-z0-9._-]+", text):
         assert home == "/home/robothor", f"{home} is an instance path"
+
+
+# ── the tools the drill needs ────────────────────────────────────────────────
+
+
+class TestTheToolsAreResolvedBeforeTheDrillStarts:
+    """`robothor-restore-drill.service` loads the same
+    `EnvironmentFile=/etc/robothor/robothor.env` as every other unit, and that
+    file sets a PATH with no `/usr/sbin` and no `/sbin`. A tool the drill
+    cannot find must say which tool, before it creates a scratch database and
+    starts timing a restore that was never going to work — otherwise the
+    result reads as "the backup did not restore", which is a very different
+    page from "psql is not installed".
+    """
+
+    def test_a_missing_tool_names_itself_and_aborts(self, tmp_path: Path):
+        write_fixture_dump(tmp_path / "dumps" / "robothor_memory-fixture.sql.gz")
+        notify_log = install_recording_notify(tmp_path)
+        env = base_env(
+            tmp_path, ROBOTHOR_RESTORE_DRILL_PSQL="robothor-not-a-real-psql"
+        )
+
+        result = run_drill(env)
+
+        output = result.stdout + result.stderr
+        assert result.returncode != 0, "a drill that cannot run must not exit 0"
+        assert "robothor-not-a-real-psql" in output, (
+            f"the abort must name the tool that is missing: {output}"
+        )
+        assert "drill PASSED" not in output, (
+            "nothing may be reported as a passing drill when the restore never ran"
+        )
+        if notify_log.exists():
+            assert "robothor-not-a-real-psql" in notify_log.read_text(), (
+                "the notification must carry the real reason too"
+            )
+
+    def test_the_sbin_directories_are_put_back_on_the_path(self, tmp_path: Path):
+        """The unit hands the drill a PATH with no /usr/sbin and no /sbin.
+
+        Recorded from a child process rather than asserted on the script text:
+        what matters is the PATH the tools are actually resolved against.
+        """
+        write_fixture_dump(tmp_path / "dumps" / "robothor_memory-fixture.sql.gz")
+        path_log = tmp_path / "notify-path.txt"
+        recorder = tmp_path / "bin" / "record-path.sh"
+        recorder.parent.mkdir(parents=True, exist_ok=True)
+        recorder.write_text(f'#!/usr/bin/env bash\nprintf \'%s\\n\' "$PATH" >> "{path_log}"\nexit 0\n')
+        recorder.chmod(recorder.stat().st_mode | stat.S_IEXEC)
+
+        env = base_env(tmp_path, ROBOTHOR_RESTORE_DRILL_NOTIFY_CMD=str(recorder))
+        env["PATH"] = f"{tmp_path / 'bin'}:/usr/bin:/bin"
+
+        run_drill(env)
+
+        assert path_log.exists(), "the drill always reports its result"
+        seen = path_log.read_text()
+        assert "/usr/sbin" in seen and "/sbin" in seen, (
+            f"the drill must put the sbin directories back on PATH: {seen}"
+        )
+        assert seen.startswith(str(tmp_path / "bin")), (
+            "and must APPEND them — the operator's own PATH still comes first"
+        )

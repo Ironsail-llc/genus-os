@@ -66,7 +66,8 @@
 #       1 a breach was found and its page could NOT be delivered, or an SLO
 #         could NOT be evaluated at all — an inert dead-man must be loud, and
 #         the unit's OnFailure= is the only voice an unevaluated check has
-#       2 the probe is misconfigured and cannot answer
+#       2 the probe is misconfigured and cannot answer — including a tool it
+#         needs that does not resolve on PATH, which is named on stderr
 #
 # Environment:
 #   ROBOTHOR_SLO_LOCAL_DUMP_DIR        nightly dump dir
@@ -111,7 +112,26 @@
 #   ROBOTHOR_SLO_HEARTBEAT_AGENT       operator-facing agent id (main)
 #   ROBOTHOR_SLO_PROBE_TIMEOUT         seconds per disk step (20) — a dropped
 #                                      USB device blocks readdir forever
+#   ROBOTHOR_SLO_PATH_FALLBACK         directories APPENDED to PATH
+#                                      (/usr/sbin:/usr/bin:/sbin:/bin). The
+#                                      unit's EnvironmentFile sets a PATH with
+#                                      no sbin, and runuser lives in /usr/sbin.
 set -uo pipefail
+
+# ── PATH ─────────────────────────────────────────────────────────────────────
+# Every unit loads EnvironmentFile=/etc/robothor/robothor.env, and that file
+# sets a PATH with NO /usr/sbin and NO /sbin. `runuser` lives in /usr/sbin, so
+# under systemd the DB hop resolved to nothing at all and the failure came back
+# through db_query as "the query did not answer (database unreachable?)". A
+# tool that is not on PATH is not a database outage, and a page an operator
+# cannot act on is worse than no page. The same PATH already cost the backup
+# volume guard its `dmsetup`.
+#
+# APPENDED, never prepended. The job here is to make a directory the unit
+# forgot REACHABLE, not to outrank the PATH the operator configured — this
+# instance's rclone is in /usr/local/bin, and a system directory pushed to the
+# front silently changes which binary every other seam resolves to.
+export PATH="${PATH:+$PATH:}${ROBOTHOR_SLO_PATH_FALLBACK:-/usr/sbin:/usr/bin:/sbin:/bin}"
 
 REPORT=0
 if [[ "${1:-}" == "--report" ]]; then
@@ -192,6 +212,50 @@ HEARTBEAT_AGENT="${ROBOTHOR_SLO_HEARTBEAT_AGENT:-main}"
 PROBE_TIMEOUT="${ROBOTHOR_SLO_PROBE_TIMEOUT:-20}"
 if [[ ! "$PROBE_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     err "ROBOTHOR_SLO_PROBE_TIMEOUT=${PROBE_TIMEOUT} is not a positive integer"
+    exit 2
+fi
+
+# ── Preflight ────────────────────────────────────────────────────────────────
+# Resolve every external tool BEFORE the first measurement.
+#
+# A binary that is not on PATH must exit non-zero naming the binary. It must
+# never become an UNEVALUATED row (the probe cannot tell "the database is down"
+# from "psql is not installed", and only one of those is something a page can
+# ask an operator to do), and it must never leave OK rows behind for tiers the
+# probe never actually reached — half a measurement is worse than none,
+# because it looks like a measurement.
+MISSING=()
+require_tool() {
+    local what="$1" cmd="$2" argv
+    [[ -n "$cmd" ]] || return 0
+    read -r -a argv <<<"$cmd"
+    command -v "${argv[0]}" >/dev/null 2>&1 || MISSING+=("${what} — ${argv[0]}")
+}
+
+for tool in date find sort head cut grep id ls timeout; do
+    require_tool "core utility" "$tool"
+done
+require_tool "S4 volume probe (ROBOTHOR_SLO_VOLUME_CHECK_CMD)" "$VOLUME_CHECK_CMD"
+require_tool "S5/S8 (ROBOTHOR_SLO_SYSTEMCTL_CMD)" "$SYSTEMCTL_CMD"
+# Only when an offsite remote is configured: a box with none never lists it.
+[[ -z "$REMOTE" ]] || require_tool "S4 offsite listing (ROBOTHOR_SLO_RCLONE_CMD)" "$RCLONE_CMD"
+if (( ! REPORT )); then
+    require_tool "the pager (ROBOTHOR_SLO_ALERT_CMD)" "$ALERT_CMD"
+    if [[ "$DB_CHECKS" != "0" ]]; then
+        require_tool "S2/S6 (ROBOTHOR_SLO_PSQL_CMD)" "${ROBOTHOR_SLO_PSQL_CMD:-psql}"
+        # Required even when this run turns out not to hop: the unit runs as
+        # root, where hopping is the only way S2/S6 are ever measured.
+        require_tool "the database hop (ROBOTHOR_SLO_RUNUSER_CMD)" "$RUNUSER_CMD"
+        require_tool "the account check (ROBOTHOR_SLO_GETENT_CMD)" "$GETENT_CMD"
+    fi
+fi
+
+if (( ${#MISSING[@]} > 0 )); then
+    err "cannot run: ${#MISSING[@]} tool(s) do not resolve on PATH=${PATH}"
+    for tool in "${MISSING[@]}"; do
+        err "  MISSING ${tool}"
+    done
+    err "nothing was measured and nothing was paged — a missing binary is a misconfiguration, not an SLO breach. Fix the tool or the unit's PATH (ROBOTHOR_SLO_PATH_FALLBACK)."
     exit 2
 fi
 

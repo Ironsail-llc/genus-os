@@ -1053,6 +1053,9 @@ class TestTheHopTargetsAnOsAccountNeverTheRole:
         install_fake_psql(tmp_path, failures=5)
         install_fake_id(tmp_path)
         install_fake_getent(tmp_path, "svcuser")
+        # Present and working: the thing missing here is the ACCOUNT to hop to,
+        # not the tool that would do the hopping.
+        install_fake_runuser(tmp_path)
         env = db_env(
             tmp_path,
             ROBOTHOR_DB_USER="db_role",
@@ -1092,6 +1095,94 @@ class TestTheHopTargetsAnOsAccountNeverTheRole:
 
         assert runuser_log.exists(), "ROBOTHOR_SERVICE_USER is the natural default"
         assert runuser_log.read_text().splitlines()[:2] == ["-u", "svcuser"]
+
+
+class TestTheToolsAreResolvedBeforeAnythingIsMeasured:
+    """Every unit loads `EnvironmentFile=/etc/robothor/robothor.env`, and that
+    file sets a PATH with **no `/usr/sbin` and no `/sbin`**. `runuser` lives in
+    `/usr/sbin`.
+
+    So under systemd the hop resolved to nothing at all, and the failure came
+    back as `db_query` returning non-zero — reported as "the query did not
+    answer (database unreachable?)". A tool that is not on PATH is not a
+    database outage, and a probe that cannot tell those apart sends a page an
+    operator cannot act on. The same PATH already made the backup volume guard
+    misidentify its own mapper by losing `dmsetup`.
+    """
+
+    def test_a_tool_outside_the_units_path_is_still_found(self, tmp_path: Path):
+        """The hop must work under the PATH the unit actually gets."""
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path, failures=5)
+        install_fake_id(tmp_path)
+        install_fake_getent(tmp_path, "svcuser")
+        # runuser lives ONLY here — as it lives only in /usr/sbin on the box —
+        # and this directory is deliberately absent from PATH below.
+        sbin = tmp_path / "sbin"
+        sbin.mkdir(parents=True, exist_ok=True)
+        runuser_log = install_fake_runuser(tmp_path)
+        (tmp_path / "bin" / "runuser").rename(sbin / "runuser")
+
+        env = db_env(
+            tmp_path,
+            ROBOTHOR_SLO_OS_USER="svcuser",
+            ROBOTHOR_DB_USER="db_role",
+            ROBOTHOR_SLO_GETENT_CMD=str(tmp_path / "bin" / "getent"),
+            ROBOTHOR_SLO_PATH_FALLBACK=str(sbin),
+        )
+        # The unit's own PATH shape: no sbin anywhere.
+        env["PATH"] = f"{tmp_path / 'bin'}:/usr/bin:/bin"
+        log = with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        assert runuser_log.exists(), (
+            "runuser was not on the PATH the unit hands the probe; the probe "
+            f"must put the sbin directories back: {result.stdout + result.stderr}"
+        )
+        assert log.exists() and "slo:llm-availability" in log.read_text(), (
+            "the hop must still deliver the measurement"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_a_missing_tool_names_itself_and_is_not_an_outage(self, tmp_path: Path):
+        """A binary that is not installed must exit loudly naming the binary,
+        not be laundered into an UNEVALUATED row about the database."""
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path)
+        env = db_env(
+            tmp_path,
+            ROBOTHOR_SLO_RUNUSER_CMD="robothor-not-a-real-runuser",
+            ROBOTHOR_SLO_PSQL_CMD=str(tmp_path / "bin" / "psql"),
+        )
+        log = with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        output = result.stdout + result.stderr
+        assert "robothor-not-a-real-runuser" in output, (
+            f"the failure must name the tool that is missing: {output}"
+        )
+        assert result.returncode != 0, "a probe that cannot run must fail its own unit"
+        assert not log.exists(), (
+            "a missing binary is a misconfiguration, not an SLO breach — it "
+            "must not page as one"
+        )
+
+    def test_a_missing_tool_stops_the_run_before_anything_is_measured(self, tmp_path: Path):
+        """Half a measurement is worse than none: it puts OK rows in the daily
+        report for tiers the probe never actually reached."""
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path, ROBOTHOR_SLO_SYSTEMCTL_CMD="robothor-not-a-real-systemctl")
+        with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        assert result.returncode != 0
+        assert "robothor-not-a-real-systemctl" in result.stdout + result.stderr
+        assert "S4 backup freshness" not in result.stdout, (
+            "the preflight runs before the first measurement"
+        )
 
 
 class TestTheUnitCanReachTheDatabase:

@@ -52,10 +52,26 @@
 #                                     CMD <subject> <body>
 #   ROBOTHOR_DB_NAME                  the LIVE database, refused as a target
 #   ROBOTHOR_PYTHON                   interpreter for the built-in notifier
+#   ROBOTHOR_RESTORE_DRILL_PATH_FALLBACK  directories APPENDED to PATH
+#                                     (/usr/sbin:/usr/bin:/sbin:/bin) — the
+#                                     unit's EnvironmentFile sets one with no
+#                                     sbin
 set -uo pipefail
 
 log() { echo "restore-drill: $*"; }
 err() { echo "restore-drill: $*" >&2; }
+
+# ── PATH ─────────────────────────────────────────────────────────────────────
+# This unit loads the same EnvironmentFile=/etc/robothor/robothor.env as every
+# other one, and that file sets a PATH with NO /usr/sbin and NO /sbin. A tool
+# the drill cannot find must not turn into "the backup did not restore" — that
+# is a very different page from "psql is not installed", and only one of them
+# is true.
+#
+# APPENDED, never prepended: the job is to make a directory the unit forgot
+# REACHABLE, not to outrank the PATH the operator configured (this instance's
+# rclone lives in /usr/local/bin).
+export PATH="${PATH:+$PATH:}${ROBOTHOR_RESTORE_DRILL_PATH_FALLBACK:-/usr/sbin:/usr/bin:/sbin:/bin}"
 
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -147,6 +163,37 @@ esac
 if [[ "$DRILL_DB" != *drill* ]]; then
     err "refusing to run the drill against ${DRILL_DB} — the scratch database name must contain 'drill', because this script ends by dropping it"
     exit 1
+fi
+
+# ── 1b. Resolve every external tool before creating anything ─────────────────
+# A binary that is not on PATH has to say which binary, BEFORE a scratch
+# database exists and a restore is being timed. Otherwise a missing psql is
+# reported as a backup that would not restore — the one conclusion this drill
+# exists to make trustworthy. Runs before the EXIT trap on purpose: nothing has
+# been created yet, so there is nothing to clean up.
+MISSING=()
+require_tool() {
+    local what="$1" cmd="$2" argv
+    [[ -n "$cmd" ]] || return 0
+    read -r -a argv <<<"$cmd"
+    command -v "${argv[0]}" >/dev/null 2>&1 || MISSING+=("${what} — ${argv[0]}")
+}
+
+for tool in date find sort head cut mktemp stat gunzip rm; do
+    require_tool "core utility" "$tool"
+done
+require_tool "the restore (ROBOTHOR_RESTORE_DRILL_PSQL)" "$PSQL"
+require_tool "the scratch database (ROBOTHOR_RESTORE_DRILL_CREATEDB)" "$CREATEDB"
+require_tool "the cleanup (ROBOTHOR_RESTORE_DRILL_DROPDB)" "$DROPDB"
+# Only when a remote is configured — a box with none never lists it.
+[[ -z "$REMOTE" ]] || require_tool "the offsite fetch (ROBOTHOR_RESTORE_DRILL_RCLONE_CMD)" "$RCLONE_CMD"
+[[ -z "$NOTIFY_CMD" ]] || require_tool "the notifier (ROBOTHOR_RESTORE_DRILL_NOTIFY_CMD)" "$NOTIFY_CMD"
+
+if (( ${#MISSING[@]} > 0 )); then
+    for tool in "${MISSING[@]}"; do
+        err "MISSING ${tool}"
+    done
+    abort "the drill cannot run: ${#MISSING[@]} tool(s) do not resolve on PATH=${PATH} (${MISSING[*]}). Nothing was created and nothing was restored — this is a misconfiguration, not a backup that failed to restore."
 fi
 
 # Installed here: after the name guards (so the dropdb in cleanup can only ever

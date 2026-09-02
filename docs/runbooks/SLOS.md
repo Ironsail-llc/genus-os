@@ -246,6 +246,39 @@ report. A typo that silently widened a budget to infinity would be a dead-man
 that reports every backup as fresh — the failure this whole file exists to
 prevent.
 
+## The unit's PATH has no `sbin`
+
+`/etc/robothor/robothor.env` sets a `PATH` with **no `/usr/sbin` and no
+`/sbin`**, and every unit loads it with `EnvironmentFile=`. `runuser` lives in
+`/usr/sbin`, so under systemd the S2/S6 hop resolved to nothing and the failure
+came back as *"the query did not answer (database unreachable?)"* — a page an
+operator cannot act on, about an outage that was not happening. The same PATH
+had already cost the backup volume guard its `dmsetup`.
+
+Both `scripts/slo_probe.sh` and `scripts/restore-drill.sh` therefore **append**
+`/usr/sbin:/usr/bin:/sbin:/bin` to whatever `PATH` they are handed
+(`ROBOTHOR_SLO_PATH_FALLBACK` / `ROBOTHOR_RESTORE_DRILL_PATH_FALLBACK`).
+Appended, never prepended: the point is to make a directory the unit forgot
+*reachable*, not to outrank the PATH the operator configured — this instance's
+`rclone` is in `/usr/local/bin`.
+
+Each script then **preflights every external tool it needs** with `command -v`
+before measuring anything, and exits non-zero naming the ones that do not
+resolve:
+
+```
+slo_probe: cannot run: 1 tool(s) do not resolve on PATH=...
+slo_probe:   MISSING the database hop (ROBOTHOR_SLO_RUNUSER_CMD) — runuser
+slo_probe: nothing was measured and nothing was paged — a missing binary is a
+           misconfiguration, not an SLO breach.
+```
+
+A missing binary must never become an `UNEVALUATED` row or a breach: the probe
+cannot tell *"the database is down"* from *"psql is not installed"*, and only
+one of those is something a page can ask someone to fix. It must also never
+leave `OK` rows behind for tiers the probe never reached — half a measurement
+is worse than none, because it looks like a measurement.
+
 ## `ROBOTHOR_SLO_DB_CHECKS=0` — the test-only mute
 
 `scripts/slo_probe.sh` reads this switch, and `0` stops it evaluating **S2**
