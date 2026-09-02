@@ -47,11 +47,18 @@ EnvironmentFile=-/run/robothor/secrets.env
 # The two DB-backed SLOs (S2 heartbeat delivery, S6 LLM availability) shell out
 # to psql. Without these they connected as root to a database named "root":
 # pg_hba uses peer auth on the Unix socket, so BOTH the role and the database
-# have to be named. Environment= is not expanded from EnvironmentFile=, so the
-# role is a rendered placeholder (scripts/render-unit.sh substitutes the
-# instance's ROBOTHOR_DB_USER) rather than ${ROBOTHOR_DB_USER}. Root is not a
-# role, so the probe hops to this account with runuser before querying.
+# have to be named. Environment= is not expanded from EnvironmentFile=, so each
+# value is a rendered placeholder (scripts/render-unit.sh substitutes the
+# instance's own) rather than ${ROBOTHOR_DB_USER}.
+#
+# THE ROLE AND THE ACCOUNT ARE TWO DIFFERENT NAMES. pg_ident maps an OS account
+# onto a database role, and the role typically has no passwd entry at all. This
+# unit runs as root, which pg_ident maps to nothing, so the probe hops with
+# `runuser -u ${ROBOTHOR_SLO_OS_USER}` and carries PGUSER across. Rendering the
+# role into both makes that hop fail with "user <role> does not exist" — every
+# hour, paging via OnFailure= while measuring nothing.
 Environment=PGUSER=robothor
+Environment=ROBOTHOR_SLO_OS_USER=robothor
 Environment=PGDATABASE=robothor_memory
 ExecStart=/usr/bin/bash /opt/robothor/scripts/slo_probe.sh
 # The sender retries a page for ~5 minutes to ride out the boot DNS/secrets

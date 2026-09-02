@@ -92,13 +92,18 @@
 #   ROBOTHOR_SLO_ALERT_CMD             replaces the default sender
 #   ROBOTHOR_SLO_PSQL_CMD              psql, for the two DB-backed SLOs.
 #                                      Unset and running as root, the query
-#                                      hops to the DB account with runuser:
-#                                      pg_hba uses peer auth on the socket, so
-#                                      the OS user must equal the PG role and
-#                                      root is not one.
-#   PGUSER / ROBOTHOR_DB_USER          that DB account (the unit sets PGUSER)
+#                                      hops to an OS ACCOUNT with runuser:
+#                                      pg_hba uses peer auth on the socket and
+#                                      pg_ident maps that account onto the
+#                                      role. Root is mapped to nothing.
+#   PGUSER / ROBOTHOR_DB_USER          the database ROLE (the unit sets PGUSER)
+#   ROBOTHOR_SLO_OS_USER               the OS ACCOUNT to hop to; defaults to
+#                                      ROBOTHOR_SERVICE_USER. NOT the role —
+#                                      `runuser -u <role>` fails with "user
+#                                      does not exist" and measures nothing.
 #   ROBOTHOR_SLO_RUNUSER_CMD           the hop itself (runuser)
-#   ROBOTHOR_SLO_DB                    database to query (robothor_memory)
+#   ROBOTHOR_SLO_GETENT_CMD            getent, to prove the account exists
+#   ROBOTHOR_SLO_DB / ROBOTHOR_DB_NAME database to query (robothor_memory)
 #   ROBOTHOR_SLO_DB_CHECKS             0 disables the DB-backed SLOs
 #   ROBOTHOR_SLO_HEARTBEAT_AGENT       operator-facing agent id (main)
 #   ROBOTHOR_SLO_PROBE_TIMEOUT         seconds per disk step (20) — a dropped
@@ -152,23 +157,29 @@ RCLONE_CMD="${ROBOTHOR_SLO_RCLONE_CMD:-rclone}"
 REMOTE="${ROBOTHOR_OFFSITE_REMOTE:-}"
 ALERT_CMD="${ROBOTHOR_SLO_ALERT_CMD:-/usr/bin/env bash ${SCRIPT_DIR}/send_failure_alert.sh}"
 
-# pg_hba.conf uses peer auth on the Unix socket: the OS user must equal the
-# PG role. This unit deliberately runs as root (the pager recovers the secrets
-# with the root-readable age key), and root is not a role — an un-hopped psql
-# fails authentication every hour and reports UNEVALUATED forever, which is
-# exactly how S2 and S6 shipped inert. So when nothing overrides the command
-# and we are root, the query becomes somebody peer auth accepts.
-DB_USER="${PGUSER:-${ROBOTHOR_DB_USER:-}}"
+# pg_hba.conf uses peer auth on the Unix socket and pg_ident maps an OS
+# ACCOUNT onto a database ROLE. Those are two different names: on the reference
+# box the role is `robothor_app`, which has no passwd entry at all, while the
+# OS accounts pg_ident maps onto it are the service user and `postgres`.
+#
+# So the hop takes the OS account and carries the role across in PGUSER.
+# Handing the role to `runuser -u` instead fails with "user <role> does not
+# exist" on EVERY run: S2 and S6 stay UNEVALUATED while the unit exits
+# non-zero, so its OnFailure= pages hourly and measures nothing. A pager that
+# only ever cries wolf gets muted, and then the real breach is silent too.
+#
+# This unit deliberately runs as root (the pager recovers the secrets with the
+# root-readable age key) and root is not in pg_ident's map, so with no OS
+# account to become there is no query to run — reported as UNEVALUATED naming
+# the account, never as silence.
+DB_ROLE="${PGUSER:-${ROBOTHOR_DB_USER:-}}"
+OS_USER="${ROBOTHOR_SLO_OS_USER:-${ROBOTHOR_SERVICE_USER:-}}"
 RUNUSER_CMD="${ROBOTHOR_SLO_RUNUSER_CMD:-runuser}"
-default_psql() {
-    if [[ -n "$DB_USER" ]] && [[ "$(id -u)" == "0" ]] && [[ "$(id -un)" != "$DB_USER" ]]; then
-        printf '%s -u %s -- psql' "$RUNUSER_CMD" "$DB_USER"
-        return
-    fi
-    printf 'psql'
-}
-PSQL_CMD="${ROBOTHOR_SLO_PSQL_CMD:-$(default_psql)}"
-DB="${ROBOTHOR_SLO_DB:-${PGDATABASE:-robothor_memory}}"
+GETENT_CMD="${ROBOTHOR_SLO_GETENT_CMD:-getent}"
+PSQL_CMD="${ROBOTHOR_SLO_PSQL_CMD:-}"
+DB="${ROBOTHOR_SLO_DB:-${PGDATABASE:-${ROBOTHOR_DB_NAME:-robothor_memory}}}"
+# Why S2/S6 could not be measured at all, in the words the operator needs.
+DB_BLOCKED=""
 DB_CHECKS="${ROBOTHOR_SLO_DB_CHECKS:-1}"
 HEARTBEAT_AGENT="${ROBOTHOR_SLO_HEARTBEAT_AGENT:-main}"
 
@@ -515,6 +526,57 @@ fi
 # backup dead-man above from running, which is the ordering discipline
 # guardrail_watch.py's main() learned on 2026-08-16.
 
+# Resolved here rather than at startup, because failing to resolve IS a
+# measurement result: it has to be reported as UNEVALUATED naming the account,
+# and a command substitution cannot report one — it runs in a subshell.
+resolve_psql() {
+    [[ -z "$PSQL_CMD" ]] || return 0    # an explicit override answers for itself
+
+    if [[ "$(id -u)" != "0" ]]; then
+        # Not root: peer auth judges whatever account this already is.
+        PSQL_CMD="psql"
+        return 0
+    fi
+    if [[ -z "$OS_USER" ]]; then
+        DB_BLOCKED="the probe runs as root, which pg_ident does not map to any database role, and no OS account was configured to hop to — set ROBOTHOR_SLO_OS_USER (or ROBOTHOR_SERVICE_USER) to the account pg_ident maps onto role '${DB_ROLE:-<unset>}'"
+        return 1
+    fi
+    if [[ "$(id -un)" == "$OS_USER" ]]; then
+        PSQL_CMD="psql"
+        return 0
+    fi
+
+    # getent, not `id <name>`: the whole failure being closed here is a name
+    # that is a database role and not an account, and only the passwd database
+    # can tell those apart.
+    local getent_argv
+    read -r -a getent_argv <<<"$GETENT_CMD"
+    if ! "${getent_argv[@]}" passwd "$OS_USER" >/dev/null 2>&1; then
+        DB_BLOCKED="the OS account '${OS_USER}' does not exist (no passwd entry), so the probe cannot hop to it — ROBOTHOR_DB_USER is a database ROLE, not an OS user; set ROBOTHOR_SLO_OS_USER to the account pg_ident maps onto role '${DB_ROLE:-<unset>}'"
+        return 1
+    fi
+
+    PSQL_CMD="${RUNUSER_CMD} -u ${OS_USER} -- env"
+    [[ -z "$DB_ROLE" ]] || PSQL_CMD+=" PGUSER=${DB_ROLE}"
+    PSQL_CMD+=" PGDATABASE=${DB} psql"
+    return 0
+}
+
+# The identity a failed query ran under. "The database did not answer" and
+# "the hop was refused" look identical from here, and an operator cannot tell
+# them apart without knowing which account asked.
+db_identity() {
+    if [[ -n "${ROBOTHOR_SLO_PSQL_CMD:-}" ]]; then
+        printf 'psql command overridden by ROBOTHOR_SLO_PSQL_CMD'
+    elif [[ "$PSQL_CMD" == "psql" ]]; then
+        printf 'as OS user %s, role %s, database %s' \
+            "$(id -un)" "${DB_ROLE:-<unset>}" "$DB"
+    else
+        printf 'hopped to OS user %s with PGUSER=%s, database %s' \
+            "$OS_USER" "${DB_ROLE:-<unset>}" "$DB"
+    fi
+}
+
 db_query() {
     local argv out
     read -r -a argv <<<"$PSQL_CMD"
@@ -531,6 +593,17 @@ check_db_slos() {
         return
     fi
 
+    # No identity peer auth accepts means no query at all — for BOTH SLOs.
+    # Reported, not swallowed: a dead-man that cannot reach its instrument is
+    # exactly as blind as one nobody wired up.
+    if ! resolve_psql; then
+        unevaluated "S2" "$DB_BLOCKED"
+        unevaluated "S6" "$DB_BLOCKED"
+        return
+    fi
+    local how
+    how="$(db_identity)"
+
     local beats failures
     if beats="$(db_query "SELECT count(*) FROM agent_runs
         WHERE started_at >= now() - interval '24 hours'
@@ -546,7 +619,7 @@ check_db_slos() {
         # Named, not swallowed. An SLO nobody can evaluate is not a passing
         # SLO, and a check that only ever reports "skipped" is indistinguishable
         # from one that cannot fire.
-        unevaluated "S2" "the heartbeat query did not answer (database unreachable?)"
+        unevaluated "S2" "the heartbeat query did not answer (${how}) — the database is unreachable, or the hop was refused"
     fi
 
     if failures="$(db_query "SELECT count(*) FROM agent_runs
@@ -559,7 +632,7 @@ check_db_slos() {
             log "  S6 'All models failed' in the last hour: ${failures} — OK"
         fi
     else
-        unevaluated "S6" "the model-failure query did not answer (database unreachable?)"
+        unevaluated "S6" "the model-failure query did not answer (${how}) — the database is unreachable, or the hop was refused"
     fi
 }
 

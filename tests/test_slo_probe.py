@@ -166,6 +166,28 @@ def install_fake_runuser(tmp_path: Path) -> Path:
     return log
 
 
+def install_fake_getent(tmp_path: Path, *known: str) -> Path:
+    """A `getent passwd <name>` stand-in where only ``known`` accounts exist.
+
+    The distinction this seam exists for: ``ROBOTHOR_DB_USER`` on this box is a
+    libpq ROLE, and `getent passwd` on a role returns nothing. A probe that
+    hops to it never runs a query at all.
+    """
+    fake = tmp_path / "bin" / "getent"
+    fake.parent.mkdir(parents=True, exist_ok=True)
+    arms = "".join(f'    {name}) echo "{name}:x:1000:1000::/home/{name}:/bin/bash" ;;\n' for name in known)
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "${1:-}" = passwd ] || exit 2\n'
+        'case "${2:-}" in\n'
+        f"{arms}"
+        "    *) exit 2 ;;\n"
+        "esac\n"
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    return fake
+
+
 #: What a healthy box answers `systemctl show` with, per unit and property.
 def systemctl_stamp(age_hours: float) -> str:
     """systemd's own timestamp spelling, e.g. ``Mon 2026-09-01 03:00:12 EDT``."""
@@ -696,11 +718,20 @@ class TestTheQueryRunsAsAnAccountPeerAuthAccepts:
     fails every hour and reports nothing."""
 
     def test_a_root_probe_hops_to_the_service_account(self, tmp_path: Path):
+        """The simple arrangement: the OS account and the role share a name."""
         healthy_tree(tmp_path)
         install_fake_psql(tmp_path, failures=5)
         install_fake_id(tmp_path)
+        install_fake_getent(tmp_path, "alice")
         runuser_log = install_fake_runuser(tmp_path)
-        env = db_env(tmp_path, ROBOTHOR_DB_USER="alice", PGDATABASE="robothor_memory")
+        env = db_env(
+            tmp_path,
+            ROBOTHOR_DB_USER="alice",
+            ROBOTHOR_SLO_OS_USER="alice",
+            ROBOTHOR_SLO_GETENT_CMD=str(tmp_path / "bin" / "getent"),
+            ROBOTHOR_SLO_RUNUSER_CMD=str(tmp_path / "bin" / "runuser"),
+            PGDATABASE="robothor_memory",
+        )
         log = with_recording_alert(tmp_path, env)
         run_probe(env)
         assert runuser_log.exists(), (
@@ -726,6 +757,145 @@ class TestTheQueryRunsAsAnAccountPeerAuthAccepts:
         )
 
 
+class TestTheHopTargetsAnOsAccountNeverTheRole:
+    """`runuser -u <name>` takes an OS ACCOUNT. The database role is not one.
+
+    On this box ``ROBOTHOR_DB_USER`` is a libpq role that ``pg_ident`` maps the
+    service user's OS account onto — ``getent passwd`` on it finds nothing. A
+    probe that hands the role to ``runuser`` gets "user <role> does not exist"
+    on every run: S2 and S6 report UNEVALUATED forever *and* the unit exits
+    non-zero, so its ``OnFailure=`` pages hourly while measuring nothing. That
+    is worse than the inert state it replaced — a pager that only ever cries
+    wolf gets muted, and then the real breach is silent too.
+    """
+
+    @staticmethod
+    def _hop_env(tmp_path: Path, **extra: str) -> dict[str, str]:
+        return db_env(
+            tmp_path,
+            ROBOTHOR_DB_USER="db_role",
+            ROBOTHOR_SLO_OS_USER="svcuser",
+            ROBOTHOR_SLO_GETENT_CMD=str(tmp_path / "bin" / "getent"),
+            ROBOTHOR_SLO_RUNUSER_CMD=str(tmp_path / "bin" / "runuser"),
+            **extra,
+        )
+
+    def test_the_hop_becomes_the_os_user_and_carries_the_role_as_pguser(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path, failures=5)
+        install_fake_id(tmp_path)
+        install_fake_getent(tmp_path, "svcuser")
+        runuser_log = install_fake_runuser(tmp_path)
+        env = self._hop_env(tmp_path)
+        log = with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        assert runuser_log.exists(), "as root the query must hop, or peer auth rejects it"
+        argv = runuser_log.read_text().splitlines()
+        assert argv[:2] == ["-u", "svcuser"], (
+            f"the hop must target the OS account, not the database role: {argv}"
+        )
+        assert "PGUSER=db_role" in argv, (
+            "the role has to survive the hop in the environment — pg_ident maps "
+            f"the OS user onto it: {argv}"
+        )
+        assert log.exists() and "slo:llm-availability" in log.read_text(), (
+            "the hop must deliver a measurement, not merely run"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_a_missing_os_account_is_unevaluated_and_names_it(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path, failures=5)
+        install_fake_id(tmp_path)
+        install_fake_getent(tmp_path)  # no account exists
+        runuser_log = install_fake_runuser(tmp_path)
+        env = self._hop_env(tmp_path)
+        log = with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        output = result.stdout + result.stderr
+        assert "UNEVALUATED" in output, output
+        assert "svcuser" in output, (
+            f"the reason must name the account that is missing, not just fail: {output}"
+        )
+        assert not runuser_log.exists(), (
+            "hopping to an account that does not exist buys nothing but a "
+            "confusing error"
+        )
+        assert not log.exists(), "an unevaluated SLO is not a breach — it must not page"
+        assert result.returncode != 0, "an unmeasurable SLO must fail its own unit"
+
+    def test_a_hop_that_fails_is_unevaluated_and_names_the_identity(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path, failures=5)
+        install_fake_id(tmp_path)
+        install_fake_getent(tmp_path, "svcuser")
+        # An account that exists but cannot be become (nologin shell, PAM, ...).
+        broken = tmp_path / "bin" / "runuser"
+        broken.parent.mkdir(parents=True, exist_ok=True)
+        broken.write_text("#!/usr/bin/env bash\necho 'runuser: PAM refused' >&2\nexit 1\n")
+        broken.chmod(broken.stat().st_mode | stat.S_IEXEC)
+        env = self._hop_env(tmp_path)
+        log = with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        output = result.stdout + result.stderr
+        assert "UNEVALUATED" in output, output
+        assert "svcuser" in output, f"the reason must name the identity it tried: {output}"
+        assert not log.exists()
+        assert result.returncode != 0
+
+    def test_no_os_account_configured_is_unevaluated_not_silence(self, tmp_path: Path):
+        """Root with nothing to hop to cannot measure S2/S6 at all."""
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path, failures=5)
+        install_fake_id(tmp_path)
+        install_fake_getent(tmp_path, "svcuser")
+        env = db_env(
+            tmp_path,
+            ROBOTHOR_DB_USER="db_role",
+            ROBOTHOR_SLO_GETENT_CMD=str(tmp_path / "bin" / "getent"),
+            ROBOTHOR_SLO_RUNUSER_CMD=str(tmp_path / "bin" / "runuser"),
+        )
+        log = with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        output = result.stdout + result.stderr
+        assert "UNEVALUATED" in output, output
+        assert "ROBOTHOR_SLO_OS_USER" in output, (
+            f"the reason must name the knob that fixes it: {output}"
+        )
+        assert not log.exists()
+        assert result.returncode != 0
+
+    def test_the_service_user_from_the_env_file_is_the_default_hop_target(self, tmp_path: Path):
+        """The unit loads /etc/robothor/robothor.env, which already names the
+        OS account. Nothing extra should have to be configured for the hop."""
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path, failures=5)
+        install_fake_id(tmp_path)
+        install_fake_getent(tmp_path, "svcuser")
+        runuser_log = install_fake_runuser(tmp_path)
+        env = db_env(
+            tmp_path,
+            ROBOTHOR_DB_USER="db_role",
+            ROBOTHOR_SERVICE_USER="svcuser",
+            ROBOTHOR_SLO_GETENT_CMD=str(tmp_path / "bin" / "getent"),
+            ROBOTHOR_SLO_RUNUSER_CMD=str(tmp_path / "bin" / "runuser"),
+        )
+        with_recording_alert(tmp_path, env)
+
+        run_probe(env)
+
+        assert runuser_log.exists(), "ROBOTHOR_SERVICE_USER is the natural default"
+        assert runuser_log.read_text().splitlines()[:2] == ["-u", "svcuser"]
+
+
 class TestTheUnitCanReachTheDatabase:
     """The unit is the other half of the fix: a seam nothing configures is a
     seam that does nothing."""
@@ -739,6 +909,17 @@ class TestTheUnitCanReachTheDatabase:
         assert any(line.startswith("Environment=PGUSER=") for line in lines), (
             "the DB-backed SLOs need a role; the template carries the "
             "placeholder account, rendered per instance at install time"
+        )
+
+    def test_the_service_names_the_os_account_to_hop_to(self):
+        """The role and the OS account are two different things, so the unit
+        has to carry both. `runuser -u <role>` fails with "user does not
+        exist" and leaves S2/S6 unmeasured while paging every hour."""
+        lines = directives(unit_text("robothor-slo.service"))
+        assert "Environment=ROBOTHOR_SLO_OS_USER=robothor" in lines, (
+            "the unit runs as root; without an OS account to hop to, peer auth "
+            "rejects every query. The placeholder is the service account, "
+            "rendered per instance at install time."
         )
 
 

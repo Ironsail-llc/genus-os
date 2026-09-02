@@ -186,6 +186,53 @@ def test_database_role_defaults_to_the_service_account(tmp_path: Path):
     assert f"Environment=PGUSER={USER}\n" in result.stdout
 
 
+def test_renders_the_os_account_a_root_unit_hops_to(tmp_path: Path):
+    """`Environment=ROBOTHOR_SLO_OS_USER=robothor` is the OS-ACCOUNT
+    placeholder, and it is not the database role.
+
+    `runuser -u` takes an OS account; `PGUSER=` takes a libpq role, and
+    pg_ident maps one onto the other. Rendering the role into both made
+    robothor-slo.service run `runuser -u <role>` — "user does not exist" on
+    every run, S2/S6 unmeasured, and an hourly page saying nothing.
+    """
+    unit = tmp_path / "robothor-hop.service"
+    unit.write_text(
+        "[Service]\n"
+        "Environment=ROBOTHOR_SLO_OS_USER=robothor\n"
+        "Environment=PGUSER=robothor\n"
+        "Environment=NOT_A_USER=robothor\n"
+    )
+    result = render(unit, base_env(ROBOTHOR_DB_USER="pgrole"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"Environment=ROBOTHOR_SLO_OS_USER={USER}\n" in result.stdout, (
+        "the hop target is the service ACCOUNT"
+    )
+    assert "Environment=PGUSER=pgrole\n" in result.stdout, "the role is a separate value"
+    assert "Environment=NOT_A_USER=robothor\n" in result.stdout
+
+
+def test_renders_the_database_name(tmp_path: Path):
+    """`Environment=PGDATABASE=robothor_memory` is the database placeholder.
+
+    The platform spells this `ROBOTHOR_DB_NAME` in /etc/robothor/robothor.env;
+    hardcoding the default in the template means an instance that renamed its
+    database gets a unit that connects to one that does not exist.
+    """
+    unit = tmp_path / "robothor-db.service"
+    unit.write_text("[Service]\nEnvironment=PGDATABASE=robothor_memory\n")
+    result = render(unit, base_env(ROBOTHOR_DB_NAME="genus_memory"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Environment=PGDATABASE=genus_memory\n" in result.stdout
+
+
+def test_database_name_defaults_to_the_platform_default(tmp_path: Path):
+    unit = tmp_path / "robothor-db.service"
+    unit.write_text("[Service]\nEnvironment=PGDATABASE=robothor_memory\n")
+    result = render(unit, base_env(ROBOTHOR_DB_NAME=None))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Environment=PGDATABASE=robothor_memory\n" in result.stdout
+
+
 def test_renders_home_placeholder(sample_unit: Path):
     result = render(sample_unit, base_env())
     assert result.returncode == 0, result.stdout + result.stderr

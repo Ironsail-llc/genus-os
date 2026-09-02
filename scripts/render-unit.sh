@@ -16,6 +16,12 @@
 #   su robothor robothor  a logrotate(8) su directive
 #                                            -> su $ROBOTHOR_SERVICE_USER $ROBOTHOR_SERVICE_GROUP
 #   Environment=PGUSER=robothor  the DB role -> $ROBOTHOR_DB_USER (exact line)
+#   Environment=ROBOTHOR_SLO_OS_USER=robothor  the OS account a root unit hops
+#                    to with runuser -> $ROBOTHOR_SERVICE_USER (exact line).
+#                    NOT the role: pg_ident maps one onto the other and the
+#                    role usually has no passwd entry at all.
+#   Environment=PGDATABASE=robothor_memory  the database -> $ROBOTHOR_DB_NAME
+#                    (exact line)
 # Legacy spellings still rendered (but rejected in new templates by
 # tests/test_install_units.py): ${ROBOTHOR_WORKSPACE} and %h.
 #
@@ -35,7 +41,11 @@
 #   ROBOTHOR_DB_USER       optional — the PostgreSQL role for units that shell
 #                          out to psql (same spelling as scripts/cron-wrapper.sh).
 #                          Defaults to the service account: pg_hba uses peer
-#                          auth on the socket, so OS user and role match.
+#                          auth on the socket, so OS user and role match unless
+#                          pg_ident says otherwise.
+#   ROBOTHOR_DB_NAME       optional — the database those units connect to
+#                          (the platform's own spelling in robothor.env).
+#                          Defaults to robothor_memory.
 #   ROBOTHOR_ENV_FILE      optional — file to read unset vars from
 #                          (default /etc/robothor/robothor.env)
 #
@@ -82,6 +92,7 @@ SERVICE_USER="${ROBOTHOR_SERVICE_USER:-$(env_file_lookup ROBOTHOR_SERVICE_USER |
 SERVICE_HOME="${ROBOTHOR_SERVICE_HOME:-$(env_file_lookup ROBOTHOR_SERVICE_HOME || true)}"
 SERVICE_GROUP="${ROBOTHOR_SERVICE_GROUP:-$(env_file_lookup ROBOTHOR_SERVICE_GROUP || true)}"
 DB_USER="${ROBOTHOR_DB_USER:-$(env_file_lookup ROBOTHOR_DB_USER || true)}"
+DB_NAME="${ROBOTHOR_DB_NAME:-$(env_file_lookup ROBOTHOR_DB_NAME || true)}"
 
 [[ -n "$WORKSPACE" ]] || die "ROBOTHOR_WORKSPACE is not set and not found in ${ENV_FILE}"
 [[ -n "$SERVICE_USER" ]] || die "ROBOTHOR_SERVICE_USER is not set and not found in ${ENV_FILE}"
@@ -93,6 +104,9 @@ DB_USER="${ROBOTHOR_DB_USER:-$(env_file_lookup ROBOTHOR_DB_USER || true)}"
 # PostgreSQL role must carry it rendered. Peer auth wants OS user == role, so
 # the service account is the default rather than a second thing to configure.
 DB_USER="${DB_USER:-$SERVICE_USER}"
+# The platform default, so an instance that never set ROBOTHOR_DB_NAME renders
+# exactly what the template already said.
+DB_NAME="${DB_NAME:-robothor_memory}"
 
 # The service home is only needed when the template references it.
 if grep -q -e '%h' -e '/home/robothor' "$SRC"; then
@@ -110,7 +124,7 @@ fi
 # by the home substitution, and awk regex/'&' semantics never touch the data.
 export RENDER_WS="$WORKSPACE" RENDER_USER="$SERVICE_USER" RENDER_HOME="$SERVICE_HOME"
 export RENDER_GROUP="$SERVICE_GROUP"
-export RENDER_DB_USER="$DB_USER"
+export RENDER_DB_USER="$DB_USER" RENDER_DB_NAME="$DB_NAME"
 export RENDER_TMPFILES="$TMPFILES"
 rendered="$(awk '
 function lsub(s, pat, rep,    out, i, n) {
@@ -123,8 +137,9 @@ function lsub(s, pat, rep,    out, i, n) {
 }
 BEGIN {
     WSENT = "\001W\002"; USENT = "\001U\002"; HSENT = "\001H\002"; GSENT = "\001G\002"; DSENT = "\001D\002"
+    NSENT = "\001N\002"
     ws = ENVIRON["RENDER_WS"]; su = ENVIRON["RENDER_USER"]; home = ENVIRON["RENDER_HOME"]
-    grp = ENVIRON["RENDER_GROUP"]; dbu = ENVIRON["RENDER_DB_USER"]
+    grp = ENVIRON["RENDER_GROUP"]; dbu = ENVIRON["RENDER_DB_USER"]; dbn = ENVIRON["RENDER_DB_NAME"]
     tmpf = (ENVIRON["RENDER_TMPFILES"] == "1")
 }
 {
@@ -160,6 +175,12 @@ BEGIN {
     # Exact line only, like User=/Group=: `Environment=NOT_A_USER=robothor` is
     # a value that happens to say robothor and must survive untouched.
     if (s == "Environment=PGUSER=robothor") s = "Environment=PGUSER=" DSENT
+    # The OS ACCOUNT a root unit hops to, which is the service user and not the
+    # role — see the header. Exact line, same discipline as User=.
+    if (s == "Environment=ROBOTHOR_SLO_OS_USER=robothor") \
+        s = "Environment=ROBOTHOR_SLO_OS_USER=" USENT
+    if (s == "Environment=PGDATABASE=robothor_memory") \
+        s = "Environment=PGDATABASE=" NSENT
     s = lsub(s, "/home/robothor", HSENT)
     s = lsub(s, "%h", HSENT)
     s = lsub(s, WSENT, ws)
@@ -167,6 +188,7 @@ BEGIN {
     s = lsub(s, GSENT, grp)
     s = lsub(s, HSENT, home)
     s = lsub(s, DSENT, dbu)
+    s = lsub(s, NSENT, dbn)
     print s
 }' "$SRC")"
 
@@ -207,6 +229,14 @@ fi
 if [[ "$DB_USER" != "robothor" ]] \
     && leftover="$(grep -nE '^Environment=PGUSER=robothor$' <<<"$directives")"; then
     fail_lines 'placeholder database role' "$leftover"
+fi
+if [[ "$SERVICE_USER" != "robothor" ]] \
+    && leftover="$(grep -nE '^Environment=ROBOTHOR_SLO_OS_USER=robothor$' <<<"$directives")"; then
+    fail_lines 'placeholder OS account for the runuser hop' "$leftover"
+fi
+if [[ "$DB_NAME" != "robothor_memory" ]] \
+    && leftover="$(grep -nE '^Environment=PGDATABASE=robothor_memory$' <<<"$directives")"; then
+    fail_lines 'placeholder database name' "$leftover"
 fi
 # The tmpfiles account columns get their own gate for the same reason they get
 # their own substitution: the ^(User|Group)= grep above cannot see them. awk
