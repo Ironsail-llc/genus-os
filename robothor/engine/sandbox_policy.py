@@ -28,6 +28,8 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.sanitize import sanitize_log
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -105,7 +107,9 @@ def _warn_opt_out(agent_id: str, mode: str) -> None:
         "Agent %s holds `exec` and declares `sandbox: host`, so it opts out of "
         "containment. sandbox_default is in %s mode; this agent is unaffected "
         "by it either way. Set %s=1 to make enforce override the manifest.",
-        agent_id,
+        # Agent ids come from manifest files, so a newline in one could forge a
+        # second log line saying whatever it liked about containment.
+        sanitize_log(agent_id),
         mode,
         OVERRIDE_OPT_OUT_ENV,
     )
