@@ -107,3 +107,43 @@ class TestItHasAProductionCaller:
             f"FleetPool.{method} has no production caller — the daemon logs a cap "
             f"that nothing enforces, which is the state this test exists to end"
         )
+
+
+class TestTheSpawnPathNeverGatesOnAdmission:
+    """The inverse of the guard above, and the more dangerous direction.
+
+    A child agent queueing for a fleet slot its own parent is holding is a
+    deadlock: the parent cannot release until the child returns, and the child
+    cannot start until the parent releases. So the spawn path is bounded by a
+    LIMIT (`max_concurrent_spawns`, narrowed to the device's policy) and must
+    never call the admission gate.
+
+    "Must never" is the sort of property that decays silently — the deadlock
+    only shows up under load, on the tier where slots are scarce. Asserting it
+    from the source is the cheapest way to keep it true.
+    """
+
+    FORBIDDEN = ("admit", "can_start")
+
+    def _spawn_source(self) -> Path:
+        path = Path(__file__).resolve().parents[1] / "tools" / "handlers" / "spawn.py"
+        assert path.exists(), f"spawn handler moved — re-point this guard: {path}"
+        return path
+
+    @pytest.mark.parametrize("method", FORBIDDEN)
+    def test_spawn_does_not_call_the_admission_gate(self, method):
+        tree = ast.parse(self._spawn_source().read_text())
+        callers = [
+            f"spawn.py:{n.lineno}"
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Call)
+            and (
+                (isinstance(n.func, ast.Attribute) and n.func.attr == method)
+                or (isinstance(n.func, ast.Name) and n.func.id == method)
+            )
+        ]
+        assert not callers, (
+            f"spawn.py calls {method}() at {callers} — a spawned child must not "
+            f"queue for a slot its parent is holding. Bound the fan-out with "
+            f"max_concurrent_spawns instead; that is what set_max_concurrent_spawns exists for"
+        )
