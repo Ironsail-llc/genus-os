@@ -69,6 +69,15 @@ an orphaned `error` target depends on nothing, which is the 2026-08-27
 signature). Anything else at the mountpoint is somebody's filesystem and the
 guard refuses to touch it.
 
+The same question picks the mapping to reuse. Every node wearing one of those
+names is asked, not just the bare one — after a heal the live mapping is
+`robothor-backup-1`, and on this box it is `robothor-backup-b` from the
+2026-08-27 recovery. If any of them is backed by the device it is mounted back
+as it stands (no key, no `cryptsetup open`, no `fsck`); if one is backed but
+held, the guard refuses and names the holder rather than stacking a second LUKS
+mapping over the same disk. A fresh name is opened **only** when no node is
+backed by the device at all.
+
 ## The manual procedure
 
 Exactly what the guard automates. Run it as root when the guard is disabled or
@@ -91,15 +100,18 @@ smartctl -d scsi -H /dev/sdX                         # FAILED → stop, replace
 
 findmnt -rn -o SOURCE --mountpoint /mnt/robothor-backup  # /dev/mapper/robothor-backup[-<token>]
                                                      # ...or somebody else's: stop
+dmsetup info -c --noheadings -o uuid <that name>     # CRYPT-LUKS2-<our uuid>-… or stop
 umount -l /mnt/robothor-backup                       # lazy: a clean umount hangs
-dmsetup deps -o devno robothor-backup                # matches the device? live
-lsblk -no MAJ:MIN /dev/disk/by-uuid/<uuid>           # ...compare with this
-dmsetup info -c --noheadings -o open robothor-backup # MUST be 0 before any fsck
+lsblk -no MAJ:MIN /dev/disk/by-uuid/<uuid>           # the device: compare deps with this
+for n in /dev/mapper/robothor-backup /dev/mapper/robothor-backup-*; do
+  dmsetup deps -o devno "${n##*/}"; done             # ANY node matching = the live one
+dmsetup info -c --noheadings -o open <that name>     # MUST be 0 before any fsck
 
-# 3. Live mapping (deps match) and open count 0 — just put it back.
-mount /dev/mapper/robothor-backup /mnt/robothor-backup
+# 3. Live mapping (deps match, under WHATEVER name) and open count 0 — just put
+#    it back. Never open a second mapping over a device that has a live one.
+mount /dev/mapper/<that name> /mnt/robothor-backup
 
-# 4. Stale mapping (deps do NOT match). The stale name cannot be reused.
+# 4. No node matches the device. The stale name cannot be reused.
 cryptsetup close robothor-backup                     # usually FAILS: kernel ref
 cryptsetup open /dev/disk/by-uuid/<uuid> robothor-backup-1 --key-file <keyfile>
 fsck.ext4 -p /dev/mapper/robothor-backup-1           # PREEN ONLY. rc>=4 → stop

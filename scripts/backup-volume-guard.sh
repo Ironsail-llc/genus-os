@@ -37,15 +37,19 @@
 #                                  (-d scsi, not -d sat: sat does not work
 #                                  through this USB bridge)
 #     findmnt -o SOURCE            gate: the thing mounted at the path must be
-#                                  our mapper — the unmount below names a PATH
+#     dmsetup deps / -o uuid       ours — the unmount below names a PATH, and
+#                                  what makes a node ours is the DEVICE behind
+#                                  it, never the name it wears
 #     umount -l <mount>            the mount is wedged; a clean umount hangs
 #     dmsetup info -o open         RE-READ here: umount -l returns before the
 #                                  last reference is dropped, and fsck on a
 #                                  referenced mapping corrupts a volume that
 #                                  was only degraded
-#     mount <name> <mount>         when the node is still the device's own live
-#                                  mapping and free, this is the whole repair —
-#                                  no close, no key, no fsck
+#     mount <name> <mount>         when SOME node — under any of our names — is
+#                                  still the device's own live mapping and
+#                                  free, this is the whole repair: no close, no
+#                                  key, no fsck, and no second mapping stacked
+#                                  on a disk that already has one
 #     cryptsetup close <name>      a STALE node, and only when nothing holds it
 #     cryptsetup open ... <name-N> a NEW mapper name, because the stale one
 #                                  holds a kernel reference until reboot
@@ -355,17 +359,51 @@ mapper_node_name() {
     printf '%s' "$name"
 }
 
-# The name to open the container under.
+# Which node, if any, IS the device's own mapping — whatever it is called.
 #
-# The original, when it is free. When it is not, the question is whether the
-# existing node is STALE: `dmsetup deps` gives the major:minor it is backed by,
-# and after a re-plug the device comes back as a different one. A node whose
-# deps still match the device is live and correct — reuse it rather than
-# stacking another mapping on the same disk.
-mapper_is_live() {
-    MAPPER_DEPS=""
-    [[ -e "${MAPPER_DIR}/${MAPPER_BASE}" ]] || return 1
-    node_is_backed_by_device "$MAPPER_BASE"
+# Asked of every node wearing this guard's name, not just the bare one. A drop
+# is healed under a NEW name (the stale node holds a kernel reference until
+# reboot), so the live mapping is `<name>-1` after one heal and `<name>-b` on
+# this box right now. Looking only at ${MAPPER_BASE} meant calling the corpse
+# there "stale", opening a SECOND LUKS mapping over a disk that already had a
+# live one, and abandoning the node that was already correct — one more burned
+# name per tick, and nine of those are a reboot.
+#
+# A free node wins; a node that is backed but busy is still returned, because
+# "something holds the live mapping" must stop the heal, never license a second
+# mapping over the same disk.
+LIVE_NODE=""
+select_live_node() {
+    LIVE_NODE=""
+    local candidate node first_backed=""
+
+    # The one at the mountpoint first: its identity is already established, and
+    # its open count cannot be asked yet — the mount itself is an opener.
+    if [[ -n "$MOUNTED_NAME" ]] && node_is_backed_by_device "$MOUNTED_NAME"; then
+        LIVE_NODE="$MOUNTED_NAME"
+        log "${LIVE_NODE} is still backed by ${MAPPER_DEPS}, which is the device — reusing it"
+        return 0
+    fi
+
+    for candidate in "${MAPPER_DIR}/${MAPPER_BASE}" "${MAPPER_DIR}/${MAPPER_BASE}"-*; do
+        [[ -e "$candidate" ]] || continue
+        node="$(mapper_node_name "$candidate")"
+        [[ -n "$node" && "$node" != "$MOUNTED_NAME" ]] || continue
+        node_is_backed_by_device "$node" || continue
+        [[ -n "$first_backed" ]] || first_backed="$node"
+        mapper_is_free "$node" || continue
+        LIVE_NODE="$node"
+        log "${LIVE_NODE} is backed by ${MAPPER_DEPS}, which is the device — reusing it"
+        return 0
+    done
+
+    if [[ -n "$first_backed" ]]; then
+        LIVE_NODE="$first_backed"
+        log "${LIVE_NODE} is backed by the device but held — reusing it, or refusing"
+        return 0
+    fi
+    log "no mapper node is backed by the device (${DEVICE_MAJMIN:-unknown}) — a reopen is unavoidable"
+    return 1
 }
 
 # crypttab's third column is the ONLY key a timer can use: `none`, `-`, or a
@@ -376,18 +414,14 @@ keyfile_is_usable() {
     [[ -f "$KEYFILE" && -r "$KEYFILE" ]]
 }
 
+# A free name to open the container under. Reached only when NOTHING is backed
+# by the device — select_live_node has already refused to stack a second
+# mapping on a disk that has a live one.
 pick_mapper_name() {
     if [[ ! -e "${MAPPER_DIR}/${MAPPER_BASE}" ]]; then
         MAPPER_USED="$MAPPER_BASE"
         return 0
     fi
-
-    if mapper_is_live; then
-        log "${MAPPER_BASE} is still backed by ${MAPPER_DEPS}, which is the device — reusing it"
-        MAPPER_USED="$MAPPER_BASE"
-        return 0
-    fi
-    log "${MAPPER_BASE} is stale (backed by ${MAPPER_DEPS:-unknown}, device is ${DEVICE_MAJMIN:-unknown})"
 
     local i
     for i in 1 2 3 4 5 6 7 8 9; do
@@ -424,61 +458,75 @@ smart_gate() {
     return 0
 }
 
+# What is mounted at ${MOUNT}, expressed as one of this guard's node names —
+# empty when nothing is mounted there. Read-only, and it runs FIRST, because
+# every side effect below is aimed at whatever it decides.
+#
+# `umount -l` names a PATH, and this runs as root: whatever is mounted there is
+# what gets detached. The mountpoint is an ordinary directory anything can be
+# mounted over — a rescue image, a staging tree, another disk parked there
+# while the real one was away — and in every one of those cases the probe fails
+# for the RIGHT reason and the unmount would be aimed at the wrong filesystem.
+#
+# The name is the CHEAP check and it is not sufficient: any node can be created
+# under `robothor-backup-<token>`, and a guard that trusted the spelling would
+# lazily unmount it. So the name only says which node to ask about, and the
+# DEVICE decides — node_is_ours above.
+MOUNTED_NAME=""
+identify_mounted_source() {
+    MOUNTED_NAME=""
+    findmnt -rn -o TARGET --mountpoint "$MOUNT" >/dev/null 2>&1 || return 0
+    local mounted_source name
+    mounted_source="$(findmnt -rn -o SOURCE --mountpoint "$MOUNT" 2>/dev/null | head -n 1)"
+    name="$(mapper_node_name "$mounted_source")"
+    if [[ -z "$name" ]]; then
+        HEAL_REASON="something other than the backup mapper is mounted at ${MOUNT} (${mounted_source:-unknown}) — refusing to unmount it"
+        return 1
+    fi
+    if ! node_is_ours "$name"; then
+        HEAL_REASON="something other than the backup mapper is mounted at ${MOUNT} (${mounted_source} is not backed by ${DEVICE}) — refusing to unmount it"
+        return 1
+    fi
+    MOUNTED_NAME="$name"
+    return 0
+}
+
 heal() {
     HEAL_REASON=""
     MAPPER_USED=""
     local opened_here=0 reuse=0
 
-    # 1. Before the first side effect: can this heal put the volume BACK?
+    # 1. Identity, before anything is touched and by the DEVICE rather than by
+    #    a name: what is at the mountpoint, and which node — under any name —
+    #    IS the mapping of the device that came back.
+    identify_mounted_source || return 1
+    select_live_node && reuse=1
+
+    # 2. Before the first side effect: can this heal put the volume BACK?
     #
     #    The teardown (umount, close) is easy and the rebuild is the part that
     #    needs a key. Doing them in that order without checking meant a
     #    crypttab with no keyfile turned a DEGRADED volume — wedged, but with
     #    its mapping intact — into an ABSENT one that only a human at a console
-    #    can restore. A reopen is needed unless the node already there is the
-    #    device's own live mapping, which we can simply remount.
-    mapper_is_live && reuse=1
+    #    can restore. A reopen is needed only when nothing is already the
+    #    device's own mapping; anything we reuse, we merely mount.
     if ((reuse == 0)) && ! keyfile_is_usable; then
         HEAL_REASON="no non-interactive keyfile in crypttab (column 3 = ${KEYFILE:-<empty>}); refusing to tear down a mapping I cannot rebuild — fix crypttab or reboot"
         return 1
     fi
 
-    # 2. Gates, and they come first because they are read-only: nothing below
-    #    may run against a device that is not ours, or a disk the firmware has
-    #    given up on — including the unmount.
+    # 3. Gates, and they come before every side effect because they are
+    #    read-only: nothing below may run against a device that is not ours, or
+    #    a disk the firmware has given up on — including the unmount.
     if ! cryptsetup isLuks "$DEVICE" >/dev/null 2>&1; then
         HEAL_REASON="${DEVICE} is not a LUKS container — refusing to touch it"
         return 1
     fi
     smart_gate || return 1
 
-    # 3. Let go of the wedged mount. Lazy, because a plain umount blocks
-    #    forever on a device that is gone.
-    #
-    #    `umount -l` names a PATH, and this runs as root: whatever is mounted
-    #    there is what gets detached. The mountpoint is an ordinary directory
-    #    anything can be mounted over — a rescue image, a staging tree, another
-    #    disk parked there while the real one was away — and in every one of
-    #    those cases the probe fails for the RIGHT reason and the unmount would
-    #    be aimed at the wrong filesystem. So identify the source first and act
-    #    only on this guard's own mapper.
-    #
-    #    The name is the CHEAP check and it is not sufficient: any node can be
-    #    created under `robothor-backup-<token>`, and a guard that trusted the
-    #    spelling would lazily unmount it. So the name only says which node to
-    #    ask about, and the DEVICE decides — node_is_ours above.
-    if findmnt -rn -o TARGET --mountpoint "$MOUNT" >/dev/null 2>&1; then
-        local mounted_source mounted_name
-        mounted_source="$(findmnt -rn -o SOURCE --mountpoint "$MOUNT" 2>/dev/null | head -n 1)"
-        mounted_name="$(mapper_node_name "$mounted_source")"
-        if [[ -z "$mounted_name" ]]; then
-            HEAL_REASON="something other than the backup mapper is mounted at ${MOUNT} (${mounted_source:-unknown}) — refusing to unmount it"
-            return 1
-        fi
-        if ! node_is_ours "$mounted_name"; then
-            HEAL_REASON="something other than the backup mapper is mounted at ${MOUNT} (${mounted_source} is not backed by ${DEVICE}) — refusing to unmount it"
-            return 1
-        fi
+    # 4. Let go of the wedged mount. Lazy, because a plain umount blocks
+    #    forever on a device that is gone. Identified in step 1.
+    if [[ -n "$MOUNTED_NAME" ]]; then
         if ! umount -l "$MOUNT"; then
             HEAL_REASON="umount -l ${MOUNT} failed"
             return 1
@@ -486,44 +534,54 @@ heal() {
     fi
 
     if ((reuse)); then
-        # 4a. The mapping is the device's own. `umount -l` returns before the
+        # 5a. The mapping is the device's own. `umount -l` returns before the
         #     last reference is dropped, so ask the kernel now — everything
         #     below this point would be done TO this mapping.
-        if ! mapper_is_free "$MAPPER_BASE"; then
-            HEAL_REASON="mapper ${MAPPER_BASE} still has ${MAPPER_OPEN_COUNT:-unknown} opener(s) after umount -l — refusing to fsck a referenced mapping; the volume is now UNMOUNTED and the next tick remounts it once the holder lets go"
+        if ! mapper_is_free "$LIVE_NODE"; then
+            HEAL_REASON="mapper ${LIVE_NODE} still has ${MAPPER_OPEN_COUNT:-unknown} opener(s) after umount -l — refusing to fsck a referenced mapping; the volume is now UNMOUNTED and the next tick remounts it once the holder lets go"
             return 1
         fi
-        # 4b. The cheapest repair that can work, tried first: put the existing
+        # 5b. The cheapest repair that can work, tried first: put the existing
         #     mapping back at its path. No close, no key, no fsck — and
         #     nothing to rebuild if it works. Most wedges are exactly this.
-        if mount "${MAPPER_DIR}/${MAPPER_BASE}" "$MOUNT"; then
-            MAPPER_USED="$MAPPER_BASE"
+        if mount "${MAPPER_DIR}/${LIVE_NODE}" "$MOUNT"; then
+            MAPPER_USED="$LIVE_NODE"
             return 0
         fi
-        log "remounting the live ${MAPPER_BASE} failed — repairing it instead"
-    elif [[ -e "${MAPPER_DIR}/${MAPPER_BASE}" ]]; then
-        # 4c. A stale node. Close it IF nothing holds it; usually something
-        #     does, and that kernel reference is why a new name is needed.
-        if mapper_is_free "$MAPPER_BASE"; then
-            cryptsetup close "$MAPPER_BASE" >/dev/null 2>&1 \
-                || log "cryptsetup close ${MAPPER_BASE} failed — carrying on under a new name"
-        else
-            log "${MAPPER_BASE} has open count ${MAPPER_OPEN_COUNT:-unknown} — cannot be closed until reboot"
+        log "remounting the live ${LIVE_NODE} failed — repairing it instead"
+        # Repaired under its OWN name: the mapping is already the device's, so
+        # there is nothing to reopen and no second mapping to stack on it.
+        MAPPER_USED="$LIVE_NODE"
+    else
+        # 5c. Nothing is backed by the device: every node wearing this guard's
+        #     name is a corpse. Close the one we just unmounted (or the bare
+        #     node, when nothing was mounted) IF nothing holds it; usually
+        #     something does, and that kernel reference is why a new name is
+        #     needed.
+        local stale_node="$MOUNTED_NAME"
+        [[ -n "$stale_node" ]] || stale_node="$MAPPER_BASE"
+        if [[ -e "${MAPPER_DIR}/${stale_node}" ]]; then
+            if mapper_is_free "$stale_node"; then
+                cryptsetup close "$stale_node" >/dev/null 2>&1 \
+                    || log "cryptsetup close ${stale_node} failed — carrying on under a new name"
+            else
+                log "${stale_node} has open count ${MAPPER_OPEN_COUNT:-unknown} — cannot be closed until reboot"
+            fi
         fi
-    fi
 
-    # 5. Open under a free name.
-    pick_mapper_name || return 1
-    if [[ ! -e "${MAPPER_DIR}/${MAPPER_USED}" ]]; then
-        local open_argv=(cryptsetup open "$DEVICE" "$MAPPER_USED")
-        if keyfile_is_usable; then
-            open_argv+=(--key-file "$KEYFILE")
+        # 5d. Open under a free name.
+        pick_mapper_name || return 1
+        if [[ ! -e "${MAPPER_DIR}/${MAPPER_USED}" ]]; then
+            local open_argv=(cryptsetup open "$DEVICE" "$MAPPER_USED")
+            if keyfile_is_usable; then
+                open_argv+=(--key-file "$KEYFILE")
+            fi
+            if ! "${open_argv[@]}"; then
+                HEAL_REASON="cryptsetup open failed for ${DEVICE} as ${MAPPER_USED}"
+                return 1
+            fi
+            opened_here=1
         fi
-        if ! "${open_argv[@]}"; then
-            HEAL_REASON="cryptsetup open failed for ${DEVICE} as ${MAPPER_USED}"
-            return 1
-        fi
-        opened_here=1
     fi
 
     # 6. The mapping fsck is about to touch must be unreferenced, and that is

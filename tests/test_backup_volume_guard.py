@@ -959,7 +959,7 @@ def test_our_own_corpse_with_no_deps_at_all_is_still_ours_to_unmount(box: Box):
 
 
 @pytest.mark.parametrize("suffix", ["-1", "-9", "-b"])
-def test_the_mapper_from_a_previous_heal_is_still_ours_to_unmount(box: Box, suffix: str):
+def test_the_mapper_from_a_previous_heal_is_the_one_reused(box: Box, suffix: str):
     """The control for the refusal above, and the case it must not break.
 
     After one heal the mount's source is ``<name>-1``, not ``<name>`` — and a
@@ -968,20 +968,96 @@ def test_the_mapper_from_a_previous_heal_is_still_ours_to_unmount(box: Box, suff
     right now, from the 2026-08-27 recovery. A check that only accepted the
     base name, or only ``-[1-9]``, would refuse to heal the very box it was
     written for — inert on arrival, and only discoverable during an outage.
+
+    And unmounting it is not enough: the mapping under that name is the
+    device's OWN, so it is the one to put back. Looking only at the bare
+    ``robothor-backup`` — a corpse here — meant opening a SECOND LUKS mapping
+    over a disk that already had a live one and abandoning the live node. So
+    this asserts which path ran, not merely that the unmount happened.
     """
     box.plug_in()
-    box.stale_mapper()
+    box.stale_mapper()  # the bare name exists and is NOT the live mapping
+    box.mapper_node(f"{MAPPER}{suffix}")
     result = box.run(
         FAKE_CHECK_RCS="1 0",
         FAKE_MOUNT_SOURCE=str(box.mapper_dir / f"{MAPPER}{suffix}"),
-        FAKE_DM_DEPS="8:16",
+        FAKE_DM_DEPS_MAP=f"{MAPPER}=8:16 {MAPPER}{suffix}=8:17",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="0",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran(f"umount -l {box.mount}"), f"refused its own mapper:\n{box.argv}"
+    assert box.ran(f"mount {box.mapper_dir / (MAPPER + suffix)} {box.mount}"), (
+        f"did not put the live mapping back under its own name:\n{box.argv}"
+    )
+    assert box.ran("cryptsetup open") == [], (
+        f"opened a second mapping over a device that already had a live one:"
+        f"\n{box.argv}"
+    )
+    assert box.ran("cryptsetup close") == [], f"closed a mapping it only borrowed:\n{box.argv}"
+    assert len(box.pages) == 1
+    assert "auto-recovered" in box.pages[0]
+    assert f"remapped as {MAPPER}{suffix})" in box.pages[0], box.pages[0]
+
+
+def test_a_live_mapper_under_another_name_is_reused_rather_than_stacked(box: Box):
+    """Nothing is mounted from the live node — but it is still the live node.
+
+    The bare ``robothor-backup`` at the mountpoint is a corpse (its deps do not
+    name the device) while a previous heal's ``robothor-backup-1`` IS backed by
+    the device that came back. Deciding by name, the guard saw only the bare
+    node, called it stale, and opened a THIRD LUKS mapping over a disk that
+    already had a live one — burning a name and abandoning the node it could
+    simply have mounted. The reuse question is "which node is backed by the
+    device", and the answer needs no key.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    box.mapper_node(f"{MAPPER}-1")
+    box.no_keyfile()  # a reuse needs no reopen, so it must not need a key
+    result = box.run(
+        FAKE_CHECK_RCS="1 0",
+        FAKE_DM_DEPS_MAP=f"{MAPPER}=8:16 {MAPPER}-1=8:17",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="0",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran(f"umount -l {box.mount}"), f"never released the corpse:\n{box.argv}"
+    assert box.ran(f"mount {box.mapper_dir / (MAPPER + '-1')} {box.mount}"), (
+        f"never mounted the mapping that was already the device's own:\n{box.argv}"
+    )
+    assert box.ran("cryptsetup open") == [], (
+        f"stacked a second mapping on a device that already had a live one:\n{box.argv}"
+    )
+    assert len(box.pages) == 1
+    assert f"remapped as {MAPPER}-1)" in box.pages[0], box.pages[0]
+
+
+def test_a_held_live_mapper_is_refused_rather_than_stacked(box: Box):
+    """The same question, answered "yes, and something holds it".
+
+    A live mapping with an opener is still a live mapping: opening a second
+    LUKS mapping over that disk is exactly what must never happen. The guard
+    stops and says who to look for, and the next tick mounts it once the holder
+    lets go.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    box.mapper_node(f"{MAPPER}-1")
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_DM_DEPS_MAP=f"{MAPPER}=8:16 {MAPPER}-1=8:17",
         FAKE_MAJMIN="8:17",
         FAKE_DM_OPEN="1",
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert box.ran(f"umount -l {box.mount}"), f"refused its own mapper:\n{box.argv}"
+    assert box.ran("cryptsetup open") == [], (
+        f"stacked a mapping over a device whose live one was merely busy:\n{box.argv}"
+    )
+    assert box.ran("fsck.ext4") == []
+    assert box.ran("mount") == []
     assert len(box.pages) == 1
-    assert "auto-recovered" in box.pages[0]
+    assert f"mapper {MAPPER}-1 still has 1 opener(s) after umount -l" in box.pages[0]
 
 
 def test_a_mapping_this_run_opened_is_never_second_guessed_by_an_open_count(box: Box):
