@@ -194,6 +194,29 @@ journalctl -u robothor-guardrail-watch.service -n 100 --no-pager
 sudo systemctl start robothor-guardrail-watch.service   # run it by hand and read the output
 ```
 
+## The S2/S6 database hop: a role is not an OS account
+
+S2 (heartbeat delivery) and S6 (LLM availability) are the only two SLOs that
+query the database. `robothor-slo.service` runs as **root**, and `pg_hba.conf`
+uses peer auth on the Unix socket — pg_ident maps an OS **account** onto a
+database **role**, and root is not in that map. So the probe hops first:
+`runuser -u "$OS_USER" -- env PGUSER="$DB_ROLE" ... psql`.
+
+Those two names are deliberately kept apart:
+
+| Variable | Names | Read from |
+|---|---|---|
+| `PGUSER` (set by the unit) or `ROBOTHOR_DB_USER` | the database **role** `psql` connects as | pg_ident's mapping target |
+| `ROBOTHOR_SLO_OS_USER` (falls back to `ROBOTHOR_SERVICE_USER`) | the OS **account** `runuser -u` hops to | pg_ident's mapping source |
+| `ROBOTHOR_SLO_DB` / `PGDATABASE` / `ROBOTHOR_DB_NAME` (default `robothor_memory`) | the database queried | — |
+
+Rendering the role into `ROBOTHOR_SLO_OS_USER` instead of an OS account fails
+**every** run with `runuser: user <role> does not exist`: S2 and S6 come back
+`UNEVALUATED` while the unit still exits non-zero, paging hourly via
+`OnFailure=` while measuring nothing. With no OS account configured at all,
+the probe reports `UNEVALUATED`, naming the missing variable and the role it
+could not map — never silence, and never a false `OK`.
+
 ## The restore drill
 
 `robothor-restore-drill.timer` runs `scripts/restore-drill.sh` monthly: it
@@ -273,7 +296,9 @@ export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/l
 `ROBOTHOR_SLO_DB_CHECKS=0` mute below: it exists so a test can point a script
 at its fakes, nothing on the box sets it, and it must never appear in
 `/etc/robothor/robothor.env`. Setting it in production hands a root-run script
-a directory of someone else's choosing, first.
+a directory of someone else's choosing, first. `scripts/flag_audit.py` lists it
+in `DEBUG_ENV_KEYS`, so if it ever shows up on a live process the audit flags
+it under `DEBUG-ENV` instead of the leak going unnoticed.
 
 Every other tool has a named seam (`ROBOTHOR_SLO_ID_CMD`,
 `ROBOTHOR_SLO_RUNUSER_CMD`, `ROBOTHOR_SLO_PSQL_CMD`, …). Point the seam at an

@@ -72,7 +72,20 @@ Telegram's notification preview, legible without opening the message.
 | `*nats*` | The message fabric is down — agent mail and federation traffic are dropping, not queuing | `docs/runbooks/FEDERATION.md` |
 | `robothor-vision.service`, `robothor-vision*` | Vision capture is down — no camera events; presence and face recognition are blind | the vision journal |
 | `*liveness*` | The liveness watchdog itself is down — nothing is checking whether the engine is alive | this runbook, "Liveness watchdog" below |
+| `slo:backup-freshness`\* | At least one backup tier (local dump / offsite / basebackup) is older than its budget; the body names every breached tier and its age | `docs/runbooks/SLOS.md` (S4) |
+| `slo:llm-availability`\* | 5+ runs in the last hour ended "All models failed" — every model shares one credential pool, check it before assuming a provider outage | `docs/runbooks/SLOS.md` (S6) |
+| `slo:guardrail-watch-stale`\* | The daily guardrail-watch report has stopped completing — drift checks, drop-in checks and instance manifest validation may not be running at all | `docs/runbooks/SLOS.md` (S8) |
+| `slo:liveness-stale`\* | The liveness watchdog itself has stopped — its timer stopped firing, or its last run did not succeed | `docs/runbooks/SLOS.md` (S5) |
+| `backup-volume-down`\* | Nightly dump, offsite refresh and base backup/WAL prune are paused; WAL offsite replication of new segments keeps running | `docs/runbooks/BACKUP_VOLUME_GUARD.md` |
+| `backup-volume-auto-recovered-N`\* | The volume dropped and the guard remapped it back on its own — the Nth such drop since boot | `docs/runbooks/BACKUP_VOLUME_GUARD.md` |
+| `backup-volume-recovered`\* | The volume is healthy again, but the guard did not heal it — the device came back, or it was fixed by hand | `docs/runbooks/BACKUP_VOLUME_GUARD.md` |
+| `alert-spool-stuck`\* | The pager's own delivery queue is not moving — every page behind the stuck one is late, not lost | "When you will hear that the spool is stuck" below |
 | anything else | `(no consequence mapped — add one in send_failure_alert.sh)` | add a case; an unmapped page is a page nobody can triage from the preview |
+
+\* Raised with the sender's **two-argument form** (`<key> "<body>"`), so
+`consequence_for()` never sees the key — there is no unit by that name for it
+to match. The caller's body carries the consequence directly; the line above
+quotes it for reference, it is not a `consequence_for()` arm.
 
 Three things about that table are load-bearing:
 

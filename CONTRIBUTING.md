@@ -126,6 +126,13 @@ pytest
 pytest robothor/memory/tests/ -v
 ```
 
+The pre-commit expression above does **not** exclude `@pytest.mark.integration`
+— those still run against a real DB/Redis by default. Some, like the
+restore-drill's live-DB tests, connect to an actual cluster rather than a
+mocked one. Add `and not integration` (`pytest -m "not slow and not llm and
+not e2e and not integration"`) to stay off the operator's cluster entirely, or
+run `pytest -m integration` on its own to include only those tests.
+
 ## Pull Request Process
 
 1. **Fork** the repo and create your branch from `main`

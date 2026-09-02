@@ -17,6 +17,14 @@ though `psql` exited 0. Run it by hand with
 `sudo systemctl start robothor-restore-drill.service`, or read
 [`SLOS.md`](SLOS.md) for how it fits alongside the backup-freshness dead-man.
 
+Before any of that, the script refuses to run at all against an unsafe scratch
+name: `ROBOTHOR_RESTORE_DRILL_DB` (default `robothor_restore_drill`) must
+contain the substring `drill`, and it must not equal the live database
+(`ROBOTHOR_DB_NAME`), `postgres`, `template0` or `template1`. The only
+destructive verb in the script is `dropdb`, so this check runs before a
+connection is opened and before the `EXIT` trap that calls `dropdb` is even
+installed.
+
 Before it creates anything, the script resolves every tool it needs
 (`psql`, `createdb`, `dropdb`, `timeout`, `rclone` when a remote is set) with
 `command -v` and aborts naming the ones that are missing. It resolves them on a
