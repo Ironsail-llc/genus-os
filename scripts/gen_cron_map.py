@@ -56,7 +56,13 @@ _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def default_workspace() -> Path:
-    return Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
+    # `or`, not a default argument: a default is evaluated on every call, so
+    # Path.home() ran even when ROBOTHOR_WORKSPACE said where the workspace is
+    # — and under a unit with no HOME and no passwd entry for the service user
+    # it raises. It also makes `ROBOTHOR_WORKSPACE=` in an env file mean the
+    # current directory instead of "unset".
+    workspace = os.environ.get("ROBOTHOR_WORKSPACE")
+    return Path(workspace) if workspace else Path.home() / "robothor"
 
 
 # ── crontab ──────────────────────────────────────────────────────────────────

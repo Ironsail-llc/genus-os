@@ -314,3 +314,40 @@ def test_no_instance_data_in_the_generator():
     text = GEN.read_text()
     assert "/home/" not in text
     assert "ROBOTHOR_WORKSPACE" in text
+
+
+# ── the workspace default ────────────────────────────────────────────────────
+
+
+def test_an_explicit_workspace_does_not_need_a_resolvable_home(monkeypatch):
+    """The fallback must not be evaluated when it is not the answer.
+
+    ``Path.home()`` sat inside ``os.environ.get(..., Path.home() / "robothor")``
+    — an argument, so Python computes it on every call, ROBOTHOR_WORKSPACE set
+    or not. Under a systemd unit with no HOME and no passwd entry for the
+    service user that raises RuntimeError, and the generator dies on a box
+    that had told it exactly where the workspace is.
+    """
+
+    def _no_home() -> Path:
+        raise RuntimeError("Could not determine home directory")
+
+    monkeypatch.setattr(Path, "home", staticmethod(_no_home))
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", "/srv/genus")
+    assert gcm.default_workspace() == Path("/srv/genus")
+
+
+def test_an_empty_workspace_variable_falls_back_rather_than_returning_nothing(
+    monkeypatch,
+):
+    """`ROBOTHOR_WORKSPACE=` in an env file is unset, not "the root of the
+    filesystem" — Path("") is Path(".")."""
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", "")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/srv/alice")))
+    assert gcm.default_workspace() == Path("/srv/alice/robothor")
+
+
+def test_the_fallback_is_still_the_home_workspace(monkeypatch):
+    monkeypatch.delenv("ROBOTHOR_WORKSPACE", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: Path("/srv/alice")))
+    assert gcm.default_workspace() == Path("/srv/alice/robothor")
