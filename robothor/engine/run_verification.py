@@ -609,8 +609,14 @@ def _subject_is_someone_else(before: str) -> bool:
         return False
     stripped = tail.rstrip()
     # Drop a trailing adverb so "the system formally recorded it" still reads
-    # its subject as `system`.
-    stripped = re.sub(r"\s+\w+ly$", "", stripped)
+    # its subject as `system`. Split on the last space rather than matching
+    # `\s+\w+ly$`: two unbounded quantifiers in sequence are the shape CodeQL
+    # flags as polynomial backtracking, and the tail this runs on is bounded
+    # only by _SUBJECT_LOOKBACK today — the bound is a caller's property, not
+    # the pattern's, and callers move.
+    head, sep, last = stripped.rpartition(" ")
+    if sep and last.isalpha() and last.endswith("ly"):
+        stripped = head
     return bool(
         _PROPER_SUBJECT_RE.search(stripped)
         or _THIRD_PARTY_SUBJECT_RE.search(stripped[-_SUBJECT_LOOKBACK:])
