@@ -115,7 +115,16 @@ ASSIGNED_CREDENTIAL_PATTERN = re.compile(
     # Without the latter the `:` reads as the assignment, the type name
     # fails the length test, and the real `=` is never reached — so every
     # typed codebase is invisible to this detector.
-    r"[\"']?\s*(?::\s*[^=\n]{1,60})?\s*[=:]\s*"
+    #
+    # The annotation may not cross a quote or a brace. A type name never
+    # contains either, and allowing them let the branch skip over a nested
+    # JSON object and adopt a quoted token from INSIDE it as the value:
+    # `"access-token": {"type": "string", "format": "opaque-bearer"}` — a
+    # schema declaring a field, with no credential anywhere — read as
+    # `access-token = opaque-bearer`. That is the shape `list_tasks` returns
+    # for any task about a connector's auth, and it hard-blocked 14 runs in
+    # 48 hours. A field NAMED after a credential is not a credential.
+    r"[\"']?\s*(?::\s*[^=\n\"'{}]{1,60})?\s*[=:]\s*"
     r"(?P<quote>[\"']?)"
     r"(?P<val>[^\s\"',;)}\]]{8,128})"
     r"(?P=quote)",
