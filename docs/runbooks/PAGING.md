@@ -7,16 +7,28 @@ Telegram via `scripts/send_failure_alert.sh`.
 ## Install on an instance
 
 ```bash
-# 1. Alert template unit (adjust script path to your workspace):
-sudo cp infra/systemd/robothor-alert@.service /etc/systemd/system/
-sudo $EDITOR /etc/systemd/system/robothor-alert@.service   # set ExecStart path
+# 1. Render and install every robothor-* unit, robothor-alert@.service included.
+#    Do NOT hand-copy it: scripts/install-units.sh runs each template through
+#    scripts/render-unit.sh (which refuses an unexpanded placeholder or a %h),
+#    gates the .service files on `systemd-analyze verify`, and installs only if
+#    every one of them rendered. A hand-edited copy in /etc is the drift the
+#    installer exists to end — it is why template fixes in the repo never
+#    reached the box.
+sudo scripts/install-units.sh
+sudo systemctl daemon-reload
 
 # 2. Wire the critical units:
 sudo scripts/install_onfailure_alerts.sh \
     robothor-engine.service robothor-bridge.service robothor-orchestrator.service \
-    robothor-nats.service robothor-delphi-engine.service
+    robothor-nats.service
 sudo systemctl daemon-reload
 ```
+
+`install-units.sh` needs `ROBOTHOR_WORKSPACE` and `ROBOTHOR_SERVICE_USER`; it
+resolves anything unset from `/etc/robothor/robothor.env` (override with
+`--env-file`). It is idempotent — a second run reports `unchanged` — and it
+does not reload or restart anything, so the `daemon-reload` above is yours to
+run.
 
 ## Verify
 
@@ -25,8 +37,59 @@ sudo systemctl start robothor-alert@manual-test
 # → a "🔴 manual-test FAILED" style message should arrive on Telegram
 ```
 
-Scope deliberately small (~6 core units) to avoid alert fatigue; timers'
-oneshot services can be added case-by-case once the baseline is quiet.
+Scope deliberately small (a handful of core units) to avoid alert fatigue;
+timers' oneshot services can be added case-by-case once the baseline is quiet.
+Add any instance-land units of your own to the same command — the installer
+only ships `robothor-*` templates, but `install_onfailure_alerts.sh` will wire
+`OnFailure=` onto whatever you name.
+
+## What a page means
+
+Line 2 of every composed page is the **consequence**: what the operator has
+actually lost, not what systemd noticed. It exists because
+`🔴 <unit> FAILED on <host>` is a fact about systemd and nothing else — ~50 of
+those were scrolled past while every backup path was down, because the text
+gave no way to tell "a log shipper is a few minutes behind" from "there is no
+restorable copy of the database tonight". It sits on line 2 so it lands inside
+Telegram's notification preview, legible without opening the message.
+
+`consequence_for()` in `scripts/send_failure_alert.sh` is the whole map:
+
+| Key matches | Consequence line | First thing to check |
+|---|---|---|
+| `*wal-offsite*` | PITR recovery point aging past 15 min — WAL has stopped shipping; last good ship: *(marker)* | `docs/runbooks/PITR.md`; `journalctl -u robothor-wal-offsite` |
+| `*backup-local*` | Nightly dump did NOT happen; newest good: *(marker)*; +24h dump-tier RPO/night | the backup volume — `docs/runbooks/BACKUP_VOLUME_GUARD.md` |
+| `*backup-offsite*`, `*offsite-backup*` | Offsite NOT refreshed; a box loss restores from *(marker)* | `docs/runbooks/OFFSITE_BACKUP.md`; rclone remote reachable? |
+| `*basebackup*` | No fresh base backup; PITR must replay every WAL since *(marker)* — restore time growing nightly | `docs/runbooks/PITR.md` |
+| `*backup-verify*` | Backups are UNVERIFIED — a corrupt archive would now go unnoticed until a restore is attempted | `docs/runbooks/OFFSITE_BACKUP.md` |
+| `robothor-engine.service` | Agents are DOWN — no scheduled runs, no heartbeat, no delivery until this is back | the engine journal; the liveness watchdog below |
+| `*bridge*` | Inbound/outbound channel bridge is down — messages to and from the operator are not moving | the bridge journal |
+| `*orchestrator*` | Workflows are not being scheduled or advanced; approvals and queued work sit untouched | the orchestrator journal |
+| `*nats*` | The message fabric is down — agent mail and federation traffic are dropping, not queuing | `docs/runbooks/FEDERATION.md` |
+| `robothor-vision.service`, `robothor-vision*` | Vision capture is down — no camera events; presence and face recognition are blind | the vision journal |
+| `*liveness*` | The liveness watchdog itself is down — nothing is checking whether the engine is alive | this runbook, "Liveness watchdog" below |
+| anything else | `(no consequence mapped — add one in send_failure_alert.sh)` | add a case; an unmapped page is a page nobody can triage from the preview |
+
+Three things about that table are load-bearing:
+
+- **Matched as substrings, first match wins.** The same condition arrives under
+  three spellings — a unit (`robothor-wal-offsite.service`), a cron pseudo-unit
+  (`cron: ... wal-offsite.sh (exit 1)`), and a script's own label
+  (`offsite-backup: ...`) — so the specific patterns are listed before the
+  general ones and a new case must go in the right place.
+- **`engine` and `vision` are anchored, not bare substrings.** `*engine*`
+  matched `search-engine` and `*vision*` matched `provision` and `supervision`,
+  so both are pinned to the real unit name instead.
+- **The marker is read from `/var/lib/robothor/backup-state` on NVMe**, never
+  from the volume that just failed
+  (`ROBOTHOR_BACKUP_STATE_DIR`; `scripts/backup-state.sh`). An absent marker
+  renders as `unknown (no successful run recorded)` — deliberately, because an
+  empty string where a timestamp belongs reads as "recent" and means the
+  opposite.
+
+The consequence line is only added to the **composed** page. A two-argument
+call supplies its own body and gets neither a headline nor a consequence — see
+below.
 
 ## Why the alert unit has no systemd start limit
 
@@ -70,6 +133,42 @@ to the operator's phone.
 The cooldown still keys on `<key>`, so pick a stable one per condition: pages
 for the same key inside `ROBOTHOR_ALERT_COOLDOWN_SECONDS` (1h) are suppressed,
 and a key that varies per run defeats that.
+
+### The cooldown falls back when the caller is not root
+
+The stamp files live in `ROBOTHOR_ALERT_STATE_DIR`
+(`/run/robothor/alert-cooldown`), which the systemd units create `root:root`
+`0755`. Cron runs as the operator's own user, so for every cron-driven page the
+`touch` failed silently — it is `|| true`, because a broken stamp must never
+block a real page — and the next run re-read an empty state dir and paged
+again. A crontab entry pointing at a deleted script paged once a day for 129
+days, and the backup storm paged with no dedup at all.
+
+So when `ROBOTHOR_ALERT_STATE_DIR` is not writable, **both** the read and the
+stamp move to a per-uid directory — moving only the stamp would leave dedup
+half-wired, reading a directory nothing ever writes:
+
+| Order | Fallback |
+|---|---|
+| 1 | `ROBOTHOR_ALERT_FALLBACK_STATE_DIR`, if set |
+| 2 | `$XDG_RUNTIME_DIR/robothor-alert-cooldown` when that dir exists and is writable — tmpfs, per-user, and gone on logout/reboot like `/run/robothor` itself |
+| 3 | `/tmp/robothor-alert-cooldown-$(id -u)` |
+
+It is created `0700`, and then **re-checked**: `mkdir -p` succeeds silently on
+an existing directory, does not chmod one, and follows a symlink, so a local
+user who pre-creates that exact path could plant stamps and suppress a real
+page. If the leaf is not a real directory owned by this user, **dedup is
+disabled for that send** rather than the send being aborted — a page must never
+be suppressed by an untrusted directory, and never dropped either. Both
+outcomes are named on stderr (`using cooldown state dir ...`, or
+`... dedup disabled for this send`), because a cooldown that moves silently is
+one nobody can find when they go looking for why a page did not arrive.
+
+Root's path is untouched: root can write `/run/robothor/alert-cooldown`, so
+none of this fires.
+
+**A test that can reach the pager must pin the cooldown dirs as well as the
+spool** — see the end of the spool section below.
 
 The form exists for the backup volume guard, whose `backup-volume-degraded` /
 `backup-volume-recovered` notices are the case that broke the composed shape:
@@ -220,16 +319,33 @@ ls -l /var/lib/robothor/alert-spool/*.attempts # how hard it has tried, per page
 ls -l /var/lib/robothor/alert-spool/poison/    # pages already given up on
 ```
 
+Read `curl_rc` **first**. It is the field that says whether the message or the
+network is the problem, and on this platform the common answer is the network:
+one 2026-08-31 window put 63 `curl_rc=6` lines in the journal and not one of
+them was a page anybody needed to act on.
+
+- `curl_rc=6` — DNS (`Could not resolve host: api.telegram.org`). **The
+  overwhelmingly common case, and not an alerting fault at all**: the spool is
+  doing exactly its job, the pages are late rather than lost, and there is
+  nothing to fix but the network. Do not rotate a token over this.
+- `curl_rc=0` with an HTTP status — curl reached Telegram and Telegram
+  answered. Now the status matters:
 - `http_status=401` or `403` — the bot token is wrong or revoked. Check
   `ROBOTHOR_TELEGRAM_BOT_TOKEN` in `/run/robothor/secrets.env`, rotate it with
   BotFather, re-encrypt, `scripts/decrypt-secrets.sh`, then
   `sudo scripts/send_failure_alert.sh --drain`. The marker clears itself on
   the first delivered page.
-- `curl_rc=6` — DNS. The spool is doing its job; nothing to fix but the
-  network.
 - `http_status=400` on page after page — the pages themselves are being
   refused; they are in `poison/`, and reading one shows what Telegram would
-  not take.
+  not take. The usual cause is a body that is not valid UTF-8: the journal
+  tail is sliced by **bytes** (`tail -c`, `ROBOTHOR_ALERT_JOURNAL_TAIL_BYTES`,
+  default 500) and journal lines carry arbitrary bytes of their own. The
+  sender now takes a little more than the budget, drops what does not
+  round-trip through `iconv -c -f utf-8 -t utf-8`, cuts to the real budget,
+  then scrubs the new boundary too — the second cut can split a character just
+  as the first one could. Without `iconv` (a from-scratch container) it falls
+  back to stripping to ASCII: losing the em dashes beats losing the page. A
+  400 here means something got past that, so read the file.
 - A marker with an EMPTY spool means nothing could clear it — almost always a
   `.stuck` owned by the other account in the 1777 dir. The drain says so in
   the journal (`could not clear ... (not owner)`); remove it as that user.
