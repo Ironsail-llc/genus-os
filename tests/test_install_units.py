@@ -257,9 +257,57 @@ EXPECTED_INSTALLED = [
     "robothor-liveness.timer",
     "robothor-bench-rotation.service",
     "robothor-bench-rotation.timer",
+    "robothor-engine.service.d/boot-guard.conf",
     "robothor-engine.service.d/hardening.conf",
+    "robothor-engine.service.d/onfailure.conf",
+    "robothor-engine.service.d/restart-forever.conf",
     "robothor-engine.service.d/upgrade-rip-flags.conf",
+    "robothor-engine.service.d/zz-sandbox.conf",
 ]
+
+#: The engine drop-in directory is a closed set. It is the one place the
+#: production guardrail posture lives, and the live copy had accumulated
+#: twelve `.bak-*`/`.pre-*` files plus two drop-ins (onfailure,
+#: restart-forever) that existed ONLY on the box — installed by hand, mirrored
+#: nowhere, and therefore not reproducible on a rebuild. Pinning the set here
+#: means a new drop-in has to be added deliberately, in a reviewed diff.
+EXPECTED_ENGINE_DROPINS = {
+    "boot-guard.conf",
+    "hardening.conf",
+    "onfailure.conf",
+    "restart-forever.conf",
+    "upgrade-rip-flags.conf",
+    "zz-sandbox.conf",
+}
+
+
+def test_engine_dropin_dir_is_a_closed_set():
+    """Exactly six .conf mirrors, no more and no fewer."""
+    present = {p.name for p in (UNIT_DIR / "robothor-engine.service.d").glob("*.conf")}
+    assert present == EXPECTED_ENGINE_DROPINS
+
+
+def test_engine_dropin_dir_carries_no_backup_files():
+    """`.bak-*`/`.pre-*` copies are how the live directory became unreadable;
+    they must never be mirrored into the repo."""
+    strays = [
+        p.name
+        for p in (UNIT_DIR / "robothor-engine.service.d").iterdir()
+        if p.is_file() and p.suffix != ".conf"
+    ]
+    assert not strays, f"backup/scratch files in the drop-in mirror: {strays}"
+
+
+def test_onfailure_dropin_matches_its_other_installer_byte_for_byte():
+    """Two installers write this file — scripts/install_onfailure_alerts.sh
+    (for every paged unit) and scripts/install-units.sh (for the engine, from
+    this mirror). If they disagree by one byte they overwrite each other in
+    turn and the drift check flaps forever, so the mirror is pinned to the
+    generator's heredoc."""
+    generator = (REPO_ROOT / "scripts" / "install_onfailure_alerts.sh").read_text()
+    body = generator.split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0] + "\n"
+    mirror = (UNIT_DIR / "robothor-engine.service.d" / "onfailure.conf").read_text()
+    assert mirror == body
 
 
 def test_installs_rendered_units_into_root(tmp_path: Path):
