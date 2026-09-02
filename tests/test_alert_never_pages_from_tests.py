@@ -85,19 +85,199 @@ REQUIRED_PINS = (
 )
 
 
+# subprocess entry points that take env=. Declared here (rather than lower,
+# where _EnvPinAudit uses it too) because argv-invocation detection needs it
+# as well, and a second hand-typed copy is how the two drift apart.
+_SUBPROCESS_CALLS = ("run", "Popen", "check_output", "check_call", "call")
+
+
+def _call_name(func: ast.expr) -> str | None:
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return None
+
+
+def _subprocess_argv_nodes(tree: ast.Module) -> list[ast.expr]:
+    """The argv/command expression of every subprocess-launching call in a
+    parsed file — ``subprocess.run(THIS, ...)``, ``Popen(THIS, ...)``, or the
+    ``args=`` keyword."""
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _call_name(node.func) not in _SUBPROCESS_CALLS:
+            continue
+        argv = node.args[0] if node.args else None
+        if argv is None:
+            argv = next((kw.value for kw in node.keywords if kw.arg == "args"), None)
+        if argv is not None:
+            out.append(argv)
+    return out
+
+
+def _literal_strings(node: ast.expr | None, tree: ast.Module, seen: frozenset = frozenset()) -> set[str]:
+    """Every string literal an expression can possibly evaluate to.
+
+    Not full symbolic execution — good enough to see through the shapes this
+    repo's tests actually use: ``str(SCRIPT)`` / ``str(self.SCRIPT)`` where
+    ``SCRIPT`` is a module- or class-level ``REPO_ROOT / "scripts" / "x.sh"``,
+    an f-string, or a local ``argv = [...]`` referenced by name at the call
+    site. Unresolvable pieces (an unannotated function parameter, a dynamic
+    join) contribute nothing rather than raising — this only ever needs to
+    prove a script name IS reachable, never that one is absent.
+    """
+    if node is None:
+        return set()
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {node.value}
+    if isinstance(node, ast.JoinedStr):
+        out: set[str] = set()
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                out.add(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                out |= _literal_strings(value.value, tree, seen)
+        return out
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _literal_strings(node.left, tree, seen) | _literal_strings(node.right, tree, seen)
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        out = set()
+        for elt in node.elts:
+            out |= _literal_strings(elt, tree, seen)
+        return out
+    if isinstance(node, ast.Starred):
+        return _literal_strings(node.value, tree, seen)
+    if isinstance(node, ast.Call):
+        out = set()
+        for arg in node.args:
+            out |= _literal_strings(arg, tree, seen)
+        return out
+    if isinstance(node, ast.Name):
+        key = ("name", node.id)
+        if key in seen:
+            return set()
+        seen = seen | {key}
+        out = set()
+        for assign in ast.walk(tree):
+            if isinstance(assign, ast.Assign):
+                for target in assign.targets:
+                    if isinstance(target, ast.Name) and target.id == node.id:
+                        out |= _literal_strings(assign.value, tree, seen)
+        return out
+    if isinstance(node, ast.Attribute):
+        key = ("attr", node.attr)
+        if key in seen:
+            return set()
+        seen = seen | {key}
+        out = set()
+        for assign in ast.walk(tree):
+            if isinstance(assign, ast.Assign):
+                for target in assign.targets:
+                    # self.SCRIPT = ... (instance attribute) or a class-body
+                    # SCRIPT = ... (accessed elsewhere as self.SCRIPT).
+                    if isinstance(target, ast.Attribute) and target.attr == node.attr:
+                        out |= _literal_strings(assign.value, tree, seen)
+                    if isinstance(target, ast.Name) and target.id == node.attr:
+                        out |= _literal_strings(assign.value, tree, seen)
+        return out
+    return set()
+
+
+def invokes_a_pager_script(text: str) -> bool:
+    """True only when a real ``subprocess``/``Popen`` call's argv names one of
+    the pager scripts — never a comment, a docstring, an assertion on a
+    script's own stdout, or fixture data (a crontab template, an installed
+    file's basename) that merely happens to contain the name.
+
+    ``test_gen_cron_map.py`` docs the ``$W`` cron-wrapper convention in a
+    CRONTAB fixture string and never runs cron-wrapper.sh; ``test_instance_
+    doctor.py`` asserts the doctor's stdout NAMES a drifted
+    ``robothor-thermal-guard.sh`` file and never runs it. A whole-file
+    substring scan cannot tell either apart from a test that actually drives
+    the script — see test_the_scan_ignores_a_script_name_mentioned_only_in_data
+    below.
+    """
+    if "subprocess" not in text:
+        return False
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return False
+    for argv in _subprocess_argv_nodes(tree):
+        if any(re.search(PAGER_SCRIPTS, s) for s in _literal_strings(argv, tree)):
+            return True
+    return False
+
+
 def tests_that_can_reach_the_pager() -> list[tuple[Path, str]]:
     """Test files that RUN something able to page — not ones that merely read
     a script's source (tests/test_cold_boot.py asserts on the sender's text
-    and executes nothing)."""
+    and executes nothing), and not ones that merely NAME a pager script in a
+    docstring, a comment, fixture data, or an assertion on some other
+    script's output."""
     found = []
     for path in sorted((REPO / "tests").rglob("test_*.py")):
         text = path.read_text(errors="ignore")
         if "subprocess" not in text:
             continue
-        if not re.search(PAGER_SCRIPTS, text) and "ROBOTHOR_TELEGRAM_BOT_TOKEN" not in text:
+        if not invokes_a_pager_script(text) and "ROBOTHOR_TELEGRAM_BOT_TOKEN" not in text:
             continue
         found.append((path, text))
     return found
+
+
+_MENTION_ONLY_FIXTURE = '''
+import subprocess
+
+# A crontab fixture that documents the $W convention — this is DATA, not an
+# invocation. The real script this test drives is "echo".
+CRONTAB = """
+W=/srv/genus/scripts/cron-wrapper.sh
+0 4 * * * $W scripts/present.sh
+"""
+
+
+def test_reads_a_crontab_fixture():
+    result = subprocess.run(["echo", "hello"], capture_output=True, text=True)
+    assert result.stdout.strip() == "hello"
+    assert "cron-wrapper.sh" in CRONTAB
+'''
+
+_REAL_INVOCATION_VIA_VARIABLE_FIXTURE = '''
+import subprocess
+from pathlib import Path
+
+REPO_ROOT = Path("/repo")
+SCRIPT = REPO_ROOT / "scripts" / "send_failure_alert.sh"
+
+
+def run(unit):
+    argv = ["bash", str(SCRIPT), unit]
+    return subprocess.run(argv, capture_output=True, text=True)
+'''
+
+
+def test_the_scan_ignores_a_script_name_mentioned_only_in_data_or_prose():
+    """The shape that made test_gen_cron_map.py and test_instance_doctor.py
+    false positives: a pager script's name inside a crontab fixture string or
+    an assertion on another script's stdout, never passed to subprocess."""
+    assert not invokes_a_pager_script(_MENTION_ONLY_FIXTURE), (
+        "a pager script name inside fixture data or a docstring must not "
+        "count as a real invocation"
+    )
+
+
+def test_the_scan_still_finds_a_real_invocation_reached_through_a_variable():
+    """The shape every real offender actually uses: a module-level SCRIPT
+    (or self.SCRIPT) built from REPO_ROOT / "scripts" / "<name>.sh", passed to
+    subprocess via str(SCRIPT) inside a local argv list. Narrowing the scan
+    must not blind it to this — the ordinary way these tests drive a script."""
+    assert invokes_a_pager_script(_REAL_INVOCATION_VIA_VARIABLE_FIXTURE), (
+        "a subprocess call whose argv names a pager script through a "
+        "variable must still be treated as reaching the pager"
+    )
 
 
 def test_every_test_that_can_page_pins_the_spool_and_the_state_dirs():
@@ -138,10 +318,7 @@ def test_no_test_invokes_the_pager_against_the_real_api():
     offenders = []
     for path in (REPO / "tests").rglob("test_*.py"):
         text = path.read_text(errors="ignore")
-        drives_pager = re.search(
-            r"backup-offsite\.sh|send_failure_alert\.sh|cron-wrapper\.sh", text
-        )
-        if not drives_pager:
+        if not invokes_a_pager_script(text):
             continue
         neutralised = (
             "ROBOTHOR_TELEGRAM_API_BASE" in text
@@ -196,18 +373,6 @@ REQUIRED_CALL_PINS = REQUIRED_PINS + (
     # api.telegram.org.
     "ROBOTHOR_TELEGRAM_API_BASE",
 )
-
-# subprocess entry points that take env=.
-_SUBPROCESS_CALLS = ("run", "Popen", "check_output", "check_call", "call")
-
-
-def _call_name(func: ast.expr) -> str | None:
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    if isinstance(func, ast.Name):
-        return func.id
-    return None
-
 
 class _EnvPinAudit:
     """Resolve the ``env=`` expression of every subprocess call in one file.
