@@ -38,7 +38,11 @@ CAPS = {
     # arrived with were hoisted to the module header (run_budget was already
     # imported there, so they bought nothing) — which paid back four of the
     # five lines this would otherwise have cost.
-    "robothor/engine/runner.py": 2957,
+    # 2957 -> 2966: 132b5bb7 propagates the CRM task id onto the run at INSERT
+    # time, so sub-agent runs stop landing with task_id NULL. Nine lines, all
+    # where the run row is assembled — there is no cohesive cluster to extract.
+    # The runner decomposition in the next PR of this train takes it back down.
+    "robothor/engine/runner.py": 2966,
     # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
     # Lowered again after phase 3b (_setup_handlers closures -> methods).
     "robothor/engine/telegram.py": 2000,
