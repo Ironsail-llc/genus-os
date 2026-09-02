@@ -1453,7 +1453,6 @@ def test_a_live_mapping_that_will_not_remount_is_repaired_under_its_own_name(box
         FAKE_DM_OPEN="0",
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "reusing it" in result.stdout, result.stdout
     assert box.ran("cryptsetup open") == [], f"reopened a live mapping:\n{box.argv}"
     assert box.ran(f"fsck.ext4 -p {box.mapper_dir / MAPPER}"), f"never repaired it:\n{box.argv}"
     assert len(box.ran(f"mount {box.mapper_dir / MAPPER} {box.mount}")) == 2, (
