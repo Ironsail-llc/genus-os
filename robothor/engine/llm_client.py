@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import random
@@ -315,6 +316,57 @@ def _is_transient_model_error(e: BaseException) -> bool:
     if isinstance(e, TimeoutError | EmptyCompletionError):
         return True
     return getattr(e, "status_code", None) in _TRANSIENT_RETRY_STATUSES
+
+
+#: Retries for a model that emitted tool-call JSON nobody can parse. ONE: a
+#: truncated generation is worth re-rolling once, but the failure is usually
+#: deterministic — the unparseable arguments are already in the request being
+#: transformed — and spending the local tier's whole retry budget on it is how
+#: twelve parse errors became twelve dead runs.
+MALFORMED_TOOL_ARGS_RETRIES = 1
+
+#: What `json.JSONDecodeError` says. litellm parses a tool call's `arguments`
+#: inside its provider transformations and re-raises the decode failure as an
+#: `APIConnectionError` — status 500, indistinguishable by status from a
+#: provider that is actually down. These strings are the only thing left that
+#: tells the two apart.
+_JSON_DECODE_MARKERS = (
+    "unterminated string starting at",
+    "expecting ',' delimiter",
+    "expecting ':' delimiter",
+    "expecting value: line",
+    "expecting property name enclosed in double quotes",
+    "invalid control character at",
+    "invalid \\escape",
+    "extra data: line",
+)
+
+
+def is_malformed_tool_arguments(e: BaseException) -> bool:
+    """True when the model's tool-call arguments could not be parsed.
+
+    This is BAD OUTPUT, not a provider outage. Observed 12 times in 24 hours
+    on the on-device tier: `litellm.APIConnectionError: Unterminated string
+    starting at: line 1 column 3175`, raised from `json.loads` inside litellm's
+    ollama chat transformation. Read as a 500, it burned the local retry budget
+    and then opened the breaker on the tier every agent's chain ends in.
+
+    Deliberately narrow. A `JSONDecodeError` anywhere in the cause chain is
+    unambiguous; without one, only a connection-shaped litellm error carrying a
+    decoder's own words qualifies. Everything else stays a provider failure,
+    because the cost of guessing wrong here is a breaker that never opens.
+    """
+    seen: set[int] = set()
+    cause: BaseException | None = e
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        if isinstance(cause, json.JSONDecodeError):
+            return True
+        cause = cause.__cause__ or cause.__context__
+    if not isinstance(e, litellm.exceptions.APIConnectionError):
+        return False
+    text = str(e).lower()
+    return any(marker in text for marker in _JSON_DECODE_MARKERS)
 
 
 def _safe_token_count(usage: Any, attr: str) -> int:
@@ -1125,6 +1177,61 @@ class LLMClient:
             suffix = " (streaming)" if streaming else ""
             logger.warning("Model %s%s failed: %s", _sanitize(model), suffix, _sanitize(e))
 
+    def _note_malformed_tool_call(self, e: Exception, model: str, *, reroll: bool) -> None:
+        """Log an unparseable tool call, and never tell the breaker about it.
+
+        The failure arrives as an `APIConnectionError` (status 500) raised from
+        inside litellm's request transformation, so by status alone it is
+        indistinguishable from the provider being down — and was treated as
+        such: five attempts at a deterministic parse failure, then a breaker
+        failure recorded against the on-device tier every agent's chain ends
+        in. Bad output is a fact about one completion, not about a provider's
+        health, so the chain advances and the breaker hears nothing.
+        """
+        if reroll:
+            logger.warning(
+                "Model %s returned unparseable tool-call arguments — "
+                "re-rolling the same model once (%s)",
+                _sanitize(model),
+                _sanitize(e),
+            )
+        else:
+            logger.warning(
+                "Model %s keeps returning unparseable tool-call arguments — falling "
+                "through to the next model. This is bad output, not a provider "
+                "outage; the breaker is not told.",
+                _sanitize(model),
+            )
+        if self._active_watchdog:
+            self._active_watchdog.touch(
+                f"model_retry:{model}" if reroll else f"model_fallback:{model}"
+            )
+
+    async def _wait_out_rate_limit(
+        self, e: Exception, model: str, attempt: int, attempts: int
+    ) -> bool:
+        """Sleep off a 429 if there is an attempt left. True means retry.
+
+        A rate limit is the provider saying "not right now", so the answer is
+        the interval it named and the SAME model — not the next one, which is
+        usually on the same key and will say the same thing.
+        """
+        wait = rate_limit_wait_seconds(e)
+        if wait is None or attempt >= attempts - 1:
+            return False
+        logger.warning(
+            "Model %s rate-limited — waiting %.1fs and retrying the same model "
+            "(attempt %d/%d)",
+            _sanitize(model),
+            wait,
+            attempt + 1,
+            attempts,
+        )
+        if self._active_watchdog:
+            self._active_watchdog.touch(f"rate_limit_wait:{model}")
+        await asyncio.sleep(wait)
+        return True
+
     async def _call_with_image_fallback(
         self,
         *,
@@ -1241,6 +1348,7 @@ class LLMClient:
                 LOCAL_CAPACITY_RETRIES if is_local_model(model) else TRANSIENT_RETRIES_PER_MODEL
             )
             rotations_left = (len(pool) - 1) if pool is not None else 0
+            malformed_retries_left = MALFORMED_TOOL_ARGS_RETRIES
             attempt = 0
             while attempt < attempts:
                 attempt_key = None
@@ -1347,21 +1455,15 @@ class LLMClient:
                             _sanitize(model),
                         )
                         raise
-                    # A rate limit is the provider saying "not right now".
-                    # Wait the interval it names and retry the SAME model.
-                    _wait = rate_limit_wait_seconds(e)
-                    if _wait is not None and attempt < attempts - 1:
-                        logger.warning(
-                            "Model %s rate-limited — waiting %.1fs and retrying "
-                            "the same model (attempt %d/%d)",
-                            _sanitize(model),
-                            _wait,
-                            attempt + 1,
-                            attempts,
-                        )
-                        if self._active_watchdog:
-                            self._active_watchdog.touch(f"rate_limit_wait:{model}")
-                        await asyncio.sleep(_wait)
+                    if is_malformed_tool_arguments(e):
+                        if malformed_retries_left > 0:
+                            malformed_retries_left -= 1
+                            attempt += 1
+                            self._note_malformed_tool_call(e, model, reroll=True)
+                            continue
+                        self._note_malformed_tool_call(e, model, reroll=False)
+                        break
+                    if await self._wait_out_rate_limit(e, model, attempt, attempts):
                         attempt += 1
                         continue
                     if attempt < attempts - 1 and _is_transient_model_error(e):
