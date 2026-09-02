@@ -25,11 +25,23 @@ def test_operator_can_promote_and_it_is_audited(controls_client_as_operator, fak
     assert fake_store.last_write == ("ROBOTHOR_RBAC_MODE", "enforce")
 
 
-def test_get_lists_all_twelve_with_verdicts(controls_client_as_operator, fake_store, fake_verdict):
+def test_get_lists_every_governed_flag_with_verdicts(
+    controls_client_as_operator, fake_store, fake_verdict
+):
+    """Counted against GOVERNED_FLAGS, never against a literal.
+
+    This asserted `== 12`, so registering a thirteenth governed flag broke a
+    test that has nothing to do with the flag — the whole drift class. What
+    the endpoint owes is "every governed flag, each with a verdict", and that
+    is what is asserted now.
+    """
+    from robothor.flags.store import GOVERNED_FLAGS
+
     r = controls_client_as_operator.get("/api/controls")
     assert r.status_code == 200
     body = r.json()
-    assert len(body) == 12
+    assert {f["name"] for f in body} == set(GOVERNED_FLAGS)
+    assert len(body) == len(GOVERNED_FLAGS)
     assert all("verdict" in f and "status" in f["verdict"] for f in body)
 
 
