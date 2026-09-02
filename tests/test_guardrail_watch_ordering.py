@@ -105,6 +105,24 @@ class TestRepoUnitOrdersAfterPostgresAndPages:
             "died at boot with nobody told"
         )
 
+    def test_service_loads_the_telegram_secrets(self) -> None:
+        """The nag has to be able to reach the operator under the unit.
+
+        guardrail_watch.send_telegram() reads the bot token and the chat id
+        out of the environment and returns False in silence when either is
+        missing. /etc/robothor/robothor.env carries neither — those
+        credentials live in the tmpfs secrets file that every other
+        unit that talks to Telegram loads — so under the unit the flag-soak
+        nag was inert: it printed into the journal and nowhere else, and only
+        the generic OnFailure page ever reached the operator.
+        """
+        body = SERVICE.read_text()
+        assert "EnvironmentFile=-/run/robothor/secrets.env" in body, (
+            "the unit does not load /run/robothor/secrets.env, so the "
+            "flag-soak nag has no Telegram credentials and send_telegram() "
+            "returns False without saying anything"
+        )
+
     def test_timer_has_a_repo_mirror_and_is_persistent(self) -> None:
         assert TIMER.exists(), "robothor-guardrail-watch.timer has no repo copy"
         body = TIMER.read_text()
