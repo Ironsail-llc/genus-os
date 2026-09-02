@@ -75,11 +75,28 @@ engine still clears the backlog. The drain:
   an hour-old page cannot be misread as a live incident;
 - **ignores the cooldown** — a spooled page is one the operator has never seen,
   and the stamp exists to dedup repeats of a page they *have*;
-- deletes a file only on a **2xx**, and **stops at the first failure** (the
-  endpoint is still down; the rest of the spool would be burned for nothing);
+- deletes a file only on a **2xx** — and the delete is **checked**: in a 1777
+  spool this account may not own the file, and `rm` failing silently meant the
+  same page went out again on every tick while the log called it delivered. A
+  non-root drain takes only files it owns and leaves the rest to root's tick;
+- **stops at a 5xx or a network failure** (the endpoint is down; the rest of
+  the spool would be burned for nothing) and counts the attempt in a
+  `<file>.attempts` sidecar;
+- **quarantines** a page it cannot ever deliver into
+  `/var/lib/robothor/alert-spool/poison/` and carries on with the next one: a
+  content rejection (a 4xx other than 401/403/408/429 — those mean bad
+  credentials or rate limiting, which apply to every page equally), or a file
+  past `ROBOTHOR_ALERT_SPOOL_MAX_ATTEMPTS`, or one older than
+  `ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS`. Before this, one rejected page sat
+  at the head of the queue and nothing behind it was ever delivered;
 - keeps at most 50 pages, dropping the oldest and saying `N older pages
-  dropped` in the log *and* in a Telegram notice — a silent truncation would be
-  the pager lying about what it held;
+  dropped` in the log. The **Telegram notice is deferred**: a drop only ever
+  happens mid-outage, which is the one moment the notice cannot be sent, so
+  the count is appended to `<spool>/.dropped` and the next page that actually
+  lands carries it as its first line; the counter is cleared only after that
+  page is delivered. Several drops in one outage add up to a single notice;
+- logs (and keeps) an empty or unreadable `.msg` rather than deleting it — it
+  leaves the queue when it ages out into `poison/`;
 - refuses any spooled page naming a pytest temp path, the same guard the entry
   point applies to the unit name (the spool dir is world-writable, see below).
 
@@ -87,6 +104,17 @@ engine still clears the backlog. The drain:
 |---|---|---|
 | `ROBOTHOR_ALERT_SPOOL_DIR` | `/var/lib/robothor/alert-spool` | durable spool for undelivered pages |
 | `ROBOTHOR_ALERT_SPOOL_CAP` | `50` | pages kept; older ones are dropped, loudly |
+| `ROBOTHOR_ALERT_SPOOL_MAX_ATTEMPTS` | `48` | failed deliveries before a page is quarantined (≈4h of 5-min ticks) |
+| `ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS` | `86400` | age at which a page is quarantined unsent |
+| `ROBOTHOR_ALERT_JOURNAL_CMD` | `journalctl` | journal reader for the page's tail (a test seam) |
+
+Anything in `poison/` is a page that was **never delivered**. Read it, then
+delete it — nothing else will:
+
+```bash
+ls -l /var/lib/robothor/alert-spool/poison/   # pages given up on, with the reason in the journal
+journalctl -u robothor-liveness.service | grep QUARANTINED   # why each one was given up on
+```
 
 The directory is `1777` (sticky), created by
 `infra/tmpfiles/robothor-restart.conf`: root's units and the operator's cron

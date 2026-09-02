@@ -110,6 +110,11 @@ SPOOL_CAP="${ROBOTHOR_ALERT_SPOOL_CAP:-50}"
 # is retried) and it is kept, not deleted — a page nobody could deliver is
 # still evidence.
 POISON_DIR="${SPOOL_DIR}/poison"
+# Pages dropped over the cap but not yet reported to the operator. Durable,
+# because the drop happens mid-outage and the report can only go out once the
+# outage ends. Appended to, never overwritten: two drops in the same outage
+# are two lines and one total.
+DROPPED_NOTE="${SPOOL_DIR}/.dropped"
 # ~48 ticks of the 5-minute liveness timer ≈ 4h. A page nothing has managed to
 # deliver in 4h is not going out; holding the queue open for it costs more than
 # it is worth.
@@ -477,6 +482,16 @@ drain_spool() {
         return 0
     fi
 
+    # Pages this spool has already thrown away and not yet owned up to. The
+    # count is durable (a file in the spool, appended to) because the drop and
+    # the chance to report it are separated by the whole outage.
+    local pending_dropped=0 line
+    if [[ -r "$DROPPED_NOTE" ]]; then
+        while read -r line || [[ -n "$line" ]]; do
+            [[ "$line" =~ ^[0-9]+$ ]] && pending_dropped=$(( pending_dropped + line ))
+        done < "$DROPPED_NOTE"
+    fi
+
     # An unbounded spool is its own outage: a week of DNS loss would dump
     # hundreds of stale pages the moment the network returned. Keep the newest
     # SPOOL_CAP and say out loud how many were dropped — a silent truncation
@@ -506,12 +521,19 @@ drain_spool() {
     if (( dropped )); then
         echo "send_failure_alert: alert spool over the ${SPOOL_CAP}-page cap —" \
              "${dropped} older pages dropped" >&2
-        if ! post_telegram "⏳ ${dropped} older pages dropped from the alert spool on ${HOST} (over the ${SPOOL_CAP}-page cap)"; then
-            echo "send_failure_alert: could not deliver the spool-overflow notice" \
-                 "(curl_rc=${LAST_CURL_RC} http_status=${LAST_HTTP_CODE:-none});" \
-                 "${#files[@]} page(s) still spooled" >&2
-            return 0
-        fi
+        # The notice used to be POSTED right here, and that is the one moment
+        # it cannot go out: the spool only overflows because nothing has been
+        # deliverable for hours. So the operator was never told that N pages
+        # had been thrown away — the notice died in the stderr of a cron job
+        # nobody reads. Record it instead and let the next page that actually
+        # lands carry it.
+        printf '%s\n' "$dropped" >>"$DROPPED_NOTE" 2>/dev/null || true
+        pending_dropped=$(( pending_dropped + dropped ))
+    fi
+    local drop_notice=""
+    if (( pending_dropped )); then
+        drop_notice="⏳ ${pending_dropped} older pages dropped from the alert spool on ${HOST} (over the ${SPOOL_CAP}-page cap)
+"
     fi
 
     local f base epoch queued text delivered=0 now attempts code
@@ -560,7 +582,10 @@ drain_spool() {
         # Say it is late and say when it was raised: a page whose timestamp is
         # an hour old reads as a live incident unless the delay is on the face
         # of it.
-        if post_telegram "⏳ DELAYED (queued ${queued}):
+        # A pending truncation notice rides the first page that actually
+        # lands, rather than being posted at the moment of the drop — which is
+        # the moment nothing can be posted at all.
+        if post_telegram "${drop_notice}⏳ DELAYED (queued ${queued}):
 ${text}"; then
             # The unlink is CHECKED, and its failure stops the drain. In the
             # 1777 sticky spool this account cannot delete a file it does not
@@ -575,6 +600,17 @@ ${text}"; then
             fi
             rm -f "${f}.attempts" 2>/dev/null || true
             delivered=$(( delivered + 1 ))
+            if [[ -n "$drop_notice" ]]; then
+                # Told once. Clearing only AFTER a delivered page is the whole
+                # point: a counter cleared on the attempt would lose the notice
+                # in exactly the outage that produced it.
+                drop_notice=""
+                rm -f "$DROPPED_NOTE" 2>/dev/null || true
+                if [[ -e "$DROPPED_NOTE" ]]; then
+                    echo "send_failure_alert: could not clear ${DROPPED_NOTE} (not owner)" \
+                         "— the spool-truncation notice will repeat" >&2
+                fi
+            fi
             continue
         fi
 

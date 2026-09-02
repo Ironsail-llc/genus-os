@@ -957,11 +957,22 @@ def install_status_curl(tmp_path: Path, statuses: list[str]) -> Path:
         f"statuses=({seq})\n"
         'i=$((n - 1)); [ "$i" -ge "${#statuses[@]}" ] && i=$(( ${#statuses[@]} - 1 ))\n'
         'code="${statuses[$i]}"\n'
+        # A separate log of what actually LANDED. The argv log records every
+        # attempt, delivered or not, so asserting on it cannot tell a page the
+        # operator received from one Telegram refused — the exact distinction
+        # the drop notice turns on.
+        f'case "$code" in 2*) printf \'%s\\n\' "$@" >> "{tmp_path / "curl-delivered.txt"}" ;; esac\n'
         "for a in \"$@\"; do [ \"$a\" = '%{http_code}' ] && printf '%s' \"$code\"; done\n"
         "exit 0\n"
     )
     curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
     return log
+
+
+def delivered_text(tmp_path: Path) -> str:
+    """Everything the stub answered 2xx to — i.e. what the operator saw."""
+    path = tmp_path / "curl-delivered.txt"
+    return path.read_text() if path.exists() else ""
 
 
 def poisoned(tmp_path: Path) -> list[Path]:
@@ -1252,6 +1263,68 @@ class TestSpoolCap:
             write_spooled(tmp_path, SPOOLED_EPOCH_OLDER + i, f"PAGE-{i}")
         result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
         assert "1 older pages dropped" in result.stdout + result.stderr
+
+
+class TestTheDropNoticeSurvivesTheOutage:
+    """The truncation notice was posted at the moment of the drop.
+
+    A drop happens because the spool overflowed, and the spool overflows
+    because nothing has been deliverable for a long time — so the one moment
+    the notice is raised is the one moment it cannot be sent. It went to
+    stderr of a cron job nobody reads, and the operator was never told that
+    N pages had been thrown away. A silent truncation is the pager lying
+    about what it held.
+    """
+
+    def drop_during_an_outage(self, tmp_path: Path) -> None:
+        install_status_curl(tmp_path, ["500"])
+        for i in range(5):
+            write_spooled(tmp_path, SPOOLED_EPOCH_OLDER + i, f"PAGE-{i}")
+        env = base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_CAP="2", **FAKE_TOKEN_ENV)
+        run_drain(tmp_path, env)
+        assert "3 older pages dropped" not in delivered_text(tmp_path), (
+            "this test is not exercising an outage — the notice went out"
+        )
+
+    def test_the_notice_arrives_when_the_endpoint_comes_back(self, tmp_path: Path):
+        self.drop_during_an_outage(tmp_path)
+        install_status_curl(tmp_path, ["200"])  # the endpoint recovers
+        env = base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_CAP="2", **FAKE_TOKEN_ENV)
+        result = run_drain(tmp_path, env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "3 older pages dropped" in delivered_text(tmp_path), (
+            "the operator was never told that 3 pages were thrown away"
+        )
+
+    def test_the_notice_arrives_exactly_once(self, tmp_path: Path):
+        self.drop_during_an_outage(tmp_path)
+        install_status_curl(tmp_path, ["200"])
+        env = base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_CAP="2", **FAKE_TOKEN_ENV)
+        run_drain(tmp_path, env)
+        write_spooled(tmp_path, SPOOLED_EPOCH_NEWER, "PAGE-LATER")
+        run_drain(tmp_path, env)
+        assert delivered_text(tmp_path).count("3 older pages dropped") == 1, (
+            "the pending-drop counter was not cleared; every later page now "
+            "carries a notice about a truncation the operator already heard about"
+        )
+
+    def test_the_pending_count_is_kept_where_the_operator_can_see_it(self, tmp_path: Path):
+        self.drop_during_an_outage(tmp_path)
+        note = spool_dir(tmp_path) / ".dropped"
+        assert note.exists(), "the drop was recorded nowhere the next drain can find it"
+        assert "3" in note.read_text()
+
+    def test_drops_across_several_outage_ticks_add_up(self, tmp_path: Path):
+        self.drop_during_an_outage(tmp_path)  # 3 dropped, 2 left
+        for i in range(3):
+            write_spooled(tmp_path, SPOOLED_EPOCH_NEWER + i, f"PAGE-LATE-{i}")
+        env = base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_CAP="2", **FAKE_TOKEN_ENV)
+        run_drain(tmp_path, env)  # still 500: 3 more over the cap
+        install_status_curl(tmp_path, ["200"])
+        run_drain(tmp_path, env)
+        assert "6 older pages dropped" in delivered_text(tmp_path), (
+            "a second drop during the same outage overwrote the first count"
+        )
 
 
 class TestEveryNormalSendDrainsFirst:
