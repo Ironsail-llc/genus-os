@@ -35,7 +35,7 @@ MAX_NEW_FUNCTION_LINES = 200
 KNOWN_LARGE: dict[str, int] = {
     "tools/schemas.py::get_engine_schemas": 3520,
     "health.py::create_health_app": 1477,  # +1: execution_mode block in /health
-    "runner.py::execute": 983,
+    "runner.py::execute": 990,  # +7: task_id propagated onto the run at INSERT time
     "runner.py::_run_loop": 775,
     "tools/handlers/gws.py::_handle_gws_tool": 453,
     "daemon.py::main": 397,  # -14: fleet capacity init extracted to _init_fleet_capacity
@@ -45,7 +45,10 @@ KNOWN_LARGE: dict[str, int] = {
     "daemon.py::_watchdog": 303,
     "chat.py::plan_approve": 286,
     "compaction.py::compact": 276,
-    "llm_client.py::_call_llm": 270,  # +1: mode signal on the success path
+    # -7: rate-limit wait and the malformed-tool-call verdict extracted;
+    # +4: review-requested comments on the malformed-tool-call branch (why the
+    # re-roll spends `attempt`, and what skipping `_handle_model_error` costs)
+    "llm_client.py::_call_llm": 267,
     "config.py::manifest_to_agent_config": 268,
     "scheduler.py::start": 266,
     "llm_client.py::_call_llm_streaming": 261,  # +1: mode signal on the success path
