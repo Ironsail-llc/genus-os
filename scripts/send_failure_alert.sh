@@ -4,6 +4,7 @@
 # stay dependency-free: bash + curl only, credentials from the environment.
 #
 # Usage: send_failure_alert.sh <unit-name> [body]
+#        send_failure_alert.sh --drain
 #
 # <unit-name> is both the headline and the dedup key. The optional [body]
 # replaces the journal tail for callers that already know what went wrong
@@ -20,10 +21,24 @@
 # attempts, 30s apart, ~5min total) and the secrets are re-sourced INSIDE the
 # loop — the boot window that breaks the send is the same window that ends a
 # few seconds later.
+#
+# When the retry budget runs out anyway the page is NOT dropped: it is written
+# to a durable spool (see "Durable spool" below) and re-sent by the next
+# successful send or by the 5-minute liveness tick, which calls `--drain`.
 set -u
 
-UNIT="${1:?usage: send_failure_alert.sh <unit-name> [body]}"
-BODY="${2:-}"
+MODE="send"
+if [[ "${1:-}" == "--drain" ]]; then
+    # Drain-only mode: deliver whatever the spool is holding and exit. No unit
+    # argument, no cooldown, no new page composed.
+    MODE="drain"
+    shift
+    UNIT="(alert spool drain)"
+    BODY=""
+else
+    UNIT="${1:?usage: send_failure_alert.sh <unit-name> [body] | --drain}"
+    BODY="${2:-}"
+fi
 
 # ── Never page from a test run ────────────────────────────────────────────────
 # 2026-08-27: a suite run delivered three real Telegram alerts, including
@@ -59,6 +74,28 @@ RETRY_DELAY="${ROBOTHOR_ALERT_RETRY_DELAY:-30}"
 # Overridable so a hermetic test/CI stub can receive the POST instead of the
 # real Telegram API.
 API_BASE="${ROBOTHOR_TELEGRAM_API_BASE:-https://api.telegram.org}"
+
+# ── Durable spool ─────────────────────────────────────────────────────────────
+# Since 2026-08-31 the journal carries 63 `curl_rc=6` lines — "Could not
+# resolve host: api.telegram.org". The OnFailure path survives those: the
+# robothor-alert@ unit has Restart=on-failure behind it, so an exhausted run
+# comes back. The callers with NO retrying unit behind them (cron-wrapper.sh,
+# backup-offsite.sh, thermal-guard.sh, boot-guard.sh) have nothing to come back
+# to — the loop exhausts, the script exits 1, and the page is gone.
+#
+# A longer backoff only helps the path that already retries. A pinned IP breaks
+# on rotation, and curl's --dns-servers needs a c-ares build. So the page is
+# written to disk instead and re-sent later: /var/lib (NVMe, NOT tmpfs) so it
+# survives the reboot that a boot-window failure usually ends in.
+#
+# The directory is 1777 sticky (infra/tmpfiles/robothor-restart.conf) because
+# root's units and the operator's cron jobs both spool into it and neither can
+# chown the other's files; sticky keeps each writer able to delete only its
+# own. That does mean any local user can plant a .msg here, so the drain
+# applies the same pytest-path refusal the entry guard does.
+SPOOL_DIR="${ROBOTHOR_ALERT_SPOOL_DIR:-/var/lib/robothor/alert-spool}"
+# Overridable so a test can exercise overflow without writing 51 files.
+SPOOL_CAP="${ROBOTHOR_ALERT_SPOOL_CAP:-50}"
 
 # ── Cooldown: dedup repeated pages for the same unit ──────────────────────────
 # A unit crash-looping on a short timer (e.g. every 15 minutes) would otherwise
@@ -138,15 +175,9 @@ if [[ -n "$STATE_DIR" ]]; then
     STAMP_FILE="${STATE_DIR}/${SANITIZED}.${UNIT_HASH}"
 fi
 
-if [[ -n "$STAMP_FILE" && -f "$STAMP_FILE" ]]; then
-    NOW=$(date +%s)
-    STAMP_TIME=$(stat -c %Y "$STAMP_FILE" 2>/dev/null || echo 0)
-    AGE=$(( NOW - STAMP_TIME ))
-    if (( AGE < COOLDOWN )); then
-        echo "send_failure_alert: suppressed duplicate page for ${UNIT} (${AGE}s < ${COOLDOWN}s)"
-        exit 0
-    fi
-fi
+# The cooldown CHECK itself lives below the spool drain: a unit inside its 1h
+# cooldown is exactly the case where pages have been piling up on disk, and an
+# early `exit 0` here would leave them there.
 
 # ── Credentials recovery ──────────────────────────────────────────────────────
 # The credentials live ONLY in /run/robothor/secrets.env, and /run is tmpfs — so
@@ -245,6 +276,184 @@ consequence_for() {
     esac
 }
 
+# The page exactly as the operator would have read it. Composed on demand
+# rather than once, because the journal tail sharpens as the failure plays out
+# and a backup marker can land while the retry loop waits out the boot window —
+# and because the spool needs the same text after the loop has given up.
+compose_text() {
+    local detail="$BODY" journal
+    if [[ -z "$detail" ]]; then
+        journal="$(journalctl -u "$UNIT" -n 5 --no-pager -o cat 2>/dev/null | tail -c 500 || true)"
+        detail="Last journal lines:
+${journal:-<journal unavailable>}
+
+Check: systemctl status ${UNIT}"
+    fi
+    printf '%s\n%s\n%s\n\n%s' \
+        "🔴 ${UNIT} FAILED on ${HOST}" \
+        "$(consequence_for "$UNIT")" \
+        "$(date -Is)" \
+        "$detail"
+}
+
+# ── One POST, one verdict ─────────────────────────────────────────────────────
+# The HTTP STATUS is checked, not just curl's exit code. curl exits 0 on an
+# HTTP 401 -- it fetched the response body just fine, the body simply says
+# {"ok":false,"error_code":401}. A revoked bot token or a wrong chat_id
+# therefore read as a DELIVERED page: the stamp was touched, arming a 1h
+# cooldown on a page nobody received, and the script exited 0 so systemd's
+# Restart=on-failure never spent a retry. This is the only paging path for 8
+# units, including the engine watchdog and offsite backup.
+#
+# --retry inside curl covers transient blips within an attempt; the callers'
+# loops cover the minutes-long boot-DNS window.
+LAST_CURL_RC=0
+LAST_HTTP_CODE=""
+post_telegram() {
+    local text="$1" http_code rc
+    http_code=$(curl -sS --max-time 15 --retry 3 --retry-all-errors --retry-delay 2 \
+        -o /dev/null -w '%{http_code}' \
+        --data-urlencode "chat_id=${ROBOTHOR_TELEGRAM_CHAT_ID}" \
+        --data-urlencode "text=${text}" \
+        "${API_BASE}/bot${ROBOTHOR_TELEGRAM_BOT_TOKEN}/sendMessage" 2>/dev/null)
+    rc=$?
+    LAST_CURL_RC="$rc"
+    LAST_HTTP_CODE="${http_code:-}"
+    [ "$rc" -eq 0 ] && [ "${http_code:-0}" -ge 200 ] && [ "${http_code:-0}" -lt 300 ]
+}
+
+# ── Spool: an undeliverable page is parked, never dropped ────────────────────
+# Written under a .tmp name and renamed, so a drain running concurrently (the
+# liveness tick fires every 5 minutes) can never read half a page.
+spool_page() {
+    local text="$1" file tmp
+    mkdir -p "$SPOOL_DIR" 2>/dev/null || true
+    if [[ ! -d "$SPOOL_DIR" || -L "$SPOOL_DIR" || ! -w "$SPOOL_DIR" ]]; then
+        echo "send_failure_alert: cannot spool ${UNIT} — ${SPOOL_DIR} is not a writable" \
+             "directory (a symlink is refused outright); THIS PAGE IS LOST" >&2
+        return 1
+    fi
+    # <epoch>-<key>.msg: the epoch prefix is what makes a plain glob sort
+    # oldest-first, and $$ keeps two pages raised in the same second apart.
+    file="${SPOOL_DIR}/$(date +%s)-${SANITIZED}.${UNIT_HASH}.$$.msg"
+    tmp="${file}.tmp"
+    if printf '%s\n' "$text" >"$tmp" 2>/dev/null && mv -f "$tmp" "$file" 2>/dev/null; then
+        # Deliberately NOT phrased "delivered page for ..." — that string is
+        # the delivery announcement, and a log line that reads like one on a
+        # page nobody received is the exact confusion this pager keeps
+        # relearning (see TestDeliveryIsAnnounced).
+        echo "send_failure_alert: page for ${UNIT} was NOT sent; spooled to ${file}" >&2
+        return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    echo "send_failure_alert: could not write ${file}; THIS PAGE IS LOST" >&2
+    return 1
+}
+
+# Deliver what the spool is holding, oldest first. Called by `--drain` (the
+# liveness timer, every 5 minutes) and at the start of every normal send.
+#
+# Never fails its caller: a drain that cannot run yet is not an incident, and
+# a page still on disk is not a lost page.
+drain_spool() {
+    [[ -d "$SPOOL_DIR" && ! -L "$SPOOL_DIR" ]] || return 0
+    local files=()
+    shopt -s nullglob
+    files=("${SPOOL_DIR}"/*.msg)
+    shopt -u nullglob
+    (( ${#files[@]} )) || return 0
+
+    source_secrets
+    if [[ -z "${ROBOTHOR_TELEGRAM_BOT_TOKEN:-}" || -z "${ROBOTHOR_TELEGRAM_CHAT_ID:-}" ]]; then
+        echo "send_failure_alert: ${#files[@]} page(s) spooled in ${SPOOL_DIR}, but there are" \
+             "no credentials yet to drain them" >&2
+        return 0
+    fi
+
+    # An unbounded spool is its own outage: a week of DNS loss would dump
+    # hundreds of stale pages the moment the network returned. Keep the newest
+    # SPOOL_CAP and say out loud how many were dropped — a silent truncation
+    # would be the pager lying about what it had.
+    local dropped=0 i
+    if (( ${#files[@]} > SPOOL_CAP )); then
+        dropped=$(( ${#files[@]} - SPOOL_CAP ))
+        for (( i = 0; i < dropped; i++ )); do
+            rm -f "${files[i]}" 2>/dev/null || true
+        done
+        files=("${files[@]:dropped}")
+        echo "send_failure_alert: alert spool over the ${SPOOL_CAP}-page cap —" \
+             "${dropped} older pages dropped" >&2
+        if ! post_telegram "⏳ ${dropped} older pages dropped from the alert spool on ${HOST} (over the ${SPOOL_CAP}-page cap)"; then
+            echo "send_failure_alert: could not deliver the spool-overflow notice" \
+                 "(curl_rc=${LAST_CURL_RC} http_status=${LAST_HTTP_CODE:-none});" \
+                 "${#files[@]} page(s) still spooled" >&2
+            return 0
+        fi
+    fi
+
+    local f base epoch queued text delivered=0
+    for f in "${files[@]}"; do
+        text="$(cat "$f" 2>/dev/null || true)"
+        if [[ -z "$text" ]]; then
+            rm -f "$f" 2>/dev/null || true
+            continue
+        fi
+        # The spool dir is world-writable by design (1777), and the entry guard
+        # above only ever saw the unit NAME. Re-apply it to the spooled text:
+        # a suite run that spooled a fixture page must not reach the operator
+        # five minutes later through this door.
+        if [[ "$text" == *"pytest-of-"* || "$text" == *"/pytest-"* ]]; then
+            echo "send_failure_alert: dropping spooled page that names a pytest temp path:" \
+                 "$(basename "$f")" >&2
+            rm -f "$f" 2>/dev/null || true
+            continue
+        fi
+        base="$(basename "$f")"
+        epoch="${base%%-*}"
+        queued="??:??"
+        [[ "$epoch" =~ ^[0-9]+$ ]] && queued="$(date -d "@${epoch}" +%H:%M 2>/dev/null || echo '??:??')"
+        # Say it is late and say when it was raised: a page whose timestamp is
+        # an hour old reads as a live incident unless the delay is on the face
+        # of it.
+        if post_telegram "⏳ DELAYED (queued ${queued}):
+${text}"; then
+            rm -f "$f" 2>/dev/null || true
+            delivered=$(( delivered + 1 ))
+        else
+            # Stop at the first failure. The endpoint is still down; burning
+            # the rest of the spool against it delivers nothing and would lose
+            # the ordering.
+            echo "send_failure_alert: spool drain stopped at $(basename "$f")" \
+                 "(curl_rc=${LAST_CURL_RC} http_status=${LAST_HTTP_CODE:-none});" \
+                 "$(( ${#files[@]} - delivered )) page(s) still spooled" >&2
+            break
+        fi
+    done
+    if (( delivered )); then
+        echo "send_failure_alert: drained ${delivered} spooled page(s) from ${SPOOL_DIR}"
+    fi
+    return 0
+}
+
+# Every invocation drains first — the sender is the only process that knows how
+# to deliver a page, so every time it runs is a chance to clear the backlog.
+drain_spool
+if [[ "$MODE" == "drain" ]]; then
+    exit 0
+fi
+
+# ── Cooldown check ────────────────────────────────────────────────────────────
+# Below the drain deliberately (see STAMP_FILE above).
+if [[ -n "$STAMP_FILE" && -f "$STAMP_FILE" ]]; then
+    NOW=$(date +%s)
+    STAMP_TIME=$(stat -c %Y "$STAMP_FILE" 2>/dev/null || echo 0)
+    AGE=$(( NOW - STAMP_TIME ))
+    if (( AGE < COOLDOWN )); then
+        echo "send_failure_alert: suppressed duplicate page for ${UNIT} (${AGE}s < ${COOLDOWN}s)"
+        exit 0
+    fi
+fi
+
 # ── Bounded retry loop ────────────────────────────────────────────────────────
 attempt=0
 while (( attempt < MAX_ATTEMPTS )); do
@@ -267,37 +476,10 @@ while (( attempt < MAX_ATTEMPTS )); do
     # Rebuilt each attempt: the journal tail sharpens as the failure plays
     # out, and a backup marker can land while the loop waits out the boot
     # window.
-    DETAIL="$BODY"
-    if [[ -z "$DETAIL" ]]; then
-        JOURNAL="$(journalctl -u "$UNIT" -n 5 --no-pager -o cat 2>/dev/null | tail -c 500 || true)"
-        DETAIL="Last journal lines:
-${JOURNAL:-<journal unavailable>}
+    TEXT="$(compose_text)"
 
-Check: systemctl status ${UNIT}"
-    fi
-    TEXT="🔴 ${UNIT} FAILED on ${HOST}
-$(consequence_for "$UNIT")
-$(date -Is)
-
-${DETAIL}"
-
-    # --retry inside curl covers transient blips within an attempt; the outer
-    # loop covers the minutes-long boot-DNS window.
-    #
-    # The HTTP STATUS is checked explicitly, not just curl's exit code. curl
-    # exits 0 on an HTTP 401 -- it fetched the response body just fine, the body
-    # simply says {"ok":false,"error_code":401}. A revoked bot token or a wrong
-    # chat_id therefore read as a DELIVERED page: the stamp was touched, arming
-    # a 1h cooldown on a page nobody received, and the script exited 0 so
-    # systemd's Restart=on-failure never spent a retry. This is the only paging
-    # path for 8 units, including the engine watchdog and offsite backup.
-    http_code=$(curl -sS --max-time 15 --retry 3 --retry-all-errors --retry-delay 2 \
-        -o /dev/null -w '%{http_code}' \
-        --data-urlencode "chat_id=${ROBOTHOR_TELEGRAM_CHAT_ID}" \
-        --data-urlencode "text=${TEXT}" \
-        "${API_BASE}/bot${ROBOTHOR_TELEGRAM_BOT_TOKEN}/sendMessage" 2>/dev/null)
-    curl_rc=$?
-    if [ "$curl_rc" -eq 0 ] && [ "${http_code:-0}" -ge 200 ] && [ "${http_code:-0}" -lt 300 ]; then
+    if post_telegram "$TEXT"; then
+        http_code="$LAST_HTTP_CODE"
         # Touch the stamp only AFTER a successful send, so a failed send (e.g.
         # Telegram is down) does not suppress the retry on the next failure.
         # STAMP_FILE is empty when dedup was disabled (no trustworthy state
@@ -316,8 +498,15 @@ ${DETAIL}"
     # Name the status: a 401 means rotate the token, a 000 means the network is
     # down. "attempt failed" alone sends the operator looking in the wrong place.
     echo "send_failure_alert: send attempt ${attempt}/${MAX_ATTEMPTS} failed" \
-         "(curl_rc=${curl_rc} http_status=${http_code:-none})" >&2
+         "(curl_rc=${LAST_CURL_RC} http_status=${LAST_HTTP_CODE:-none})" >&2
 done
 
 echo "send_failure_alert: failed to send Telegram message after ${MAX_ATTEMPTS} attempts" >&2
+# The retry budget is spent, but the page is not lost: park it for the next
+# send or the next liveness tick. Composed here rather than reused from the
+# loop because the loop may never have reached the compose step at all — a
+# boot with no decrypted secrets yet `continue`s before it.
+spool_page "$(compose_text)" || true
+# Still a failure: the caller's unit must go `failed` so systemd's own
+# Restart=/OnFailure= plumbing sees it, exactly as before.
 exit 1

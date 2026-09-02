@@ -136,6 +136,12 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
         "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-cooldown-fallback"),
         "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "backup-state"),
         "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+        # The spool is DURABLE (/var/lib, survives reboot) and is drained by
+        # every later send and every liveness tick. A test that spools into
+        # the real directory therefore hands the operator a page composed of
+        # fixture text minutes later — the 2026-08-27 accident with a longer
+        # fuse. Pin it per test.
+        "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
         # Fast by default; individual tests override.
         "ROBOTHOR_ALERT_RETRY_DELAY": "0",
         "ROBOTHOR_ALERT_MAX_ATTEMPTS": "1",
@@ -753,3 +759,218 @@ class TestHttpErrorIsNotDelivery:
         result = run_send(tmp_path, env)
         assert result.returncode == 0
         assert state.exists() and list(state.glob("*")), "cooldown not armed on a real send"
+
+
+# ── send_failure_alert.sh: DNS loss must not eat the page ────────────────────
+# Since 2026-08-31 the journal carries 63 `curl_rc=6` lines — "Could not
+# resolve host". `robothor-alert@.service` has Restart=on-failure behind it, so
+# those pages come back. The callers WITHOUT a retrying unit behind them
+# (scripts/cron-wrapper.sh, backup-offsite.sh, thermal-guard.sh, boot-guard.sh)
+# have nothing to come back to: the retry loop exhausts, the script exits 1 and
+# the page is gone.
+#
+# Longer backoff was rejected — it only helps the path that already retries. A
+# pinned IP breaks on rotation, and curl's --dns-servers needs a c-ares build.
+# So the undeliverable page goes to a durable spool on NVMe and the next
+# successful send (or the 5-minute liveness tick) delivers it.
+
+
+def spool_dir(tmp_path: Path) -> Path:
+    return tmp_path / "alert-spool"
+
+
+def spooled(tmp_path: Path) -> list[Path]:
+    """Spool files oldest-first, without assuming the filename scheme beyond
+    the epoch prefix the drain order depends on."""
+    d = spool_dir(tmp_path)
+    if not d.exists():
+        return []
+    return sorted(p for p in d.iterdir() if p.is_file() and p.name.endswith(".msg"))
+
+
+def write_spooled(tmp_path: Path, epoch: int, text: str) -> Path:
+    d = spool_dir(tmp_path)
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{epoch}-robothor-spooled.service.deadbeef.1.msg"
+    path.write_text(text + "\n")
+    return path
+
+
+def run_drain(tmp_path: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(SEND), "--drain"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+
+
+class TestUndeliverablePageIsSpooled:
+    def test_base_env_pins_the_spool_dir(self, tmp_path: Path):
+        """The spool is durable and drained later — an unpinned test would
+        page the operator with fixture text on the next tick."""
+        assert "ROBOTHOR_ALERT_SPOOL_DIR" in base_env(tmp_path)
+
+    def test_an_exhausted_send_spools_the_page(self, tmp_path: Path):
+        install_fake_curl(tmp_path, fail_first=99)
+        result = run_send(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert result.returncode != 0, "an undelivered page must still fail the caller"
+        files = spooled(tmp_path)
+        assert len(files) == 1, f"the page was not spooled: {result.stdout}{result.stderr}"
+        assert "robothor-sample.service" in files[0].read_text()
+
+    def test_the_spooled_text_is_the_page_the_operator_would_have_seen(self, tmp_path: Path):
+        install_fake_curl(tmp_path, fail_first=99)
+        run_send(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        text = spooled(tmp_path)[0].read_text()
+        assert text.startswith("🔴 robothor-sample.service FAILED on ")
+        assert "no consequence mapped" in text, "the consequence line must be spooled too"
+
+    def test_a_missing_token_still_spools(self, tmp_path: Path):
+        """The boot window that has no secrets is exactly the window whose
+        pages were lost — the spool must catch that one too."""
+        install_fake_curl(tmp_path)
+        result = run_send(tmp_path, base_env(tmp_path))
+        assert result.returncode != 0
+        assert len(spooled(tmp_path)) == 1
+
+    def test_a_delivered_page_spools_nothing(self, tmp_path: Path):
+        install_fake_curl(tmp_path)
+        result = run_send(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert spooled(tmp_path) == []
+
+    def test_a_suppressed_run_spools_nothing(self, tmp_path: Path):
+        install_fake_curl(tmp_path, fail_first=99)
+        env = base_env(tmp_path, ROBOTHOR_ALERT_SUPPRESS="1", **FAKE_TOKEN_ENV)
+        result = run_send(tmp_path, env)
+        assert result.returncode == 0
+        assert spooled(tmp_path) == [], "a suppressed page must not come back via the spool"
+
+
+class TestSpoolDrain:
+    def test_drain_delivers_the_spooled_page_and_removes_it(self, tmp_path: Path):
+        log = install_fake_curl(tmp_path)
+        write_spooled(tmp_path, 1756000000, "🔴 robothor-spooled.service FAILED on box")
+        result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert curl_calls(log) == 1
+        assert "robothor-spooled.service" in log.read_text()
+        assert spooled(tmp_path) == [], "a delivered spool file must be deleted"
+
+    def test_the_drained_page_says_it_is_delayed_and_when_it_was_queued(self, tmp_path: Path):
+        log = install_fake_curl(tmp_path)
+        epoch = 1756000000
+        write_spooled(tmp_path, epoch, "🔴 robothor-spooled.service FAILED on box")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        queued = time.strftime("%H:%M", time.localtime(epoch))
+        assert f"⏳ DELAYED (queued {queued}):" in log.read_text()
+
+    def test_an_undelivered_spool_file_is_kept(self, tmp_path: Path):
+        install_fake_curl(tmp_path, fail_first=99)
+        write_spooled(tmp_path, 1756000000, "🔴 robothor-spooled.service FAILED on box")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert len(spooled(tmp_path)) == 1, "a failed drain must not delete the page"
+
+    def test_drain_goes_oldest_first(self, tmp_path: Path):
+        log = install_fake_curl(tmp_path)
+        write_spooled(tmp_path, 1756000000, "PAGE-OLDEST")
+        write_spooled(tmp_path, 1756009999, "PAGE-NEWEST")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        args = log.read_text()
+        assert args.index("PAGE-OLDEST") < args.index("PAGE-NEWEST")
+
+    def test_drain_stops_at_the_first_failure(self, tmp_path: Path):
+        """Telegram is still down: burning the whole spool against a dead
+        endpoint would deliver nothing and lose the ordering."""
+        log = install_fake_curl(tmp_path, fail_first=99)
+        write_spooled(tmp_path, 1756000000, "PAGE-OLDEST")
+        write_spooled(tmp_path, 1756009999, "PAGE-NEWEST")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert curl_calls(log) == 1, "the drain kept sending after a failure"
+        assert len(spooled(tmp_path)) == 2
+
+    def test_drain_ignores_the_cooldown(self, tmp_path: Path):
+        """The cooldown dedups repeat pages for a live unit. A spooled page is
+        one the operator has NEVER seen, so it must not be swallowed by a
+        stamp armed while it sat on disk."""
+        log = install_fake_curl(tmp_path)
+        env = base_env(tmp_path, ROBOTHOR_ALERT_COOLDOWN_SECONDS="3600", **FAKE_TOKEN_ENV)
+        assert run_send(tmp_path, env).returncode == 0  # arms the stamp
+        assert curl_calls(log) == 1
+        write_spooled(tmp_path, 1756000000, "PAGE-SPOOLED")
+        run_drain(tmp_path, env)
+        assert "PAGE-SPOOLED" in log.read_text()
+
+    def test_drain_is_silent_and_cheap_when_the_spool_is_empty(self, tmp_path: Path):
+        log = install_fake_curl(tmp_path)
+        result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert curl_calls(log) == 0
+
+    def test_drain_without_credentials_keeps_the_spool(self, tmp_path: Path):
+        install_fake_curl(tmp_path)
+        write_spooled(tmp_path, 1756000000, "PAGE-SPOOLED")
+        result = run_drain(tmp_path, base_env(tmp_path))
+        assert result.returncode == 0, "a drain that cannot run yet is not a failure"
+        assert len(spooled(tmp_path)) == 1
+
+    def test_drain_refuses_a_spooled_page_naming_a_pytest_path(self, tmp_path: Path):
+        """The entry guard covers the unit name; the spool is a second way in.
+        A fixture page that reached the disk must never reach the operator."""
+        log = install_fake_curl(tmp_path)
+        write_spooled(tmp_path, 1756000000, "🔴 /tmp/pytest-of-someone/pytest-1/x FAILED")
+        result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert curl_calls(log) == 0, "a pytest fixture page was sent to the operator"
+        assert spooled(tmp_path) == []
+
+
+class TestSpoolCap:
+    def test_the_spool_is_capped_and_says_what_it_dropped(self, tmp_path: Path):
+        log = install_fake_curl(tmp_path)
+        for i in range(5):
+            write_spooled(tmp_path, 1756000000 + i, f"PAGE-{i}")
+        env = base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_CAP="2", **FAKE_TOKEN_ENV)
+        result = run_drain(tmp_path, env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        out = result.stdout + result.stderr
+        assert "3 older pages dropped" in out, out
+        args = log.read_text()
+        assert "3 older pages dropped" in args, "the drop must be paged, not only logged"
+        assert "PAGE-0" not in args and "PAGE-2" not in args
+        assert "PAGE-3" in args and "PAGE-4" in args
+        assert spooled(tmp_path) == []
+
+    def test_the_default_cap_is_fifty(self, tmp_path: Path):
+        install_fake_curl(tmp_path)
+        for i in range(51):
+            write_spooled(tmp_path, 1756000000 + i, f"PAGE-{i}")
+        result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert "1 older pages dropped" in result.stdout + result.stderr
+
+
+class TestEveryNormalSendDrainsFirst:
+    def test_a_normal_send_drains_the_spool_before_paging(self, tmp_path: Path):
+        log = install_fake_curl(tmp_path)
+        write_spooled(tmp_path, 1756000000, "PAGE-SPOOLED")
+        result = run_send(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        args = log.read_text()
+        assert "PAGE-SPOOLED" in args, "the send did not drain the spool"
+        assert args.index("PAGE-SPOOLED") < args.index("robothor-sample.service FAILED")
+        assert spooled(tmp_path) == []
+
+    def test_a_cooldown_suppressed_send_still_drains(self, tmp_path: Path):
+        """The drain must sit ABOVE the cooldown check: a flapping unit inside
+        its 1h cooldown is exactly when the spool would otherwise sit."""
+        log = install_fake_curl(tmp_path)
+        env = base_env(tmp_path, ROBOTHOR_ALERT_COOLDOWN_SECONDS="3600", **FAKE_TOKEN_ENV)
+        assert run_send(tmp_path, env).returncode == 0
+        write_spooled(tmp_path, 1756000000, "PAGE-SPOOLED")
+        result = run_send(tmp_path, env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "suppressed duplicate page" in result.stdout + result.stderr
+        assert "PAGE-SPOOLED" in log.read_text()
+        assert spooled(tmp_path) == []

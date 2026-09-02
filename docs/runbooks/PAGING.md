@@ -46,6 +46,67 @@ repeat pages per unit for `ROBOTHOR_ALERT_COOLDOWN_SECONDS` (default 1h) and
 only stamps that cooldown after a *delivered* send. Do not restore the start
 limit; `tests/test_liveness_watchdog.py` fails if it comes back.
 
+## The spool: a page DNS ate is late, not lost
+
+Since 2026-08-31 the journal carries 63 `curl_rc=6` lines — `Could not resolve
+host: api.telegram.org`. The `OnFailure=` path survives those, because
+`robothor-alert@.service` has `Restart=on-failure` behind it. The callers with
+no retrying unit behind them do not: `scripts/cron-wrapper.sh`,
+`backup-offsite.sh`, `thermal-guard.sh` and `boot-guard.sh` exhaust the retry
+loop, exit 1, and the page is gone.
+
+A longer backoff only helps the path that already retries; a pinned IP breaks on
+rotation; `curl --dns-servers` needs a c-ares build. So an exhausted send writes
+the page it composed to a **durable spool** and still exits 1:
+
+```
+/var/lib/robothor/alert-spool/<epoch>-<key>.msg
+```
+
+`/var/lib`, not `/run` — the boot window that breaks a page usually ends in a
+reboot, and a tmpfs spool would lose it there.
+
+Draining is not a separate service. Every invocation of the sender drains
+first, and `robothor-liveness.timer` (root, every 5 min, `After=network-online`)
+runs `send_failure_alert.sh --drain` at the top of each tick, so a healthy
+engine still clears the backlog. The drain:
+
+- goes **oldest first** and prefixes each page `⏳ DELAYED (queued HH:MM):`, so
+  an hour-old page cannot be misread as a live incident;
+- **ignores the cooldown** — a spooled page is one the operator has never seen,
+  and the stamp exists to dedup repeats of a page they *have*;
+- deletes a file only on a **2xx**, and **stops at the first failure** (the
+  endpoint is still down; the rest of the spool would be burned for nothing);
+- keeps at most 50 pages, dropping the oldest and saying `N older pages
+  dropped` in the log *and* in a Telegram notice — a silent truncation would be
+  the pager lying about what it held;
+- refuses any spooled page naming a pytest temp path, the same guard the entry
+  point applies to the unit name (the spool dir is world-writable, see below).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ROBOTHOR_ALERT_SPOOL_DIR` | `/var/lib/robothor/alert-spool` | durable spool for undelivered pages |
+| `ROBOTHOR_ALERT_SPOOL_CAP` | `50` | pages kept; older ones are dropped, loudly |
+
+The directory is `1777` (sticky), created by
+`infra/tmpfiles/robothor-restart.conf`: root's units and the operator's cron
+jobs both spool into it and neither can chown the other's files, and sticky
+keeps each writer able to delete only its own. The cost is that any local user
+can plant a `.msg` there, which is why the drain re-applies the fixture-path
+refusal to the message body.
+
+```bash
+ls -l /var/lib/robothor/alert-spool           # anything here is a page still owed
+sudo scripts/send_failure_alert.sh --drain    # deliver it now
+```
+
+**Tests must pin `ROBOTHOR_ALERT_SPOOL_DIR`.** A cooldown stamp written by a
+test only suppresses a page; a spooled file is a page the next tick will
+actually *deliver*. The base envs in `tests/test_pager_hardening.py`,
+`tests/test_failure_alerts.py` and `tests/test_liveness_watchdog.py` pin it, and
+`test_run_send_default_env_never_spools_to_the_real_dir` fails if that stops
+being true.
+
 ## Liveness watchdog (the path that does not use OnFailure=)
 
 `OnFailure=` is a single, best-effort, in-band hook. It fires exactly once, and

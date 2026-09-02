@@ -113,6 +113,11 @@ def run_send(
         # primary state dir unwritable plants a real stamp there — see
         # test_run_send_default_env_never_touches_the_shared_fallback_dir.
         "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "fallback-state"),
+        # The spool is durable (/var/lib/robothor/alert-spool, NOT tmpfs) and
+        # every later send drains it. A test that spools into the real
+        # directory therefore pages the operator with fixture text on the next
+        # tick — see test_run_send_default_env_never_spools_to_the_real_dir.
+        "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
         # These tests predate the boot-window retry loop and assert on exact
         # curl call counts — pin a single fast attempt so they keep testing
         # what they always tested. The retry behavior itself is covered in
@@ -261,6 +266,34 @@ def test_run_send_default_env_never_touches_the_shared_fallback_dir(tmp_path: Pa
         "a test run stamped the shared real fallback cooldown dir: "
         f"{after - before}"
     )
+
+
+def test_run_send_default_env_never_spools_to_the_real_dir(tmp_path: Path):
+    """run_send's base env must isolate the SPOOL as well.
+
+    The spool is worse than the cooldown stamp: a stamp only suppresses a
+    page, while a spooled file is a page the next send or the next 5-minute
+    liveness tick will actually DELIVER. A test that spools into
+    /var/lib/robothor/alert-spool hands the operator a page composed of
+    fixture text minutes later — the 2026-08-27 accident with a longer fuse,
+    and one no `pytest` marker would reach.
+    """
+    real_spool = Path("/var/lib/robothor/alert-spool")
+    before = set(real_spool.iterdir()) if real_spool.exists() else set()
+
+    fake_curl_failing(tmp_path)  # nothing delivers, so the page must be spooled
+    result = run_send(
+        tmp_path,
+        "robothor-spool-isolation-test.service",
+        {"ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123", "ROBOTHOR_TELEGRAM_CHAT_ID": "42"},
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert list((tmp_path / "alert-spool").glob("*.msg")), (
+        "the page was not spooled anywhere — this test is not exercising the spool"
+    )
+
+    after = set(real_spool.iterdir()) if real_spool.exists() else set()
+    assert after == before, f"a test run spooled a real, deliverable page: {after - before}"
 
 
 def test_install_creates_onfailure_dropins(tmp_path: Path):
