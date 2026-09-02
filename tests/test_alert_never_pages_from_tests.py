@@ -22,8 +22,12 @@ Guard the path every caller crosses, not the one today's caller uses.
 from __future__ import annotations
 
 import ast
+import importlib.util
+import os
 import re
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 PAGER = REPO / "scripts" / "send_failure_alert.sh"
@@ -655,4 +659,156 @@ def test_every_subprocess_call_in_a_pager_reaching_test_pins_the_sender_seams():
         "these subprocess call sites run a script that can page without "
         "pinning the sender's durable state — each is one fixture failure "
         "away from the operator's phone:\n  " + "\n  ".join(offenders)
+    )
+
+
+# ── The Python senders ───────────────────────────────────────────────────────
+#
+# Everything above audits the SHELL path. It is not the only way a test can
+# reach the operator's phone.
+#
+# scripts/guardrail_watch.py carries its own sender: send_telegram() POSTs to a
+# hardcoded https://api.telegram.org, reading ROBOTHOR_TELEGRAM_BOT_TOKEN and
+# ROBOTHOR_TELEGRAM_CHAT_ID straight out of os.environ. There is no API-base
+# seam to redirect, no spool to pin and no cooldown to stamp — none of the
+# pins above apply to it at all. A test that drives main() on a box where the
+# operator's credentials are exported does not spool a page for later; it
+# delivers one, now.
+#
+# Two independent stops, because the one that is easy to forget is the one
+# that pages: the credentials are removed from every test's environment
+# (root conftest.py), and the sender itself refuses to deliver from inside a
+# test run — the same guard the shell pager already has.
+
+
+def _guardrail_watch():
+    """Load scripts/guardrail_watch.py as a module, the way its own tests do."""
+    spec = importlib.util.spec_from_file_location(
+        "guardrail_watch_under_ratchet", REPO / "scripts" / "guardrail_watch.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+LIVE_TELEGRAM_ENV = ("ROBOTHOR_TELEGRAM_BOT_TOKEN", "ROBOTHOR_TELEGRAM_CHAT_ID")
+
+
+def test_no_test_runs_with_live_telegram_credentials_in_its_environment():
+    """The operator's shell exports these; a bare `pytest` inherits them."""
+    present = [key for key in LIVE_TELEGRAM_ENV if key in os.environ]
+    assert not present, (
+        f"{present} reached a test — any Python sender reading os.environ can "
+        "now deliver a fixture message to the operator"
+    )
+
+
+def test_the_root_conftest_strips_the_credentials():
+    import conftest
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        for key in LIVE_TELEGRAM_ENV:
+            monkeypatch.setenv(key, "fixture-value-not-a-credential")
+        conftest.strip_live_telegram_credentials(monkeypatch)
+        still_set = [key for key in LIVE_TELEGRAM_ENV if key in os.environ]
+        assert not still_set, f"the strip left {still_set} in place"
+    finally:
+        monkeypatch.undo()
+
+
+def test_the_credential_strip_applies_to_every_test_without_being_requested(request):
+    """autouse, or it only protects the tests that remembered to ask.
+
+    This test never asks for the strip; ``request.fixturenames`` lists it only
+    if pytest applied it on its own.
+    """
+    assert "_no_live_telegram_credentials" in request.fixturenames, (
+        "the Telegram credential strip is not autouse, so it guards exactly "
+        "the tests that already knew about the hazard"
+    )
+
+
+def test_the_python_sender_refuses_to_deliver_from_inside_a_test(monkeypatch):
+    """Mirror of the shell pager's own in-test guard.
+
+    Credentials can arrive by routes the conftest strip does not see — a
+    monkeypatched env, a .env a fixture sources, a future caller that passes
+    them in — so the sender says no on its own account too.
+    """
+    gw = _guardrail_watch()
+    calls: list[object] = []
+    monkeypatch.setattr(gw.urllib.request, "urlopen", lambda *a, **k: calls.append(a))
+    for key in LIVE_TELEGRAM_ENV:
+        monkeypatch.setenv(key, "fixture-value-not-a-credential")
+
+    assert gw.send_telegram("fixture nag — must never leave the box") is False
+    assert calls == [], (
+        "guardrail_watch.send_telegram POSTed from inside a test run; on a box "
+        "with real credentials in scope that is a fixture message on the "
+        "operator's phone, with no spool, cooldown or API seam in the way"
+    )
+
+
+# ── The guardrail-watch stub helpers ─────────────────────────────────────────
+#
+# Four test files define a helper of the same name, `_stub_sibling_checks`,
+# with the same stated job: default every check main() calls to a safe pass so
+# that driving main() does not reach the live box or the operator. Four copies
+# of one contract drift (2026-08-22: three "hardcoded names" defects turned out
+# to be one), and the copy in test_guardrail_watch_slos.py had already lost
+# send_telegram — so its main() tests ran the real sender.
+
+_STUB_HELPER = "_stub_sibling_checks"
+
+
+def _monkeypatched_attrs(func: ast.FunctionDef) -> set[str]:
+    """The attribute names a helper hands to ``monkeypatch.setattr(gw, "x", …)``."""
+    names: set[str] = set()
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Call) or _call_name(node.func) != "setattr":
+            continue
+        if len(node.args) < 2:
+            continue
+        target = node.args[1]
+        if isinstance(target, ast.Constant) and isinstance(target.value, str):
+            names.add(target.value)
+    return names
+
+
+def stub_helpers() -> dict[Path, set[str]]:
+    """Every test file defining ``_stub_sibling_checks``, and what it stubs."""
+    out: dict[Path, set[str]] = {}
+    for path in sorted((REPO / "tests").rglob("test_*.py")):
+        try:
+            tree = ast.parse(path.read_text(errors="ignore"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == _STUB_HELPER:
+                out[path] = _monkeypatched_attrs(node)
+    return out
+
+
+def test_the_stub_helper_scan_finds_the_files_that_define_one():
+    """A scan that matches nothing passes forever. Name the files."""
+    names = {path.name for path in stub_helpers()}
+    for expected in (
+        "test_guardrail_watch_ordering.py",
+        "test_guardrail_watch_slos.py",
+        "test_instance_doctor.py",
+        "test_flag_audit.py",
+    ):
+        assert expected in names, f"the scan no longer sees {expected}"
+
+
+def test_every_stub_sibling_checks_helper_neutralises_the_python_sender():
+    offenders = sorted(
+        path.name for path, attrs in stub_helpers().items() if "send_telegram" not in attrs
+    )
+    assert not offenders, (
+        "these _stub_sibling_checks helpers claim to default every live-box "
+        "check to a safe pass but leave guardrail_watch.send_telegram real, "
+        f"so a nag raised by main() is delivered for real: {offenders}"
     )

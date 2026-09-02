@@ -78,6 +78,20 @@ def format_nag(overdue: list[dict], today: dt.date | None = None) -> str:
 
 
 def send_telegram(text: str) -> bool:
+    """Deliver a nag to the operator. False when it did not go out.
+
+    Never from inside a test. This sender has none of the shell pager's fuses
+    — no ROBOTHOR_TELEGRAM_API_BASE to redirect, no spool, no cooldown — it
+    POSTs to api.telegram.org with whatever token is in the environment. On
+    the operator's box those credentials ARE in the environment, so one test
+    that drives main() with an unstubbed nag path puts fixture text on the
+    operator's phone with nothing in the way. Same guard the shell pager and
+    model_breaker._in_pytest() already apply, at the one place every caller
+    crosses.
+    """
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        print("  (telegram nag suppressed: running under pytest)", file=sys.stderr)
+        return False
     token = os.environ.get("ROBOTHOR_TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:

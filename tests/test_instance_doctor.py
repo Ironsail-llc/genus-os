@@ -539,6 +539,33 @@ gw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gw)
 
 
+@pytest.fixture(autouse=True)
+def _the_real_slo_probe_never_runs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Sentinel, not trust — the same guard tests/test_guardrail_watch_ordering.py
+    puts around its own main() tests.
+
+    ``gw.check_slos()`` shells out to ``bash scripts/slo_probe.sh --report``.
+    Nothing in this file wants that: the probe walks the live backup volume,
+    asks ``systemctl show`` about the live units and can page through
+    ``send_failure_alert.sh``, so a test driving ``main()`` without stubbing it
+    silently depended on how the operator's box happened to be this morning —
+    and a probe with a dropped USB device blocks in readdir.
+
+    Point ``gw.SLO_PROBE`` at a stand-in that records every invocation, and
+    fail the test if anything ran it.
+    """
+    ran = tmp_path / "slo-probe-ran.txt"
+    stand_in = tmp_path / "fake-slo-probe.sh"
+    stand_in.write_text(f'#!/usr/bin/env bash\necho ran >> "{ran}"\nexit 0\n')
+    stand_in.chmod(0o755)
+    monkeypatch.setattr(gw, "SLO_PROBE", stand_in)
+    yield
+    assert not ran.exists(), (
+        "this test ran the real SLO probe against the live box — call "
+        "_stub_sibling_checks(monkeypatch, gw) before driving main()"
+    )
+
+
 def _fake_doctor(tmp_path: Path, exit_code: int, message: str = "seeded") -> Path:
     stub = tmp_path / "fake_instance_doctor.sh"
     stub.write_text(f"#!/usr/bin/env bash\necho '{message}'\nexit {exit_code}\n")
@@ -556,6 +583,10 @@ def _stub_sibling_checks(monkeypatch, gw):
     monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: True)
     monkeypatch.setattr(gw, "check_instance_doctor", lambda script=None: True)
     monkeypatch.setattr(gw, "send_telegram", lambda text: False)
+    # check_slos() shells out to the real scripts/slo_probe.sh, which reads the
+    # live backup volume and the live units and can page. Nothing in this file
+    # is about the SLOs.
+    monkeypatch.setattr(gw, "check_slos", lambda: [])
 
 
 def test_guardrail_watch_reports_doctor_findings(tmp_path: Path, capsys):

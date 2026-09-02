@@ -146,6 +146,12 @@ def _stub_sibling_checks(monkeypatch: pytest.MonkeyPatch) -> None:
     signature. Call this first, then override whatever this test targets."""
     monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: True)
     monkeypatch.setattr(gw, "check_instance_doctor", lambda script=None: True)
+    # The nag sender is a live-box check too — it POSTs to api.telegram.org
+    # with whatever credentials are in the environment, with no spool, no
+    # cooldown and no API-base seam to redirect. The same-named helper in the
+    # three sibling files stubs it; this copy had lost it, so every test here
+    # that drives main() ran the real sender.
+    monkeypatch.setattr(gw, "send_telegram", lambda text: False)
 
 
 def by_name(slos: list, needle: str):
