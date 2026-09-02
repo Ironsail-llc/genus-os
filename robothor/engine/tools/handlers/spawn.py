@@ -48,17 +48,40 @@ _spawn_semaphore: asyncio.Semaphore | None = None
 _spawn_semaphore_size: int = 0
 DEFAULT_MAX_CONCURRENT_SPAWNS = 10
 
+#: Set once at daemon boot from the mode policy — what THIS device can run,
+#: rather than the cloud-shaped constant in `config.py`. None means "not sized
+#: yet", which keeps the CLI and every test on the configured value.
+_spawn_limit_override: int | None = None
+
+
+def set_max_concurrent_spawns(limit: int) -> None:
+    """Bound sub-agent fan-out to the device's inference capacity.
+
+    The spawn path deliberately does NOT ask fleet admission: a child queueing
+    for a slot its parent is already holding is a deadlock, not backpressure.
+    So the only honest control here is a LIMIT, and it has to be the device's
+    — ten sub-agents against one GPU slot is nine runs of queue depth wearing
+    the costume of parallelism.
+    """
+    global _spawn_limit_override
+    _spawn_limit_override = max(1, int(limit))
+
+
+def max_concurrent_spawns() -> int:
+    """The fan-out ceiling in force: device bound first, then engine config."""
+    if _spawn_limit_override is not None:
+        return _spawn_limit_override
+    return _engine_config.max_concurrent_spawns if _engine_config else DEFAULT_MAX_CONCURRENT_SPAWNS
+
 
 def _get_spawn_semaphore() -> asyncio.Semaphore:
     """Get or create the spawn concurrency semaphore.
 
-    Uses the engine config's max_concurrent_spawns if available,
-    otherwise falls back to DEFAULT_MAX_CONCURRENT_SPAWNS.
+    Uses the device bound set at boot, else the engine config's
+    max_concurrent_spawns, else DEFAULT_MAX_CONCURRENT_SPAWNS.
     """
     global _spawn_semaphore, _spawn_semaphore_size
-    target = (
-        _engine_config.max_concurrent_spawns if _engine_config else DEFAULT_MAX_CONCURRENT_SPAWNS
-    )
+    target = max_concurrent_spawns()
     if _spawn_semaphore is None or _spawn_semaphore_size != target:
         _spawn_semaphore = asyncio.Semaphore(target)
         _spawn_semaphore_size = target

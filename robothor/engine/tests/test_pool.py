@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from robothor.engine.pool import FleetPool, get_fleet_pool, init_fleet_pool
+from robothor.engine.pool import FleetPool, Priority, get_fleet_pool, init_fleet_pool
 
 
 class TestFleetPool:
@@ -25,11 +25,14 @@ class TestFleetPool:
         assert "capacity" in reason
 
     def test_allows_after_completion(self):
+        # BACKGROUND: at a one-slot cap CRITICAL gets a bounded slot of
+        # overflow (test_admission_starvation.py), so only BACKGROUND still
+        # shows the cap being enforced and then released.
         pool = FleetPool(max_concurrent=1, hourly_cost_cap_usd=0)
         pool.register_run("run-1", "agent-a")
-        assert pool.can_start("agent-b")[0] is False
+        assert pool.can_start("agent-b", Priority.BACKGROUND)[0] is False
         pool.complete_run("run-1", cost_usd=0.10)
-        assert pool.can_start("agent-b")[0] is True
+        assert pool.can_start("agent-b", Priority.BACKGROUND)[0] is True
 
     def test_hourly_cost_cap(self):
         pool = FleetPool(max_concurrent=100, hourly_cost_cap_usd=1.0)

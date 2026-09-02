@@ -48,6 +48,13 @@ class Priority(StrEnum):
     BACKGROUND = "background"
 
 
+#: Extra slots CRITICAL work may take when the cap is one, where the
+#: interactive reservation is impossible by construction. ONE, not more: the
+#: point is that a CRITICAL run is never queued *behind background work*, not
+#: that CRITICAL is unbounded — at two active runs the next one still waits.
+CRITICAL_OVERFLOW_AT_ONE_SLOT = 1
+
+
 class FleetPool:
     """Fleet-wide admission control for agent runs.
 
@@ -110,6 +117,15 @@ class FleetPool:
                         f"Background run refused: {len(self._active)}/{self._max_concurrent} "
                         f"slots used and {self._reserved_slots} reserved for interactive work"
                     )
+            elif priority is Priority.CRITICAL and self._max_concurrent <= 1:
+                # A one-slot cap is the size at which the reservation above
+                # cannot exist: holding the only slot back would stall the
+                # fleet, so `mode_policy` sets reserved_slots=0 there and the
+                # slot goes to whoever asked first. Whoever asks first is cron.
+                # Measured on a LOCAL episode: main's CRITICAL heartbeat was
+                # refused 12 times while BACKGROUND sweeps held the single GPU
+                # slot. Overflow, not reservation, is the only lever left.
+                limit = self._max_concurrent + CRITICAL_OVERFLOW_AT_ONE_SLOT
             # Concurrency check
             if len(self._active) >= limit:
                 return False, (

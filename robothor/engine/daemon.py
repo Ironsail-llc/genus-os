@@ -1759,12 +1759,44 @@ def _init_fleet_capacity(config: EngineConfig) -> None:
         reserved_slots=max(0, min(reserved, config.max_concurrent_agents - 1)),
     )
     applied = CapacityGovernor(cloud_max_concurrent=config.max_concurrent_agents).apply_once()
+    _size_spawn_fan_out(config)
     logger.info(
         "Fleet pool: configured max_concurrent=%d, hourly_cost_cap=$%.2f, applied=%s",
         config.max_concurrent_agents,
         config.hourly_cost_cap_usd,
         applied,
     )
+
+
+def _size_spawn_fan_out(config: EngineConfig) -> None:
+    """Bound sub-agent fan-out by what this device can actually run.
+
+    ``ROBOTHOR_MAX_CONCURRENT_SPAWNS`` defaults to 10 regardless of device, so
+    on a one-slot LOCAL box ten sub-agents queue against a single inference
+    slot while their parent holds a fleet slot waiting for them. Admission
+    cannot fix that from the spawn path -- a child asking for a slot its
+    parent already holds is a deadlock -- so the bound is applied here, from
+    the same ``ModePolicy`` the pool is sized from.
+
+    Only ever narrows: an operator who configured 4 keeps 4 on an 8-slot box.
+    Fails open, like every other governor: an unreadable policy leaves the
+    configured value in place rather than stopping the daemon.
+    """
+    try:
+        from robothor.engine.mode_policy import current_policy
+        from robothor.engine.tools.handlers.spawn import set_max_concurrent_spawns
+
+        policy = current_policy(cloud_max_concurrent=config.max_concurrent_agents)
+        limit = max(1, min(config.max_concurrent_spawns, policy.max_concurrent_runs))
+        set_max_concurrent_spawns(limit)
+        logger.info(
+            "Sub-agent fan-out: %d (configured %d, device policy %d)",
+            limit,
+            config.max_concurrent_spawns,
+            policy.max_concurrent_runs,
+        )
+    except Exception:  # noqa: BLE001 - a limit is a guard, not a dependency
+        logger.warning("Could not size sub-agent fan-out — keeping the configured limit")
 
 
 async def _capacity_governor_loop(cloud_max_concurrent: int) -> None:

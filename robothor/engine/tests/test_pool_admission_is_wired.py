@@ -65,12 +65,17 @@ class TestTheReservationDesignsOutTheInversion:
         assert not p.can_start("a3", priority=Priority.BACKGROUND)[0]
 
     def test_a_released_slot_is_reusable(self):
-        """Asymmetric accounting is how an admission control becomes the outage."""
+        """Asymmetric accounting is how an admission control becomes the outage.
+
+        BACKGROUND priority deliberately: at a one-slot cap CRITICAL gets a
+        bounded slot of overflow (see test_admission_starvation.py), so it is
+        the wrong probe for "is the slot actually released".
+        """
         p = FleetPool(max_concurrent=1)
         p.register_run("r1", "a1")
-        assert not p.can_start("a2")[0]
+        assert not p.can_start("a2", priority=Priority.BACKGROUND)[0]
         p.complete_run("r1")
-        assert p.can_start("a2")[0]
+        assert p.can_start("a2", priority=Priority.BACKGROUND)[0]
 
 
 class TestItHasAProductionCaller:
