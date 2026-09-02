@@ -378,6 +378,26 @@ def test_timer_triggered_oneshot_is_not_reported(installed_root: Path, tmp_path:
     assert "robothor-liveness.service" not in result.stdout, result.stdout
 
 
+def test_the_doctor_does_not_ask_for_a_mirror_the_installer_retired(
+    installed_root: Path,
+):
+    """The doctor derives its host-script list from install-host-scripts.sh's
+    `install_one` lines rather than restating them (#329/#330/#331 were one
+    hand-maintained list drifting from the real one). Dropping an install line
+    must therefore drop the check with it, not leave a permanent
+    "not-installed" finding for a file nothing writes."""
+    # Absent from /usr/local/bin is now the CORRECT state, so seed it: with the
+    # pair still derived, each of these would raise a not-installed finding.
+    bin_dir = installed_root / "usr" / "local" / "bin"
+    for name in ("robothor-pg-basebackup.sh", "robothor-wal-offsite.sh"):
+        (bin_dir / name).unlink(missing_ok=True)
+
+    result = run_doctor(installed_root)
+
+    assert "robothor-pg-basebackup.sh" not in result.stdout, result.stdout
+    assert "robothor-wal-offsite.sh" not in result.stdout, result.stdout
+
+
 def test_host_script_drift_is_reported(installed_root: Path):
     installed = installed_root / "usr" / "local" / "bin" / "robothor-thermal-guard.sh"
     installed.write_text(installed.read_text() + "\n# stale installed copy\n")

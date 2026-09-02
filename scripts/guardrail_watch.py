@@ -320,9 +320,16 @@ def check_dropin_drift(pairs: list[tuple[str, str]] | None = None) -> None:
 # repo source is exactly how a month-old permission fix in pg-basebackup.sh
 # stayed unapplied on the live box.
 HOST_SCRIPT_DRIFT_PAIRS: list[tuple[str, str]] = [
-    ("/usr/local/bin/robothor-pg-basebackup.sh", "scripts/pg-basebackup.sh"),
-    ("/usr/local/bin/robothor-wal-offsite.sh", "scripts/wal-offsite.sh"),
+    # Postgres runs this one straight out of /usr/local/bin via archive_command,
+    # so the installed copy is the copy that executes.
     ("/usr/local/bin/robothor-wal-archive.sh", "scripts/wal-archive.sh"),
+    # No pair for robothor-pg-basebackup.sh or robothor-wal-offsite.sh:
+    # scripts/install-host-scripts.sh stopped mirroring them and now deletes
+    # any left behind. Their units ExecStart the workspace copy, and the
+    # scripts source sibling helpers /usr/local/bin does not have — so a mirror
+    # could not run even if something tried. A drift pair for a file nothing
+    # installs reports "missing" forever, and a permanently red check is one
+    # the operator stops reading.
     # The thermal guard is a SAFETY control (Aug 2026 GPU event) that ran for
     # weeks with no repo mirror at all — a rebuilt box would have lost it.
     ("/usr/local/bin/robothor-thermal-guard.sh", "scripts/thermal-guard.sh"),

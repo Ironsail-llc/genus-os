@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Install the host ops scripts (base backup, WAL offsite, WAL archive) from
-# the repo into their live location, replacing the hand-copy workflow.
+# Install the host ops scripts (WAL archive, thermal, boot and GPU guards)
+# from the repo into their live location, replacing the hand-copy workflow.
+#
+# Only scripts something actually EXECUTES from /usr/local/bin belong here.
+# The base-backup and WAL-offsite jobs run their workspace copy (see their
+# units' ExecStart=) and source sibling helpers, so a mirror here cannot run
+# at all; the stale ones are removed below.
 #
 # Today's incident's root cause: these scripts are hand-copied to
 # /usr/local/bin/robothor-*.sh with no installer and no drift check. A
@@ -59,10 +64,34 @@ install_one() {
     fi
 }
 
-install_one "${REPO_ROOT}/scripts/pg-basebackup.sh" "robothor-pg-basebackup.sh"
-install_one "${REPO_ROOT}/scripts/wal-offsite.sh" "robothor-wal-offsite.sh"
+# NOTE: the doctor (scripts/instance_doctor.sh) and guardrail_watch.py derive
+# what to drift-check from these `install_one` lines, so a line removed here
+# removes its check too. Keep the literal two-argument form.
 install_one "${REPO_ROOT}/scripts/wal-archive.sh" "robothor-wal-archive.sh"
 install_one "${REPO_ROOT}/scripts/thermal-guard.sh" "robothor-thermal-guard.sh"
+
+# ── Retired mirrors ───────────────────────────────────────────────────────────
+# pg-basebackup.sh and wal-offsite.sh were mirrored here and never invoked:
+# robothor-basebackup.service and robothor-wal-offsite.service both ExecStart
+# the WORKSPACE copy, and always did. The mirrors were dead weight that the
+# drift check nevertheless kept comparing.
+#
+# They are now worse than dead. Both scripts `source "$SCRIPT_DIR/backup-state.sh"`
+# (wal-offsite.sh also needs backup-volume-check.sh), and /usr/local/bin has no
+# sibling of that name — so a mirror aborts on its first source line while
+# looking, to anyone reading the directory, exactly like the installed backup.
+# Copying the helpers alongside would create a second, parallel backup
+# implementation to keep in sync; deleting the unused copy will not.
+#
+# Removal is unconditional and logged rather than left to the operator: the old
+# installer put these on every box that ran it, and a broken script nobody
+# deletes is the same trap the next reader falls into.
+for stale_name in robothor-pg-basebackup.sh robothor-wal-offsite.sh; do
+    stale="${BIN_DIR}/${stale_name}"
+    [[ -e "$stale" ]] || continue
+    rm -f "$stale"
+    log "removed ${stale} — no unit ran it, and it sources a sibling that only exists in the workspace"
+done
 
 # ── Log rotation ──────────────────────────────────────────────────────────────
 # /etc/logrotate.d/robothor existed on the box with no source in the repo and

@@ -22,11 +22,20 @@ gw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gw)
 
 
-def test_default_pairs_cover_the_three_host_scripts():
+def test_default_pairs_cover_the_installed_host_scripts():
     pairs = dict(gw.HOST_SCRIPT_DRIFT_PAIRS)
-    assert pairs["/usr/local/bin/robothor-pg-basebackup.sh"] == "scripts/pg-basebackup.sh"
-    assert pairs["/usr/local/bin/robothor-wal-offsite.sh"] == "scripts/wal-offsite.sh"
     assert pairs["/usr/local/bin/robothor-wal-archive.sh"] == "scripts/wal-archive.sh"
+    assert pairs["/usr/local/bin/robothor-thermal-guard.sh"] == "scripts/thermal-guard.sh"
+
+
+def test_no_pair_for_a_mirror_the_installer_no_longer_writes():
+    """A drift pair for a file nothing installs reports "missing" forever, and
+    a permanently red check is one the operator stops reading. pg-basebackup.sh
+    and wal-offsite.sh are run from the workspace by their units and source a
+    sibling /usr/local/bin does not have."""
+    pairs = dict(gw.HOST_SCRIPT_DRIFT_PAIRS)
+    assert "/usr/local/bin/robothor-pg-basebackup.sh" not in pairs
+    assert "/usr/local/bin/robothor-wal-offsite.sh" not in pairs
 
 
 def test_reports_ok_when_live_matches_mirror(tmp_path, capsys):
