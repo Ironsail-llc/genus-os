@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import time
@@ -347,3 +348,224 @@ class TestEveryStepIsBounded:
 
         assert result.returncode == SKIP, _output(result)
         assert elapsed < 20, f"the probe hung for {elapsed:.1f}s on the stat step"
+
+
+class TestTheSeparateMountGuardIsOnlyDisabledByExactlyZero:
+    """The escape hatch has to be hard to trip by accident.
+
+    ``ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT`` was armed only when it was
+    exactly ``"1"``, so every other value disarmed it — including ``true``,
+    ``yes``, ``on`` and a stray trailing space. Those all read as "yes, require
+    a separate mount" to whoever typed them, and every one of them silently
+    turned the guard off, which is how a backup ends up on the root disk
+    looking like success.
+
+    Disarming is the dangerous direction, so only the one unambiguous value
+    disarms it.
+    """
+
+    @pytest.mark.parametrize("value", ["true", "yes", "on", "1 ", "", "00", "-0"])
+    def test_anything_but_zero_keeps_the_guard_armed(
+        self, tmp_path: Path, value: str
+    ) -> None:
+        vol = tmp_path / "vol"
+        vol.mkdir()
+        result = _run(
+            "--rw",
+            str(vol),
+            env_extra={"ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": value},
+        )
+        assert result.returncode == SKIP, (
+            f"ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT={value!r} disarmed the "
+            "guard; a backup on the root filesystem then looks like success\n"
+            + _output(result)
+        )
+        assert "root filesystem" in _output(result), _output(result)
+
+    def test_exactly_zero_disarms_it(self, tmp_path: Path) -> None:
+        vol = tmp_path / "vol"
+        vol.mkdir()
+        result = _run(
+            "--rw",
+            str(vol),
+            env_extra={"ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0"},
+        )
+        assert result.returncode == 0, _output(result)
+
+
+class TestAMalformedTimeoutMustNotSkipEveryBackup:
+    """Exit 2 from an ExecCondition= is a SKIP, not aconfiguration error the operator sees.
+
+    A typo in ``ROBOTHOR_VOLUME_PROBE_TIMEOUT`` (``20s``, ``5m``, an empty
+    override) exited 2 — which systemd reads as "the condition does not hold"
+    and quietly skips the unit. One malformed environment line in
+    /etc/robothor/robothor.env would therefore stop all four backup units,
+    forever, without a single failure or page.
+
+    The value is a bound on how long each step may hang; there is a perfectly
+    good default. Say the value is bad, use the default, and let the backup
+    run.
+    """
+
+    @pytest.mark.parametrize("value", ["20s", "5m", "abc", "-1", "0", "2.5"])
+    def test_a_bad_value_falls_back_to_the_default(
+        self, tmp_path: Path, value: str
+    ) -> None:
+        vol = tmp_path / "vol"
+        vol.mkdir()
+        result = _run(
+            "--rw", str(vol), env_extra={"ROBOTHOR_VOLUME_PROBE_TIMEOUT": value}
+        )
+        assert result.returncode == 0, (
+            "a typo in one environment variable skipped the backup\n"
+            + _output(result)
+        )
+        assert value in _output(result), (
+            "the bad value must be named in the journal or nobody will ever "
+            "find the typo\n" + _output(result)
+        )
+        assert "20" in _output(result), (
+            "say which default was used instead\n" + _output(result)
+        )
+
+    def test_a_good_value_is_still_honoured(self, tmp_path: Path) -> None:
+        """The fallback must not swallow a legitimate override — the hang
+        tests above depend on it."""
+        vol = tmp_path / "vol"
+        vol.mkdir()
+        bin_dir = tmp_path / "bin"
+        _stub(bin_dir / "ls", "sleep 60")
+
+        started = time.monotonic()
+        result = _run(
+            "--ro",
+            str(vol),
+            env_extra={"ROBOTHOR_VOLUME_PROBE_TIMEOUT": "1"},
+            path=f"{bin_dir}:{os.environ['PATH']}",
+        )
+        assert result.returncode == SKIP, _output(result)
+        assert time.monotonic() - started < 20
+
+
+class TestAStackedMountCannotCollapseTheGuard:
+    """``findmnt --target`` can print more than one row.
+
+    The output was whitespace-stripped whole, so two rows of ``/`` became the
+    single token ``//`` — which is not ``/``, so the "is this the root
+    filesystem?" comparison stopped matching and an unmounted backup directory
+    passed the guard. The same stripping concatenated two option rows into one
+    unparseable string.
+
+    Only the first row describes the mount containing the target.
+    """
+
+    @staticmethod
+    def _findmnt(bin_dir: Path, targets: str, options: str) -> None:
+        _stub(
+            bin_dir / "findmnt",
+            'case "$*" in\n'
+            f"  *TARGET*) printf '{targets}' ;;\n"
+            f"  *OPTIONS*) printf '{options}' ;;\n"
+            "esac",
+        )
+
+    def test_two_root_rows_do_not_become_a_non_root_path(
+        self, tmp_path: Path
+    ) -> None:
+        vol = tmp_path / "vol"
+        vol.mkdir()
+        bin_dir = tmp_path / "bin"
+        self._findmnt(bin_dir, r"/\n/\n", r"rw,relatime\n rw,relatime\n")
+
+        result = _run(
+            "--rw",
+            str(vol),
+            env_extra={"ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "1"},
+            path=f"{bin_dir}:{os.environ['PATH']}",
+        )
+        assert result.returncode == SKIP, (
+            "two rows of '/' collapsed to '//' and walked straight past the "
+            "root-filesystem guard\n" + _output(result)
+        )
+        assert "root filesystem" in _output(result), _output(result)
+
+    def test_a_second_options_row_does_not_decide_the_answer(
+        self, tmp_path: Path
+    ) -> None:
+        vol = tmp_path / "vol"
+        vol.mkdir()
+        bin_dir = tmp_path / "bin"
+        # Row 1 is the mount that actually contains the target and it is fine.
+        # Row 2 belongs to something else and must not be read at all.
+        self._findmnt(
+            bin_dir,
+            r"/mnt/vol\n/mnt/other\n",
+            r"rw,relatime\nro,relatime,emergency_ro\n",
+        )
+
+        result = _run("--rw", str(vol), path=f"{bin_dir}:{os.environ['PATH']}")
+        assert result.returncode == 0, (
+            "a second findmnt row was glued onto the first, so an unrelated "
+            "mount's options answered the question\n" + _output(result)
+        )
+
+
+class TestTheWriteProbeSurvivesASignal:
+    """``.robothor-volume-probe.XXXXXX`` must never outlive the probe.
+
+    The cleanup was a plain statement after the write, so a SIGTERM (systemd
+    hitting TimeoutStartSec, a `systemctl stop` during a nightly run) between
+    the mktemp and the rm left the file on the backup volume — once per run,
+    forever. A probe that litters the volume it is protecting is a probe that
+    gets disabled.
+    """
+
+    def test_a_signal_mid_write_leaves_nothing_on_the_volume(
+        self, tmp_path: Path
+    ) -> None:
+        real_timeout = shutil.which("timeout")
+        assert real_timeout, "coreutils timeout is required for this test"
+
+        vol = tmp_path / "vol"
+        vol.mkdir()
+        bin_dir = tmp_path / "bin"
+        # Hang the WRITE step only; every other step gets the real timeout.
+        _stub(
+            bin_dir / "timeout",
+            'for a in "$@"; do\n'
+            '  case "$a" in *"printf ok"*) sleep 60; exit 1 ;; esac\n'
+            "done\n"
+            f'exec {real_timeout} "$@"',
+        )
+
+        proc = subprocess.Popen(
+            [BASH, str(SCRIPT), "--rw", str(vol)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+            env={
+                "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0",
+            },
+        )
+        try:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if list(vol.glob(".robothor-volume-probe.*")):
+                    break
+                time.sleep(0.05)
+            else:  # pragma: no cover - the fixture never reached the write
+                raise AssertionError("the write probe file was never created")
+
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            proc.wait(timeout=30)
+        finally:
+            if proc.poll() is None:  # pragma: no cover
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                proc.wait(timeout=10)
+
+        assert list(vol.iterdir()) == [], (
+            "a signal during the write left "
+            f"{[p.name for p in vol.iterdir()]} on the backup volume"
+        )

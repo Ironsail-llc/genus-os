@@ -42,22 +42,28 @@
 #
 # Environment:
 #   ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT
-#                                  1 (default) => PATH must live on a mount of
-#                                  its own. An unmounted /mnt/robothor-backup is
-#                                  an empty directory on the root filesystem
-#                                  that reads and writes perfectly, so without
-#                                  this the backup lands on the root disk and
-#                                  looks like success. Set to 0 only for an
-#                                  instance whose backup directory is genuinely
-#                                  on the root filesystem (and in tests, which
-#                                  cannot create a mount unprivileged).
+#                                  armed unless set to exactly "0" (default 1):
+#                                  PATH must live on a mount of its own. An
+#                                  unmounted /mnt/robothor-backup is an empty
+#                                  directory on the root filesystem that reads
+#                                  and writes perfectly, so without this the
+#                                  backup lands on the root disk and looks like
+#                                  success. Only "0" disarms it — "true",
+#                                  "yes" and a stray trailing space all read as
+#                                  "yes, require it" to whoever typed them.
+#                                  Set it for an instance whose backup
+#                                  directory is genuinely on the root
+#                                  filesystem (and in tests, which cannot
+#                                  create a mount unprivileged).
 #   ROBOTHOR_VOLUME_PROBE_TIMEOUT  seconds allowed per step (default 20). A
 #                                  dropped USB device blocks readdir forever;
 #                                  without this the probe inherits the hang
 #                                  and the unit sits in `activating` until
 #                                  TimeoutStartSec (3600s for the nightly
 #                                  backup) — worse than the failure it
-#                                  replaced.
+#                                  replaced. A malformed value is logged and
+#                                  the default used: exiting non-zero on a typo
+#                                  would skip every backup unit silently.
 set -uo pipefail
 
 EXIT_HEALTHY=0
@@ -96,10 +102,17 @@ TARGET="${1:-}"
 [[ $# -eq 1 ]] || usage
 
 REQUIRE_SEPARATE_MOUNT="${ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT:-1}"
-TIMEOUT="${ROBOTHOR_VOLUME_PROBE_TIMEOUT:-20}"
+
+# The default is a bound on how long each step may hang, and a typo in it is
+# not a reason to answer a question about the disk. Exit 2 here would be read
+# by systemd as "the condition does not hold", so one malformed line in
+# /etc/robothor/robothor.env would silently skip all four backup units forever.
+# Name the bad value and carry on with the default instead.
+TIMEOUT_DEFAULT=20
+TIMEOUT="${ROBOTHOR_VOLUME_PROBE_TIMEOUT:-$TIMEOUT_DEFAULT}"
 if [[ ! "$TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
-    say "ROBOTHOR_VOLUME_PROBE_TIMEOUT=${TIMEOUT} is not a positive integer"
-    exit "$EXIT_USAGE"
+    say "ROBOTHOR_VOLUME_PROBE_TIMEOUT=${TIMEOUT} is not a positive integer — using the default ${TIMEOUT_DEFAULT}s"
+    TIMEOUT="$TIMEOUT_DEFAULT"
 fi
 
 # ── The probe's own tools ────────────────────────────────────────────────────
@@ -138,9 +151,19 @@ fi
 if ! MOUNT_TARGET=$(timeout "$TIMEOUT" findmnt -n -o TARGET --target "$TARGET" 2>/dev/null); then
     unhealthy "findmnt could not resolve a mount for $TARGET (timed out, or the volume is not mounted)"
 fi
+# findmnt can print MORE than one row (stacked mounts). Only the first row
+# describes the mount containing the target — and stripping the whole output
+# turned two rows of "/" into the single token "//", which is not "/", so the
+# root-filesystem comparison below stopped matching and an unmounted backup
+# directory sailed through the guard.
+MOUNT_TARGET="$(printf '%s\n' "$MOUNT_TARGET" | head -n 1)"
 MOUNT_TARGET="${MOUNT_TARGET//[[:space:]]/}"
 
-if [[ "$REQUIRE_SEPARATE_MOUNT" == "1" && "$MOUNT_TARGET" == "/" ]]; then
+# Disarmed ONLY by exactly "0". This used to be armed only by exactly "1", so
+# `true`, `yes`, `on` and a stray trailing space all turned it off — every one
+# of which reads as "yes, require a separate mount" to whoever typed it. The
+# dangerous direction is disarming, so it takes the one unambiguous value.
+if [[ "$REQUIRE_SEPARATE_MOUNT" != "0" && "$MOUNT_TARGET" == "/" ]]; then
     unhealthy "$TARGET is on the root filesystem — the backup volume is not mounted"
 fi
 
@@ -150,6 +173,9 @@ fi
 if ! OPTIONS=$(timeout "$TIMEOUT" findmnt -n -o OPTIONS --target "$TARGET" 2>/dev/null); then
     unhealthy "findmnt could not read the mount options for $TARGET"
 fi
+# First row only, for the same reason as the mount target above: concatenating
+# a second mount's options lets an unrelated mount answer the question.
+OPTIONS="$(printf '%s\n' "$OPTIONS" | head -n 1)"
 OPTIONS="${OPTIONS//[[:space:]]/}"
 
 if [[ "$OPTIONS" == *emergency_ro* ]]; then
@@ -175,6 +201,14 @@ if [[ "$MODE" == "--rw" ]]; then
     if ! PROBE_FILE=$(timeout "$TIMEOUT" mktemp "${TARGET}/.robothor-volume-probe.XXXXXX" 2>/dev/null); then
         unhealthy "cannot create a file in $TARGET — a backup written here would go nowhere"
     fi
+    # Set the moment the file exists, not after the write. A SIGTERM in between
+    # (systemd hitting TimeoutStartSec, a systemctl stop during a nightly run)
+    # otherwise leaves .robothor-volume-probe.XXXXXX on the volume once per
+    # run, and a probe that litters the disk it protects is a probe that gets
+    # disabled. Bounded like every other step: unlink can hang on a dead
+    # device too, and a trap that hangs never returns the exit status.
+    # shellcheck disable=SC2064  # expand PROBE_FILE and TIMEOUT now, on purpose
+    trap "timeout $TIMEOUT rm -f '$PROBE_FILE' 2>/dev/null || true" EXIT
     # "${BASH}", not `bash`: the interpreter is already running, and a caller
     # with a stripped PATH must not turn a healthy volume into a skipped unit.
     # shellcheck disable=SC2016  # $1 is the inner shell's argument, on purpose
