@@ -51,7 +51,7 @@ tomorrow.
 | S6 | LLM availability | `agent_runs`, 24h: `All models failed` share, `ollama_chat/%` share | all-failed < 1%/day, local fallback < 30% | **page** `slo:llm-availability` (6h cooldown) at ≥ 5 all-failed in an hour |
 | S6 | Credential pool | `keys_from_env('OPENROUTER_API_KEY')` — the pool every model shares | ≥ 2 keys | digest line `pool size N`, never a page |
 | S7 | Workflows | `workflow_runs`, 7d, worst workflow | bad ≤ 10% | digest |
-| S8 | Guardrail-watch ran | `systemctl show robothor-guardrail-watch.service -p ExecMainExitTimestamp,Result`, read hourly | completed < 26h ago, `success` | **page** `slo:guardrail-watch-stale` (12h cooldown) |
+| S8 | Guardrail-watch ran | `systemctl show robothor-guardrail-watch.service -p ExecMainExitTimestamp,ExecMainStatus,Result`, read hourly | **completed** < 26h ago (exit 1 = findings reported, still completed) | **page** `slo:guardrail-watch-stale` (12h cooldown) |
 
 S5 and S8 were both the string `OK` until the hourly probe learned to ask
 systemd. S8's evidence was the daily report printing itself — which says
@@ -150,6 +150,26 @@ journalctl -u robothor-liveness.service -n 50 --no-pager
 The daily report has stopped completing, so the drift checks, the instance
 manifest validation and the whole daily SLO section it carries are producing
 nothing — silently, because a unit that does not run fails nothing.
+
+**S8 measures whether the report RAN, not whether it liked what it found.**
+`robothor-guardrail-watch.service` is a `Type=oneshot` that exits **1 by
+design** whenever it has findings — a drifted drop-in, an invalid manifest, a
+guardrail whose effective mode is not the one its manifest records. That exit
+is the unit's own `OnFailure=` pager firing, and the findings have already
+reached the operator by the time S8 looks. So a fresh `ExecMainExitTimestamp`
+with `ExecMainStatus=1` is **OK** for S8; reading it as a breach meant two
+pages for one event, the second one saying the opposite of the truth.
+
+S8 breaches on exactly three states:
+
+| State | Why |
+|---|---|
+| no `ExecMainExitTimestamp` | no run has ever completed on this box |
+| `ExecMainExitTimestamp` older than 26h | the report has stopped running |
+| `Result` in `timeout`, `signal`, `core-dump`, `watchdog` | the run stopped mid-way, so no findings page fired either |
+
+An exit status that is neither 0 nor 1 also breaches: the report has no
+vocabulary for one, so something killed it after it started.
 
 ```bash
 systemctl status robothor-guardrail-watch.timer robothor-guardrail-watch.service

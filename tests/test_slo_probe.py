@@ -199,6 +199,7 @@ def healthy_units() -> dict[str, dict[str, str]]:
     return {
         "robothor-guardrail-watch.service": {
             "Result": "success",
+            "ExecMainStatus": "0",
             "ExecMainExitTimestamp": systemctl_stamp(2),
         },
         "robothor-liveness.service": {"Result": "success"},
@@ -549,11 +550,13 @@ class TestTheGuardrailWatchStalenessSlo:
         assert "slo:guardrail-watch-stale" in body
         assert "--- 43200" in body, "S8 carries a 12h cooldown"
 
-    def test_a_failed_last_run_pages_even_when_it_is_recent(self, tmp_path: Path):
+    def test_an_unexpected_exit_status_pages_even_when_it_is_recent(self, tmp_path: Path):
+        """Status 2 is not a vocabulary the daily report has: it died."""
         healthy_tree(tmp_path)
         env = base_env(tmp_path)
         units = healthy_units()
         units["robothor-guardrail-watch.service"]["Result"] = "exit-code"
+        units["robothor-guardrail-watch.service"]["ExecMainStatus"] = "2"
         with_units(tmp_path, env, units)
         log = with_recording_alert(tmp_path, env)
         run_probe(env)
@@ -575,6 +578,99 @@ class TestTheGuardrailWatchStalenessSlo:
         log = with_recording_alert(tmp_path, env)
         assert run_probe(env).returncode == 0
         assert not log.exists()
+
+
+class TestS8MeasuresWhetherTheReportRanNotWhetherItFoundNothing:
+    """`robothor-guardrail-watch.service` is a Type=oneshot that exits 1 BY
+    DESIGN whenever it has findings — a drifted drop-in, an invalid manifest,
+    a guardrail whose effective mode is not the one its manifest records. That
+    exit code is the unit's own OnFailure= pager firing, and it has already
+    reached the operator by the time S8 looks.
+
+    Reading it as ``Result != success`` therefore made S8 page "the daily
+    report is failing, so the drift checks are not reaching anyone" on exactly
+    the mornings the drift checks DID reach someone. Two pages for one event,
+    the second one wrong, on the surface whose whole job is to be trusted when
+    it finally says something.
+
+    S8 asks one question: did the report RUN, recently? A completed run with a
+    fresh exit timestamp answers yes whatever it found. Only a run that did
+    not complete — timeout, signal, core dump — or one too old, or none at
+    all, is a breach.
+    """
+
+    @staticmethod
+    def _watch(**props: str) -> dict[str, dict[str, str]]:
+        units = healthy_units()
+        units["robothor-guardrail-watch.service"].update(props)
+        return units
+
+    def test_a_fresh_run_that_reported_findings_is_not_a_breach(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        with_units(
+            tmp_path,
+            env,
+            self._watch(
+                Result="exit-code",
+                ExecMainStatus="1",
+                ExecMainExitTimestamp=systemctl_stamp(2),
+            ),
+        )
+        log = with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        assert not log.exists(), (
+            "the report ran two hours ago and said what it found; S8 must not "
+            f"page a second time on top of its OnFailure=: {log.read_text() if log.exists() else ''}"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    @pytest.mark.parametrize("result_value", ["timeout", "signal", "core-dump"])
+    def test_a_run_that_did_not_complete_is_a_breach(self, tmp_path: Path, result_value: str):
+        """These are the Results that mean the report stopped mid-way: nothing
+        it carries reached anyone, and no OnFailure= says which half ran."""
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        with_units(
+            tmp_path,
+            env,
+            self._watch(
+                Result=result_value,
+                ExecMainStatus="1",
+                ExecMainExitTimestamp=systemctl_stamp(2),
+            ),
+        )
+        log = with_recording_alert(tmp_path, env)
+
+        run_probe(env)
+
+        assert log.exists(), f"Result={result_value} is a report that never finished"
+        body = log.read_text()
+        assert "slo:guardrail-watch-stale" in body
+        assert result_value in body, "the page must name what systemd actually said"
+
+    def test_a_stale_run_is_a_breach_however_it_exited(self, tmp_path: Path):
+        """Freshness is the measurement. A findings-exit 30h ago is still a
+        report that has not run since yesterday."""
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        with_units(
+            tmp_path,
+            env,
+            self._watch(
+                Result="exit-code",
+                ExecMainStatus="1",
+                ExecMainExitTimestamp=systemctl_stamp(30),
+            ),
+        )
+        log = with_recording_alert(tmp_path, env)
+
+        run_probe(env)
+
+        assert log.exists(), "30h since the last completed run is the breach S8 exists for"
+        assert "slo:guardrail-watch-stale" in log.read_text()
 
 
 class TestTheLivenessSlo:

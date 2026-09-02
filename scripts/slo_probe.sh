@@ -439,16 +439,32 @@ unevaluated() {
     UNEVALUATED=1
 }
 
+# The Results that mean the run did not FINISH. Everything else that has an
+# exit timestamp completed, whatever status it completed with.
+#
+# robothor-guardrail-watch.service is a Type=oneshot that exits 1 BY DESIGN
+# whenever it has findings (a drifted drop-in, an invalid manifest, a guardrail
+# whose effective mode is not the one its manifest records — guardrail_watch.py
+# main()). That exit is the unit's own OnFailure= pager firing, and it has
+# already reached the operator by the time this looks. Reading it as
+# `Result != success` made S8 page "the daily report is failing, so the drift
+# checks are not reaching anyone" on exactly the mornings they did reach
+# someone: two pages for one event, and the second one false.
+#
+# S8 asks whether the report RAN, recently. Not whether it liked what it found.
+INCOMPLETE_RESULTS="timeout signal core-dump watchdog"
+
 check_guardrail_watch() {
-    local out result stamp epoch age
-    local label="S8 guardrail-watch ran" target="< ${GUARDRAIL_WATCH_MAX_HOURS}h, Result=success"
-    out="$(show_props robothor-guardrail-watch.service ExecMainExitTimestamp,Result)"
+    local out result status stamp epoch age how
+    local label="S8 guardrail-watch ran" target="completed < ${GUARDRAIL_WATCH_MAX_HOURS}h ago"
+    out="$(show_props robothor-guardrail-watch.service ExecMainExitTimestamp,ExecMainStatus,Result)"
     if [[ -z "$out" ]]; then
         unevaluated "S8" "systemctl could not answer for robothor-guardrail-watch.service"
         emit "$label" "$target" "systemctl could not answer" "UNEVALUATED"
         return
     fi
     result="$(prop_of "$out" Result)"
+    status="$(prop_of "$out" ExecMainStatus)"
     stamp="$(prop_of "$out" ExecMainExitTimestamp)"
 
     if ! epoch="$(stamp_epoch "$stamp")"; then
@@ -458,18 +474,32 @@ check_guardrail_watch() {
         return
     fi
     age="$(hours_since "$epoch")"
+    how="Result=${result:-<none>}, status ${status:-<none>}"
 
-    if [[ "$result" != "success" ]]; then
-        emit "$label" "$target" "last run ${age}h ago, Result=${result}" "BREACH"
+    if [[ " ${INCOMPLETE_RESULTS} " == *" ${result} "* ]]; then
+        emit "$label" "$target" "last run ${age}h ago did not finish (${how})" "BREACH"
         page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
-            "S8 BREACHED: robothor-guardrail-watch.service last finished ${age}h ago with Result=${result}. The daily report is failing, so the drift checks and manifest validation it carries are not reaching anyone. Runbook: docs/runbooks/SLOS.md (S8)." || true
+            "S8 BREACHED: robothor-guardrail-watch.service stopped mid-run ${age}h ago (Result=${result}). It did not finish, so nobody knows which half of the drift checks, manifest validation and SLO report ran — and a run that never reached its end fires no findings page of its own. Runbook: docs/runbooks/SLOS.md (S8)." || true
     elif (( age > GUARDRAIL_WATCH_MAX_HOURS )); then
         emit "$label" "$target" "last completed ${age}h ago" "BREACH"
         page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
             "S8 BREACHED: robothor-guardrail-watch.service last completed ${age}h ago (budget ${GUARDRAIL_WATCH_MAX_HOURS}h). A daily watchdog that stops running reports nothing and fails nothing — this is the only signal left. Runbook: docs/runbooks/SLOS.md (S8)." || true
+    elif [[ "$result" == "success" ]]; then
+        log "  S8 guardrail-watch: last completed ${age}h ago, ${how} (budget ${GUARDRAIL_WATCH_MAX_HOURS}h) — OK"
+        emit "$label" "$target" "last completed ${age}h ago, ${how}" "OK"
+    elif [[ "$status" == "1" ]]; then
+        # The by-design exit: the report finished and had findings. Its own
+        # OnFailure= has already paged them; S8 saying so again would be the
+        # second, wrong page for one event.
+        log "  S8 guardrail-watch: completed ${age}h ago and reported findings (${how}) — OK for S8; the findings paged on their own"
+        emit "$label" "$target" "completed ${age}h ago and reported findings (${how})" "OK"
     else
-        log "  S8 guardrail-watch: last completed ${age}h ago, Result=${result} (budget ${GUARDRAIL_WATCH_MAX_HOURS}h) — OK"
-        emit "$label" "$target" "last completed ${age}h ago, Result=${result}" "OK"
+        # Finished, but with a status the report has no vocabulary for — it
+        # exits 0 or 1 and nothing else. Something else killed it after it
+        # started writing.
+        emit "$label" "$target" "last run ${age}h ago exited unexpectedly (${how})" "BREACH"
+        page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
+            "S8 BREACHED: robothor-guardrail-watch.service finished ${age}h ago with an unexpected exit (${how}). It exits 0 for a clean report and 1 for one with findings; anything else means it died partway, so the drift checks and manifest validation it carries may not have run at all. Runbook: docs/runbooks/SLOS.md (S8)." || true
     fi
 }
 
