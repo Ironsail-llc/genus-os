@@ -917,17 +917,38 @@ def write_slo_digest(subject: str, body: str) -> bool:
 
 
 def check_slos() -> list[Slo]:
-    """Report every SLO, then leave one digest row if any of them breached."""
-    print("\n=== SLOs ===")
-    # DB-free first, and unconditionally — see the module comment above. S4, S5
-    # and S8 all come from the hourly probe's --report mode, so the daily
-    # surface and the pager can never disagree about what they measured.
+    """The database-free half of the roster: S4, S5, S8 and the pool size.
+
+    Runs in main()'s DB-free section and opens no connection. S4, S5 and S8
+    all come from the hourly probe's --report mode, so the daily surface and
+    the pager can never disagree about what they measured, and the credential
+    pool is counted from the environment. The rows are returned so the digest
+    written in the database section covers the whole run.
+    """
+    print("\n=== SLOs (database-free) ===")
     slos = probe_report_slos()
     slos.append(credential_pool_slo(credential_pool_size()))
-    slos += db_slos()
+    print(format_slo_report(slos))
+    return slos
+
+
+def check_db_slos(db_free: list[Slo] | None = None) -> list[Slo]:
+    """The database-backed half, plus ONE digest row for the whole run.
+
+    Deliberately called from _run_db_dependent_checks(): these are five SQL
+    queries, and they used to run inside main()'s DB-FREE section — the
+    section that exists precisely because a DB-dependent call raising once
+    took the drift checks down with it. A database that hangs there also
+    stalls the instance manifest validation that follows, which is the check
+    that catches the class of YAML typo that deleted the primary agent for
+    3h48m.
+    """
+    print("\n=== SLOs (database-backed) ===")
+    slos = db_slos()
     print(format_slo_report(slos))
 
-    breached = [s for s in slos if s.status == "BREACH"]
+    everything = list(db_free or []) + slos
+    breached = [s for s in everything if s.status == "BREACH"]
     if not breached:
         print("  every evaluated SLO is inside target")
         return slos
@@ -938,7 +959,7 @@ def check_slos() -> list[Slo]:
     return slos
 
 
-def _run_db_dependent_checks() -> None:
+def _run_db_dependent_checks(db_free_slos: list[Slo] | None = None) -> None:
     """Everything here needs a live database connection.
 
     Kept out of main()'s DB-free section deliberately: if this raises (DB
@@ -946,6 +967,10 @@ def _run_db_dependent_checks() -> None:
     the drift-check output before this ever ran.
     """
     from robothor.db.connection import get_connection
+
+    # First, so the digest row covering the whole run is attempted before any
+    # other query can abort the section.
+    check_db_slos(db_free_slos)
 
     with get_connection() as conn:
         cur = conn.cursor()
@@ -1055,11 +1080,11 @@ def main() -> int:
     check_dropin_drift()
     check_host_script_drift()
     doctor_ok = check_instance_doctor()
-    check_slos()
+    db_free_slos = check_slos()
     manifests_ok = check_instance_manifests()
 
     try:
-        _run_db_dependent_checks()
+        _run_db_dependent_checks(db_free_slos)
         # Second pass, with the database. The `feature_flags` pin, its actor
         # and the evidence columns (rows_7d, last_fired, last_probe) exist
         # only here — and a DB pin beats every file layer the pass above can
@@ -1069,10 +1094,12 @@ def main() -> int:
     except Exception as exc:
         print(
             f"\n=== DATABASE UNAVAILABLE: {exc} ===\n"
-            "guardrail-watch: the DB-dependent checks (guardrail events, run "
-            "outcomes, stale goals, memory scoping) were skipped. The DB-free "
-            "checks above (flag soak deadlines, drop-in drift, host-script "
-            "drift) already ran and are valid — this is a partial report, "
+            "guardrail-watch: the DB-dependent checks (the database-backed "
+            "SLOs, guardrail events, run outcomes, stale goals, memory "
+            "scoping) were skipped. The DB-free checks above (flag soak "
+            "deadlines, drop-in drift, host-script drift, the database-free "
+            "SLOs, manifest validation) already ran and are valid — this is a "
+            "partial report, "
             "not a silent skip. Exiting non-zero so systemd marks the run "
             "failed and OnFailure pages."
         )

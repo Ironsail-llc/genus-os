@@ -473,7 +473,7 @@ class TestOneDigestRowPerRun:
         write_marker(tmp_path, "last-local-dump", age_hours=27)
         write_marker(tmp_path, "last-offsite-ok", age_hours=27)
 
-        gw.check_slos()
+        gw.check_db_slos(gw.check_slos())
 
         assert len(written) == 1, (
             "four breached SLOs on a bad morning must not become four "
@@ -482,14 +482,14 @@ class TestOneDigestRowPerRun:
         subject, body = written[0]
         assert "SLO" in subject
         assert "local dump" in body and "offsite" in body
-        assert "=== SLOs ===" in capsys.readouterr().out
+        assert "=== SLOs (database-free) ===" in capsys.readouterr().out
 
     def test_a_clean_run_writes_no_row(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         written = self._isolate(monkeypatch, tmp_path)
         fresh_markers(tmp_path)
-        gw.check_slos()
+        gw.check_db_slos(gw.check_slos())
         assert written == [], "a clean run must not put noise in the heartbeat"
 
     def test_the_section_prints_even_when_everything_is_fine(
@@ -501,7 +501,7 @@ class TestOneDigestRowPerRun:
         fresh_markers(tmp_path)
         gw.check_slos()
         out = capsys.readouterr().out
-        assert "=== SLOs ===" in out and "local dump" in out
+        assert "=== SLOs (database-free) ===" in out and "local dump" in out
 
 
 # ── unevaluated is not OK ────────────────────────────────────────────────────
@@ -520,7 +520,7 @@ class TestUnevaluatedIsNotOk:
         )
         fresh_markers(tmp_path)
 
-        gw.check_slos()  # must not raise
+        gw.check_db_slos(gw.check_slos())  # must not raise
 
         out = capsys.readouterr().out
         assert "local dump" in out, (
@@ -548,8 +548,78 @@ class TestUnevaluatedIsNotOk:
             lambda autocommit=False: (_ for _ in ()).throw(RuntimeError("postgres is down")),
         )
         fresh_markers(tmp_path)
-        gw.check_slos()
+        gw.check_db_slos(gw.check_slos())
         assert written == []
+
+
+# ── the DB-backed SLOs belong to the DB section ──────────────────────────────
+
+
+class TestTheDatabaseBackedSlosRunInTheDatabaseSection:
+    """check_slos() ran five SQL queries from main()'s DB-FREE section — the
+    section that exists because on 2026-08-16 a DB-dependent call raising took
+    the drift checks down with it. A database that hangs there stalls the
+    manifest validation that follows, and manifest validation is what caught
+    the YAML typo that deleted the primary agent for 3h48m."""
+
+    @staticmethod
+    def _quiet(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        write_dump(probe_env(monkeypatch, tmp_path))
+        fresh_markers(tmp_path)
+        monkeypatch.setattr(gw, "send_telegram", lambda text: False)
+        monkeypatch.setattr(gw, "check_soak_deadlines", lambda: None)
+        monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
+        monkeypatch.setattr(gw, "check_host_script_drift", lambda pairs=None: None)
+        monkeypatch.setattr(gw, "write_slo_digest", lambda subject, body: True)
+        monkeypatch.setattr(
+            gw, "check_instance_manifests", lambda: (print("SENTINEL-MANIFESTS"), True)[1]
+        )
+
+    def test_the_db_backed_slos_run_after_the_manifest_check(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._quiet(monkeypatch, tmp_path)
+        monkeypatch.setattr(gw, "db_slos", lambda: (print("SENTINEL-DB-SLOS"), [])[1])
+        monkeypatch.setattr(
+            "robothor.db.connection.get_connection",
+            lambda autocommit=False: (_ for _ in ()).throw(RuntimeError("postgres is down")),
+        )
+
+        exit_code = gw.main()
+
+        out = capsys.readouterr().out
+        assert "local dump" in out, "the DB-free SLO rows must still be reported"
+        assert out.index("local dump") < out.index("SENTINEL-MANIFESTS")
+        assert out.index("SENTINEL-MANIFESTS") < out.index("SENTINEL-DB-SLOS"), (
+            "the SLO queries must run in the DB section, after the manifest "
+            "check — not inside the DB-free half where a hang stalls it"
+        )
+        assert exit_code != 0
+
+    def test_a_database_that_cannot_answer_does_not_stall_the_manifest_check(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._quiet(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            gw,
+            "db_slos",
+            lambda: (_ for _ in ()).throw(RuntimeError("connection timed out after 30s")),
+        )
+        monkeypatch.setattr(
+            "robothor.db.connection.get_connection",
+            lambda autocommit=False: (_ for _ in ()).throw(RuntimeError("postgres is down")),
+        )
+
+        exit_code = gw.main()
+
+        out = capsys.readouterr().out
+        assert "SENTINEL-MANIFESTS" in out, (
+            "the fleet's manifests must be validated even when the database "
+            "never answers — that check needs no database at all"
+        )
+        assert "local dump" in out
+        assert exit_code != 0
+        assert "connection timed out" in out, "the actual failure must be visible"
 
 
 # ── main() ordering ──────────────────────────────────────────────────────────

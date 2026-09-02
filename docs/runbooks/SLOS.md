@@ -8,7 +8,7 @@ Two surfaces, deliberately different:
 | Surface | Unit | Cadence | What it does |
 |---|---|---|---|
 | `scripts/slo_probe.sh` | `robothor-slo.timer` | hourly | **Pages** for the three SLOs that must interrupt someone. |
-| `scripts/guardrail_watch.py` `check_slos()` | `robothor-guardrail-watch.timer` | daily | Prints the `=== SLOs ===` section for **all** of them and leaves one `alert_digest` row for the heartbeat. |
+| `scripts/guardrail_watch.py` `check_slos()` + `check_db_slos()` | `robothor-guardrail-watch.timer` | daily | Prints `=== SLOs (database-free) ===` for S4/S5/S8/pool size, then `=== SLOs (database-backed) ===` for S1/S2/S3/S6/S7, and leaves one `alert_digest` row covering both. |
 
 The daily surface does not measure S4, S5 or S8 a second way: it runs
 `scripts/slo_probe.sh --report`, which evaluates every database-free SLO,
@@ -58,6 +58,11 @@ systemd. S8's evidence was the daily report printing itself — which says
 nothing at all on the day the report does not run — and S5 asserted that a
 timer *exists* rather than that it *fired*. Both are now measured from
 `systemctl show`, hourly, by the same level-triggered probe as S4.
+
+The split is the 2026-08-16 ordering discipline: the database-free half
+(and the instance manifest validation after it) must already have run and
+reported before any query can hang or raise. Five SQL queries inside the
+DB-*free* section defeated exactly that.
 
 Statuses in the daily section are three-valued. **`UNEVALUATED` is not `OK`** —
 an SLO whose query did not answer is reported in that word, spelled out, and
