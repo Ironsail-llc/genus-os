@@ -97,6 +97,26 @@ SPOOL_DIR="${ROBOTHOR_ALERT_SPOOL_DIR:-/var/lib/robothor/alert-spool}"
 # Overridable so a test can exercise overflow without writing 51 files.
 SPOOL_CAP="${ROBOTHOR_ALERT_SPOOL_CAP:-50}"
 
+# ── A page the endpoint REFUSES must not hold the queue ──────────────────────
+# The drain used to break out of its loop on any post failure, with no
+# per-file attempt counter and no age-out. A page Telegram permanently rejects
+# — a body cut through a multi-byte character, say — therefore sat at the head
+# of the spool forever and every page raised after it was never delivered. The
+# spool exists to make a page late rather than lost; that inverted it for the
+# whole queue.
+#
+# So a file that cannot go out is moved aside instead of blocking: poison/ is
+# a subdirectory (the drain globs *.msg in the top level only, so nothing there
+# is retried) and it is kept, not deleted — a page nobody could deliver is
+# still evidence.
+POISON_DIR="${SPOOL_DIR}/poison"
+# ~48 ticks of the 5-minute liveness timer ≈ 4h. A page nothing has managed to
+# deliver in 4h is not going out; holding the queue open for it costs more than
+# it is worth.
+SPOOL_MAX_ATTEMPTS="${ROBOTHOR_ALERT_SPOOL_MAX_ATTEMPTS:-48}"
+# A day-old page is not an incident report any more.
+SPOOL_MAX_AGE="${ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS:-86400}"
+
 # ── Cooldown: dedup repeated pages for the same unit ──────────────────────────
 # A unit crash-looping on a short timer (e.g. every 15 minutes) would otherwise
 # page the operator dozens of times a day for the same underlying failure —
@@ -383,6 +403,36 @@ spool_page() {
     return 1
 }
 
+# Move a page out of the delivery path, keeping it. Never deletes: a page
+# nobody could deliver is the evidence of why, and `ls poison/` is where the
+# operator goes looking for it.
+quarantine_spooled() {
+    local f="$1" reason="$2" name
+    name="$(basename "$f")"
+    mkdir -p "$POISON_DIR" 2>/dev/null || true
+    if [[ -d "$POISON_DIR" ]] && mv -f "$f" "${POISON_DIR}/${name}" 2>/dev/null; then
+        rm -f "${f}.attempts" 2>/dev/null || true
+        # Loud, and named: a page silently removed from the queue is
+        # indistinguishable from a page that was never raised.
+        echo "send_failure_alert: QUARANTINED spooled page ${name} to ${POISON_DIR}" \
+             "— ${reason}; it will NOT be delivered" >&2
+        return 0
+    fi
+    echo "send_failure_alert: could not quarantine ${name} (${reason});" \
+         "it stays in ${SPOOL_DIR} and will be retried" >&2
+    return 1
+}
+
+# How many times this exact file has already failed to go out. The counter is
+# a sidecar rather than a rewrite of the page, so the bytes the operator will
+# eventually read are never touched by bookkeeping.
+attempt_count() {
+    local n
+    n="$(head -n 1 "${1}.attempts" 2>/dev/null || true)"
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    printf '%s' "$n"
+}
+
 # Deliver what the spool is holding, oldest first. Called by `--drain` (the
 # liveness timer, every 5 minutes) and at the start of every normal send.
 #
@@ -424,11 +474,36 @@ drain_spool() {
         fi
     fi
 
-    local f base epoch queued text delivered=0
+    local f base epoch queued text delivered=0 now attempts code
+    now="$(date +%s)"
     for f in "${files[@]}"; do
+        base="$(basename "$f")"
+        epoch="${base%%-*}"
+        queued="??:??"
+        [[ "$epoch" =~ ^[0-9]+$ ]] && queued="$(date -d "@${epoch}" +%H:%M 2>/dev/null || echo '??:??')"
+
+        # ── Age-out ──────────────────────────────────────────────────────────
+        # Checked BEFORE the file is read, so a page that cannot be read at all
+        # still leaves the queue eventually.
+        if [[ "$epoch" =~ ^[0-9]+$ ]] && (( now - epoch > SPOOL_MAX_AGE )); then
+            quarantine_spooled "$f" "queued $(( (now - epoch) / 3600 ))h ago, past the ${SPOOL_MAX_AGE}s age cap" || true
+            continue
+        fi
+        # ── Attempt budget ───────────────────────────────────────────────────
+        attempts="$(attempt_count "$f")"
+        if (( attempts >= SPOOL_MAX_ATTEMPTS )); then
+            quarantine_spooled "$f" "${attempts} failed delivery attempts, at the ${SPOOL_MAX_ATTEMPTS}-attempt budget" || true
+            continue
+        fi
+
         text="$(cat "$f" 2>/dev/null || true)"
         if [[ -z "$text" ]]; then
-            rm -f "$f" 2>/dev/null || true
+            # NOT deleted: an unreadable page is one whose contents nobody has
+            # seen, and deleting it makes the loss unexaminable. Named, because
+            # a file skipped in silence is a page that quietly never arrives.
+            # The age cap above is what eventually clears it.
+            echo "send_failure_alert: spooled page ${base} is empty or unreadable —" \
+                 "skipping it (kept for inspection; it ages out into ${POISON_DIR})" >&2
             continue
         fi
         # The spool dir is world-writable by design (1777), and the entry guard
@@ -437,30 +512,49 @@ drain_spool() {
         # five minutes later through this door.
         if [[ "$text" == *"pytest-of-"* || "$text" == *"/pytest-"* ]]; then
             echo "send_failure_alert: dropping spooled page that names a pytest temp path:" \
-                 "$(basename "$f")" >&2
+                 "${base}" >&2
             rm -f "$f" 2>/dev/null || true
+            rm -f "${f}.attempts" 2>/dev/null || true
             continue
         fi
-        base="$(basename "$f")"
-        epoch="${base%%-*}"
-        queued="??:??"
-        [[ "$epoch" =~ ^[0-9]+$ ]] && queued="$(date -d "@${epoch}" +%H:%M 2>/dev/null || echo '??:??')"
         # Say it is late and say when it was raised: a page whose timestamp is
         # an hour old reads as a live incident unless the delay is on the face
         # of it.
         if post_telegram "⏳ DELAYED (queued ${queued}):
 ${text}"; then
             rm -f "$f" 2>/dev/null || true
+            rm -f "${f}.attempts" 2>/dev/null || true
             delivered=$(( delivered + 1 ))
-        else
-            # Stop at the first failure. The endpoint is still down; burning
-            # the rest of the spool against it delivers nothing and would lose
-            # the ordering.
-            echo "send_failure_alert: spool drain stopped at $(basename "$f")" \
-                 "(curl_rc=${LAST_CURL_RC} http_status=${LAST_HTTP_CODE:-none});" \
-                 "$(( ${#files[@]} - delivered )) page(s) still spooled" >&2
-            break
+            continue
         fi
+
+        # ── Refusal vs unavailability ────────────────────────────────────────
+        # Telegram answering 400 (or 413/414) is a verdict on THIS message:
+        # retrying it is retrying the same bytes against the same rule, and
+        # while it sits at the head of the queue nothing behind it moves. Take
+        # it out of the path and CONTINUE.
+        #
+        # Deliberately NOT every 4xx. 401/403 mean the token is wrong and 429
+        # means slow down — both answer the same way to every page in the
+        # spool, so quarantining on them would empty the whole queue into
+        # poison/ over one bad credential. Those are availability problems and
+        # take the 5xx path.
+        code="${LAST_HTTP_CODE:-}"
+        if [[ "$code" =~ ^4[0-9][0-9]$ ]] && [[ ! "$code" =~ ^(401|403|408|429)$ ]]; then
+            quarantine_spooled "$f" "Telegram refused it with HTTP ${code} (content rejection, not an outage)" || true
+            continue
+        fi
+
+        # Availability: the message is fine, the endpoint is not. Count the
+        # attempt against this file and stop — burning the rest of the spool
+        # against a dead endpoint delivers nothing and loses the ordering.
+        attempts=$(( attempts + 1 ))
+        printf '%s\n' "$attempts" >"${f}.attempts" 2>/dev/null || true
+        echo "send_failure_alert: spool drain stopped at ${base}" \
+             "(curl_rc=${LAST_CURL_RC} http_status=${LAST_HTTP_CODE:-none};" \
+             "attempt ${attempts}/${SPOOL_MAX_ATTEMPTS});" \
+             "$(( ${#files[@]} - delivered )) page(s) still spooled" >&2
+        break
     done
     if (( delivered )); then
         echo "send_failure_alert: drained ${delivered} spooled page(s) from ${SPOOL_DIR}"

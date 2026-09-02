@@ -48,6 +48,7 @@ import re
 import shutil
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -568,7 +569,16 @@ class TestFleetGuardWatchesSemanticsNotAliveness:
 # which is exactly the shape a drain needs.
 
 
-def spool_a_page(tmp_path: Path, text: str = "PAGE-SPOOLED", epoch: int = 1756000000) -> Path:
+def spool_a_page(
+    tmp_path: Path,
+    text: str = "PAGE-SPOOLED",
+    # Recent, not a hard-coded 2026-08 epoch: the drain ages a page out after
+    # ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS (a day) and would quarantine a
+    # historical fixture unsent, leaving these tests certifying the age-out
+    # instead of the tick's drain.
+    epoch: int | None = None,
+) -> Path:
+    epoch = int(time.time()) - 900 if epoch is None else epoch
     spool = tmp_path / "alert-spool"
     spool.mkdir(parents=True, exist_ok=True)
     path = spool / f"{epoch}-robothor-spooled.service.deadbeef.1.msg"

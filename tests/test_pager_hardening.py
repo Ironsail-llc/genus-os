@@ -775,6 +775,15 @@ class TestHttpErrorIsNotDelivery:
 # successful send (or the 5-minute liveness tick) delivers it.
 
 
+# Spool fixtures carry an epoch in the filename, and the drain now ages a page
+# out after ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS (a day). A hard-coded epoch
+# from 2026-08 was fine when nothing read it; today it would quarantine every
+# fixture page unsent and the suite would be testing the age-out and nothing
+# else. Recent, still ordered oldest-first.
+SPOOLED_EPOCH_OLDER = int(time.time()) - 900
+SPOOLED_EPOCH_NEWER = int(time.time()) - 300
+
+
 def spool_dir(tmp_path: Path) -> Path:
     return tmp_path / "alert-spool"
 
@@ -852,7 +861,7 @@ class TestUndeliverablePageIsSpooled:
 class TestSpoolDrain:
     def test_drain_delivers_the_spooled_page_and_removes_it(self, tmp_path: Path):
         log = install_fake_curl(tmp_path)
-        write_spooled(tmp_path, 1756000000, "🔴 robothor-spooled.service FAILED on box")
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "🔴 robothor-spooled.service FAILED on box")
         result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
         assert result.returncode == 0, result.stdout + result.stderr
         assert curl_calls(log) == 1
@@ -861,7 +870,7 @@ class TestSpoolDrain:
 
     def test_the_drained_page_says_it_is_delayed_and_when_it_was_queued(self, tmp_path: Path):
         log = install_fake_curl(tmp_path)
-        epoch = 1756000000
+        epoch = SPOOLED_EPOCH_OLDER
         write_spooled(tmp_path, epoch, "🔴 robothor-spooled.service FAILED on box")
         run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
         queued = time.strftime("%H:%M", time.localtime(epoch))
@@ -869,14 +878,14 @@ class TestSpoolDrain:
 
     def test_an_undelivered_spool_file_is_kept(self, tmp_path: Path):
         install_fake_curl(tmp_path, fail_first=99)
-        write_spooled(tmp_path, 1756000000, "🔴 robothor-spooled.service FAILED on box")
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "🔴 robothor-spooled.service FAILED on box")
         run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
         assert len(spooled(tmp_path)) == 1, "a failed drain must not delete the page"
 
     def test_drain_goes_oldest_first(self, tmp_path: Path):
         log = install_fake_curl(tmp_path)
-        write_spooled(tmp_path, 1756000000, "PAGE-OLDEST")
-        write_spooled(tmp_path, 1756009999, "PAGE-NEWEST")
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-OLDEST")
+        write_spooled(tmp_path, SPOOLED_EPOCH_NEWER, "PAGE-NEWEST")
         run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
         args = log.read_text()
         assert args.index("PAGE-OLDEST") < args.index("PAGE-NEWEST")
@@ -885,8 +894,8 @@ class TestSpoolDrain:
         """Telegram is still down: burning the whole spool against a dead
         endpoint would deliver nothing and lose the ordering."""
         log = install_fake_curl(tmp_path, fail_first=99)
-        write_spooled(tmp_path, 1756000000, "PAGE-OLDEST")
-        write_spooled(tmp_path, 1756009999, "PAGE-NEWEST")
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-OLDEST")
+        write_spooled(tmp_path, SPOOLED_EPOCH_NEWER, "PAGE-NEWEST")
         run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
         assert curl_calls(log) == 1, "the drain kept sending after a failure"
         assert len(spooled(tmp_path)) == 2
@@ -899,7 +908,7 @@ class TestSpoolDrain:
         env = base_env(tmp_path, ROBOTHOR_ALERT_COOLDOWN_SECONDS="3600", **FAKE_TOKEN_ENV)
         assert run_send(tmp_path, env).returncode == 0  # arms the stamp
         assert curl_calls(log) == 1
-        write_spooled(tmp_path, 1756000000, "PAGE-SPOOLED")
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-SPOOLED")
         run_drain(tmp_path, env)
         assert "PAGE-SPOOLED" in log.read_text()
 
@@ -911,7 +920,7 @@ class TestSpoolDrain:
 
     def test_drain_without_credentials_keeps_the_spool(self, tmp_path: Path):
         install_fake_curl(tmp_path)
-        write_spooled(tmp_path, 1756000000, "PAGE-SPOOLED")
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-SPOOLED")
         result = run_drain(tmp_path, base_env(tmp_path))
         assert result.returncode == 0, "a drain that cannot run yet is not a failure"
         assert len(spooled(tmp_path)) == 1
@@ -920,18 +929,222 @@ class TestSpoolDrain:
         """The entry guard covers the unit name; the spool is a second way in.
         A fixture page that reached the disk must never reach the operator."""
         log = install_fake_curl(tmp_path)
-        write_spooled(tmp_path, 1756000000, "🔴 /tmp/pytest-of-someone/pytest-1/x FAILED")
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "🔴 /tmp/pytest-of-someone/pytest-1/x FAILED")
         result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
         assert result.returncode == 0, result.stdout + result.stderr
         assert curl_calls(log) == 0, "a pytest fixture page was sent to the operator"
         assert spooled(tmp_path) == []
 
 
+def install_status_curl(tmp_path: Path, statuses: list[str]) -> Path:
+    """A curl stand-in that answers a SEQUENCE of HTTP statuses.
+
+    The transport always succeeds (exit 0, like real curl on a 400) — only the
+    status varies, which is the whole point: a 400 is the endpoint refusing
+    THIS message, a 500 is the endpoint being unavailable, and the drain has
+    to tell them apart.  The last status repeats once the list runs out.
+    """
+    log = tmp_path / "curl-args.txt"
+    count = tmp_path / "curl-count.txt"
+    curl = tmp_path / "bin" / "curl"
+    curl.parent.mkdir(parents=True, exist_ok=True)
+    seq = " ".join(statuses)
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf \'%s\\n\' "$@" >> "{log}"\n'
+        f'n=$(cat "{count}" 2>/dev/null || echo 0)\n'
+        f'n=$((n + 1)); echo "$n" > "{count}"\n'
+        f"statuses=({seq})\n"
+        'i=$((n - 1)); [ "$i" -ge "${#statuses[@]}" ] && i=$(( ${#statuses[@]} - 1 ))\n'
+        'code="${statuses[$i]}"\n'
+        "for a in \"$@\"; do [ \"$a\" = '%{http_code}' ] && printf '%s' \"$code\"; done\n"
+        "exit 0\n"
+    )
+    curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
+    return log
+
+
+def poisoned(tmp_path: Path) -> list[Path]:
+    d = spool_dir(tmp_path) / "poison"
+    if not d.exists():
+        return []
+    return sorted(p for p in d.iterdir() if p.is_file())
+
+
+def attempts_of(path: Path) -> int:
+    sidecar = Path(str(path) + ".attempts")
+    return int(sidecar.read_text().strip()) if sidecar.exists() else 0
+
+
+class TestARejectedPageDoesNotWedgeTheSpool:
+    """A page Telegram REFUSES is not a page Telegram cannot take.
+
+    The drain broke out of the loop on any post failure, with no per-file
+    attempt counter and no age-out. So one permanently-rejected message — a
+    body Telegram answers 400 to, e.g. one whose journal tail was cut through
+    a multi-byte character — sat at the head of the queue forever and every
+    page raised after it was never delivered. The spool's whole promise is
+    that a page is late, not lost; this inverted it for the entire queue.
+
+    Content rejection and unavailability need OPPOSITE handling: quarantine
+    the message (nothing will ever make it acceptable) versus keep it and
+    retry later (nothing is wrong with it).
+    """
+
+    def test_a_400_does_not_block_the_page_behind_it(self, tmp_path: Path):
+        log = install_status_curl(tmp_path, ["400", "200"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-REJECTED")
+        write_spooled(tmp_path, SPOOLED_EPOCH_NEWER, "PAGE-BEHIND-IT")
+        result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        args = log.read_text()
+        assert "PAGE-BEHIND-IT" in args, (
+            "a page Telegram rejected stopped the drain, so every page queued "
+            "behind it is undeliverable for as long as it sits there"
+        )
+        assert spooled(tmp_path) == [], "the delivered page was not removed"
+
+    def test_a_rejected_page_is_quarantined_not_deleted(self, tmp_path: Path):
+        install_status_curl(tmp_path, ["400", "200"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-REJECTED")
+        write_spooled(tmp_path, SPOOLED_EPOCH_NEWER, "PAGE-BEHIND-IT")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        poison = poisoned(tmp_path)
+        assert len(poison) == 1, f"the rejected page was not quarantined: {poison}"
+        assert "PAGE-REJECTED" in poison[0].read_text()
+
+    def test_the_quarantine_is_loud(self, tmp_path: Path):
+        install_status_curl(tmp_path, ["400", "200"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-REJECTED")
+        result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        out = result.stdout + result.stderr
+        assert "QUARANTINED" in out and "400" in out, (
+            f"a page was dropped from the delivery path without saying so: {out}"
+        )
+
+    def test_a_quarantined_page_is_not_retried(self, tmp_path: Path):
+        log = install_status_curl(tmp_path, ["400", "200"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-REJECTED")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        before = curl_calls(log)
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert curl_calls(log) == before, "the poison directory is being drained"
+
+    def test_a_500_still_stops_the_drain(self, tmp_path: Path):
+        """Unavailability is the opposite case: the message is fine, the
+        endpoint is not. Burning the queue against it delivers nothing and
+        loses the ordering."""
+        log = install_status_curl(tmp_path, ["500"])
+        head = write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-OLDEST")
+        write_spooled(tmp_path, SPOOLED_EPOCH_NEWER, "PAGE-NEWEST")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert curl_calls(log) == 1, "the drain kept sending after a 5xx"
+        assert len(spooled(tmp_path)) == 2, "a 5xx must not discard a page"
+        assert poisoned(tmp_path) == [], "a 5xx is not a content rejection"
+        assert attempts_of(head) == 1, "the failure was not counted against the file"
+
+    def test_a_401_does_not_poison_the_whole_spool(self, tmp_path: Path):
+        """A revoked token answers 4xx to EVERY page. Quarantining on that
+        would empty the spool into poison/ on one bad credential — the
+        opposite of what the spool is for."""
+        log = install_status_curl(tmp_path, ["401"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-OLDEST")
+        write_spooled(tmp_path, SPOOLED_EPOCH_NEWER, "PAGE-NEWEST")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert curl_calls(log) == 1
+        assert len(spooled(tmp_path)) == 2
+        assert poisoned(tmp_path) == []
+
+    def test_attempts_accumulate_across_drains(self, tmp_path: Path):
+        install_status_curl(tmp_path, ["500"])
+        head = write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-OLDEST")
+        for _ in range(3):
+            run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert attempts_of(head) == 3
+
+    def test_a_file_past_the_attempt_budget_is_quarantined(self, tmp_path: Path):
+        """~48 ticks is about 4h of 5-minute drains. A page nothing has been
+        able to deliver in 4h is not going out; it must stop holding the
+        queue."""
+        log = install_status_curl(tmp_path, ["500", "500", "200"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-STUCK")
+        write_spooled(tmp_path, SPOOLED_EPOCH_NEWER, "PAGE-BEHIND-IT")
+        env = base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_MAX_ATTEMPTS="2", **FAKE_TOKEN_ENV)
+        run_drain(tmp_path, env)  # attempt 1
+        run_drain(tmp_path, env)  # attempt 2 — budget spent
+        result = run_drain(tmp_path, env)  # quarantine, then deliver the next
+        out = result.stdout + result.stderr
+        assert "QUARANTINED" in out, out
+        assert len(poisoned(tmp_path)) == 1
+        assert "PAGE-BEHIND-IT" in log.read_text()
+        assert spooled(tmp_path) == []
+
+    def test_the_attempt_sidecar_goes_with_the_quarantined_file(self, tmp_path: Path):
+        install_status_curl(tmp_path, ["500", "200"])
+        head = write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-STUCK")
+        env = base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_MAX_ATTEMPTS="1", **FAKE_TOKEN_ENV)
+        run_drain(tmp_path, env)
+        run_drain(tmp_path, env)
+        assert not Path(str(head) + ".attempts").exists(), (
+            "the sidecar outlived its page — the spool dir accumulates litter "
+            "no drain will ever clean"
+        )
+
+    def test_a_page_older_than_the_age_cap_is_quarantined_unsent(self, tmp_path: Path):
+        """A day-old page is not an incident report any more; delivering it
+        after the fact is noise, and holding the queue for it is worse."""
+        log = install_status_curl(tmp_path, ["200"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-ANCIENT")
+        env = base_env(
+            tmp_path, ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS="60", **FAKE_TOKEN_ENV
+        )
+        result = run_drain(tmp_path, env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert curl_calls(log) == 0, "an aged-out page was still sent"
+        assert len(poisoned(tmp_path)) == 1
+        assert "QUARANTINED" in result.stdout + result.stderr
+
+    def test_the_default_age_cap_is_a_day(self, tmp_path: Path):
+        """Every other test pins the cap, so the shipped default needs its own
+        probe — an unbounded default would be the wedge again, slower."""
+        log = install_status_curl(tmp_path, ["200"])
+        write_spooled(tmp_path, int(time.time()) - 2 * 86400, "PAGE-TWO-DAYS-OLD")
+        result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert curl_calls(log) == 0
+        assert len(poisoned(tmp_path)) == 1
+
+    def test_the_default_attempt_budget_is_forty_eight(self, tmp_path: Path):
+        log = install_status_curl(tmp_path, ["200"])
+        head = write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-STUCK")
+        Path(str(head) + ".attempts").write_text("48\n")
+        result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert curl_calls(log) == 0, "a page at the attempt budget was sent anyway"
+        assert len(poisoned(tmp_path)) == 1
+
+    def test_a_page_short_of_the_budget_is_still_tried(self, tmp_path: Path):
+        log = install_status_curl(tmp_path, ["200"])
+        head = write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-NEARLY-STUCK")
+        Path(str(head) + ".attempts").write_text("47\n")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert curl_calls(log) == 1, "the budget is off by one — a page was given up early"
+        assert poisoned(tmp_path) == []
+
+    def test_a_fresh_page_is_not_aged_out(self, tmp_path: Path):
+        log = install_status_curl(tmp_path, ["200"])
+        write_spooled(tmp_path, int(time.time()), "PAGE-FRESH")
+        result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert curl_calls(log) == 1
+        assert poisoned(tmp_path) == []
+
+
 class TestSpoolCap:
     def test_the_spool_is_capped_and_says_what_it_dropped(self, tmp_path: Path):
         log = install_fake_curl(tmp_path)
         for i in range(5):
-            write_spooled(tmp_path, 1756000000 + i, f"PAGE-{i}")
+            write_spooled(tmp_path, SPOOLED_EPOCH_OLDER + i, f"PAGE-{i}")
         env = base_env(tmp_path, ROBOTHOR_ALERT_SPOOL_CAP="2", **FAKE_TOKEN_ENV)
         result = run_drain(tmp_path, env)
         assert result.returncode == 0, result.stdout + result.stderr
@@ -946,7 +1159,7 @@ class TestSpoolCap:
     def test_the_default_cap_is_fifty(self, tmp_path: Path):
         install_fake_curl(tmp_path)
         for i in range(51):
-            write_spooled(tmp_path, 1756000000 + i, f"PAGE-{i}")
+            write_spooled(tmp_path, SPOOLED_EPOCH_OLDER + i, f"PAGE-{i}")
         result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
         assert "1 older pages dropped" in result.stdout + result.stderr
 
@@ -954,7 +1167,7 @@ class TestSpoolCap:
 class TestEveryNormalSendDrainsFirst:
     def test_a_normal_send_drains_the_spool_before_paging(self, tmp_path: Path):
         log = install_fake_curl(tmp_path)
-        write_spooled(tmp_path, 1756000000, "PAGE-SPOOLED")
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-SPOOLED")
         result = run_send(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
         assert result.returncode == 0, result.stdout + result.stderr
         args = log.read_text()
@@ -968,7 +1181,7 @@ class TestEveryNormalSendDrainsFirst:
         log = install_fake_curl(tmp_path)
         env = base_env(tmp_path, ROBOTHOR_ALERT_COOLDOWN_SECONDS="3600", **FAKE_TOKEN_ENV)
         assert run_send(tmp_path, env).returncode == 0
-        write_spooled(tmp_path, 1756000000, "PAGE-SPOOLED")
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-SPOOLED")
         result = run_send(tmp_path, env)
         assert result.returncode == 0, result.stdout + result.stderr
         assert "suppressed duplicate page" in result.stdout + result.stderr
