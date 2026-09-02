@@ -50,7 +50,9 @@
 #
 # Exit: 0 every evaluated SLO is inside budget, or every breach was
 #         successfully handed to the sender
-#       1 a breach was found and its page could NOT be delivered
+#       1 a breach was found and its page could NOT be delivered, or an SLO
+#         could NOT be evaluated at all — an inert dead-man must be loud, and
+#         the unit's OnFailure= is the only voice an unevaluated check has
 #       2 the probe is misconfigured and cannot answer
 #
 # Environment:
@@ -70,7 +72,14 @@
 #   ROBOTHOR_SLO_RCLONE_CMD            rclone, for the offsite listing
 #   ROBOTHOR_OFFSITE_REMOTE            rclone remote (shared with backup-offsite.sh)
 #   ROBOTHOR_SLO_ALERT_CMD             replaces the default sender
-#   ROBOTHOR_SLO_PSQL_CMD              psql, for the two DB-backed SLOs
+#   ROBOTHOR_SLO_PSQL_CMD              psql, for the two DB-backed SLOs.
+#                                      Unset and running as root, the query
+#                                      hops to the DB account with runuser:
+#                                      pg_hba uses peer auth on the socket, so
+#                                      the OS user must equal the PG role and
+#                                      root is not one.
+#   PGUSER / ROBOTHOR_DB_USER          that DB account (the unit sets PGUSER)
+#   ROBOTHOR_SLO_RUNUSER_CMD           the hop itself (runuser)
 #   ROBOTHOR_SLO_DB                    database to query (robothor_memory)
 #   ROBOTHOR_SLO_DB_CHECKS             0 disables the DB-backed SLOs
 #   ROBOTHOR_SLO_HEARTBEAT_AGENT       operator-facing agent id (main)
@@ -100,8 +109,23 @@ RCLONE_CMD="${ROBOTHOR_SLO_RCLONE_CMD:-rclone}"
 REMOTE="${ROBOTHOR_OFFSITE_REMOTE:-}"
 ALERT_CMD="${ROBOTHOR_SLO_ALERT_CMD:-/usr/bin/env bash ${SCRIPT_DIR}/send_failure_alert.sh}"
 
-PSQL_CMD="${ROBOTHOR_SLO_PSQL_CMD:-psql}"
-DB="${ROBOTHOR_SLO_DB:-robothor_memory}"
+# pg_hba.conf uses peer auth on the Unix socket: the OS user must equal the
+# PG role. This unit deliberately runs as root (the pager recovers the secrets
+# with the root-readable age key), and root is not a role — an un-hopped psql
+# fails authentication every hour and reports UNEVALUATED forever, which is
+# exactly how S2 and S6 shipped inert. So when nothing overrides the command
+# and we are root, the query becomes somebody peer auth accepts.
+DB_USER="${PGUSER:-${ROBOTHOR_DB_USER:-}}"
+RUNUSER_CMD="${ROBOTHOR_SLO_RUNUSER_CMD:-runuser}"
+default_psql() {
+    if [[ -n "$DB_USER" ]] && [[ "$(id -u)" == "0" ]] && [[ "$(id -un)" != "$DB_USER" ]]; then
+        printf '%s -u %s -- psql' "$RUNUSER_CMD" "$DB_USER"
+        return
+    fi
+    printf 'psql'
+}
+PSQL_CMD="${ROBOTHOR_SLO_PSQL_CMD:-$(default_psql)}"
+DB="${ROBOTHOR_SLO_DB:-${PGDATABASE:-robothor_memory}}"
 DB_CHECKS="${ROBOTHOR_SLO_DB_CHECKS:-1}"
 HEARTBEAT_AGENT="${ROBOTHOR_SLO_HEARTBEAT_AGENT:-main}"
 
@@ -113,6 +137,7 @@ fi
 
 NOW="$(date +%s)"
 UNDELIVERED=0
+UNEVALUATED=0
 
 # ── Paging ───────────────────────────────────────────────────────────────────
 # One page per SLO, keyed `slo:<name>` rather than by a systemd unit. A
@@ -329,6 +354,7 @@ check_db_slos() {
         # SLO, and a check that only ever reports "skipped" is indistinguishable
         # from one that cannot fire.
         err "  S2 UNEVALUATED — the heartbeat query did not answer (database unreachable?)"
+        UNEVALUATED=1
     fi
 
     if failures="$(db_query "SELECT count(*) FROM agent_runs
@@ -342,6 +368,7 @@ check_db_slos() {
         fi
     else
         err "  S6 UNEVALUATED — the model-failure query did not answer (database unreachable?)"
+        UNEVALUATED=1
     fi
 }
 
@@ -349,6 +376,14 @@ check_db_slos
 
 if (( UNDELIVERED )); then
     err "at least one SLO page was NOT delivered — failing the unit so its own OnFailure= pages"
+    exit 1
+fi
+if (( UNEVALUATED )); then
+    # An SLO nobody could evaluate pages nobody by design — it is not a breach.
+    # Exiting 0 here would make that silence indistinguishable from health,
+    # which is how six built-and-wired controls turned out to be inert. The
+    # unit's OnFailure= is the only voice an unevaluated check has.
+    err "at least one SLO could NOT be evaluated — failing the unit so its own OnFailure= pages"
     exit 1
 fi
 exit 0

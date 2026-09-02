@@ -108,6 +108,64 @@ def install_recording_alert(tmp_path: Path, exit_code: int = 0) -> Path:
     return log
 
 
+def install_fake_psql(
+    tmp_path: Path, *, beats: int = 5, failures: int = 0, exit_code: int = 0
+) -> Path:
+    """A psql stand-in answering the probe's two count queries.
+
+    The real thing is never invoked from a test: this box's psql would reach
+    the LIVE database under peer auth. It logs argv so the caller can assert
+    which identity the query ran as, and can be made to fail outright — the
+    case that used to print UNEVALUATED forever and page nobody.
+    """
+    log = tmp_path / "psql-args.txt"
+    psql = tmp_path / "bin" / "psql"
+    psql.parent.mkdir(parents=True, exist_ok=True)
+    psql.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf \'%s\\n\' "$@" >> "{log}"\n'
+        f"[ {exit_code} = 0 ] || exit {exit_code}\n"
+        'case "$*" in\n'
+        f"    *heartbeat*) echo {beats} ;;\n"
+        f"    *'All models failed'*) echo {failures} ;;\n"
+        "    *) echo 0 ;;\n"
+        "esac\n"
+    )
+    psql.chmod(psql.stat().st_mode | stat.S_IEXEC)
+    return log
+
+
+def install_fake_id(tmp_path: Path, uid: str = "0", name: str = "root") -> None:
+    """Make the probe believe it runs as root, which is how the unit runs it."""
+    fake = tmp_path / "bin" / "id"
+    fake.parent.mkdir(parents=True, exist_ok=True)
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "${1:-}" in\n'
+        f"    -u) echo {uid} ;;\n"
+        f"    -un) echo {name} ;;\n"
+        f"    *) echo {name} ;;\n"
+        "esac\n"
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+
+
+def install_fake_runuser(tmp_path: Path) -> Path:
+    """Records the account it was asked to become, then runs the command."""
+    log = tmp_path / "runuser-args.txt"
+    fake = tmp_path / "bin" / "runuser"
+    fake.parent.mkdir(parents=True, exist_ok=True)
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf \'%s\\n\' "$@" >> "{log}"\n'
+        'while [ "${1:-}" != "--" ] && [ $# -gt 0 ]; do shift; done\n'
+        "shift || true\n"
+        'exec "$@"\n'
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    return log
+
+
 def send_attempts(log: Path) -> int:
     """Telegram sends the pipeline actually attempted — one `.../sendMessage`
     argument per curl invocation, logged whether or not the send succeeds."""
@@ -284,9 +342,7 @@ class TestAnUnreadableDirectoryIsABreach:
         finally:
             dumps.chmod(0o755)
 
-    def test_an_unreadable_directory_pages_even_when_the_marker_looks_fresh(
-        self, tmp_path: Path
-    ):
+    def test_an_unreadable_directory_pages_even_when_the_marker_looks_fresh(self, tmp_path: Path):
         """The markers live on NVMe and the dumps on the USB volume. A marker
         stamped an hour before the drive fell off the bus stays fresh forever,
         so it must not be allowed to vouch for a directory nobody can read."""
@@ -386,6 +442,142 @@ class TestAnUndeliveredPageIsNotSuccess:
         assert "not delivered" in (result.stdout + result.stderr).lower()
 
 
+# ── S2 / S6: the database-backed SLOs ────────────────────────────────────────
+
+
+def db_env(tmp_path: Path, **extra: str) -> dict[str, str]:
+    """base_env with the DB-backed half switched ON and pointed at a fake psql.
+
+    Everything above pins ``ROBOTHOR_SLO_DB_CHECKS=0``, which is how S2 and S6
+    shipped untested: the unit runs the probe as root, psql fails peer auth,
+    and both printed UNEVALUATED forever while paging nobody.
+    """
+    env = base_env(tmp_path, ROBOTHOR_SLO_DB_CHECKS="1")
+    env.update(extra)
+    return env
+
+
+class TestTheLlmAvailabilitySloPages:
+    def test_five_all_models_failed_in_one_hour_pages(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path, failures=5)
+        env = db_env(tmp_path, ROBOTHOR_SLO_PSQL_CMD=str(tmp_path / "bin" / "psql"))
+        log = with_recording_alert(tmp_path, env)
+        run_probe(env)
+        assert log.exists(), "5 runs in an hour with every model exhausted must page"
+        body = log.read_text()
+        assert "slo:llm-availability" in body, "the page must be keyed per SLO"
+        assert "--- 21600" in body, "S6 carries a 6h cooldown, not the backup tier's 12h"
+
+    def test_four_in_one_hour_stays_inside_the_threshold(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path, failures=4)
+        env = db_env(tmp_path, ROBOTHOR_SLO_PSQL_CMD=str(tmp_path / "bin" / "psql"))
+        log = with_recording_alert(tmp_path, env)
+        result = run_probe(env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not log.exists(), f"4 < 5 must not page: {log.read_text() if log.exists() else ''}"
+
+
+class TestTheHeartbeatDeliverySloPages:
+    def test_zero_heartbeat_runs_in_24h_pages(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path, beats=0)
+        env = db_env(tmp_path, ROBOTHOR_SLO_PSQL_CMD=str(tmp_path / "bin" / "psql"))
+        log = with_recording_alert(tmp_path, env)
+        run_probe(env)
+        assert log.exists(), "an operator-facing agent that has not run in 24h must page"
+        assert "slo:heartbeat-delivery" in log.read_text()
+
+    def test_a_heartbeat_that_ran_is_silent(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path, beats=12)
+        env = db_env(tmp_path, ROBOTHOR_SLO_PSQL_CMD=str(tmp_path / "bin" / "psql"))
+        log = with_recording_alert(tmp_path, env)
+        assert run_probe(env).returncode == 0
+        assert not log.exists()
+
+
+class TestAnUnevaluatedSloIsLoud:
+    """An inert dead-man must be loud. A probe that cannot reach the database
+    prints UNEVALUATED and pages nothing — so the ONLY way that reaches an
+    operator is a non-zero exit firing the unit's own OnFailure=."""
+
+    def test_a_psql_failure_pages_nothing_and_fails_the_unit(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path, exit_code=2)
+        env = db_env(tmp_path, ROBOTHOR_SLO_PSQL_CMD=str(tmp_path / "bin" / "psql"))
+        log = with_recording_alert(tmp_path, env)
+        result = run_probe(env)
+        output = result.stdout + result.stderr
+        assert "UNEVALUATED" in output, output
+        assert not log.exists(), "an unevaluated SLO is not a breach — it must not page"
+        assert result.returncode != 0, (
+            "a database the probe cannot reach leaves S2 and S6 unmeasured; "
+            "exiting 0 makes the whole DB half of the dead-man inert and silent"
+        )
+
+    def test_the_disabled_switch_is_not_a_failure(self, tmp_path: Path):
+        """ROBOTHOR_SLO_DB_CHECKS=0 is a deliberate operator choice, not an
+        outage — it must stay exit 0 or every test above would page."""
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        assert run_probe(env).returncode == 0
+
+
+class TestTheQueryRunsAsAnAccountPeerAuthAccepts:
+    """pg_hba uses peer auth on the Unix socket: the OS user must equal the PG
+    role. The unit runs as root (it must — the pager recovers the secrets with
+    the root-readable age key), and root is not a role, so an un-hopped psql
+    fails every hour and reports nothing."""
+
+    def test_a_root_probe_hops_to_the_service_account(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path, failures=5)
+        install_fake_id(tmp_path)
+        runuser_log = install_fake_runuser(tmp_path)
+        env = db_env(tmp_path, ROBOTHOR_DB_USER="alice", PGDATABASE="robothor_memory")
+        log = with_recording_alert(tmp_path, env)
+        run_probe(env)
+        assert runuser_log.exists(), (
+            "as root the query must hop to the DB account, or peer auth "
+            "rejects it and S2/S6 are UNEVALUATED forever"
+        )
+        assert "alice" in runuser_log.read_text()
+        assert log.exists() and "slo:llm-availability" in log.read_text(), (
+            "the hop must still deliver the measurement, not just run"
+        )
+
+    def test_a_probe_already_running_as_the_db_account_does_not_hop(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        psql_log = install_fake_psql(tmp_path, failures=5)
+        runuser_log = install_fake_runuser(tmp_path)
+        env = db_env(tmp_path)
+        with_recording_alert(tmp_path, env)
+        run_probe(env)
+        assert psql_log.exists(), "the query must run"
+        assert not runuser_log.exists(), (
+            "a probe already running as an account peer auth accepts must not "
+            "shell out through runuser"
+        )
+
+
+class TestTheUnitCanReachTheDatabase:
+    """The unit is the other half of the fix: a seam nothing configures is a
+    seam that does nothing."""
+
+    def test_the_service_names_the_database_and_the_role(self):
+        lines = directives(unit_text("robothor-slo.service"))
+        assert "Environment=PGDATABASE=robothor_memory" in lines, (
+            "without PGDATABASE psql connects to a database named after the "
+            "OS user, which does not exist"
+        )
+        assert any(line.startswith("Environment=PGUSER=") for line in lines), (
+            "the DB-backed SLOs need a role; the template carries the "
+            "placeholder account, rendered per instance at install time"
+        )
+
+
 # ── unit templates ───────────────────────────────────────────────────────────
 
 
@@ -418,7 +610,9 @@ class TestSloUnits:
         assert int(re.sub(r"\D", "", timeouts[0]) or 0) >= 600
 
     def test_service_pages_if_the_probe_itself_dies(self):
-        assert "OnFailure=robothor-alert@%n.service" in directives(unit_text("robothor-slo.service"))
+        assert "OnFailure=robothor-alert@%n.service" in directives(
+            unit_text("robothor-slo.service")
+        )
 
     def test_service_loads_the_instance_env_and_optional_secrets(self):
         lines = directives(unit_text("robothor-slo.service"))

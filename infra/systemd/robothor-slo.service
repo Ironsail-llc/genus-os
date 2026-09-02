@@ -44,6 +44,15 @@ EnvironmentFile=/etc/robothor/robothor.env
 # Optional '-': /run is tmpfs, so this file does not exist on a cold boot and a
 # non-optional EnvironmentFile would fail the unit outright (tests/test_cold_boot.py).
 EnvironmentFile=-/run/robothor/secrets.env
+# The two DB-backed SLOs (S2 heartbeat delivery, S6 LLM availability) shell out
+# to psql. Without these they connected as root to a database named "root":
+# pg_hba uses peer auth on the Unix socket, so BOTH the role and the database
+# have to be named. Environment= is not expanded from EnvironmentFile=, so the
+# role is a rendered placeholder (scripts/render-unit.sh substitutes the
+# instance's ROBOTHOR_DB_USER) rather than ${ROBOTHOR_DB_USER}. Root is not a
+# role, so the probe hops to this account with runuser before querying.
+Environment=PGUSER=robothor
+Environment=PGDATABASE=robothor_memory
 ExecStart=/usr/bin/bash /opt/robothor/scripts/slo_probe.sh
 # The sender retries a page for ~5 minutes to ride out the boot DNS/secrets
 # window. systemd's default TimeoutStartSec (90s) would SIGTERM it mid-retry

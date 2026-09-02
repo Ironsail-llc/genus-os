@@ -155,6 +155,37 @@ def test_other_service_accounts_are_untouched(tmp_path: Path):
     assert "User=postgres\n" in result.stdout
 
 
+def test_renders_the_database_role(tmp_path: Path):
+    """`Environment=PGUSER=robothor` is the DB-account placeholder.
+
+    systemd does NOT expand `${ROBOTHOR_DB_USER}` inside Environment= (only
+    ExecStart= and friends get expansion), so a unit that needs a role has to
+    carry it rendered. Without one, robothor-slo.service queried as root under
+    peer auth and both DB-backed SLOs printed UNEVALUATED forever.
+    """
+    unit = tmp_path / "robothor-db.service"
+    unit.write_text(
+        "[Service]\nUser=robothor\nEnvironment=PGUSER=robothor\n"
+        "Environment=NOT_A_USER=robothor\nExecStart=/opt/robothor/scripts/x.sh\n"
+    )
+    result = render(unit, base_env(ROBOTHOR_DB_USER="pgrole"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Environment=PGUSER=pgrole\n" in result.stdout
+    assert "Environment=NOT_A_USER=robothor\n" in result.stdout, (
+        "the substitution is exact-line anchored, like User=/Group="
+    )
+
+
+def test_database_role_defaults_to_the_service_account(tmp_path: Path):
+    """One account by default — peer auth wants the OS user and the PG role to
+    be the same name, which is the arrangement every other unit already has."""
+    unit = tmp_path / "robothor-db.service"
+    unit.write_text("[Service]\nUser=robothor\nEnvironment=PGUSER=robothor\n")
+    result = render(unit, base_env(ROBOTHOR_DB_USER=None))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"Environment=PGUSER={USER}\n" in result.stdout
+
+
 def test_renders_home_placeholder(sample_unit: Path):
     result = render(sample_unit, base_env())
     assert result.returncode == 0, result.stdout + result.stderr
