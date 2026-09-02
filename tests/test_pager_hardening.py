@@ -41,15 +41,45 @@ VOLUME_CHECK = REPO_ROOT / "scripts" / "backup-volume-check.sh"
 STATE_LIB = REPO_ROOT / "scripts" / "backup-state.sh"
 UNIT_DIR = REPO_ROOT / "infra" / "systemd"
 
-# The backup units whose ExecCondition= must consult the volume probe, and the
-# access mode each of them actually needs. wal-offsite is deliberately absent —
-# see TestAWedgedVolumeSkipsTheBackupUnits.
+# The backup units whose ExecCondition= must consult the volume probe, the
+# access mode each of them actually needs, and the path each one is allowed to
+# gate on. wal-offsite is deliberately absent — see
+# TestAWedgedVolumeSkipsTheBackupUnits.
 VOLUME_GATED_UNITS = {
-    "robothor-backup-local.service": "--rw",
-    "robothor-basebackup.service": "--rw",
-    "robothor-backup-offsite.service": "--ro",
-    "robothor-backup-verify.service": "--ro",
+    "robothor-backup-local.service": ("--rw", "/mnt/robothor-backup"),
+    "robothor-basebackup.service": ("--rw", "/mnt/robothor-backup/robothor"),
+    "robothor-backup-offsite.service": ("--ro", "/mnt/robothor-backup/robothor/db"),
+    "robothor-backup-verify.service": ("--ro", "/mnt/robothor-backup/robothor/db"),
 }
+
+# The script each unit's ExecStart= runs. A unit must never gate on a path that
+# only its OWN ExecStart= creates.
+UNIT_EXEC_SCRIPT = {
+    "robothor-backup-local.service": "backup-ssd.sh",
+    "robothor-basebackup.service": "pg-basebackup.sh",
+    "robothor-backup-offsite.service": "backup-offsite.sh",
+    "robothor-backup-verify.service": "backup-offsite.sh",
+}
+
+# What actually brings each gatable path into existence. None = the mount.
+PATH_CREATED_BY = {
+    "/mnt/robothor-backup": None,
+    "/mnt/robothor-backup/robothor": "backup-ssd.sh",
+    "/mnt/robothor-backup/robothor/basebackup": "pg-basebackup.sh",
+    "/mnt/robothor-backup/robothor/db": "backup-ssd.sh",
+}
+
+
+def volume_condition_line(unit: str) -> str:
+    return next(
+        line
+        for line in unit_text(unit).splitlines()
+        if line.startswith("ExecCondition=") and "backup-volume-check.sh" in line
+    )
+
+
+def volume_gate_path(unit: str) -> str:
+    return volume_condition_line(unit).split()[-1]
 
 FAKE_TOKEN_ENV = {
     "ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123",
@@ -384,12 +414,8 @@ class TestAWedgedVolumeSkipsTheBackupUnits:
 
     @pytest.mark.parametrize("unit", sorted(VOLUME_GATED_UNITS))
     def test_the_probe_is_asked_for_the_access_the_unit_needs(self, unit: str):
-        mode = VOLUME_GATED_UNITS[unit]
-        line = next(
-            line
-            for line in unit_text(unit).splitlines()
-            if line.startswith("ExecCondition=") and "backup-volume-check.sh" in line
-        )
+        mode = VOLUME_GATED_UNITS[unit][0]
+        line = volume_condition_line(unit)
         assert f" {mode} " in f"{line} ", (
             f"{unit} must probe with {mode}: a unit that writes to the volume is "
             "not protected by a read-only probe (emergency_ro passes every read)"
@@ -430,6 +456,62 @@ class TestAWedgedVolumeSkipsTheBackupUnits:
         assert not [line for line in directives if line.startswith("ExecCondition=")], (
             "gating robothor-wal-offsite on the backup volume would stop the "
             "15-minute WAL push whenever the USB volume is wedged"
+        )
+
+
+class TestTheGateCannotDeadlockOnAFreshVolume:
+    """A unit must not gate on a path that only its own ExecStart= creates.
+
+    ``robothor-backup-local`` gated on ``/mnt/robothor-backup/robothor`` —
+    which ``scripts/backup-ssd.sh`` creates on line 54, AFTER the guard. On a
+    fresh (or re-made) volume the directory does not exist, the probe answers
+    "unhealthy", systemd records ``Result=exec-condition`` and SKIPS the unit,
+    nothing is ever created, and the unit skips forever. Silently: a skipped
+    unit does not fire ``OnFailure=``, which is the entire point of the gate.
+
+    ``robothor-basebackup`` had the same shape one level deeper: it gated on
+    ``.../robothor/basebackup``, created by ``pg-basebackup.sh`` itself.
+
+    The gate therefore has to sit on something an EARLIER actor creates:
+
+      * backup-local gates on the MOUNT ROOT — created by the mount. The
+        probe's separate-mount check is what proves that root is the real
+        volume and not an empty directory on the root filesystem.
+      * basebackup gates on ``.../robothor`` — created nightly by
+        backup-local, so the weekly base backup finds it.
+      * offsite/verify keep ``--ro .../db``: it holds the dumps they replicate,
+        and if it is absent there is nothing to replicate — skipping is right.
+    """
+
+    @pytest.mark.parametrize("unit", sorted(VOLUME_GATED_UNITS))
+    def test_the_unit_gates_on_the_agreed_path(self, unit: str):
+        assert volume_gate_path(unit) == VOLUME_GATED_UNITS[unit][1], (
+            f"{unit} gates on {volume_gate_path(unit)}"
+        )
+
+    @pytest.mark.parametrize("unit", sorted(VOLUME_GATED_UNITS))
+    def test_a_unit_never_gates_on_a_path_only_it_creates(self, unit: str):
+        path = volume_gate_path(unit)
+        assert path in PATH_CREATED_BY, (
+            f"{unit} gates on {path}, whose creator nobody has written down — "
+            "an ExecCondition= on a path nothing creates skips forever"
+        )
+        assert PATH_CREATED_BY[path] != UNIT_EXEC_SCRIPT[unit], (
+            f"{unit} gates on {path}, which only its own ExecStart= "
+            f"({UNIT_EXEC_SCRIPT[unit]}) creates. On a fresh volume the "
+            "condition never holds, the unit is SKIPPED (not failed, so no "
+            "page), and it never runs again"
+        )
+
+    @pytest.mark.parametrize("unit", sorted(VOLUME_GATED_UNITS))
+    def test_the_unit_says_what_creates_the_path_it_gates_on(self, unit: str):
+        """The next person to move this path needs the reason in front of
+        them, not in a commit message."""
+        text = unit_text(unit)
+        comments = [line for line in text.splitlines() if line.lstrip().startswith("#")]
+        assert any("created" in line.lower() for line in comments), (
+            f"{unit} does not say what creates the path its ExecCondition= "
+            "gates on — the bootstrap deadlock is invisible from the unit file"
         )
 
 
