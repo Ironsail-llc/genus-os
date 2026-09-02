@@ -83,6 +83,20 @@ DEBUG_ENV_KEYS: tuple[str, ...] = (
 #: The global kill switch ``_enforcement_mode`` consults before anything else.
 PANIC_KEY = "ROBOTHOR_DISABLE_ALL_RIPS"
 
+#: ``updated_by`` values written by an operator-facing surface.
+#:
+#: ``robothor.flags.store.set_flag`` is called from exactly one place —
+#: ``crm/bridge/routers/controls.py``, whose ``require_operator`` returns
+#: ``f"operator:{auth.actor_id}"`` — so a row stamped with one of these is a
+#: deliberate Controls-dashboard flip: the supported way to govern a flag, and
+#: the one layer an operator can see and change without editing /etc. Tagging
+#: it SHADOW-LAYER made every legitimate flip page every morning forever,
+#: which is how a daily nag becomes wallpaper. The bare names are accepted
+#: alongside the prefix so a future CLI or admin surface reads as operator
+#: intent the day it lands rather than as an anonymous pin.
+OPERATOR_ACTOR_PREFIXES: tuple[str, ...] = ("operator:",)
+OPERATOR_ACTORS: frozenset[str] = frozenset({"operator", "dashboard", "controls-api"})
+
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 
 #: Pre-promotion modes, same definition guardrail_watch.overdue_flags uses.
@@ -543,6 +557,7 @@ def _build_row(
     effective = effective_value(flag, resolved, gates)
     layer = _winning_layer(flag, db_pin=db_pin, environ=environ, envfile=envfile, dropin=dropin)
 
+    db_pin_actor = db.pin_actors.get(flag) if db else None
     tags: list[str] = []
     expected = expected_from_manifest(flag, yaml_mode)
     if expected is not None and expected != effective:
@@ -557,7 +572,15 @@ def _build_row(
     # that completion-contracts and the deliverable contract are on, and
     # nothing would restore them. "Set in both" is the noisy case, not the
     # dangerous one.
-    if layer in ("db", "envfile", "environ"):
+    #
+    # A DB row is the exception, and only when an operator surface wrote it:
+    # the Controls dashboard IS the supported place to govern a flag, so its
+    # rows are reported (PINNED, in the findings summary) without failing the
+    # run. Every other actor — a sync job, a script, a stray psql — is still
+    # unversioned posture nothing would restore, and still exits 1.
+    if layer == "db" and _is_operator_actor(db_pin_actor):
+        tags.append(f"PINNED:db@{db_pin_actor}")
+    elif layer in ("db", "envfile", "environ"):
         tags.append(f"SHADOW-LAYER:{layer}")
     if _is_overdue(manifest_entry, today):
         tags.append("OVERDUE")
@@ -569,7 +592,7 @@ def _build_row(
         dropin=dropin.get(flag),
         envfile=envfile.get(flag),
         db_pin=db_pin,
-        db_pin_actor=db.pin_actors.get(flag) if db else None,
+        db_pin_actor=db_pin_actor,
         effective=effective,
         layer=layer,
         rows_7d=_fmt_rows(ev, have_db=db is not None),
@@ -577,6 +600,19 @@ def _build_row(
         last_probe=_fmt_ts(ev.last_probe, date_only=True) if ev else None,
         tags=tuple(tags),
     )
+
+
+def _is_operator_actor(actor: str | None) -> bool:
+    """Did an operator-facing surface write this ``feature_flags`` row?
+
+    Keyed on the actor, never on "there is a row at all": the migration seed
+    is already filtered out in ``fetch_db_state``, an operator's dashboard
+    flip is legitimate, and anything else is an anonymous pin.
+    """
+    if not actor:
+        return False
+    name = actor.strip()
+    return name in OPERATOR_ACTORS or name.startswith(OPERATOR_ACTOR_PREFIXES)
 
 
 def _winning_layer(
@@ -652,9 +688,11 @@ def _debug_rows(
 def has_drift(rows: list[FlagRow]) -> bool:
     """True when some layer is being shadowed or contradicts the manifest.
 
-    OVERDUE and DEBUG-ENV are reported but do not fail the run: a soak past its
-    date is already nagged by ``check_soak_deadlines``, and a debug key being
-    set is a fact to surface, not by itself a disagreement between layers.
+    OVERDUE, PINNED and DEBUG-ENV are reported but do not fail the run: a soak
+    past its date is already nagged by ``check_soak_deadlines``, an
+    operator-written DB pin is the supported way to govern a flag, and a debug
+    key being set is a fact to surface, not by itself a disagreement between
+    layers.
     """
     return any(t == "MISMATCH" or t.startswith("SHADOW-LAYER") for row in rows for t in row.tags)
 
@@ -704,7 +742,7 @@ def format_table(rows: list[FlagRow]) -> str:
 
 def _summary(rows: list[FlagRow]) -> list[str]:
     out = []
-    for tag in ("MISMATCH", "SHADOW-LAYER", "OVERDUE", "DEBUG-ENV"):
+    for tag in ("MISMATCH", "SHADOW-LAYER", "PINNED", "OVERDUE", "DEBUG-ENV"):
         named = [r.flag for r in rows if any(t.startswith(tag) for t in r.tags)]
         if named:
             out.append(f"  {tag}: {', '.join(named)}")

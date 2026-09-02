@@ -843,3 +843,144 @@ def test_main_fails_when_only_the_db_pass_of_the_audit_finds_drift(monkeypatch, 
     rc = gw.main()
     capsys.readouterr()
     assert rc == 1
+
+
+# --- a Controls-dashboard flip is not a shadow layer ------------------------
+
+
+class _FakeCursor:
+    """Queue-driven psycopg2 cursor, same shape as tests/test_operator_identity.py.
+
+    Each ``execute`` pops the next ``{"fetchone": ..., "fetchall": [...]}``
+    step and records the SQL, so a test can assert on the predicate text the
+    audit actually sends — the read path has no other observable behaviour.
+    """
+
+    def __init__(self, script):
+        self._script = list(script)
+        self._fetchone = None
+        self._fetchall = []
+        self.executed: list[tuple[str, tuple]] = []
+        self.connection = type("_Conn", (), {"rollback": lambda self: None})()
+
+    def execute(self, sql, params=()):
+        self.executed.append((sql, tuple(params) if params else ()))
+        step = self._script.pop(0) if self._script else {}
+        self._fetchone = step.get("fetchone")
+        self._fetchall = step.get("fetchall", [])
+
+    def fetchone(self):
+        return self._fetchone
+
+    def fetchall(self):
+        return self._fetchall
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeConnection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def cursor(self, *a, **kw):
+        return self._cursor
+
+    def rollback(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _patch_connection(monkeypatch, cursor):
+    """fetch_db_state imports get_connection lazily — patch it at the source
+    module, which is where the lazy import resolves it."""
+    import robothor.db.connection as conn_mod
+
+    monkeypatch.setattr(conn_mod, "get_connection", lambda *a, **kw: _FakeConnection(cursor))
+
+
+def _db_row(tmp_path, *, pin, actor, manifest_mode):
+    manifest = _manifest(tmp_path, [{"name": "ROBOTHOR_RBAC_MODE", "mode": manifest_mode}])
+    env_file = tmp_path / "robothor.env"
+    env_file.write_text("")
+    environ = tmp_path / "environ"
+    environ.write_bytes(b"ROBOTHOR_RBAC_ENABLED=1\x00")
+    db = fa.DbState(
+        pins={"ROBOTHOR_RBAC_MODE": pin},
+        evidence={},
+        pin_actors={"ROBOTHOR_RBAC_MODE": actor},
+    )
+    rows = fa.audit(
+        flags_yaml=manifest,
+        env_file=env_file,
+        dropin_dir=tmp_path / "none",
+        environ_path=environ,
+        db=db,
+        today=TODAY,
+    )
+    return rows, next(r for r in rows if r.flag == "ROBOTHOR_RBAC_MODE")
+
+
+def test_an_operator_written_pin_is_informational_not_drift(tmp_path):
+    """The Controls dashboard writes `feature_flags` through store.set_flag,
+    stamped `operator:<actor_id>` by routers/_operator.require_operator. That
+    IS the supported way to flip a guardrail; tagging it SHADOW-LAYER made
+    every legitimate flip page the operator every morning, forever.
+    """
+    rows, row = _db_row(tmp_path, pin="observe", actor="operator:u-123", manifest_mode="observe")
+    assert row.layer == "db"
+    assert "PINNED:db@operator:u-123" in row.tags
+    assert not any(t.startswith("SHADOW-LAYER") for t in row.tags)
+    assert not fa.has_drift(rows), "a dashboard flip must not exit 1"
+
+
+def test_a_pin_from_an_unknown_actor_is_still_a_shadow_layer(tmp_path):
+    """A row nothing operator-facing wrote — a sync job, a script, a stray
+    psql — is exactly the unversioned posture this audit exists to name."""
+    rows, row = _db_row(
+        tmp_path, pin="observe", actor="engine-posture-sync", manifest_mode="observe"
+    )
+    assert "SHADOW-LAYER:db" in row.tags
+    assert not any(t.startswith("PINNED") for t in row.tags)
+    assert fa.has_drift(rows)
+
+
+def test_the_migration_seed_row_is_not_a_pin_at_all(monkeypatch):
+    """migration-084's seed row means "unset" (robothor/flags/store._read_db),
+    so it must never reach the table as a pin of any class."""
+    from robothor.flags.store import _SEED_ACTOR
+
+    cursor = _FakeCursor(
+        [
+            {
+                "fetchall": [
+                    ("ROBOTHOR_RBAC_MODE", "observe", _SEED_ACTOR),
+                    ("ROBOTHOR_JUDGE_ENABLED", "true", "operator:u-123"),
+                ]
+            }
+        ]
+    )
+    _patch_connection(monkeypatch, cursor)
+
+    state = fa.fetch_db_state(["ROBOTHOR_RBAC_MODE", "ROBOTHOR_JUDGE_ENABLED"])
+
+    assert "ROBOTHOR_RBAC_MODE" not in state.pins
+    assert state.pins["ROBOTHOR_JUDGE_ENABLED"] == "true"
+    assert state.pin_actors["ROBOTHOR_JUDGE_ENABLED"] == "operator:u-123"
+
+
+def test_an_operator_pin_that_contradicts_the_manifest_still_fails(tmp_path):
+    """PINNED downgrades the shadow tag only. A dashboard flip the manifest
+    does not record is still a lie in infra/flags.yaml."""
+    rows, row = _db_row(tmp_path, pin="enforce", actor="operator:u-123", manifest_mode="observe")
+    assert "PINNED:db@operator:u-123" in row.tags
+    assert "MISMATCH" in row.tags
+    assert fa.has_drift(rows)
