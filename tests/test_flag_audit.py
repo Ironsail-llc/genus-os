@@ -658,8 +658,9 @@ def test_check_flag_truth_runs_before_the_db_dependent_section(monkeypatch, caps
         gw, "check_instance_manifests", lambda: (order.append("manifests"), True)[1]
     )
     monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: (order.append("flags"), True)[1])
+    monkeypatch.setattr(gw, "check_slos", lambda: [])
 
-    def _boom() -> None:
+    def _boom(*args, **kwargs) -> None:
         order.append("db")
         raise RuntimeError("postgres is not up yet")
 
@@ -680,9 +681,10 @@ def test_main_exits_non_zero_when_the_flag_truth_table_drifts(monkeypatch, capsy
         "check_host_script_drift",
         "_run_db_dependent_checks",
     ):
-        monkeypatch.setattr(gw, name, lambda: None)
+        monkeypatch.setattr(gw, name, lambda *args, **kwargs: None)
     monkeypatch.setattr(gw, "check_instance_manifests", lambda: True)
     monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: False)
+    monkeypatch.setattr(gw, "check_slos", lambda: [])
 
     rc = gw.main()
     capsys.readouterr()
@@ -858,7 +860,8 @@ def test_main_audits_the_file_layers_without_the_db_then_again_with_it(monkeypat
     monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
     monkeypatch.setattr(gw, "check_host_script_drift", lambda: None)
     monkeypatch.setattr(gw, "check_instance_manifests", lambda: True)
-    monkeypatch.setattr(gw, "_run_db_dependent_checks", lambda: order.append("db"))
+    monkeypatch.setattr(gw, "check_slos", lambda: [])
+    monkeypatch.setattr(gw, "_run_db_dependent_checks", lambda *args, **kwargs: order.append("db"))
 
     rc = gw.main()
     capsys.readouterr()
@@ -880,7 +883,8 @@ def test_main_fails_when_only_the_db_pass_of_the_audit_finds_drift(monkeypatch, 
     monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
     monkeypatch.setattr(gw, "check_host_script_drift", lambda: None)
     monkeypatch.setattr(gw, "check_instance_manifests", lambda: True)
-    monkeypatch.setattr(gw, "_run_db_dependent_checks", lambda: None)
+    monkeypatch.setattr(gw, "check_slos", lambda: [])
+    monkeypatch.setattr(gw, "_run_db_dependent_checks", lambda *args, **kwargs: None)
 
     rc = gw.main()
     capsys.readouterr()

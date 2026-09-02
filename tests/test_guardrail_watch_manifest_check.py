@@ -110,7 +110,8 @@ def test_main_exits_nonzero_when_manifests_fail(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(gw, "check_soak_deadlines", lambda: None)
     monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
     monkeypatch.setattr(gw, "check_host_script_drift", lambda: None)
-    monkeypatch.setattr(gw, "_run_db_dependent_checks", lambda: None)
+    monkeypatch.setattr(gw, "check_slos", lambda: [])
+    monkeypatch.setattr(gw, "_run_db_dependent_checks", lambda *args, **kwargs: None)
     real_check = gw.check_instance_manifests
     monkeypatch.setattr(
         gw,
