@@ -248,11 +248,9 @@ if ((lock_held == 0)); then
     # make the guard exit 0 forever without ever probing the volume — the inert
     # control, arrived at by a redirect nobody checked.
     err "cannot open the lock file ${LOCK_FILE} — running WITHOUT serialisation"
-elif command -v flock >/dev/null 2>&1; then
-    if ! flock -n 9; then
-        log "another guard run is still working (probably a long fsck) — skipping this tick"
-        exit 0
-    fi
+elif ! flock -n 9; then
+    log "another guard run is still working (probably a long fsck) — skipping this tick"
+    exit 0
 fi
 
 # ── The probe ────────────────────────────────────────────────────────────────
