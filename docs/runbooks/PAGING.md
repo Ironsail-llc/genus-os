@@ -72,6 +72,10 @@ Telegram's notification preview, legible without opening the message.
 | `*nats*` | The message fabric is down — agent mail and federation traffic are dropping, not queuing | `docs/runbooks/FEDERATION.md` |
 | `robothor-vision.service`, `robothor-vision*` | Vision capture is down — no camera events; presence and face recognition are blind | the vision journal |
 | `*liveness*` | The liveness watchdog itself is down — nothing is checking whether the engine is alive | this runbook, "Liveness watchdog" below |
+| `*backup-volume-guard*` | The backup volume guard is down — a USB drop will no longer be detected or remapped, and every backup tier it gates goes quiet instead of failing | `docs/runbooks/BACKUP_VOLUME_GUARD.md`; `journalctl -u robothor-backup-volume-guard` |
+| `*robothor-slo*` | The hourly SLO probe is down — backup freshness, liveness staleness and LLM availability will not page until it is back, however far they drift | `docs/runbooks/SLOS.md`; `systemctl status robothor-slo.timer` |
+| `*restore-drill*` | The restore drill did not complete — nothing has proven the backups reconstitute a database, and the RTO number in the runbook is now unmeasured | `docs/runbooks/RESTORE_DRILL.md`; is a scratch database still there? |
+| `*guardrail-watch*` | The daily guardrail watch is down — drop-in and host-script drift, flag soak deadlines and instance manifest validity are all unchecked | `docs/runbooks/GUARDRAIL_FLIPS.md`; `journalctl -u robothor-guardrail-watch` |
 | `slo:backup-freshness`\* | At least one backup tier (local dump / offsite / basebackup) is older than its budget; the body names every breached tier and its age | `docs/runbooks/SLOS.md` (S4) |
 | `slo:llm-availability`\* | 5+ runs in the last hour ended "All models failed" — every model shares one credential pool, check it before assuming a provider outage | `docs/runbooks/SLOS.md` (S6) |
 | `slo:guardrail-watch-stale`\* | The daily guardrail-watch report has stopped completing — drift checks, drop-in checks and instance manifest validation may not be running at all | `docs/runbooks/SLOS.md` (S8) |

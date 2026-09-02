@@ -595,6 +595,55 @@ class TestConsequenceLine:
                 "(no consequence mapped — add one in send_failure_alert.sh)" in text
             ), unit
 
+    # ── the watchdogs' own OnFailure pages ───────────────────────────────────
+    #
+    # Four units added on this branch all carry
+    # OnFailure=robothor-alert@%n.service and none of them had an arm, so their
+    # page was the unit name plus "(no consequence mapped — add one in
+    # send_failure_alert.sh)": a maintenance note where the consequence
+    # belongs, on the pages that say a WATCHDOG has stopped. Those are the
+    # hardest pages to triage from a preview, because nothing is visibly
+    # broken yet — what has been lost is the thing that would tell you.
+
+    def test_the_backup_volume_guard_says_what_stops_being_watched(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-backup-volume-guard.service")
+        assert "no consequence mapped" not in text
+        assert "volume" in text.lower()
+
+    def test_the_slo_probe_says_which_breaches_stop_paging(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-slo.service")
+        assert "no consequence mapped" not in text
+        assert "SLO" in text
+
+    def test_the_restore_drill_says_the_backups_are_unproven(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-restore-drill.service")
+        assert "no consequence mapped" not in text
+        assert "restore" in text.lower()
+
+    def test_the_guardrail_watch_says_which_checks_stop_running(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-guardrail-watch.service")
+        assert "no consequence mapped" not in text
+        assert "drift" in text.lower()
+
+    def test_the_four_mapped_watchdog_units_exist(self):
+        """A consequence for a unit that does not exist is a comment.
+
+        Each arm is keyed on a real unit's name, so if one is renamed the map
+        goes stale silently — the page would fall back to the maintainer note
+        the four tests above exist to keep off the operator's phone.
+        """
+        unit_dir = REPO_ROOT / "infra" / "systemd"
+        for unit in (
+            "robothor-backup-volume-guard.service",
+            "robothor-slo.service",
+            "robothor-restore-drill.service",
+            "robothor-guardrail-watch.service",
+        ):
+            assert (unit_dir / unit).exists(), f"{unit} has no repo mirror"
+            assert "OnFailure=robothor-alert@%n.service" in (unit_dir / unit).read_text(), (
+                f"{unit} does not page on failure, so its consequence arm is dead code"
+            )
+
     def test_an_unmapped_unit_says_so_instead_of_inventing_one(self, tmp_path: Path):
         """A wrong consequence is worse than an absent one — the default has
         to read as a gap in the map, and as a chore to close it."""

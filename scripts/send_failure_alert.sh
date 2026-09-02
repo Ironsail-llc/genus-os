@@ -359,6 +359,16 @@ consequence_for() {
             echo "Vision capture is down — no camera events; presence and face recognition are blind" ;;
         *liveness*)
             echo "The liveness watchdog itself is down — nothing is checking whether the engine is alive" ;;
+        # The watchdogs. A page from one of these says nothing is visibly
+        # broken YET — what has been lost is the thing that would tell you.
+        *backup-volume-guard*)
+            echo "The backup volume guard is down — a USB drop will no longer be detected or remapped, and every backup tier it gates goes quiet instead of failing" ;;
+        *robothor-slo*)
+            echo "The hourly SLO probe is down — backup freshness, liveness staleness and LLM availability will not page until it is back, however far they drift" ;;
+        *restore-drill*)
+            echo "The restore drill did not complete — nothing has proven the backups reconstitute a database, and the RTO number in the runbook is now unmeasured" ;;
+        *guardrail-watch*)
+            echo "The daily guardrail watch is down — drop-in and host-script drift, flag soak deadlines and instance manifest validity are all unchecked" ;;
         *)
             echo "(no consequence mapped — add one in send_failure_alert.sh)" ;;
     esac
