@@ -1160,6 +1160,29 @@ class TestARejectedPageDoesNotWedgeTheSpool:
         assert curl_calls(log) == 1
         assert poisoned(tmp_path) == []
 
+    def test_the_still_spooled_count_excludes_what_it_quarantined(self, tmp_path: Path):
+        """"3 page(s) still spooled" when two are.
+
+        The count was the size of the queue this drain STARTED with, minus
+        what it delivered — so every page it quarantined on the way through
+        was still being reported as waiting. That number is the one line an
+        operator reads to decide whether the backlog is growing, and it
+        overstated it by exactly the pages that had just been given up on.
+        """
+        install_status_curl(tmp_path, ["500"])
+        write_spooled(tmp_path, int(time.time()) - 2 * 86400, "PAGE-ANCIENT")
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-OLDEST")
+        write_spooled(tmp_path, SPOOLED_EPOCH_NEWER, "PAGE-NEWEST")
+
+        result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        out = result.stdout + result.stderr
+
+        assert len(poisoned(tmp_path)) == 1, out
+        assert len(spooled(tmp_path)) == 2, out
+        assert "2 page(s) still spooled" in out, (
+            "the count includes the page this drain quarantined — it is no "
+            f"longer spooled, and nothing will retry it:\n{out}"
+        )
 
 def test_the_drain_skips_spool_files_the_current_user_does_not_own():
     """Only root drains another account's pages.
@@ -1496,3 +1519,54 @@ def test_the_spool_dir_is_created_sticky_by_tmpfiles():
         "lets any local user delete another's undelivered page, and a "
         "non-world-writable one drops every page raised by the other account"
     )
+
+
+# ── the entry guard has to read the BODY too ─────────────────────────────────
+
+
+def test_the_entry_guard_refuses_a_pytest_path_in_the_body(tmp_path: Path):
+    """The two-argument form makes the BODY the page — and the guard only
+    ever looked at the unit name.
+
+    So the caller that passes a clean dedup key and a body composed from a
+    path — scripts/backup-volume-check.sh, which reports the volume it found
+    unmounted — walked straight past a guard written for the one-argument
+    shape. Under pytest that body is a tmpdir, which is exactly the text the
+    guard exists to keep off the operator's phone.
+    """
+    log = install_fake_curl(tmp_path)
+    result = subprocess.run(
+        [
+            "bash",
+            str(SEND),
+            "robothor-backup-volume",
+            "🔴 backup volume /tmp/pytest-of-someone/pytest-7/vol0 is not mounted",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=base_env(tmp_path, **FAKE_TOKEN_ENV),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert curl_calls(log) == 0, (
+        "a fixture path in the BODY was paged to the operator — the guard "
+        "only inspected the dedup key"
+    )
+    assert spooled(tmp_path) == [], (
+        "refused, then spooled: the next liveness drain would deliver it "
+        "anyway, five minutes later"
+    )
+
+
+def test_a_real_body_still_pages(tmp_path: Path):
+    """The guard stays narrow: it must refuse fixture paths, not bodies."""
+    log = install_fake_curl(tmp_path)
+    result = subprocess.run(
+        ["bash", str(SEND), "robothor-backup-volume", "🔴 backup volume is not mounted"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=base_env(tmp_path, **FAKE_TOKEN_ENV),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert curl_calls(log) == 1, "a genuine two-argument page was suppressed"

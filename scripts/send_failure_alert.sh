@@ -63,7 +63,14 @@ fi
 # Deliberately NARROW: it suppresses only messages that name a pytest temp
 # directory, never a real unit failure. An alert path that guesses would be
 # worse than the spam.
-if [[ "$UNIT" == *"pytest-of-"* || "$UNIT" == *"/pytest-"* ]]; then
+#
+# The BODY is checked, not just the key. With two arguments the body IS the
+# page and the key is only a dedup label, so a caller that composes its body
+# from a path — scripts/backup-volume-check.sh names the volume it found
+# unmounted — puts the fixture path there and nowhere else. A guard written
+# for the one-argument shape never saw it. Both are checked, so neither
+# shape can carry a tmpdir to the operator.
+if [[ "$UNIT$BODY" == *"pytest-of-"* || "$UNIT$BODY" == *"/pytest-"* ]]; then
     echo "send_failure_alert: refusing to page — message names a pytest temp path: $UNIT" >&2
     exit 0
 fi
@@ -576,7 +583,12 @@ drain_spool() {
 "
     fi
 
+    # `left` is what is still WAITING, not the size of the queue this drain
+    # started with: a page quarantined on the way through has left the
+    # delivery path for good, and counting it as spooled overstates the
+    # backlog by exactly the pages nothing will ever retry.
     local f base epoch queued text delivered=0 now attempts code
+    local left=${#files[@]}
     now="$(date +%s)"
     for f in "${files[@]}"; do
         base="$(basename "$f")"
@@ -588,13 +600,17 @@ drain_spool() {
         # Checked BEFORE the file is read, so a page that cannot be read at all
         # still leaves the queue eventually.
         if [[ "$epoch" =~ ^[0-9]+$ ]] && (( now - epoch > SPOOL_MAX_AGE )); then
-            quarantine_spooled "$f" "queued $(( (now - epoch) / 3600 ))h ago, past the ${SPOOL_MAX_AGE}s age cap" || true
+            if quarantine_spooled "$f" "queued $(( (now - epoch) / 3600 ))h ago, past the ${SPOOL_MAX_AGE}s age cap"; then
+                left=$(( left - 1 ))
+            fi
             continue
         fi
         # ── Attempt budget ───────────────────────────────────────────────────
         attempts="$(attempt_count "$f")"
         if (( attempts >= SPOOL_MAX_ATTEMPTS )); then
-            quarantine_spooled "$f" "${attempts} failed delivery attempts, at the ${SPOOL_MAX_ATTEMPTS}-attempt budget" || true
+            if quarantine_spooled "$f" "${attempts} failed delivery attempts, at the ${SPOOL_MAX_ATTEMPTS}-attempt budget"; then
+                left=$(( left - 1 ))
+            fi
             continue
         fi
 
@@ -617,6 +633,7 @@ drain_spool() {
                  "${base}" >&2
             rm -f "$f" 2>/dev/null || true
             rm -f "${f}.attempts" 2>/dev/null || true
+            [[ -e "$f" ]] || left=$(( left - 1 ))
             continue
         fi
         # Say it is late and say when it was raised: a page whose timestamp is
@@ -667,7 +684,9 @@ ${text}"; then
         # take the 5xx path.
         code="${LAST_HTTP_CODE:-}"
         if [[ "$code" =~ ^4[0-9][0-9]$ ]] && [[ ! "$code" =~ ^(401|403|408|429)$ ]]; then
-            quarantine_spooled "$f" "Telegram refused it with HTTP ${code} (content rejection, not an outage)" || true
+            if quarantine_spooled "$f" "Telegram refused it with HTTP ${code} (content rejection, not an outage)"; then
+                left=$(( left - 1 ))
+            fi
             continue
         fi
 
@@ -679,7 +698,7 @@ ${text}"; then
         echo "send_failure_alert: spool drain stopped at ${base}" \
              "(curl_rc=${LAST_CURL_RC} http_status=${LAST_HTTP_CODE:-none};" \
              "attempt ${attempts}/${SPOOL_MAX_ATTEMPTS});" \
-             "$(( ${#files[@]} - delivered )) page(s) still spooled" >&2
+             "$(( left - delivered )) page(s) still spooled" >&2
         break
     done
     if (( delivered )); then
