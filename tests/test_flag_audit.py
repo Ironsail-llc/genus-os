@@ -1153,3 +1153,179 @@ def test_main_still_notes_an_unreadable_environ(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "could not read the running engine's environment" in out
     assert "simulated" in out
+
+
+# --- the DB read path -------------------------------------------------------
+#
+# Three functions that only ever ran against the live database. Their whole
+# behaviour is the SQL they send — a wrong predicate returns a comforting zero
+# and makes this detector a liar (robothor/flags/evidence.py says exactly
+# that) — so these assert the predicate text, on the same injected cursor the
+# rest of the suite uses.
+
+
+def test_fetch_db_state_asks_only_for_the_flags_it_audits(monkeypatch):
+    from robothor.flags.evidence import EVIDENCE_SOURCES
+
+    flag = "ROBOTHOR_RBAC_MODE"
+    fired = dt.datetime(2026, 9, 1, 8, 30, tzinfo=dt.UTC)
+    probed = dt.datetime(2026, 8, 30, 7, 0, tzinfo=dt.UTC)
+    cursor = _FakeCursor(
+        [
+            {"fetchall": [(flag, "observe", "operator:u-1")]},
+            {"fetchone": (f"public.{EVIDENCE_SOURCES[flag].table}",)},
+            {"fetchall": [("observed", 3), ("blocked", 1)]},
+            {"fetchone": (fired,)},
+            {"fetchone": (probed,)},
+        ]
+    )
+    _patch_connection(monkeypatch, cursor)
+
+    state = fa.fetch_db_state([flag])
+
+    pin_sql, pin_params = cursor.executed[0]
+    assert "FROM feature_flags WHERE name = ANY(%s)" in pin_sql
+    assert pin_params == ([flag],), "one query for the audited set, not one per flag"
+    assert state.pins == {flag: "observe"}
+    assert state.evidence[flag].rows_7d == {"observed": 3, "blocked": 1}
+
+
+def test_fetch_db_state_skips_flags_with_no_declared_evidence_source(monkeypatch):
+    """A flag with no EvidenceSource must send NO evidence query at all —
+    querying the wrong table for it would report a zero that means nothing."""
+    from robothor.flags.evidence import EVIDENCE_SOURCES
+
+    unsourced = next(f for f in fa.DEBUG_ENV_KEYS if f not in EVIDENCE_SOURCES)
+    cursor = _FakeCursor([{"fetchall": []}])
+    _patch_connection(monkeypatch, cursor)
+
+    state = fa.fetch_db_state([unsourced])
+
+    assert len(cursor.executed) == 1, "only the feature_flags read"
+    assert state.evidence == {}
+
+
+def test_fetch_one_evidence_groups_the_event_log_by_action(monkeypatch):
+    """`observed` (would have blocked) vs `blocked` is the promotion decision;
+    a bare count cannot make it."""
+    from robothor.flags.evidence import EVIDENCE_SOURCES
+
+    src = EVIDENCE_SOURCES["ROBOTHOR_RBAC_MODE"]
+    fired = dt.datetime(2026, 9, 1, 8, 30, tzinfo=dt.UTC)
+    cursor = _FakeCursor(
+        [
+            {"fetchone": ("public.agent_guardrail_events",)},
+            {"fetchall": [("observed", 7)]},
+            {"fetchone": (fired,)},
+            {"fetchone": (None,)},
+        ]
+    )
+
+    ev = fa._fetch_one_evidence(cursor, "ROBOTHOR_RBAC_MODE", src)
+
+    guard_sql, guard_params = cursor.executed[0]
+    assert "to_regclass" in guard_sql
+    assert guard_params == ("public.agent_guardrail_events",)
+    counts_sql = cursor.executed[1][0]
+    assert "GROUP BY action" in counts_sql
+    assert src.where in counts_sql
+    assert "interval '7 days'" in counts_sql
+    assert ev.rows_7d == {"observed": 7}
+    assert ev.last_fired == fired
+
+
+def test_fetch_one_evidence_reports_a_missing_table_instead_of_a_zero(monkeypatch):
+    """Table presence is deploy-specific. "no <table>" and "0 rows" are
+    different findings and must not be printed as the same one."""
+    from robothor.flags.evidence import EVIDENCE_SOURCES
+
+    src = EVIDENCE_SOURCES["ROBOTHOR_JUDGE_ENABLED"]
+    cursor = _FakeCursor([{"fetchone": (None,)}])
+
+    ev = fa._fetch_one_evidence(cursor, "ROBOTHOR_JUDGE_ENABLED", src)
+
+    assert ev.note == f"no {src.table}"
+    assert ev.rows_7d == {}
+    assert len(cursor.executed) == 1, "a missing table must not be queried"
+
+
+def test_fetch_one_evidence_counts_rows_for_a_non_event_table(monkeypatch):
+    """Only agent_guardrail_events has an `action` column; every other source
+    is counted on its own time column."""
+    from robothor.flags.evidence import EVIDENCE_SOURCES
+
+    src = EVIDENCE_SOURCES["ROBOTHOR_JUDGE_ENABLED"]
+    fired = dt.datetime(2026, 8, 29, 12, 0, tzinfo=dt.UTC)
+    cursor = _FakeCursor(
+        [
+            {"fetchone": (f"public.{src.table}",)},
+            {"fetchone": (fired, 4)},
+            {"fetchone": (None,)},
+        ]
+    )
+
+    ev = fa._fetch_one_evidence(cursor, "ROBOTHOR_JUDGE_ENABLED", src)
+
+    counts_sql = cursor.executed[1][0]
+    assert "GROUP BY action" not in counts_sql
+    assert src.time_column in counts_sql
+    assert src.where in counts_sql
+    assert ev.rows_7d == {"rows": 4}
+    assert ev.last_fired == fired
+
+
+def test_fetch_one_evidence_rolls_back_and_notes_a_drifted_schema(monkeypatch):
+    """A dropped column must degrade this one flag's evidence, not abort the
+    audit — and the aborted transaction must be rolled back or every query
+    after it fails too."""
+    from robothor.flags.evidence import EVIDENCE_SOURCES
+
+    src = EVIDENCE_SOURCES["ROBOTHOR_RBAC_MODE"]
+    rolled: list[bool] = []
+
+    class _Exploding(_FakeCursor):
+        def execute(self, sql, params=()):
+            self.executed.append((sql, tuple(params) if params else ()))
+            if len(self.executed) == 1:
+                self._fetchone = ("public.agent_guardrail_events",)
+                return
+            raise RuntimeError('column "action" does not exist')
+
+    cursor = _Exploding([])
+    cursor.connection = type("_C", (), {"rollback": lambda self: rolled.append(True)})()
+
+    ev = fa._fetch_one_evidence(cursor, "ROBOTHOR_RBAC_MODE", src)
+
+    assert ev.note == f"query failed on {src.table}"
+    assert rolled == [True]
+
+
+def test_fetch_last_probe_matches_the_probe_trigger_detail():
+    """A probe run is the only evidence separating "nothing violated this"
+    from "this control cannot fire" — it is matched on the trigger_detail
+    prefix the probe runs stamp themselves with."""
+    probed = dt.datetime(2026, 8, 30, 7, 0, tzinfo=dt.UTC)
+    cursor = _FakeCursor([{"fetchone": (probed,)}])
+
+    got = fa._fetch_last_probe(cursor, "ROBOTHOR_RBAC_MODE")
+
+    sql, params = cursor.executed[0]
+    assert "max(started_at)" in sql
+    assert "FROM agent_runs WHERE trigger_detail LIKE %s" in sql
+    assert params == ("probe:ROBOTHOR_RBAC_MODE%",)
+    assert got == probed
+
+
+def test_fetch_last_probe_survives_a_missing_agent_runs_table():
+    rolled: list[bool] = []
+
+    class _Exploding(_FakeCursor):
+        def execute(self, sql, params=()):
+            self.executed.append((sql, tuple(params) if params else ()))
+            raise RuntimeError("relation agent_runs does not exist")
+
+    cursor = _Exploding([])
+    cursor.connection = type("_C", (), {"rollback": lambda self: rolled.append(True)})()
+
+    assert fa._fetch_last_probe(cursor, "ROBOTHOR_RBAC_MODE") is None
+    assert rolled == [True]
