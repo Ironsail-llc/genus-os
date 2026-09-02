@@ -213,10 +213,18 @@ class Box:
             "  esac\n"
             "done",
         )
+        # `cryptsetup luksUUID` reads the container's UUID out of the header.
+        # It is read-only, and it is the only place that UUID exists when
+        # crypttab names a device PATH instead of UUID=<…>.
         self._stub(
             "cryptsetup",
             'case "$1" in\n'
             '  isLuks) exit "${FAKE_ISLUKS_RC:-0}" ;;\n'
+            '  luksUUID) rc="${FAKE_LUKSUUID_RC:-0}"\n'
+            '          [ "$rc" = 0 ] && printf "%s\\n" "${FAKE_LUKS_UUID:-'
+            + UUID
+            + '}"\n'
+            '          exit "$rc" ;;\n'
             '  open)   rc="${FAKE_OPEN_RC:-0}"\n'
             '          [ "$rc" = 0 ] && : > "$FAKE_MAPPER_DIR/$3"\n'
             '          exit "$rc" ;;\n'
@@ -255,6 +263,18 @@ class Box:
         self.crypttab.write_text(
             f"# <name>  <device>  <keyfile>  <options>\n"
             f"{MAPPER}  UUID={UUID}  {keyfile}  luks,noauto\n"
+        )
+
+    def crypttab_names_a_path(self) -> None:
+        """crypttab column 2 is a device PATH, not ``UUID=<…>``.
+
+        A perfectly ordinary configuration, and the file then carries no
+        container UUID at all — so the identity check that recognises this
+        guard's own corpse has nothing to compare against unless the header is
+        asked directly."""
+        self.crypttab.write_text(
+            "# <name>  <device>  <keyfile>  <options>\n"
+            f"{MAPPER}  {self.device}  {self.keyfile}  luks,noauto\n"
         )
 
     def no_keyfile(self, column3: str = "none") -> None:
@@ -1063,6 +1083,57 @@ def test_our_own_corpse_with_no_deps_at_all_is_still_ours_to_unmount(box: Box):
     assert box.ran(f"cryptsetup open {box.device} {MAPPER}-1"), box.argv
     assert len(box.pages) == 1
     assert "auto-recovered" in box.pages[0]
+
+
+def test_a_path_spec_crypttab_still_knows_its_own_corpse(box: Box):
+    """The corpse case must not depend on how crypttab spells the device.
+
+    ``robothor-backup UUID=<…>`` hands the container's UUID over for free, and
+    the check that recognises this guard's own wedged node after the device has
+    dropped off — when ``dmsetup deps`` has nothing left to say — is built on
+    it. Spell the same device as ``/dev/disk/by-id/…`` and that UUID is simply
+    absent, the check silently answers "not ours", and the guard refuses to
+    unmount the very node the recovery exists to unmount. The header has the
+    UUID; ask it, read-only.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    box.crypttab_names_a_path()
+    result = box.run(
+        FAKE_CHECK_RCS="1 0",
+        FAKE_DM_DEPS="",  # an error target depends on nothing
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",  # held by the kernel, as it was on the night
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert box.ran(f"cryptsetup luksUUID {box.device}"), (
+        f"never asked the header for the container UUID:\n{box.argv}"
+    )
+    assert box.ran(f"umount -l {box.mount}"), f"refused its own corpse:\n{box.argv}"
+    assert box.ran(f"cryptsetup open {box.device} {MAPPER}-1"), box.argv
+    assert len(box.pages) == 1
+    assert "auto-recovered" in box.pages[0]
+
+
+def test_an_unreadable_luks_header_says_identity_is_degraded(box: Box):
+    """And when the header cannot be read, say so rather than carrying on as
+    if the UUID were simply absent. Identity falls back to ``deps`` alone,
+    which is the check that cannot see a corpse — a fact the operator reading
+    the journal after a refusal needs in front of them."""
+    box.plug_in()
+    box.stale_mapper()
+    box.crypttab_names_a_path()
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_LUKSUUID_RC="1",
+        FAKE_DM_DEPS="",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "identity is degraded to deps-only" in result.stdout, result.stdout
+    assert box.ran("umount") == [], f"unmounted a node it could not identify:\n{box.argv}"
 
 
 @pytest.mark.parametrize("suffix", ["-1", "-9", "-b"])

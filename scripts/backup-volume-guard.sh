@@ -265,7 +265,35 @@ resolve_device() {
             LUKS_UUID="${LUKS_UUID//-/}"
             LUKS_UUID="${LUKS_UUID,,}"
             ;;
-        /*) DEVICE="$spec" ;;
+        /*)
+            DEVICE="$spec"
+            # crypttab named a path, so the file carries no container UUID and
+            # node_is_our_luks_corpse — the check that recognises this guard's
+            # OWN wedged node once the device has dropped off and `dmsetup
+            # deps` has nothing left to say — would have nothing to compare
+            # against. That is the 2026-08-27 signature, and it would refuse
+            # to unmount the very node the recovery exists to unmount.
+            #
+            # The header has the UUID. luksUUID only reads it.
+            local header_uuid header_rc=0
+            if [[ -e "$DEVICE" ]]; then
+                header_uuid="$(cryptsetup luksUUID "$DEVICE" 2>/dev/null)" || header_rc=$?
+                # Only what a SUCCESSFUL read printed: whatever a failing
+                # cryptsetup left on stdout is not a UUID, and half of one
+                # would be worse here than none — it can only ever make a
+                # stranger's node look like ours.
+                if ((header_rc == 0)); then
+                    LUKS_UUID="${header_uuid//[[:space:]]/}"
+                    LUKS_UUID="${LUKS_UUID//-/}"
+                    LUKS_UUID="${LUKS_UUID,,}"
+                fi
+            fi
+            # Said out loud, because what is lost is invisible from the
+            # refusal it causes: with no container UUID, identity is `deps`
+            # alone, and `deps` is exactly the half that cannot see a corpse.
+            [[ -n "$LUKS_UUID" ]] || \
+                log "could not read the LUKS UUID of ${DEVICE} — node identity is degraded to deps-only"
+            ;;
         *)
             DEVICE_REASON="crypttab entry ${MAPPER_BASE} names ${spec}, which is neither a UUID= nor a path"
             return 1
