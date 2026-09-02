@@ -1,0 +1,24 @@
+# Drives robothor-slo.service — see that file for the incident this closes.
+#
+# Hourly. The budgets it enforces are measured in hours and days (26h local
+# dump, 26h offsite, 8d base backup), so an hourly tick is far finer than any
+# of them; the resolution that matters is the sender's per-key cooldown, which
+# turns a standing breach into a daily re-page rather than an hourly storm.
+[Unit]
+Description=Robothor SLO probe every hour
+
+[Timer]
+# OnBootSec so a box that boots into an already-stale backup tier is told about
+# it; without it the timer only starts counting from its first manual
+# activation. Ten minutes in, so the boot-time secrets decrypt has happened and
+# the pager has credentials to send with.
+OnBootSec=10min
+OnUnitActiveSec=1h
+AccuracySec=1min
+# Persistent=true: a breach missed while the box was off is still a breach when
+# it comes back — unlike a liveness probe, staleness only ever gets worse
+# across a downtime, so the catch-up run carries real information.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
