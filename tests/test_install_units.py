@@ -247,6 +247,44 @@ def test_unknown_robothor_var_fails_the_render(tmp_path: Path):
 
 # ── Installer: --root install ────────────────────────────────────────────────
 
+#: Every mirrored drop-in directory, and the closed set of .conf files in it.
+#:
+#: A drop-in directory is a closed set because it is where production posture
+#: lives outside the unit file. The engine's live copy had accumulated twelve
+#: `.bak-*`/`.pre-*` files plus two drop-ins (onfailure, restart-forever) that
+#: existed ONLY on the box — installed by hand, mirrored nowhere, therefore not
+#: reproducible on a rebuild. The bridge, orchestrator and vision directories
+#: were the same story one unit over: seven hand-written .conf files, two of
+#: which (zz-rls.conf) carry the RLS posture and one (zz-bind-loopback.conf)
+#: the fix for an unauthenticated 0.0.0.0 bind. Pinning the sets here means a
+#: new drop-in has to be added deliberately, in a reviewed diff.
+EXPECTED_DROPINS: dict[str, set[str]] = {
+    "robothor-engine.service.d": {
+        "boot-guard.conf",
+        "hardening.conf",
+        "onfailure.conf",
+        "restart-forever.conf",
+        "upgrade-rip-flags.conf",
+        "zz-sandbox.conf",
+    },
+    "robothor-bridge.service.d": {
+        "onfailure.conf",
+        "restart-forever.conf",
+    },
+    "robothor-orchestrator.service.d": {
+        "instance-env.conf",
+        "onfailure.conf",
+        "restart-forever.conf",
+        "zz-bind-loopback.conf",
+        "zz-rls.conf",
+    },
+    "robothor-vision.service.d": {
+        "onfailure.conf",
+        "restart-forever.conf",
+        "zz-rls.conf",
+    },
+}
+
 EXPECTED_INSTALLED = [
     "robothor-engine.service",
     "robothor-bridge.service",
@@ -257,59 +295,62 @@ EXPECTED_INSTALLED = [
     "robothor-liveness.timer",
     "robothor-bench-rotation.service",
     "robothor-bench-rotation.timer",
-    "robothor-engine.service.d/boot-guard.conf",
     "robothor-backup-volume-guard.service",
     "robothor-backup-volume-guard.timer",
-    "robothor-engine.service.d/hardening.conf",
-    "robothor-engine.service.d/onfailure.conf",
-    "robothor-engine.service.d/restart-forever.conf",
-    "robothor-engine.service.d/upgrade-rip-flags.conf",
-    "robothor-engine.service.d/zz-sandbox.conf",
-]
-
-#: The engine drop-in directory is a closed set. It is the one place the
-#: production guardrail posture lives, and the live copy had accumulated
-#: twelve `.bak-*`/`.pre-*` files plus two drop-ins (onfailure,
-#: restart-forever) that existed ONLY on the box — installed by hand, mirrored
-#: nowhere, and therefore not reproducible on a rebuild. Pinning the set here
-#: means a new drop-in has to be added deliberately, in a reviewed diff.
-EXPECTED_ENGINE_DROPINS = {
-    "boot-guard.conf",
-    "hardening.conf",
-    "onfailure.conf",
-    "restart-forever.conf",
-    "upgrade-rip-flags.conf",
-    "zz-sandbox.conf",
-}
+] + [f"{d}/{conf}" for d, confs in EXPECTED_DROPINS.items() for conf in sorted(confs)]
 
 
-def test_engine_dropin_dir_is_a_closed_set():
-    """Exactly six .conf mirrors, no more and no fewer."""
-    present = {p.name for p in (UNIT_DIR / "robothor-engine.service.d").glob("*.conf")}
-    assert present == EXPECTED_ENGINE_DROPINS
+def test_the_set_of_mirrored_dropin_dirs_is_closed():
+    """A drop-in directory that appears in infra/systemd/ without a line in
+    EXPECTED_DROPINS is a directory nothing pins — which is how the engine's
+    grew two untracked files."""
+    present = {p.name for p in UNIT_DIR.glob("robothor-*.service.d") if p.is_dir()}
+    assert present == set(EXPECTED_DROPINS)
 
 
-def test_engine_dropin_dir_carries_no_backup_files():
+@pytest.mark.parametrize("dirname", sorted(EXPECTED_DROPINS), ids=lambda d: d)
+def test_dropin_dir_is_a_closed_set(dirname: str):
+    """Exactly the pinned .conf mirrors, no more and no fewer."""
+    present = {p.name for p in (UNIT_DIR / dirname).glob("*.conf")}
+    assert present == EXPECTED_DROPINS[dirname]
+
+
+@pytest.mark.parametrize("dirname", sorted(EXPECTED_DROPINS), ids=lambda d: d)
+def test_dropin_dir_carries_no_backup_files(dirname: str):
     """`.bak-*`/`.pre-*` copies are how the live directory became unreadable;
     they must never be mirrored into the repo."""
-    strays = [
-        p.name
-        for p in (UNIT_DIR / "robothor-engine.service.d").iterdir()
-        if p.is_file() and p.suffix != ".conf"
-    ]
+    strays = [p.name for p in (UNIT_DIR / dirname).iterdir() if p.is_file() and p.suffix != ".conf"]
     assert not strays, f"backup/scratch files in the drop-in mirror: {strays}"
 
 
-def test_onfailure_dropin_matches_its_other_installer_byte_for_byte():
+ONFAILURE_MIRRORS = sorted(d for d, confs in EXPECTED_DROPINS.items() if "onfailure.conf" in confs)
+
+
+@pytest.mark.parametrize("dirname", ONFAILURE_MIRRORS, ids=lambda d: d)
+def test_onfailure_dropin_matches_its_other_installer_byte_for_byte(dirname: str):
     """Two installers write this file — scripts/install_onfailure_alerts.sh
-    (for every paged unit) and scripts/install-units.sh (for the engine, from
-    this mirror). If they disagree by one byte they overwrite each other in
-    turn and the drift check flaps forever, so the mirror is pinned to the
-    generator's heredoc."""
+    (for every paged unit) and scripts/install-units.sh (from these mirrors).
+    If they disagree by one byte they overwrite each other in turn and the
+    drift check flaps forever, so every mirror is pinned to the generator's
+    heredoc."""
     generator = (REPO_ROOT / "scripts" / "install_onfailure_alerts.sh").read_text()
     body = generator.split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0] + "\n"
-    mirror = (UNIT_DIR / "robothor-engine.service.d" / "onfailure.conf").read_text()
+    mirror = (UNIT_DIR / dirname / "onfailure.conf").read_text()
     assert mirror == body
+
+
+def test_restart_forever_dropins_agree_on_their_directives():
+    """The comment header explains why THIS unit restarts forever and so
+    differs per unit; the directives must not. A drop-in that sets a different
+    key is a drop-in that does something else and should not share the name."""
+    bodies = {
+        dirname: directives((UNIT_DIR / dirname / "restart-forever.conf").read_text()).strip()
+        for dirname, confs in EXPECTED_DROPINS.items()
+        if "restart-forever.conf" in confs
+    }
+    assert len(bodies) == 4, bodies
+    assert len(set(bodies.values())) == 1, bodies
+    assert set(bodies.values()) == {"[Unit]\nStartLimitIntervalSec=0"}, bodies
 
 
 def test_installs_rendered_units_into_root(tmp_path: Path):
