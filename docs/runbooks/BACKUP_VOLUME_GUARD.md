@@ -52,6 +52,8 @@ mean recent.
 | `mapper robothor-backup still has N opener(s) after umount -l — refusing to fsck a referenced mapping; the volume is now UNMOUNTED and the next tick remounts it once the holder lets go` | The mapping is the device's own and correct, but something still holds it: `umount -l` returns before the last reference is dropped. `fsck.ext4 -p` there would corrupt a filesystem that was only degraded. **The lazy unmount already happened**, so the volume is no longer at the path — it is not degraded now, it is absent, and it stays absent while the holder holds. | `lsof +f -- /dev/mapper/robothor-backup` / `fuser -vm /mnt/robothor-backup` to find the holder (a login shell sitting in the directory counts) and stop it. The next tick then remounts it; nothing else is needed. If nothing is holding it, the reference is a kernel one: reboot. |
 | `something other than the backup mapper is mounted at /mnt/robothor-backup (SOURCE) — refusing to unmount it` | The probe says the path is unusable and what is mounted there is not one of this guard's mapper nodes at all. Somebody mounted over the mountpoint. The guard touched nothing: `umount -l` names a path, and unmounting a stranger's filesystem out from under its users is not this control's job. | Find out what `SOURCE` is (`findmnt /mnt/robothor-backup`) and unmount it yourself when whatever is using it is done. The next tick then heals the real volume. |
 | `something other than the backup mapper is mounted at /mnt/robothor-backup (SOURCE is not backed by DEVICE) — refusing to unmount it` | A node **named** like this guard's mapper is mounted there, but it is neither backed by our device nor a mapping of our LUKS container — see "How it decides what is ours". A name is not an identity. | `dmsetup deps <name>` and `dmsetup info -c -o uuid <name>` say what it really is. Unmount it yourself once whatever is using it is done. |
+| `could not ask findmnt what is mounted at /mnt/robothor-backup (exit N) — refusing to guess` | findmnt failed rather than answering. `findmnt` exits non-zero both for an empty mountpoint and for a real error, so an exit it cannot explain is never read as "nothing is mounted there" — everything the heal does is aimed at whatever is really at the path. The guard touched nothing. | Check `findmnt` works at all (`findmnt /mnt/robothor-backup`; exit 127 means util-linux is missing from the unit's PATH). The next tick heals it once findmnt answers. |
+| `N filesystems stacked at /mnt/robothor-backup (SOURCES) — refusing to unmount any of them` | More than one filesystem is mounted at the path. `umount -l` pops the TOP of the stack, which is not the layer the identity check can vouch for, so the guard will not touch any of them. | `findmnt -o SOURCE,FSTYPE /mnt/robothor-backup` lists the layers. Unmount whatever was stacked on top once its user is done; the next tick heals the real volume. |
 | `no non-interactive keyfile in crypttab (column 3 = X); refusing to tear down a mapping I cannot rebuild` | crypttab column 3 is `none`, `-`, or a file root cannot read, so `cryptsetup open` would prompt on a console the timer does not have. The guard did **not** unmount or close anything — it left the volume degraded rather than making it absent. | Put a readable keyfile in column 3 of `/etc/crypttab` (`cryptsetup luksAddKey` first), or run the manual procedure below and unlock it by hand. |
 | `... heal deferred: <unit> is activating` | A backup unit was mid-run; unmounting under it would corrupt the backup. | Nothing — the next tick heals it. |
 | `<mount> is mounted emergency_ro ...` with `HEAL=0` | Healing is switched off. | Re-enable, or run the manual procedure below. |
@@ -66,8 +68,17 @@ either `dmsetup deps` resolves to the same `MAJ:MIN` as the crypttab
 mapping), or its dm-crypt UUID — `CRYPT-LUKS2-<container uuid>-<name>` — names
 our LUKS container (our own **corpse**, after a drop has taken the deps away;
 an orphaned `error` target depends on nothing, which is the 2026-08-27
-signature). Anything else at the mountpoint is somebody's filesystem and the
-guard refuses to touch it.
+signature). Only the container field of that UUID counts: the `<name>` after it
+is a string whoever made the node chose, so a node merely *named* after our
+container is not ours. Anything else at the mountpoint is somebody's filesystem
+and the guard refuses to touch it.
+
+When crypttab names the device as a **path** instead of `UUID=<…>`, the file
+carries no container UUID and the corpse half of that test would have nothing
+to compare against — so the guard reads it from the header with `cryptsetup
+luksUUID` (read-only). If even that fails it logs `node identity is degraded to
+deps-only`, which is the state in which it cannot recognise its own corpse and
+will refuse the heal the drop signature needs.
 
 The same question picks the mapping to reuse. Every node wearing one of those
 names is asked, not just the bare one — after a heal the live mapping is
