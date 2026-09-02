@@ -32,6 +32,10 @@ fail() { log "ERROR: $*"; exit 1; }
 MOUNT="${DEST%%/robothor/*}"
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 VOLUME_CHECK="${ROBOTHOR_VOLUME_CHECK:-$SCRIPT_DIR/backup-volume-check.sh}"
+# Last-good markers: a freshness guard needs to know when this last WORKED,
+# not only whether the most recent run failed. See scripts/backup-state.sh.
+# shellcheck source=scripts/backup-state.sh
+source "$SCRIPT_DIR/backup-state.sh"
 [[ -x "$VOLUME_CHECK" ]] || fail "volume probe not found at $VOLUME_CHECK"
 "$VOLUME_CHECK" --rw "$MOUNT" \
     || fail "$MOUNT is not a usable backup volume — refusing to write a base backup that would go nowhere"
@@ -107,3 +111,5 @@ for d in "${OLD[@]:-}"; do
 done
 
 log "done"
+
+backup_state_record last-basebackup

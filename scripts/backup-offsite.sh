@@ -40,6 +40,12 @@ LOG="${ROBOTHOR_OFFSITE_LOG:-$_default_log}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
 
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+# Last-good markers: a freshness guard needs to know when this last WORKED,
+# not only whether the most recent run failed. See scripts/backup-state.sh.
+# shellcheck source=scripts/backup-state.sh
+source "$SCRIPT_DIR/backup-state.sh"
+
 fail() {
     log "FAILED: $*"
     # Page the operator — a backup that quietly stops running is the whole risk.
@@ -221,3 +227,9 @@ done
 # old line reported the pre-prune total and read as an off-by-one every night.
 remaining=$(rclone lsf "$REMOTE/db" --include "*.sql.gz" 2>/dev/null | wc -l | tr -d ' ')
 log "offsite replication OK ($remaining object(s) offsite, ${#keep_files[@]} retained generations, keeping $KEEP, pruned $pruned)"
+
+# The dumps are now offsite and verified. Verify-only runs exit above and
+# deliberately do not stamp this: they upload nothing, so they say nothing
+# about whether replication is still working.
+backup_state_record last-offsite-ok
+

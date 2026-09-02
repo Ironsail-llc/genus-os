@@ -16,6 +16,11 @@ MIN_FREE_GB=10
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 VOLUME_CHECK="${ROBOTHOR_VOLUME_CHECK:-$SCRIPT_DIR/backup-volume-check.sh}"
 
+# Last-good markers: a freshness guard needs to know when this last WORKED,
+# not only whether the most recent run failed. See scripts/backup-state.sh.
+# shellcheck source=scripts/backup-state.sh
+source "$SCRIPT_DIR/backup-state.sh"
+
 log() { echo "[$TIMESTAMP] $1" >> "$LOG"; }
 
 # ── Pre-flight checks ───────────────────────────────────────────
@@ -218,3 +223,6 @@ backup_docker_volumes || log "WARNING: docker volume backup incomplete"
 
 TOTAL_SIZE=$(du -sh "$BACKUP_ROOT" | cut -f1)
 log "Backup complete. ${TOTAL_SIZE} total on SSD."
+
+backup_state_record last-local-dump
+

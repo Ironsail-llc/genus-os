@@ -300,3 +300,80 @@ class TestWalOffsiteDegradesWhenTheBackupVolumeIsWedged:
             "rclone was pointed at the unreadable volume anyway\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
+
+    def test_a_degraded_run_still_records_that_the_wal_went_offsite(
+        self, tmp_path: Path
+    ) -> None:
+        """Exiting 0 is only safe if something else carries the freshness
+        signal. The marker lives on NVMe, not on the volume that broke."""
+        self._run(tmp_path)
+        marker = tmp_path / "state" / "last-wal-offsite-ok"
+        assert marker.exists(), (
+            "the unit stopped failing and recorded nothing instead — the "
+            "paging storm would be replaced by silence"
+        )
+
+
+class TestTheBaseBackupRecordsWhenItLastWorked:
+    """pg-basebackup.sh drives real binaries, so it is stubbed rather than
+    grepped: a marker that is written by code nobody ever executes is the
+    inert control this whole change exists to avoid."""
+
+    SCRIPT = REPO_ROOT / "scripts" / "pg-basebackup.sh"
+
+    @staticmethod
+    def _stub(path: Path, body: str) -> None:
+        path.write_text(f"#!/usr/bin/env bash\n{body}\n")
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+    def _run(self, tmp_path: Path, dest: Path):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        # pg_basebackup writes a directory at --pgdata=...; that is all the
+        # rest of the script needs from it.
+        self._stub(
+            bin_dir / "pg_basebackup",
+            'for a in "$@"; do case "$a" in --pgdata=*) mkdir -p "${a#--pgdata=}";; esac; done',
+        )
+        env = {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "ROBOTHOR_BASEBACKUP_DIR": str(dest),
+            "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
+        }
+        return subprocess.run(
+            ["bash", str(self.SCRIPT)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+
+    def test_a_successful_base_backup_records_last_basebackup(
+        self, tmp_path: Path
+    ) -> None:
+        dest = tmp_path / "robothor" / "basebackup"
+        dest.mkdir(parents=True)
+        result = self._run(tmp_path, dest)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        marker = tmp_path / "state" / "last-basebackup"
+        assert marker.exists(), result.stdout + result.stderr
+        assert marker.read_text().strip()
+
+    def test_a_wedged_volume_records_nothing_and_does_not_run(
+        self, tmp_path: Path
+    ) -> None:
+        """The volume probe refuses first, so there is no half-written base
+        backup and no marker claiming one exists."""
+        dest = tmp_path / "robothor" / "basebackup"
+        dest.mkdir(parents=True)
+        (tmp_path / "robothor").chmod(0o000)
+        try:
+            result = self._run(tmp_path, dest)
+        finally:
+            (tmp_path / "robothor").chmod(0o755)
+
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert not (tmp_path / "state" / "last-basebackup").exists(), (
+            "a base backup that never ran recorded itself as successful"
+        )

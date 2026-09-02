@@ -25,6 +25,11 @@ KEEP_DAYS="${ROBOTHOR_WAL_KEEP_DAYS:-8}"
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 VOLUME_CHECK="${ROBOTHOR_VOLUME_CHECK:-$SCRIPT_DIR/backup-volume-check.sh}"
 
+# Last-good markers: a freshness guard needs to know when this last WORKED,
+# not only whether the most recent run failed. See scripts/backup-state.sh.
+# shellcheck source=scripts/backup-state.sh
+source "$SCRIPT_DIR/backup-state.sh"
+
 log()  { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
 fail() { log "ERROR: $*"; exit 1; }
 
@@ -149,6 +154,14 @@ if [[ "$AVAIL_GB" -lt 10 ]]; then
 fi
 
 log "WAL offsite replication complete"
+
+# Stamp the marker only when the WAL actually reached the remote. A marker
+# written on a failed push makes a stale archive look fresh, which is worse
+# than no marker at all. A DEGRADED run (backup volume wedged) does stamp:
+# the WAL did go offsite, which is what this marker is about.
+if [[ "$OFFSITE_FAILED" -eq 0 ]]; then
+    backup_state_record last-wal-offsite-ok
+fi
 
 # Now that the prune and disk guard have both run unconditionally, surface the
 # §2 failure (if any) so OnFailure still pages the operator about it.
