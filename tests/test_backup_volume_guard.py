@@ -44,6 +44,7 @@ import os
 import shutil
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -1708,6 +1709,45 @@ def test_a_lock_that_cannot_be_opened_says_so_on_stderr(box: Box):
     # And it kept going: an unopenable lock must not turn into "another run
     # holds it", which would exit 0 forever without probing the volume.
     assert len(box.pages) == 1, f"the guard stopped instead of probing: {box.pages}"
+
+
+def test_a_held_lock_is_skipped_without_a_page(box: Box):
+    """A second guard invocation while a heal is still mid-flight (a long
+    fsck) must not treat the held lock as a green light: it exits 0, says so
+    on the log, and never reaches the probe or the mapper — no page, no mount
+    or cryptsetup argv at all."""
+    box.state_dir.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = Path(f"{str(box.state_dir).rstrip('/')}.lock")
+    holder_ready = box.root / "holder-ready"
+    holder = subprocess.Popen(
+        [
+            "bash",
+            "-c",
+            f'exec 9>"{lock_path}" && flock -n 9 || exit 1; '
+            f'touch "{holder_ready}"; sleep 30',
+        ],
+    )
+    try:
+        for _ in range(100):
+            if holder_ready.exists():
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("the lock holder never signalled that it had the lock")
+
+        result = box.run(FAKE_CHECK_RCS="1 0")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "another guard run is still working" in result.stdout, (
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert box.pages == [], f"paged while another run held the lock: {box.pages}"
+        assert box.ran("mount") == [], f"touched the mount while locked out:\n{box.argv}"
+        assert box.ran("cryptsetup") == [], (
+            f"touched cryptsetup while locked out:\n{box.argv}"
+        )
+    finally:
+        holder.terminate()
+        holder.wait(timeout=5)
 
 
 def test_the_preflight_names_the_missing_tool_and_touches_nothing(box: Box, tmp_path: Path):
