@@ -275,6 +275,22 @@ def write_dump(dump_dir: Path, age_hours: float, name: str = "robothor_memory-fi
     return path
 
 
+def write_basebackup(base_dir: Path, age_hours: float, stamp: str = "20260901T000000") -> Path:
+    """A base backup as `scripts/pg-basebackup.sh` leaves it: a `base-<stamp>/`
+    directory holding the tarball, plus a `base-<stamp>.backup_label` file
+    beside it."""
+    base_dir.mkdir(parents=True, exist_ok=True)
+    out = base_dir / f"base-{stamp}"
+    out.mkdir(exist_ok=True)
+    (out / "base.tar.gz").write_bytes(b"fixture")
+    label = base_dir / f"base-{stamp}.backup_label"
+    label.write_text("START WAL LOCATION: 0/3000028\n")
+    when = time.time() - age_hours * 3600
+    for path in (out / "base.tar.gz", out, label):
+        os.utime(path, (when, when))
+    return out
+
+
 def healthy_tree(tmp_path: Path, age_hours: float = 1) -> None:
     """A backup tier that is entirely within budget."""
     write_all_markers(tmp_path / "backup-state", age_hours)
@@ -295,6 +311,7 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
             # The two live paths this probe would otherwise read.
             "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "backup-state"),
             "ROBOTHOR_SLO_LOCAL_DUMP_DIR": str(tmp_path / "dumps"),
+            "ROBOTHOR_SLO_BASEBACKUP_DIR": str(tmp_path / "basebackup"),
             # Seams: no volume probe, no rclone, no psql by default, and a
             # systemctl that answers for a healthy box — never the live units.
             "ROBOTHOR_SLO_VOLUME_CHECK_CMD": "/bin/true",
@@ -388,6 +405,66 @@ class TestStalenessPages:
         write_marker(tmp_path / "backup-state", "last-basebackup", age_hours=24 * 9)
         run_probe(env)
         assert log.exists() and "basebackup" in log.read_text().lower()
+
+    def test_a_basebackup_on_disk_answers_when_the_marker_is_gone(self, tmp_path: Path):
+        """The marker is evidence a run happened; the base-* directory is the
+        thing PITR actually starts from.
+
+        Reading only the marker made the missing-marker case page "PITR has no
+        starting point" — a sentence that is simply false while a week-old base
+        backup sits on the volume. The marker directory is on NVMe and the
+        backup is not: restoring the box, or losing /var/lib, loses the marker
+        and keeps the base. A dead-man that cries about a backup it is standing
+        on gets muted like any other."""
+        healthy_tree(tmp_path)
+        (tmp_path / "backup-state" / "last-basebackup").unlink()
+        write_basebackup(tmp_path / "basebackup", age_hours=30)
+        env = base_env(tmp_path)
+        log = with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        assert not log.exists(), (
+            "a 30h-old base backup is inside the 8-day budget whether or not "
+            f"a marker recorded it: {log.read_text() if log.exists() else ''}"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "marker absent" in result.stdout, (
+            "the report must say the age came from the artifact, not a marker"
+        )
+
+    def test_a_stale_basebackup_on_disk_still_pages(self, tmp_path: Path):
+        """The fallback measures; it does not excuse."""
+        healthy_tree(tmp_path)
+        (tmp_path / "backup-state" / "last-basebackup").unlink()
+        write_basebackup(tmp_path / "basebackup", age_hours=24 * 9)
+        env = base_env(tmp_path)
+        log = with_recording_alert(tmp_path, env)
+
+        run_probe(env)
+
+        assert log.exists(), "a 9-day-old base backup is outside its 8-day budget"
+        assert "basebackup" in log.read_text().lower()
+
+    def test_the_backup_label_file_is_not_mistaken_for_a_base_backup(self, tmp_path: Path):
+        """`pg-basebackup.sh` writes `base-<stamp>/` AND `base-<stamp>.backup_label`
+        beside it. The label is a few hundred bytes of text; it is not a
+        restorable copy, and a glob that counts it reports a base backup that
+        does not exist."""
+        healthy_tree(tmp_path)
+        (tmp_path / "backup-state" / "last-basebackup").unlink()
+        base = tmp_path / "basebackup"
+        base.mkdir(parents=True, exist_ok=True)
+        label = base / "base-20260901T000000.backup_label"
+        label.write_text("START WAL LOCATION: 0/3000028\n")
+        os.utime(label, (time.time(), time.time()))
+        env = base_env(tmp_path)
+        log = with_recording_alert(tmp_path, env)
+
+        run_probe(env)
+
+        assert log.exists(), "a lone backup_label is not a base backup — that must page"
+        assert "basebackup" in log.read_text().lower()
 
     def test_a_marker_that_was_never_written_is_a_breach(self, tmp_path: Path):
         """An absent marker reads as "recent" to anything that only checks for

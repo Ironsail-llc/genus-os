@@ -46,7 +46,7 @@ tomorrow.
 | S1 | Run success | `agent_runs`, 7d, terminal statuses only, `benchmark:%` excluded | bad ≤ 5% | digest |
 | S2 | Heartbeat delivery | `agent_runs`, 24h, main's `heartbeat:%` runs with `delivered_at`, plus the worst `delivered_at - completed_at` over 7d | ≥ 95% delivered **and** lag < 60s | **page** (12h cooldown) when 0 ran in 24h |
 | S3 | Pager delivery | `crm_agent_notifications`, 7d, `alert_fallback` rows **+** `failed to send` lines in `robothor-alert@*`'s journal over 7d | 0 lost pages | digest |
-| **S4** | **Backup freshness (dead-man)** | `scripts/backup-state.sh` markers + a readdir of the dump dir + `backup-volume-check.sh --ro` | local dump < 26h, offsite < 26h, basebackup < 8d | **page** `slo:backup-freshness` (12h cooldown → re-pages daily until fixed) |
+| **S4** | **Backup freshness (dead-man)** | `scripts/backup-state.sh` markers + a readdir of the dump dir + the newest `base-*` directory + `backup-volume-check.sh --ro` | local dump < 26h, offsite < 26h, basebackup < 8d | **page** `slo:backup-freshness` (12h cooldown → re-pages daily until fixed) |
 | S5 | Liveness | `systemctl show robothor-liveness.service -p Result` + the timer's `LastTriggerUSec`, read hourly | last fired < 1h, last run `success` | **page** `slo:liveness-stale` (12h cooldown) |
 | S6 | LLM availability | `agent_runs`, 24h: `All models failed` share, `ollama_chat/%` share | all-failed < 1%/day, local fallback < 30% | **page** `slo:llm-availability` (6h cooldown) at ≥ 5 all-failed in an hour |
 | S6 | Credential pool | `keys_from_env('OPENROUTER_API_KEY')` — the pool every model shares | ≥ 2 keys | digest line `pool size N`, never a page |
@@ -95,6 +95,23 @@ journalctl -u robothor-backup-local.service -n 50 --no-pager
 A marker reading `unknown (no successful run recorded)` means that job has
 **never** succeeded on this box — not that it is merely late. On a fresh
 install that is expected until the first successful run stamps it.
+
+Two tiers do not stop at the marker, because the marker and the backup live on
+**different disks** — markers on NVMe, backups on the volume — so either can
+outlive the other:
+
+- the **local dump** tier takes the worse of (marker, newest `*.sql.gz`);
+- the **basebackup** tier falls back to the newest `base-*` **directory** under
+  `/mnt/robothor-backup/robothor/basebackup` (`ROBOTHOR_BASEBACKUP_DIR`) when
+  the marker is missing, probing the volume first. The report then says
+  `marker absent; newest base-* directory is Nh old`, and that is **OK** if N is
+  inside the budget. Only the `base-<stamp>/` directory counts — the
+  `base-<stamp>.backup_label` file beside it is a WAL position, not a
+  restorable copy.
+
+Restoring the box, or losing `/var/lib`, loses the markers and keeps the
+backups. Paging *"PITR has no starting point"* while a week-old base backup sits
+on the volume is how a dead-man gets muted.
 
 The page repeats every 12 hours while the breach stands. It stops on its own
 once a successful run stamps a fresh marker; there is nothing to acknowledge.
@@ -211,6 +228,7 @@ variables:
 | `ROBOTHOR_SLO_LOCAL_DUMP_MAX_HOURS` | `26` | S4 local dump |
 | `ROBOTHOR_SLO_OFFSITE_MAX_HOURS` | `26` | S4 offsite |
 | `ROBOTHOR_SLO_BASEBACKUP_MAX_HOURS` | `192` (8d) | S4 basebackup |
+| `ROBOTHOR_BASEBACKUP_DIR` | `/mnt/robothor-backup/robothor/basebackup` | S4 basebackup's marker-free fallback (same spelling as `pg-basebackup.sh`) |
 | `ROBOTHOR_SLO_GUARDRAIL_WATCH_MAX_HOURS` | `26` | S8 |
 | `ROBOTHOR_SLO_LIVENESS_MAX_HOURS` | `1` | S5 |
 

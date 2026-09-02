@@ -76,6 +76,9 @@
 #   ROBOTHOR_SLO_LOCAL_DUMP_MAX_HOURS  local dump budget (26)
 #   ROBOTHOR_SLO_OFFSITE_MAX_HOURS     offsite budget (26)
 #   ROBOTHOR_SLO_BASEBACKUP_MAX_HOURS  base backup budget (192 = 8d)
+#   ROBOTHOR_SLO_BASEBACKUP_DIR        base backups, for the marker-free
+#   / ROBOTHOR_BASEBACKUP_DIR          fallback (same spelling and default as
+#                                      scripts/pg-basebackup.sh)
 #   ROBOTHOR_SLO_BACKUP_COOLDOWN_SECONDS    12h — hourly probe, so the
 #                                      standing breach re-pages daily
 #   ROBOTHOR_SLO_HEARTBEAT_COOLDOWN_SECONDS 12h
@@ -140,6 +143,9 @@ DUMP_DIR="${ROBOTHOR_SLO_LOCAL_DUMP_DIR:-/mnt/robothor-backup/robothor/db}"
 LOCAL_MAX_HOURS="${ROBOTHOR_SLO_LOCAL_DUMP_MAX_HOURS:-26}"
 OFFSITE_MAX_HOURS="${ROBOTHOR_SLO_OFFSITE_MAX_HOURS:-26}"
 BASEBACKUP_MAX_HOURS="${ROBOTHOR_SLO_BASEBACKUP_MAX_HOURS:-192}"
+# Same spelling and same default as scripts/pg-basebackup.sh and wal-offsite.sh,
+# so the probe reads the directory those two actually write.
+BASEBACKUP_DIR="${ROBOTHOR_SLO_BASEBACKUP_DIR:-${ROBOTHOR_BASEBACKUP_DIR:-/mnt/robothor-backup/robothor/basebackup}}"
 # S8: the daily report runs at 08:30, so 26h is one missed run plus slack.
 GUARDRAIL_WATCH_MAX_HOURS="${ROBOTHOR_SLO_GUARDRAIL_WATCH_MAX_HOURS:-26}"
 # S5: the liveness timer fires every 5 minutes. An hour is twelve missed ticks.
@@ -365,19 +371,57 @@ check_offsite() {
 # 4. The base backup tier — weekly, so it carries its own much wider budget.
 #    PITR must replay every WAL segment since this point, so a stale base
 #    backup grows the restore TIME rather than losing data.
+#
+#    The marker is evidence that a run happened; the base-* directory is the
+#    thing PITR actually starts FROM. They live on different disks — markers on
+#    NVMe, backups on the volume — so either can outlive the other, and reading
+#    only the marker made a missing one page "PITR has no starting point" while
+#    a week-old base backup sat on the volume. A dead-man that cries about a
+#    backup it is standing on gets muted like any other.
+#
+#    Newest mtime of a base-* DIRECTORY, never a file: pg-basebackup.sh writes
+#    `base-<stamp>.backup_label` beside `base-<stamp>/`, and a few hundred bytes
+#    of WAL position is not a restorable copy.
+basebackup_artifact_epoch() {
+    local argv newest
+    # The volume probe first, exactly as the local dump tier does it: stat()
+    # keeps answering on a dropped USB device, so a find that returns nothing
+    # is indistinguishable from a volume that is gone until something asks.
+    read -r -a argv <<<"$VOLUME_CHECK_CMD"
+    "${argv[@]}" "$BASEBACKUP_DIR" >/dev/null 2>&1 || return 1
+    newest="$(timeout "$PROBE_TIMEOUT" find "$BASEBACKUP_DIR" -mindepth 1 -maxdepth 1 \
+        -type d -name 'base-*' -printf '%T@\n' 2>/dev/null | sort -rn | head -n 1)"
+    [[ -n "$newest" ]] || return 1
+    printf '%s' "${newest%%.*}"
+}
+
 check_basebackup() {
-    local epoch="" age
+    local epoch="" age from="the last-basebackup marker" prefix=""
     local label="S4 backup freshness: basebackup" target="< ${BASEBACKUP_MAX_HOURS}h"
     epoch="$(marker_epoch last-basebackup)" || epoch=""
+
     if [[ -z "$epoch" ]]; then
-        breach "basebackup freshness is UNKNOWN — no successful base backup has ever been recorded; PITR has no starting point"
-        emit "$label" "$target" "unknown — no successful run recorded" "BREACH"
+        if epoch="$(basebackup_artifact_epoch)"; then
+            from="the newest base-* directory in ${BASEBACKUP_DIR}"
+            prefix="marker absent; "
+        else
+            epoch=""
+        fi
+    fi
+
+    if [[ -z "$epoch" ]]; then
+        breach "basebackup freshness is UNKNOWN — no successful base backup has ever been recorded and no base-* directory was found in ${BASEBACKUP_DIR}; PITR has no starting point"
+        emit "$label" "$target" "unknown — no run recorded and no base-* on the volume" "BREACH"
         return
     fi
+
     age="$(hours_since "$epoch")"
     if (( age > BASEBACKUP_MAX_HOURS )); then
-        breach "newest basebackup is ${age}h old (budget ${BASEBACKUP_MAX_HOURS}h) — PITR must replay every WAL segment since then, and the restore time grows nightly"
-        emit "$label" "$target" "${age}h" "BREACH"
+        breach "${prefix}newest basebackup is ${age}h old per ${from} (budget ${BASEBACKUP_MAX_HOURS}h) — PITR must replay every WAL segment since then, and the restore time grows nightly"
+        emit "$label" "$target" "${prefix}${age}h" "BREACH"
+    elif [[ -n "$prefix" ]]; then
+        log "basebackup: marker absent; newest base-* directory is ${age}h old (budget ${BASEBACKUP_MAX_HOURS}h) — OK"
+        emit "$label" "$target" "marker absent; newest base-* directory is ${age}h old" "OK"
     else
         log "basebackup: ${age}h old (budget ${BASEBACKUP_MAX_HOURS}h) — OK"
         emit "$label" "$target" "${age}h" "OK"
