@@ -974,3 +974,48 @@ class TestEveryNormalSendDrainsFirst:
         assert "suppressed duplicate page" in result.stdout + result.stderr
         assert "PAGE-SPOOLED" in log.read_text()
         assert spooled(tmp_path) == []
+
+
+# ── the spool directory has to exist before the first outage ─────────────────
+
+
+TMPFILES_DIR = REPO_ROOT / "infra" / "tmpfiles"
+
+
+def tmpfiles_rows() -> list[list[str]]:
+    """Every shipped tmpfiles.d row: TYPE PATH MODE USER GROUP AGE ARG."""
+    rows: list[list[str]] = []
+    for conf in sorted(TMPFILES_DIR.glob("*.conf")):
+        for line in conf.read_text().splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            fields = line.split()
+            if len(fields) >= 5 and fields[1].startswith("/"):
+                rows.append(fields)
+    return rows
+
+
+def test_the_spool_dir_is_created_sticky_by_tmpfiles():
+    """Root's units and the operator's cron jobs both spool here, and neither
+    can chown the other's files. 1777 lets both write; the sticky bit keeps
+    each able to delete only its own — and the drain deletes only what it
+    delivered.
+
+    Without a shipped tmpfiles row the directory is created ad hoc by whoever
+    spools first, owned by that account, and the other side silently cannot
+    write: the pages that DID reach disk would be exactly the ones nobody was
+    missing.
+    """
+    default = "/var/lib/robothor/alert-spool"
+    assert f"ROBOTHOR_ALERT_SPOOL_DIR:-{default}" in SEND.read_text(), (
+        "the sender's default spool path moved — update the tmpfiles row with it"
+    )
+    rows = [r for r in tmpfiles_rows() if r[1] == default]
+    assert rows, f"no tmpfiles.d row creates {default}"
+    fields = rows[0]
+    assert fields[0] == "d", f"{default} must be a directory row, not {fields[0]!r}"
+    assert fields[2] == "1777", (
+        f"the spool is {fields[2]}, not 1777 — a non-sticky world-writable dir "
+        "lets any local user delete another's undelivered page, and a "
+        "non-world-writable one drops every page raised by the other account"
+    )
