@@ -56,7 +56,7 @@ fail() {
 #
 # Loaded HERE, before any work, and fatally. This script runs `set -uo pipefail`
 # without -e, so a failed `source` does not stop it: it would replicate
-# everything, then die on the final backup_state_record with "command not found"
+# everything, then die on the final backup_state_mark with "command not found"
 # and exit 127 — an hour of upload followed by a page for a backup that worked.
 # shellcheck source=scripts/backup-state.sh
 source "$SCRIPT_DIR/backup-state.sh" \
@@ -238,5 +238,5 @@ log "offsite replication OK ($remaining object(s) offsite, ${#keep_files[@]} ret
 # The dumps are now offsite and verified. Verify-only runs exit above and
 # deliberately do not stamp this: they upload nothing, so they say nothing
 # about whether replication is still working.
-backup_state_record last-offsite-ok
+backup_state_mark last-offsite-ok "$REMOTE/db/${keep_files[-1]}"
 

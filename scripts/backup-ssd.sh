@@ -224,5 +224,7 @@ backup_docker_volumes || log "WARNING: docker volume backup incomplete"
 TOTAL_SIZE=$(du -sh "$BACKUP_ROOT" | cut -f1)
 log "Backup complete. ${TOTAL_SIZE} total on SSD."
 
-backup_state_record last-local-dump
+# The identifier is the dump this run left behind, so a freshness page can
+# name the generation it is talking about.
+backup_state_mark last-local-dump "$(basename "$DUMP_FILE")"
 

@@ -112,4 +112,4 @@ done
 
 log "done"
 
-backup_state_record last-basebackup
+backup_state_mark last-basebackup "$(basename "$OUT")"

@@ -182,8 +182,14 @@ log "WAL offsite replication complete"
 # only" path — nothing was attempted, so nothing failed — so gating on it alone
 # stamped "the WAL is offsite" every 15 minutes on an instance that has no
 # offsite destination at all.
+#
+# The identifier is the newest WAL segment in the archive — segment names sort
+# lexicographically in WAL order, so it is the exact recovery point this run
+# put offsite, which is what an RPO page needs to quote.
 if [[ -n "$REMOTE" && "$OFFSITE_FAILED" -eq 0 ]]; then
-    backup_state_record last-wal-offsite-ok
+    NEWEST_WAL=$(find "$ARCHIVE_DIR" -maxdepth 1 -name '0*' -type f -printf '%f\n' \
+        2>/dev/null | sort | tail -1)
+    backup_state_mark last-wal-offsite-ok "${NEWEST_WAL:-no-segments}"
 fi
 
 # Now that the prune and disk guard have both run unconditionally, surface the

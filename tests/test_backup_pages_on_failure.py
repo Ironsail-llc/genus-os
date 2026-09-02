@@ -318,6 +318,11 @@ class TestWalOffsiteDegradesWhenTheBackupVolumeIsWedged:
             "the unit stopped failing and recorded nothing instead — the "
             "paging storm would be replaced by silence"
         )
+        assert "000000010000000000000003" in marker.read_text(), (
+            "the marker must name the newest WAL segment that went offsite, "
+            "or a freshness page cannot say how far behind the archive is\n"
+            + marker.read_text()
+        )
 
 
 class TestTheBaseBackupRecordsWhenItLastWorked:
@@ -368,6 +373,12 @@ class TestTheBaseBackupRecordsWhenItLastWorked:
         marker = tmp_path / "state" / "last-basebackup"
         assert marker.exists(), result.stdout + result.stderr
         assert marker.read_text().strip()
+        made = sorted(d.name for d in dest.iterdir() if d.is_dir())
+        assert made, result.stdout + result.stderr
+        assert made[-1] in marker.read_text(), (
+            "the marker must name the base backup directory it recorded, so a "
+            f"freshness page can point at it\n{marker.read_text()}"
+        )
 
     def test_a_wedged_volume_records_nothing_and_does_not_run(
         self, tmp_path: Path

@@ -325,6 +325,11 @@ def test_verify_distinguishes_missing_from_corrupt(tmp_path: Path):
 
 STATE_LIB = REPO_ROOT / "scripts" / "backup-state.sh"
 UNKNOWN = "unknown (no successful run recorded)"
+# `date -Is` — local time WITH the offset, e.g. 2026-09-02T04:30:11+02:00.
+# The offset is the point: a bare local timestamp is unorderable against
+# anything, and a guard that compares it to `now` on a box that changed zone
+# reads hours of drift as a stale backup.
+TS_RE = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}"
 
 
 def _state_dir(tmp_path: Path) -> Path:
@@ -360,8 +365,24 @@ class TestTheOffsiteRunRecordsWhenItLastWorked:
         src = _make_source(tmp_path)
         _run(tmp_path, src, tmp_path / "remote")
         stamp = (_state_dir(tmp_path) / "last-offsite-ok").read_text().strip()
-        # RFC 3339 / ISO 8601 UTC, e.g. 2026-09-02T04:30:11Z
-        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", stamp), stamp
+        ts, _, identifier = stamp.partition(" ")
+        assert re.fullmatch(TS_RE, ts), stamp
+        assert identifier, (
+            "the marker says WHEN but not WHAT — a freshness guard that pages "
+            "'offsite is 40 hours stale' has to be able to name the generation "
+            f"it is talking about\n{stamp}"
+        )
+
+    def test_the_marker_names_the_object_that_went_offsite(self, tmp_path: Path):
+        src = _make_source(tmp_path)
+        dest = tmp_path / "remote"
+        _run(tmp_path, src, dest)
+        stamp = (_state_dir(tmp_path) / "last-offsite-ok").read_text().strip()
+        newest = sorted(f.name for f in src.glob("*.sql.gz"))[-1]
+        assert newest in stamp, (
+            "the identifier must be the object that actually landed offsite\n"
+            f"{stamp}"
+        )
 
     def test_a_failed_run_records_nothing(self, tmp_path: Path):
         """A marker written on failure is worse than no marker: it makes a
@@ -433,13 +454,58 @@ class TestTheMarkerHelper:
     def test_a_recorded_marker_reads_back(self, tmp_path: Path):
         result = self._sh(
             tmp_path,
-            'backup_state_record last-local-dump\nbackup_state_last last-local-dump',
+            "backup_state_mark last-local-dump dump-20260902.sql.gz\n"
+            "backup_state_last last-local-dump",
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert UNKNOWN not in result.stdout
-        assert re.search(
-            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", result.stdout
-        ), result.stdout
+        assert re.search(TS_RE, result.stdout), result.stdout
+
+    def test_the_marker_file_is_a_timestamp_then_an_identifier(self, tmp_path: Path):
+        """The whole contract, in one line on disk.
+
+        It used to be a bare UTC timestamp, so every marker said WHEN a job
+        last worked and nothing about WHAT it produced. A freshness page that
+        cannot name the dump, the offsite object or the base backup it is
+        talking about sends the operator to the box to find out.
+        """
+        self._sh(tmp_path, "backup_state_mark last-local-dump dump-20260902.sql.gz")
+        line = (_state_dir(tmp_path) / "last-local-dump").read_text()
+        assert line.endswith("\n"), "the marker must be one newline-terminated line"
+        ts, _, identifier = line.strip().partition(" ")
+        assert re.fullmatch(TS_RE, ts), line
+        assert identifier == "dump-20260902.sql.gz", line
+
+    def test_reading_a_marker_keeps_the_identifier(self, tmp_path: Path):
+        """backup_state_last stripped ALL whitespace, so the moment a marker
+        carried two fields the reader glued them into one unparseable token."""
+        result = self._sh(
+            tmp_path,
+            "backup_state_mark last-local-dump dump-20260902.sql.gz\n"
+            "backup_state_last last-local-dump",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        ts, _, identifier = result.stdout.strip().partition(" ")
+        assert re.fullmatch(TS_RE, ts), result.stdout
+        assert identifier == "dump-20260902.sql.gz", result.stdout
+
+    def test_the_timestamp_can_be_read_on_its_own(self, tmp_path: Path):
+        """A guard doing date arithmetic wants field 1 and nothing else."""
+        result = self._sh(
+            tmp_path,
+            "backup_state_mark last-local-dump dump-20260902.sql.gz\n"
+            "backup_state_last_ts last-local-dump",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert re.fullmatch(TS_RE, result.stdout.strip()), result.stdout
+
+    def test_an_unwritten_marker_has_no_timestamp_either(self, tmp_path: Path):
+        result = self._sh(tmp_path, "backup_state_last_ts last-basebackup || true")
+        assert UNKNOWN in result.stdout, result.stdout + result.stderr
+        result = self._sh(tmp_path, "backup_state_last_ts last-basebackup")
+        assert result.returncode != 0, (
+            "a guard must be able to branch on 'no successful run recorded'"
+        )
 
     def test_recording_never_fails_the_backup_that_calls_it(self, tmp_path: Path):
         """The marker is bookkeeping. A backup that succeeded must not be
@@ -450,7 +516,7 @@ class TestTheMarkerHelper:
         try:
             result = self._sh(
                 tmp_path,
-                'backup_state_record last-local-dump\necho survived',
+                'backup_state_mark last-local-dump dump.sql.gz\necho survived',
                 ROBOTHOR_BACKUP_STATE_DIR=str(blocked / "state"),
             )
             assert result.returncode == 0, result.stdout + result.stderr
@@ -474,7 +540,7 @@ class TestEveryBackupJobRecordsItsMarker:
     )
     def test_the_job_records_its_own_marker(self, script: str, marker: str):
         body = (REPO_ROOT / "scripts" / script).read_text()
-        assert f"backup_state_record {marker}" in body, (
+        assert f"backup_state_mark {marker}" in body, (
             f"{script} never records {marker}; the freshness guard cannot tell "
             "a job that stopped running from one that is merely quiet"
         )
@@ -486,7 +552,7 @@ class TestAMissingHelperFailsBeforeTheWork:
     That is deliberate (the retention and verification steps decide their own
     failure handling), but it means a `source` of a missing
     scripts/backup-state.sh does not stop the script — it carries on, does the
-    whole replication, and then dies on the last line with "backup_state_record:
+    whole replication, and then dies on the last line with "backup_state_mark:
     command not found" and exit 127. A successful backup reported as a failed
     one is a page for nothing, which is the exact behaviour this branch exists
     to end.
