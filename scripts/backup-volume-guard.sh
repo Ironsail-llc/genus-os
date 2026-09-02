@@ -227,6 +227,20 @@ resolve_device() {
 # major:minor as MAJ:MIN, whichever punctuation the tool used.
 majmin() { sed -n 's/.*(\([0-9]*\)[,:][[:space:]]*\([0-9]*\)).*/\1:\2/p' | head -n 1; }
 
+# Does anything still hold this mapping? Asked of the kernel, every time, at
+# the moment it matters — never inherited from an earlier step.
+#
+# `umount -l` detaches the tree and RETURNS; the last reference is dropped
+# whenever the last user lets go, which may be after this script has moved on.
+# So a count read before the unmount says nothing about the mapping fsck is
+# about to be pointed at, and fsck on a mapping the kernel is still handing out
+# turns a degraded volume into a corrupted one.
+MAPPER_OPEN_COUNT=""
+mapper_is_free() {
+    MAPPER_OPEN_COUNT="$(dmsetup info -c --noheadings -o open "$1" 2>/dev/null | tr -dc '0-9')"
+    [[ "$MAPPER_OPEN_COUNT" == "0" ]]
+}
+
 # ── Heal ─────────────────────────────────────────────────────────────────────
 HEAL_REASON=""
 MAPPER_USED=""
@@ -305,13 +319,11 @@ heal() {
     # 2. Close the old mapping IF nothing holds it. Usually something does —
     #    that kernel reference is exactly why a new name is needed below.
     if [[ -e "${MAPPER_DIR}/${MAPPER_BASE}" ]]; then
-        local open_count
-        open_count="$(dmsetup info -c --noheadings -o open "$MAPPER_BASE" 2>/dev/null | tr -dc '0-9')"
-        if [[ "$open_count" == "0" ]]; then
+        if mapper_is_free "$MAPPER_BASE"; then
             cryptsetup close "$MAPPER_BASE" >/dev/null 2>&1 \
                 || log "cryptsetup close ${MAPPER_BASE} failed — carrying on under a new name"
         else
-            log "${MAPPER_BASE} has open count ${open_count:-unknown} — cannot be closed until reboot"
+            log "${MAPPER_BASE} has open count ${MAPPER_OPEN_COUNT:-unknown} — cannot be closed until reboot"
         fi
     fi
 
@@ -338,7 +350,20 @@ heal() {
         fi
     fi
 
-    # 5. Preen fsck ONLY. -p fixes what is safe to fix without asking and
+    # 5. The mapping fsck is about to touch must be unreferenced, and that is
+    #    established HERE, against the name actually chosen — not inferred from
+    #    the count read before `umount -l`, which returns early by design.
+    #
+    #    Only the original name can be in this state: a container just opened
+    #    under <name>-N is ours alone. When the original is busy there is
+    #    nothing safe left to do to it, so the guard stops and pages rather
+    #    than repairing a filesystem out from under its users.
+    if [[ "$MAPPER_USED" == "$MAPPER_BASE" ]] && ! mapper_is_free "$MAPPER_BASE"; then
+        HEAL_REASON="mapper ${MAPPER_BASE} still has ${MAPPER_OPEN_COUNT:-unknown} opener(s) after umount -l — refusing to fsck a referenced mapping"
+        return 1
+    fi
+
+    # 6. Preen fsck ONLY. -p fixes what is safe to fix without asking and
     #    exits >=4 for anything that needs a decision. An automated -y here
     #    could destroy a recoverable filesystem while nobody is watching.
     local fsck_rc=0
@@ -350,7 +375,7 @@ heal() {
         return 1
     fi
 
-    # 6. Back at the SAME path: RequiresMountsFor= and every backup script
+    # 7. Back at the SAME path: RequiresMountsFor= and every backup script
     #    name the path, not the mapper.
     if ! mount "${MAPPER_DIR}/${MAPPER_USED}" "$MOUNT"; then
         HEAL_REASON="mount ${MAPPER_DIR}/${MAPPER_USED} at ${MOUNT} failed"

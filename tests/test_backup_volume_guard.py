@@ -428,6 +428,63 @@ def test_fsck_needing_manual_repair_never_mounts(box: Box):
     assert box.ran(f"cryptsetup close {MAPPER}-1"), f"left the mapper open:\n{box.argv}"
 
 
+def test_a_busy_mapper_is_never_fsckd_even_when_it_is_the_right_device(box: Box):
+    """``umount -l`` RETURNS before the last reference is dropped.
+
+    When the mapper's ``dmsetup deps`` still name the device on the bus, the
+    guard reuses that mapping instead of opening a new one — and then it is
+    about to ``fsck.ext4 -p`` a mapping the kernel is still handing out. That
+    is how a volume that was merely degraded becomes a corrupted one. The open
+    count has to be re-read at that moment, and a non-zero answer means stop:
+    no fsck, no close, no mount.
+    """
+    box.plug_in()
+    box.stale_mapper()  # a node that is NOT stale: same major:minor as the device
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_DM_DEPS="8:17",  # the mapping is backed by...
+        FAKE_MAJMIN="8:17",  # ...the device that is on the bus: live, not stale
+        FAKE_DM_OPEN="1",  # but something still holds it
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert box.ran("fsck.ext4") == [], (
+        f"ran fsck on a mapping with an opener — this corrupts a degraded "
+        f"volume:\n{box.argv}"
+    )
+    assert box.ran("cryptsetup close") == [], f"closed a referenced mapping:\n{box.argv}"
+    assert box.ran("mount") == [], f"mounted a mapping it had not repaired:\n{box.argv}"
+
+    assert len(box.pages) == 1, f"expected exactly one page, got {box.pages}"
+    assert f"mapper {MAPPER} still has 1 opener(s) after umount -l" in box.pages[0]
+    assert "refusing to fsck a referenced mapping" in box.pages[0]
+
+
+def test_a_free_live_mapper_is_healed_under_its_own_name(box: Box):
+    """The control for the test above: same live mapping, open count 0. There
+    is nothing to refuse — the heal proceeds, on the ORIGINAL name, because
+    stacking a second mapping on a disk that already has a correct one is how
+    the nine names get burned."""
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1 0",
+        FAKE_DM_DEPS="8:17",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="0",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran(f"mount {box.mapper_dir / MAPPER} {box.mount}"), (
+        f"the live mapping was not remounted under its own name:\n{box.argv}"
+    )
+    assert box.ran(f"cryptsetup open {box.device} {MAPPER}-1") == [], (
+        f"burned a fresh mapper name on a mapping that was already correct:\n{box.argv}"
+    )
+    assert len(box.pages) == 1
+    assert "auto-recovered" in box.pages[0]
+    assert f"remapped as {MAPPER})" in box.pages[0], box.pages[0]
+
+
 def test_no_free_mapper_name_refuses_and_says_reboot(box: Box):
     """Nine stale mappings means the kernel references never went away. There
     is no tenth name to try; say what actually clears it."""
