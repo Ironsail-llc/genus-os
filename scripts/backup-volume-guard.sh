@@ -103,6 +103,17 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 # Last-good markers. Sourced, not reimplemented: the format and the "unknown
 # (no successful run recorded)" fallback have to match what the backup scripts
 # write, and an empty string where a timestamp belongs reads as "just now".
+#
+# Checked, because `source` on a missing file is not fatal here — there is no
+# `set -e`, and there must not be one: this script has to keep going through
+# failing sub-commands to reach the page. Without the library every LAST_*
+# would be empty and the page would read "Local dump last good:" with nothing
+# after it, which is scanned as "fine". Exit 1 instead, so the guard's own
+# OnFailure= pages about a guard that cannot tell the truth.
+if [[ ! -r "${SCRIPT_DIR}/backup-state.sh" ]]; then
+    echo "backup-volume-guard: ${SCRIPT_DIR}/backup-state.sh missing — cannot report last-good facts" >&2
+    exit 1
+fi
 # shellcheck source=./backup-state.sh
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/backup-state.sh"

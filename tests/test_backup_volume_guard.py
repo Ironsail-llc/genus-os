@@ -353,6 +353,42 @@ def test_the_down_page_names_what_stopped_and_what_did_not(box: Box):
     assert "00000001000000A2000000F3" in page
 
 
+def test_a_missing_backup_state_library_fails_the_run_instead_of_paging_blanks(
+    box: Box, tmp_path: Path
+):
+    """``source backup-state.sh`` was unguarded and the script has no ``set
+    -e``: a missing or unreadable library left every ``LAST_*`` an empty
+    string, and the page then read
+
+        Local dump last good:
+        Offsite last OK:
+
+    which an operator scans as "blank, so nothing to worry about" — the
+    opposite of the truth. The library IS the guard's only source of last-good
+    facts; without it there is no honest page to send, so the run fails and
+    the unit's own OnFailure= pages instead.
+    """
+    lonely = tmp_path / "no-library"
+    lonely.mkdir()
+    copy = lonely / GUARD.name
+    copy.write_bytes(GUARD.read_bytes())
+
+    result = subprocess.run(
+        ["bash", str(copy)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=box.env(FAKE_CHECK_RCS="1"),
+    )
+    assert result.returncode == 1, (
+        f"a guard with no last-good facts exited {result.returncode} — it would "
+        f"page timestamps it does not have\n{result.stdout}{result.stderr}"
+    )
+    assert "backup-state.sh" in result.stderr
+    assert "cannot report last-good facts" in result.stderr
+    assert box.pages == [], f"paged with no facts to page: {box.pages}"
+
+
 def test_the_page_says_which_HALF_of_wal_offsite_is_still_running(box: Box):
     """"Still running: WAL offsite" was not true, and the guard's own code says
     so: robothor-wal-offsite.service is in BACKUP_UNITS precisely because it
