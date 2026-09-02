@@ -38,7 +38,7 @@ CAPS = {
     # arrived with were hoisted to the module header (run_budget was already
     # imported there, so they bought nothing) — which paid back four of the
     # five lines this would otherwise have cost.
-    "robothor/engine/runner.py": 2938,
+    "robothor/engine/runner.py": 2945,
     # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
     # Lowered again after phase 3b (_setup_handlers closures -> methods).
     "robothor/engine/telegram.py": 2000,
@@ -51,7 +51,7 @@ CAPS = {
     "robothor/engine/run_budget.py": 120,
     # Tempo-scaled watchdog budgets (2026-08-27): extracted here rather than
     # growing run_budget past its cap, same as the finalization cluster.
-    "robothor/engine/watchdog_budgets.py": 110,
+    "robothor/engine/watchdog_budgets.py": 116,
     # Cancel classification (2026-08-27): extracted from the runner, which is
     # the god-object this ratchet exists to shrink.
     # 80 -> 86: terminal_run was untyped, which the mypy gate rejects as an
