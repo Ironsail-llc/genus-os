@@ -27,6 +27,7 @@ systemd timer with the same OnFailure paging as its two siblings.
 
 from __future__ import annotations
 
+import ast
 import os
 import stat
 import subprocess
@@ -196,6 +197,12 @@ class TestWalOffsiteSurvivesAnOffsiteFailure:
             "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
             "ROBOTHOR_OFFSITE_REMOTE": "remote:bucket",
             "ROBOTHOR_DB_NAME": "robothor_memory",
+            # The markers are live, durable state: the SLO probe, the daily
+            # report and the pager's consequence line all read them to decide
+            # when each backup tier last succeeded. A fixture run that stamps
+            # one into /var/lib/robothor/backup-state tells the operator a
+            # backup happened that did not.
+            "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
             # tmp_path is on the root filesystem; see
             # tests/test_backup_volume_check.py for what guards this step.
             "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0",
@@ -855,3 +862,54 @@ class TestTheVolumeProbeActuallyGatesTheLocalBackup:
         assert str(fallback) in result.stderr, (
             "a silently relocated log is a log nobody finds\n" + result.stderr
         )
+
+
+# --- the markers a test must never write into the live state dir --------------
+
+
+def _env_dicts_with(key: str) -> list[ast.Dict]:
+    """Every dict literal in THIS file that carries `key`."""
+    tree = ast.parse(Path(__file__).read_text())
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        names = {
+            k.value
+            for k in node.keys
+            if isinstance(k, ast.Constant) and isinstance(k.value, str)
+        }
+        if key in names:
+            out.append(node)
+    return out
+
+
+def test_every_backup_run_here_pins_the_state_dir():
+    """The markers are shared, durable, live state.
+
+    scripts/backup-state.sh writes into /var/lib/robothor/backup-state unless
+    ROBOTHOR_BACKUP_STATE_DIR says otherwise, and those files are what the SLO
+    probe, the daily report and the pager's own consequence line read to decide
+    when each backup tier last succeeded. A fixture run that stamps one there
+    tells the operator a backup happened that did not — the same class of harm
+    as a spooled fixture page, without even a delivery step in the way.
+
+    Checked per env= dict, not per file: the first WAL test built its own
+    inline and pinned everything EXCEPT this, among siblings that pin it.
+    """
+    offenders = [
+        node.lineno
+        for key in ("ROBOTHOR_WAL_ARCHIVE_DIR", "ROBOTHOR_BACKUP_MOUNT")
+        for node in _env_dicts_with(key)
+        if "ROBOTHOR_BACKUP_STATE_DIR"
+        not in {
+            k.value
+            for k in node.keys
+            if isinstance(k, ast.Constant) and isinstance(k.value, str)
+        }
+    ]
+    assert not offenders, (
+        "these env dicts drive a backup script without pinning "
+        f"ROBOTHOR_BACKUP_STATE_DIR, so its markers land in the live state "
+        f"directory: {sorted(offenders)}"
+    )
