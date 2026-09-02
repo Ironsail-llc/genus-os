@@ -354,6 +354,37 @@ def check_host_script_drift(pairs: list[tuple[str, str]] | None = None) -> None:
         print(result.stdout.rstrip())
 
 
+def check_instance_doctor(script: Path | None = None) -> bool:
+    """Install truth: what is on this box that no repo template describes?
+
+    install-units.sh reports installed/updated/unchanged — one direction only.
+    The other direction (a unit symlinked into the checkout, nine live units
+    with no template, inert .bak files in a drop-in directory, a hand drop-in,
+    a service enabled but not running) was invisible to every command on the
+    box. Needs no database, so it belongs in main()'s DB-free block.
+
+    Returns False on any finding OR when the doctor itself could not run — a
+    watchdog whose probe is missing must never report health.
+    """
+    doctor = script or (Path(__file__).resolve().parent / "instance_doctor.sh")
+    print("\n=== instance install truth ===")
+    if not Path(doctor).exists():
+        print(f"  FAIL: {Path(doctor).name} missing — install truth was NOT checked")
+        return False
+    try:
+        result = subprocess.run(
+            ["bash", str(doctor)], capture_output=True, text=True, timeout=300
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  FAIL: instance doctor could not run: {exc}")
+        return False
+    print(result.stdout.rstrip())
+    if result.returncode not in (0, 1):
+        print(f"  FAIL: instance doctor exited {result.returncode}\n{result.stderr.rstrip()}")
+        return False
+    return result.returncode == 0
+
+
 def scoping_is_vacuous(non_privileged: int, linked_facts: int) -> bool:
     """True when a scoping guarantee is being advertised but cannot bind.
 
@@ -534,6 +565,7 @@ def main() -> int:
     flags_ok = check_flag_truth(no_db=True)
     check_dropin_drift()
     check_host_script_drift()
+    doctor_ok = check_instance_doctor()
     manifests_ok = check_instance_manifests()
 
     try:
@@ -556,11 +588,13 @@ def main() -> int:
         )
         return 1
 
-    if not manifests_ok or not flags_ok:
-        # The fleet's manifests are the fleet, and a guardrail whose effective
-        # mode is not the one the manifest records is a control nobody is
-        # actually running. Either must reach the operator; rc=1 fires the
-        # unit's OnFailure= pager.
+    if not manifests_ok or not flags_ok or not doctor_ok:
+        # The fleet's manifests are the fleet; a guardrail whose effective mode
+        # is not the one the manifest records is a control nobody is actually
+        # running; and a box that no longer matches its templates is a box
+        # nobody can rebuild. Any of the three must reach the operator; rc=1
+        # fires the unit's OnFailure= pager. The way to silence a KNOWN
+        # instance-only unit is instance-units.allow, not a swallowed exit code.
         return 1
     return 0
 
