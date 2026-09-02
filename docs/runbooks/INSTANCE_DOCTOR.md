@@ -23,6 +23,26 @@ scripts/instance_doctor.sh                 # the live box
 scripts/instance_doctor.sh --root /tmp/x   # a staged root, for tests
 ```
 
+## Where it looks for templates
+
+Two directories, in order:
+
+1. `infra/systemd/` of the checkout the script was **run from**;
+2. `$ROBOTHOR_WORKSPACE/infra/systemd` (resolved from the environment or
+   `/etc/robothor/robothor.env`), when that is somewhere else.
+
+The first wins a name collision, so a stale workspace copy can never decide
+whether a reviewed change looks like drift.
+
+The second directory exists because some unit templates are **gitignored on
+purpose**: `.gitignore` carries `/infra/systemd/delphi-*.service` and
+`/infra/systemd/robothor-delphi-engine.*` because those units are instance-land
+(CLAUDE.md rule 11), so they exist only in the workspace checkout that serves
+the box. Run from a branch worktree or a fresh clone, the doctor used to report
+`no-template` for `robothor-delphi-engine.service` while its template sat in
+the workspace — a finding whose remedy had already been carried out, and whose
+only cure was to allow-list a unit that is in fact templated.
+
 ## Who runs it, and what a finding costs you
 
 `scripts/guardrail_watch.py` runs it in its **database-free block**
@@ -44,7 +64,7 @@ class) allow-list it.
 | `template-drift` | the live unit differs from its rendered template | commit the live change to the mirror, then reinstall |
 | `host-script-drift` | an installed `/usr/local/bin` copy differs from its repo source | `scripts/install-host-scripts.sh` |
 | `cannot-compare` | the comparison **did not happen** — the renderer is missing, or the render env is unresolvable | fix `ROBOTHOR_WORKSPACE` / `ROBOTHOR_SERVICE_USER` (or `/etc/robothor/robothor.env`); this is not drift, and nothing about these units is currently being checked |
-| `no-template` | a live unit with no template in `infra/systemd/` | template it, or allow-list it (below) |
+| `no-template` | a live unit with no template on the search path above | template it, or allow-list it (below) |
 | `unmirrored-dropin` | a hand-written drop-in with no repo mirror — unversioned production config | mirror it into `infra/systemd/` |
 | `inert-file` | a non-`.conf` file in a drop-in directory; systemd ignores it, a human reading the directory does not | delete it |
 | `symlink` | a unit is a symlink, so it was never rendered and moving the target silently unschedules it | reinstall it properly |
