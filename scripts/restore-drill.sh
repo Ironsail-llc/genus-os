@@ -60,6 +60,7 @@
 #                                     its fakes. Nothing on the box sets it;
 #                                     documented in docs/runbooks/RESTORE_DRILL.md.
 set -uo pipefail
+export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 log() { echo "restore-drill: $*"; }
 err() { echo "restore-drill: $*" >&2; }
@@ -82,7 +83,6 @@ err() { echo "restore-drill: $*" >&2; }
 # lives there.
 #
 # ROBOTHOR_EXTRA_PATH is the one prepended element and it is test-only.
-export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
