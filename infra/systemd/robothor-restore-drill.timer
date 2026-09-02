@@ -1,0 +1,20 @@
+# Drives robothor-restore-drill.service — see that file for why the existing
+# backup-verify timer is not a drill.
+[Unit]
+Description=Monthly robothor database restore drill
+
+[Timer]
+# First Sunday of the month, early, after the nightly dump and the offsite
+# replication have both had their window.
+OnCalendar=Sun *-*-01..07 05:30:00
+# Persistent=true: a drill missed because the box was off must run when it
+# comes back. Without it "monthly" degrades into "whenever the box happened to
+# be up at 05:30 on the right Sunday" — which is how a quarterly procedure
+# became two runs in five months.
+Persistent=true
+# The drill competes with the nightly backup chain for the same disks; a
+# randomised delay keeps it from starting in lockstep with anything else.
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target
