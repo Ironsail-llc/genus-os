@@ -63,9 +63,7 @@ def test_no_unfiltered_ann_index_shadows_the_active_one():
         found = _hnsw_indexes_on(cur, "memory_facts", "embedding")
         unfiltered = []
         for name in found:
-            cur.execute(
-                "SELECT indexdef FROM pg_indexes WHERE indexname = %s", (name,)
-            )
+            cur.execute("SELECT indexdef FROM pg_indexes WHERE indexname = %s", (name,))
             ddl = cur.fetchone()[0]
             if "WHERE" not in ddl.upper():
                 unfiltered.append(name)

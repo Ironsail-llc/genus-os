@@ -19,7 +19,9 @@ from robothor.engine.key_pool import KeyPool, Retirement
 def _capture(monkeypatch):
     sent: list[tuple[str, str, str]] = []
     monkeypatch.setattr(pa, "_in_pytest", lambda: False)
-    monkeypatch.setattr(pa, "_deliver", lambda level, title, body: sent.append((level, title, body)))
+    monkeypatch.setattr(
+        pa, "_deliver", lambda level, title, body: sent.append((level, title, body))
+    )
     return sent
 
 

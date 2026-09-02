@@ -290,7 +290,9 @@ def reset_shared_pools() -> None:
     _SHARED.clear()
 
 
-def shared_pool(var: str, on_exhausted: Callable[[Retirement], None] | None = None) -> KeyPool | None:
+def shared_pool(
+    var: str, on_exhausted: Callable[[Retirement], None] | None = None
+) -> KeyPool | None:
     """The one pool for ``var`` in this process, or None if unconfigured.
 
     Built lazily: secrets land in tmpfs after import, so a pool constructed at

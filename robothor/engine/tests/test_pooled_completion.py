@@ -16,7 +16,7 @@ def _clean():
     kp.reset_shared_pools()
 
 
-class _Boom(Exception):
+class _BoomError(Exception):
     def __init__(self, msg="", status=None):
         super().__init__(msg)
         if status is not None:
@@ -69,10 +69,10 @@ async def test_a_weekly_cap_retires_as_periodic(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-a")
 
     async def fake(**kw):
-        raise _Boom("Key limit exceeded (weekly limit)")
+        raise _BoomError("Key limit exceeded (weekly limit)")
 
     monkeypatch.setattr("litellm.acompletion", fake)
-    with pytest.raises(_Boom):
+    with pytest.raises(_BoomError):
         await acompletion(model="openrouter/x", messages=[])
     pool = kp.shared_pool("OPENROUTER_API_KEY")
     assert pool is not None
@@ -85,10 +85,10 @@ async def test_a_model_specific_403_does_not_retire_the_key(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-a")
 
     async def fake(**kw):
-        raise _Boom("Rate limited", status=403)
+        raise _BoomError("Rate limited", status=403)
 
     monkeypatch.setattr("litellm.acompletion", fake)
-    with pytest.raises(_Boom):
+    with pytest.raises(_BoomError):
         await acompletion(model="openrouter/x", messages=[])
     assert kp.api_key_for_model("openrouter/x") == "sk-a"
 
@@ -99,9 +99,9 @@ async def test_a_rotation_is_visible_to_the_next_caller(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY_2", "sk-b")
 
     async def fake(**kw):
-        raise _Boom("no auth", status=401)
+        raise _BoomError("no auth", status=401)
 
     monkeypatch.setattr("litellm.acompletion", fake)
-    with pytest.raises(_Boom):
+    with pytest.raises(_BoomError):
         await acompletion(model="openrouter/x", messages=[])
     assert kp.api_key_for_model("openrouter/x") == "sk-b"

@@ -9,8 +9,6 @@ pool had already retired.
 
 from __future__ import annotations
 
-import pytest
-
 from robothor.memory import generation
 
 
@@ -48,9 +46,7 @@ def test_a_weekly_cap_is_retired_as_periodic(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-only")
     monkeypatch.delenv("OPENROUTER_API_KEY_2", raising=False)
     generation._reset_key_pool()
-    generation._retire_remote_key(
-        "sk-only", status=403, detail="Key limit exceeded (weekly limit)"
-    )
+    generation._retire_remote_key("sk-only", status=403, detail="Key limit exceeded (weekly limit)")
     pool = generation._key_pool()
     assert pool is not None
     assert pool.status()[0].reason is Retirement.QUOTA_EXHAUSTED_PERIODIC

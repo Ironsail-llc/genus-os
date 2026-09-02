@@ -102,8 +102,8 @@ async def _handle_analyze_pdf(
         if text_pages and query:
             text_content = "\n\n".join(text_pages)[:6000]
             try:
-                import litellm
-
+                # litellm is imported by pooled_acompletion; an ImportError
+                # still lands in this same handler.
                 response = await pooled_acompletion(
                     model="gemini/gemini-2.5-flash",
                     messages=[
@@ -157,8 +157,6 @@ async def _handle_analyze_pdf(
                     "page_count": total_pages,
                     "text_content": "[No extractable text or images found in this PDF]",
                 }
-
-            import litellm
 
             content: list[dict[str, Any]] = []
             for idx, img_b64 in enumerate(images_b64[:3]):
