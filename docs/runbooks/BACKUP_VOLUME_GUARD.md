@@ -49,7 +49,8 @@ mean recent.
 | `9 stale mappings, reboot required` | Nine device-mapper nodes are held by kernel references that nothing in userspace can release. | Reboot. This is the only thing that clears them. |
 | `filesystem needs manual fsck (fsck.ext4 -p exit N) — NOT mounted` | Preen could not repair it without a decision. The guard deliberately did **not** mount it and closed the container again. | `cryptsetup open /dev/disk/by-uuid/<uuid> robothor-backup-<n>` then `fsck.ext4 -y /dev/mapper/robothor-backup-<n>`, *with the offsite copy verified first*. |
 | `SMART reports /dev/sdX as FAILED` | The firmware has given up on the disk. The guard refuses to remount it. | Replace the disk. Restore from offsite (`docs/runbooks/OFFSITE_BACKUP.md`). |
-| `mapper robothor-backup still has N opener(s) after umount -l — refusing to fsck a referenced mapping` | The mapping is the device's own and correct, but something still holds it: `umount -l` returns before the last reference is dropped. `fsck.ext4 -p` there would corrupt a filesystem that was only degraded. | `lsof +f -- /dev/mapper/robothor-backup` / `fuser -vm /mnt/robothor-backup` to find the holder, stop it, and the next tick heals. If nothing is holding it, the reference is a kernel one: reboot. |
+| `mapper robothor-backup still has N opener(s) after umount -l — refusing to fsck a referenced mapping; the volume is now UNMOUNTED and the next tick remounts it once the holder lets go` | The mapping is the device's own and correct, but something still holds it: `umount -l` returns before the last reference is dropped. `fsck.ext4 -p` there would corrupt a filesystem that was only degraded. **The lazy unmount already happened**, so the volume is no longer at the path — it is not degraded now, it is absent, and it stays absent while the holder holds. | `lsof +f -- /dev/mapper/robothor-backup` / `fuser -vm /mnt/robothor-backup` to find the holder (a login shell sitting in the directory counts) and stop it. The next tick then remounts it; nothing else is needed. If nothing is holding it, the reference is a kernel one: reboot. |
+| `something other than the backup mapper is mounted at /mnt/robothor-backup (SOURCE) — refusing to unmount it` | The probe says the path is unusable and what is mounted there is not this guard's mapper. Somebody mounted over the mountpoint. "This guard's mapper" means `/dev/mapper/robothor-backup` with at most one trailing `-<token>` (`-1` from a heal, `-b` from the 2026-08-27 hand recovery). The guard touched nothing: `umount -l` names a path, and unmounting a stranger's filesystem out from under its users is not this control's job. | Find out what `SOURCE` is (`findmnt /mnt/robothor-backup`) and unmount it yourself when whatever is using it is done. The next tick then heals the real volume. |
 | `no non-interactive keyfile in crypttab (column 3 = X); refusing to tear down a mapping I cannot rebuild` | crypttab column 3 is `none`, `-`, or a file root cannot read, so `cryptsetup open` would prompt on a console the timer does not have. The guard did **not** unmount or close anything — it left the volume degraded rather than making it absent. | Put a readable keyfile in column 3 of `/etc/crypttab` (`cryptsetup luksAddKey` first), or run the manual procedure below and unlock it by hand. |
 | `... heal deferred: <unit> is activating` | A backup unit was mid-run; unmounting under it would corrupt the backup. | Nothing — the next tick heals it. |
 | `<mount> is mounted emergency_ro ...` with `HEAL=0` | Healing is switched off. | Re-enable, or run the manual procedure below. |
@@ -60,27 +61,40 @@ Exactly what the guard automates. Run it as root when the guard is disabled or
 when you want to watch it happen.
 
 ```bash
-# 0. Can you get back in? crypttab column 3 must be a keyfile you can read;
+# 0. Stop the timer first — see "While the guard timer is enabled, do NOT"
+#    below. A tick landing between two of these commands does its own heal on
+#    top of yours. Start it again when you are done.
+sudo systemctl stop robothor-backup-volume-guard.timer
+systemctl is-active robothor-backup-volume-guard.service   # "inactive": nothing mid-flight
+
+# 1. Can you get back in? crypttab column 3 must be a keyfile you can read;
 #    `none` or `-` means the guard will refuse, because a timer has no console.
 awk '$1 == "robothor-backup" { print $3 }' /etc/crypttab
 
-# 1. Gates first, while nothing is torn down.
+# 2. Gates first, while nothing is torn down.
 cryptsetup isLuks /dev/disk/by-uuid/<uuid>           # ours, or stop
 smartctl -d scsi -H /dev/sdX                         # FAILED → stop, replace
 
+findmnt -rn -o SOURCE --mountpoint /mnt/robothor-backup  # /dev/mapper/robothor-backup[-<token>]
+                                                     # ...or somebody else's: stop
 umount -l /mnt/robothor-backup                       # lazy: a clean umount hangs
 dmsetup deps -o devno robothor-backup                # matches the device? live
 lsblk -no MAJ:MIN /dev/disk/by-uuid/<uuid>           # ...compare with this
 dmsetup info -c --noheadings -o open robothor-backup # MUST be 0 before any fsck
 
-# 2. Live mapping (deps match) and open count 0 — just put it back.
+# 3. Live mapping (deps match) and open count 0 — just put it back.
 mount /dev/mapper/robothor-backup /mnt/robothor-backup
 
-# 3. Stale mapping (deps do NOT match). The stale name cannot be reused.
+# 4. Stale mapping (deps do NOT match). The stale name cannot be reused.
 cryptsetup close robothor-backup                     # usually FAILS: kernel ref
 cryptsetup open /dev/disk/by-uuid/<uuid> robothor-backup-1 --key-file <keyfile>
 fsck.ext4 -p /dev/mapper/robothor-backup-1           # PREEN ONLY. rc>=4 → stop
 mount /dev/mapper/robothor-backup-1 /mnt/robothor-backup   # the SAME path
+
+# 5. Re-arm the guard. Not optional: from here until this runs, nothing is
+#    watching the volume.
+sudo systemctl start robothor-backup-volume-guard.timer
+systemctl list-timers 'robothor-backup*' --no-pager
 ```
 
 The units bind to the **path**, not the mapper name, so nothing else needs
@@ -108,6 +122,44 @@ that both the guard and every backup unit take — so that "a backup is running"
 is a fact the guard holds rather than one it sampled. Follow-up; the guard's
 own `${STATE_DIR}.lock` only serialises the guard against itself.
 
+## While the guard timer is enabled, do NOT
+
+The timer runs as root every 10 minutes and its whole job is to act on that
+mountpoint. Anything you do to the volume by hand is racing it, and the guard
+does not know you are there.
+
+1. **Do not mount anything by hand at `ROBOTHOR_BACKUP_MOUNT`**
+   (`/mnt/robothor-backup`). A live timer probes that path, and something it
+   cannot use gets lazy-unmounted within 10 minutes. The guard refuses when the
+   mounted source is not its own mapper — `something other than the backup
+   mapper is mounted at <mount> (<source>) — refusing to unmount it` — but that
+   refusal is a page and a stalled heal, not permission to park a filesystem
+   there. Mount it somewhere else.
+
+2. **Do not leave a shell or a process with its cwd, or an open file, inside
+   the volume.** That is an opener on the mapper, and the guard will not fsck a
+   referenced mapping: it refuses with `refusing to fsck a referenced mapping`.
+   By then it has already lazy-unmounted the volume, so the backups stay down
+   until you let go. `cd` out of the tree before you walk away, and check with
+   `fuser -vm /mnt/robothor-backup` if a heal keeps refusing.
+
+3. **Stop the timer before you work on the volume yourself, and start it
+   again afterwards** — both before the manual procedure above and before the
+   `mount -o remount,ro` drill below:
+
+   ```bash
+   sudo systemctl stop robothor-backup-volume-guard.timer
+   systemctl is-active robothor-backup-volume-guard.service   # "inactive": no tick mid-flight
+   ...                                                        # your work here
+   sudo systemctl start robothor-backup-volume-guard.timer
+   ```
+
+   Stopping the timer does not stop a tick already running, which is what the
+   second line is for; a heal in flight can take minutes (fsck). Without this,
+   a tick can land between your `cryptsetup open` and your `fsck`, and — in the
+   drill — will heal the volume you just broke before you have looked at it,
+   which measures the guard racing itself rather than the control being tested.
+
 ## Knobs
 
 Set in `/etc/robothor/robothor.env`.
@@ -134,6 +186,12 @@ blank, which reads as reassuring). Each of those fires its own
 A guard nobody has fired is a guard nobody knows works. In a quiet window:
 
 ```bash
+# 0. Take the timer out of the loop FIRST. Every step below starts the service
+#    by hand; a scheduled tick landing in between heals the volume you just
+#    broke, and the drill then measures a race instead of the control.
+sudo systemctl stop robothor-backup-volume-guard.timer
+systemctl is-active robothor-backup-volume-guard.service   # "inactive": nothing mid-flight
+
 sudo systemctl start robothor-backup-volume-guard.service
 journalctl -u robothor-backup-volume-guard.service -n 20 --no-pager
 # → "backup-volume-guard: volume healthy at /mnt/robothor-backup"
@@ -146,6 +204,11 @@ sudo systemctl start robothor-backup-volume-guard.service
 sudo systemctl start robothor-backup-volume-guard.service
 # → NO second page (the day-long repage window, or a recovery notice if the
 #   remount worked)
+
+# Last: the drill is NOT over until the timer is back. Check it — an unarmed
+# guard is the failure this whole unit exists to prevent.
+sudo systemctl start robothor-backup-volume-guard.timer
+systemctl list-timers 'robothor-backup*' --no-pager
 ```
 
 If the first start produces no page, the control is inert — check the timer is
