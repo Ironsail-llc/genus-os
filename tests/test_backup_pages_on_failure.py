@@ -386,3 +386,178 @@ class TestTheBaseBackupRecordsWhenItLastWorked:
         assert not (tmp_path / "state" / "last-basebackup").exists(), (
             "a base backup that never ran recorded itself as successful"
         )
+
+
+class TestTheWalMarkerOnlyMeansTheWalWentOffsite:
+    """``last-wal-offsite-ok`` answers one question: did the WAL reach the
+    remote?
+
+    It was stamped whenever ``OFFSITE_FAILED`` was 0 — and that variable is
+    initialised to 0 and never touched when ``ROBOTHOR_OFFSITE_REMOTE`` is
+    unset (the "archiving locally only" path falls straight through). So an
+    instance with no offsite destination at all stamped a fresh
+    "WAL is offsite" marker every 15 minutes, forever. A freshness guard
+    reading it would report the RPO as healthy on a box that has never sent a
+    single byte anywhere.
+
+    A DEGRADED run is the opposite case and must still stamp: when the backup
+    volume is wedged only the basebackup replication is skipped — the WAL
+    itself still goes offsite, which is exactly what this marker is about.
+    """
+
+    SCRIPT = REPO_ROOT / "scripts" / "wal-offsite.sh"
+
+    @staticmethod
+    def _stub(path: Path, body: str) -> None:
+        path.write_text(f"#!/usr/bin/env bash\n{body}\n")
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+    def _run(self, tmp_path: Path, *, volume_down: bool = False, **env_extra):
+        archive_dir = tmp_path / "wal_archive"
+        archive_dir.mkdir()
+        (archive_dir / "000000010000000000000003").write_text("wal")
+
+        basebackup_dir = tmp_path / "basebackup"
+        basebackup_dir.mkdir()
+        (basebackup_dir / "base-20260902-000000.backup_label").write_text(
+            "START WAL LOCATION: 0/2000028 (file 000000010000000000000002)\n"
+        )
+        if volume_down:
+            # Mounted, stats fine, readdir fails — the emergency_ro shape.
+            basebackup_dir.chmod(0o000)
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        self._stub(bin_dir / "psql", 'echo "5|0|-"')
+        self._stub(bin_dir / "rclone", "exit 0")
+        self._stub(bin_dir / "pg_archivecleanup", "exit 0")
+        self._stub(bin_dir / "df", 'echo "1M-blocks"; echo "9999999"')
+
+        env = {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
+            "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
+            "ROBOTHOR_DB_NAME": "robothor_memory",
+            "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
+            "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0",
+        }
+        env.update(env_extra)
+        try:
+            result = subprocess.run(
+                ["bash", str(self.SCRIPT)],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=env,
+            )
+        finally:
+            if volume_down:
+                basebackup_dir.chmod(0o755)
+        return result
+
+    def test_no_offsite_remote_configured_records_nothing(self, tmp_path: Path):
+        result = self._run(tmp_path)  # ROBOTHOR_OFFSITE_REMOTE deliberately unset
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "archiving locally only" in result.stdout, result.stdout
+        assert not (tmp_path / "state" / "last-wal-offsite-ok").exists(), (
+            "an instance with no offsite destination stamped 'the WAL is "
+            "offsite' anyway — the freshness guard would call an RPO of "
+            "infinity healthy\n" + result.stdout + result.stderr
+        )
+
+    def test_a_degraded_run_with_a_working_remote_still_records(
+        self, tmp_path: Path
+    ):
+        result = self._run(
+            tmp_path, volume_down=True, ROBOTHOR_OFFSITE_REMOTE="remote:bucket"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "skipping basebackup replication" in result.stdout, result.stdout
+        assert (tmp_path / "state" / "last-wal-offsite-ok").exists(), (
+            "the WAL push succeeded and the marker was withheld — only the "
+            "basebackup replication is skipped when the volume is wedged\n"
+            + result.stdout
+            + result.stderr
+        )
+
+
+class TestWalOffsiteRefusesToGuessWhenTheProbeIsBroken:
+    """Exit 255 from the volume probe means "I cannot answer the question".
+
+    wal-offsite.sh treated every non-zero probe exit the same way: degrade,
+    log a line, exit 0. So a probe with no ``timeout`` or no ``findmnt``
+    installed — the two cases the probe reserves 255 for — turned into a
+    permanently degraded run that never replicated a base backup, never pruned
+    WAL, and never failed. The four sibling units page in that state (systemd
+    fails a unit on ExecCondition= 255); this one went quiet instead.
+
+    Only exit 1 (the volume is genuinely unhealthy) degrades.
+    """
+
+    SCRIPT = REPO_ROOT / "scripts" / "wal-offsite.sh"
+
+    @staticmethod
+    def _stub(path: Path, body: str) -> None:
+        path.write_text(f"#!/usr/bin/env bash\n{body}\n")
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+    def _run(self, tmp_path: Path, probe_exit: int):
+        archive_dir = tmp_path / "wal_archive"
+        archive_dir.mkdir()
+        (archive_dir / "000000010000000000000003").write_text("wal")
+        basebackup_dir = tmp_path / "basebackup"
+        basebackup_dir.mkdir()
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        self._stub(bin_dir / "psql", 'echo "5|0|-"')
+        self._stub(bin_dir / "rclone", "exit 0")
+        self._stub(bin_dir / "pg_archivecleanup", "exit 0")
+        self._stub(bin_dir / "df", 'echo "1M-blocks"; echo "9999999"')
+        probe = tmp_path / "fake-volume-check.sh"
+        self._stub(probe, f"exit {probe_exit}")
+
+        return subprocess.run(
+            ["bash", str(self.SCRIPT)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env={
+                "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
+                "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
+                "ROBOTHOR_OFFSITE_REMOTE": "remote:bucket",
+                "ROBOTHOR_DB_NAME": "robothor_memory",
+                "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
+                "ROBOTHOR_VOLUME_CHECK": str(probe),
+                "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0",
+            },
+        )
+
+    def test_a_broken_probe_fails_the_unit(self, tmp_path: Path):
+        result = self._run(tmp_path, 255)
+        assert result.returncode != 0, (
+            "a probe that cannot answer the question was read as 'the volume "
+            "is down', so the unit degraded quietly and forever\n"
+            + result.stdout
+            + result.stderr
+        )
+        assert "refusing to guess" in result.stdout + result.stderr, (
+            "the page must say the PROBE is broken, not the volume\n"
+            + result.stdout
+            + result.stderr
+        )
+
+    def test_a_broken_probe_records_no_marker(self, tmp_path: Path):
+        self._run(tmp_path, 255)
+        assert not (tmp_path / "state" / "last-wal-offsite-ok").exists()
+
+    def test_an_unhealthy_volume_still_only_degrades(self, tmp_path: Path):
+        result = self._run(tmp_path, 1)
+        assert result.returncode == 0, (
+            "exit 1 means the volume is wedged, which this unit must survive: "
+            "the WAL archive is on NVMe and this push IS the 15-minute RPO\n"
+            + result.stdout
+            + result.stderr
+        )
+        assert "skipping basebackup replication" in result.stdout, result.stdout

@@ -53,12 +53,30 @@ fail() { log "ERROR: $*"; exit 1; }
 # A missing probe counts as unhealthy on purpose: degrading is safe (§4's disk
 # guard still pages if the unpruned archive threatens to fill the disk), while
 # assuming health would put us straight back in the outage.
+#
+# Only exit 1 degrades. Exit 255 is the probe saying "I cannot answer the
+# question" (its own tools are missing) — systemd FAILS the four sibling units
+# on that, and treating it here as "the volume is down" would leave this unit
+# permanently degraded and permanently silent: no basebackup replication, no
+# WAL prune, no failure. So 255 degrades AND fails, which pages once per
+# OnFailure cooldown instead of never.
+#
+# Declared before §2 so a broken probe can set it.
+OFFSITE_FAILED=0
 VOLUME_DOWN=0
 if [[ ! -x "$VOLUME_CHECK" ]]; then
     log "ERROR: volume probe not found at $VOLUME_CHECK"
     VOLUME_DOWN=1
-elif ! "$VOLUME_CHECK" --ro "$BASEBACKUP_DIR"; then
-    VOLUME_DOWN=1
+else
+    VOLUME_CHECK_RC=0
+    "$VOLUME_CHECK" --ro "$BASEBACKUP_DIR" || VOLUME_CHECK_RC=$?
+    if [[ "$VOLUME_CHECK_RC" -eq 255 ]]; then
+        log "ERROR: backup-volume-check.sh is broken (exit 255) — refusing to guess"
+        VOLUME_DOWN=1
+        OFFSITE_FAILED=1
+    elif [[ "$VOLUME_CHECK_RC" -ne 0 ]]; then
+        VOLUME_DOWN=1
+    fi
 fi
 if [[ "$VOLUME_DOWN" -eq 1 ]]; then
     log "backup volume unhealthy — skipping basebackup replication and WAL prune"
@@ -90,7 +108,7 @@ fi
 # what keep pg_wal bounded, and a network/offsite outage is exactly when they
 # matter most. So capture the failure instead of exiting, and exit at the very
 # end (after §3/§4 have run) so systemd's OnFailure hook still pages.
-OFFSITE_FAILED=0
+# OFFSITE_FAILED is initialised in §0, which can already have set it.
 if [[ -n "$REMOTE" ]]; then
     if ! command -v rclone >/dev/null 2>&1; then
         log "ERROR: rclone is not installed"
@@ -159,7 +177,12 @@ log "WAL offsite replication complete"
 # written on a failed push makes a stale archive look fresh, which is worse
 # than no marker at all. A DEGRADED run (backup volume wedged) does stamp:
 # the WAL did go offsite, which is what this marker is about.
-if [[ "$OFFSITE_FAILED" -eq 0 ]]; then
+#
+# $REMOTE must be non-empty. OFFSITE_FAILED stays 0 on the "archiving locally
+# only" path — nothing was attempted, so nothing failed — so gating on it alone
+# stamped "the WAL is offsite" every 15 minutes on an instance that has no
+# offsite destination at all.
+if [[ -n "$REMOTE" && "$OFFSITE_FAILED" -eq 0 ]]; then
     backup_state_record last-wal-offsite-ok
 fi
 
