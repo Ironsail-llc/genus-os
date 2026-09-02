@@ -326,7 +326,8 @@ class TestArgumentContract:
             "id: agent-a\nmodel:\n  primary: openrouter/stealth/ox-alpha\n",
         )
 
-        assert run(mod, "--fallbacks", CHAIN, "--apply") == 0
+        # Unapplied under --apply is a FAILURE, not a line of scrollback.
+        assert run(mod, "--fallbacks", CHAIN, "--apply") == 1
 
         out = capsys.readouterr().out
         assert "agent-a.yaml" in out
@@ -344,7 +345,7 @@ class TestArgumentContract:
         )
         original = path.read_text()
 
-        assert run(mod, "--fallbacks", CHAIN, "--apply") == 0
+        assert run(mod, "--fallbacks", CHAIN, "--apply") == 1
 
         assert path.read_text() == original
         assert "not applied" in capsys.readouterr().out.lower()
@@ -439,3 +440,60 @@ class TestVerifier:
         assert mod._verify(original, tampered, CHAIN_LIST) == (
             "rewrite touched something other than a fallbacks key"
         )
+
+
+class TestExitStatus:
+    """A chain that missed a manifest must not exit 0.
+
+    The 2026-08-22 swap "succeeded" seven times while manifests kept the old
+    model. Anything scripted around this tool reads the exit code, so an
+    unreached manifest has to be a failure, not a line of scrollback.
+    """
+
+    NO_KEY = "id: agent-c\nmodel:\n  primary: openrouter/stealth/ox-alpha\n"
+
+    def test_apply_returns_one_when_a_manifest_did_not_get_the_chain(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ):
+        mod = load_tool(tmp_path, monkeypatch)
+        base = agents_dir(tmp_path)
+        write(base / "agent-a.yaml", INLINE)
+        write(base / "agent-c.yaml", self.NO_KEY)
+
+        assert run(mod, "--fallbacks", CHAIN, "--apply") == 1
+
+        out = capsys.readouterr().out
+        assert "did NOT get the chain" in out
+        assert "docs/agents/agent-c.yaml" in out.split("did NOT get the chain")[1]
+
+    def test_a_skipped_manifest_counts_as_unapplied(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        mod = load_tool(tmp_path, monkeypatch)
+        write(agents_dir(tmp_path) / "agent-a.yaml", PROSE)
+
+        assert run(mod, "--fallbacks", CHAIN, "--apply") == 1
+
+    def test_dry_run_returns_zero_but_prints_the_same_list(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ):
+        mod = load_tool(tmp_path, monkeypatch)
+        write(agents_dir(tmp_path) / "agent-c.yaml", self.NO_KEY)
+
+        assert run(mod, "--fallbacks", CHAIN) == 0
+
+        out = capsys.readouterr().out
+        assert "did NOT get the chain" in out
+        assert "docs/agents/agent-c.yaml" in out.split("did NOT get the chain")[1]
+
+    def test_apply_returns_zero_when_every_manifest_took_the_chain(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ):
+        mod = load_tool(tmp_path, monkeypatch)
+        base = agents_dir(tmp_path)
+        write(base / "agent-a.yaml", INLINE)
+        write(base / "agent-b.yaml", BLOCK)
+
+        assert run(mod, "--fallbacks", CHAIN, "--apply") == 0
+
+        assert "did NOT get the chain" not in capsys.readouterr().out

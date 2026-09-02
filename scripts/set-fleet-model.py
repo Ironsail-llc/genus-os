@@ -299,30 +299,43 @@ def rewrite_primary(
     return old, new_primary
 
 
-def rewrite_fallbacks(path: Path, fallbacks: list[str], *, apply: bool) -> str | None:
-    """Apply the chain to one manifest. Returns a status line, or None if unchanged."""
+class FileResult(NamedTuple):
+    """``note`` is the line to print (None when there is nothing to say).
+
+    ``applied`` is the only thing the exit status is built from: True means
+    this manifest now carries the chain (it was rewritten, or already had it).
+    """
+
+    note: str | None
+    applied: bool
+
+
+def rewrite_fallbacks(path: Path, fallbacks: list[str], *, apply: bool) -> FileResult:
+    """Apply the chain to one manifest."""
     text = path.read_text()
     result = rewrite_fallbacks_text(text, fallbacks)
     if result.keys == 0:
         if result.prose:
-            return (
+            return FileResult(
                 "SKIPPED — fallbacks: appears only inside a block scalar (prose, "
-                "not a mapping key) — chain NOT applied"
+                "not a mapping key) — chain NOT applied",
+                False,
             )
-        return "no fallbacks: line — chain NOT applied"
+        return FileResult("no fallbacks: line — chain NOT applied", False)
     if result.unhandled:
-        return (
+        return FileResult(
             f"{result.unhandled} fallbacks: value(s) in a style this tool does not "
-            "rewrite (anchor/alias?) — chain NOT applied, edit by hand"
+            "rewrite (anchor/alias?) — chain NOT applied, edit by hand",
+            False,
         )
     if result.text is None:
-        return None
+        return FileResult(None, True)  # already correct
     error = _verify(text, result.text, fallbacks)
     if error:
-        return f"SKIPPED — {error}"
+        return FileResult(f"SKIPPED — {error}", False)
     if apply:
         path.write_text(result.text)
-    return "fallbacks -> " + ", ".join(fallbacks)
+    return FileResult("fallbacks -> " + ", ".join(fallbacks), True)
 
 
 def main() -> int:
@@ -354,6 +367,7 @@ def main() -> int:
     )
 
     changed = 0
+    unapplied: list[str] = []
     for path in manifests(include_defaults=args.include_defaults):
         rel = path.relative_to(WORKSPACE)
         touched = False
@@ -364,15 +378,25 @@ def main() -> int:
                 print(f"  {rel}: {old} -> {new}")
                 touched = True
         if fallbacks is not None:
-            note = rewrite_fallbacks(path, fallbacks, apply=args.apply)
+            note, applied = rewrite_fallbacks(path, fallbacks, apply=args.apply)
             if note:
                 print(f"  {rel}: {note}")
-                touched = touched or note.startswith("fallbacks")
+            if not applied:
+                unapplied.append(str(rel))
+            touched = touched or (applied and note is not None)
         if touched:
             changed += 1
 
     verb = "updated" if args.apply else "would update"
     print(f"\n{verb} {changed} manifest(s)")
+
+    # A chain that missed a manifest is the failure this tool exists to catch,
+    # so it is listed in one place at the end and carried into the exit status
+    # — a caller that only reads the status must not see a clean run.
+    if unapplied:
+        print(f"\n{len(unapplied)} manifest(s) did NOT get the chain:")
+        for rel_path in unapplied:
+            print(f"  - {rel_path}")
 
     if not args.apply:
         print("\nDRY RUN — nothing written. Re-run with --apply.")
@@ -390,7 +414,7 @@ def main() -> int:
         '         "SELECT model_used, count(*) FROM agent_runs '
         "WHERE created_at > now()-interval '10 min' GROUP BY 1;\""
     )
-    return 0
+    return 1 if unapplied else 0
 
 
 if __name__ == "__main__":
