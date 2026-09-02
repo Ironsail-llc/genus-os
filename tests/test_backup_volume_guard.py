@@ -345,13 +345,31 @@ def test_the_down_page_names_what_stopped_and_what_did_not(box: Box):
     assert "Paused: nightly dump" in page
     assert "offsite refresh" in page
     assert "base backup + WAL prune" in page
-    assert "Still running: WAL offsite" in page
     assert "PITR RPO intact, dump-tier RPO growing" in page
     assert "Runbook: BACKUP_VOLUME_GUARD.md" in page
     # The last-good facts come from the NVMe markers, never from the volume
     # that just failed.
     assert "robothor_memory-20260901.sql.gz" in page
     assert "00000001000000A2000000F3" in page
+
+
+def test_the_page_says_which_HALF_of_wal_offsite_is_still_running(box: Box):
+    """"Still running: WAL offsite" was not true, and the guard's own code says
+    so: robothor-wal-offsite.service is in BACKUP_UNITS precisely because it
+    writes to the volume. What survives a wedged volume is the archiving of NEW
+    WAL segments to the remote; what stops with everything else is the
+    base-backup copy and the WAL prune (wal-offsite.sh reads the prune horizon
+    off the volume and refuses to guess it).
+
+    An operator who reads "WAL offsite: still running" concludes PITR is whole.
+    It is — for now — and only because the segments are still going out; the
+    base backup they replay onto is not being copied.
+    """
+    box.run(FAKE_CHECK_RCS="1")
+    page = box.pages[0]
+    assert "Still running: WAL offsite replication of NEW segments" in page, page
+    assert "base-backup copy and WAL prune paused" in page, page
+    assert "PITR RPO intact, dump-tier RPO growing" in page
 
 
 def test_missing_markers_say_so_rather_than_reading_as_recent(box: Box):

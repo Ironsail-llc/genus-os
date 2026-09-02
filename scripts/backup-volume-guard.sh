@@ -120,6 +120,10 @@ REPAGE_SECONDS="${ROBOTHOR_VOLUME_GUARD_REPAGE_SECONDS:-86400}"
 
 # Units that write to the volume. Lazy-unmounting under any of them corrupts
 # the backup, so any one of them `activating` defers the heal to the next tick.
+# robothor-wal-offsite is here because it WRITES to the volume (it copies base
+# backups off it and reads the prune horizon from it), not because it stops
+# when the volume is down: it degrades instead, and keeps archiving new WAL
+# segments to the remote. That distinction is what the DOWN page has to say.
 BACKUP_UNITS=(
     robothor-backup-local.service
     robothor-backup-offsite.service
@@ -571,7 +575,7 @@ fi
 if ! page "backup-volume-down" \
     "🔴 BACKUP VOLUME DOWN since ${DOWN_SINCE} (${reason}).
 Paused: nightly dump (last good ${LAST_LOCAL_DUMP}), offsite refresh (last OK ${LAST_OFFSITE}), base backup + WAL prune.
-Still running: WAL offsite (last OK ${LAST_WAL_OFFSITE}) → PITR RPO intact, dump-tier RPO growing.
+Still running: WAL offsite replication of NEW segments (last OK ${LAST_WAL_OFFSITE}) — base-backup copy and WAL prune paused → PITR RPO intact, dump-tier RPO growing.
 Runbook: BACKUP_VOLUME_GUARD.md"; then
     # Deliberately NOT stamping last_paged: arming the day-long quiet period on
     # a page nobody received is how an outage goes silent.
