@@ -49,8 +49,12 @@ class TestTheLeaderIsNamed:
 
         full = [
             CategoryStanding(
-                category=f"cat{i}", runs=3, mean=0.402, spread=0.02,
-                baseline=0.3876, verdict="ahead",
+                category=f"cat{i}",
+                runs=3,
+                mean=0.402,
+                spread=0.02,
+                baseline=0.3876,
+                verdict="ahead",
             )
             for i in range(BENCH_CATEGORIES)
         ]
