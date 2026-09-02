@@ -280,10 +280,43 @@ consequence_for() {
 # rather than once, because the journal tail sharpens as the failure plays out
 # and a backup marker can land while the retry loop waits out the boot window —
 # and because the spool needs the same text after the loop has given up.
+
+# ── The journal tail must be valid UTF-8 ─────────────────────────────────────
+# The tail is sliced by BYTES (`tail -c`), and the slice lands wherever it
+# lands — including the middle of a multi-byte character. Journal lines also
+# carry arbitrary bytes of their own: on 2026-09-02 this box's journal put a
+# raw 0x80 into a page. Telegram answers a body that is not valid UTF-8 with
+# an HTTP 400, and a 400 on a SPOOLED page used to stop the drain at that file
+# on every tick forever — one mis-sliced em dash wedged every page behind it.
+# (The drain now quarantines a rejected page, but a page that cannot be
+# delivered at all is still a page lost.)
+#
+# So: take a little more than the budget, drop what does not round-trip, cut
+# to the real budget, then scrub the NEW boundary too — the second cut can
+# split a character just as the first one could.
+JOURNAL_TAIL_BYTES="${ROBOTHOR_ALERT_JOURNAL_TAIL_BYTES:-500}"
+# Overridable so a test can supply the tail instead of reading this host's
+# journal, which differs on every box and every run — and is not guaranteed
+# to be decodable at all.
+JOURNAL_CMD="${ROBOTHOR_ALERT_JOURNAL_CMD:-journalctl}"
+scrub_utf8() {
+    if command -v iconv >/dev/null 2>&1; then
+        iconv -c -f utf-8 -t utf-8 2>/dev/null || true
+    else
+        # No iconv (a from-scratch container): fall back to ASCII, which is
+        # always valid UTF-8. Losing the em dashes beats losing the page.
+        LC_ALL=C tr -d '\200-\377' 2>/dev/null || true
+    fi
+}
+
 compose_text() {
     local detail="$BODY" journal
     if [[ -z "$detail" ]]; then
-        journal="$(journalctl -u "$UNIT" -n 5 --no-pager -o cat 2>/dev/null | tail -c 500 || true)"
+        journal="$("$JOURNAL_CMD" -u "$UNIT" -n 5 --no-pager -o cat 2>/dev/null \
+            | tail -c "$(( JOURNAL_TAIL_BYTES + 100 ))" \
+            | scrub_utf8 \
+            | tail -c "$JOURNAL_TAIL_BYTES" \
+            | scrub_utf8 || true)"
         detail="Last journal lines:
 ${journal:-<journal unavailable>}
 

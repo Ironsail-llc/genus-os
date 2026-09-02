@@ -52,6 +52,24 @@ def fake_curl_failing(tmp_path: Path) -> Path:
     return log
 
 
+def fake_journal(tmp_path: Path, payload: bytes) -> Path:
+    """A journalctl stand-in emitting exactly ``payload``, ignoring its argv.
+
+    The sender tails the journal of the failed unit into the page body. Read
+    from the LIVE host journal that is whatever this box happened to log a few
+    minutes ago: unstable, unassertable, and — as of 2026-09-02 — not even
+    valid UTF-8, which crashed two tests in this file outright. The seam
+    (ROBOTHOR_ALERT_JOURNAL_CMD) exists so a test supplies the tail itself.
+    """
+    journal = tmp_path / "bin" / "fake-journalctl"
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    blob = tmp_path / "bin" / "journal-fixture.bin"
+    blob.write_bytes(payload)
+    journal.write_text(f'#!/usr/bin/env bash\ncat "{blob}"\nexit 0\n')
+    journal.chmod(journal.stat().st_mode | stat.S_IEXEC)
+    return journal
+
+
 def curl_call_count(log: Path) -> int:
     """Each invocation writes exactly one Telegram API URL arg; count those."""
     if not log.exists():
@@ -118,6 +136,15 @@ def run_send(
         # directory therefore pages the operator with fixture text on the next
         # tick — see test_run_send_default_env_never_spools_to_the_real_dir.
         "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+        # The journal tail comes from a fixture, never from this box. The live
+        # journal is not reproducible between runs and is not guaranteed to be
+        # valid UTF-8 — on 2026-09-02 it was not, and TestConsequenceLine died
+        # decoding the page it had just composed.
+        "ROBOTHOR_ALERT_JOURNAL_CMD": str(
+            (tmp_path / "bin" / "fake-journalctl")
+            if (tmp_path / "bin" / "fake-journalctl").exists()
+            else fake_journal(tmp_path, b"fixture journal line\n")
+        ),
         # These tests predate the boot-window retry loop and assert on exact
         # curl call counts — pin a single fast attempt so they keep testing
         # what they always tested. The retry behavior itself is covered in
@@ -294,6 +321,77 @@ def test_run_send_default_env_never_spools_to_the_real_dir(tmp_path: Path):
 
     after = set(real_spool.iterdir()) if real_spool.exists() else set()
     assert after == before, f"a test run spooled a real, deliverable page: {after - before}"
+
+
+class TestJournalTailIsUtf8Safe:
+    """The journal tail is sliced by BYTES; Telegram rejects invalid UTF-8.
+
+    ``compose_text`` cut the tail with ``tail -c 500``, which lands wherever it
+    lands — including the middle of a multi-byte character (the consequence
+    lines are full of em dashes, and journal lines carry arbitrary bytes).
+    Telegram answers such a body with an HTTP 400, and a 400 on a SPOOLED page
+    used to stop the drain at that file forever: one mis-sliced character
+    wedged every page behind it.
+
+    It is not hypothetical: on 2026-09-02 this box's own journal put a raw
+    0x80 into the page, and two tests in TestConsequenceLine failed decoding
+    the payload they had just captured.
+    """
+
+    ENV = {"ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123", "ROBOTHOR_TELEGRAM_CHAT_ID": "42"}
+
+    def send_with_journal(self, tmp_path: Path, payload: bytes) -> bytes:
+        log = fake_curl(tmp_path)
+        fake_journal(tmp_path, payload)
+        result = run_send(tmp_path, "robothor-something-new.service", dict(self.ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        return log.read_bytes()
+
+    def test_the_journal_command_is_a_seam(self, tmp_path: Path):
+        """Without it every consequence test asserts against this host's
+        journal — a different body on every box and every run."""
+        src = SEND.read_text()
+        assert "ROBOTHOR_ALERT_JOURNAL_CMD" in src, (
+            "send_failure_alert.sh shells straight out to journalctl, so no "
+            "test can supply a journal tail; the page body is whatever this "
+            "box logged a few minutes ago"
+        )
+
+    def test_run_send_default_env_pins_the_journal_command(self, tmp_path: Path):
+        fake_curl(tmp_path)
+        result = run_send(tmp_path, "robothor-something-new.service", dict(self.ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "fixture journal line" in page_text(tmp_path / "curl-args.txt"), (
+            "run_send's default env does not pin the journal seam, so the page "
+            "body still comes from the live host journal"
+        )
+
+    def test_a_raw_invalid_byte_never_reaches_the_page(self, tmp_path: Path):
+        """A journal line with binary in it must not become the page body."""
+        raw = self.send_with_journal(tmp_path, b"boom \xff\xfe binary \x80 tail\n")
+        # 0xfe and 0xff never occur in valid UTF-8 at all (0x80 does, as a
+        # continuation byte — the page's own em dash carries one).
+        assert b"\xff" not in raw and b"\xfe" not in raw, (
+            "invalid UTF-8 from the journal reached the Telegram payload; "
+            "Telegram answers that with a 400 and the page is rejected"
+        )
+        raw.decode("utf-8")  # must not raise
+
+    def test_a_multibyte_character_is_not_cut_by_the_byte_slice(self, tmp_path: Path):
+        """Em dashes are 3 bytes each; a 500-byte slice through 900 of them
+        lands mid-character on 2 boundaries out of 3."""
+        raw = self.send_with_journal(tmp_path, ("—" * 900).encode("utf-8") + b"\n")
+        raw.decode("utf-8")  # must not raise
+
+    def test_the_journal_tail_stays_within_its_byte_budget(self, tmp_path: Path):
+        """Scrubbing must not become an excuse to grow the page."""
+        raw = self.send_with_journal(tmp_path, ("—" * 900).encode("utf-8") + b"\n")
+        text = raw.decode("utf-8")
+        tail = text.split("Last journal lines:\n", 1)[1].split("\n\nCheck:", 1)[0]
+        assert len(tail.encode("utf-8")) <= 500, (
+            f"the journal tail is {len(tail.encode('utf-8'))} bytes, over the 500-byte budget"
+        )
+        assert tail.startswith("—"), "the scrub ate the whole tail"
 
 
 def test_install_creates_onfailure_dropins(tmp_path: Path):
