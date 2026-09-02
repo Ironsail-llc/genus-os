@@ -1332,6 +1332,17 @@ class TestTheSpoolDirIsCreatedUsableByBothAccounts:
         mode = spool_dir(tmp_path).stat().st_mode & 0o7777
         assert mode == 0o1777, f"a freshly created spool is {oct(mode)}, not 0o1777"
 
+    def test_the_poison_dir_is_created_the_same_way(self, tmp_path: Path):
+        """Root's tick and the operator's drain both quarantine into it; a
+        0755 dir made by whichever ran first leaves the other unable to move
+        anything aside, so its rejected pages stay in the queue."""
+        install_status_curl(tmp_path, ["400"])
+        write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-REJECTED")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert poisoned(tmp_path), "nothing was quarantined — this test proves nothing"
+        mode = (spool_dir(tmp_path) / "poison").stat().st_mode & 0o7777
+        assert mode == 0o1777, f"the poison dir is {oct(mode)}, not 0o1777"
+
     def test_an_existing_spool_dir_keeps_the_mode_its_owner_chose(self, tmp_path: Path):
         """Only the dir we just created is ours to chmod. Widening a directory
         somebody else made — to 1777, of all modes — is not the pager's call."""

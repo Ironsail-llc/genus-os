@@ -447,7 +447,14 @@ spool_page() {
 quarantine_spooled() {
     local f="$1" reason="$2" name
     name="$(basename "$f")"
-    mkdir -p "$POISON_DIR" 2>/dev/null || true
+    # Sticky and world-writable for the same reason the spool is: root's tick
+    # and the operator's drain both quarantine into it, and a 0755 dir made by
+    # whichever ran first would leave the other unable to move anything here —
+    # its rejected pages would stay in the queue instead. Only chmod what this
+    # run created.
+    if [[ ! -d "$POISON_DIR" ]] && mkdir -p "$POISON_DIR" 2>/dev/null; then
+        chmod 1777 "$POISON_DIR" 2>/dev/null || true
+    fi
     if [[ -d "$POISON_DIR" ]] && mv -f "$f" "${POISON_DIR}/${name}" 2>/dev/null; then
         rm -f "${f}.attempts" 2>/dev/null || true
         # Loud, and named: a page silently removed from the queue is

@@ -133,7 +133,11 @@ test only suppresses a page; a spooled file is a page the next tick will
 actually *deliver*. The base envs in `tests/test_pager_hardening.py`,
 `tests/test_failure_alerts.py` and `tests/test_liveness_watchdog.py` pin it, and
 `test_run_send_default_env_never_spools_to_the_real_dir` fails if that stops
-being true.
+being true. Repo-wide,
+`tests/test_alert_never_pages_from_tests.py::test_every_test_that_can_page_pins_the_spool_and_the_state_dirs`
+fails, naming the file, if any test that runs the pager leaves the spool or
+either cooldown dir unpinned — redirecting the API is not enough once an
+undelivered page is spooled rather than dropped.
 
 ## Liveness watchdog (the path that does not use OnFailure=)
 
