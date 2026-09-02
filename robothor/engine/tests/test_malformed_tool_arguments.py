@@ -49,6 +49,26 @@ def _malformed() -> Exception:
     )
 
 
+def _response_side_decode_failure() -> Exception:
+    """An ollama serving an HTML error page or an empty body.
+
+    litellm parses the RESPONSE with the same `json` module it parses a tool
+    call's `arguments` with — `raw_response.json()`, and
+    `json.loads(response_json_message["content"])` — and re-raises the decode
+    failure as the same `APIConnectionError`. Nothing about the exception TYPE
+    separates the two; only the decoder's own words do.
+    """
+    try:
+        json.loads("<html><body>502 Bad Gateway</body></html>")
+    except json.JSONDecodeError as cause:
+        err = litellm.exceptions.APIConnectionError(
+            message=str(cause), llm_provider="ollama_chat", model=LOCAL_MODEL
+        )
+        err.__cause__ = cause
+        return err
+    raise AssertionError("json.loads accepted HTML")  # pragma: no cover
+
+
 @pytest.fixture
 def client() -> LLMClient:
     return LLMClient()
@@ -77,20 +97,18 @@ class TestClassification:
         assert is_malformed_tool_arguments(_malformed()) is True
 
     def test_a_raw_json_decode_error_is_recognised(self) -> None:
-        try:
+        with pytest.raises(json.JSONDecodeError) as caught:
             json.loads('{"a": "b')
-        except json.JSONDecodeError as e:
-            assert is_malformed_tool_arguments(e) is True
+        assert is_malformed_tool_arguments(caught.value) is True
 
     def test_a_wrapped_json_decode_error_is_recognised(self) -> None:
         """litellm versions differ on whether the cause survives."""
-        try:
+        with pytest.raises(RuntimeError) as caught:
             try:
                 json.loads('{"a": "b')
             except json.JSONDecodeError as cause:
                 raise RuntimeError("tool call parse failed") from cause
-        except RuntimeError as e:
-            assert is_malformed_tool_arguments(e) is True
+        assert is_malformed_tool_arguments(caught.value) is True
 
     def test_a_real_connection_failure_is_not(self) -> None:
         """The whole point is to keep telling these two apart."""
@@ -203,3 +221,49 @@ class TestItIsRetriedNotSurfacedAsAnOutage:
             )
 
         assert [m for m, _ in recorded_failures] == [LOCAL_MODEL]
+
+
+class TestAnUnreadableRESPONSEIsStillAnOutage:
+    """The narrowing that keeps the breaker able to open.
+
+    `Expecting value: line 1 column 1` is what an EMPTY body or an HTML error
+    page decodes to. It is never what a truncated tool-call payload decodes to
+    — that payload is well-formed right up to where it stops, so the decoder
+    complains about an unterminated string or a missing delimiter. Treating
+    the first as bad output means an ollama that has fallen over behind a
+    proxy is re-rolled and skipped, and the breaker is never told, for as long
+    as the outage lasts.
+    """
+
+    def test_an_html_error_page_is_a_provider_failure(self) -> None:
+        assert is_malformed_tool_arguments(_response_side_decode_failure()) is False
+
+    def test_an_empty_body_is_a_provider_failure(self) -> None:
+        e = litellm.exceptions.APIConnectionError(
+            message="Expecting value: line 1 column 1 (char 0)",
+            llm_provider="ollama_chat",
+            model=LOCAL_MODEL,
+        )
+        assert is_malformed_tool_arguments(e) is False
+
+    def test_a_truncated_payload_is_still_bad_output(self) -> None:
+        """The narrowing must not undo the fix it is narrowing."""
+        assert is_malformed_tool_arguments(_malformed()) is True
+
+    @pytest.mark.asyncio
+    async def test_the_breaker_hears_about_the_dead_provider(
+        self, client, recorded_failures
+    ) -> None:
+        acompletion = AsyncMock(side_effect=[_response_side_decode_failure() for _ in range(8)])
+        with (
+            patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+            patch("robothor.engine.llm_client.litellm.acompletion", acompletion),
+        ):
+            await client._call_llm(
+                [{"role": "user", "content": "hi"}], [LOCAL_MODEL], [], broken_models=set()
+            )
+
+        assert [m for m, _ in recorded_failures] == [LOCAL_MODEL], (
+            "an unreadable response body was classified as bad output, so the "
+            "breaker can never open on that outage"
+        )

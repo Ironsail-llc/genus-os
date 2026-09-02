@@ -325,21 +325,67 @@ def _is_transient_model_error(e: BaseException) -> bool:
 #: twelve parse errors became twelve dead runs.
 MALFORMED_TOOL_ARGS_RETRIES = 1
 
-#: What `json.JSONDecodeError` says. litellm parses a tool call's `arguments`
-#: inside its provider transformations and re-raises the decode failure as an
-#: `APIConnectionError` — status 500, indistinguishable by status from a
-#: provider that is actually down. These strings are the only thing left that
-#: tells the two apart.
+#: What `json.JSONDecodeError` says when a payload stops MID-STRUCTURE. litellm
+#: parses a tool call's `arguments` inside its provider transformations and
+#: re-raises the decode failure as an `APIConnectionError` — status 500,
+#: indistinguishable by status from a provider that is actually down. These
+#: strings are the only thing left that tells the two apart, and a truncated
+#: generation is well-formed right up to where it stopped, so this is the shape
+#: it decodes to.
+#:
+#: `expecting value: line` is deliberately ABSENT. That is what an empty body
+#: or an HTML error page decodes to, never a truncated arguments blob — and
+#: litellm parses the RESPONSE with the same module (`raw_response.json()`,
+#: `json.loads(response_json_message["content"])`), re-raising it as the same
+#: exception. While it was listed here, an ollama that had fallen over behind a
+#: proxy was read as bad output: re-rolled, skipped, breaker never told, for as
+#: long as the outage lasted.
 _JSON_DECODE_MARKERS = (
     "unterminated string starting at",
     "expecting ',' delimiter",
     "expecting ':' delimiter",
-    "expecting value: line",
     "expecting property name enclosed in double quotes",
     "invalid control character at",
     "invalid \\escape",
     "extra data: line",
 )
+
+#: Words that place a decode failure on the REQUEST side. litellm reaches
+#: `tool_call["function"]["arguments"]` to build the request; a response-side
+#: parse names neither. Checked against every message in the cause chain and
+#: against the traceback's frame names, both of which are often absent — this
+#: only ever ADDS confidence, it is never required.
+_TOOL_ARGUMENT_HINTS = ("arguments", "tool")
+
+
+def _exception_chain(e: BaseException) -> list[BaseException]:
+    """`e` and everything it was raised from, cycle-guarded."""
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    cause: BaseException | None = e
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        chain.append(cause)
+        cause = cause.__cause__ or cause.__context__
+    return chain
+
+
+def _references_tool_arguments(chain: list[BaseException]) -> bool:
+    """True if anything in the chain names a tool call or its arguments.
+
+    Frame NAMES only, not filenames: a test module about tool arguments is
+    named after them, and matching the filename would make every such test
+    self-confirming.
+    """
+    for exc in chain:
+        if any(hint in str(exc).lower() for hint in _TOOL_ARGUMENT_HINTS):
+            return True
+        tb = exc.__traceback__
+        while tb is not None:
+            if any(hint in tb.tb_frame.f_code.co_name.lower() for hint in _TOOL_ARGUMENT_HINTS):
+                return True
+            tb = tb.tb_next
+    return False
 
 
 def is_malformed_tool_arguments(e: BaseException) -> bool:
@@ -351,22 +397,29 @@ def is_malformed_tool_arguments(e: BaseException) -> bool:
     ollama chat transformation. Read as a 500, it burned the local retry budget
     and then opened the breaker on the tier every agent's chain ends in.
 
-    Deliberately narrow. A `JSONDecodeError` anywhere in the cause chain is
-    unambiguous; without one, only a connection-shaped litellm error carrying a
-    decoder's own words qualifies. Everything else stays a provider failure,
-    because the cost of guessing wrong here is a breaker that never opens.
+    Deliberately narrow, and narrower than the exception type allows. A
+    `JSONDecodeError` in the cause chain is NOT on its own enough: litellm
+    parses the response with the same module it parses the request with, so a
+    provider returning an empty body or an HTML error page raises the same
+    exception from the same place. The two are otherwise indistinguishable —
+    nothing in the type, the status, or the provider tells them apart — so the
+    decoder's own words carry the verdict, backed by any mention of a tool call
+    or its arguments in the chain's messages or frame names.
+
+    A payload that stops mid-structure ("Unterminated string starting at",
+    "Expecting ',' delimiter") is a truncated generation. "Expecting value:
+    line 1 column 1" is an empty or non-JSON body, and stays a provider
+    failure: the cost of guessing wrong there is a breaker that never opens on
+    a real outage.
     """
-    seen: set[int] = set()
-    cause: BaseException | None = e
-    while cause is not None and id(cause) not in seen:
-        seen.add(id(cause))
-        if isinstance(cause, json.JSONDecodeError):
-            return True
-        cause = cause.__cause__ or cause.__context__
-    if not isinstance(e, litellm.exceptions.APIConnectionError):
+    chain = _exception_chain(e)
+    has_decoder = any(isinstance(c, json.JSONDecodeError) for c in chain)
+    if not has_decoder and not isinstance(e, litellm.exceptions.APIConnectionError):
         return False
-    text = str(e).lower()
-    return any(marker in text for marker in _JSON_DECODE_MARKERS)
+    text = " ".join(str(c) for c in chain).lower()
+    if any(marker in text for marker in _JSON_DECODE_MARKERS):
+        return True
+    return has_decoder and _references_tool_arguments(chain)
 
 
 def _safe_token_count(usage: Any, attr: str) -> int:
@@ -1220,8 +1273,7 @@ class LLMClient:
         if wait is None or attempt >= attempts - 1:
             return False
         logger.warning(
-            "Model %s rate-limited — waiting %.1fs and retrying the same model "
-            "(attempt %d/%d)",
+            "Model %s rate-limited — waiting %.1fs and retrying the same model (attempt %d/%d)",
             _sanitize(model),
             wait,
             attempt + 1,
@@ -1458,9 +1510,13 @@ class LLMClient:
                     if is_malformed_tool_arguments(e):
                         if malformed_retries_left > 0:
                             malformed_retries_left -= 1
+                            # Advances `attempt`, unlike the key rotation above:
+                            # a re-roll is a real call and spends the budget.
                             attempt += 1
                             self._note_malformed_tool_call(e, model, reroll=True)
                             continue
+                        # Skips `_handle_model_error`, so a chain naming this
+                        # model twice re-rolls it once more. Bounded, and cheap.
                         self._note_malformed_tool_call(e, model, reroll=False)
                         break
                     if await self._wait_out_rate_limit(e, model, attempt, attempts):
