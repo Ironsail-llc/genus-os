@@ -78,10 +78,42 @@ STATE_DIR="${ROBOTHOR_ALERT_STATE_DIR:-/run/robothor/alert-cooldown}"
 # genuine page for an unrelated unit.
 SANITIZED="$(printf '%s' "$UNIT" | tr -c 'A-Za-z0-9._-' '_')"
 UNIT_HASH="$(printf '%s' "$UNIT" | sha256sum | cut -c1-8)"
-STAMP_FILE="${STATE_DIR}/${SANITIZED}.${UNIT_HASH}"
 COOLDOWN="${ROBOTHOR_ALERT_COOLDOWN_SECONDS:-3600}"
 
 mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+# ── Cooldown state dir the CALLING USER can actually write ───────────────────
+# /run/robothor/alert-cooldown is created root:root 0755 by the systemd units,
+# and cron runs as the operator's own user. So for every cron-driven page the
+# `touch` below silently failed (it is `|| true`, because a broken stamp must
+# never block a real page) and the next run re-read an empty state dir and
+# paged again: a crontab entry pointing at a deleted script paged once a day
+# for 129 days, and the backup storm paged with no dedup at all.
+#
+# Fall back to a per-uid dir for BOTH the read and the stamp — moving only the
+# stamp would leave the dedup half-wired, reading a dir nothing ever writes.
+# Root's path is untouched: root can write /run/robothor/alert-cooldown, so
+# -w is true and nothing here fires.
+if [[ ! -w "$STATE_DIR" ]]; then
+    FALLBACK_STATE_DIR="${ROBOTHOR_ALERT_FALLBACK_STATE_DIR:-/tmp/robothor-alert-cooldown-$(id -u)}"
+    # SC2174: with -p, -m applies only to the deepest directory. That is the
+    # one that matters here — the stamps live in the leaf, and mkdir creates
+    # it 0700 atomically, so no other user can read or plant stamps in it.
+    # Any parent it has to create is a plain 0755 dir owned by this user, so
+    # nothing else can unlink through it either.
+    # shellcheck disable=SC2174
+    mkdir -m 700 -p "$FALLBACK_STATE_DIR" 2>/dev/null || true
+    if [[ -w "$FALLBACK_STATE_DIR" ]]; then
+        # Name it: a cooldown that moves silently is a cooldown nobody can
+        # find when they go looking for why a page did not arrive.
+        echo "send_failure_alert: ${STATE_DIR} is not writable; using cooldown state dir ${FALLBACK_STATE_DIR}" >&2
+        STATE_DIR="$FALLBACK_STATE_DIR"
+    else
+        echo "send_failure_alert: no writable cooldown state dir (${STATE_DIR}, ${FALLBACK_STATE_DIR}) — pages will not dedup" >&2
+    fi
+fi
+
+STAMP_FILE="${STATE_DIR}/${SANITIZED}.${UNIT_HASH}"
 
 if [[ -f "$STAMP_FILE" ]]; then
     NOW=$(date +%s)

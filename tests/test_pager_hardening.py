@@ -130,6 +130,11 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
         "HOME": str(tmp_path),
         # Never touch the real /run/robothor state or secrets from a test.
         "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+        # The fallback state dir is a real, shared path (/tmp/...-$uid) that
+        # survives between test runs — pin it per test or one run's stamp
+        # silently suppresses the next run's page.
+        "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-cooldown-fallback"),
+        "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "backup-state"),
         "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
         # Fast by default; individual tests override.
         "ROBOTHOR_ALERT_RETRY_DELAY": "0",
@@ -303,6 +308,80 @@ class TestCronWrapperPagesOnFailure:
         result = run_wrapper(tmp_path, ["echo", "hello-from-cron"], FAKE_TOKEN_ENV)
         assert result.returncode == 0
         assert "hello-from-cron" in result.stdout
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="root ignores directory permissions, so 0555 is writable"
+)
+class TestCronDedupSurvivesAnUnwritableStateDir:
+    """Cron failures paged with ZERO dedup.
+
+    ``/run/robothor/alert-cooldown`` is root:root 0755 and cron runs as the
+    operator's own user, so the ``touch`` at the end of the sender silently
+    failed (``|| true``) and the stamp was never written. Every subsequent
+    run re-read an empty state dir and paged again: a crontab entry pointing
+    at a deleted script paged once a day for 129 days.
+
+    The cooldown must therefore fall back to a dir the calling user CAN
+    write — for both the read and the stamp, or the dedup is still half
+    broken — and say which one it used, so the next person reading a cron
+    log can find the stamps.
+    """
+
+    def unwritable_state(self, tmp_path: Path) -> dict[str, str]:
+        ro = tmp_path / "root-owned-state"
+        ro.mkdir()
+        ro.chmod(0o555)
+        env = dict(FAKE_TOKEN_ENV)
+        env["ROBOTHOR_ALERT_STATE_DIR"] = str(ro)
+        env["ROBOTHOR_ALERT_FALLBACK_STATE_DIR"] = str(tmp_path / "fallback-state")
+        return env
+
+    def test_a_repeated_cron_failure_pages_once(self, tmp_path: Path):
+        log = install_fake_curl(tmp_path)
+        env = self.unwritable_state(tmp_path)
+
+        first = run_wrapper(tmp_path, ["sh", "-c", "exit 7"], env)
+        assert first.returncode == 7, first.stdout + first.stderr
+        assert curl_calls(log) == 1
+
+        second = run_wrapper(tmp_path, ["sh", "-c", "exit 7"], env)
+        assert second.returncode == 7, second.stdout + second.stderr
+        assert curl_calls(log) == 1, (
+            "the same cron command failing twice paged twice — the cooldown "
+            "stamp could not be written, so every run looks like the first"
+        )
+        assert "suppressed duplicate" in second.stdout + second.stderr
+
+    def test_the_log_names_the_fallback_dir_it_used(self, tmp_path: Path):
+        install_fake_curl(tmp_path)
+        env = self.unwritable_state(tmp_path)
+        result = run_wrapper(tmp_path, ["sh", "-c", "exit 7"], env)
+        assert result.returncode == 7
+        assert str(tmp_path / "fallback-state") in result.stdout + result.stderr, (
+            "a cooldown that silently moves is a cooldown nobody can find"
+        )
+
+    def test_the_stamp_lands_in_the_fallback_dir(self, tmp_path: Path):
+        install_fake_curl(tmp_path)
+        env = self.unwritable_state(tmp_path)
+        run_wrapper(tmp_path, ["sh", "-c", "exit 7"], env)
+        fallback = tmp_path / "fallback-state"
+        assert fallback.exists() and list(fallback.iterdir()), (
+            "nothing was stamped anywhere, so the next failure pages again"
+        )
+
+    def test_a_writable_state_dir_is_used_unchanged(self, tmp_path: Path):
+        """Root's path must not move: /run/robothor/alert-cooldown stays the
+        stamp dir whenever it is writable."""
+        install_fake_curl(tmp_path)
+        env = dict(FAKE_TOKEN_ENV)
+        result = run_send(tmp_path, base_env(tmp_path, **env))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert list((tmp_path / "alert-cooldown").iterdir()), "stamp left the writable dir"
+        assert not (tmp_path / "alert-cooldown-fallback").exists(), (
+            "a writable state dir must not trigger the fallback"
+        )
 
 
 # ── unit templates: the directives that survive the next boot ────────────────
