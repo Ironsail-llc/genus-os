@@ -208,7 +208,7 @@ async def rerank(
     if batch_size is None:
         from robothor.llm.local_gate import gate as _gate
 
-        batch_size = max(1, int(_gate().snapshot()["slots"]))
+        batch_size = max(1, _gate().slots)
 
     t0 = time.time()
     yes_results: list[dict[str, Any]] = []

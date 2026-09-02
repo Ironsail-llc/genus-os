@@ -34,6 +34,10 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +124,18 @@ class LocalInferenceGate:
         self._paced = False
 
     # ── capacity ────────────────────────────────────────────────────────
+    @property
+    def slots(self) -> int:
+        """How many concurrent local requests the gate admits right now.
+
+        Callers sizing a batch to the device want this number, not
+        ``snapshot()["slots"]`` — the snapshot is a display dict of
+        ``object`` values, so reading a size out of it costs an unchecked
+        ``int(...)`` cast at every call site.
+        """
+        with self._cv:
+            return self._slots
+
     def resize(self, slots: int) -> None:
         """Retune without a restart. Never below one: a gate of zero is a stalled
         fleet, and the shell guard owns the genuinely protective actions."""
@@ -202,7 +218,9 @@ class LocalInferenceGate:
         self._acquire_blocking(lane, timeout)
 
     @asynccontextmanager
-    async def slot(self, lane: Lane = Lane.NORMAL, timeout: float | None = None):
+    async def slot(
+        self, lane: Lane = Lane.NORMAL, timeout: float | None = None
+    ) -> AsyncIterator[None]:
         """Hold one inference slot for the duration of ONE leaf request.
 
         Gate the leaf HTTP call, never a composite: a caller that holds a slot while

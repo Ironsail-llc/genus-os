@@ -49,6 +49,8 @@ from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.stall_watchdog import _active_watchdog_var
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from robothor.engine.session import AgentSession
     from robothor.engine.stall_watchdog import _StallWatchdog
 
@@ -246,7 +248,7 @@ async def _gated_acompletion(model: str, kwargs: dict[str, Any]) -> Any:
 
 
 @asynccontextmanager
-async def _local_slot(model: str, lane: Any = None):
+async def _local_slot(model: str, lane: Any = None) -> AsyncIterator[None]:
     """Hold a local inference slot for one call; a no-op for cloud models.
 
     Cloud fan-out stays unguarded — someone else's datacentre is not our heat

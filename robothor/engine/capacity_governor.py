@@ -101,12 +101,15 @@ class CapacityGovernor:
 
         gate_slots = self._gate_slots()
 
+        # Bound before it goes into `state`: the dict's value type widens to
+        # `object`, so reading `.get("level")` back out of it is untypeable.
+        thermal = self._thermal.snapshot()
         state = {
             "mode": str(mode),
             "max_concurrent_runs": runs,
             "reserved_interactive_slots": reserved,
             "gate_slots": gate_slots,
-            "thermal": self._thermal.snapshot(),
+            "thermal": thermal,
         }
         if self._last != state:
             logger.info(
@@ -115,7 +118,7 @@ class CapacityGovernor:
                 runs,
                 reserved,
                 gate_slots,
-                state["thermal"].get("level", "n/a"),
+                thermal.get("level", "n/a"),
             )
             self._last = state
         return state

@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, AsyncIterator
 
     from robothor.llm.local_gate import Lane
 
@@ -81,7 +81,7 @@ def _probe_client(timeout: float) -> httpx.AsyncClient:
 
 
 @asynccontextmanager
-async def _client(timeout: float, lane: Lane | None = None):
+async def _client(timeout: float, lane: Lane | None = None) -> AsyncIterator[httpx.AsyncClient]:
     """One inference slot, then a client. Every request-bearing call goes through here.
 
     This is the single funnel for local inference in this module, so gating it covers
