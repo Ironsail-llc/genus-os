@@ -118,8 +118,14 @@ done
 # Cheap, and it is the state a never-mounted volume leaves behind. It is NOT
 # sufficient on its own — this is exactly the check that passed all through
 # the outage.
-if [[ ! -d "$TARGET" ]]; then
-    unhealthy "$TARGET does not exist or is not a directory"
+#
+# `timeout test -d`, not the `[[ -d ]]` builtin: a device that has dropped off
+# the bus can block stat() as well as readdir(), and a builtin cannot be
+# interrupted. An unbounded probe leaves the unit in `activating` until
+# TimeoutStartSec (3600s for the nightly backup) — worse than the failure it
+# replaces. Every step below is bounded the same way.
+if ! timeout "$TIMEOUT" test -d "$TARGET"; then
+    unhealthy "$TARGET does not exist, is not a directory, or did not answer stat() within ${TIMEOUT}s"
 fi
 
 # ── 2. Is the volume actually mounted? ───────────────────────────────────────

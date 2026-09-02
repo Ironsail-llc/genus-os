@@ -317,3 +317,33 @@ class TestAnUnmountedVolumeIsNotAHealthyOne:
             env_extra={"ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0"},
         )
         assert result.returncode == 0, _output(result)
+
+
+class TestEveryStepIsBounded:
+    """"Each step under timeout" includes the cheap one.
+
+    A device that has dropped off the bus can block stat() too, not only
+    readdir(). A bash `[[ -d ]]` cannot be interrupted, so the probe would hang
+    and the unit would sit in `activating` until TimeoutStartSec — 3600s for
+    the nightly backup, which is worse than the failure being replaced.
+    """
+
+    def test_a_stat_that_never_returns_times_out_as_unhealthy(
+        self, tmp_path: Path
+    ) -> None:
+        vol = tmp_path / "vol"
+        vol.mkdir()
+        bin_dir = tmp_path / "bin"
+        _stub(bin_dir / "test", "sleep 60")
+
+        started = time.monotonic()
+        result = _run(
+            "--ro",
+            str(vol),
+            env_extra={"ROBOTHOR_VOLUME_PROBE_TIMEOUT": "1"},
+            path=f"{bin_dir}:{os.environ['PATH']}",
+        )
+        elapsed = time.monotonic() - started
+
+        assert result.returncode == SKIP, _output(result)
+        assert elapsed < 20, f"the probe hung for {elapsed:.1f}s on the stat step"
