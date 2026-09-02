@@ -37,7 +37,18 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SEND = REPO_ROOT / "scripts" / "send_failure_alert.sh"
 WRAPPER = REPO_ROOT / "scripts" / "cron-wrapper.sh"
+VOLUME_CHECK = REPO_ROOT / "scripts" / "backup-volume-check.sh"
 UNIT_DIR = REPO_ROOT / "infra" / "systemd"
+
+# The backup units whose ExecCondition= must consult the volume probe, and the
+# access mode each of them actually needs. wal-offsite is deliberately absent —
+# see TestAWedgedVolumeSkipsTheBackupUnits.
+VOLUME_GATED_UNITS = {
+    "robothor-backup-local.service": "--rw",
+    "robothor-basebackup.service": "--rw",
+    "robothor-backup-offsite.service": "--ro",
+    "robothor-backup-verify.service": "--ro",
+}
 
 FAKE_TOKEN_ENV = {
     "ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123",
@@ -335,6 +346,92 @@ class TestBackupChainStopsRacingBootMounts:
         assert "Wants=network-online.target" in text
 
 
+class TestAWedgedVolumeSkipsTheBackupUnits:
+    """A mounted-but-wedged volume must SKIP the backup units, not fail them.
+
+    When the encrypted USB volume drops off the bus, ext4 remounts it
+    ``emergency_ro``: stat() keeps succeeding, so ``RequiresMountsFor=`` is
+    satisfied and every in-script guard passes, but readdir() and write() fail.
+    The units therefore ran and failed — robothor-wal-offsite every 15 minutes,
+    96 OnFailure triggers a day, ~22 pages that said nothing but a unit name.
+
+    ``ExecCondition=`` is the systemd primitive for "do not even try". Its exit
+    codes are the whole design (systemd 255):
+
+        exit 0        condition holds, unit runs
+        exit 1-254    condition fails, unit is SKIPPED, OnFailure does NOT fire
+        exit 255      the condition check itself failed, unit FAILS and pages
+
+    so the probe's exit 1 is what turns the storm off, and its 255 keeps a
+    genuinely broken probe loud. See tests/test_backup_volume_check.py.
+    """
+
+    @pytest.mark.parametrize("unit", sorted(VOLUME_GATED_UNITS))
+    def test_backup_units_gate_on_the_volume_probe(self, unit: str):
+        conditions = [
+            line
+            for line in unit_text(unit).splitlines()
+            if line.startswith("ExecCondition=")
+        ]
+        assert conditions, (
+            f"{unit} has no ExecCondition= — a wedged volume makes it RUN and "
+            "FAIL, and every failure pages the operator"
+        )
+        assert any("backup-volume-check.sh" in line for line in conditions), (
+            f"{unit}'s ExecCondition= does not consult scripts/backup-volume-check.sh"
+        )
+
+    @pytest.mark.parametrize("unit", sorted(VOLUME_GATED_UNITS))
+    def test_the_probe_is_asked_for_the_access_the_unit_needs(self, unit: str):
+        mode = VOLUME_GATED_UNITS[unit]
+        line = next(
+            line
+            for line in unit_text(unit).splitlines()
+            if line.startswith("ExecCondition=") and "backup-volume-check.sh" in line
+        )
+        assert f" {mode} " in f"{line} ", (
+            f"{unit} must probe with {mode}: a unit that writes to the volume is "
+            "not protected by a read-only probe (emergency_ro passes every read)"
+        )
+
+    @pytest.mark.parametrize("unit", sorted(VOLUME_GATED_UNITS))
+    def test_the_condition_runs_before_the_work(self, unit: str):
+        """systemd runs ExecCondition= before ExecStart= regardless of order,
+        but a reader must not have to know that."""
+        lines = unit_text(unit).splitlines()
+        condition = next(
+            i for i, line in enumerate(lines) if line.startswith("ExecCondition=")
+        )
+        start = next(
+            i for i, line in enumerate(lines) if line.startswith("ExecStart=")
+        )
+        assert condition < start, f"{unit} declares ExecCondition= after ExecStart="
+
+    @pytest.mark.parametrize("unit", sorted(VOLUME_GATED_UNITS))
+    def test_the_mount_dependency_is_kept(self, unit: str):
+        """ExecCondition= replaces neither RequiresMountsFor= nor the boot
+        ordering it fixed — it covers the state where the mount EXISTS and is
+        useless, which RequiresMountsFor= cannot see."""
+        assert "RequiresMountsFor=/mnt/robothor-backup" in unit_text(unit)
+
+    def test_wal_offsite_is_not_gated_because_it_degrades_instead(self):
+        """The WAL push is the 15-minute RPO and the WAL archive lives on NVMe,
+        not on the backup volume. Skipping this unit when the USB volume is
+        wedged would stop shipping WAL offsite — trading a paging storm for
+        actual data loss. Instead wal-offsite.sh runs the same probe itself and
+        degrades: it skips the basebackup replication and the WAL prune, still
+        pushes WAL, and exits 0. See test_backup_pages_on_failure.py."""
+        directives = [
+            line
+            for line in unit_text("robothor-wal-offsite.service").splitlines()
+            if not line.lstrip().startswith(("#", ";"))
+        ]
+        assert not [line for line in directives if line.startswith("ExecCondition=")], (
+            "gating robothor-wal-offsite on the backup volume would stop the "
+            "15-minute WAL push whenever the USB volume is wedged"
+        )
+
+
 class TestShutdownAndBootPathTemplates:
     def test_app_treats_sigterm_exit_as_success(self):
         # Node exits 143 on SIGTERM; without SuccessExitStatus=143 every clean
@@ -360,7 +457,7 @@ class TestShutdownAndBootPathTemplates:
 
 
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
-@pytest.mark.parametrize("script", [SEND, WRAPPER])
+@pytest.mark.parametrize("script", [SEND, WRAPPER, VOLUME_CHECK])
 def test_changed_scripts_are_shellcheck_clean(script: Path):
     result = subprocess.run(
         ["shellcheck", "--severity=warning", str(script)],

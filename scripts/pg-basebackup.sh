@@ -19,12 +19,22 @@ log()  { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
 fail() { log "ERROR: $*"; exit 1; }
 
 # The backup volume is USB and has physically dropped off the bus before
-# (2026-07-14). Fail loudly rather than writing a "base backup" into an empty
-# mountpoint on the root filesystem — which would look like success.
+# (2026-07-14, 2026-08-27). Fail loudly rather than writing a "base backup"
+# into an empty mountpoint on the root filesystem — which would look like
+# success.
+#
+# `mountpoint -q` used to be this guard, and it is a stat() check: when the
+# drive drops off the bus ext4 remounts the volume `emergency_ro`, stat() keeps
+# succeeding, and the guard passed all through the outage. backup-volume-check.sh
+# does a real readdir and a real write. robothor-basebackup.service runs the
+# same probe as ExecCondition= so the unit skips rather than failing; this copy
+# keeps the guarantee for a hand-run.
 MOUNT="${DEST%%/robothor/*}"
-if ! mountpoint -q "$MOUNT" 2>/dev/null; then
-    fail "$MOUNT is not mounted — refusing to write a base backup to the root filesystem"
-fi
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+VOLUME_CHECK="${ROBOTHOR_VOLUME_CHECK:-$SCRIPT_DIR/backup-volume-check.sh}"
+[[ -x "$VOLUME_CHECK" ]] || fail "volume probe not found at $VOLUME_CHECK"
+"$VOLUME_CHECK" --rw "$MOUNT" \
+    || fail "$MOUNT is not a usable backup volume — refusing to write a base backup that would go nowhere"
 
 mkdir -p "$DEST"
 OUT="$DEST/base-$STAMP"

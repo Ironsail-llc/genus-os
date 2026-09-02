@@ -13,13 +13,28 @@ LOG="$HOME/robothor/scripts/backup.log"
 MANIFEST="$BACKUP_ROOT/backup-manifest.txt"
 MIN_FREE_GB=10
 
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+VOLUME_CHECK="${ROBOTHOR_VOLUME_CHECK:-$SCRIPT_DIR/backup-volume-check.sh}"
+
 log() { echo "[$TIMESTAMP] $1" >> "$LOG"; }
 
 # ── Pre-flight checks ───────────────────────────────────────────
 
-# Check SSD is mounted — fail loudly if not
-if ! mountpoint -q "$SSD_MOUNT" 2>/dev/null; then
-    log "ERROR: SSD not mounted at $SSD_MOUNT — backup FAILED"
+# Is the SSD actually usable? This used to be `mountpoint -q`, which is a
+# stat() check — and stat() keeps succeeding on the `emergency_ro` volume the
+# USB drive leaves behind when it drops off the bus (2026-08-27). The backup
+# then "passed" its guard, ran, wrote nothing, and failed.
+# backup-volume-check.sh does a real readdir and a real write.
+#
+# robothor-backup-local.service also runs this probe as ExecCondition=, so the
+# unit SKIPS instead of failing. Keeping it here too means the guarantee holds
+# however the script is invoked — including by hand.
+if [[ ! -x "$VOLUME_CHECK" ]]; then
+    log "ERROR: volume probe not found at $VOLUME_CHECK — backup FAILED"
+    exit 1
+fi
+if ! "$VOLUME_CHECK" --rw "$SSD_MOUNT" >> "$LOG" 2>&1; then
+    log "ERROR: backup volume at $SSD_MOUNT is not usable — backup FAILED"
     exit 1
 fi
 

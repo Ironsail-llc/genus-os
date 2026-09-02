@@ -22,10 +22,42 @@ DB="${ROBOTHOR_DB_NAME:-robothor_memory}"
 # Keep WAL for this many days beyond the newest base backup.
 KEEP_DAYS="${ROBOTHOR_WAL_KEEP_DAYS:-8}"
 
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+VOLUME_CHECK="${ROBOTHOR_VOLUME_CHECK:-$SCRIPT_DIR/backup-volume-check.sh}"
+
 log()  { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
 fail() { log "ERROR: $*"; exit 1; }
 
 [[ -d "$ARCHIVE_DIR" ]] || fail "archive dir $ARCHIVE_DIR does not exist"
+
+# ── 0. Is the backup volume usable? ──────────────────────────────────────────
+# This unit runs every 15 minutes. On 2026-08-27 the encrypted USB volume went
+# `emergency_ro` — stat() kept working, so the old `[[ -d "$BASEBACKUP_DIR" ]]`
+# below passed, rclone and the prune ran against a dead disk, and the unit
+# failed 96 times in a day. ~22 Telegram pages whose entire content was a unit
+# name is a muted pager.
+#
+# But this unit must DEGRADE, not skip (its four sibling backup units use
+# ExecCondition= to skip): the WAL archive lives on NVMe and this push IS the
+# 15-minute RPO. Refusing to run because a different, USB-attached disk is
+# wedged would trade a paging storm for real data loss. So the two steps that
+# read the backup volume — replicating the base backups, and reading the newest
+# backup_label to fix the prune horizon — are skipped, the WAL still goes
+# offsite, and this exits 0.
+#
+# A missing probe counts as unhealthy on purpose: degrading is safe (§4's disk
+# guard still pages if the unpruned archive threatens to fill the disk), while
+# assuming health would put us straight back in the outage.
+VOLUME_DOWN=0
+if [[ ! -x "$VOLUME_CHECK" ]]; then
+    log "ERROR: volume probe not found at $VOLUME_CHECK"
+    VOLUME_DOWN=1
+elif ! "$VOLUME_CHECK" --ro "$BASEBACKUP_DIR"; then
+    VOLUME_DOWN=1
+fi
+if [[ "$VOLUME_DOWN" -eq 1 ]]; then
+    log "backup volume unhealthy — skipping basebackup replication and WAL prune"
+fi
 
 # ── 1. Is Postgres actually archiving, or silently failing? ──────────────────
 # A failing archive_command is a slow-motion outage: Postgres retains every WAL
@@ -65,7 +97,9 @@ if [[ -n "$REMOTE" ]]; then
             OFFSITE_FAILED=1
         fi
 
-        if [[ -d "$BASEBACKUP_DIR" ]]; then
+        # §0 already proved the volume answers readdir; `[[ -d ]]` alone did
+        # not, which is how rclone came to be pointed at a dead disk.
+        if [[ "$VOLUME_DOWN" -eq 0 ]]; then
             log "replicating base backups to $REMOTE/basebackup"
             if ! rclone copy "$BASEBACKUP_DIR" "$REMOTE/basebackup" --transfers 4; then
                 log "ERROR: rclone copy of base backups failed"
@@ -81,8 +115,18 @@ fi
 # WAL is only useful for replaying ONTO a base backup. Anything older than the
 # newest base backup is dead weight — but pruning MORE than that silently
 # destroys the ability to recover, so this only ever prunes below the base.
-NEWEST_BASE=$(ls -1t "$BASEBACKUP_DIR"/*.backup_label 2>/dev/null | head -1 || true)
-if [[ -n "$NEWEST_BASE" ]] && command -v pg_archivecleanup >/dev/null 2>&1; then
+#
+# When the backup volume is down the horizon is UNKNOWABLE, so nothing is
+# pruned. That is the safe direction to fail: an over-eager prune destroys the
+# ability to recover, while an under-pruned archive is only a disk-space
+# problem — and §4 below still pages if it becomes one.
+NEWEST_BASE=""
+if [[ "$VOLUME_DOWN" -eq 0 ]]; then
+    NEWEST_BASE=$(ls -1t "$BASEBACKUP_DIR"/*.backup_label 2>/dev/null | head -1 || true)
+fi
+if [[ "$VOLUME_DOWN" -eq 1 ]]; then
+    log "backup volume unhealthy — NOT pruning WAL (the prune horizon is read from the newest base backup, which is unreadable)"
+elif [[ -n "$NEWEST_BASE" ]] && command -v pg_archivecleanup >/dev/null 2>&1; then
     OLDEST_NEEDED=$(awk '/^START WAL LOCATION/ {gsub(/[()]/, "", $6); print $6}' "$NEWEST_BASE" 2>/dev/null || true)
     if [[ -n "$OLDEST_NEEDED" ]]; then
         log "pruning WAL older than $OLDEST_NEEDED (needed by $(basename "$NEWEST_BASE"))"
