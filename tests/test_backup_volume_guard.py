@@ -1186,6 +1186,40 @@ def test_a_close_that_fails_is_not_fatal_the_new_name_is_the_point(box: Box):
     assert f"remapped as {MAPPER}-1" in box.pages[0]
 
 
+def test_a_stranger_wearing_our_bare_name_is_never_closed(box: Box):
+    """``cryptsetup close`` destroys a mapping, and the name it is given here
+    is a FALLBACK, not an identity.
+
+    When nothing is mounted at the path the guard closes ``${MAPPER_BASE}``
+    simply because that is what its own node is usually called. Every other
+    node this script touches has been through ``node_is_ours`` first; this one
+    had not, so a stranger's mapping parked under the bare name — backed by
+    another device, wearing another container's UUID — was torn down by a
+    guard that liked the spelling. Leave it alone and take the next free name.
+    """
+    box.plug_in()
+    box.stale_mapper()  # a node exists under the bare name; it is not ours
+    result = box.run(
+        FAKE_CHECK_RCS="1 0",
+        FAKE_MOUNTED_RC="1",  # nothing is mounted at the path
+        FAKE_DM_DEPS="8:99",  # backed by a device that is not ours
+        FAKE_DM_UUID="CRYPT-LUKS2-00000000000000000000000000000000-not-ours",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="0",  # free, so nothing BUT identity can stop the close
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert box.ran("cryptsetup close") == [], (
+        f"closed a mapping that is not ours:\n{box.argv}"
+    )
+    assert box.ran(f"cryptsetup open {box.device} {MAPPER}-1"), (
+        f"did not step over the stranger onto the first free name:\n{box.argv}"
+    )
+    assert len(box.pages) == 1, f"expected exactly one page, got {box.pages}"
+    assert "auto-recovered" in box.pages[0]
+    assert f"remapped as {MAPPER}-1" in box.pages[0]
+
+
 def test_a_live_mapping_that_will_not_remount_is_repaired_under_its_own_name(box: Box):
     """The fall-back from the cheap path. The node is the device's own and
     free, but the plain remount fails — ext4 needs the preen first. The

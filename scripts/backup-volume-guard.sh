@@ -560,7 +560,17 @@ heal() {
         #     needed.
         local stale_node="$MOUNTED_NAME"
         [[ -n "$stale_node" ]] || stale_node="$MAPPER_BASE"
-        if [[ -e "${MAPPER_DIR}/${stale_node}" ]]; then
+        # ${MAPPER_BASE} is where that fallback lands, and it is a NAME: the
+        # one node in this script reached without going through identity
+        # first. A close DESTROYS a mapping, so a stranger parked under our
+        # bare name must be stepped over, not torn down — pick_mapper_name
+        # then takes the first free alternate, exactly as it does for a node
+        # of ours the kernel will not let go of.
+        if [[ -e "${MAPPER_DIR}/${stale_node}" ]] && ! node_is_ours "$stale_node"; then
+            log "${stale_node} is not ours (neither backed by ${DEVICE} nor our container) — leaving it alone"
+            stale_node=""
+        fi
+        if [[ -n "$stale_node" && -e "${MAPPER_DIR}/${stale_node}" ]]; then
             if mapper_is_free "$stale_node"; then
                 cryptsetup close "$stale_node" >/dev/null 2>&1 \
                     || log "cryptsetup close ${stale_node} failed — carrying on under a new name"
