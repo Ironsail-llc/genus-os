@@ -463,7 +463,7 @@ post_telegram() {
 # Written under a .tmp name and renamed, so a drain running concurrently (the
 # liveness tick fires every 5 minutes) can never read half a page.
 spool_page() {
-    local text="$1" file tmp
+    local text="$1" file tmp stale
     # The tmpfiles row (infra/tmpfiles/robothor-restart.conf) normally creates
     # this 1777. When it does not exist yet, a bare `mkdir -p` leaves it 0755
     # and owned by whoever spooled first — after which the OTHER account (root's
@@ -480,6 +480,25 @@ spool_page() {
              "directory (a symlink is refused outright); THIS PAGE IS LOST" >&2
         return 1
     fi
+    # One pending page per unit, newest wins.
+    #
+    # robothor-alert@.service is Restart=on-failure/RestartSec=60 and an
+    # exhausted send exits 1, so while DNS is down systemd re-runs the pager
+    # about every six minutes. Each run raises the SAME page, and every one of
+    # them used to land as its own <epoch>-<key>.<hash>.<pid>.msg — an hour of
+    # outage became ten identical files, all of which the drain delivers the
+    # moment the network returns. Ten buzzes for one failure is how a real page
+    # gets scrolled past, so the pending copy is replaced rather than joined.
+    #
+    # Only files THIS account owns: root's units and the operator's cron jobs
+    # share the spool, and removing the other account's undelivered page would
+    # be page loss, not de-duplication.
+    shopt -s nullglob
+    for stale in "${SPOOL_DIR}/"*"-${SANITIZED}.${UNIT_HASH}."*.msg; do
+        [[ -f "$stale" && ! -L "$stale" && -O "$stale" ]] || continue
+        rm -f "$stale" "${stale}.attempts" 2>/dev/null || true
+    done
+    shopt -u nullglob
     # <epoch>-<key>.msg: the epoch prefix is what makes a plain glob sort
     # oldest-first, and $$ keeps two pages raised in the same second apart.
     file="${SPOOL_DIR}/$(date +%s)-${SANITIZED}.${UNIT_HASH}.$$.msg"

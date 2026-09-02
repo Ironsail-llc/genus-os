@@ -873,6 +873,47 @@ class TestUndeliverablePageIsSpooled:
         assert result.returncode == 0
         assert spooled(tmp_path) == [], "a suppressed page must not come back via the spool"
 
+    def test_a_second_exhausted_send_replaces_the_pending_page(self, tmp_path: Path):
+        """One pending page per unit, newest wins — never a queue of clones.
+
+        robothor-alert@.service is Restart=on-failure/RestartSec=60, and an
+        exhausted send exits 1. So systemd re-runs the pager roughly every six
+        minutes for as long as DNS is down, and every run used to append a new
+        <epoch>-<key>.<hash>.<pid>.msg. A one-hour outage would therefore leave
+        ten identical pages in the spool, all of which the drain delivers the
+        moment DNS returns — the operator's phone buzzing ten times for one
+        failure, which is how a real page gets scrolled past.
+        """
+        install_fake_curl(tmp_path, fail_first=99)
+        env = base_env(tmp_path, **FAKE_TOKEN_ENV)
+        run_send(tmp_path, env)
+        run_send(tmp_path, env)
+        files = spooled(tmp_path)
+        assert len(files) == 1, (
+            "a re-run of the same failing unit must replace its pending page, "
+            f"not queue another copy of it: {[f.name for f in files]}"
+        )
+        assert "robothor-sample.service" in files[0].read_text()
+
+    def test_replacing_a_pending_page_leaves_another_units_page_alone(
+        self, tmp_path: Path
+    ):
+        """Collapsing duplicates must key on the unit, not empty the spool.
+
+        A page for some OTHER unit is a different failure, still undelivered —
+        dropping it would turn de-duplication into page loss.
+        """
+        install_fake_curl(tmp_path, fail_first=99)
+        other = write_spooled(tmp_path, SPOOLED_EPOCH_OLDER, "PAGE-FOR-ANOTHER-UNIT")
+        env = base_env(tmp_path, **FAKE_TOKEN_ENV)
+        run_send(tmp_path, env)
+        run_send(tmp_path, env)
+        assert other.exists(), "another unit's pending page must survive"
+        assert len(spooled(tmp_path)) == 2, (
+            "expected exactly the other unit's page plus one page for this unit: "
+            f"{[f.name for f in spooled(tmp_path)]}"
+        )
+
 
 class TestSpoolDrain:
     def test_drain_delivers_the_spooled_page_and_removes_it(self, tmp_path: Path):
