@@ -6,10 +6,17 @@
 # Usage: send_failure_alert.sh <unit-name> [body]
 #        send_failure_alert.sh --drain
 #
-# <unit-name> is both the headline and the dedup key. The optional [body]
-# replaces the journal tail for callers that already know what went wrong
-# (thermal-guard.sh, boot-guard.sh): those page under a pseudo-unit that
-# journalctl has nothing for, so the tail was always "<journal unavailable>".
+# With one argument, <unit-name> is both the headline and the dedup key and
+# the page is composed from it: "🔴 <unit> FAILED on <host>", the consequence
+# line, and the tail of that unit's journal.
+#
+# With two, [body] IS the page — the caller already knows what to say, and the
+# only thing added is a "<timestamp> on <host>" trailer. <unit-name> stays the
+# dedup key and nothing else: a caller sending a RECOVERY notice must not have
+# "🔴 <key> FAILED" prepended to it, and a key outside the consequence map must
+# not put "(no consequence mapped — add one in send_failure_alert.sh)", a note
+# for whoever maintains this script, on the operator's phone.
+#
 # Every existing caller passes one argument and is unaffected.
 #
 # systemd fires OnFailure= exactly ONCE per failure — if this script cannot
@@ -335,18 +342,34 @@ scrub_utf8() {
 }
 
 compose_text() {
-    local detail="$BODY" journal
-    if [[ -z "$detail" ]]; then
-        journal="$("$JOURNAL_CMD" -u "$UNIT" -n 5 --no-pager -o cat 2>/dev/null \
-            | tail -c "$(( JOURNAL_TAIL_BYTES + 100 ))" \
-            | scrub_utf8 \
-            | tail -c "$JOURNAL_TAIL_BYTES" \
-            | scrub_utf8 || true)"
-        detail="Last journal lines:
+    # ── With a body, the body IS the message ─────────────────────────────────
+    # $1 is the dedup key, not a headline. The sender used to prepend
+    # "🔴 <key> FAILED on <host>" and a consequence line to a caller-supplied
+    # body, so a RECOVERY notice paged as "🔴 backup-volume-recovered FAILED"
+    # above a ✅ line — the pager contradicting the message it was handed —
+    # and any key outside the consequence map added "(no consequence mapped —
+    # add one in send_failure_alert.sh)", a note for whoever maintains this
+    # script, to the operator's phone.
+    #
+    # Only the trailer survives: a page still has to say when it was raised
+    # and which box raised it.
+    if [[ -n "$BODY" ]]; then
+        printf '%s\n%s' "$BODY" "$(date -Is) on ${HOST}"
+        return 0
+    fi
+
+    # No body: the page is composed from the unit — headline, consequence, and
+    # the tail of that unit's journal.
+    local detail journal
+    journal="$("$JOURNAL_CMD" -u "$UNIT" -n 5 --no-pager -o cat 2>/dev/null \
+        | tail -c "$(( JOURNAL_TAIL_BYTES + 100 ))" \
+        | scrub_utf8 \
+        | tail -c "$JOURNAL_TAIL_BYTES" \
+        | scrub_utf8 || true)"
+    detail="Last journal lines:
 ${journal:-<journal unavailable>}
 
 Check: systemctl status ${UNIT}"
-    fi
     printf '%s\n%s\n%s\n\n%s' \
         "🔴 ${UNIT} FAILED on ${HOST}" \
         "$(consequence_for "$UNIT")" \

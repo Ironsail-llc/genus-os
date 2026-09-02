@@ -657,9 +657,69 @@ class TestBodyOverride:
         assert "Last journal lines:" in text
         assert "Check: systemctl status robothor-engine.service" in text
 
-    def test_the_body_keeps_the_header_and_the_consequence(self, tmp_path: Path):
+    def test_the_body_is_the_whole_message(self, tmp_path: Path):
+        """When the caller supplies the body, the body IS the page.
+
+        The sender kept prepending "🔴 <key> FAILED on <host>" and a
+        consequence line to it. A caller sending a RECOVERY notice therefore
+        paged "🔴 backup-volume-recovered FAILED on box" above a ✅ body —
+        the pager contradicting its own message — and any key outside the
+        consequence map added "(no consequence mapped — add one in
+        send_failure_alert.sh)", a maintenance note, to the operator's phone.
+        $1 stays what it always was: the dedup key, not a headline.
+        """
         log = fake_curl(tmp_path)
-        result = run_send(tmp_path, "robothor-engine.service", dict(self.ENV), body="custom detail")
+        result = run_send(
+            tmp_path,
+            "backup-volume-recovered",
+            dict(self.ENV),
+            body="✅ backup volume is back: /mnt/robothor-backup mounted rw",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        text = page_text(log)
+        assert text.startswith("✅ backup volume is back: /mnt/robothor-backup mounted rw"), (
+            f"the body is not the first thing the operator reads: {text!r}"
+        )
+        assert "FAILED" not in text, (
+            "a recovery notice was paged under a FAILED headline — the pager "
+            "contradicting the message it was asked to send"
+        )
+        assert "no consequence mapped" not in text, (
+            "a note addressed to whoever maintains the pager was delivered to "
+            "the operator instead"
+        )
+
+    def test_the_body_page_is_stamped_with_the_time_and_host(self, tmp_path: Path):
+        """Losing the headline must not lose WHEN and WHERE."""
+        log = fake_curl(tmp_path)
+        run_send(tmp_path, "backup-volume-recovered", dict(self.ENV), body="✅ all good")
+        text = page_text(log)
+        host = subprocess.run(
+            ["hostname", "-s"], capture_output=True, text=True
+        ).stdout.strip()
+        assert re.search(
+            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2} on " + re.escape(host) + r"$",
+            text.splitlines()[-1],
+        ), f"no '<timestamp> on <host>' trailer: {text!r}"
+
+    def test_the_body_page_keeps_its_own_shape_through_the_spool(self, tmp_path: Path):
+        """The drain prefixes the STORED text; it must not re-compose a
+        headline around a body-override page on the way out."""
+        fake_curl_failing(tmp_path)
+        result = run_send(
+            tmp_path, "backup-volume-recovered", dict(self.ENV), body="✅ all good"
+        )
+        assert result.returncode != 0
+        spooled = sorted((tmp_path / "alert-spool").glob("*.msg"))
+        assert len(spooled) == 1, "nothing was spooled — this test proves nothing"
+        text = spooled[0].read_text()
+        assert text.startswith("✅ all good")
+        assert "FAILED" not in text
+
+    def test_a_one_argument_page_still_leads_with_the_headline(self, tmp_path: Path):
+        """The unchanged contract for every existing caller."""
+        log = fake_curl(tmp_path)
+        result = run_send(tmp_path, "robothor-engine.service", dict(self.ENV))
         assert result.returncode == 0, result.stdout + result.stderr
         lines = page_text(log).splitlines()
         assert lines[0].startswith("🔴 robothor-engine.service FAILED on ")
