@@ -82,7 +82,15 @@ def _installed_to_repo() -> dict[str, Path]:
 
 
 def _script_for(token: str) -> Path | None:
-    """The repo script a unit's exec token names, or None if it is not one."""
+    """The repo script a unit's exec token names, or None if it is not one.
+
+    A ``.sh`` token is a claim that this IS meant to be a script — an
+    interpreter (``bash``), a flag (``--rw``) or an argument never makes that
+    claim, so those return None and are skipped. A ``.sh`` token that then
+    resolves to neither the installer map nor ``scripts/<basename>`` is a
+    typo or a moved file: falling through to None here would make the
+    derivation quietly guard nothing for it, so this fails loudly instead.
+    """
     installed = _installed_to_repo()
     if token in installed:
         return installed[token]
@@ -90,6 +98,7 @@ def _script_for(token: str) -> Path | None:
         candidate = SCRIPTS / Path(token).name
         if candidate.is_file():
             return candidate
+        raise AssertionError(f"unresolvable exec token: {token}")
     return None
 
 
@@ -193,6 +202,23 @@ def test_the_derivation_finds_the_scripts_it_is_supposed_to_guard():
         "pg-basebackup.sh",
     ):
         assert expected in guarded, f"{expected} is started by no EnvironmentFile= unit"
+
+
+def test_an_unresolvable_exec_token_fails_loudly_instead_of_being_skipped(tmp_path: Path):
+    """A ``.sh`` exec token that names neither an installed script nor
+    ``scripts/<basename>`` — a typo, or a script that moved — must not
+    silently vanish from ``_exec_targets``. Falling through to ``None`` there
+    is exactly how the derivation could quietly guard nothing: the same
+    failure mode ``test_the_derivation_finds_the_scripts_it_is_supposed_to_guard``
+    exists to catch, one token earlier."""
+    unit = tmp_path / "robothor-fixture.service"
+    unit.write_text(
+        "[Unit]\nDescription=fixture\n\n"
+        "[Service]\nEnvironmentFile=/etc/robothor/robothor.env\n"
+        "ExecStart=/usr/bin/bash /nowhere/x.sh\n"
+    )
+    with pytest.raises(AssertionError, match=r"unresolvable exec token: /nowhere/x\.sh"):
+        _exec_targets(unit)
 
 
 @pytest.mark.parametrize(
