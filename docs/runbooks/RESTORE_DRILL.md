@@ -1,10 +1,27 @@
 # Database Restore Drill
 
 Backups that have never been restored are hope, not backups. This runbook is
-the drill procedure plus the measured baseline; re-run it quarterly (or after
-any change to the backup pipeline) and update the table below.
+the drill procedure plus the measured baseline; re-run it after any change to
+the backup pipeline and update the table below.
 
-## Procedure
+## Automated
+
+`robothor-restore-drill.timer` runs `scripts/restore-drill.sh` **monthly** — the
+procedure below, unattended, with the result written as an `info` notification
+into main's heartbeat. It was quarterly-by-hand and got run twice in five
+months, which is how long a drill stays a plan.
+
+The script carries the two guards this runbook learned the hard way: an empty
+dump aborts non-zero, and a restore that produces **zero tables** fails even
+though `psql` exited 0. Run it by hand with
+`sudo systemctl start robothor-restore-drill.service`, or read
+[`SLOS.md`](SLOS.md) for how it fits alongside the backup-freshness dead-man.
+
+It is **not** `robothor-backup-verify.timer`. That is `backup-offsite.sh` with
+`ROBOTHOR_OFFSITE_VERIFY_ONLY=1`: an rclone byte-comparison, which proves the
+bytes match and nothing about whether they reconstitute a database.
+
+## Procedure (by hand)
 
 ```bash
 # 0. ASK THE MARKER, NOT THE GLOB. The glob answers "is there a file", which is
