@@ -20,7 +20,11 @@ passes is only correct if the second still fails.
 
 from __future__ import annotations
 
-from robothor.engine.guardrails import GuardrailEngine, _first_assigned_credential
+from robothor.engine.guardrails import (
+    GuardrailEngine,
+    _first_assigned_credential,
+    redact_secrets,
+)
 
 # Fake, but shaped like the real thing so the production patterns match.
 FAKE_OPENAI_KEY = "sk-" + "a1b2c3d4e5" * 4
@@ -120,3 +124,50 @@ class TestRealCredentialsStillBlock:
             _first_assigned_credential('client_password: str = "s3cr3t-staging-99"')
             == "client_password"
         )
+
+
+class TestAQuotedAnnotationDoesNotShieldTheValue:
+    """Excluding quotes from the annotation was too much medicine.
+
+    The annotation branch stops at the first quote, so for a quoted or
+    subscripted type the branch matches nothing, the `:` is read as the
+    assignment, and the TYPE NAME is adopted as the value. Two ways to fail,
+    both worse than the false positive being fixed:
+
+    * `password: 'str' = 'hunter2hunter2'` — the type is 3 characters, below
+      the 8-character floor, so nothing matches at all and a real credential
+      sails through the publication gate; and
+    * `password: "SecretStr" = "hunter2hunter2ab"` — the type is 9 characters,
+      so `SecretStr` is redacted and the credential is left in the text.
+
+    Only braces need excluding. A nested JSON object is what the annotation
+    must not cross; a quote inside a type name is not.
+    """
+
+    ROWS = (
+        ("password: 'str' = 'hunter2hunter2'", "password", "hunter2hunter2"),
+        ('password: "SecretStr" = "hunter2hunter2ab"', "password", "hunter2hunter2ab"),
+        ('api_key: Literal["prod"] = "s3cr3t-staging-99"', "api_key", "s3cr3t-staging-99"),
+    )
+
+    def test_each_row_is_detected_as_a_credential(self) -> None:
+        for text, name, _secret in self.ROWS:
+            assert _first_assigned_credential(text) == name, text
+
+    def test_each_row_redacts_the_value_not_the_annotation(self) -> None:
+        for text, _name, secret in self.ROWS:
+            out = redact_secrets(text)
+            assert secret not in out, f"the credential survived redaction: {out}"
+            assert "[REDACTED" in out, out
+
+    def test_a_typed_assignment_still_blocks_a_publish(self) -> None:
+        r = _engine().check_pre_execution(
+            "exec",
+            {"command": "git push origin main"},
+            agent_id="a",
+            prior_steps=[
+                _Step("read_file", {"content": 'password: "SecretStr" = "hunter2hunter2ab"'})
+            ],
+        )
+        assert r.allowed is False
+        assert "hunter2hunter2ab" not in r.reason

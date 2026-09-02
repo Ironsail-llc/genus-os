@@ -116,15 +116,22 @@ ASSIGNED_CREDENTIAL_PATTERN = re.compile(
     # fails the length test, and the real `=` is never reached — so every
     # typed codebase is invisible to this detector.
     #
-    # The annotation may not cross a quote or a brace. A type name never
-    # contains either, and allowing them let the branch skip over a nested
-    # JSON object and adopt a quoted token from INSIDE it as the value:
+    # The annotation may not cross a BRACE. A nested JSON object is the thing
+    # it must not skip over: allowing braces let the branch step across one
+    # and adopt a quoted token from INSIDE it as the value, so
     # `"access-token": {"type": "string", "format": "opaque-bearer"}` — a
-    # schema declaring a field, with no credential anywhere — read as
+    # schema declaring a field, with no credential anywhere — was read as
     # `access-token = opaque-bearer`. That is the shape `list_tasks` returns
     # for any task about a connector's auth, and it hard-blocked 14 runs in
     # 48 hours. A field NAMED after a credential is not a credential.
-    r"[\"']?\s*(?::\s*[^=\n\"'{}]{1,60})?\s*[=:]\s*"
+    #
+    # Quotes are deliberately still ALLOWED here. Excluding them too made the
+    # branch stop at the first quote of a quoted or subscripted annotation, so
+    # `password: "SecretStr" = "<secret>"` read the `:` as the assignment and
+    # redacted `SecretStr` — leaving the credential in the text — while
+    # `password: 'str' = '<secret>'` matched nothing at all because `str` is
+    # under the 8-character floor. Missing a real secret is the worse failure.
+    r"[\"']?\s*(?::\s*[^=\n{}]{1,60})?\s*[=:]\s*"
     r"(?P<quote>[\"']?)"
     r"(?P<val>[^\s\"',;)}\]]{8,128})"
     r"(?P=quote)",
