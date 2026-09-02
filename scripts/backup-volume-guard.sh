@@ -363,9 +363,14 @@ node_is_our_luks_corpse() {
     [[ -n "$LUKS_UUID" ]] || return 1
     local dm_uuid
     dm_uuid="$(dmsetup info -c --noheadings -o uuid "$1" 2>/dev/null | tr -d '[:space:]')"
-    [[ "$dm_uuid" == CRYPT-LUKS* ]] || return 1
-    dm_uuid="${dm_uuid//-/}"
-    [[ "${dm_uuid,,}" == *"$LUKS_UUID"* ]]
+    # CRYPT-LUKS<n>-<container uuid, dashes already stripped>-<node name>.
+    # ANCHORED to the container field, because only that field is an identity
+    # — the name after it is a string somebody chose. Stripping the dashes out
+    # of the whole line and asking whether our UUID appears ANYWHERE in it
+    # matched a stranger's container whose node was merely NAMED after our
+    # UUID, which is the "a name is not an identity" hole this check exists to
+    # close.
+    [[ "${dm_uuid,,}" == crypt-luks?-"${LUKS_UUID}"-* ]]
 }
 
 # Ours = the device's live mapping, or our own container's corpse.

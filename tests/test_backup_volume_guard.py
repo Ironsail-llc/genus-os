@@ -1061,6 +1061,44 @@ def test_a_mapper_wearing_our_name_but_backed_by_another_device_is_not_ours(box:
     ) in box.pages[0], box.pages[0]
 
 
+def test_our_uuid_in_a_strangers_node_NAME_does_not_make_the_node_ours(box: Box):
+    """A dm-crypt UUID is ``CRYPT-LUKS<n>-<container uuid>-<node name>``, and
+    only the FIRST field is an identity — the second is a string somebody
+    chose.
+
+    Comparing with the dashes stripped out of the whole thing and a substring
+    test let our UUID match wherever it appeared, the name half included. So a
+    node called ``robothor-backup-<our uuid in hex>`` over somebody else's LUKS
+    container passed as ours, and the guard would lazy-unmount and fsck it —
+    the same "a name is not an identity" hole the deps check was added to
+    close, reopened inside the check that replaced it. Anchor the comparison
+    to the field that means something.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    hexuuid = UUID.replace("-", "")
+    impostor = box.mapper_dir / f"{MAPPER}-{hexuuid}"
+    box.mapper_node(impostor.name)
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_MOUNT_SOURCE=str(impostor),
+        FAKE_DM_DEPS="8:99",  # backed by a device that is not ours
+        # a STRANGER's container, wearing our UUID only in the name field
+        FAKE_DM_UUID=f"CRYPT-LUKS2-00000000000000000000000000000000-{MAPPER}-{hexuuid}",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert box.ran("umount") == [], f"unmounted a stranger's container:\n{box.argv}"
+    assert box.ran("cryptsetup open") == []
+    assert box.ran("cryptsetup close") == []
+    assert box.ran("fsck.ext4") == []
+    assert box.ran("mount") == []
+    assert len(box.pages) == 1, f"expected exactly one page, got {box.pages}"
+    assert "refusing to unmount it" in box.pages[0], box.pages[0]
+
+
 def test_our_own_corpse_with_no_deps_at_all_is_still_ours_to_unmount(box: Box):
     """The control for the refusal above, and the case identity must not break.
 
