@@ -16,7 +16,7 @@ nothing — and it looks exactly like a working setup until you need it.
 
 | Piece | What it does |
 |---|---|
-| `archive_command` -> `wal-archive.sh` | copies each completed WAL segment to `/var/lib/robothor/wal_archive` |
+| `archive_command` -> `wal-archive.sh` | copies each completed WAL segment to `$ROBOTHOR_WAL_ARCHIVE_DIR` — the scripts default to `/var/lib/postgresql/wal_archive`, and the shipped `robothor-wal-offsite.service` sets it to `/var/lib/robothor/wal_archive`. Both halves read the same variable; set it once, in the unit or the env file, or the shipper and the archiver look in different places |
 | `archive_timeout = 5min` | forces a segment switch on an idle box, so the recovery point stays fresh |
 | `robothor-basebackup.timer` (weekly) | `pg_basebackup` -> the encrypted volume. **This is what WAL replays onto.** |
 | `robothor-wal-offsite.timer` (*/15) | replicates archive + base offsite, prunes spent WAL, **and checks archiving is not silently failing** |
@@ -40,6 +40,67 @@ Two rules follow, and the scripts obey them:
 `pg_stat_archiver.failed_count > 0` or if free space drops below 10GB. **Zero
 archived segments is not evidence of health** — it is equally consistent with the
 command being broken.
+
+## Degraded mode: when the backup volume is wedged but the WAL still ships
+
+The four other backup units carry an `ExecCondition=` and **skip** when the
+encrypted USB volume is unusable. `robothor-wal-offsite` deliberately does
+**not**. It runs every 15 minutes and that push *is* the 15-minute RPO; the WAL
+archive lives on the NVMe, so refusing to run because a *different*,
+USB-attached disk is wedged would trade a paging storm for real data loss.
+
+So `wal-offsite.sh` calls the same probe
+(`scripts/backup-volume-check.sh --ro $ROBOTHOR_BASEBACKUP_DIR`) itself and
+degrades:
+
+| | volume healthy | volume unhealthy (**degraded**) |
+|---|---|---|
+| Ship WAL offsite (`rclone copy` → `<remote>/wal`) | yes | **yes** |
+| Replicate base backups → `<remote>/basebackup` | yes | skipped |
+| Prune spent WAL (`pg_archivecleanup`) | yes | **skipped** |
+| Stamp `last-wal-offsite-ok` | yes | **yes** — the WAL did go offsite, which is what the marker is about |
+| Exit status | 0 | 0 |
+
+Read the journal line, because a degraded run looks like a healthy one from
+outside:
+
+```
+backup volume unhealthy — skipping basebackup replication and WAL prune
+backup volume unhealthy — NOT pruning WAL (the prune horizon is read from the
+newest base backup, which is unreadable)
+```
+
+Three things follow, and each is the safe direction to fail:
+
+1. **Nothing is pruned while the volume is down.** The prune horizon is read
+   from the newest `backup_label` on that volume, so when it is unreadable the
+   horizon is unknowable. An over-eager prune destroys the ability to recover;
+   an under-pruned archive is only a disk-space problem — and §4's disk guard
+   still pages at <10GB free. The archive will grow for as long as the volume
+   stays down, so a degraded run is a clock, not a steady state.
+2. **A missing probe counts as unhealthy.** If `backup-volume-check.sh` is not
+   executable at `$ROBOTHOR_VOLUME_CHECK`, the script degrades rather than
+   assuming health — assuming health is what put us in the outage.
+3. **Probe exit 255 degrades *and* fails.** 255 is the probe saying "I cannot
+   answer the question" (its own tools are missing). Treating it here as "the
+   volume is down" would leave this unit permanently degraded and permanently
+   silent: no base-backup replication, no prune, and no failure to page about
+   it. So 255 degrades and then exits non-zero, which pages once per
+   `OnFailure=` cooldown instead of never.
+
+**A degraded run still stamps `last-wal-offsite-ok`.** That is correct — the
+WAL genuinely reached the remote — but it means the WAL marker cannot tell you
+the base backups are stale. `last-basebackup` is the one that goes quiet, and
+the consequence line for `*basebackup*` in `docs/runbooks/PAGING.md` is what
+says so: *PITR must replay every WAL since <marker> — restore time growing
+nightly*. Fix the volume (`docs/runbooks/BACKUP_VOLUME_GUARD.md`); the RPO is
+fine, the RTO is what is drifting.
+
+The marker is stamped only when `$ROBOTHOR_OFFSITE_REMOTE` is set **and** the
+push succeeded. On an instance with no offsite destination nothing is
+attempted, so nothing fails — and gating on the failure flag alone used to
+stamp "the WAL is offsite" every 15 minutes on a box that had no offsite at
+all.
 
 ## Two traps that will break your restore at 3am
 

@@ -7,17 +7,46 @@ any change to the backup pipeline) and update the table below.
 ## Procedure
 
 ```bash
-# 1. Latest nightly dump (produced by scripts/backup-ssd.sh at 04:30).
-#    GUARD THE GLOB: on 2026-08-24 the backup SSD had USB-disconnected and the
-#    glob matched NOTHING — and the drill pipeline below then "succeeded" in
-#    0.09s against an empty database. An empty dump variable must abort.
-DUMP=$(ls -t /mnt/robothor-backup/robothor/db/robothor_memory-*.sql.gz 2>/dev/null | head -1)
+# 0. ASK THE MARKER, NOT THE GLOB. The glob answers "is there a file", which is
+#    a question about the mount. The marker answers "did a backup actually
+#    succeed, and when" — it is written on the LAST line of a successful run by
+#    scripts/backup-state.sh, and it lives on NVMe, never on the volume that
+#    breaks. A wedged volume leaves the glob matching nothing (2026-08-24) or,
+#    worse, matching a stale generation that looks current.
+#
+#    Absent or empty reads as "unknown (no successful run recorded)", NOT as an
+#    empty string — an empty value where a timestamp belongs is scanned as
+#    "recent" and means the opposite.
+cat "${ROBOTHOR_BACKUP_STATE_DIR:-/var/lib/robothor/backup-state}/last-local-dump"
+# 2026-09-02T04:30:11+02:00 robothor_memory-20260902.sql.gz
+#
+# Field 1 is the timestamp (with its UTC offset, so it stays orderable against
+# `now`); field 2 is the identifier — for this marker, the dump filename. If it
+# is hours older than you expect, the drill you are about to run is a drill on
+# an old generation and the finding is already in front of you. Compare with
+# last-offsite-ok before deciding which copy to drill from.
+
+# 1. The dump the marker names (produced by scripts/backup-ssd.sh at 04:30).
+#    GUARD THE GLOB anyway: on 2026-08-24 the backup SSD had USB-disconnected
+#    and the glob matched NOTHING — and the drill pipeline below then
+#    "succeeded" in 0.09s against an empty database. An empty dump variable
+#    must abort.
+MOUNT="${ROBOTHOR_BACKUP_MOUNT:-/mnt/robothor-backup}"
+DUMP=$(ls -t "$MOUNT"/robothor/db/robothor_memory-*.sql.gz 2>/dev/null | head -1)
 [ -n "$DUMP" ] || { echo "NO LOCAL DUMP — mount gone? Drill from offsite instead:"; \
                     echo "  rclone copy <remote>/db/<newest>.sql.gz /tmp/"; exit 1; }
 
+# 1b. IS IT A WHOLE FILE? gunzip -t reads and decompresses the entire archive
+#     and checks its CRC without writing anything. A dump truncated by a volume
+#     that dropped mid-write decompresses cleanly for hundreds of megabytes and
+#     then stops — and `gunzip -c | psql` swallows that as a short restore with
+#     a nonzero exit somewhere in a pipe nobody checks. Two minutes here beats
+#     discovering it at 3am.
+gunzip -t "$DUMP" || { echo "CORRUPT/TRUNCATED: $DUMP — do not drill this; try offsite"; exit 1; }
+
 # 2. Timed restore into a scratch DB (never touch the live DB):
 time (createdb robothor_restore_drill && \
-      gunzip -c <dump> | psql -q -d robothor_restore_drill -v ON_ERROR_STOP=0 \
+      gunzip -c "$DUMP" | psql -q -d robothor_restore_drill -v ON_ERROR_STOP=0 \
       2> /tmp/restore-errors.log)
 
 # 3. Verify: table count and spot row-counts vs live (drift since the dump
@@ -30,6 +59,31 @@ psql -d robothor_restore_drill -tAc "SELECT
 # 4. Clean up:
 dropdb robothor_restore_drill
 ```
+
+Drilling from the offsite copy? `gunzip -t` it there too — the fetch is the
+step that can truncate, and `rclone copy` reporting success is not a CRC.
+
+## Why the marker, and not `systemctl status`
+
+The four backup units carry an `ExecCondition=`
+(`scripts/backup-volume-check.sh`). When the volume is unusable they are
+**skipped**, not failed: `Result=exec-condition`, no `OnFailure=`, no page.
+That is the right behaviour — it is what ended a 96-failures-a-day page
+storm — but it means **a clean `systemctl status` is not evidence a backup
+ran**. The markers are the signal that survives a skip:
+
+| Marker | Written by | Answers |
+|---|---|---|
+| `last-local-dump` | `scripts/backup-ssd.sh` | is there a dump to drill from, and how old |
+| `last-offsite-ok` | `scripts/backup-offsite.sh` (replication runs only — a verify-only run uploads nothing and does not stamp) | would a box loss be survivable, and from which generation |
+| `last-basebackup` | `scripts/pg-basebackup.sh` | how much WAL a PITR would have to replay |
+| `last-wal-offsite-ok` | `scripts/wal-offsite.sh` | the recovery point actually shipped offsite |
+
+All four live in `ROBOTHOR_BACKUP_STATE_DIR`
+(`/var/lib/robothor/backup-state`) on NVMe. Same format: `<date -Is>
+<identifier>`. `docs/runbooks/PAGING.md` quotes them in the consequence line of
+every backup page, so what you read here is what an operator reads on their
+phone.
 
 ## Measured baselines
 

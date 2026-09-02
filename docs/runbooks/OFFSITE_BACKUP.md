@@ -59,18 +59,68 @@ provisioning one is account-scoped; Drive needed nothing new.)
 ## Install
 
 ```bash
-sudo cp infra/systemd/robothor-backup-offsite.* /etc/systemd/system/
-sudo cp infra/systemd/robothor-backup-verify.*  /etc/systemd/system/
-sudo $EDITOR /etc/systemd/system/robothor-backup-offsite.service   # fix paths/user
+# Renders and installs every robothor-* unit, these two among them. Do NOT
+# hand-copy and edit: the installer substitutes the instance placeholders via
+# scripts/render-unit.sh, refuses an unexpanded one, gates the .service files
+# on `systemd-analyze verify`, and installs all-or-nothing. A hand-edited copy
+# in /etc is how template fixes in the repo stop reaching the box.
+sudo scripts/install-units.sh
 sudo systemctl daemon-reload
 sudo systemctl enable --now robothor-backup-offsite.timer robothor-backup-verify.timer
 ```
 
-- **Nightly 05:30** — replicate (after `backup-ssd.sh` at 04:30).
-- **Weekly Sun 06:30** — verify the offsite copy still matches the source.
+- **Nightly 05:30** — replicate (after `backup-ssd.sh` at 04:30). The timer is
+  `Persistent=true`, so a box that was off at 05:30 runs it at boot.
+- **Weekly Sun 06:30** — verify the offsite copy still matches the source
+  (also `Persistent=true`).
 - Both units page the operator on failure via `robothor-alert@` (see
   `docs/runbooks/PAGING.md`). **A backup that silently stops running is the
   entire risk** — that is why failure is loud.
+
+### Skipped is not failed — and neither is silent
+
+Both units carry an `ExecCondition=` running
+`scripts/backup-volume-check.sh --ro <mount>/robothor/db`, and systemd reads
+its exit code in three ways:
+
+| Exit | systemd | What you see |
+|---|---|---|
+| `0` | condition holds | the unit runs |
+| `1` | condition does not hold | `Result=exec-condition` — the unit is **SKIPPED**, `OnFailure=` does **not** fire, **no page** |
+| `255` | the probe itself is broken | the unit **FAILS** and `OnFailure=` pages |
+
+A skip is the right answer for a backup unit whose volume is wedged: the old
+behaviour was ~22 identical pages a day carrying nothing but a unit name, which
+is a muted pager. But it means **`systemctl status` showing no failure is not
+evidence the backup ran**. The gated path is created by
+`robothor-backup-local` (`backup-ssd.sh`) and never by these units, so on a
+fresh volume they skip until the local backup has run once — correctly, since
+there would be nothing to replicate.
+
+The thing that survives a skip is the **last-good marker**. `backup-offsite.sh`
+stamps `last-offsite-ok` on the last line of a successful **replication** run,
+with the newest generation it uploaded as the identifier:
+
+```bash
+cat /var/lib/robothor/backup-state/last-offsite-ok
+# 2026-09-02T05:31:44+02:00 <remote>/db/robothor_memory-20260902.sql.gz
+```
+
+Three properties of that file are deliberate, and each is load-bearing:
+
+- **It lives on NVMe** (`ROBOTHOR_BACKUP_STATE_DIR`,
+  `/var/lib/robothor/backup-state`), never on the backup volume. The disk that
+  breaks must not be the disk holding the evidence of when it last worked.
+- **A verify-only run does not stamp it.** `ROBOTHOR_OFFSITE_VERIFY_ONLY=1`
+  uploads nothing and exits before the stamp, so a weekly verify cannot make a
+  stale replication look fresh.
+- **An absent marker reads as `unknown (no successful run recorded)`**, not as
+  an empty string — an empty value where a timestamp belongs is scanned as
+  "recent" and means the opposite. That string is what appears in a page.
+
+So: "did the offsite backup run?" is answered by that marker's timestamp, not
+by the absence of a failure. That is also where the pager reads it from — see
+the consequence table in `docs/runbooks/PAGING.md`.
 
 ## Verify by hand
 
