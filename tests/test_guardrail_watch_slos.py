@@ -112,6 +112,39 @@ def healthy_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return dumps
 
 
+@pytest.fixture(autouse=True)
+def _forbid_live_sibling_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`main()` calls two checks that reach THIS box, and neither belongs in a
+    unit test: ``check_flag_truth`` runs the flag audit as a subprocess (up to
+    a 180s timeout, against the live flag store) and ``check_instance_doctor``
+    shells out to ``instance_doctor.sh``, which reads /etc/systemd/system.
+
+    A test that drives ``main()`` without stubbing them does not fail loudly —
+    it quietly takes three minutes and makes its verdict depend on whatever
+    state the operator's machine happens to be in this morning. So forgetting
+    is made loud here, and every test that wants ``main()`` calls
+    ``_stub_sibling_checks`` first. Same guard, same reason, as
+    ``tests/test_flag_audit.py``.
+    """
+
+    def _forbidden(*args: object, **kwargs: object) -> bool:
+        raise AssertionError(
+            "this test reached a live-box check (check_flag_truth / "
+            "check_instance_doctor) — call _stub_sibling_checks(monkeypatch) "
+            "before driving main()"
+        )
+
+    monkeypatch.setattr(gw, "check_flag_truth", _forbidden)
+    monkeypatch.setattr(gw, "check_instance_doctor", _forbidden)
+
+
+def _stub_sibling_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default the live-box checks to a safe pass, matching each real
+    signature. Call this first, then override whatever this test targets."""
+    monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: True)
+    monkeypatch.setattr(gw, "check_instance_doctor", lambda script=None: True)
+
+
 def by_name(slos: list, needle: str):
     matches = [s for s in slos if needle in s.name]
     assert matches, f"no SLO whose name contains {needle!r} in {[s.name for s in slos]}"
@@ -566,6 +599,7 @@ class TestTheDatabaseBackedSlosRunInTheDatabaseSection:
     def _quiet(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         write_dump(probe_env(monkeypatch, tmp_path))
         fresh_markers(tmp_path)
+        _stub_sibling_checks(monkeypatch)
         monkeypatch.setattr(gw, "send_telegram", lambda text: False)
         monkeypatch.setattr(gw, "check_soak_deadlines", lambda: None)
         monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
@@ -631,6 +665,7 @@ class TestMainRunsTheSloSectionBeforeTheDatabaseSection:
     ) -> None:
         """Same discipline as the drift checks (2026-08-16): the DB-free work
         must already have produced output before the DB section can abort."""
+        _stub_sibling_checks(monkeypatch)
         monkeypatch.setattr(gw, "send_telegram", lambda text: False)
         monkeypatch.setattr(gw, "check_soak_deadlines", lambda: None)
         monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
