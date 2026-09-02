@@ -133,7 +133,17 @@ class Box:
         )
         self._stub("fsck.ext4", 'exit "${FAKE_FSCK_RC:-0}"')
         self._stub("smartctl", 'printf "%s\\n" "${FAKE_SMART_OUT:-SMART Health Status: OK}"')
-        self._stub("systemctl", 'printf "%s\\n" "${FAKE_UNIT_STATE:-inactive}"')
+        # FAKE_UNIT_STATE answers for every unit; FAKE_ACTIVATING names ONE
+        # unit that is mid-run, so a test can pin the deferral list member by
+        # member instead of putting the whole fleet in the same state.
+        self._stub(
+            "systemctl",
+            'if [ -n "${FAKE_ACTIVATING:-}" ] && [ "$2" = "$FAKE_ACTIVATING" ]; then\n'
+            '  printf "activating\\n"\n'
+            "else\n"
+            '  printf "%s\\n" "${FAKE_UNIT_STATE:-inactive}"\n'
+            "fi",
+        )
         self._stub(
             "dmsetup",
             'case "$1" in\n'
@@ -822,6 +832,53 @@ def test_a_live_mapping_that_will_not_remount_is_repaired_under_its_own_name(box
     assert len(box.pages) == 1
     assert "auto-recovered" in box.pages[0]
     assert f"remapped as {MAPPER})" in box.pages[0]
+
+
+# The five units that write to the backup volume. This list is the deferral
+# contract: each one of them, mid-run, must stop the heal on its own, because
+# `umount -l` under any of them corrupts the backup the guard exists to
+# protect. It is pinned here member by member — a unit quietly dropped from
+# BACKUP_UNITS is invisible to a test that puts the whole fleet in the same
+# state, and would only show up as a corrupt backup discovered at restore time.
+DEFERRING_UNITS = [
+    "robothor-backup-local.service",
+    "robothor-backup-offsite.service",
+    "robothor-backup-verify.service",
+    "robothor-basebackup.service",
+    "robothor-wal-offsite.service",
+]
+
+
+@pytest.mark.parametrize("unit", DEFERRING_UNITS)
+def test_each_backup_unit_defers_the_heal_on_its_own(box: Box, unit: str):
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(FAKE_CHECK_RCS="1", FAKE_ACTIVATING=unit)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran("umount") == [], f"unmounted while {unit} was mid-run:\n{box.argv}"
+    assert box.ran("cryptsetup open") == []
+    assert box.ran("mount") == []
+    assert len(box.pages) == 1
+    assert f"heal deferred: {unit} is activating" in box.pages[0], box.pages[0]
+
+
+def test_a_unit_that_does_not_write_to_the_volume_does_not_defer_the_heal(box: Box):
+    """The list is not "anything that happens to be running". Deferring on a
+    unit that never touches the volume would postpone the heal indefinitely on
+    a busy box — the failure mode is a guard that never fires."""
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1 0",
+        FAKE_ACTIVATING="robothor-engine.service",
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran(f"umount -l {box.mount}"), f"the heal never ran:\n{box.argv}"
+    assert len(box.pages) == 1
+    assert "auto-recovered" in box.pages[0]
 
 
 # ── back to healthy ──────────────────────────────────────────────────────────
