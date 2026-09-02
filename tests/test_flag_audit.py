@@ -18,6 +18,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -617,7 +618,7 @@ def test_check_flag_truth_runs_before_the_db_dependent_section(monkeypatch, caps
     monkeypatch.setattr(
         gw, "check_instance_manifests", lambda: (order.append("manifests"), True)[1]
     )
-    monkeypatch.setattr(gw, "check_flag_truth", lambda: (order.append("flags"), True)[1])
+    monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: (order.append("flags"), True)[1])
 
     def _boom() -> None:
         order.append("db")
@@ -641,7 +642,203 @@ def test_main_exits_non_zero_when_the_flag_truth_table_drifts(monkeypatch, capsy
     ):
         monkeypatch.setattr(gw, name, lambda: None)
     monkeypatch.setattr(gw, "check_instance_manifests", lambda: True)
-    monkeypatch.setattr(gw, "check_flag_truth", lambda: False)
+    monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: False)
+
+    rc = gw.main()
+    capsys.readouterr()
+    assert rc == 1
+
+
+# --- check_flag_truth: a crashed audit is not a disagreement ----------------
+
+
+def _fake_subprocess_run(monkeypatch, gw, outcome, calls=None):
+    """Replace the subprocess the watch spawns. No live audit, no live pager."""
+
+    def run(cmd, **kwargs):
+        if calls is not None:
+            calls.append((list(cmd), kwargs))
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(gw.subprocess, "run", run)
+
+
+def _capture_nags(monkeypatch, gw):
+    """This box carries live Telegram credentials — nothing here may send."""
+    sent: list[str] = []
+    monkeypatch.setattr(gw, "send_telegram", lambda text: (sent.append(text), False)[1])
+    return sent
+
+
+def test_flag_audit_crash_is_reported_as_could_not_run_not_as_drift(monkeypatch, capsys):
+    """rc=2 is the audit DYING — an import error, a missing yaml, a drifted
+    schema. Paging "FLAG LAYERS DISAGREE" for it sends the operator to stare
+    at flags that are fine, while the stderr saying what actually broke was
+    captured and thrown away.
+    """
+    gw = _guardrail_watch()
+    sent = _capture_nags(monkeypatch, gw)
+    _fake_subprocess_run(
+        monkeypatch,
+        gw,
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=2,
+            stdout="",
+            stderr="Traceback (most recent call last):\nModuleNotFoundError: No module named 'yaml'\n",
+        ),
+    )
+
+    ok = gw.check_flag_truth()
+
+    out = capsys.readouterr().out
+    assert ok is False
+    assert "could not run (rc=2)" in out
+    assert "No module named 'yaml'" in out, "the captured stderr must be printed"
+    assert "DISAGREE" not in out
+    assert not any("DISAGREE" in text for text in sent)
+
+
+def test_flag_audit_timeout_is_reported_as_could_not_run(monkeypatch, capsys):
+    gw = _guardrail_watch()
+    _capture_nags(monkeypatch, gw)
+    _fake_subprocess_run(
+        monkeypatch, gw, subprocess.TimeoutExpired(cmd="flag_audit.py", timeout=180)
+    )
+
+    ok = gw.check_flag_truth()
+
+    out = capsys.readouterr().out
+    assert ok is False
+    assert "could not run" in out
+    assert "DISAGREE" not in out
+
+
+def test_flag_audit_rc_1_with_a_table_is_real_drift(monkeypatch, capsys):
+    gw = _guardrail_watch()
+    sent = _capture_nags(monkeypatch, gw)
+    _fake_subprocess_run(
+        monkeypatch,
+        gw,
+        subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="flag  yaml  effective\nROBOTHOR_RBAC_MODE  observe  enforce\nFAIL: a layer is shadowed\n",
+            stderr="",
+        ),
+    )
+
+    ok = gw.check_flag_truth()
+
+    out = capsys.readouterr().out
+    assert ok is False
+    assert "DISAGREE" in out
+    assert "could not run" not in out
+    assert any("DISAGREE" in text for text in sent)
+
+
+def test_flag_audit_rc_1_with_no_table_is_a_crash_not_drift(monkeypatch, capsys):
+    """The audit exits 1 on drift *after* printing the table. Exit 1 with
+    nothing on stdout is argparse or an early raise, not a verdict."""
+    gw = _guardrail_watch()
+    _capture_nags(monkeypatch, gw)
+    _fake_subprocess_run(
+        monkeypatch,
+        gw,
+        subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="error: unrecognized arguments: --no-db\n"
+        ),
+    )
+
+    ok = gw.check_flag_truth()
+
+    out = capsys.readouterr().out
+    assert ok is False
+    assert "could not run (rc=1)" in out
+    assert "unrecognized arguments" in out
+    assert "DISAGREE" not in out
+
+
+def test_flag_audit_rc_0_is_ok_and_pages_nobody(monkeypatch, capsys):
+    gw = _guardrail_watch()
+    sent = _capture_nags(monkeypatch, gw)
+    _fake_subprocess_run(
+        monkeypatch,
+        gw,
+        subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="flag  yaml\nOK — every layer agrees\n", stderr=""
+        ),
+    )
+
+    ok = gw.check_flag_truth()
+
+    out = capsys.readouterr().out
+    assert ok is True
+    assert "every layer agrees" in out
+    assert sent == []
+
+
+def test_check_flag_truth_passes_no_db_and_the_requested_timeout(monkeypatch, capsys):
+    gw = _guardrail_watch()
+    _capture_nags(monkeypatch, gw)
+    calls: list[tuple[list[str], dict]] = []
+    _fake_subprocess_run(
+        monkeypatch,
+        gw,
+        subprocess.CompletedProcess(args=[], returncode=0, stdout="ok\n", stderr=""),
+        calls=calls,
+    )
+
+    gw.check_flag_truth(no_db=True)
+    gw.check_flag_truth(no_db=False, timeout=60)
+    capsys.readouterr()
+
+    assert "--no-db" in calls[0][0]
+    assert "--no-db" not in calls[1][0]
+    assert calls[1][1]["timeout"] == 60
+
+
+def test_main_audits_the_file_layers_without_the_db_then_again_with_it(monkeypatch, capsys):
+    """The DB-free half must not need postgres (2026-08-16), but the pin,
+    actor and evidence columns exist only with it — so the watch runs both."""
+    gw = _guardrail_watch()
+    calls: list[dict] = []
+    order: list[str] = []
+
+    def fake_truth(**kwargs):
+        calls.append(kwargs)
+        order.append("flags")
+        return True
+
+    monkeypatch.setattr(gw, "check_flag_truth", fake_truth)
+    monkeypatch.setattr(gw, "check_soak_deadlines", lambda: None)
+    monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
+    monkeypatch.setattr(gw, "check_host_script_drift", lambda: None)
+    monkeypatch.setattr(gw, "check_instance_manifests", lambda: True)
+    monkeypatch.setattr(gw, "_run_db_dependent_checks", lambda: order.append("db"))
+
+    rc = gw.main()
+    capsys.readouterr()
+
+    assert rc == 0
+    assert [c.get("no_db") for c in calls] == [True, False]
+    assert calls[1].get("timeout") == 60
+    assert order == ["flags", "db", "flags"]
+
+
+def test_main_fails_when_only_the_db_pass_of_the_audit_finds_drift(monkeypatch, capsys):
+    """A feature_flags pin is invisible to the --no-db pass; if the second
+    pass is not allowed to fail the run, an unversioned DB pin never pages."""
+    gw = _guardrail_watch()
+    results = iter([True, False])
+    monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: next(results))
+    monkeypatch.setattr(gw, "check_soak_deadlines", lambda: None)
+    monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
+    monkeypatch.setattr(gw, "check_host_script_drift", lambda: None)
+    monkeypatch.setattr(gw, "check_instance_manifests", lambda: True)
+    monkeypatch.setattr(gw, "_run_db_dependent_checks", lambda: None)
 
     rc = gw.main()
     capsys.readouterr()

@@ -101,7 +101,34 @@ def check_soak_deadlines() -> None:
         print("  (nag sent to Telegram)")
 
 
-def check_flag_truth() -> bool:
+def _stderr_tail(text: str, *, lines: int = 3, chars: int = 400) -> str:
+    """The last few stderr lines, one line, bounded — the part that names the
+    failure. Empty stderr yields ``"(no stderr)"`` rather than a blank space,
+    so a message never reads as if the tail were the explanation."""
+    tail = " | ".join(part.strip() for part in text.strip().splitlines()[-lines:] if part.strip())
+    if not tail:
+        return "(no stderr)"
+    return tail[-chars:]
+
+
+def _flag_audit_could_not_run(rc: str, detail: str) -> bool:
+    """Report a DEAD audit as dead, and page with that wording.
+
+    Distinct from drift on purpose. Until 2026-09 every non-zero rc paged
+    "FLAG LAYERS DISAGREE", so an audit that crashed on an import error, a
+    missing infra/flags.yaml or a drifted evidence schema sent the operator to
+    stare at flags that were fine — and the stderr that said what actually
+    broke was captured and then thrown away, printed nowhere. Still returns
+    False: a watchdog whose probe died must not report health.
+    """
+    nag = f"⚠️ flag audit could not run (rc={rc}): {detail}"
+    print(f"  FAIL: {nag}")
+    if send_telegram(nag):
+        print("  (nag sent to Telegram)")
+    return False
+
+
+def check_flag_truth(*, no_db: bool = False, timeout: int = 180) -> bool:
     """Print the per-flag truth table and fail when a layer is shadowed.
 
     ``check_soak_deadlines`` above nags about the manifest's *intent*;
@@ -117,28 +144,46 @@ def check_flag_truth() -> bool:
     fail THIS CHECK rather than take the whole watch down. Returns False on
     drift so ``main()`` exits non-zero and the unit's ``OnFailure=`` pager
     fires. The audit is read-only — SELECTs only, no writes anywhere.
+
+    ``no_db=True`` runs it as a DB-free check (``--no-db``): the file layers
+    alone answer "which layer governs this flag", and that half of the watch
+    must survive a postgres outage. The second, DB-backed pass is what sees a
+    ``feature_flags`` pin and the evidence columns.
+
+    Exactly one non-zero code means drift: rc=1 *with a table on stdout*, the
+    audit's own verdict. Anything else is the audit dying, and
+    :func:`_flag_audit_could_not_run` says so instead of crying wolf.
     """
     script = Path(__file__).resolve().parent / "flag_audit.py"
-    print("\n=== flag truth table ===")
+    print(f"\n=== flag truth table ({'file layers only' if no_db else 'with DB evidence'}) ===")
     if not script.exists():
         print("  FAIL: flag_audit.py missing — the layer audit could not run")
         return False
+    cmd = [sys.executable, str(script)]
+    if no_db:
+        cmd.append("--no-db")
     try:
         result = subprocess.run(
-            [sys.executable, str(script)],
+            cmd,
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=timeout,
             cwd=str(REPO_ROOT),
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        print(f"  FAIL: flag audit could not run: {exc}")
-        return False
+        return _flag_audit_could_not_run("?", f"{type(exc).__name__}: {exc}")
 
     for line in result.stdout.rstrip().splitlines():
         print(f"  {line}")
+    # Print it, always. Captured-and-discarded stderr is how a crash looked
+    # exactly like a disagreement from the report alone.
+    for line in result.stderr.rstrip().splitlines():
+        print(f"  stderr: {line}")
+
     if result.returncode == 0:
         return True
+    if result.returncode != 1 or not result.stdout.strip():
+        return _flag_audit_could_not_run(str(result.returncode), _stderr_tail(result.stderr))
     nag = (
         "⚠️ FLAG LAYERS DISAGREE — a flag is set in more than one "
         "place, or the running engine does not match infra/flags.yaml. "
@@ -484,13 +529,21 @@ def main() -> int:
     # reached anyone, no report, nothing. A DB outage must never take the
     # DB-free checks down with it.
     check_soak_deadlines()
-    flags_ok = check_flag_truth()
+    # --no-db: the file layers alone answer "which layer governs this flag",
+    # and a DB read here would put the same outage back in the DB-free half.
+    flags_ok = check_flag_truth(no_db=True)
     check_dropin_drift()
     check_host_script_drift()
     manifests_ok = check_instance_manifests()
 
     try:
         _run_db_dependent_checks()
+        # Second pass, with the database. The `feature_flags` pin, its actor
+        # and the evidence columns (rows_7d, last_fired, last_probe) exist
+        # only here — and a DB pin beats every file layer the pass above can
+        # see, so dropping this pass would make an unversioned pin invisible.
+        # 60s, not 180: postgres has just answered the checks above.
+        flags_ok = check_flag_truth(no_db=False, timeout=60) and flags_ok
     except Exception as exc:
         print(
             f"\n=== DATABASE UNAVAILABLE: {exc} ===\n"
