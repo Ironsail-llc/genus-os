@@ -357,3 +357,85 @@ class TestArgumentContract:
         assert run(mod, "--fallbacks", "", "--apply") == 0
 
         assert yaml.safe_load(path.read_text())["model"]["fallbacks"] == []
+
+
+PROSE = """\
+id: agent-a
+name: Agent A
+
+instructions: |
+  When you choose a model, write the chain out in full, e.g.
+  fallbacks: ["some/example"]
+  and never guess at it.
+"""
+
+PROSE_PLUS_KEY = """\
+id: agent-a
+name: Agent A
+
+instructions: |
+  When you choose a model, write the chain out in full, e.g.
+  fallbacks: ["some/example"]
+  and never guess at it.
+
+model:
+  primary: openrouter/stealth/ox-alpha
+  fallbacks: ["ollama_chat/qwen3.8:27b"]  # offline tier
+"""
+
+
+class TestProseIsNotAMappingKey:
+    """A ``fallbacks:`` line inside an ``instructions: |`` block is PROSE.
+
+    Rewriting it silently edits an agent's instructions — the one kind of
+    damage a model swap must never do — and the old verifier could not see it
+    because it only walked mapping keys.
+    """
+
+    def test_fallbacks_inside_a_block_scalar_is_left_byte_identical(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ):
+        mod = load_tool(tmp_path, monkeypatch)
+        path = write(agents_dir(tmp_path) / "agent-a.yaml", PROSE)
+
+        run(mod, "--fallbacks", CHAIN, "--apply")
+
+        assert path.read_text() == PROSE
+        out = capsys.readouterr().out
+        assert "agent-a.yaml" in out
+        assert "SKIPPED" in out
+
+    def test_prose_does_not_stop_a_real_key_being_rewritten(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        mod = load_tool(tmp_path, monkeypatch)
+        path = write(agents_dir(tmp_path) / "agent-a.yaml", PROSE_PLUS_KEY)
+
+        run(mod, "--fallbacks", CHAIN, "--apply")
+
+        data = yaml.safe_load(path.read_text())
+        assert data["model"]["fallbacks"] == CHAIN_LIST
+        # The prose is untouched, comment and all.
+        assert 'fallbacks: ["some/example"]' in data["instructions"]
+
+
+class TestVerifier:
+    """The verifier proves the rewrite changed the fallbacks keys and NOTHING else."""
+
+    def test_a_clean_rewrite_verifies(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        mod = load_tool(tmp_path, monkeypatch)
+        original = 'id: agent-a\nmodel:\n  fallbacks: ["ollama_chat/qwen3.8:27b"]\n'
+        updated = f"id: agent-a\nmodel:\n  fallbacks: {CHAIN_LIST!r}\n"
+
+        assert mod._verify(original, updated, CHAIN_LIST) is None
+
+    def test_a_change_outside_a_fallbacks_key_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        mod = load_tool(tmp_path, monkeypatch)
+        original = 'id: agent-a\nmodel:\n  fallbacks: ["ollama_chat/qwen3.8:27b"]\n'
+        tampered = f"id: agent-b\nmodel:\n  fallbacks: {CHAIN_LIST!r}\n"
+
+        assert mod._verify(original, tampered, CHAIN_LIST) == (
+            "rewrite touched something other than a fallbacks key"
+        )

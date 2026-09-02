@@ -37,6 +37,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import yaml
 
@@ -54,6 +55,14 @@ _PRIMARY = re.compile(r"^(?P<indent>\s*)primary:\s*(?P<model>\S+)\s*$", re.MULTI
 _FALLBACKS = re.compile(r"^(?P<indent>[ \t]*)fallbacks:(?P<rest>.*)$")
 _INLINE_LIST = re.compile(r"^\s*\[(?P<items>[^]]*)\]\s*(?P<comment>#.*)?$")
 _BLOCK_ITEM = re.compile(r"^(?P<indent>[ \t]+)-\s*(?P<value>.*)$")
+_COMMENT_LINE = re.compile(r"^(?P<indent>[ \t]+)#.*$")
+
+#: A key that opens a BLOCK SCALAR (``instructions: |``, ``notes: >-``). Every
+#: line indented under it is prose, not YAML — and agent instructions are full
+#: of lines like ``fallbacks: ["some/example"]``. Rewriting one silently edits
+#: what the agent is told to do, which is the one kind of damage a model swap
+#: must never cause.
+_BLOCK_SCALAR = re.compile(r"^(?P<indent>[ \t]*)(?:-[ \t]+)?[^#\s][^:]*:[ \t]*[|>][+-]?\d*[ \t]*$")
 
 #: A scalar safe to leave unquoted inside a BLOCK sequence. ``:`` is allowed
 #: there only because it is never followed by a space in a model path
@@ -95,10 +104,41 @@ def _render(value: str, *, flow: bool) -> str:
     return f'"{escaped}"'
 
 
-def rewrite_fallbacks_text(text: str, fallbacks: list[str]) -> tuple[str | None, int]:
-    """Return ``(new text or None, count of occurrences left alone)``.
+class Rewrite(NamedTuple):
+    """What one pass over a manifest did.
 
-    The text is None when nothing changed (no such key, or already correct).
+    ``text`` is None when nothing changed (no such key, or already correct).
+    ``keys`` counts real mapping keys, ``prose`` counts ``fallbacks:`` lines
+    that turned out to live inside a block scalar — the difference between
+    "this manifest has no chain" and "this manifest talks ABOUT chains".
+    """
+
+    text: str | None
+    unhandled: int
+    keys: int
+    prose: int
+
+
+def _skip_block_scalar(lines: list[str], start: int, indent: str) -> int:
+    """Index of the first line after the block scalar opened at ``start``.
+
+    Content belongs to the scalar while it is blank or indented deeper than
+    the key that opened it — the same rule the YAML parser applies.
+    """
+    i = start + 1
+    while i < len(lines):
+        body = lines[i].rstrip("\r\n")
+        if body.strip():
+            lead = len(body) - len(body.lstrip(" \t"))
+            if lead <= len(indent):
+                break
+        i += 1
+    return i
+
+
+def rewrite_fallbacks_text(text: str, fallbacks: list[str]) -> Rewrite:
+    """Rewrite every real ``fallbacks:`` mapping key, and nothing else.
+
     Each occurrence keeps its own style — an inline flow list stays inline, a
     block sequence stays a block — so the diff is the list and nothing else.
     """
@@ -107,15 +147,26 @@ def rewrite_fallbacks_text(text: str, fallbacks: list[str]) -> tuple[str | None,
     i = 0
     changed = False
     unhandled = 0
+    keys = 0
+    prose = 0
     while i < len(lines):
         raw = lines[i]
         body = raw.rstrip("\r\n")
         eol = raw[len(body) :] or "\n"
+        scalar = _BLOCK_SCALAR.match(body)
+        if scalar:
+            end = _skip_block_scalar(lines, i, scalar.group("indent"))
+            block = lines[i:end]
+            prose += sum(1 for line in block[1:] if _FALLBACKS.match(line.rstrip("\r\n")))
+            out.extend(block)
+            i = end
+            continue
         match = _FALLBACKS.match(body)
         if not match:
             out.append(raw)
             i += 1
             continue
+        keys += 1
 
         indent = match.group("indent")
         rest = match.group("rest")
@@ -163,18 +214,38 @@ def rewrite_fallbacks_text(text: str, fallbacks: list[str]) -> tuple[str | None,
         changed = changed or new_items != old_items
         out.extend(new_items)
 
-    return ("".join(out) if changed else None), unhandled
+    return Rewrite("".join(out) if changed else None, unhandled, keys, prose)
+
+
+def _normalise(node: object, fallbacks: list[str]) -> object:
+    """The document with every ``fallbacks`` mapping value pinned to the chain.
+
+    Two documents that are equal after this differ ONLY in fallbacks keys —
+    which is the whole claim a textual rewrite has to make good on.
+    """
+    if isinstance(node, dict):
+        return {
+            key: (list(fallbacks) if key == "fallbacks" else _normalise(value, fallbacks))
+            for key, value in node.items()
+        }
+    if isinstance(node, list):
+        return [_normalise(item, fallbacks) for item in node]
+    return node
 
 
 def _verify(original: str, updated: str, fallbacks: list[str]) -> str | None:
     """Return an error string if the rewrite did not do what it claims.
 
     Textual edits to YAML are exactly the kind of change that can look right
-    and parse wrong, so the result is parsed and every ``fallbacks`` value it
-    contains is checked before anything is written.
+    and parse wrong, so the result is parsed before anything is written and
+    held to two claims: every ``fallbacks`` value is now the chain, and the
+    two documents are otherwise EQUAL. The second claim is what catches an
+    edit to something that merely looked like a key — a ``fallbacks:`` line
+    inside an ``instructions: |`` block, say — which walking mapping keys
+    alone can never see.
     """
     try:
-        yaml.safe_load(original)
+        before = yaml.safe_load(original)
     except yaml.YAMLError:
         return None  # was not parseable before us; not ours to judge
     try:
@@ -195,7 +266,11 @@ def _verify(original: str, updated: str, fallbacks: list[str]) -> str | None:
                     return err
         return None
 
-    return walk(data)
+    if (err := walk(data)) is not None:
+        return err
+    if _normalise(before, fallbacks) != _normalise(data, fallbacks):
+        return "rewrite touched something other than a fallbacks key"
+    return None
 
 
 def rewrite_primary(
@@ -227,21 +302,26 @@ def rewrite_primary(
 def rewrite_fallbacks(path: Path, fallbacks: list[str], *, apply: bool) -> str | None:
     """Apply the chain to one manifest. Returns a status line, or None if unchanged."""
     text = path.read_text()
-    if not any(_FALLBACKS.match(line) for line in text.splitlines()):
+    result = rewrite_fallbacks_text(text, fallbacks)
+    if result.keys == 0:
+        if result.prose:
+            return (
+                "SKIPPED — fallbacks: appears only inside a block scalar (prose, "
+                "not a mapping key) — chain NOT applied"
+            )
         return "no fallbacks: line — chain NOT applied"
-    updated, unhandled = rewrite_fallbacks_text(text, fallbacks)
-    if unhandled:
+    if result.unhandled:
         return (
-            f"{unhandled} fallbacks: value(s) in a style this tool does not "
+            f"{result.unhandled} fallbacks: value(s) in a style this tool does not "
             "rewrite (anchor/alias?) — chain NOT applied, edit by hand"
         )
-    if updated is None:
+    if result.text is None:
         return None
-    error = _verify(text, updated, fallbacks)
+    error = _verify(text, result.text, fallbacks)
     if error:
         return f"SKIPPED — {error}"
     if apply:
-        path.write_text(updated)
+        path.write_text(result.text)
     return "fallbacks -> " + ", ".join(fallbacks)
 
 
