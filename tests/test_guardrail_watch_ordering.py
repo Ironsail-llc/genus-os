@@ -21,10 +21,8 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import pytest
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,14 +41,42 @@ def _stub_sibling_checks(monkeypatch: "pytest.MonkeyPatch", gw) -> None:
     """Default every check `main()` calls to a safe pass, matching each
     check's real signature, so a test driving `main()` for the DB-outage
     ordering does not also run its siblings for real. `check_instance_doctor`
-    hits the live box and `send_telegram` has real credentials on it — a test
-    that forgets to stub either does not just fail loud, it pages the
-    operator or shells out to instance_doctor.sh. Call this first, then
-    override whichever check this test actually targets.
+    hits the live box, `check_slos` shells out to `scripts/slo_probe.sh
+    --report` (a readdir over the live backup volume, a volume probe and a
+    `systemctl show` of the live units), and `send_telegram` has real
+    credentials on it — a test that forgets to stub any of them does not just
+    fail loud, it pages the operator, shells out to instance_doctor.sh, or
+    measures this morning's backup state. Call this first, then override
+    whichever check this test actually targets.
     """
     monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: True)
     monkeypatch.setattr(gw, "check_instance_doctor", lambda script=None: True)
+    monkeypatch.setattr(gw, "check_slos", lambda: [])
     monkeypatch.setattr(gw, "send_telegram", lambda text: False)
+
+
+@pytest.fixture(autouse=True)
+def _the_real_slo_probe_never_runs(monkeypatch: "pytest.MonkeyPatch", tmp_path: Path):
+    """Sentinel, not trust: point `gw.SLO_PROBE` at a stand-in that records
+    every invocation, and fail the test if anything ran it.
+
+    `check_slos()` runs `bash scripts/slo_probe.sh --report` as a subprocess.
+    Nothing in this file wants that: it walks the live backup volume, runs the
+    volume probe and asks `systemctl show` about the live units, so every test
+    here silently depended on how the operator's box happened to be this
+    morning — and a probe with a dropped USB device blocks in readdir. A stub
+    that is asserted, rather than a stub that is assumed.
+    """
+    ran = tmp_path / "slo-probe-ran.txt"
+    stand_in = tmp_path / "fake-slo-probe.sh"
+    stand_in.write_text(f'#!/usr/bin/env bash\necho ran >> "{ran}"\nexit 0\n')
+    stand_in.chmod(0o755)
+    monkeypatch.setattr(gw, "SLO_PROBE", stand_in)
+    yield
+    assert not ran.exists(), (
+        "this test ran the real SLO probe against the live box — call "
+        "_stub_sibling_checks(monkeypatch, gw) before driving main()"
+    )
 
 
 class TestRepoUnitOrdersAfterPostgresAndPages:
