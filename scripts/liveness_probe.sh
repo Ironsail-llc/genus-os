@@ -87,6 +87,43 @@
 #   what carries it.
 set -u
 
+# ── PATH: fixed, and NOT inherited ───────────────────────────────────────────
+# The unit that starts this loads EnvironmentFile=, and the instance file there
+# carries the OPERATOR's PATH: user-writable directories first (~/.local/bin,
+# ~/.npm-global/bin) and no /usr/sbin or /sbin at all. Both halves are bugs for
+# something running as root — it must not execute a user-writable binary, and
+# dmsetup, cryptsetup, fsck.ext4, smartctl and runuser all live in /usr/sbin,
+# where "not found" reaches a script that reads output as an empty ANSWER
+# rather than as an error (2026-09-02, scripts/backup-volume-guard.sh).
+#
+# So the PATH is SET, not extended, and it is the same line in every root
+# script. ROBOTHOR_EXTRA_PATH is a TEST-ONLY leading directory, where the suites
+# put their stub binaries — it is never set in a unit or in
+# /etc/robothor/robothor.env. Anything from the workspace venv is called by
+# absolute path (SCRIPT_DIR), never found on PATH.
+# See infra/systemd/README.md.
+export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# ── The tools this script cannot work without ────────────────────────────────
+# A watchdog that cannot read a timestamp or hash a unit name cannot
+# count, and a counter that never reaches the threshold is a watchdog that
+# is permanently, invisibly silent. curl is required below instead — only
+# when no ROBOTHOR_LIVENESS_PROBE_CMD replaces it.
+require_tools() {
+    local tool missing=0
+    for tool in "$@"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "liveness_probe: required tool not found on PATH: ${tool}" >&2
+            missing=1
+        fi
+    done
+    if [ "$missing" = 1 ]; then
+        echo "liveness_probe: PATH=${PATH}" >&2
+        exit 1
+    fi
+}
+require_tools date stat sha256sum cut tr
+
 log() { echo "liveness_probe: $*"; }
 err() { echo "liveness_probe: $*" >&2; }
 
@@ -98,6 +135,11 @@ URL="${ROBOTHOR_LIVENESS_URL:-http://127.0.0.1:${ENGINE_PORT}/live}"
 TIMEOUT="${ROBOTHOR_LIVENESS_TIMEOUT:-10}"
 STATE_DIR="${ROBOTHOR_LIVENESS_STATE_DIR:-/run/robothor/liveness}"
 PROBE_CMD="${ROBOTHOR_LIVENESS_PROBE_CMD:-}"
+# The default probe IS curl (this script is bash + curl by design), so a curl
+# that cannot be found makes every tick a failure and pages about an engine
+# that may be perfectly healthy. An override replaces the probe entirely, and
+# then curl is not this script's dependency at all.
+[ -n "$PROBE_CMD" ] || require_tools curl
 ALERT_CMD="${ROBOTHOR_LIVENESS_ALERT_CMD:-/usr/bin/env bash ${SCRIPT_DIR}/send_failure_alert.sh}"
 
 # The sender marks a spool it cannot move here; this tick is what makes that

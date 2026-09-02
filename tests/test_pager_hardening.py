@@ -132,6 +132,10 @@ def curl_calls(log: Path) -> int:
 def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
     env = {
         "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+        # The script SETS its PATH (a root unit must not inherit the operator's
+        # user-writable directories), so the stub directory reaches it through the
+        # one documented seam — see infra/systemd/README.md.
+        "ROBOTHOR_EXTRA_PATH": str(tmp_path / "bin"),
         "HOME": str(tmp_path),
         # Never touch the real /run/robothor state or secrets from a test.
         "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),

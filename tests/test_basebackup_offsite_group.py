@@ -67,6 +67,10 @@ def _run_basebackup(
 
     env = {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        # The script SETS its PATH (a root unit must not inherit the operator's
+        # user-writable directories), so the stub directory reaches it through the
+        # one documented seam — see infra/systemd/README.md.
+        "ROBOTHOR_EXTRA_PATH": str(bin_dir),
         "ROBOTHOR_BASEBACKUP_DIR": str(dest),
         "ROBOTHOR_BACKUP_GROUP": group,
         "ROBOTHOR_BASEBACKUP_KEEP": "3",

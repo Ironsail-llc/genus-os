@@ -54,10 +54,24 @@ def _stub(path: Path, body: str) -> Path:
 
 
 def _run(
-    *args: str, env_extra: dict[str, str] | None = None, path: str | None = None
+    *args: str,
+    env_extra: dict[str, str] | None = None,
+    path: str | None = None,
+    script: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = {
         "PATH": path if path is not None else os.environ["PATH"],
+        # The probe SETS its own PATH: it runs as ExecCondition= under units
+        # that load an EnvironmentFile= whose PATH begins with the operator's
+        # user-writable directories and has no /usr/sbin (see
+        # infra/systemd/README.md). So a stub directory can no longer be handed
+        # over by prepending it to PATH — it goes through the documented seam,
+        # which is the FIRST entry of whatever `path` a test supplies.
+        **(
+            {"ROBOTHOR_EXTRA_PATH": path.split(":")[0]}
+            if path is not None
+            else {}
+        ),
         # This script never pages, but a test that grows one later must not
         # start doing so silently.
         "ROBOTHOR_ALERT_SUPPRESS": "1",
@@ -70,7 +84,7 @@ def _run(
     }
     env.update(env_extra or {})
     return subprocess.run(
-        [BASH, str(SCRIPT), *args],
+        [BASH, str(script or SCRIPT), *args],
         capture_output=True,
         text=True,
         timeout=60,
@@ -220,29 +234,65 @@ class TestABrokenProbeFailsLoudly:
     cannot answer the question", never for "the answer is no" — otherwise the
     paging storm comes straight back."""
 
+    # The probe no longer inherits PATH, so a tool cannot be hidden from it by
+    # handing over a stripped one — /usr/bin is always on the PATH it sets for
+    # itself. What CAN be exercised is the preflight at its own call site: the
+    # tool name it looks for is swapped, in a copy, for one that cannot
+    # resolve. The names it actually looks for are pinned separately, below.
+    @staticmethod
+    def _guard_missing(tmp_path: Path, tool: str) -> Path:
+        source = SCRIPT.read_text()
+        marker = "for tool in timeout findmnt mktemp; do"
+        assert marker in source, "the probe has no tool preflight to exercise"
+        absent = f"robothor-absent-{tool}"
+        copy = tmp_path / f"probe-without-{tool}" / SCRIPT.name
+        copy.parent.mkdir(parents=True, exist_ok=True)
+        copy.write_text(source.replace(marker, marker.replace(tool, absent), 1))
+        return copy
+
     def test_missing_timeout_is_255_not_a_silent_skip(self, tmp_path: Path) -> None:
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        (bin_dir / "findmnt").symlink_to("/usr/bin/findmnt")
         vol = tmp_path / "vol"
         vol.mkdir()
+        copy = self._guard_missing(tmp_path, "timeout")
 
-        result = _run("--ro", str(vol), path=str(bin_dir))
+        result = _run("--ro", str(vol), script=copy)
         assert result.returncode == BROKEN_PROBE, (
             "without `timeout` the probe cannot bound a hung readdir; that is a "
             "broken guard and must page, not quietly skip every backup\n"
             + _output(result)
         )
+        assert "robothor-absent-timeout" in result.stderr, _output(result)
 
     def test_missing_findmnt_is_255(self, tmp_path: Path) -> None:
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        (bin_dir / "timeout").symlink_to("/usr/bin/timeout")
         vol = tmp_path / "vol"
         vol.mkdir()
+        copy = self._guard_missing(tmp_path, "findmnt")
 
-        result = _run("--ro", str(vol), path=str(bin_dir))
+        result = _run("--ro", str(vol), script=copy)
         assert result.returncode == BROKEN_PROBE, _output(result)
+
+    def test_missing_mktemp_is_255(self, tmp_path: Path) -> None:
+        """The --rw probe proves a write LANDS, and it opens that write with
+        mktemp. A mktemp that is not found fails exactly like a full disk —
+        one of which is an answer about the volume and the other is not."""
+        vol = tmp_path / "vol"
+        vol.mkdir()
+        copy = self._guard_missing(tmp_path, "mktemp")
+
+        result = _run("--rw", str(vol), script=copy)
+        assert result.returncode == BROKEN_PROBE, _output(result)
+
+    def test_the_preflight_names_the_tools_the_probe_actually_uses(self) -> None:
+        """The list is the point: a probe that checks two of the three tools
+        leaves the third to fail as an empty answer."""
+        line = [
+            stripped
+            for stripped in (raw.strip() for raw in SCRIPT.read_text().splitlines())
+            if stripped.startswith("for tool in ")
+        ]
+        assert line, "the probe has no tool preflight at all"
+        checked = set(line[0].removeprefix("for tool in ").rstrip("; do").split())
+        assert {"timeout", "findmnt", "mktemp"} <= checked, checked
 
 
 class TestUsage:
@@ -546,6 +596,9 @@ class TestTheWriteProbeSurvivesASignal:
             start_new_session=True,
             env={
                 "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                # The probe sets its own PATH, so the stub `timeout` that hangs
+                # the write step reaches it through the documented seam.
+                "ROBOTHOR_EXTRA_PATH": str(bin_dir),
                 "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0",
             },
         )

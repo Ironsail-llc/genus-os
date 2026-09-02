@@ -120,6 +120,10 @@ def run_send(
 ) -> subprocess.CompletedProcess[str]:
     env = {
         "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+        # The script SETS its PATH (a root unit must not inherit the operator's
+        # user-writable directories), so the stub directory reaches it through the
+        # one documented seam — see infra/systemd/README.md.
+        "ROBOTHOR_EXTRA_PATH": str(tmp_path / "bin"),
         "HOME": str(tmp_path),
         # Isolate the cooldown state dir per test — the default lives under
         # /run/robothor, which is real and writable on this box, and a test

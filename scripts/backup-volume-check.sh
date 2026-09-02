@@ -66,6 +66,24 @@
 #                                  would skip every backup unit silently.
 set -uo pipefail
 
+# ── PATH: fixed, and NOT inherited ───────────────────────────────────────────
+# This is an ExecCondition= on four units, all of which load
+# EnvironmentFile=/etc/robothor/robothor.env — and the instance file there
+# carries the OPERATOR's PATH: user-writable directories first (~/.local/bin,
+# ~/.npm-global/bin) and no /usr/sbin or /sbin at all. Both halves are bugs for
+# something running as root — it must not execute a user-writable binary, and
+# dmsetup, cryptsetup, fsck.ext4, smartctl and runuser all live in /usr/sbin,
+# where "not found" reaches a script that reads output as an empty ANSWER
+# rather than as an error (2026-09-02, scripts/backup-volume-guard.sh).
+#
+# So the PATH is SET, not extended, and it is the same line in every root
+# script. ROBOTHOR_EXTRA_PATH is a TEST-ONLY leading directory, where the suites
+# put their stub binaries — it is never set in a unit or in
+# /etc/robothor/robothor.env. Anything from the workspace venv is called by
+# absolute path (SCRIPT_DIR), never found on PATH.
+# See infra/systemd/README.md.
+export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 EXIT_HEALTHY=0
 EXIT_UNHEALTHY=1
 EXIT_USAGE=2
@@ -120,7 +138,10 @@ fi
 # "unhealthy" there would silently skip every backup forever, which is the
 # inert-guard failure this whole change exists to end. 255 => the unit fails
 # and the operator is paged.
-for tool in timeout findmnt; do
+# mktemp is here for the same reason: the --rw probe proves a write LANDS, and
+# a mktemp that was never found fails the same way a full disk does — the
+# difference being that one of them is a real answer about the volume.
+for tool in timeout findmnt mktemp; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         say "FATAL: $tool is not installed — the backup volume cannot be checked"
         exit "$EXIT_PROBE_BROKEN"

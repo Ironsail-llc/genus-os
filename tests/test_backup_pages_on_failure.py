@@ -188,6 +188,10 @@ class TestWalOffsiteSurvivesAnOffsiteFailure:
         env = {
             **_pager_pins(tmp_path),
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            # The script SETS its PATH (a root unit must not inherit the operator's
+            # user-writable directories), so the stub directory reaches it through the
+            # one documented seam — see infra/systemd/README.md.
+            "ROBOTHOR_EXTRA_PATH": str(bin_dir),
             "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
             "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
             "ROBOTHOR_OFFSITE_REMOTE": "remote:bucket",
@@ -274,6 +278,10 @@ class TestWalOffsiteDegradesWhenTheBackupVolumeIsWedged:
         env = {
             **_pager_pins(tmp_path),
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            # The script SETS its PATH (a root unit must not inherit the operator's
+            # user-writable directories), so the stub directory reaches it through the
+            # one documented seam — see infra/systemd/README.md.
+            "ROBOTHOR_EXTRA_PATH": str(bin_dir),
             "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
             "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
             "ROBOTHOR_OFFSITE_REMOTE": "remote:bucket",
@@ -381,6 +389,10 @@ class TestTheBaseBackupRecordsWhenItLastWorked:
         env = {
             **_pager_pins(tmp_path),
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            # The script SETS its PATH (a root unit must not inherit the operator's
+            # user-writable directories), so the stub directory reaches it through the
+            # one documented seam — see infra/systemd/README.md.
+            "ROBOTHOR_EXTRA_PATH": str(bin_dir),
             "ROBOTHOR_BASEBACKUP_DIR": str(dest),
             "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
             # tmp_path is on the root filesystem; see
@@ -480,6 +492,10 @@ class TestTheWalMarkerOnlyMeansTheWalWentOffsite:
         env = {
             **_pager_pins(tmp_path),
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            # The script SETS its PATH (a root unit must not inherit the operator's
+            # user-writable directories), so the stub directory reaches it through the
+            # one documented seam — see infra/systemd/README.md.
+            "ROBOTHOR_EXTRA_PATH": str(bin_dir),
             "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
             "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
             "ROBOTHOR_DB_NAME": "robothor_memory",
@@ -575,6 +591,10 @@ class TestWalOffsiteRefusesToGuessWhenTheProbeIsBroken:
             env={
                 **_pager_pins(tmp_path),
                 "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                # The script SETS its PATH (a root unit must not inherit the operator's
+                # user-writable directories), so the stub directory reaches it through the
+                # one documented seam — see infra/systemd/README.md.
+                "ROBOTHOR_EXTRA_PATH": str(bin_dir),
                 "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
                 "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
                 "ROBOTHOR_OFFSITE_REMOTE": "remote:bucket",
@@ -680,6 +700,10 @@ class TestTheVolumeProbeActuallyGatesTheLocalBackup:
         env = {
             **_pager_pins(tmp_path),
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            # The script SETS its PATH (a root unit must not inherit the operator's
+            # user-writable directories), so the stub directory reaches it through the
+            # one documented seam — see infra/systemd/README.md.
+            "ROBOTHOR_EXTRA_PATH": str(bin_dir),
             "HOME": str(home),
             "ROBOTHOR_BACKUP_MOUNT": str(mount),
             "ROBOTHOR_BACKUP_LOG": str(tmp_path / "backup.log"),
