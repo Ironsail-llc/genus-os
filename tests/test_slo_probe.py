@@ -304,6 +304,16 @@ def healthy_tree(tmp_path: Path, age_hours: float = 1) -> None:
 FIXED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
+
+def _pinned_cooldown_dir(tmp_path: Path) -> Path:
+    """Pre-create the pinned cooldown dir. If it does not exist when the sender
+    runs, send_failure_alert.sh falls back to $XDG_RUNTIME_DIR/robothor-alert-cooldown
+    — a real, shared directory — which is exactly the leak these tests must never
+    reach (observed once as a cross-test flake)."""
+    d = tmp_path / "alert-cooldown"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
 def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
     """Hermetic: no live volume, no live marker dir, no live cooldown state,
     no real Telegram endpoint, no database."""
@@ -331,7 +341,7 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
             "ROBOTHOR_SLO_DB_CHECKS": "0",
             # Sender isolation — a stamp written into the real /run/robothor
             # cooldown dir by a test could suppress a REAL page later.
-            "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+            "ROBOTHOR_ALERT_STATE_DIR": str(_pinned_cooldown_dir(tmp_path)),
             "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
             "ROBOTHOR_ALERT_MAX_ATTEMPTS": "1",
             "ROBOTHOR_ALERT_RETRY_DELAY": "0",

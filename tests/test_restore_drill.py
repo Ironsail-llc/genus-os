@@ -95,6 +95,16 @@ def write_fixture_dump(path: Path) -> Path:
     return path
 
 
+
+def _pinned_cooldown_dir(tmp_path: Path) -> Path:
+    """Pre-create the pinned cooldown dir. If it does not exist when the sender
+    runs, send_failure_alert.sh falls back to $XDG_RUNTIME_DIR/robothor-alert-cooldown
+    — a real, shared directory — which is exactly the leak these tests must never
+    reach (observed once as a cross-test flake)."""
+    d = tmp_path / "alert-cooldown"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
 def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("ROBOTHOR_")}
     env.update(
@@ -116,7 +126,7 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
             "ROBOTHOR_RESTORE_DRILL_NOTIFY_CMD": str(tmp_path / "bin" / "fake-notify.sh"),
             # Sender isolation, in case anything reaches the pager.
             "ROBOTHOR_ALERT_SUPPRESS": "1",
-            "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+            "ROBOTHOR_ALERT_STATE_DIR": str(_pinned_cooldown_dir(tmp_path)),
             "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
         }
     )
