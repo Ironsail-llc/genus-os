@@ -231,6 +231,83 @@ class TestValidateManifest:
         assert any("max_iterations" in w for w in warnings)
 
 
+class TestValidationWarningLogging:
+    """The loader runs on every schedule tick; the warnings do not change."""
+
+    MANIFEST = {
+        "id": "agent-a",
+        "name": "Agent A",
+        "v2": {"planing_enabled": True},  # typo → one stable warning
+    }
+
+    def _write(self, tmp_path: Path) -> Path:
+        (tmp_path / "agent-a.yaml").write_text(yaml.dump(self.MANIFEST))
+        return tmp_path
+
+    def test_repeated_loads_log_the_warning_once(self, tmp_path: Path, caplog):
+        """Same agent, same warning, same process → one log record, not one per tick."""
+        import logging
+
+        import robothor.engine.config as config_mod
+
+        manifest_dir = self._write(tmp_path)
+        config_mod.reset_validation_warning_log()
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.config"):
+            config_mod.load_agent_config("agent-a", manifest_dir)
+            config_mod.load_agent_config("agent-a", manifest_dir)
+
+        records = [r for r in caplog.records if "planing_enabled" in r.getMessage()]
+        assert len(records) == 1
+
+    def test_deduping_does_not_hide_the_warnings_from_callers(self, tmp_path: Path):
+        """Only the LOG is deduped — config.validation_warnings stays complete."""
+        import robothor.engine.config as config_mod
+
+        manifest_dir = self._write(tmp_path)
+        config_mod.reset_validation_warning_log()
+        first = config_mod.load_agent_config("agent-a", manifest_dir)
+        second = config_mod.load_agent_config("agent-a", manifest_dir)
+
+        assert first is not None and second is not None
+        assert any("planing_enabled" in w for w in first.validation_warnings)
+        assert second.validation_warnings == first.validation_warnings
+
+    def test_a_different_agent_still_logs(self, tmp_path: Path, caplog):
+        """Dedupe is per (agent, warning) — a second agent's copy is its own news."""
+        import logging
+
+        import robothor.engine.config as config_mod
+
+        manifest_dir = self._write(tmp_path)
+        other = dict(self.MANIFEST, id="agent-b", name="Agent B")
+        (manifest_dir / "agent-b.yaml").write_text(yaml.dump(other))
+
+        config_mod.reset_validation_warning_log()
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.config"):
+            config_mod.load_agent_config("agent-a", manifest_dir)
+            config_mod.load_agent_config("agent-b", manifest_dir)
+
+        records = [r for r in caplog.records if "planing_enabled" in r.getMessage()]
+        assert len(records) == 2
+
+    def test_a_new_warning_for_a_seen_agent_still_logs(self, tmp_path: Path, caplog):
+        """Suppression is keyed on the text, so a manifest that gets WORSE is not silent."""
+        import logging
+
+        import robothor.engine.config as config_mod
+
+        manifest_dir = self._write(tmp_path)
+        config_mod.reset_validation_warning_log()
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.config"):
+            config_mod.load_agent_config("agent-a", manifest_dir)
+            worse = dict(self.MANIFEST, v2={"planing_enabled": True, "guardrails": ["not_real"]})
+            (manifest_dir / "agent-a.yaml").write_text(yaml.dump(worse))
+            config_mod.load_agent_config("agent-a", manifest_dir)
+
+        assert sum("not_real" in r.getMessage() for r in caplog.records) == 1
+        assert sum("planing_enabled" in r.getMessage() for r in caplog.records) == 1
+
+
 # ─── Explain Config ──────────────────────────────────────────────────
 
 
