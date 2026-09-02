@@ -1265,6 +1265,86 @@ class TestSpoolCap:
         assert "1 older pages dropped" in result.stdout + result.stderr
 
 
+class TestAnUnreadableSpoolFileIsNamedNotDeleted:
+    """A `.msg` the drain cannot read used to be `rm`'d in silence.
+
+    That is a page — the operator was owed it, nobody ever saw it, and the
+    only record of its existence was deleted along with it. Whatever went
+    wrong (a truncated write, a permission the spooler did not have) is
+    diagnosable only from the file that is left behind.
+    """
+
+    def unreadable_page(self, tmp_path: Path) -> Path:
+        d = spool_dir(tmp_path)
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"{SPOOLED_EPOCH_OLDER}-robothor-truncated.service.deadbeef.1.msg"
+        path.write_text("")
+        return path
+
+    def test_the_file_survives_the_drain(self, tmp_path: Path):
+        install_status_curl(tmp_path, ["200"])
+        path = self.unreadable_page(tmp_path)
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert path.exists(), "an unreadable page was deleted, taking the evidence with it"
+
+    def test_the_drain_names_it(self, tmp_path: Path):
+        install_status_curl(tmp_path, ["200"])
+        path = self.unreadable_page(tmp_path)
+        result = run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        out = result.stdout + result.stderr
+        assert path.name in out, f"the skipped page was not named: {out}"
+
+    def test_it_does_not_block_the_page_behind_it(self, tmp_path: Path):
+        log = install_status_curl(tmp_path, ["200"])
+        self.unreadable_page(tmp_path)
+        write_spooled(tmp_path, SPOOLED_EPOCH_NEWER, "PAGE-BEHIND-IT")
+        run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert "PAGE-BEHIND-IT" in delivered_text(tmp_path)
+        assert curl_calls(log) == 1
+
+    def test_it_leaves_the_queue_when_it_ages_out(self, tmp_path: Path):
+        """Kept is not kept forever — the age cap is what finally clears it,
+        into poison/ where it is still readable."""
+        install_status_curl(tmp_path, ["200"])
+        self.unreadable_page(tmp_path)
+        env = base_env(
+            tmp_path, ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS="60", **FAKE_TOKEN_ENV
+        )
+        run_drain(tmp_path, env)
+        assert len(poisoned(tmp_path)) == 1
+
+
+class TestTheSpoolDirIsCreatedUsableByBothAccounts:
+    """`mkdir -p` alone leaves the spool 0755 and owned by whoever spooled
+    first. Root's units and the operator's cron jobs both write here, so the
+    other account is then silently unable to spool at all — and the pages that
+    DID reach disk would be exactly the ones nobody was missing. The tmpfiles
+    row normally creates it 1777; this is the path where it does not exist
+    yet."""
+
+    def test_a_spool_dir_this_run_creates_is_sticky_and_world_writable(
+        self, tmp_path: Path
+    ):
+        install_fake_curl(tmp_path, fail_first=99)
+        result = run_send(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert result.returncode != 0
+        assert spooled(tmp_path), "nothing was spooled — this test proves nothing"
+        mode = spool_dir(tmp_path).stat().st_mode & 0o7777
+        assert mode == 0o1777, f"a freshly created spool is {oct(mode)}, not 0o1777"
+
+    def test_an_existing_spool_dir_keeps_the_mode_its_owner_chose(self, tmp_path: Path):
+        """Only the dir we just created is ours to chmod. Widening a directory
+        somebody else made — to 1777, of all modes — is not the pager's call."""
+        d = spool_dir(tmp_path)
+        d.mkdir(parents=True)
+        d.chmod(0o700)
+        install_fake_curl(tmp_path, fail_first=99)
+        run_send(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
+        assert spooled(tmp_path), "nothing was spooled — this test proves nothing"
+        mode = d.stat().st_mode & 0o7777
+        assert mode == 0o700, f"the pager chmod'd an existing directory to {oct(mode)}"
+
+
 class TestTheDropNoticeSurvivesTheOutage:
     """The truncation notice was posted at the moment of the drop.
 

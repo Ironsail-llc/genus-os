@@ -385,7 +385,17 @@ post_telegram() {
 # liveness tick fires every 5 minutes) can never read half a page.
 spool_page() {
     local text="$1" file tmp
-    mkdir -p "$SPOOL_DIR" 2>/dev/null || true
+    # The tmpfiles row (infra/tmpfiles/robothor-restart.conf) normally creates
+    # this 1777. When it does not exist yet, a bare `mkdir -p` leaves it 0755
+    # and owned by whoever spooled first — after which the OTHER account (root's
+    # units, or the operator's cron jobs) silently cannot spool at all, and the
+    # pages that reached disk would be exactly the ones nobody was missing.
+    #
+    # Only chmod a directory THIS run created. Widening one somebody else made
+    # — to 1777, of all modes — is not the pager's call.
+    if [[ ! -d "$SPOOL_DIR" ]] && mkdir -p "$SPOOL_DIR" 2>/dev/null; then
+        chmod 1777 "$SPOOL_DIR" 2>/dev/null || true
+    fi
     if [[ ! -d "$SPOOL_DIR" || -L "$SPOOL_DIR" || ! -w "$SPOOL_DIR" ]]; then
         echo "send_failure_alert: cannot spool ${UNIT} — ${SPOOL_DIR} is not a writable" \
              "directory (a symlink is refused outright); THIS PAGE IS LOST" >&2
