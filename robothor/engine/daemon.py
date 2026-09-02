@@ -541,19 +541,32 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
 
 
 async def _maybe_run_alert_selftest() -> None:
-    """Optional live probe of the alert delivery path (env-gated).
+    """Optional live probe of the alert path (env-gated). It must NOT page.
 
-    ROBOTHOR_ALERT_SELFTEST=1 fires one alert at a PAGING level so the
-    alert() -> send_fn(chat_id, text) path is verified end-to-end on a running
-    box — a code-free way to confirm the sender actually reaches the operator,
-    without waiting for a real incident to trip it.
+    ROBOTHOR_ALERT_SELFTEST=1 fires one alert at ``info`` shortly after
+    startup, which ``alerts.alert()`` routes to an ``alert_digest`` row the
+    operator agent surfaces on its next heartbeat. What that proves is that
+    ``alert()`` runs on this box and reaches durable storage; the write is
+    checked, not assumed.
 
-    The level matters and is the whole point: this probe used to fire at
-    ``info``, which is not in ``_PAGE_LEVELS``, so it wrote a database row and
-    never touched the Telegram sender whose arity it was written to confirm.
-    An operator set the flag, saw no error, and concluded pages worked — while
-    a revoked bot token or an unset chat id stayed invisible. A probe that
-    cannot fail is worse than no probe, because it reads as a pass.
+    This probe has been wrong in both directions, and the level is where both
+    mistakes live:
+
+    * It first fired at ``info`` while its docstring claimed to verify the
+      ``alert() -> send_fn(chat_id, text)`` arity end-to-end — the one thing
+      ``info`` cannot do. An operator set the flag, saw no error, and
+      concluded pages worked while a revoked bot token stayed invisible.
+    * Raising it to ``critical`` made it honest and made it a pager. The
+      engine restarts; the flag therefore paged CRITICAL on every start —
+      52 pages in 7 days, not one of them an incident. A self-test that
+      trains the operator to scroll past red costs more than the blind spot
+      it closed.
+
+    So the probe no longer claims to prove Telegram delivery, and no longer
+    interrupts anyone to do it. Real delivery is proved by the paths that page
+    for real: ``scripts/send_failure_alert.sh`` verifies its own send by HTTP
+    status and spools what it could not deliver, and the liveness watchdog
+    checks the sender's exit code rather than assuming it.
 
     Best-effort: never raises into the caller, but it does not fail quietly
     either — silence was the original defect.
@@ -563,21 +576,22 @@ async def _maybe_run_alert_selftest() -> None:
     try:
         from robothor.engine.alerts import alert
 
-        delivered = await alert(
-            "critical",
+        recorded = await alert(
+            "info",
             "Alert delivery self-test",
-            "Engine startup self-test — if you are reading this on Telegram, "
-            "the paging path works. Unset ROBOTHOR_ALERT_SELFTEST to stop it.",
+            "Engine startup self-test — this is a digest row, not a page. It "
+            "confirms alert() runs and reaches the notification inbox. Unset "
+            "ROBOTHOR_ALERT_SELFTEST to stop it.",
         )
     except Exception as e:
-        logger.error("Alert delivery self-test RAISED: %s — the paging path is broken", e)
+        logger.error("Alert delivery self-test RAISED: %s — the alert path is broken", e)
         return
-    if delivered:
-        logger.info("Alert delivery self-test: the paging path delivered.")
+    if recorded:
+        logger.info("Alert delivery self-test: alert() wrote its alert_digest row.")
     else:
         logger.error(
-            "Alert delivery self-test did NOT deliver — check the bot token and "
-            "ROBOTHOR_TELEGRAM_CHAT_ID. Pages will not reach the operator."
+            "Alert delivery self-test did NOT record an alert_digest row — alert() "
+            "reached no durable store, so warning/info alerts are being lost."
         )
 
 

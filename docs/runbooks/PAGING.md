@@ -171,6 +171,31 @@ Application-level alerts go through `robothor/engine/alerts.py::alert()`:
 `alert_digest` notification rows instead of paging. A failed page falls back to
 an `alert_fallback` notification row so the alert is not lost.
 
+### `ROBOTHOR_ALERT_SELFTEST` must not page critical in production
+
+`ROBOTHOR_ALERT_SELFTEST=1` makes the engine fire one alert shortly after
+startup (`robothor/engine/daemon.py::_maybe_run_alert_selftest`). It fires at
+`info`, so it lands as an `alert_digest` row and the operator agent surfaces it
+on the next heartbeat. **Leave it at `info`.**
+
+It has been wrong in both directions. At first the probe fired at `info` while
+claiming to verify Telegram delivery end-to-end — which `info` cannot do, so it
+was a probe that could not fail. Raising it to `critical` made it honest and
+made it a pager: the engine restarts, so the flag paged CRITICAL on *every
+start* — 52 pages in 7 days, none of them an incident. A self-test that trains
+the operator to scroll past red costs more than the blind spot it closed.
+
+What the probe proves is that `alert()` runs and reaches durable storage; the
+row write is checked, not assumed, and a failure is logged at ERROR. It does
+not prove Telegram delivery, and it is not supposed to. Those paths prove
+themselves: `send_failure_alert.sh` verifies its send by HTTP status (a 401 is
+not a delivery) and spools what it could not send, and the liveness watchdog
+checks the sender's exit code. To confirm a page really lands, use the Verify
+step at the top of this runbook — a deliberate, one-off `robothor-alert@manual-test`.
+
+`robothor/engine/tests/test_alert_selftest.py::test_the_selftest_never_pages`
+fails if the level goes back up.
+
 ### Who reads the digest
 
 `robothor/engine/warmup.py` is the consumer. On the operator-facing agent's
