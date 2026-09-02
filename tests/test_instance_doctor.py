@@ -235,6 +235,91 @@ def test_allow_file_suppresses_a_known_untemplated_unit(
     assert "robothor-orphan.service" not in result.stdout.replace("allow", "")
 
 
+def test_an_unrenderable_mirror_is_not_reported_as_drift(installed_root: Path):
+    """check_dropin_drift.sh exits 2 for "I could not compare these" — a missing
+    renderer, or a render env it cannot resolve — and 1 for "these differ".
+    Collapsing 2 into template-drift sends the operator to reconcile a
+    difference that was never measured, and hides the real fault: the doctor
+    is not checking these units at all.
+    """
+    result = run_doctor(installed_root, base_env(ROBOTHOR_WORKSPACE=None))
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "cannot-compare" in result.stdout, result.stdout
+    assert "template-drift" not in result.stdout, (
+        "an uncomparable unit was reported as drifted\n" + result.stdout
+    )
+
+
+# ── the allow file ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file")
+def test_an_unreadable_allow_file_is_reported(installed_root: Path, tmp_path: Path):
+    """Silently ignoring it means every entry stops suppressing and the
+    operator reads a page full of findings they had already triaged — with no
+    line anywhere saying why."""
+    sysd = system_dir(installed_root)
+    (sysd / "robothor-orphan.service").write_text("[Service]\nExecStart=/bin/true\n")
+    allow = tmp_path / "instance-units.allow"
+    allow.write_text("robothor-orphan.service\n")
+    allow.chmod(0o000)
+    try:
+        result = run_doctor(installed_root, base_env(), "--allow-file", str(allow))
+    finally:
+        allow.chmod(0o600)
+
+    assert str(allow) in result.stderr, result.stderr
+    assert "robothor-orphan.service" in result.stdout, result.stdout
+
+
+def test_an_allow_entry_that_matched_nothing_is_reported(
+    installed_root: Path, tmp_path: Path
+):
+    """A stale entry suppresses nothing and looks like coverage. The unit was
+    removed, or it finally got a template — either way the operator should
+    delete the line rather than carry it forever."""
+    allow = tmp_path / "instance-units.allow"
+    allow.write_text("robothor-long-gone.service\n")
+
+    result = run_doctor(installed_root, base_env(), "--allow-file", str(allow))
+
+    assert result.returncode == 0, result.stdout
+    assert "robothor-long-gone.service" in result.stderr, result.stderr
+
+
+def test_the_allow_file_cannot_suppress_drift_inert_files_or_symlinks(
+    installed_root: Path, tmp_path: Path
+):
+    """The allow file says "this unit is deliberately instance-only", which is
+    a statement about having no template. It is not a mute button: a live unit
+    that no longer matches its own template, a file systemd ignores, and a unit
+    that was symlinked instead of rendered are all still wrong for a unit
+    someone deliberately listed here."""
+    sysd = system_dir(installed_root)
+    drifted = sysd / "robothor-engine.service"
+    drifted.write_text(drifted.read_text() + "\n# unversioned live edit\n")
+    inert = sysd / "robothor-engine.service.d" / "upgrade-rip-flags.conf.bak-20260713"
+    inert.write_text("[Service]\n")
+    symlinked = sysd / "robothor-liveness.timer"
+    symlinked.unlink()
+    symlinked.symlink_to(REPO_ROOT / "infra" / "systemd" / "robothor-liveness.timer")
+
+    allow = tmp_path / "instance-units.allow"
+    allow.write_text(
+        "robothor-engine.service\n"
+        "robothor-engine.service.d/upgrade-rip-flags.conf.bak-20260713\n"
+        "robothor-liveness.timer\n"
+    )
+
+    result = run_doctor(installed_root, base_env(), "--allow-file", str(allow))
+
+    assert result.returncode == 1, result.stdout
+    assert "template-drift" in result.stdout, result.stdout
+    assert "inert-file" in result.stdout, result.stdout
+    assert "symlink" in result.stdout, result.stdout
+
+
 def test_enabled_but_not_active_is_reported(installed_root: Path, tmp_path: Path):
     stub = fake_systemctl(
         tmp_path,

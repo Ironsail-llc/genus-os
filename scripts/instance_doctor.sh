@@ -28,6 +28,15 @@
 #                     (robothor-x.service.d/y.conf). Default:
 #                     <root>/etc/robothor/instance-units.allow — instance-land,
 #                     next to robothor.env, deliberately NOT in the repo.
+#                     It suppresses ONE finding class: no-template /
+#                     unmirrored-dropin. It is not a mute button — drift, inert
+#                     files, symlinked units, enabled≠active and env shadowing
+#                     are still reported for a unit named here, because they
+#                     are wrong whether or not the unit is instance-only.
+#                     An unreadable allow file and an entry that matched
+#                     nothing are both warned about on stderr: the first
+#                     silently un-suppresses everything, the second is a line
+#                     the operator is carrying that covers nothing.
 #   --env-file FILE   the EnvironmentFile= every unit sources, checked for keys
 #                     that shadow a drop-in Environment=
 #                     (default <root>/etc/robothor/robothor.env)
@@ -55,6 +64,7 @@ HOST_INSTALLER="${REPO_ROOT}/scripts/install-host-scripts.sh"
 
 ROOT=""
 ALLOW_FILE=""
+ALLOW_FILE_EXPLICIT=0
 UNIT_ENV_FILE=""
 
 while [[ $# -gt 0 ]]; do
@@ -65,6 +75,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --allow-file)
             ALLOW_FILE="${2:?--allow-file requires a file}"
+            ALLOW_FILE_EXPLICIT=1
             shift 2
             ;;
         --env-file)
@@ -106,6 +117,16 @@ shopt -s nullglob
 # vendor CRM) exist on one box and naming them in the repo would be exactly the
 # instance data CLAUDE.md rule 1 forbids.
 ALLOWED=()
+declare -A ALLOW_HIT=()
+
+# An allow file that cannot be read suppresses nothing, and the page that
+# results looks exactly like a box that suddenly grew a dozen untemplated
+# units. Say so, on stderr, rather than letting the operator re-triage
+# findings they had already dismissed.
+if [[ ! -r "$ALLOW_FILE" ]] && { [[ -e "$ALLOW_FILE" ]] || [[ $ALLOW_FILE_EXPLICIT -eq 1 ]]; }; then
+    echo "[instance-doctor] WARNING: cannot read allow file ${ALLOW_FILE} — every entry in it is being ignored, so deliberately instance-only units are reported below" >&2
+fi
+
 if [[ -r "$ALLOW_FILE" ]]; then
     while IFS= read -r line; do
         line="${line%%#*}"
@@ -117,9 +138,24 @@ fi
 is_allowed() {
     local needle="$1" entry
     for entry in ${ALLOWED[@]+"${ALLOWED[@]}"}; do
-        [[ "$entry" == "$needle" ]] && return 0
+        if [[ "$entry" == "$needle" ]]; then
+            ALLOW_HIT["$entry"]=1
+            return 0
+        fi
     done
     return 1
+}
+
+# An entry that matched nothing this run is a line the operator is carrying
+# that covers nothing: the unit was removed, or it finally got a template. It
+# reads as coverage and is not, so it gets said out loud — on stderr, because
+# a stale suppression is not itself a finding about the box.
+report_unused_allow_entries() {
+    local entry
+    for entry in ${ALLOWED[@]+"${ALLOWED[@]}"}; do
+        [[ -n "${ALLOW_HIT[$entry]:-}" ]] && continue
+        echo "[instance-doctor] WARNING: allow entry '${entry}' (${ALLOW_FILE}) matched nothing — the unit is gone or it now has a template; the line suppresses nothing" >&2
+    done
 }
 
 # ── systemd state seam ────────────────────────────────────────────────────────
@@ -153,13 +189,33 @@ is_masked() {
 # is run once, comprehensively, in its own section below — over every live
 # drop-in, not only the mirrored ones — so it is suppressed here to keep each
 # finding from being reported twice.
-diff_against_template() {  # live mirror -> 0 = same, 1 = drift/missing
+# check_dropin_drift.sh distinguishes "these differ" (1) from "I could not
+# compare these" (2 — a missing renderer, or a render env it cannot resolve).
+# That distinction is passed straight through: collapsing 2 into drift sends
+# the operator to reconcile a difference nobody measured, and buries the real
+# fault, which is that these units are not being checked at all.
+diff_against_template() {  # live mirror -> 0 = same, 1 = drift, 2 = cannot compare
     local live="$1" mirror="$2" out rc
     out="$(ENV_FILE=/nonexistent/robothor.env bash "$DRIFT" "$live" "$mirror" 2>&1)"
     rc=$?
     [[ $rc -eq 0 ]] && return 0
     printf '%s\n' "$out"
-    return 1
+    return $rc
+}
+
+# The three call sites differ only in what they call the thing being compared.
+report_comparison() {  # rc out kind name
+    case "$1" in
+        0) return 0 ;;
+        2)
+            finding "cannot-compare" \
+                "${4}: could not be compared with its template — the doctor is not checking this ${3}"
+            ;;
+        *)
+            finding "template-drift" "${4}: live ${3} differs from its rendered template"
+            ;;
+    esac
+    detail "$2"
 }
 
 log "root=${ROOT:-/}  templates=${SRC_DIR}"
@@ -183,10 +239,8 @@ for src in "$SRC_DIR"/robothor-*.service "$SRC_DIR"/robothor-*.timer "$SRC_DIR"/
         finding "not-installed" "${name}: template exists, nothing installed (run scripts/install-units.sh)"
         continue
     fi
-    if ! out="$(diff_against_template "$live" "$src")"; then
-        finding "template-drift" "${name}: live unit differs from its rendered template"
-        detail "$out"
-    fi
+    out="$(diff_against_template "$live" "$src")"
+    report_comparison "$?" "$out" "unit" "$name"
 done
 
 for src in "$SRC_DIR"/robothor-*.service.d/*.conf; do
@@ -196,10 +250,8 @@ for src in "$SRC_DIR"/robothor-*.service.d/*.conf; do
         finding "not-installed" "${rel}: drop-in template exists, nothing installed"
         continue
     fi
-    if ! out="$(diff_against_template "$live" "$src")"; then
-        finding "template-drift" "${rel}: live drop-in differs from its rendered template"
-        detail "$out"
-    fi
+    out="$(diff_against_template "$live" "$src")"
+    report_comparison "$?" "$out" "drop-in" "$rel"
 done
 
 # ── (b) live without template ─────────────────────────────────────────────────
@@ -300,7 +352,13 @@ while IFS= read -r line; do
         finding "not-installed" "${dest_name}: not installed (run scripts/install-host-scripts.sh)"
         continue
     fi
-    if ! out="$(diff_against_template "$live" "$src")"; then
+    out="$(diff_against_template "$live" "$src")"
+    rc=$?
+    if [[ $rc -eq 2 ]]; then
+        finding "cannot-compare" \
+            "${dest_name}: could not be compared with ${src_expr#\$\{REPO_ROOT\}/} — the doctor is not checking this script"
+        detail "$out"
+    elif [[ $rc -ne 0 ]]; then
         finding "host-script-drift" "${dest_name}: installed copy differs from ${src_expr#\$\{REPO_ROOT\}/}"
         detail "$out"
     fi
@@ -331,6 +389,7 @@ else
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
+report_unused_allow_entries
 echo
 if [[ $FINDINGS -eq 0 ]]; then
     log "OK — the box matches the repo (0 findings)"
