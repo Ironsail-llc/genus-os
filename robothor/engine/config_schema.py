@@ -293,7 +293,12 @@ def validate_manifest(data: dict[str, Any]) -> list[str]:
     schedule = data.get("schedule", {})
     if isinstance(schedule, dict):
         _check_range(warnings, schedule, "timeout_seconds", 0, 86400)
-        _check_range(warnings, schedule, "max_iterations", 1, 10000)
+        # Lower bound is 0, not 1: 0 is the documented "no check-in interval"
+        # sentinel (schema.yaml; the run loop guards with `_checkin_interval > 0`
+        # and safety_cap is what actually bounds the run). main sets it, so a
+        # floor of 1 logged a warning for every agent on every schedule tick.
+        # Negative values are still a mistake and still warn.
+        _check_range(warnings, schedule, "max_iterations", 0, 10000)
         _check_range(warnings, schedule, "safety_cap", 1, 10000)
         _check_range(warnings, schedule, "stall_timeout_seconds", 0, 86400)
         cron = schedule.get("cron", "")

@@ -214,6 +214,22 @@ class TestValidateManifest:
         warnings = validate_manifest(data)
         assert any("safety_cap" in w for w in warnings)
 
+    def test_max_iterations_zero_is_the_documented_unlimited_value(self):
+        """0 means "no check-in interval" — main runs on it, so it must not warn.
+
+        ``manifest_to_agent_config`` clamps only NEGATIVE values (the run loop
+        guards with ``_checkin_interval > 0``), and safety_cap is what actually
+        bounds the run. Warning on 0 put a line in the log on every schedule
+        tick for a value the schema documents.
+        """
+        warnings = validate_manifest({"id": "test-agent", "schedule": {"max_iterations": 0}})
+        assert not any("max_iterations" in w for w in warnings)
+
+    def test_negative_max_iterations_still_warns(self):
+        """0 is a sentinel; -1 is a mistake."""
+        warnings = validate_manifest({"id": "test-agent", "schedule": {"max_iterations": -1}})
+        assert any("max_iterations" in w for w in warnings)
+
 
 # ─── Explain Config ──────────────────────────────────────────────────
 
