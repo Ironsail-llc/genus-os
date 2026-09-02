@@ -46,6 +46,12 @@ def _run(tmp_path: Path, src: Path, dest: Path, **env_extra) -> subprocess.Compl
         "ROBOTHOR_OFFSITE_SOURCE": str(src),
         "ROBOTHOR_OFFSITE_KEEP": "2",
         "ROBOTHOR_OFFSITE_LOG": str(tmp_path / "offsite.log"),
+        # This script pages the operator on failure, and several cases here
+        # FAIL on purpose. Without this the suite delivers fixture failures to
+        # a real phone -- it did, on 2026-08-27, including a fake "CORRUPT
+        # offsite" that reads like a data-integrity emergency.
+        "ROBOTHOR_ALERT_SUPPRESS": "1",
+        "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",  # never resolves
     }
     env.update(env_extra)
     return subprocess.run(
