@@ -170,9 +170,7 @@ class TestTheRunnerActuallyUsesIt:
         disagree. If someone reintroduces `_fleet_wallclock_ceiling()` at the
         watchdog construction site, this fails.
         """
-        src = (
-            Path(__file__).resolve().parents[1] / "runner.py"
-        ).read_text()
+        src = (Path(__file__).resolve().parents[1] / "runner.py").read_text()
         assert "watchdog_budgets_for(agent_config)" in src, (
             "the runner no longer reads the scaled budgets — tier awareness is inert"
         )
@@ -183,10 +181,6 @@ class TestTheRunnerActuallyUsesIt:
         )
 
     def test_the_chunk_loop_no_longer_reads_the_flat_constant(self):
-        src = (
-            Path(__file__).resolve().parents[1] / "llm_client.py"
-        ).read_text()
+        src = (Path(__file__).resolve().parents[1] / "llm_client.py").read_text()
         assert "timeout=stream_chunk_timeout(model)" in src
-        assert "timeout=STREAM_CHUNK_TIMEOUT" not in src, (
-            "the per-chunk timeout is flat again"
-        )
+        assert "timeout=STREAM_CHUNK_TIMEOUT" not in src, "the per-chunk timeout is flat again"

@@ -135,9 +135,9 @@ def extract_tool_summary(content: str) -> str:
             parts = []
             for k in keys[:3]:
                 val = str(parsed[k])
-                val_preview = val[:40] + ('...' if len(val) > 40 else '')
-                parts.append(f'{k}: {val_preview}')
-            preview = ', '.join(parts)
+                val_preview = val[:40] + ("..." if len(val) > 40 else "")
+                parts.append(f"{k}: {val_preview}")
+            preview = ", ".join(parts)
             if len(keys) > 3:
                 return f"{{{preview}, +{len(keys) - 3} more keys}}"
             return f"{{{preview}}}"
@@ -154,6 +154,8 @@ def extract_tool_summary(content: str) -> str:
 
     # Default: first 80 chars
     return stripped[:80] + ("..." if len(stripped) > 80 else "")
+
+
 #: Per-tool-result budget when feeding fact extraction. Enough for a table
 #: or a coordinate dump, small enough that forty of them stay inside the
 #: summariser's own window.
