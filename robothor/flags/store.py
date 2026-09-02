@@ -1,4 +1,4 @@
-"""DB-backed resolution for the 12 governed guardrail flags.
+"""DB-backed resolution for the governed guardrail flags.
 
 Resolution order, never violated: operator DB row -> os.environ -> None.
 
@@ -30,11 +30,24 @@ GOVERNED_FLAGS: frozenset[str] = frozenset(
         "ROBOTHOR_RIP_4_ENABLED",
         "ROBOTHOR_RIP_5_ENABLED",
         "ROBOTHOR_JUDGE_ENABLED",
+        # Six controls that shipped with a full observe->alert->enforce ladder
+        # but were never added here, so the Controls API (crm/bridge/routers/
+        # controls.py, which iterates exactly this set) could neither show nor
+        # set them: the dashboard listed 13 flags while the engine read 19.
+        # An operator flipping one had to edit /etc and restart the engine,
+        # which is how three of them came to live only in the env file.
+        "ROBOTHOR_RUN_VERIFICATION_MODE",
+        "ROBOTHOR_TOOL_VERIFY_MODE",
+        "ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE",
+        "ROBOTHOR_DELIVERABLE_CONTRACT_MODE",
+        "ROBOTHOR_HONESTY_SUITE_MODE",
+        "ROBOTHOR_BENCHMARK_SANDBOX_MODE",
     }
 )
 
 _MODE_VALUES: tuple[str, ...] = ("off", "observe", "alert", "enforce")
 _RIP_13_VALUES: tuple[str, ...] = ("observe", "enforce")
+_HONESTY_SUITE_VALUES: tuple[str, ...] = ("off", "observe", "enforce")
 _BOOL_VALUES: tuple[str, ...] = ("true", "false")
 
 
@@ -44,7 +57,11 @@ def valid_values_for(name: str) -> tuple[str, ...]:
     Boolean flags (``*_ENABLED``) accept ``true``/``false``. ``ROBOTHOR_RIP_13_MODE``
     is a mode flag that only honors ``observe``/``enforce`` — the engine silently
     drops any other value, so the API must not accept the full mode ladder for it.
-    Every other ``*_MODE`` flag accepts the full ladder: ``off``/``observe``/``alert``/``enforce``.
+    ``ROBOTHOR_HONESTY_SUITE_MODE`` is the same shape one rung wider
+    (``off``/``observe``/``enforce``): it is a grader, not a guardrail, so it
+    blocks nothing and has no "would have blocked" event to page about — see
+    ``feature_flags.honesty_suite_mode``. Every other ``*_MODE`` flag accepts the
+    full ladder: ``off``/``observe``/``alert``/``enforce``.
 
     Both the bridge's write-path validation (422 on an out-of-range value) and
     its read-path payload (``valid_values`` per flag, so the frontend doesn't
@@ -55,6 +72,8 @@ def valid_values_for(name: str) -> tuple[str, ...]:
         return _BOOL_VALUES
     if name == "ROBOTHOR_RIP_13_MODE":
         return _RIP_13_VALUES
+    if name == "ROBOTHOR_HONESTY_SUITE_MODE":
+        return _HONESTY_SUITE_VALUES
     return _MODE_VALUES
 
 

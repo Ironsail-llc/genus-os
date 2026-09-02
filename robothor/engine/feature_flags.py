@@ -57,7 +57,7 @@ def _resolve_raw(name: str, default: str = "") -> str:
     """Governed flags resolve through the DB store first, then env.
 
     Non-governed names (credentials, tuning) go straight to env — the store only
-    knows the 12 guardrail flags.
+    knows the governed guardrail flags (``GOVERNED_FLAGS``).
     """
     from robothor.flags.store import GOVERNED_FLAGS, resolve
 

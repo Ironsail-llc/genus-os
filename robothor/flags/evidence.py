@@ -13,13 +13,16 @@ a given flag returns a comforting zero and makes THIS detector a liar — so
 every source is declared here, in code, cited against the writer it observes,
 never inferred or copy-pasted across flags.
 
-Two flags currently have NO durable DB evidence surface at all:
+Three flags currently have NO durable DB evidence surface at all:
 
 * RIP-4 (skill write-origin provenance) stamps a ``meta.json`` sidecar on
   disk (robothor/engine/skill_provenance.py) — never a DB row.
 * RIP-13 (symbolic-memory compaction) only ``logger.info()``s its token
   savings (robothor/engine/session.py:_finalize_symbol_graph) — never a DB
   row either.
+* The benchmark sandbox records its ``state_checks`` on each in-memory task
+  result, which ``failures_brief`` drops before the ``benchmark_results`` row
+  is written, and sweeps its seeded fixtures at teardown.
 
 Their EvidenceSource entries point at ``agent_guardrail_events`` with a
 ``guardrail_name`` that nothing in the codebase ever inserts. That is not a
@@ -117,6 +120,52 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
         time_column="last_pass_at",
     ),
     "ROBOTHOR_JUDGE_ENABLED": EvidenceSource("agent_reviews", "reviewer_type = 'judge'"),
+    # ── The six controls added to GOVERNED_FLAGS with the flag audit ────────
+    "ROBOTHOR_RUN_VERIFICATION_MODE": EvidenceSource(
+        "agent_guardrail_events", "guardrail_name = 'run_verification'"
+    ),
+    "ROBOTHOR_DELIVERABLE_CONTRACT_MODE": EvidenceSource(
+        "agent_guardrail_events", "guardrail_name = 'deliverable_contract'"
+    ),
+    # The tool post-condition checker owns this table outright: nothing else in
+    # the codebase inserts into it (robothor/engine/tools/verification.py
+    # `_insert_evidence` is the only writer), so every row is one recorded
+    # verdict and the predicate does not need to discriminate. It also emits a
+    # `tool_postconditions` guardrail event, but only on the failure path —
+    # counting those would report a working control as INERT for as long as it
+    # kept finding nothing wrong.
+    "ROBOTHOR_TOOL_VERIFY_MODE": EvidenceSource("agent_run_evidence", "verified IS NOT NULL"),
+    # Decontamination has no event log. Its ONLY durable write is the operator
+    # notification raised by `notify_guardrail_alert`
+    # (robothor/engine/analytics.py) — which fires at `alert` and above; at
+    # `observe` it emits a log line and nothing else. So an honest zero here
+    # means "never escalated", which at observe is exactly what is expected,
+    # and the verdict is INERT rather than a fabricated green.
+    "ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE": EvidenceSource(
+        "crm_agent_notifications",
+        "subject = 'Guardrail would block: benchmark_decontamination'",
+    ),
+    # The honesty grade lands in `benchmark_results.failures` as a
+    # `honesty_verdict` key, and only for cases that FAILED
+    # (robothor/engine/tools/handlers/benchmark.py `failures_brief`). An
+    # abstention that passes leaves no row, so this counts caught fabrications,
+    # not suite executions — the number that matters for the promotion gate
+    # ("at least one real fabrication surfaced and triaged").
+    "ROBOTHOR_HONESTY_SUITE_MODE": EvidenceSource(
+        "benchmark_results",
+        "failures::text LIKE '%honesty_verdict%'",
+        time_column="run_at",
+    ),
+    # No durable DB surface, same honest-zero as RIP-4 and RIP-13 above: the
+    # sandbox's proof of work is `state_checks` on each in-memory task result,
+    # and `failures_brief` drops that key before the benchmark_results row is
+    # written. Its fixtures are swept from the sandbox tenant at teardown by
+    # design, so even the seeded rows are gone by the time anyone looks.
+    # Whichever real table you query there is genuinely no record, so this
+    # correctly reports INERT rather than inventing a signal.
+    "ROBOTHOR_BENCHMARK_SANDBOX_MODE": EvidenceSource(
+        "agent_guardrail_events", "guardrail_name = 'benchmark_sandbox'"
+    ),
 }
 
 
