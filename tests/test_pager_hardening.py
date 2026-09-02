@@ -40,6 +40,7 @@ SEND = REPO_ROOT / "scripts" / "send_failure_alert.sh"
 WRAPPER = REPO_ROOT / "scripts" / "cron-wrapper.sh"
 VOLUME_CHECK = REPO_ROOT / "scripts" / "backup-volume-check.sh"
 STATE_LIB = REPO_ROOT / "scripts" / "backup-state.sh"
+VOLUME_GUARD = REPO_ROOT / "scripts" / "backup-volume-guard.sh"
 UNIT_DIR = REPO_ROOT / "infra" / "systemd"
 
 # The backup units whose ExecCondition= must consult the volume probe, the
@@ -685,7 +686,7 @@ class TestShutdownAndBootPathTemplates:
 
 
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
-@pytest.mark.parametrize("script", [SEND, WRAPPER, VOLUME_CHECK, STATE_LIB])
+@pytest.mark.parametrize("script", [SEND, WRAPPER, VOLUME_CHECK, STATE_LIB, VOLUME_GUARD])
 def test_changed_scripts_are_shellcheck_clean(script: Path):
     result = subprocess.run(
         ["shellcheck", "--severity=warning", str(script)],

@@ -1,0 +1,67 @@
+# The backup volume guard — detect the USB drop, heal it, page ONCE.
+#
+# scripts/backup-volume-check.sh (wired as ExecCondition= on the four backup
+# units) ended a page storm: 96 wal-offsite failures a day, ~22 Telegram pages
+# whose entire content was a unit name. It ended it by making the units SKIP.
+#
+# A skipped unit fires no OnFailure=, so with that fix alone the backups could
+# stop for a week in complete silence. This unit is the other half: it runs the
+# same probe every 10 minutes, performs the recovery that worked by hand twice
+# on this box (lazy unmount, reopen LUKS under a NEW mapper name, fsck -p,
+# remount at the same path), and pages once per heal — or once a day while the
+# volume stays down.
+#
+# Enable with: sudo systemctl enable --now robothor-backup-volume-guard.timer
+#
+# Template — instance values use the canonical placeholder spellings
+# (see infra/systemd/README.md) and are substituted by scripts/render-unit.sh
+# at install time.
+[Unit]
+Description=Robothor backup volume guard (detect, heal, page)
+# The pager needs DNS.
+After=network-online.target
+Wants=network-online.target
+# Deliberately NO RequiresMountsFor=/mnt/robothor-backup: this is the unit that
+# runs WHEN that mount is broken. Binding it to the mount would stop it
+# starting at exactly the moment it is needed — the same mistake as a watchdog
+# ordered after the thing it watches.
+#
+# The guard exits 0 on a down volume; it exits non-zero only when a page could
+# not be DELIVERED, which is itself operator-visible news.
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+# No User= — this must be root. It calls umount, cryptsetup, dmsetup, fsck and
+# mount, and the pager it invokes recovers /run/robothor/secrets.env via the
+# root-readable age key when the secrets have not been decrypted yet.
+EnvironmentFile=/etc/robothor/robothor.env
+# Optional '-': /run is tmpfs, so this file does not exist on a cold boot and a
+# non-optional EnvironmentFile would fail the unit outright.
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/usr/bin/bash /opt/robothor/scripts/backup-volume-guard.sh
+# An fsck -p on a multi-terabyte volume, plus the sender's ~5 minute retry loop
+# for the boot DNS/secrets window. The 90s default would SIGTERM the guard
+# mid-fsck and leave the container open and unmounted.
+TimeoutStartSec=900
+
+# ── Containment: deliberately minimal, and this is load-bearing ──────────────
+# This unit MOUNTS a filesystem that every other unit must be able to see. The
+# usual hardening set would put that mount in a namespace of its own and the
+# guard would report success while the backups still found nothing:
+#
+#   PrivateTmp=      implies a private mount namespace
+#   PrivateMounts=   the private namespace, explicitly
+#   ProtectSystem=   /usr, /boot and (strict) the whole tree read-only —
+#                    including the mount point
+#   ProtectHome=     an instance's backup mount may live under the service
+#                    user's home
+#
+# None of them may be set here. NoNewPrivileges is safe and is kept: nothing
+# this script runs needs to gain privileges beyond the root it already has.
+NoNewPrivileges=yes
+
+# No [Install] section, deliberately: the TIMER is what gets enabled, and it
+# pulls this unit in. A WantedBy=multi-user.target here would also run the
+# guard once at boot, racing the normal mount attempt that OnBootSec=3min
+# exists to wait for.

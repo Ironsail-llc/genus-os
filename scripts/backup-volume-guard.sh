@@ -1,0 +1,484 @@
+#!/usr/bin/env bash
+# The backup volume guard: detect the USB drop, heal it, page ONCE, truthfully.
+#
+# WHY THIS EXISTS
+#   The encrypted USB backup SSD drops off the bus. Three times in nine days
+#   (2026-07-14, 2026-08-24, 2026-08-27). What it leaves behind is not a clean
+#   absence: the mount is still a mount, `df` still reports the cached
+#   capacity, and the device-mapper node keeps a kernel reference so it cannot
+#   even be closed. ext4 flips to `emergency_ro` and every write goes nowhere.
+#
+#   Until scripts/backup-volume-check.sh landed, all four backup units ran
+#   anyway and failed — robothor-wal-offsite every 15 minutes, 96 failures a
+#   day, ~22 Telegram pages whose entire content was a unit name. That probe,
+#   wired as ExecCondition=, turned the storm into SILENCE: the units now SKIP.
+#
+#   Silence is right for a backup unit and wrong for the fleet. A skipped unit
+#   fires no OnFailure=, so with the storm fixed and nothing else added, the
+#   backups could stop for a week and the only evidence would be a marker file
+#   nobody reads. THIS script is the thing that says so — and, because the
+#   recovery is a known five-command sequence that worked by hand twice, does
+#   the recovery first.
+#
+# WHAT IT DOES (every 10 minutes, as root)
+#   healthy  and previously down -> ONE recovery notice, state cleared
+#   healthy  otherwise           -> nothing at all
+#   unhealthy                    -> heal (unless disabled or a backup unit is
+#                                   mid-run), then page: once per heal, or
+#                                   once a day while it stays down
+#
+#   The heal is the sequence that worked on this box, in order:
+#     umount -l <mount>            the mount is wedged; a clean umount hangs
+#     cryptsetup close <name>      only when nothing holds it (open count 0);
+#                                  a stale node usually cannot be closed at all
+#     cryptsetup isLuks            gate: never touch a device that is not ours
+#     smartctl -d scsi -H          gate: never remount a disk SMART calls FAILED
+#                                  (-d scsi, not -d sat: sat does not work
+#                                  through this USB bridge)
+#     cryptsetup open ... <name-N> a NEW mapper name, because the stale one
+#                                  holds a kernel reference until reboot
+#     fsck.ext4 -p                 PREEN ONLY. rc>=4 needs a human; mounting
+#                                  it anyway can turn a recoverable backup
+#                                  volume into an unrecoverable one
+#     mount <mapper> <mount>       the SAME path — the units bind to the path,
+#                                  not to the mapper name
+#
+# WHAT IT WILL NOT DO
+#   * Heal while any backup unit is `activating`: lazy-unmounting the volume
+#     out from under a running pg_basebackup corrupts the backup this guard
+#     exists to protect.
+#   * Answer "when did the backups last work?" from the volume that just
+#     failed. Those facts come from the NVMe markers written by the backup
+#     scripts (scripts/backup-state.sh) — the disk that breaks must not be the
+#     disk holding the evidence.
+#   * Mask a flaky bridge. EVERY heal pages, under its own dedup key, because
+#     three self-healed drops in a day is a hardware fault, not a quiet night.
+#
+# STATE  ${ROBOTHOR_VOLUME_GUARD_STATE_DIR:-/run/robothor/volume-guard}
+#   down_since  when the volume first failed a probe (edge-triggered, so the
+#               page can say how long it has been down)
+#   last_paged  epoch of the last DOWN page, for the repage interval
+#   heal_count  USB drops healed since boot — the "#N" in the heal page
+#   On /run (tmpfs) on purpose, like robothor/engine/manifest_guard.py: a
+#   reboot re-arms the guard, and "since boot" is exactly the window in which
+#   a repeated drop means the hardware is failing.
+#
+# ENVIRONMENT
+#   ROBOTHOR_BACKUP_MOUNT                  mount point (default
+#                                          /mnt/robothor-backup)
+#   ROBOTHOR_VOLUME_GUARD_STATE_DIR        see STATE above
+#   ROBOTHOR_BACKUP_STATE_DIR              last-good markers (NVMe)
+#   ROBOTHOR_CRYPTTAB                      crypttab to resolve the UUID from
+#                                          (default /etc/crypttab)
+#   ROBOTHOR_VOLUME_GUARD_MAPPER           crypttab name of the container
+#                                          (default robothor-backup)
+#   ROBOTHOR_VOLUME_GUARD_HEAL             1 (default) to heal, 0 to page only
+#   ROBOTHOR_VOLUME_GUARD_REPAGE_SECONDS   quiet period while still down
+#                                          (default 86400)
+#   ROBOTHOR_VOLUME_GUARD_CHECK_CMD        the volume probe (test seam)
+#   ROBOTHOR_VOLUME_GUARD_ALERT_CMD        the pager (test seam)
+#   ROBOTHOR_VOLUME_GUARD_DEV_DIR          by-uuid dir (test seam)
+#   ROBOTHOR_VOLUME_GUARD_MAPPER_DIR       /dev/mapper (test seam)
+#
+# Exit: 0 whatever the volume's state — a down volume is news, not a unit
+#       failure. 1 ONLY when a page could not be DELIVERED, so this unit's own
+#       OnFailure=robothor-alert@%n.service fires (same discipline as
+#       scripts/liveness_probe.sh: an undelivered page is not success).
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+# Last-good markers. Sourced, not reimplemented: the format and the "unknown
+# (no successful run recorded)" fallback have to match what the backup scripts
+# write, and an empty string where a timestamp belongs reads as "just now".
+# shellcheck source=./backup-state.sh
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/backup-state.sh"
+
+MOUNT="${ROBOTHOR_BACKUP_MOUNT:-/mnt/robothor-backup}"
+STATE_DIR="${ROBOTHOR_VOLUME_GUARD_STATE_DIR:-/run/robothor/volume-guard}"
+CRYPTTAB="${ROBOTHOR_CRYPTTAB:-/etc/crypttab}"
+MAPPER_BASE="${ROBOTHOR_VOLUME_GUARD_MAPPER:-robothor-backup}"
+DEV_DIR="${ROBOTHOR_VOLUME_GUARD_DEV_DIR:-/dev/disk/by-uuid}"
+MAPPER_DIR="${ROBOTHOR_VOLUME_GUARD_MAPPER_DIR:-/dev/mapper}"
+CHECK_CMD="${ROBOTHOR_VOLUME_GUARD_CHECK_CMD:-/usr/bin/env bash ${SCRIPT_DIR}/backup-volume-check.sh}"
+ALERT_CMD="${ROBOTHOR_VOLUME_GUARD_ALERT_CMD:-/usr/bin/env bash ${SCRIPT_DIR}/send_failure_alert.sh}"
+HEAL="${ROBOTHOR_VOLUME_GUARD_HEAL:-1}"
+REPAGE_SECONDS="${ROBOTHOR_VOLUME_GUARD_REPAGE_SECONDS:-86400}"
+
+# Units that write to the volume. Lazy-unmounting under any of them corrupts
+# the backup, so any one of them `activating` defers the heal to the next tick.
+BACKUP_UNITS=(
+    robothor-backup-local.service
+    robothor-backup-offsite.service
+    robothor-backup-verify.service
+    robothor-basebackup.service
+    robothor-wal-offsite.service
+)
+
+log() { echo "backup-volume-guard: $*"; }
+err() { echo "backup-volume-guard: $*" >&2; }
+
+if [[ ! "$REPAGE_SECONDS" =~ ^[0-9]+$ ]]; then
+    err "ROBOTHOR_VOLUME_GUARD_REPAGE_SECONDS=${REPAGE_SECONDS} is not an integer — using 86400"
+    REPAGE_SECONDS=86400
+fi
+
+# ── State ────────────────────────────────────────────────────────────────────
+if ! mkdir -p "$STATE_DIR" 2>/dev/null; then
+    err "cannot create the state directory ${STATE_DIR} — the guard cannot tell a"
+    err "new outage from an old one, and would page every 10 minutes"
+    exit 1
+fi
+
+state_read() {
+    local file="${STATE_DIR}/$1"
+    [[ -r "$file" ]] && head -n 1 "$file" 2>/dev/null | tr -d '[:space:]'
+    return 0
+}
+state_write() { printf '%s\n' "$2" >"${STATE_DIR}/$1" 2>/dev/null || err "cannot write ${STATE_DIR}/$1"; }
+state_clear() { rm -f "${STATE_DIR}/$1" 2>/dev/null || true; }
+
+# The lock lives BESIDE the state dir, not in it: a lock file inside would be
+# indistinguishable from state to anything (a human included) reading the dir.
+#
+# Serialised because a heal takes minutes — an fsck on a full 4TB volume can
+# outlast the 10-minute timer — and two concurrent runs would unmount the
+# volume the other one just mounted.
+LOCK_FILE="${STATE_DIR%/}.lock"
+lock_held=1
+exec 9>"$LOCK_FILE" 2>/dev/null || lock_held=0
+if ((lock_held == 0)); then
+    # Say so instead of skipping. `flock -n 9` on a closed descriptor fails
+    # exactly like a held lock, and treating that as "another run has it" would
+    # make the guard exit 0 forever without ever probing the volume — the inert
+    # control, arrived at by a redirect nobody checked.
+    err "cannot open the lock file ${LOCK_FILE} — running WITHOUT serialisation"
+elif command -v flock >/dev/null 2>&1; then
+    if ! flock -n 9; then
+        log "another guard run is still working (probably a long fsck) — skipping this tick"
+        exit 0
+    fi
+fi
+
+# ── The probe ────────────────────────────────────────────────────────────────
+# Not reimplemented here: scripts/backup-volume-check.sh is the SAME probe the
+# backup units use as ExecCondition=, so the guard cannot disagree with the
+# thing that decides whether they run.
+PROBE_OUTPUT=""
+probe() {
+    local argv rc=0
+    # Split on whitespace deliberately: the seam is a command line.
+    read -r -a argv <<<"$CHECK_CMD"
+    PROBE_OUTPUT="$("${argv[@]}" --rw "$MOUNT" 2>&1 >/dev/null)" || rc=$?
+    return "$rc"
+}
+
+# ── The pager ────────────────────────────────────────────────────────────────
+# Returns the SENDER's status. Checked, never assumed: an undelivered page is
+# not a page (robothor/engine/alerts.py, scripts/liveness_probe.sh).
+page() {
+    local key="$1" body="$2" argv
+    read -r -a argv <<<"$ALERT_CMD"
+    if "${argv[@]}" "$key" "$body"; then
+        return 0
+    fi
+    err "the page was NOT delivered — the sender failed. Failing this unit so its"
+    err "own OnFailure= hook fires; the outage must not end up silent."
+    return 1
+}
+
+# ── Facts about the backups, read from NVMe ──────────────────────────────────
+LAST_LOCAL_DUMP="$(backup_state_last last-local-dump)"
+LAST_OFFSITE="$(backup_state_last last-offsite-ok)"
+LAST_WAL_OFFSITE="$(backup_state_last last-wal-offsite-ok)"
+
+# ── The device behind the mount ──────────────────────────────────────────────
+# From crypttab, not from the mount: when the volume is wedged the mount tells
+# you nothing about which physical device it was supposed to be.
+DEVICE=""
+KEYFILE=""
+DEVICE_REASON=""
+resolve_device() {
+    if [[ ! -r "$CRYPTTAB" ]]; then
+        DEVICE_REASON="cannot read ${CRYPTTAB} — the backing device is unknown"
+        return 1
+    fi
+    local spec
+    spec="$(awk -v name="$MAPPER_BASE" \
+        '!/^[[:space:]]*#/ && $1 == name { print $2; exit }' "$CRYPTTAB")"
+    KEYFILE="$(awk -v name="$MAPPER_BASE" \
+        '!/^[[:space:]]*#/ && $1 == name { print $3; exit }' "$CRYPTTAB")"
+    if [[ -z "$spec" ]]; then
+        DEVICE_REASON="no crypttab entry named ${MAPPER_BASE} in ${CRYPTTAB}"
+        return 1
+    fi
+    case "$spec" in
+        UUID=*) DEVICE="${DEV_DIR}/${spec#UUID=}" ;;
+        /*) DEVICE="$spec" ;;
+        *)
+            DEVICE_REASON="crypttab entry ${MAPPER_BASE} names ${spec}, which is neither a UUID= nor a path"
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+# major:minor as MAJ:MIN, whichever punctuation the tool used.
+majmin() { sed -n 's/.*(\([0-9]*\)[,:][[:space:]]*\([0-9]*\)).*/\1:\2/p' | head -n 1; }
+
+# ── Heal ─────────────────────────────────────────────────────────────────────
+HEAL_REASON=""
+MAPPER_USED=""
+
+# The name to open the container under.
+#
+# The original, when it is free. When it is not, the question is whether the
+# existing node is STALE: `dmsetup deps` gives the major:minor it is backed by,
+# and after a re-plug the device comes back as a different one. A node whose
+# deps still match the device is live and correct — reuse it rather than
+# stacking another mapping on the same disk.
+pick_mapper_name() {
+    if [[ ! -e "${MAPPER_DIR}/${MAPPER_BASE}" ]]; then
+        MAPPER_USED="$MAPPER_BASE"
+        return 0
+    fi
+
+    local deps dev_majmin
+    deps="$(dmsetup deps -o devno "$MAPPER_BASE" 2>/dev/null | majmin)"
+    dev_majmin="$(lsblk -no MAJ:MIN "$DEVICE" 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+    if [[ -n "$deps" && -n "$dev_majmin" && "$deps" == "$dev_majmin" ]]; then
+        log "${MAPPER_BASE} is still backed by ${deps}, which is the device — reusing it"
+        MAPPER_USED="$MAPPER_BASE"
+        return 0
+    fi
+    log "${MAPPER_BASE} is stale (backed by ${deps:-unknown}, device is ${dev_majmin:-unknown})"
+
+    local i
+    for i in 1 2 3 4 5 6 7 8 9; do
+        if [[ ! -e "${MAPPER_DIR}/${MAPPER_BASE}-${i}" ]]; then
+            MAPPER_USED="${MAPPER_BASE}-${i}"
+            return 0
+        fi
+    done
+    # Every name burned means nine kernel references that never went away.
+    # Nothing this script can do clears them.
+    HEAL_REASON="9 stale mappings, reboot required"
+    return 1
+}
+
+# SMART, through the bridge that actually answers. `-d sat` returns nothing on
+# this USB enclosure; `-d scsi` works. A missing smartctl is not a reason to
+# refuse the heal — it is a reason to say the gate did not run.
+smart_gate() {
+    if ! command -v smartctl >/dev/null 2>&1; then
+        log "smartctl is not installed — the SMART gate did not run"
+        return 0
+    fi
+    local disk out
+    disk="$(lsblk -no PKNAME "$DEVICE" 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+    if [[ -n "$disk" ]]; then disk="/dev/${disk}"; else disk="$DEVICE"; fi
+    out="$(smartctl -d scsi -H "$disk" 2>&1)"
+    # Case-sensitive: the health verdict is the literal token FAILED. A
+    # case-insensitive match would trip on "Read Device Identity failed",
+    # which is a bridge quirk, not a dying disk.
+    if grep -q 'FAILED' <<<"$out"; then
+        HEAL_REASON="SMART reports ${disk} as FAILED — refusing to remount a dying disk"
+        return 1
+    fi
+    return 0
+}
+
+heal() {
+    HEAL_REASON=""
+    MAPPER_USED=""
+
+    # 1. Let go of the wedged mount. Lazy, because a plain umount blocks
+    #    forever on a device that is gone.
+    if findmnt -rn -o TARGET --mountpoint "$MOUNT" >/dev/null 2>&1; then
+        if ! umount -l "$MOUNT"; then
+            HEAL_REASON="umount -l ${MOUNT} failed"
+            return 1
+        fi
+    fi
+
+    # 2. Close the old mapping IF nothing holds it. Usually something does —
+    #    that kernel reference is exactly why a new name is needed below.
+    if [[ -e "${MAPPER_DIR}/${MAPPER_BASE}" ]]; then
+        local open_count
+        open_count="$(dmsetup info -c --noheadings -o open "$MAPPER_BASE" 2>/dev/null | tr -dc '0-9')"
+        if [[ "$open_count" == "0" ]]; then
+            cryptsetup close "$MAPPER_BASE" >/dev/null 2>&1 \
+                || log "cryptsetup close ${MAPPER_BASE} failed — carrying on under a new name"
+        else
+            log "${MAPPER_BASE} has open count ${open_count:-unknown} — cannot be closed until reboot"
+        fi
+    fi
+
+    # 3. Gates. Nothing below here may run against a device that is not ours,
+    #    or a disk the firmware has given up on.
+    if ! cryptsetup isLuks "$DEVICE" >/dev/null 2>&1; then
+        HEAL_REASON="${DEVICE} is not a LUKS container — refusing to touch it"
+        return 1
+    fi
+    smart_gate || return 1
+
+    # 4. Open under a free name.
+    pick_mapper_name || return 1
+    if [[ ! -e "${MAPPER_DIR}/${MAPPER_USED}" ]]; then
+        local open_argv=(cryptsetup open "$DEVICE" "$MAPPER_USED")
+        # crypttab's third column: a keyfile, or `none`/`-` for interactive —
+        # and interactive is not available to a timer.
+        if [[ -n "$KEYFILE" && "$KEYFILE" != "none" && "$KEYFILE" != "-" && -r "$KEYFILE" ]]; then
+            open_argv+=(--key-file "$KEYFILE")
+        fi
+        if ! "${open_argv[@]}"; then
+            HEAL_REASON="cryptsetup open failed for ${DEVICE} as ${MAPPER_USED}"
+            return 1
+        fi
+    fi
+
+    # 5. Preen fsck ONLY. -p fixes what is safe to fix without asking and
+    #    exits >=4 for anything that needs a decision. An automated -y here
+    #    could destroy a recoverable filesystem while nobody is watching.
+    local fsck_rc=0
+    fsck.ext4 -p "${MAPPER_DIR}/${MAPPER_USED}" || fsck_rc=$?
+    if ((fsck_rc >= 4)); then
+        cryptsetup close "$MAPPER_USED" >/dev/null 2>&1 \
+            || log "could not close ${MAPPER_USED} after the failed fsck"
+        HEAL_REASON="filesystem needs manual fsck (fsck.ext4 -p exit ${fsck_rc}) — NOT mounted"
+        return 1
+    fi
+
+    # 6. Back at the SAME path: RequiresMountsFor= and every backup script
+    #    name the path, not the mapper.
+    if ! mount "${MAPPER_DIR}/${MAPPER_USED}" "$MOUNT"; then
+        HEAL_REASON="mount ${MAPPER_DIR}/${MAPPER_USED} at ${MOUNT} failed"
+        return 1
+    fi
+    return 0
+}
+
+busy_backup_unit() {
+    command -v systemctl >/dev/null 2>&1 || return 1
+    local unit state
+    for unit in "${BACKUP_UNITS[@]}"; do
+        state="$(systemctl is-active "$unit" 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+        if [[ "$state" == "activating" ]]; then
+            printf '%s' "$unit"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ── Healthy ──────────────────────────────────────────────────────────────────
+probe_rc=0
+probe || probe_rc=$?
+
+if ((probe_rc == 0)); then
+    down_since="$(state_read down_since)"
+    if [[ -n "$down_since" ]]; then
+        log "the backup volume is healthy again (down since ${down_since})"
+        if ! page "backup-volume-recovered" \
+            "✅ backup volume healthy again (down since ${down_since}; the guard did not heal it — the device came back, or it was fixed by hand).
+Local dump last good: ${LAST_LOCAL_DUMP}
+Offsite last OK: ${LAST_OFFSITE}
+WAL offsite last OK: ${LAST_WAL_OFFSITE}"; then
+            exit 1
+        fi
+    fi
+    # Cleared even when nothing was down: a stale last_paged would suppress the
+    # first page of the NEXT outage for a whole day. heal_count is deliberately
+    # kept — it counts drops since boot, and tmpfs is what resets it.
+    state_clear down_since
+    state_clear last_paged
+    log "volume healthy at ${MOUNT}"
+    exit 0
+fi
+
+# ── Unhealthy ────────────────────────────────────────────────────────────────
+# The probe's own words, so the page says what is actually wrong (emergency_ro,
+# not mounted, readdir timed out) rather than "exit 1".
+reason="$(grep -m 1 '^backup-volume-check: ' <<<"$PROBE_OUTPUT" \
+    | sed 's/^backup-volume-check: //')"
+[[ -n "$reason" ]] || reason="the volume probe reported it unusable (exit ${probe_rc})"
+((probe_rc == 255)) && reason="the volume probe itself is broken (exit 255): ${reason}"
+
+DOWN_SINCE="$(state_read down_since)"
+if [[ -z "$DOWN_SINCE" ]]; then
+    DOWN_SINCE="$(date -Is)"
+    state_write down_since "$DOWN_SINCE"
+fi
+err "backup volume at ${MOUNT} is NOT usable: ${reason}"
+
+healed=0
+if ! resolve_device; then
+    reason="$DEVICE_REASON"
+    log "not healing: ${reason}"
+elif [[ ! -e "$DEVICE" ]]; then
+    # Nothing to unmount, open or fsck — the disk is not on the bus. Say so
+    # and stop: the fix is physical.
+    reason="device absent from USB"
+    log "not healing: ${reason} (${DEVICE} does not exist)"
+elif [[ "$HEAL" != "1" ]]; then
+    log "not healing: ROBOTHOR_VOLUME_GUARD_HEAL=${HEAL}"
+elif busy_unit="$(busy_backup_unit)"; then
+    reason="${reason}; heal deferred: ${busy_unit} is activating"
+    log "not healing: ${busy_unit} is activating — unmounting under a running backup would corrupt it"
+else
+    if heal; then
+        # PROVE it. The heal steps returning 0 is not the same as a usable
+        # volume, and "recovered" in a log nobody can falsify is how an inert
+        # control survives for months.
+        reprobe_rc=0
+        probe || reprobe_rc=$?
+        if ((reprobe_rc == 0)); then
+            healed=1
+        else
+            reason="remapped as ${MAPPER_USED}, but the volume is still unusable"
+        fi
+    else
+        reason="$HEAL_REASON"
+    fi
+fi
+
+if ((healed)); then
+    count="$(state_read heal_count)"
+    [[ "$count" =~ ^[0-9]+$ ]] || count=0
+    count=$((count + 1))
+    state_write heal_count "$count"
+    log "backup volume auto-recovered (drop #${count} since boot; remapped as ${MAPPER_USED})"
+    # A unique key per drop, on purpose: the sender dedups per key for an hour,
+    # and a bridge that flaps twice in that hour must produce two pages.
+    if ! page "backup-volume-auto-recovered-${count}" \
+        "⚠️ backup volume auto-recovered (USB drop #${count} since boot; remapped as ${MAPPER_USED}).
+Local dump last good: ${LAST_LOCAL_DUMP}
+Offsite last OK: ${LAST_OFFSITE}
+WAL offsite last OK: ${LAST_WAL_OFFSITE}"; then
+        exit 1
+    fi
+    state_clear down_since
+    state_clear last_paged
+    exit 0
+fi
+
+# ── Still down: one page, then quiet ─────────────────────────────────────────
+last_paged="$(state_read last_paged)"
+now="$(date +%s)"
+if [[ "$last_paged" =~ ^[0-9]+$ ]] && ((now - last_paged < REPAGE_SECONDS)); then
+    log "already paged $((now - last_paged))s ago (repage after ${REPAGE_SECONDS}s) — staying quiet"
+    exit 0
+fi
+
+if ! page "backup-volume-down" \
+    "🔴 BACKUP VOLUME DOWN since ${DOWN_SINCE} (${reason}).
+Paused: nightly dump (last good ${LAST_LOCAL_DUMP}), offsite refresh (last OK ${LAST_OFFSITE}), base backup + WAL prune.
+Still running: WAL offsite (last OK ${LAST_WAL_OFFSITE}) → PITR RPO intact, dump-tier RPO growing.
+Runbook: BACKUP_VOLUME_GUARD.md"; then
+    # Deliberately NOT stamping last_paged: arming the day-long quiet period on
+    # a page nobody received is how an outage goes silent.
+    exit 1
+fi
+state_write last_paged "$now"
+exit 0
