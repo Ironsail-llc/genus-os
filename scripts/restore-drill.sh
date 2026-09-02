@@ -52,26 +52,34 @@
 #                                     CMD <subject> <body>
 #   ROBOTHOR_DB_NAME                  the LIVE database, refused as a target
 #   ROBOTHOR_PYTHON                   interpreter for the built-in notifier
-#   ROBOTHOR_RESTORE_DRILL_PATH_FALLBACK  directories APPENDED to PATH
-#                                     (/usr/sbin:/usr/bin:/sbin:/bin) — the
-#                                     unit's EnvironmentFile sets one with no
-#                                     sbin
+#   ROBOTHOR_EXTRA_PATH               TEST-ONLY. Prepended to the fixed PATH
+#                                     below so a test can point the drill at
+#                                     its fakes. Nothing on the box sets it;
+#                                     documented in docs/runbooks/RESTORE_DRILL.md.
 set -uo pipefail
 
 log() { echo "restore-drill: $*"; }
 err() { echo "restore-drill: $*" >&2; }
 
 # ── PATH ─────────────────────────────────────────────────────────────────────
+# Built from scratch, and the inherited one is DISCARDED.
+#
 # This unit loads the same EnvironmentFile=/etc/robothor/robothor.env as every
 # other one, and that file sets a PATH with NO /usr/sbin and NO /sbin. A tool
 # the drill cannot find must not turn into "the backup did not restore" — that
 # is a very different page from "psql is not installed", and only one of them
 # is true.
 #
-# APPENDED, never prepended: the job is to make a directory the unit forgot
-# REACHABLE, not to outrank the PATH the operator configured (this instance's
-# rclone lives in /usr/local/bin).
-export PATH="${PATH:+$PATH:}${ROBOTHOR_RESTORE_DRILL_PATH_FALLBACK:-/usr/sbin:/usr/bin:/sbin:/bin}"
+# The inherited PATH is not merely extended, because it begins with a
+# user-writable ~/.local/bin and this drill runs as root: anything dropped
+# there that shadows date, find, gunzip, psql, createdb or dropdb would run as
+# root, and dropdb is the one destructive verb in this script. Appending
+# system directories does not help — the planted copy still wins. So the PATH
+# is a fixed list, with /usr/local/bin on it because this instance's rclone
+# lives there.
+#
+# ROBOTHOR_EXTRA_PATH is the one prepended element and it is test-only.
+export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -193,7 +201,7 @@ if (( ${#MISSING[@]} > 0 )); then
     for tool in "${MISSING[@]}"; do
         err "MISSING ${tool}"
     done
-    abort "the drill cannot run: ${#MISSING[@]} tool(s) do not resolve on PATH=${PATH} (${MISSING[*]}). Nothing was created and nothing was restored — this is a misconfiguration, not a backup that failed to restore."
+    abort "the drill cannot run: ${#MISSING[@]} tool(s) do not resolve on PATH=${PATH} (${MISSING[*]}). Nothing was created and nothing was restored — this is a misconfiguration, not a backup that failed to restore. Install the tool, or point its seam at one; the drill's PATH is fixed and does not inherit the caller's."
 fi
 
 # Installed here: after the name guards (so the dropdb in cleanup can only ever

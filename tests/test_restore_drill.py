@@ -48,6 +48,9 @@ UNIT_DIR = REPO_ROOT / "infra" / "systemd"
 
 SCRATCH_DB = f"robothor_restore_drill_test_{os.getpid()}"
 
+#: The PATH the drill builds for itself, discarding what it inherits.
+FIXED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 
 def database_is_reachable() -> bool:
     if not all(shutil.which(t) for t in ("psql", "createdb", "dropdb")):
@@ -93,7 +96,12 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("ROBOTHOR_")}
     env.update(
         {
-            "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+            # Fakes go in through ROBOTHOR_EXTRA_PATH, the drill's test-only
+            # seam — never by prepending to PATH. The drill discards the PATH
+            # it inherits, so a test that planted its fakes there would be
+            # exercising a channel the drill no longer reads.
+            "PATH": os.environ["PATH"],
+            "ROBOTHOR_EXTRA_PATH": str(tmp_path / "bin"),
             "HOME": str(tmp_path),
             "ROBOTHOR_RESTORE_DRILL_DB": SCRATCH_DB,
             "ROBOTHOR_RESTORE_DRILL_LOCAL_DIR": str(tmp_path / "dumps"),
@@ -428,6 +436,10 @@ class TestTheToolsAreResolvedBeforeTheDrillStarts:
     starts timing a restore that was never going to work — otherwise the
     result reads as "the backup did not restore", which is a very different
     page from "psql is not installed".
+
+    The same PATH is also the reason the drill builds its own rather than
+    extending what it inherits: under the unit that PATH begins with a
+    user-writable `~/.local/bin`, and the drill runs as root.
     """
 
     def test_a_missing_tool_names_itself_and_aborts(self, tmp_path: Path):
@@ -452,8 +464,12 @@ class TestTheToolsAreResolvedBeforeTheDrillStarts:
                 "the notification must carry the real reason too"
             )
 
-    def test_the_sbin_directories_are_put_back_on_the_path(self, tmp_path: Path):
-        """The unit hands the drill a PATH with no /usr/sbin and no /sbin.
+    def test_the_path_is_fixed_and_an_inherited_directory_is_not_consulted(
+        self, tmp_path: Path
+    ):
+        """The drill runs as root out of a timer whose inherited PATH begins
+        with a user-writable ``~/.local/bin``. It builds its own PATH instead,
+        keeping ``/usr/local/bin`` because this instance's `rclone` is there.
 
         Recorded from a child process rather than asserted on the script text:
         what matters is the PATH the tools are actually resolved against.
@@ -465,16 +481,37 @@ class TestTheToolsAreResolvedBeforeTheDrillStarts:
         recorder.write_text(f'#!/usr/bin/env bash\nprintf \'%s\\n\' "$PATH" >> "{path_log}"\nexit 0\n')
         recorder.chmod(recorder.stat().st_mode | stat.S_IEXEC)
 
-        env = base_env(tmp_path, ROBOTHOR_RESTORE_DRILL_NOTIFY_CMD=str(recorder))
-        env["PATH"] = f"{tmp_path / 'bin'}:/usr/bin:/bin"
+        # A `date` shim first on the inherited PATH: the drill times the
+        # restore with `date +%s`, so this is what a planted binary would ride.
+        planted = tmp_path / "planted"
+        planted.mkdir()
+        sentinel = tmp_path / "planted-ran.txt"
+        shim = planted / "date"
+        shim.write_text(
+            "#!/usr/bin/env bash\n"
+            f'echo ran >> "{sentinel}"\n'
+            'exec /usr/bin/date "$@"\n'
+        )
+        shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
+
+        env = base_env(
+            tmp_path,
+            ROBOTHOR_RESTORE_DRILL_NOTIFY_CMD=str(recorder),
+            **install_fake_pg(tmp_path),
+        )
+        env["PATH"] = f"{planted}:{os.environ['PATH']}"
 
         run_drill(env)
 
         assert path_log.exists(), "the drill always reports its result"
-        seen = path_log.read_text()
-        assert "/usr/sbin" in seen and "/sbin" in seen, (
-            f"the drill must put the sbin directories back on PATH: {seen}"
+        seen = path_log.read_text().strip()
+        assert seen == f"{tmp_path / 'bin'}:{FIXED_PATH}", (
+            f"the drill must run on the fixed system PATH, not the inherited one: {seen}"
         )
-        assert seen.startswith(str(tmp_path / "bin")), (
-            "and must APPEND them — the operator's own PATH still comes first"
+        assert str(planted) not in seen, (
+            "a directory the drill merely inherited must not be searched at all"
+        )
+        assert not sentinel.exists(), (
+            "a binary planted on the inherited PATH was executed by a drill "
+            "that runs as root"
         )

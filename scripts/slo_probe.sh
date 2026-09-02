@@ -112,26 +112,36 @@
 #   ROBOTHOR_SLO_HEARTBEAT_AGENT       operator-facing agent id (main)
 #   ROBOTHOR_SLO_PROBE_TIMEOUT         seconds per disk step (20) — a dropped
 #                                      USB device blocks readdir forever
-#   ROBOTHOR_SLO_PATH_FALLBACK         directories APPENDED to PATH
-#                                      (/usr/sbin:/usr/bin:/sbin:/bin). The
-#                                      unit's EnvironmentFile sets a PATH with
-#                                      no sbin, and runuser lives in /usr/sbin.
+#   ROBOTHOR_SLO_ID_CMD                id, which decides whether this run has
+#                                      to hop at all
+#   ROBOTHOR_EXTRA_PATH                TEST-ONLY. Prepended to the fixed PATH
+#                                      below so a test can point the probe at
+#                                      its fakes. Nothing on the box sets it;
+#                                      documented in docs/runbooks/SLOS.md.
 set -uo pipefail
 
 # ── PATH ─────────────────────────────────────────────────────────────────────
-# Every unit loads EnvironmentFile=/etc/robothor/robothor.env, and that file
-# sets a PATH with NO /usr/sbin and NO /sbin. `runuser` lives in /usr/sbin, so
-# under systemd the DB hop resolved to nothing at all and the failure came back
-# through db_query as "the query did not answer (database unreachable?)". A
-# tool that is not on PATH is not a database outage, and a page an operator
-# cannot act on is worse than no page. The same PATH already cost the backup
-# volume guard its `dmsetup`.
+# Built from scratch, and the inherited one is DISCARDED.
 #
-# APPENDED, never prepended. The job here is to make a directory the unit
-# forgot REACHABLE, not to outrank the PATH the operator configured — this
-# instance's rclone is in /usr/local/bin, and a system directory pushed to the
-# front silently changes which binary every other seam resolves to.
-export PATH="${PATH:+$PATH:}${ROBOTHOR_SLO_PATH_FALLBACK:-/usr/sbin:/usr/bin:/sbin:/bin}"
+# Two problems, one line. Every unit loads
+# EnvironmentFile=/etc/robothor/robothor.env, and that file sets a PATH with NO
+# /usr/sbin and NO /sbin — `runuser` lives in /usr/sbin, so under systemd the DB
+# hop resolved to nothing at all and came back through db_query as "the query
+# did not answer (database unreachable?)". A tool that is not on PATH is not a
+# database outage. The same PATH already cost the backup volume guard its
+# `dmsetup`.
+#
+# The second problem is why the inherited PATH is not merely extended: it
+# begins with a user-writable ~/.local/bin, and this probe runs HOURLY AS ROOT.
+# Anything dropped in there that shadows date, find, grep, ls or psql would run
+# as root every hour. Appending system directories does not help — the planted
+# copy still wins. So the PATH is a fixed list, and /usr/local/bin stays on it
+# because this instance's rclone is there.
+#
+# ROBOTHOR_EXTRA_PATH is the one prepended element, and it is test-only: it
+# exists so a test can point the probe at its fakes without pretending the
+# inherited PATH is trustworthy. Nothing on the box sets it.
+export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 REPORT=0
 if [[ "${1:-}" == "--report" ]]; then
@@ -178,6 +188,9 @@ GUARDRAIL_COOLDOWN="${ROBOTHOR_SLO_GUARDRAIL_COOLDOWN_SECONDS:-43200}"
 LIVENESS_COOLDOWN="${ROBOTHOR_SLO_LIVENESS_COOLDOWN_SECONDS:-43200}"
 
 SYSTEMCTL_CMD="${ROBOTHOR_SLO_SYSTEMCTL_CMD:-systemctl}"
+# A seam, because the fixed PATH above means a test can no longer shadow `id`
+# by prepending a directory — and `id` is what decides whether this run hops.
+ID_CMD="${ROBOTHOR_SLO_ID_CMD:-id}"
 VOLUME_CHECK_CMD="${ROBOTHOR_SLO_VOLUME_CHECK_CMD:-/usr/bin/env bash ${SCRIPT_DIR}/backup-volume-check.sh --ro}"
 RCLONE_CMD="${ROBOTHOR_SLO_RCLONE_CMD:-rclone}"
 REMOTE="${ROBOTHOR_OFFSITE_REMOTE:-}"
@@ -232,9 +245,13 @@ require_tool() {
     command -v "${argv[0]}" >/dev/null 2>&1 || MISSING+=("${what} — ${argv[0]}")
 }
 
-for tool in date find sort head cut grep id ls timeout; do
+# `env` is not decoration: the runuser hop is literally
+# `runuser -u <account> -- env PGUSER=... psql`, so a missing `env` breaks the
+# DB half while every other tool resolves.
+for tool in date find sort head cut grep ls timeout env; do
     require_tool "core utility" "$tool"
 done
+require_tool "the identity check (ROBOTHOR_SLO_ID_CMD)" "$ID_CMD"
 require_tool "S4 volume probe (ROBOTHOR_SLO_VOLUME_CHECK_CMD)" "$VOLUME_CHECK_CMD"
 require_tool "S5/S8 (ROBOTHOR_SLO_SYSTEMCTL_CMD)" "$SYSTEMCTL_CMD"
 # Only when an offsite remote is configured: a box with none never lists it.
@@ -255,7 +272,7 @@ if (( ${#MISSING[@]} > 0 )); then
     for tool in "${MISSING[@]}"; do
         err "  MISSING ${tool}"
     done
-    err "nothing was measured and nothing was paged — a missing binary is a misconfiguration, not an SLO breach. Fix the tool or the unit's PATH (ROBOTHOR_SLO_PATH_FALLBACK)."
+    err "nothing was measured and nothing was paged — a missing binary is a misconfiguration, not an SLO breach. Install the tool, or point its seam at one — the probe's PATH is fixed and does not inherit the caller's."
     exit 2
 fi
 
@@ -670,7 +687,7 @@ fi
 resolve_psql() {
     [[ -z "$PSQL_CMD" ]] || return 0    # an explicit override answers for itself
 
-    if [[ "$(id -u)" != "0" ]]; then
+    if [[ "$("$ID_CMD" -u)" != "0" ]]; then
         # Not root: peer auth judges whatever account this already is.
         PSQL_CMD="psql"
         return 0
@@ -679,7 +696,7 @@ resolve_psql() {
         DB_BLOCKED="the probe runs as root, which pg_ident does not map to any database role, and no OS account was configured to hop to — set ROBOTHOR_SLO_OS_USER (or ROBOTHOR_SERVICE_USER) to the account pg_ident maps onto role '${DB_ROLE:-<unset>}'"
         return 1
     fi
-    if [[ "$(id -un)" == "$OS_USER" ]]; then
+    if [[ "$("$ID_CMD" -un)" == "$OS_USER" ]]; then
         PSQL_CMD="psql"
         return 0
     fi
@@ -708,7 +725,7 @@ db_identity() {
         printf 'psql command overridden by ROBOTHOR_SLO_PSQL_CMD'
     elif [[ "$PSQL_CMD" == "psql" ]]; then
         printf 'as OS user %s, role %s, database %s' \
-            "$(id -un)" "${DB_ROLE:-<unset>}" "$DB"
+            "$("$ID_CMD" -un)" "${DB_ROLE:-<unset>}" "$DB"
     else
         printf 'hopped to OS user %s with PGUSER=%s, database %s' \
             "$OS_USER" "${DB_ROLE:-<unset>}" "$DB"

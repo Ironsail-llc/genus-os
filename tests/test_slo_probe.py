@@ -300,13 +300,24 @@ def healthy_tree(tmp_path: Path, age_hours: float = 1) -> None:
 # ── the environment ──────────────────────────────────────────────────────────
 
 
+#: The PATH both scripts build for themselves, discarding what they inherit.
+FIXED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
 def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
     """Hermetic: no live volume, no live marker dir, no live cooldown state,
     no real Telegram endpoint, no database."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("ROBOTHOR_")}
     env.update(
         {
-            "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+            # The fakes are injected through ROBOTHOR_EXTRA_PATH, the probe's
+            # own test-only seam — NOT by prepending to PATH. The probe
+            # deliberately discards the PATH it inherits (under the unit that
+            # PATH begins with a user-writable ~/.local/bin), so a test that
+            # planted its fakes there would be testing a channel the probe no
+            # longer reads.
+            "PATH": os.environ["PATH"],
+            "ROBOTHOR_EXTRA_PATH": str(tmp_path / "bin"),
             "HOME": str(tmp_path),
             # The two live paths this probe would otherwise read.
             "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "backup-state"),
@@ -1110,40 +1121,96 @@ class TestTheToolsAreResolvedBeforeAnythingIsMeasured:
     misidentify its own mapper by losing `dmsetup`.
     """
 
-    def test_a_tool_outside_the_units_path_is_still_found(self, tmp_path: Path):
-        """The hop must work under the PATH the unit actually gets."""
+    def test_the_path_is_the_fixed_system_one_and_drops_what_it_inherited(
+        self, tmp_path: Path
+    ):
+        """The unit's inherited PATH begins with a user-writable
+        ``~/.local/bin``. This runs hourly AS ROOT, so anything on that PATH
+        that shadows `date`, `find`, `grep` or `psql` runs as root — the probe
+        must build its PATH from scratch instead of trusting what it is
+        handed. ``/usr/local/bin`` stays on it because this instance's
+        `rclone` lives there.
+        """
         healthy_tree(tmp_path)
-        install_fake_psql(tmp_path, failures=5)
-        install_fake_id(tmp_path)
-        install_fake_getent(tmp_path, "svcuser")
-        # runuser lives ONLY here — as it lives only in /usr/sbin on the box —
-        # and this directory is deliberately absent from PATH below.
-        sbin = tmp_path / "sbin"
-        sbin.mkdir(parents=True, exist_ok=True)
-        runuser_log = install_fake_runuser(tmp_path)
-        (tmp_path / "bin" / "runuser").rename(sbin / "runuser")
+        planted = tmp_path / "planted"
+        planted.mkdir()
+        env = base_env(tmp_path, ROBOTHOR_SLO_SYSTEMCTL_CMD="robothor-not-a-real-systemctl")
+        env["PATH"] = f"{planted}:{os.environ['PATH']}"
 
+        result = run_probe(env)
+
+        match = re.search(r"do not resolve on PATH=(\S+)", result.stderr)
+        assert match, f"the preflight must report the PATH it searched: {result.stderr}"
+        seen = match.group(1)
+        assert seen == f"{tmp_path / 'bin'}:{FIXED_PATH}", (
+            f"the probe must run on the fixed system PATH, not the inherited one: {seen}"
+        )
+        assert str(planted) not in seen, (
+            "a directory the probe merely inherited must not be searched at all"
+        )
+
+    def test_a_binary_planted_on_the_inherited_path_is_never_run(self, tmp_path: Path):
+        """Not "the PATH string looks right" — "the planted binary never ran".
+
+        A `date` shim first on the inherited PATH is the whole attack: the
+        probe runs `date` on every tier, hourly, as root.
+        """
+        healthy_tree(tmp_path)
+        planted = tmp_path / "planted"
+        planted.mkdir()
+        sentinel = tmp_path / "planted-ran.txt"
+        shim = planted / "date"
+        shim.write_text(
+            "#!/usr/bin/env bash\n"
+            f'echo ran >> "{sentinel}"\n'
+            'exec /usr/bin/date "$@"\n'
+        )
+        shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
+        env = base_env(tmp_path)
+        env["PATH"] = f"{planted}:{os.environ['PATH']}"
+        with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        assert not sentinel.exists(), (
+            "a binary planted on the inherited PATH was executed by a probe "
+            "that runs as root every hour"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_the_identity_check_has_its_own_seam(self, tmp_path: Path):
+        """`id` decides whether the probe hops at all, and the fixed PATH
+        means a test can no longer shadow it by prepending a directory. The
+        seam is how the root path stays testable off a root box."""
+        healthy_tree(tmp_path)
+        install_fake_psql(tmp_path)
+        seams = tmp_path / "seams"
+        seams.mkdir()
+        fake_id = seams / "id"
+        fake_id.write_text(
+            "#!/usr/bin/env bash\n"
+            'case "${1:-}" in\n'
+            "    -u) echo 0 ;;\n"
+            "    *) echo root ;;\n"
+            "esac\n"
+        )
+        fake_id.chmod(fake_id.stat().st_mode | stat.S_IEXEC)
+        # `seams` is on no PATH the probe builds; only the seam can reach it.
         env = db_env(
             tmp_path,
-            ROBOTHOR_SLO_OS_USER="svcuser",
+            ROBOTHOR_SLO_ID_CMD=str(fake_id),
             ROBOTHOR_DB_USER="db_role",
-            ROBOTHOR_SLO_GETENT_CMD=str(tmp_path / "bin" / "getent"),
-            ROBOTHOR_SLO_PATH_FALLBACK=str(sbin),
         )
-        # The unit's own PATH shape: no sbin anywhere.
-        env["PATH"] = f"{tmp_path / 'bin'}:/usr/bin:/bin"
         log = with_recording_alert(tmp_path, env)
 
         result = run_probe(env)
 
-        assert runuser_log.exists(), (
-            "runuser was not on the PATH the unit hands the probe; the probe "
-            f"must put the sbin directories back: {result.stdout + result.stderr}"
+        output = result.stdout + result.stderr
+        assert "ROBOTHOR_SLO_OS_USER" in output, (
+            "the seam said uid 0, so the probe must take the root path and "
+            f"report that it has nothing to hop to: {output}"
         )
-        assert log.exists() and "slo:llm-availability" in log.read_text(), (
-            "the hop must still deliver the measurement"
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
+        assert not log.exists(), "a configuration gap is not an SLO breach"
 
     def test_a_missing_tool_names_itself_and_is_not_an_outage(self, tmp_path: Path):
         """A binary that is not installed must exit loudly naming the binary,

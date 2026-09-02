@@ -246,7 +246,7 @@ report. A typo that silently widened a budget to infinity would be a dead-man
 that reports every backup as fresh — the failure this whole file exists to
 prevent.
 
-## The unit's PATH has no `sbin`
+## Both scripts build their own PATH
 
 `/etc/robothor/robothor.env` sets a `PATH` with **no `/usr/sbin` and no
 `/sbin`**, and every unit loads it with `EnvironmentFile=`. `runuser` lives in
@@ -255,12 +255,29 @@ came back as *"the query did not answer (database unreachable?)"* — a page an
 operator cannot act on, about an outage that was not happening. The same PATH
 had already cost the backup volume guard its `dmsetup`.
 
-Both `scripts/slo_probe.sh` and `scripts/restore-drill.sh` therefore **append**
-`/usr/sbin:/usr/bin:/sbin:/bin` to whatever `PATH` they are handed
-(`ROBOTHOR_SLO_PATH_FALLBACK` / `ROBOTHOR_RESTORE_DRILL_PATH_FALLBACK`).
-Appended, never prepended: the point is to make a directory the unit forgot
-*reachable*, not to outrank the PATH the operator configured — this instance's
-`rclone` is in `/usr/local/bin`.
+That PATH also **begins with a user-writable `~/.local/bin`**, and both
+`robothor-slo.service` (hourly) and `robothor-restore-drill.service` run as
+**root**. Anything dropped in there shadowing `date`, `find`, `grep`, `psql`,
+`createdb` or `dropdb` would run as root — and appending the system
+directories does not help, because the planted copy still wins the lookup.
+
+So `scripts/slo_probe.sh` and `scripts/restore-drill.sh` **discard the PATH
+they inherit** and set one line, identically:
+
+```sh
+export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+```
+
+`/usr/local/bin` is on it because this instance's `rclone` lives there.
+`ROBOTHOR_EXTRA_PATH` is **test-only**, in the same family as the
+`ROBOTHOR_SLO_DB_CHECKS=0` mute below: it exists so a test can point a script
+at its fakes, nothing on the box sets it, and it must never appear in
+`/etc/robothor/robothor.env`. Setting it in production hands a root-run script
+a directory of someone else's choosing, first.
+
+Every other tool has a named seam (`ROBOTHOR_SLO_ID_CMD`,
+`ROBOTHOR_SLO_RUNUSER_CMD`, `ROBOTHOR_SLO_PSQL_CMD`, …). Point the seam at an
+absolute path rather than widening the PATH to reach it.
 
 Each script then **preflights every external tool it needs** with `command -v`
 before measuring anything, and exits non-zero naming the ones that do not
@@ -270,7 +287,8 @@ resolve:
 slo_probe: cannot run: 1 tool(s) do not resolve on PATH=...
 slo_probe:   MISSING the database hop (ROBOTHOR_SLO_RUNUSER_CMD) — runuser
 slo_probe: nothing was measured and nothing was paged — a missing binary is a
-           misconfiguration, not an SLO breach.
+           misconfiguration, not an SLO breach. Install the tool, or point its
+           seam at one.
 ```
 
 A missing binary must never become an `UNEVALUATED` row or a breach: the probe

@@ -18,13 +18,14 @@ though `psql` exited 0. Run it by hand with
 [`SLOS.md`](SLOS.md) for how it fits alongside the backup-freshness dead-man.
 
 Before it creates anything, the script resolves every tool it needs
-(`psql`, `createdb`, `dropdb`, `rclone` when a remote is set) with `command -v`
-and aborts naming the ones that are missing. The unit loads
-`/etc/robothor/robothor.env`, whose `PATH` has no `/usr/sbin` and no `/sbin`, so
-the script appends those directories first
-(`ROBOTHOR_RESTORE_DRILL_PATH_FALLBACK`). A missing binary reported as a
-restore failure is the one wrong conclusion this drill must never reach — see
-[`SLOS.md`](SLOS.md), "The unit's PATH has no `sbin`".
+(`psql`, `createdb`, `dropdb`, `timeout`, `rclone` when a remote is set) with
+`command -v` and aborts naming the ones that are missing. It resolves them on a
+PATH it builds itself — the unit loads `/etc/robothor/robothor.env`, whose
+`PATH` has no `/usr/sbin` and no `/sbin` and *does* begin with a user-writable
+`~/.local/bin`, which is not a PATH a root-run drill should inherit. A missing
+binary reported as a restore failure is the one wrong conclusion this drill
+must never reach — see [`SLOS.md`](SLOS.md), "Both scripts build their own
+PATH", for the exact line and for `ROBOTHOR_EXTRA_PATH`, the test-only seam.
 
 It is **not** `robothor-backup-verify.timer`. That is `backup-offsite.sh` with
 `ROBOTHOR_OFFSITE_VERIFY_ONLY=1`: an rclone byte-comparison, which proves the
