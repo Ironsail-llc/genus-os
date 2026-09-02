@@ -370,6 +370,55 @@ class TestCronDedupSurvivesAnUnwritableStateDir:
         assert fallback.exists() and list(fallback.iterdir()), (
             "nothing was stamped anywhere, so the next failure pages again"
         )
+        mode = oct(fallback.stat().st_mode)[-3:]
+        assert mode == "700", (
+            f"fallback state dir must be created 0700 (no other user can read "
+            f"or plant stamps in it), got {mode}"
+        )
+
+    def test_a_preexisting_symlinked_fallback_dir_is_not_adopted(self, tmp_path: Path):
+        """A local user who pre-creates the fallback path as a symlink to
+        another directory could plant stamps there to suppress a real page,
+        or read stamps written through it. ``mkdir -m 700 -p`` succeeds
+        silently on a symlink to a dir without touching its mode, so this
+        must be rejected explicitly. The page must still be sent — dedup
+        is disabled for this send instead."""
+        log = install_fake_curl(tmp_path)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        fallback_path = tmp_path / "fallback-state"
+        fallback_path.symlink_to(elsewhere)
+
+        env = self.unwritable_state(tmp_path)
+        env["ROBOTHOR_ALERT_FALLBACK_STATE_DIR"] = str(fallback_path)
+
+        result = run_wrapper(tmp_path, ["sh", "-c", "exit 7"], env)
+        assert result.returncode == 7, result.stdout + result.stderr
+        assert curl_calls(log) == 1, "a page must never be dropped over dedup state"
+        assert (
+            "fallback state dir" in result.stdout + result.stderr
+            and "dedup disabled" in result.stdout + result.stderr
+        ), "an untrusted fallback dir must be named and dedup explicitly disabled"
+        assert list(elsewhere.iterdir()) == [], (
+            "no stamp may be written through the symlink"
+        )
+
+    def test_a_preexisting_owned_directory_is_adopted_normally(self, tmp_path: Path):
+        """A fallback dir that already exists, is a real directory (not a
+        symlink), and is owned by this user must be trusted and used —
+        not everything pre-existing is an attack."""
+        log = install_fake_curl(tmp_path)
+        fallback_path = tmp_path / "fallback-state"
+        fallback_path.mkdir(mode=0o700)
+
+        env = self.unwritable_state(tmp_path)
+        env["ROBOTHOR_ALERT_FALLBACK_STATE_DIR"] = str(fallback_path)
+
+        result = run_wrapper(tmp_path, ["sh", "-c", "exit 7"], env)
+        assert result.returncode == 7, result.stdout + result.stderr
+        assert curl_calls(log) == 1
+        assert list(fallback_path.iterdir()), "the pre-existing owned dir was not adopted"
+        assert "dedup disabled" not in result.stdout + result.stderr
 
     def test_a_writable_state_dir_is_used_unchanged(self, tmp_path: Path):
         """Root's path must not move: /run/robothor/alert-cooldown stays the

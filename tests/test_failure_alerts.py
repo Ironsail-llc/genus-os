@@ -9,9 +9,12 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SEND = REPO_ROOT / "scripts" / "send_failure_alert.sh"
@@ -98,6 +101,18 @@ def run_send(
         # the default dir is real on this box, and a test must not read the
         # operator's actual backup state into an assertion.
         "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "backup-state"),
+        # /run/robothor/secrets.env is real and readable on a live box. Without
+        # this default, a call site that forgets to pass a fake token AND
+        # forgets to override this itself falls through to the operator's
+        # actual credentials — see
+        # test_run_send_default_env_never_sources_the_real_secrets_file.
+        "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+        # The cooldown fallback lives at a fixed, shared, real path
+        # (/tmp/robothor-alert-cooldown-<uid>) that this box uses for actual
+        # production pages. Without this default, any test that makes the
+        # primary state dir unwritable plants a real stamp there — see
+        # test_run_send_default_env_never_touches_the_shared_fallback_dir.
+        "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "fallback-state"),
         # These tests predate the boot-window retry loop and assert on exact
         # curl call counts — pin a single fast attempt so they keep testing
         # what they always tested. The retry behavior itself is covered in
@@ -157,6 +172,95 @@ def test_send_fails_loudly_without_token(tmp_path: Path):
     )
     assert result.returncode != 0
     assert "ROBOTHOR_TELEGRAM_BOT_TOKEN" in result.stdout + result.stderr
+
+
+# Shape of a real Telegram bot token ("<digits>:<35 base64url-ish chars>"), used
+# to detect a leaked real credential generically rather than hardcoding one.
+_REAL_TOKEN_SHAPE = re.compile(r"\d{6,10}:[A-Za-z0-9_-]{30,40}")
+
+
+def test_run_send_default_env_never_sources_the_real_secrets_file(tmp_path: Path):
+    """run_send's own base env must be the seam that keeps every test in this
+    file off /run/robothor/secrets.env — not each call site remembering to
+    override ROBOTHOR_SECRETS_FILE.
+
+    That file is real and readable on a live box (this one included): without
+    an isolating default, a caller of run_send() that forgets to pass a fake
+    token AND forgets to override ROBOTHOR_SECRETS_FILE silently sources the
+    operator's real Telegram credentials and would page for real.
+    """
+    log = fake_curl(tmp_path)
+    # Deliberately no ROBOTHOR_TELEGRAM_BOT_TOKEN/CHAT_ID and no
+    # ROBOTHOR_SECRETS_FILE override — this must rely entirely on run_send's
+    # own defaults to stay hermetic.
+    result = run_send(tmp_path, "robothor-something-new.service", {})
+    assert result.returncode != 0, (
+        "a hermetic test run must never find real credentials to send with"
+    )
+    assert "ROBOTHOR_TELEGRAM_BOT_TOKEN" in result.stdout + result.stderr
+    assert curl_call_count(log) == 0, (
+        "no send should have been attempted at all — any curl call here "
+        "means a token (real or otherwise) was found and used"
+    )
+    assert not _REAL_TOKEN_SHAPE.search(log.read_text() if log.exists() else "")
+
+
+def test_run_send_sources_only_the_explicit_fake_secrets_file(tmp_path: Path):
+    """When credentials DO come from a sourced secrets file, the curl args
+    log must carry only the fake token from that file — never anything
+    shaped like a real Telegram bot token."""
+    log = fake_curl(tmp_path)
+    fake_secrets = tmp_path / "fake-secrets.env"
+    fake_secrets.write_text(
+        'ROBOTHOR_TELEGRAM_BOT_TOKEN="tok123"\nROBOTHOR_TELEGRAM_CHAT_ID="42"\n'
+    )
+    result = run_send(
+        tmp_path,
+        "robothor-engine.service",
+        {"ROBOTHOR_SECRETS_FILE": str(fake_secrets)},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = log.read_text()
+    assert "api.telegram.org/bottok123/sendMessage" in args
+    assert not _REAL_TOKEN_SHAPE.search(args), (
+        f"curl args must contain only the fake token, found a real-shaped "
+        f"one: {args!r}"
+    )
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="root ignores directory permissions, so 0555 is writable"
+)
+def test_run_send_default_env_never_touches_the_shared_fallback_dir(tmp_path: Path):
+    """run_send's base env must also isolate the cooldown FALLBACK dir.
+
+    The fallback lives at a fixed, shared, real path
+    (/tmp/robothor-alert-cooldown-<uid>) that this box already uses for
+    production pages. Without a default override, a test that only makes
+    the primary ROBOTHOR_ALERT_STATE_DIR unwritable (without separately
+    remembering the fallback var) plants a real stamp file in that shared
+    directory, which can suppress a genuine future page.
+    """
+    real_fallback = Path(f"/tmp/robothor-alert-cooldown-{os.getuid()}")
+    before = set(real_fallback.iterdir()) if real_fallback.exists() else set()
+
+    fake_curl(tmp_path)
+    unwritable = tmp_path / "unwritable-state"
+    unwritable.mkdir()
+    unwritable.chmod(0o555)
+    env = {
+        "ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123",
+        "ROBOTHOR_TELEGRAM_CHAT_ID": "42",
+        "ROBOTHOR_ALERT_STATE_DIR": str(unwritable),
+    }
+    result = run_send(tmp_path, "robothor-fallback-isolation-test.service", env)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    after = set(real_fallback.iterdir()) if real_fallback.exists() else set()
+    assert after == before, (
+        "a test run stamped the shared real fallback cooldown dir: "
+        f"{after - before}"
+    )
 
 
 def test_install_creates_onfailure_dropins(tmp_path: Path):
@@ -319,11 +423,36 @@ class TestConsequenceLine:
         text = self.page_for(tmp_path, "robothor-engine.service")
         assert "Agents are DOWN" in text
 
+    def test_search_engine_does_not_match_the_engine_arm(self, tmp_path: Path):
+        """The *engine* arm was a bare substring match — a unit or cron
+        label merely containing "engine" (e.g. a search-engine indexer)
+        must not be misdiagnosed as the robothor agent engine being down."""
+        text = self.page_for(tmp_path, "search-engine-reindex.service")
+        assert "Agents are DOWN" not in text
+        assert "(no consequence mapped — add one in send_failure_alert.sh)" in text
+
+    def test_vision_says_presence_and_face_recognition_are_blind(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-vision.service")
+        assert "Vision capture is down" in text
+
+    def test_provision_and_supervision_do_not_match_the_vision_arm(self, tmp_path: Path):
+        """The *vision* arm was a bare substring match — "provision" and
+        "supervision" both contain "vision" and must not be misdiagnosed as
+        the camera/vision pipeline being down."""
+        for unit in ("cloud-provision.service", "agent-supervision.service"):
+            text = self.page_for(tmp_path, unit)
+            assert "Vision capture is down" not in text, unit
+            assert (
+                "(no consequence mapped — add one in send_failure_alert.sh)" in text
+            ), unit
+
     def test_an_unmapped_unit_says_so_instead_of_inventing_one(self, tmp_path: Path):
         """A wrong consequence is worse than an absent one — the default has
         to read as a gap in the map, and as a chore to close it."""
         text = self.page_for(tmp_path, "robothor-something-new.service")
-        assert "no consequence mapped" in text
+        assert (
+            "(no consequence mapped — add one in send_failure_alert.sh)" in text
+        )
 
     def test_the_consequence_is_the_second_line_of_the_page(self, tmp_path: Path):
         """Telegram truncates the preview; the consequence must be visible

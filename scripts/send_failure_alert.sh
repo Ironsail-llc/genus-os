@@ -95,7 +95,16 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 # Root's path is untouched: root can write /run/robothor/alert-cooldown, so
 # -w is true and nothing here fires.
 if [[ ! -w "$STATE_DIR" ]]; then
-    FALLBACK_STATE_DIR="${ROBOTHOR_ALERT_FALLBACK_STATE_DIR:-/tmp/robothor-alert-cooldown-$(id -u)}"
+    if [[ -n "${ROBOTHOR_ALERT_FALLBACK_STATE_DIR:-}" ]]; then
+        FALLBACK_STATE_DIR="$ROBOTHOR_ALERT_FALLBACK_STATE_DIR"
+    elif [[ -n "${XDG_RUNTIME_DIR:-}" && -w "${XDG_RUNTIME_DIR}" ]]; then
+        # Prefer the per-session runtime dir: it is tmpfs, per-user by
+        # construction, and gone on logout/reboot like /run/robothor itself —
+        # a better match than a /tmp path that outlives the session.
+        FALLBACK_STATE_DIR="${XDG_RUNTIME_DIR}/robothor-alert-cooldown"
+    else
+        FALLBACK_STATE_DIR="/tmp/robothor-alert-cooldown-$(id -u)"
+    fi
     # SC2174: with -p, -m applies only to the deepest directory. That is the
     # one that matters here — the stamps live in the leaf, and mkdir creates
     # it 0700 atomically, so no other user can read or plant stamps in it.
@@ -103,19 +112,33 @@ if [[ ! -w "$STATE_DIR" ]]; then
     # nothing else can unlink through it either.
     # shellcheck disable=SC2174
     mkdir -m 700 -p "$FALLBACK_STATE_DIR" 2>/dev/null || true
-    if [[ -w "$FALLBACK_STATE_DIR" ]]; then
+    # mkdir -p succeeds SILENTLY on a directory that already exists — it does
+    # not chmod an existing leaf to 700, and it happily follows a symlink to
+    # a directory. A local user who pre-creates this exact path (or symlinks
+    # it elsewhere) could plant or read cooldown stamps and suppress a real
+    # page. So the leaf must be re-checked after mkdir: a real directory
+    # (not a symlink), owned by this user, or it is not trusted.
+    #
+    # A page must never be SUPPRESSED by an untrusted dir, and must never be
+    # DROPPED either — so a failed check disables dedup for this send rather
+    # than aborting it.
+    if [[ -d "$FALLBACK_STATE_DIR" && ! -L "$FALLBACK_STATE_DIR" && -O "$FALLBACK_STATE_DIR" ]]; then
         # Name it: a cooldown that moves silently is a cooldown nobody can
         # find when they go looking for why a page did not arrive.
         echo "send_failure_alert: ${STATE_DIR} is not writable; using cooldown state dir ${FALLBACK_STATE_DIR}" >&2
         STATE_DIR="$FALLBACK_STATE_DIR"
     else
-        echo "send_failure_alert: no writable cooldown state dir (${STATE_DIR}, ${FALLBACK_STATE_DIR}) — pages will not dedup" >&2
+        echo "send_failure_alert: fallback state dir ${FALLBACK_STATE_DIR} is not a directory owned by this user — dedup disabled for this send" >&2
+        STATE_DIR=""
     fi
 fi
 
-STAMP_FILE="${STATE_DIR}/${SANITIZED}.${UNIT_HASH}"
+STAMP_FILE=""
+if [[ -n "$STATE_DIR" ]]; then
+    STAMP_FILE="${STATE_DIR}/${SANITIZED}.${UNIT_HASH}"
+fi
 
-if [[ -f "$STAMP_FILE" ]]; then
+if [[ -n "$STAMP_FILE" && -f "$STAMP_FILE" ]]; then
     NOW=$(date +%s)
     STAMP_TIME=$(stat -c %Y "$STAMP_FILE" 2>/dev/null || echo 0)
     AGE=$(( NOW - STAMP_TIME ))
@@ -189,6 +212,10 @@ backup_marker() {
 # systemd unit ("robothor-wal-offsite.service"), a cron pseudo-unit
 # ("cron: ... wal-offsite.sh (exit 1)"), and a script's own label
 # ("offsite-backup: ...").
+#
+# The engine and vision arms are the exception: *engine* matched
+# "search-engine" and *vision* matched "provision"/"supervision", so those
+# two are anchored to the real unit name instead of left as bare substrings.
 consequence_for() {
     case "$1" in
         *wal-offsite*)
@@ -201,7 +228,7 @@ consequence_for() {
             echo "No fresh base backup; PITR must replay every WAL since $(backup_marker last-basebackup) — restore time growing nightly" ;;
         *backup-verify*)
             echo "Backups are UNVERIFIED — a corrupt archive would now go unnoticed until a restore is attempted" ;;
-        *engine*)
+        robothor-engine.service)
             echo "Agents are DOWN — no scheduled runs, no heartbeat, no delivery until this is back" ;;
         *bridge*)
             echo "Inbound/outbound channel bridge is down — messages to and from the operator are not moving" ;;
@@ -209,12 +236,12 @@ consequence_for() {
             echo "Workflows are not being scheduled or advanced; approvals and queued work sit untouched" ;;
         *nats*)
             echo "The message fabric is down — agent mail and federation traffic are dropping, not queuing" ;;
-        *vision*)
+        robothor-vision.service|robothor-vision*)
             echo "Vision capture is down — no camera events; presence and face recognition are blind" ;;
         *liveness*)
             echo "The liveness watchdog itself is down — nothing is checking whether the engine is alive" ;;
         *)
-            echo "(no consequence mapped — add one)" ;;
+            echo "(no consequence mapped — add one in send_failure_alert.sh)" ;;
     esac
 }
 
@@ -273,8 +300,12 @@ ${DETAIL}"
     if [ "$curl_rc" -eq 0 ] && [ "${http_code:-0}" -ge 200 ] && [ "${http_code:-0}" -lt 300 ]; then
         # Touch the stamp only AFTER a successful send, so a failed send (e.g.
         # Telegram is down) does not suppress the retry on the next failure.
-        mkdir -p "$STATE_DIR" 2>/dev/null || true
-        touch "$STAMP_FILE" 2>/dev/null || true
+        # STAMP_FILE is empty when dedup was disabled (no trustworthy state
+        # dir) — nothing to touch, and nothing should be.
+        if [[ -n "$STAMP_FILE" ]]; then
+            mkdir -p "$STATE_DIR" 2>/dev/null || true
+            touch "$STAMP_FILE" 2>/dev/null || true
+        fi
         # Say so. A successful send printed NOTHING, so a cron log carried no
         # evidence a page had ever gone out — an entirely silent pager and a
         # quiet night looked identical in the logs, and only the failures were
