@@ -166,6 +166,59 @@ def install_fake_runuser(tmp_path: Path) -> Path:
     return log
 
 
+#: What a healthy box answers `systemctl show` with, per unit and property.
+def systemctl_stamp(age_hours: float) -> str:
+    """systemd's own timestamp spelling, e.g. ``Mon 2026-09-01 03:00:12 EDT``."""
+    when = dt.datetime.now().astimezone() - dt.timedelta(hours=age_hours)
+    return when.strftime("%a %Y-%m-%d %H:%M:%S %Z")
+
+
+def healthy_units() -> dict[str, dict[str, str]]:
+    return {
+        "robothor-guardrail-watch.service": {
+            "Result": "success",
+            "ExecMainExitTimestamp": systemctl_stamp(2),
+        },
+        "robothor-liveness.service": {"Result": "success"},
+        "robothor-liveness.timer": {"LastTriggerUSec": systemctl_stamp(0.1)},
+    }
+
+
+def install_fake_systemctl(tmp_path: Path, units: dict[str, dict[str, str]] | None = None) -> Path:
+    """A `systemctl show <unit> -p A,B` stand-in.
+
+    Pinned by base_env for every test in this file: without it S5 and S8 would
+    read the LIVE units on this box, so the suite's verdict would depend on
+    whether the operator's own timers happened to be healthy this morning.
+    Unknown properties come back empty, exactly as systemctl reports them.
+    """
+    units = healthy_units() if units is None else units
+    arms = "".join(
+        f'        "{unit}={prop}") echo "{prop}={value}" ;;\n'
+        for unit, props in units.items()
+        for prop, value in props.items()
+    )
+    log = tmp_path / "systemctl-args.txt"
+    fake = tmp_path / "bin" / "systemctl"
+    fake.parent.mkdir(parents=True, exist_ok=True)
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf \'%s\\n\' "$@" >> "{log}"\n'
+        '[ "${1:-}" = show ] || exit 1\n'
+        'unit="$2"\n'
+        'props="$4"\n'
+        "IFS=, read -ra want <<<\"$props\"\n"
+        'for prop in "${want[@]}"; do\n'
+        '    case "${unit}=${prop}" in\n'
+        f"{arms}"
+        '        *) echo "${prop}=" ;;\n'
+        "    esac\n"
+        "done\n"
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    return fake
+
+
 def send_attempts(log: Path) -> int:
     """Telegram sends the pipeline actually attempted — one `.../sendMessage`
     argument per curl invocation, logged whether or not the send succeeds."""
@@ -219,8 +272,10 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
             # The two live paths this probe would otherwise read.
             "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "backup-state"),
             "ROBOTHOR_SLO_LOCAL_DUMP_DIR": str(tmp_path / "dumps"),
-            # Seams: no volume probe, no rclone, no psql by default.
+            # Seams: no volume probe, no rclone, no psql by default, and a
+            # systemctl that answers for a healthy box — never the live units.
             "ROBOTHOR_SLO_VOLUME_CHECK_CMD": "/bin/true",
+            "ROBOTHOR_SLO_SYSTEMCTL_CMD": str(install_fake_systemctl(tmp_path)),
             "ROBOTHOR_SLO_RCLONE_CMD": "/bin/false",
             "ROBOTHOR_SLO_DB_CHECKS": "0",
             # Sender isolation — a stamp written into the real /run/robothor
@@ -440,6 +495,113 @@ class TestAnUndeliveredPageIsNotSuccess:
         result = run_probe(env)
         assert result.returncode != 0
         assert "not delivered" in (result.stdout + result.stderr).lower()
+
+
+# ── S5 / S8: the two SLOs that used to be hardcoded OK ───────────────────────
+
+
+def with_units(tmp_path: Path, env: dict[str, str], units: dict[str, dict[str, str]]) -> None:
+    """Repoint the systemctl seam at a differently-answering box."""
+    env["ROBOTHOR_SLO_SYSTEMCTL_CMD"] = str(install_fake_systemctl(tmp_path, units))
+
+
+class TestTheGuardrailWatchStalenessSlo:
+    """S8 was the string "this report is the evidence" — printed by the very
+    report whose absence it was supposed to detect. A daily unit that stops
+    running produces no report, so nothing said so."""
+
+    def test_a_daily_report_that_has_not_run_in_26h_pages(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        units = healthy_units()
+        units["robothor-guardrail-watch.service"]["ExecMainExitTimestamp"] = systemctl_stamp(30)
+        with_units(tmp_path, env, units)
+        log = with_recording_alert(tmp_path, env)
+        run_probe(env)
+        assert log.exists(), "a daily report 30h since its last run must page"
+        body = log.read_text()
+        assert "slo:guardrail-watch-stale" in body
+        assert "--- 43200" in body, "S8 carries a 12h cooldown"
+
+    def test_a_failed_last_run_pages_even_when_it_is_recent(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        units = healthy_units()
+        units["robothor-guardrail-watch.service"]["Result"] = "exit-code"
+        with_units(tmp_path, env, units)
+        log = with_recording_alert(tmp_path, env)
+        run_probe(env)
+        assert log.exists() and "slo:guardrail-watch-stale" in log.read_text()
+
+    def test_a_unit_that_never_completed_is_a_breach_not_silence(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        units = healthy_units()
+        units["robothor-guardrail-watch.service"]["ExecMainExitTimestamp"] = ""
+        with_units(tmp_path, env, units)
+        log = with_recording_alert(tmp_path, env)
+        run_probe(env)
+        assert log.exists(), "no run has ever completed — that is the breach, not no news"
+
+    def test_a_healthy_daily_report_is_silent(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        log = with_recording_alert(tmp_path, env)
+        assert run_probe(env).returncode == 0
+        assert not log.exists()
+
+
+class TestTheLivenessSlo:
+    """S5 was the string "enforced by robothor-liveness.timer" — an assertion
+    that the watchdog exists, not a measurement that it ran."""
+
+    def test_a_liveness_timer_that_stopped_firing_pages(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        units = healthy_units()
+        units["robothor-liveness.timer"]["LastTriggerUSec"] = systemctl_stamp(4)
+        with_units(tmp_path, env, units)
+        log = with_recording_alert(tmp_path, env)
+        run_probe(env)
+        assert log.exists(), (
+            "a 5-minute timer that last fired 4h ago is not watching anything"
+        )
+        assert "slo:liveness-stale" in log.read_text()
+
+    def test_a_failing_liveness_probe_pages(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        units = healthy_units()
+        units["robothor-liveness.service"]["Result"] = "timeout"
+        with_units(tmp_path, env, units)
+        log = with_recording_alert(tmp_path, env)
+        run_probe(env)
+        assert log.exists() and "slo:liveness-stale" in log.read_text()
+
+    def test_a_timer_that_has_never_fired_is_a_breach(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        units = healthy_units()
+        units["robothor-liveness.timer"]["LastTriggerUSec"] = "n/a"
+        with_units(tmp_path, env, units)
+        log = with_recording_alert(tmp_path, env)
+        run_probe(env)
+        assert log.exists() and "slo:liveness-stale" in log.read_text()
+
+
+class TestASystemctlThatCannotAnswerIsUnevaluated:
+    def test_no_systemctl_is_unevaluated_and_loud(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path, ROBOTHOR_SLO_SYSTEMCTL_CMD="/bin/false")
+        log = with_recording_alert(tmp_path, env)
+        result = run_probe(env)
+        output = result.stdout + result.stderr
+        assert "UNEVALUATED" in output
+        assert not log.exists(), "an unevaluated SLO is not a breach — it must not page"
+        assert result.returncode != 0, (
+            "S5 and S8 unmeasured is the inert-control state; the unit's "
+            "OnFailure= is the only voice it has"
+        )
 
 
 # ── S2 / S6: the database-backed SLOs ────────────────────────────────────────

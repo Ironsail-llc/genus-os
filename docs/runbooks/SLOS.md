@@ -38,10 +38,16 @@ tomorrow.
 | S2 | Heartbeat delivery | `agent_runs`, 24h, main's `heartbeat:%` runs with `delivered_at` | ≥ 95% delivered | **page** (12h cooldown) when 0 ran in 24h |
 | S3 | Pager delivery | `crm_agent_notifications`, 7d, `alert_fallback` rows | 0 lost pages | digest |
 | **S4** | **Backup freshness (dead-man)** | `scripts/backup-state.sh` markers + a readdir of the dump dir + `backup-volume-check.sh --ro` | local dump < 26h, offsite < 26h, basebackup < 8d | **page** `slo:backup-freshness` (12h cooldown → re-pages daily until fixed) |
-| S5 | Liveness | `robothor-liveness.timer` | 100% | already wired — pages through its own probe |
+| S5 | Liveness | `systemctl show robothor-liveness.service -p Result` + the timer's `LastTriggerUSec`, read hourly | last fired < 1h, last run `success` | **page** `slo:liveness-stale` (12h cooldown) |
 | S6 | LLM availability | `agent_runs`, 24h: `All models failed` share, `ollama_chat/%` share | all-failed < 1%/day, local fallback < 30% | **page** `slo:llm-availability` (6h cooldown) at ≥ 5 all-failed in an hour |
 | S7 | Workflows | `workflow_runs`, 7d, worst workflow | bad ≤ 10% | digest |
-| S8 | Guardrail-watch ran | the daily report itself | daily | page via the unit's `OnFailure=` |
+| S8 | Guardrail-watch ran | `systemctl show robothor-guardrail-watch.service -p ExecMainExitTimestamp,Result`, read hourly | completed < 26h ago, `success` | **page** `slo:guardrail-watch-stale` (12h cooldown) |
+
+S5 and S8 were both the string `OK` until the hourly probe learned to ask
+systemd. S8's evidence was the daily report printing itself — which says
+nothing at all on the day the report does not run — and S5 asserted that a
+timer *exists* rather than that it *fired*. Both are now measured from
+`systemctl show`, hourly, by the same level-triggered probe as S4.
 
 Statuses in the daily section are three-valued. **`UNEVALUATED` is not `OK`** —
 an SLO whose query did not answer is reported in that word, spelled out, and
@@ -106,6 +112,30 @@ A 403 is not a 401 on OpenRouter — a capped key answers 403 while the
 credential is still valid. Spare keys ride `OPENROUTER_API_KEY_2` and up; the
 walk stops at the first gap, so a hole in the numbering hides every key after
 it.
+
+### `slo:liveness-stale` — S5
+
+The engine watchdog itself is the thing that failed. Either its last run did
+not succeed or its 5-minute timer has stopped firing, and a timer that stops
+firing fails nothing — no `OnFailure=` anywhere covers this.
+
+```bash
+systemctl status robothor-liveness.timer robothor-liveness.service
+systemctl list-timers robothor-liveness.timer --all
+journalctl -u robothor-liveness.service -n 50 --no-pager
+```
+
+### `slo:guardrail-watch-stale` — S8
+
+The daily report has stopped completing, so the drift checks, the instance
+manifest validation and the whole daily SLO section it carries are producing
+nothing — silently, because a unit that does not run fails nothing.
+
+```bash
+systemctl status robothor-guardrail-watch.timer robothor-guardrail-watch.service
+journalctl -u robothor-guardrail-watch.service -n 100 --no-pager
+sudo systemctl start robothor-guardrail-watch.service   # run it by hand and read the output
+```
 
 ## The restore drill
 

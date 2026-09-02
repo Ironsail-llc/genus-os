@@ -69,6 +69,11 @@
 #   ROBOTHOR_SLO_LLM_COOLDOWN_SECONDS       6h
 #   ROBOTHOR_SLO_VOLUME_CHECK_CMD      volume probe; the dump dir is appended
 #                                      (scripts/backup-volume-check.sh --ro)
+#   ROBOTHOR_SLO_SYSTEMCTL_CMD         systemctl, for S5 and S8
+#   ROBOTHOR_SLO_GUARDRAIL_WATCH_MAX_HOURS  S8 budget (26)
+#   ROBOTHOR_SLO_LIVENESS_MAX_HOURS         S5 budget (1)
+#   ROBOTHOR_SLO_GUARDRAIL_COOLDOWN_SECONDS 12h
+#   ROBOTHOR_SLO_LIVENESS_COOLDOWN_SECONDS  12h
 #   ROBOTHOR_SLO_RCLONE_CMD            rclone, for the offsite listing
 #   ROBOTHOR_OFFSITE_REMOTE            rclone remote (shared with backup-offsite.sh)
 #   ROBOTHOR_SLO_ALERT_CMD             replaces the default sender
@@ -99,11 +104,18 @@ DUMP_DIR="${ROBOTHOR_SLO_LOCAL_DUMP_DIR:-/mnt/robothor-backup/robothor/db}"
 LOCAL_MAX_HOURS="${ROBOTHOR_SLO_LOCAL_DUMP_MAX_HOURS:-26}"
 OFFSITE_MAX_HOURS="${ROBOTHOR_SLO_OFFSITE_MAX_HOURS:-26}"
 BASEBACKUP_MAX_HOURS="${ROBOTHOR_SLO_BASEBACKUP_MAX_HOURS:-192}"
+# S8: the daily report runs at 08:30, so 26h is one missed run plus slack.
+GUARDRAIL_WATCH_MAX_HOURS="${ROBOTHOR_SLO_GUARDRAIL_WATCH_MAX_HOURS:-26}"
+# S5: the liveness timer fires every 5 minutes. An hour is twelve missed ticks.
+LIVENESS_MAX_HOURS="${ROBOTHOR_SLO_LIVENESS_MAX_HOURS:-1}"
 
 BACKUP_COOLDOWN="${ROBOTHOR_SLO_BACKUP_COOLDOWN_SECONDS:-43200}"
 HEARTBEAT_COOLDOWN="${ROBOTHOR_SLO_HEARTBEAT_COOLDOWN_SECONDS:-43200}"
 LLM_COOLDOWN="${ROBOTHOR_SLO_LLM_COOLDOWN_SECONDS:-21600}"
+GUARDRAIL_COOLDOWN="${ROBOTHOR_SLO_GUARDRAIL_COOLDOWN_SECONDS:-43200}"
+LIVENESS_COOLDOWN="${ROBOTHOR_SLO_LIVENESS_COOLDOWN_SECONDS:-43200}"
 
+SYSTEMCTL_CMD="${ROBOTHOR_SLO_SYSTEMCTL_CMD:-systemctl}"
 VOLUME_CHECK_CMD="${ROBOTHOR_SLO_VOLUME_CHECK_CMD:-/usr/bin/env bash ${SCRIPT_DIR}/backup-volume-check.sh --ro}"
 RCLONE_CMD="${ROBOTHOR_SLO_RCLONE_CMD:-rclone}"
 REMOTE="${ROBOTHOR_OFFSITE_REMOTE:-}"
@@ -317,6 +329,98 @@ else
     log "S4 backup freshness: OK — every tier is inside budget"
 fi
 
+# ── S5 / S8: is the rest of the watchdog fleet still running? ────────────────
+# Both of these used to be the string "OK" in the daily report — S8's evidence
+# was the report printing itself, which says nothing at all on the day the
+# report does not run, and S5 asserted that a timer exists rather than that it
+# fired. systemd already knows both answers; ask it.
+
+# `systemctl show <unit> -p A,B` prints one KEY=VALUE line per property, and an
+# empty value for anything it has no answer for. An empty value is never read
+# as fresh here: it means the unit has no completed run, which is the state
+# this pair exists to find.
+show_props() {
+    local argv
+    read -r -a argv <<<"$SYSTEMCTL_CMD"
+    "${argv[@]}" show "$1" -p "$2" 2>/dev/null
+}
+
+prop_of() { grep -m 1 "^${2}=" <<<"$1" | cut -d= -f2- ; }
+
+# systemd spells "never" three ways depending on the property: empty, `n/a`
+# and `0`. All three are the absence of a run, not a timestamp.
+stamp_epoch() {
+    local stamp="$1"
+    [[ -n "$stamp" && "$stamp" != "n/a" && "$stamp" != "0" ]] || return 1
+    date -d "$stamp" +%s 2>/dev/null || return 1
+}
+
+unevaluated() {
+    err "  $1 UNEVALUATED — $2"
+    UNEVALUATED=1
+}
+
+check_guardrail_watch() {
+    local out result stamp epoch age
+    out="$(show_props robothor-guardrail-watch.service ExecMainExitTimestamp,Result)"
+    if [[ -z "$out" ]]; then
+        unevaluated "S8" "systemctl could not answer for robothor-guardrail-watch.service"
+        return
+    fi
+    result="$(prop_of "$out" Result)"
+    stamp="$(prop_of "$out" ExecMainExitTimestamp)"
+
+    if ! epoch="$(stamp_epoch "$stamp")"; then
+        page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
+            "S8 BREACHED: robothor-guardrail-watch.service has no completed run on this box. The daily SLO report, the drop-in/host-script drift checks and instance manifest validation have never produced a result here. Runbook: docs/runbooks/SLOS.md (S8)." || true
+        return
+    fi
+    age="$(hours_since "$epoch")"
+
+    if [[ "$result" != "success" ]]; then
+        page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
+            "S8 BREACHED: robothor-guardrail-watch.service last finished ${age}h ago with Result=${result}. The daily report is failing, so the drift checks and manifest validation it carries are not reaching anyone. Runbook: docs/runbooks/SLOS.md (S8)." || true
+    elif (( age > GUARDRAIL_WATCH_MAX_HOURS )); then
+        page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
+            "S8 BREACHED: robothor-guardrail-watch.service last completed ${age}h ago (budget ${GUARDRAIL_WATCH_MAX_HOURS}h). A daily watchdog that stops running reports nothing and fails nothing — this is the only signal left. Runbook: docs/runbooks/SLOS.md (S8)." || true
+    else
+        log "  S8 guardrail-watch: last completed ${age}h ago, Result=${result} (budget ${GUARDRAIL_WATCH_MAX_HOURS}h) — OK"
+    fi
+}
+
+check_liveness() {
+    local out tout result stamp epoch age
+    out="$(show_props robothor-liveness.service Result)"
+    tout="$(show_props robothor-liveness.timer LastTriggerUSec)"
+    if [[ -z "$out" || -z "$tout" ]]; then
+        unevaluated "S5" "systemctl could not answer for the robothor-liveness units"
+        return
+    fi
+    result="$(prop_of "$out" Result)"
+    stamp="$(prop_of "$tout" LastTriggerUSec)"
+
+    if ! epoch="$(stamp_epoch "$stamp")"; then
+        page "slo:liveness-stale" "$LIVENESS_COOLDOWN" \
+            "S5 BREACHED: robothor-liveness.timer has never fired on this box. The engine watchdog that survives a hard kill is not watching. Runbook: docs/runbooks/SLOS.md (S5)." || true
+        return
+    fi
+    age="$(hours_since "$epoch")"
+
+    if [[ "$result" != "success" ]]; then
+        page "slo:liveness-stale" "$LIVENESS_COOLDOWN" \
+            "S5 BREACHED: robothor-liveness.service last ran with Result=${result} (timer last fired ${age}h ago). The watchdog itself is failing, so a dead engine would page nobody. Runbook: docs/runbooks/SLOS.md (S5)." || true
+    elif (( age > LIVENESS_MAX_HOURS )); then
+        page "slo:liveness-stale" "$LIVENESS_COOLDOWN" \
+            "S5 BREACHED: robothor-liveness.timer last fired ${age}h ago (budget ${LIVENESS_MAX_HOURS}h) — it runs every 5 minutes. A timer that stops firing fails nothing, so nothing else would say this. Runbook: docs/runbooks/SLOS.md (S5)." || true
+    else
+        log "  S5 liveness: timer fired ${age}h ago, last run Result=${result} — OK"
+    fi
+}
+
+log "=== S5 liveness / S8 guardrail-watch freshness ==="
+check_liveness
+check_guardrail_watch
+
 # ── S2 / S6: the DB-backed SLOs ──────────────────────────────────────────────
 # Read-only, and deliberately last: a database outage must never stop the
 # backup dead-man above from running, which is the ordering discipline
@@ -353,8 +457,7 @@ check_db_slos() {
         # Named, not swallowed. An SLO nobody can evaluate is not a passing
         # SLO, and a check that only ever reports "skipped" is indistinguishable
         # from one that cannot fire.
-        err "  S2 UNEVALUATED — the heartbeat query did not answer (database unreachable?)"
-        UNEVALUATED=1
+        unevaluated "S2" "the heartbeat query did not answer (database unreachable?)"
     fi
 
     if failures="$(db_query "SELECT count(*) FROM agent_runs
@@ -367,8 +470,7 @@ check_db_slos() {
             log "  S6 'All models failed' in the last hour: ${failures} — OK"
         fi
     else
-        err "  S6 UNEVALUATED — the model-failure query did not answer (database unreachable?)"
-        UNEVALUATED=1
+        unevaluated "S6" "the model-failure query did not answer (database unreachable?)"
     fi
 }
 
