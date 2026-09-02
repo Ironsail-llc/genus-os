@@ -16,9 +16,17 @@
 # unresolvable the check fails loudly (exit 2) — it must never silently
 # report OK. Non-unit mirrors (host ops scripts) are still raw-diffed.
 #
+# It also reports stale backup copies left beside the live file. systemd reads
+# only *.conf, so a `.bak-*`/`.pre-*` sibling changes nothing — which is the
+# problem: the live directory had accumulated TWELVE of them going back to
+# 2026-05-30, each one left by the rollback step in GUARDRAIL_FLIPS.md, until
+# the one directory carrying the production guardrail posture could not be read
+# at a glance. Nothing had ever said so.
+#
 # Usage: check_dropin_drift.sh [LIVE_PATH] [MIRROR_PATH]
-# Exit codes: 0 = in sync, 1 = drift (diff printed), 2 = a file is missing
-#             or the templated mirror cannot be rendered.
+# Exit codes: 0 = in sync, 1 = drift (diff printed) or stale backup copies
+#             present, 2 = a file is missing or the templated mirror cannot be
+#             rendered.
 set -u
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,6 +40,35 @@ fi
 if [[ ! -f "$MIRROR" ]]; then
     echo "drift-check: repo mirror missing: $MIRROR"
     exit 2
+fi
+
+# ── Stale backup copies beside the live file ─────────────────────────────────
+# Matched as siblings OF THIS FILE, not "anything in the directory":
+# guardrail-watch runs this check once per mirrored .conf, and a directory-wide
+# scan would print the same list once per pair. A `.conf` sibling is another
+# drop-in, never a backup, and is deliberately not matched.
+#
+# Reported but not fatal to the comparison: the diff below still runs and still
+# prints, so a rollback copy can never mask a real drift. Both raise exit 1.
+STALE_FOUND=0
+stale_list=()
+for candidate in "${LIVE}".bak* "${LIVE}".pre* "${LIVE}".orig* "${LIVE}".save* "${LIVE}"~; do
+    [[ -e "$candidate" ]] || continue   # unmatched glob stays literal under set -u
+    stale_list+=("$candidate")
+done
+
+if [[ ${#stale_list[@]} -gt 0 ]]; then
+    STALE_FOUND=1
+    echo "drift-check: STALE — ${#stale_list[@]} backup copies beside $(basename "$LIVE"):"
+    for f in "${stale_list[@]}"; do
+        echo "  $(basename "$f")"
+    done
+    echo "systemd loads only *.conf, so these set nothing — they just make the"
+    echo "directory that carries the guardrail posture unreadable. The mirror in"
+    echo "git is the rollback source (git log the mirror, or the PR that flipped"
+    echo "it), so a dated copy here is not needed. Clear them with:"
+    echo "  sudo rm -f $(dirname "$LIVE")/$(basename "$LIVE").bak-* \\"
+    echo "             $(dirname "$LIVE")/$(basename "$LIVE").pre-*"
 fi
 
 # A matching mirror is necessary but not sufficient. systemd applies
@@ -101,6 +138,10 @@ case "$MIRROR" in
 esac
 
 if diff_output=$(diff -u --label "$MIRROR_LABEL: $MIRROR" --label "live: $LIVE" "$COMPARE_MIRROR" "$LIVE"); then
+    if [[ "$STALE_FOUND" == 1 ]]; then
+        echo "drift-check: live drop-in matches repo mirror, but stale backup copies remain (above)"
+        exit 1
+    fi
     echo "drift-check: OK — live drop-in matches repo mirror, no shadowed flags"
     exit 0
 fi

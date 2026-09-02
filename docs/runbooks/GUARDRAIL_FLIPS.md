@@ -16,13 +16,19 @@ The daily guardrail-watch report runs it, so unversioned live edits surface with
 2. **Apply to live** (operator or ops agent on the box):
 
    ```bash
-   sudo cp /etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf \
-        /etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf.bak-$(date +%Y%m%d-%H%M%S)
-   sudo cp infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf \
-        /etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf
+   sudo scripts/install-units.sh          # renders + installs every drop-in
    sudo systemctl daemon-reload && sudo systemctl restart robothor-engine
    scripts/check_dropin_drift.sh   # must print OK
    ```
+
+   **Do not take a dated `.bak-` copy first.** That step is what this
+   procedure used to say, and it left twelve `upgrade-rip-flags.conf.bak-*` /
+   `.pre-*` files in the live directory going back to 2026-05-30 — none of
+   which systemd reads, all of which made the one directory carrying the
+   production guardrail posture unreadable at a glance. The rollback source is
+   git (see below), which is strictly better: it has the diff, the review and
+   the reason. `check_dropin_drift.sh` now reports any such copy as `STALE`
+   and exits 1 until it is cleared.
 
 3. **Watch**: one flip per 24h. After each flip confirm in the daily
    guardrail-watch report (or ad hoc `python scripts/guardrail_watch.py`):
@@ -100,14 +106,26 @@ drop-in — then update `infra/flags.yaml` to match.
 
 ## Rollback (< 2 minutes)
 
+Roll back from git, not from a copy left in `/etc`:
+
 ```bash
-sudo cp /etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf.bak-<STAMP> \
-     /etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf
+git -C "$ROBOTHOR_WORKSPACE" log --oneline -- \
+    infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf
+git -C "$ROBOTHOR_WORKSPACE" checkout <good-sha> -- \
+    infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf
+sudo scripts/install-units.sh
 sudo systemctl daemon-reload && sudo systemctl restart robothor-engine
+scripts/check_dropin_drift.sh   # must print OK
 ```
 
+For a single flag on a governed name, the Controls dashboard is faster still
+and needs no restart — it writes a `feature_flags` row that beats every file
+layer, and `flag_audit.py` shows it as `PINNED:db@operator:<id>`. Clear the row
+when the file layers are back in agreement, or the drop-in stays inert.
+
 Then revert the mirror in a follow-up PR so drift-check stays green — never
-leave live and mirror disagreeing.
+leave live and mirror disagreeing, and never leave a `.bak-` copy behind as
+"the rollback": git already holds it, with the diff and the reason attached.
 
 ## Current promotion ladder (2026-07-13)
 

@@ -185,3 +185,75 @@ def test_host_scripts_keep_the_raw_diff(tmp_path: Path):
     result = run(live, mirror, env=env)
     assert result.returncode == 1
     assert "DRIFT" in result.stdout
+
+
+# --- stale backup copies beside the live drop-in ------------------------------
+#
+# The live directory had accumulated TWELVE `upgrade-rip-flags.conf.bak-*` and
+# `.pre-*` files, going back to 2026-05-30. systemd reads only `*.conf`, so
+# none of them did anything — which is exactly the problem: the one directory
+# carrying the production guardrail posture became unreadable, every rollback
+# left another copy, and nothing ever said so. The flip runbook's own rollback
+# step is what creates them.
+#
+# Matched as siblings of the file being checked (`<live>.bak*`, `<live>.pre*`,
+# `<live>.orig*`, `<live>.save*`, `<live>~`) rather than "anything in the
+# directory": guardrail-watch runs this once per mirrored .conf, and a
+# directory-wide scan would print the same list six times.
+
+
+def stale(tmp_path: Path, *names: str) -> tuple[Path, Path]:
+    live = tmp_path / "upgrade-rip-flags.conf"
+    mirror = tmp_path / "mirror.conf"
+    live.write_text(CONF)
+    mirror.write_text(CONF)
+    for name in names:
+        (tmp_path / name).write_text("old posture\n")
+    return live, mirror
+
+
+def test_stale_backup_copies_are_reported_even_when_in_sync(tmp_path: Path):
+    live, mirror = stale(
+        tmp_path,
+        "upgrade-rip-flags.conf.bak-20260713-174439",
+        "upgrade-rip-flags.conf.pre-cutover-20260702",
+    )
+    result = run(live, mirror)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "STALE" in result.stdout
+    assert "upgrade-rip-flags.conf.bak-20260713-174439" in result.stdout
+    assert "upgrade-rip-flags.conf.pre-cutover-20260702" in result.stdout
+
+
+def test_stale_report_names_the_count_and_how_to_clear_it(tmp_path: Path):
+    live, mirror = stale(tmp_path, "upgrade-rip-flags.conf.bak-1", "upgrade-rip-flags.conf.bak-2")
+    result = run(live, mirror)
+    assert "2" in result.stdout
+    assert "rm" in result.stdout
+
+
+def test_stale_copies_do_not_mask_a_real_drift(tmp_path: Path):
+    live, mirror = stale(tmp_path, "upgrade-rip-flags.conf.bak-1")
+    live.write_text(CONF + "Environment=ROBOTHOR_INJECTION_SCAN_MODE=enforce\n")
+    result = run(live, mirror)
+    assert result.returncode == 1
+    assert "STALE" in result.stdout
+    assert "DRIFT" in result.stdout
+    assert "ROBOTHOR_INJECTION_SCAN_MODE" in result.stdout
+
+
+def test_the_live_conf_itself_is_never_reported_as_stale(tmp_path: Path):
+    """`.conf` is what systemd loads; a sibling drop-in is not a backup."""
+    live, mirror = stale(tmp_path, "zz-sandbox.conf", "hardening.conf")
+    result = run(live, mirror)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "STALE" not in result.stdout
+
+
+def test_unrelated_backups_belong_to_their_own_pair(tmp_path: Path):
+    """Only siblings OF THIS FILE are reported, so guardrail-watch does not
+    print the same list once per mirrored .conf."""
+    live, mirror = stale(tmp_path, "zz-sandbox.conf.bak-20260820")
+    result = run(live, mirror)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "STALE" not in result.stdout
