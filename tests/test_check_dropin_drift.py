@@ -100,7 +100,7 @@ RENDERED = (
     "[Service]\n"
     "User=alice\n"
     "WorkingDirectory=/srv/workspace\n"
-    "ReadWritePaths=/home/alice/.cache\n"
+    "ReadWritePaths=/srv/alice/.cache\n"
 )
 
 
@@ -111,7 +111,7 @@ def render_env(tmp_path: Path) -> dict[str, str]:
         "PATH": os.environ["PATH"],
         "ROBOTHOR_WORKSPACE": "/srv/workspace",
         "ROBOTHOR_SERVICE_USER": "alice",
-        "ROBOTHOR_SERVICE_HOME": "/home/alice",
+        "ROBOTHOR_SERVICE_HOME": "/srv/alice",
         "ROBOTHOR_ENV_FILE": str(tmp_path / "no-such.env"),
     }
 
