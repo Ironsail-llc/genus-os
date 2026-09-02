@@ -49,6 +49,8 @@ mean recent.
 | `9 stale mappings, reboot required` | Nine device-mapper nodes are held by kernel references that nothing in userspace can release. | Reboot. This is the only thing that clears them. |
 | `filesystem needs manual fsck (fsck.ext4 -p exit N) — NOT mounted` | Preen could not repair it without a decision. The guard deliberately did **not** mount it and closed the container again. | `cryptsetup open /dev/disk/by-uuid/<uuid> robothor-backup-<n>` then `fsck.ext4 -y /dev/mapper/robothor-backup-<n>`, *with the offsite copy verified first*. |
 | `SMART reports /dev/sdX as FAILED` | The firmware has given up on the disk. The guard refuses to remount it. | Replace the disk. Restore from offsite (`docs/runbooks/OFFSITE_BACKUP.md`). |
+| `mapper robothor-backup still has N opener(s) after umount -l — refusing to fsck a referenced mapping` | The mapping is the device's own and correct, but something still holds it: `umount -l` returns before the last reference is dropped. `fsck.ext4 -p` there would corrupt a filesystem that was only degraded. | `lsof +f -- /dev/mapper/robothor-backup` / `fuser -vm /mnt/robothor-backup` to find the holder, stop it, and the next tick heals. If nothing is holding it, the reference is a kernel one: reboot. |
+| `no non-interactive keyfile in crypttab (column 3 = X); refusing to tear down a mapping I cannot rebuild` | crypttab column 3 is `none`, `-`, or a file root cannot read, so `cryptsetup open` would prompt on a console the timer does not have. The guard did **not** unmount or close anything — it left the volume degraded rather than making it absent. | Put a readable keyfile in column 3 of `/etc/crypttab` (`cryptsetup luksAddKey` first), or run the manual procedure below and unlock it by hand. |
 | `... heal deferred: <unit> is activating` | A backup unit was mid-run; unmounting under it would corrupt the backup. | Nothing — the next tick heals it. |
 | `<mount> is mounted emergency_ro ...` with `HEAL=0` | Healing is switched off. | Re-enable, or run the manual procedure below. |
 
@@ -58,12 +60,25 @@ Exactly what the guard automates. Run it as root when the guard is disabled or
 when you want to watch it happen.
 
 ```bash
-umount -l /mnt/robothor-backup                      # lazy: a clean umount hangs
-dmsetup info -c --noheadings -o open robothor-backup # 0 → closeable, else stale
-cryptsetup close robothor-backup                     # usually FAILS: kernel ref
+# 0. Can you get back in? crypttab column 3 must be a keyfile you can read;
+#    `none` or `-` means the guard will refuse, because a timer has no console.
+awk '$1 == "robothor-backup" { print $3 }' /etc/crypttab
 
-# The stale name cannot be reused, so take the next free one.
-cryptsetup open /dev/disk/by-uuid/<uuid> robothor-backup-1
+# 1. Gates first, while nothing is torn down.
+cryptsetup isLuks /dev/disk/by-uuid/<uuid>           # ours, or stop
+smartctl -d scsi -H /dev/sdX                         # FAILED → stop, replace
+
+umount -l /mnt/robothor-backup                       # lazy: a clean umount hangs
+dmsetup deps -o devno robothor-backup                # matches the device? live
+lsblk -no MAJ:MIN /dev/disk/by-uuid/<uuid>           # ...compare with this
+dmsetup info -c --noheadings -o open robothor-backup # MUST be 0 before any fsck
+
+# 2. Live mapping (deps match) and open count 0 — just put it back.
+mount /dev/mapper/robothor-backup /mnt/robothor-backup
+
+# 3. Stale mapping (deps do NOT match). The stale name cannot be reused.
+cryptsetup close robothor-backup                     # usually FAILS: kernel ref
+cryptsetup open /dev/disk/by-uuid/<uuid> robothor-backup-1 --key-file <keyfile>
 fsck.ext4 -p /dev/mapper/robothor-backup-1           # PREEN ONLY. rc>=4 → stop
 mount /dev/mapper/robothor-backup-1 /mnt/robothor-backup   # the SAME path
 ```
@@ -71,6 +86,27 @@ mount /dev/mapper/robothor-backup-1 /mnt/robothor-backup   # the SAME path
 The units bind to the **path**, not the mapper name, so nothing else needs
 changing. `smartctl -d scsi -H /dev/sdX` is the health probe that works through
 this USB bridge — `-d sat` returns nothing on it.
+
+Re-read the open count immediately before the `fsck`, every time: `umount -l`
+detaches the tree and returns, and the last reference is dropped whenever the
+last user lets go. An `fsck` on a mapping the kernel is still handing out turns
+a degraded volume into a corrupted one. The guard refuses at exactly that
+point, and so should you.
+
+## Known limitation: the guard defers, it does not prevent
+
+`busy_backup_unit` asks `systemctl is-active` for each of the five backup units
+and skips the tick if any is `activating`. That is a check followed by an
+action, and a backup unit can start in the gap between them — the guard's own
+timer and the backup timers are not coordinated. The window is small (the
+`umount -l` follows within a second or so) and a lazy unmount under a running
+job fails that job's run rather than corrupting the volume, but it is a real
+race, not a prevented one.
+
+The real fix is a lock shared with the backup scripts — `flock` on one file
+that both the guard and every backup unit take — so that "a backup is running"
+is a fact the guard holds rather than one it sampled. Follow-up; the guard's
+own `${STATE_DIR}.lock` only serialises the guard against itself.
 
 ## Knobs
 
@@ -87,8 +123,11 @@ Set in `/etc/robothor/robothor.env`.
 | `ROBOTHOR_BACKUP_STATE_DIR` | `/var/lib/robothor/backup-state` | last-good markers, on NVMe |
 
 The guard exits 0 whatever the volume's state — a down volume is news, not a
-unit failure. It exits 1 **only** when a page could not be delivered, which
-fires its own `OnFailure=robothor-alert@%n.service`.
+unit failure. It exits 1 **only** when it cannot do its job: a page that could
+not be delivered, a state directory it cannot create, or a missing
+`scripts/backup-state.sh` (without it every "last good" line would go out
+blank, which reads as reassuring). Each of those fires its own
+`OnFailure=robothor-alert@%n.service`.
 
 ## Probe it — do not trust the silence
 

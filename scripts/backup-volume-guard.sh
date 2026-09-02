@@ -195,7 +195,10 @@ fi
 PROBE_OUTPUT=""
 probe() {
     local argv rc=0
-    # Split on whitespace deliberately: the seam is a command line.
+    # Split on whitespace deliberately: the seam is a command LINE, not a path
+    # ("/usr/bin/env bash /…/backup-volume-check.sh"). The consequence is that
+    # neither the checkout nor ROBOTHOR_WORKSPACE may contain a space — the
+    # default is built from SCRIPT_DIR. The same applies to ALERT_CMD below.
     read -r -a argv <<<"$CHECK_CMD"
     PROBE_OUTPUT="$("${argv[@]}" --rw "$MOUNT" 2>&1 >/dev/null)" || rc=$?
     return "$rc"
@@ -206,6 +209,7 @@ probe() {
 # not a page (robothor/engine/alerts.py, scripts/liveness_probe.sh).
 page() {
     local key="$1" body="$2" argv
+    # A command line, split on whitespace — see probe(): no spaces in the path.
     read -r -a argv <<<"$ALERT_CMD"
     if "${argv[@]}" "$key" "$body"; then
         return 0
