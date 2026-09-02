@@ -39,6 +39,20 @@ SERVICE = REPO_ROOT / "infra" / "systemd" / "robothor-guardrail-watch.service"
 TIMER = REPO_ROOT / "infra" / "systemd" / "robothor-guardrail-watch.timer"
 
 
+def _stub_sibling_checks(monkeypatch: "pytest.MonkeyPatch", gw) -> None:
+    """Default every check `main()` calls to a safe pass, matching each
+    check's real signature, so a test driving `main()` for the DB-outage
+    ordering does not also run its siblings for real. `check_instance_doctor`
+    hits the live box and `send_telegram` has real credentials on it — a test
+    that forgets to stub either does not just fail loud, it pages the
+    operator or shells out to instance_doctor.sh. Call this first, then
+    override whichever check this test actually targets.
+    """
+    monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: True)
+    monkeypatch.setattr(gw, "check_instance_doctor", lambda script=None: True)
+    monkeypatch.setattr(gw, "send_telegram", lambda text: False)
+
+
 class TestRepoUnitOrdersAfterPostgresAndPages:
     """The live unit had no repo mirror at all until this PR."""
 
@@ -76,19 +90,13 @@ class TestDBFreeChecksSurviveADatabaseOutage:
     """The bug: get_connection() raising took the drift checks down with it."""
 
     @staticmethod
-    def _silence_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
-        # This environment carries real, live Telegram credentials — a test
-        # must never let a nag actually send.
-        monkeypatch.setattr(gw, "send_telegram", lambda text: False)
-
-    @staticmethod
     def _raising_get_connection(autocommit: bool = False):
         raise RuntimeError("connection to server failed: postgres is not up yet")
 
     def test_drift_checks_still_run_when_the_db_is_down(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        self._silence_telegram(monkeypatch)
+        _stub_sibling_checks(monkeypatch, gw)
 
         calls: list[str] = []
         monkeypatch.setattr(
@@ -125,7 +133,7 @@ class TestDBFreeChecksSurviveADatabaseOutage:
         """Ordering, not just presence: a partial report only works if the
         DB-free section's output reaches the report before the DB section
         can abort the run."""
-        self._silence_telegram(monkeypatch)
+        _stub_sibling_checks(monkeypatch, gw)
         monkeypatch.setattr(gw, "check_dropin_drift", lambda: print("SENTINEL-DROPIN-OK"))
         monkeypatch.setattr(
             gw, "check_host_script_drift", lambda pairs=None: print("SENTINEL-HOST-OK")
@@ -146,7 +154,7 @@ class TestDBFreeChecksSurviveADatabaseOutage:
     def test_report_says_clearly_that_it_is_partial(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        self._silence_telegram(monkeypatch)
+        _stub_sibling_checks(monkeypatch, gw)
         monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
         monkeypatch.setattr(gw, "check_host_script_drift", lambda pairs=None: None)
         monkeypatch.setattr(
