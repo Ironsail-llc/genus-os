@@ -518,6 +518,40 @@ def test_stale_mapping_is_reopened_under_a_new_name_and_remounted(box: Box):
     assert box.state("down_since") is None, "the down state survived a successful heal"
 
 
+def test_a_heal_whose_every_step_worked_is_not_recovery_until_the_probe_says_so(box: Box):
+    """The re-probe is the only thing that makes "auto-recovered" a fact.
+
+    Every step of the heal can return 0 and leave the volume unusable — the
+    reopened container mounts, and ext4 flips straight back to ``emergency_ro``
+    because the bridge is still dropping writes. A guard that set ``healed=1``
+    on the heal function's own exit status would page RECOVERED, clear
+    ``down_since``, arm the quiet period, and go silent on an outage that never
+    ended: the inert control, certified by its own log line. So the probe runs
+    again afterwards and it, not the heal, decides.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1 1",  # every heal step works; the volume is still dead
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    # The heal really did run — this is not a test of a refusal.
+    assert box.ran(f"cryptsetup open {box.device} {MAPPER}-1"), f"no heal ran:\n{box.argv}"
+    assert box.ran(f"mount {box.mapper_dir / (MAPPER + '-1')} {box.mount}"), box.argv
+
+    assert len(box.pages) == 1, f"expected exactly one page, got {box.pages}"
+    page = box.pages[0]
+    assert "BACKUP VOLUME DOWN" in page, page
+    assert f"remapped as {MAPPER}-1, but the volume is still unusable" in page, page
+    assert "auto-recovered" not in page, page
+    assert box.state("heal_count") is None, "counted a drop that was never recovered"
+    assert box.state("down_since"), "cleared the outage the volume is still in"
+
+
 def test_every_heal_pages_so_a_flaky_bridge_is_never_masked(box: Box):
     """Two drops in one hour must be two pages. A dedup key shared with the
     first would let the sender's 1h cooldown swallow the second, and a bridge
