@@ -258,6 +258,8 @@ EXPECTED_INSTALLED = [
     "robothor-bench-rotation.service",
     "robothor-bench-rotation.timer",
     "robothor-engine.service.d/boot-guard.conf",
+    "robothor-backup-volume-guard.service",
+    "robothor-backup-volume-guard.timer",
     "robothor-engine.service.d/hardening.conf",
     "robothor-engine.service.d/onfailure.conf",
     "robothor-engine.service.d/restart-forever.conf",
@@ -632,6 +634,28 @@ def test_positional_account_is_invisible_without_the_flag(tmp_path: Path):
     assert "robothor robothor" in result.stdout, (
         "if this now renders, the flag is redundant — delete it and this test"
     )
+
+
+def test_installs_every_tracked_tmpfiles_conf(tmp_path: Path):
+    """The installer used to name robothor-restart.conf literally, so the
+    SECOND tmpfiles template (robothor-backup-state.conf, which creates the
+    last-good marker directory the backup guard reads) would have been added to
+    the repo, gated by every test above, and never installed on any box — an
+    inert control with a full set of passing tests.
+    """
+    result = run_install(tmp_path, base_env())
+    assert result.returncode == 0, result.stdout + result.stderr
+    installed = tmp_path / "etc/tmpfiles.d"
+    for conf in repo_tmpfiles():
+        dest = installed / conf.name
+        assert dest.exists(), f"{conf.name} was never installed\n{result.stdout}"
+        assert dest.stat().st_mode & 0o777 == 0o644
+        rows = tmpfiles_rows(dest.read_text())
+        assert rows, f"{conf.name}: no tmpfiles row installed"
+        for fields in rows:
+            assert fields[3] in (USER, "-") and fields[4] in (USER, "-"), (
+                f"{conf.name}: unrendered account {fields}"
+            )
 
 
 def test_installs_the_privileged_helper_and_tmpfiles_conf(tmp_path: Path):
