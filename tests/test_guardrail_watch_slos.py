@@ -89,6 +89,9 @@ def probe_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     dumps = tmp_path / "dumps"
     monkeypatch.setenv("ROBOTHOR_BACKUP_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("ROBOTHOR_SLO_LOCAL_DUMP_DIR", str(dumps))
+    # The basebackup tier falls back to the newest base-* directory when its
+    # marker is missing; unpinned, that find() runs against the live volume.
+    monkeypatch.setenv("ROBOTHOR_SLO_BASEBACKUP_DIR", str(tmp_path / "basebackup"))
     monkeypatch.setenv("ROBOTHOR_SLO_VOLUME_CHECK_CMD", "/bin/true")
     monkeypatch.setenv("ROBOTHOR_SLO_RCLONE_CMD", "/bin/false")
     monkeypatch.setenv("ROBOTHOR_SLO_SYSTEMCTL_CMD", "/bin/false")
