@@ -38,6 +38,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 UNIT_DIR = REPO_ROOT / "infra" / "systemd"
 
 
+def _pager_pins(tmp_path: Path) -> dict[str, str]:
+    """The five seams every subprocess in this file must pin.
+
+    Every script under test here (wal-offsite.sh, pg-basebackup.sh,
+    backup-ssd.sh) can reach send_failure_alert.sh on failure. Without these,
+    a fixture failure spools a real page that root's next liveness drain
+    delivers to the operator's phone — see tests/test_alert_never_pages_from_tests.py.
+    """
+    return {
+        "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+        "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-state"),
+        "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-fallback"),
+        "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+        "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+    }
+
+
 def _code_lines(body: str) -> list[str]:
     """Shell source minus comments.
 
@@ -169,6 +186,7 @@ class TestWalOffsiteSurvivesAnOffsiteFailure:
         )
 
         env = {
+            **_pager_pins(tmp_path),
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
             "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
@@ -254,6 +272,7 @@ class TestWalOffsiteDegradesWhenTheBackupVolumeIsWedged:
         self._stub(bin_dir / "df", 'echo "1M-blocks"; echo "9999999"')
 
         env = {
+            **_pager_pins(tmp_path),
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
             "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
@@ -360,6 +379,7 @@ class TestTheBaseBackupRecordsWhenItLastWorked:
             'for a in "$@"; do case "$a" in --pgdata=*) mkdir -p "${a#--pgdata=}";; esac; done',
         )
         env = {
+            **_pager_pins(tmp_path),
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "ROBOTHOR_BASEBACKUP_DIR": str(dest),
             "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "state"),
@@ -458,6 +478,7 @@ class TestTheWalMarkerOnlyMeansTheWalWentOffsite:
         self._stub(bin_dir / "df", 'echo "1M-blocks"; echo "9999999"')
 
         env = {
+            **_pager_pins(tmp_path),
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
             "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
@@ -552,6 +573,7 @@ class TestWalOffsiteRefusesToGuessWhenTheProbeIsBroken:
             text=True,
             timeout=120,
             env={
+                **_pager_pins(tmp_path),
                 "PATH": f"{bin_dir}:{os.environ['PATH']}",
                 "ROBOTHOR_WAL_ARCHIVE_DIR": str(archive_dir),
                 "ROBOTHOR_BASEBACKUP_DIR": str(basebackup_dir),
@@ -655,7 +677,8 @@ class TestTheVolumeProbeActuallyGatesTheLocalBackup:
             probe, f'printf \'%s\\n\' "$@" >> "{probe_log}"\nexit {probe_exit}'
         )
 
-        env: dict[str, str] = {
+        env = {
+            **_pager_pins(tmp_path),
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "HOME": str(home),
             "ROBOTHOR_BACKUP_MOUNT": str(mount),

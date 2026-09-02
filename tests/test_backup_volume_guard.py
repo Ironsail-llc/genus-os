@@ -324,9 +324,15 @@ class Box:
                 "FAKE_MAPPER_DIR": str(self.mapper_dir),
                 # Belt and braces: neither can be reached with the pager
                 # stubbed, but a refactor that reaches the real sender must
-                # still be unable to deliver anything.
+                # still be unable to deliver anything — including the durable
+                # state it writes before it ever gets to the network (see
+                # tests/test_alert_never_pages_from_tests.py).
                 "ROBOTHOR_ALERT_SUPPRESS": "1",
                 "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+                "ROBOTHOR_ALERT_SPOOL_DIR": str(self.root / "alert-spool"),
+                "ROBOTHOR_ALERT_STATE_DIR": str(self.root / "alert-state"),
+                "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(self.root / "alert-fallback"),
+                "ROBOTHOR_SECRETS_FILE": str(self.root / "no-such-secrets.env"),
             }
         )
         env.update(extra)
