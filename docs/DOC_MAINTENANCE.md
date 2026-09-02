@@ -17,4 +17,5 @@ When infrastructure, agents, services, or cron jobs change, update docs as part 
 | Deployment/fix with gotchas | Auto-memory `MEMORY.md` (session-to-session learning) |
 | Task-lifecycle change (planner / promoter / todo escalation / autonomy defaults) | `docs/SYSTEM_ARCHITECTURE.md` (Task Lifecycle section), `docs/AGENT_BUILDER.md` (Section 2a), `brain/HEARTBEAT.md`, `brain/AGENTS.md`, `brain/SOUL.md`, `brain/memory/autonomy_defaults.md` if budgets shift |
 | New off/observe/enforce rollout flag | A runbook in `docs/runbooks/` documenting the ladder + soak procedure (see `GUARDRAIL_FLIPS.md` for the systemd-drop-in-governed pattern, `IDENTITY_ROLLOUT.md` for the plain-env-var pattern); note any cross-flag ordering dependency explicitly |
+| New systemd unit template, host ops script, or install-truth finding class (`scripts/instance_doctor.sh`) | `docs/runbooks/INSTANCE_DOCTOR.md` (finding table + allow-file scope), `SERVICES.md` |
 | Identity/data-scoping change (`robothor/identity/`) | `docs/runbooks/IDENTITY_ROLLOUT.md`, `docs/SYSTEM_ARCHITECTURE.md` (Cross-System Identity section) |

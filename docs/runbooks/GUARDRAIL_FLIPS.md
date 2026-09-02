@@ -52,6 +52,10 @@ mirror matched, drift-check printed OK, and the running process kept the old
 value because `robothor.env:45` also set it. Five RIP flags were duplicated
 that way; four happened to agree, which is why it had never been noticed.
 
+`scripts/instance_doctor.sh` reports the same collision as an `env-shadow`
+finding over *every* live drop-in, not only the mirrored one — see
+[`INSTANCE_DOCTOR.md`](INSTANCE_DOCTOR.md).
+
 `check_dropin_drift.sh` now fails with a `SHADOWED` verdict listing any
 variable present in both files. The env file holds instance data (secrets,
 tenant ids) so it cannot be mirrored into the repo — keep each flag in exactly
