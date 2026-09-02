@@ -33,7 +33,9 @@ MAX_NEW_FUNCTION_LINES = 200
 #: an entry is more than 10% larger than reality, so shrinking forces the cap
 #: down with it. Delete an entry when its function drops under the threshold.
 KNOWN_LARGE: dict[str, int] = {
-    "tools/schemas.py::get_engine_schemas": 3520,
+    # 3675 here, 3520 once the plugins PR removes the Apollo/pf tool schemas
+    # from core; this branch is measured before that removal.
+    "tools/schemas.py::get_engine_schemas": 3675,
     "health.py::create_health_app": 1477,  # +1: execution_mode block in /health
     "runner.py::execute": 990,  # +7: task_id propagated onto the run at INSERT time
     "runner.py::_run_loop": 775,

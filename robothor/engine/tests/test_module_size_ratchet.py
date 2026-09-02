@@ -73,10 +73,8 @@ CAPS = {
     # TYPE_CHECKING import four; trimming to fit would have meant deleting
     # the docstring that says why watchdog_fired overrides the status.
     "robothor/engine/cancel_outcome.py": 86,
-    # Fleet admission (2026-08-27): extracted from the scheduler rather than
-    # growing it past its cap — the pool it drives had no production caller for
-    # its whole existence, and the wiring is a cohesive unit of its own.
-    "robothor/engine/admission.py": 82,
+    # admission.py's cap travels with the capacity PR that introduces the
+    # module; this branch does not carry it yet.
     # The finalization cluster (what a run may spend AFTER its loop ends)
     # was extracted here rather than growing run_budget past its cap.
     "robothor/engine/finalization_budget.py": 160,
