@@ -161,15 +161,38 @@ class Box:
         # repeats), because a single heal asks the kernel more than once and the
         # answer is allowed to differ between the questions — a count that can
         # change is the entire reason it is re-read rather than remembered.
+        # `dmsetup deps` answers PER NODE: FAKE_DM_DEPS is the default and
+        # FAKE_DM_DEPS_MAP ("<name>=<majmin> <name>=<majmin>") overrides it for
+        # individual nodes, because the interesting states have more than one
+        # mapper node and they are backed by different things — a stale corpse
+        # and the device's own live mapping side by side.
+        #
+        # `dmsetup info -o uuid` answers with the dm-crypt UUID, which for a
+        # LUKS mapping is CRYPT-LUKS2-<container uuid, dashes stripped>-<name>.
+        # That is the container's own identity and it survives the device
+        # dropping off the bus, so it is how the guard tells its OWN corpse
+        # from a stranger wearing its name. It deliberately does NOT bump the
+        # open-count sequence: it is a different question.
         self._stub(
             "dmsetup",
+            'for dm_name in "$@"; do :; done\n'
+            'dm_deps="${FAKE_DM_DEPS:-8:16}"\n'
+            'for kv in ${FAKE_DM_DEPS_MAP:-}; do\n'
+            '  [ "${kv%%=*}" = "$dm_name" ] && dm_deps="${kv#*=}"\n'
+            "done\n"
             'case "$1" in\n'
-            f'  info) n=$(cat "{self.dm_count}" 2>/dev/null || echo 0); n=$((n + 1))\n'
-            f'        printf "%s" "$n" > "{self.dm_count}"\n'
-            '        read -r -a counts <<<"${FAKE_DM_OPEN:-0}"\n'
-            "        i=$((n - 1)); (( i >= ${#counts[@]} )) && i=$(( ${#counts[@]} - 1 ))\n"
-            '        printf "%s\\n" "${counts[$i]}" ;;\n'
-            '  deps) printf "1 dependencies : (%s)\\n" "${FAKE_DM_DEPS:-8:16}" ;;\n'
+            '  info) case " $* " in\n'
+            '          *" uuid "*)\n'
+            '            printf "%s\\n" "${FAKE_DM_UUID:-CRYPT-LUKS2-'
+            + UUID.replace("-", "")
+            + '-$dm_name}" ;;\n'
+            f'          *) n=$(cat "{self.dm_count}" 2>/dev/null || echo 0); n=$((n + 1))\n'
+            f'             printf "%s" "$n" > "{self.dm_count}"\n'
+            '             read -r -a counts <<<"${FAKE_DM_OPEN:-0}"\n'
+            "             i=$((n - 1)); (( i >= ${#counts[@]} )) && i=$(( ${#counts[@]} - 1 ))\n"
+            '             printf "%s\\n" "${counts[$i]}" ;;\n'
+            "        esac ;;\n"
+            '  deps) printf "1 dependencies : (%s)\\n" "$dm_deps" ;;\n'
             "esac",
         )
         self._stub(
@@ -238,6 +261,11 @@ class Box:
         """A mapper node left behind by a drop: it exists, and its backing
         major:minor no longer matches the device that just came back."""
         (self.mapper_dir / MAPPER).write_text("")
+
+    def mapper_node(self, name: str) -> None:
+        """Any other device-mapper node — a previous heal's ``<name>-1``, or
+        the ``<name>-b`` a human recovered under at 3am."""
+        (self.mapper_dir / name).write_text("")
 
     def markers(self) -> None:
         for name, value in (
@@ -866,6 +894,68 @@ def test_a_mapping_that_merely_starts_with_our_name_is_not_ours(box: Box, source
     assert result.returncode == 0, result.stdout + result.stderr
     assert box.ran("umount") == [], f"unmounted {source}:\n{box.argv}"
     assert "refusing to unmount it" in box.pages[0]
+
+
+def test_a_mapper_wearing_our_name_but_backed_by_another_device_is_not_ours(box: Box):
+    """The lexical check is necessary and not sufficient.
+
+    ``robothor-backup-<token>`` is a NAME, and a name is not an identity: any
+    device-mapper node can be created under it, and the guard would then
+    lazy-unmount somebody else's filesystem because it liked the spelling. What
+    makes a node ours is the DEVICE — either ``dmsetup deps`` resolving to the
+    same major:minor the crypttab UUID resolves to, or a dm-crypt UUID naming
+    our own LUKS container (that is our corpse after a drop, which is exactly
+    the thing the heal has to unmount). ``robothor-backup-evil`` is neither.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    evil = box.mapper_dir / f"{MAPPER}-evil"
+    box.mapper_node(evil.name)
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_MOUNT_SOURCE=str(evil),
+        FAKE_DM_DEPS="8:99",  # backed by a device that is not ours
+        FAKE_DM_UUID="CRYPT-LUKS2-00000000000000000000000000000000-not-ours",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert box.ran("umount") == [], f"lazy-unmounted a stranger's filesystem:\n{box.argv}"
+    assert box.ran("cryptsetup open") == []
+    assert box.ran("cryptsetup close") == []
+    assert box.ran("fsck.ext4") == []
+    assert box.ran("mount") == []
+
+    assert len(box.pages) == 1, f"expected exactly one page, got {box.pages}"
+    assert (
+        f"something other than the backup mapper is mounted at {box.mount} "
+        f"({evil} is not backed by {box.device}) — refusing to unmount it"
+    ) in box.pages[0], box.pages[0]
+
+
+def test_our_own_corpse_with_no_deps_at_all_is_still_ours_to_unmount(box: Box):
+    """The control for the refusal above, and the case identity must not break.
+
+    On 2026-08-27 the wedged node was an orphaned ``error`` target: the device
+    had gone, so ``dmsetup deps`` named NOTHING. An identity check that only
+    compared deps would have refused to unmount the very thing the recovery
+    unmounts — inert on exactly the signature it was written for. The dm-crypt
+    UUID still names our LUKS container, so the node is still ours.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1 0",
+        FAKE_DM_DEPS="",  # an error target depends on nothing
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",  # held by the kernel, as it was on the night
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran(f"umount -l {box.mount}"), f"refused its own corpse:\n{box.argv}"
+    assert box.ran(f"cryptsetup open {box.device} {MAPPER}-1"), box.argv
+    assert len(box.pages) == 1
+    assert "auto-recovered" in box.pages[0]
 
 
 @pytest.mark.parametrize("suffix", ["-1", "-9", "-b"])

@@ -50,10 +50,24 @@ mean recent.
 | `filesystem needs manual fsck (fsck.ext4 -p exit N) — NOT mounted` | Preen could not repair it without a decision. The guard deliberately did **not** mount it and closed the container again. | `cryptsetup open /dev/disk/by-uuid/<uuid> robothor-backup-<n>` then `fsck.ext4 -y /dev/mapper/robothor-backup-<n>`, *with the offsite copy verified first*. |
 | `SMART reports /dev/sdX as FAILED` | The firmware has given up on the disk. The guard refuses to remount it. | Replace the disk. Restore from offsite (`docs/runbooks/OFFSITE_BACKUP.md`). |
 | `mapper robothor-backup still has N opener(s) after umount -l — refusing to fsck a referenced mapping; the volume is now UNMOUNTED and the next tick remounts it once the holder lets go` | The mapping is the device's own and correct, but something still holds it: `umount -l` returns before the last reference is dropped. `fsck.ext4 -p` there would corrupt a filesystem that was only degraded. **The lazy unmount already happened**, so the volume is no longer at the path — it is not degraded now, it is absent, and it stays absent while the holder holds. | `lsof +f -- /dev/mapper/robothor-backup` / `fuser -vm /mnt/robothor-backup` to find the holder (a login shell sitting in the directory counts) and stop it. The next tick then remounts it; nothing else is needed. If nothing is holding it, the reference is a kernel one: reboot. |
-| `something other than the backup mapper is mounted at /mnt/robothor-backup (SOURCE) — refusing to unmount it` | The probe says the path is unusable and what is mounted there is not this guard's mapper. Somebody mounted over the mountpoint. "This guard's mapper" means `/dev/mapper/robothor-backup` with at most one trailing `-<token>` (`-1` from a heal, `-b` from the 2026-08-27 hand recovery). The guard touched nothing: `umount -l` names a path, and unmounting a stranger's filesystem out from under its users is not this control's job. | Find out what `SOURCE` is (`findmnt /mnt/robothor-backup`) and unmount it yourself when whatever is using it is done. The next tick then heals the real volume. |
+| `something other than the backup mapper is mounted at /mnt/robothor-backup (SOURCE) — refusing to unmount it` | The probe says the path is unusable and what is mounted there is not one of this guard's mapper nodes at all. Somebody mounted over the mountpoint. The guard touched nothing: `umount -l` names a path, and unmounting a stranger's filesystem out from under its users is not this control's job. | Find out what `SOURCE` is (`findmnt /mnt/robothor-backup`) and unmount it yourself when whatever is using it is done. The next tick then heals the real volume. |
+| `something other than the backup mapper is mounted at /mnt/robothor-backup (SOURCE is not backed by DEVICE) — refusing to unmount it` | A node **named** like this guard's mapper is mounted there, but it is neither backed by our device nor a mapping of our LUKS container — see "How it decides what is ours". A name is not an identity. | `dmsetup deps <name>` and `dmsetup info -c -o uuid <name>` say what it really is. Unmount it yourself once whatever is using it is done. |
 | `no non-interactive keyfile in crypttab (column 3 = X); refusing to tear down a mapping I cannot rebuild` | crypttab column 3 is `none`, `-`, or a file root cannot read, so `cryptsetup open` would prompt on a console the timer does not have. The guard did **not** unmount or close anything — it left the volume degraded rather than making it absent. | Put a readable keyfile in column 3 of `/etc/crypttab` (`cryptsetup luksAddKey` first), or run the manual procedure below and unlock it by hand. |
 | `... heal deferred: <unit> is activating` | A backup unit was mid-run; unmounting under it would corrupt the backup. | Nothing — the next tick heals it. |
 | `<mount> is mounted emergency_ro ...` with `HEAL=0` | Healing is switched off. | Re-enable, or run the manual procedure below. |
+
+## How it decides what is ours
+
+By the **device**, not by the name. `/dev/mapper/robothor-backup[-<token>]` is
+only the cheap first filter — it says which node to ask about, and anything
+with root can create a node under that spelling. A node is this guard's when
+either `dmsetup deps` resolves to the same `MAJ:MIN` as the crypttab
+`UUID=` → `/dev/disk/by-uuid` → `lsblk` chain (the device's own **live**
+mapping), or its dm-crypt UUID — `CRYPT-LUKS2-<container uuid>-<name>` — names
+our LUKS container (our own **corpse**, after a drop has taken the deps away;
+an orphaned `error` target depends on nothing, which is the 2026-08-27
+signature). Anything else at the mountpoint is somebody's filesystem and the
+guard refuses to touch it.
 
 ## The manual procedure
 

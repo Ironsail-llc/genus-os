@@ -235,6 +235,11 @@ LAST_WAL_OFFSITE="$(backup_state_last last-wal-offsite-ok)"
 DEVICE=""
 KEYFILE=""
 DEVICE_REASON=""
+# The LUKS container's own UUID, dashes stripped and lowercased, as it appears
+# inside a dm-crypt node's UUID (CRYPT-LUKS2-<uuid>-<name>). For a LUKS
+# partition the by-uuid name IS the header UUID, so crypttab already carries
+# it. Empty when crypttab names a path instead — see node_is_our_luks_corpse.
+LUKS_UUID=""
 resolve_device() {
     if [[ ! -r "$CRYPTTAB" ]]; then
         DEVICE_REASON="cannot read ${CRYPTTAB} — the backing device is unknown"
@@ -250,7 +255,12 @@ resolve_device() {
         return 1
     fi
     case "$spec" in
-        UUID=*) DEVICE="${DEV_DIR}/${spec#UUID=}" ;;
+        UUID=*)
+            DEVICE="${DEV_DIR}/${spec#UUID=}"
+            LUKS_UUID="${spec#UUID=}"
+            LUKS_UUID="${LUKS_UUID//-/}"
+            LUKS_UUID="${LUKS_UUID,,}"
+            ;;
         /*) DEVICE="$spec" ;;
         *)
             DEVICE_REASON="crypttab entry ${MAPPER_BASE} names ${spec}, which is neither a UUID= nor a path"
@@ -284,13 +294,66 @@ mapper_is_free() {
 HEAL_REASON=""
 MAPPER_USED=""
 
-# Is the node already at ${MAPPER_DIR}/${MAPPER_BASE} the device's OWN live
-# mapping, or the corpse a drop left behind? `dmsetup deps` gives the
-# major:minor it is backed by, and after a re-plug the device comes back as a
-# different one — so deps that still match are a live, correct mapping, and
-# deps that do not are the stale node that cannot be closed until reboot.
+# ── Identity: by the DEVICE, never by the name ───────────────────────────────
+#
+# `robothor-backup-<token>` is a NAME. Anything with root can create a mapper
+# node under one, and a check that accepts a name lazy-unmounts whatever wears
+# it. What makes a node this guard's is the DEVICE behind it, established two
+# ways because a drop takes one of them away:
+#
+#   deps  — `dmsetup deps` gives the major:minor the node is backed by, and the
+#           crypttab UUID -> by-uuid -> lsblk chain gives the device's. Equal
+#           means this is the device's own LIVE mapping.
+#   uuid  — a dm-crypt node's UUID is CRYPT-LUKS<n>-<container uuid>-<name>.
+#           That names the LUKS CONTAINER, not the bus address, so it still
+#           identifies our own corpse after the device has dropped off and the
+#           deps have gone (an `error` target has none) or gone stale. This is
+#           the 2026-08-27 signature: the wedged node mounted at the path is
+#           ours and unmounting it is the entire recovery, so identity that
+#           only knew `deps` would refuse to heal the case the guard is for.
 MAPPER_DEPS=""
 DEVICE_MAJMIN=""
+
+# Resolved once per tick: the device does not move under us mid-heal.
+device_majmin() {
+    [[ -n "$DEVICE_MAJMIN" ]] && return 0
+    DEVICE_MAJMIN="$(lsblk -no MAJ:MIN "$DEVICE" 2>/dev/null | head -n 1 | tr -d '[:space:]')"
+    [[ -n "$DEVICE_MAJMIN" ]]
+}
+
+node_is_backed_by_device() {
+    MAPPER_DEPS="$(dmsetup deps -o devno "$1" 2>/dev/null | majmin)"
+    device_majmin || return 1
+    [[ -n "$MAPPER_DEPS" && "$MAPPER_DEPS" == "$DEVICE_MAJMIN" ]]
+}
+
+node_is_our_luks_corpse() {
+    [[ -n "$LUKS_UUID" ]] || return 1
+    local dm_uuid
+    dm_uuid="$(dmsetup info -c --noheadings -o uuid "$1" 2>/dev/null | tr -d '[:space:]')"
+    [[ "$dm_uuid" == CRYPT-LUKS* ]] || return 1
+    dm_uuid="${dm_uuid//-/}"
+    [[ "${dm_uuid,,}" == *"$LUKS_UUID"* ]]
+}
+
+# Ours = the device's live mapping, or our own container's corpse.
+node_is_ours() { node_is_backed_by_device "$1" || node_is_our_luks_corpse "$1"; }
+
+# The node name a mount SOURCE names, or nothing when the source is not one of
+# this guard's mapper nodes at all. The cheap check, first: it must live in
+# ${MAPPER_DIR} with no further slash (so <name>-1/../../sda1 is not ours), and
+# be ${MAPPER_BASE} plus at most ONE trailing -<token> of letters, digits and
+# underscores — a heal's <name>-N, and also the name a human recovered under by
+# hand. A name ours merely PREFIXES (robothor-backupX, robothor-backup-1-other)
+# is a different mapping.
+mapper_node_name() {
+    local src="$1" name
+    [[ "$src" == "${MAPPER_DIR}/"* ]] || return 0
+    name="${src#"${MAPPER_DIR}/"}"
+    [[ "$name" == */* ]] && return 0
+    [[ "$name" == "$MAPPER_BASE" || "$name" =~ ^"${MAPPER_BASE}"-[[:alnum:]_]+$ ]] || return 0
+    printf '%s' "$name"
+}
 
 # The name to open the container under.
 #
@@ -301,11 +364,8 @@ DEVICE_MAJMIN=""
 # stacking another mapping on the same disk.
 mapper_is_live() {
     MAPPER_DEPS=""
-    DEVICE_MAJMIN=""
     [[ -e "${MAPPER_DIR}/${MAPPER_BASE}" ]] || return 1
-    MAPPER_DEPS="$(dmsetup deps -o devno "$MAPPER_BASE" 2>/dev/null | majmin)"
-    DEVICE_MAJMIN="$(lsblk -no MAJ:MIN "$DEVICE" 2>/dev/null | head -n 1 | tr -d '[:space:]')"
-    [[ -n "$MAPPER_DEPS" && -n "$DEVICE_MAJMIN" && "$MAPPER_DEPS" == "$DEVICE_MAJMIN" ]]
+    node_is_backed_by_device "$MAPPER_BASE"
 }
 
 # crypttab's third column is the ONLY key a timer can use: `none`, `-`, or a
@@ -403,21 +463,20 @@ heal() {
     #    be aimed at the wrong filesystem. So identify the source first and act
     #    only on this guard's own mapper.
     #
-    #    "Ours" is ${MAPPER_DIR}/${MAPPER_BASE} plus at most ONE trailing
-    #    -<token> of letters, digits and underscores: a heal's <name>-N, and
-    #    ALSO the name a human recovered under by hand — this box is mounted
-    #    from robothor-backup-b right now, left by the 2026-08-27 recovery, and
-    #    a check that accepted only -[1-9] would have been inert on the machine
-    #    it was written for. The token cannot contain a slash, so
-    #    <name>-1/../../sda1 is not ours; and a name ours merely PREFIXES
-    #    (robothor-backupX, robothor-backup-1-other) is a different mapping.
+    #    The name is the CHEAP check and it is not sufficient: any node can be
+    #    created under `robothor-backup-<token>`, and a guard that trusted the
+    #    spelling would lazily unmount it. So the name only says which node to
+    #    ask about, and the DEVICE decides — node_is_ours above.
     if findmnt -rn -o TARGET --mountpoint "$MOUNT" >/dev/null 2>&1; then
-        local mounted_source mounted_suffix
+        local mounted_source mounted_name
         mounted_source="$(findmnt -rn -o SOURCE --mountpoint "$MOUNT" 2>/dev/null | head -n 1)"
-        mounted_suffix="${mounted_source#"${MAPPER_DIR}/${MAPPER_BASE}"}"
-        if [[ "$mounted_source" != "${MAPPER_DIR}/${MAPPER_BASE}"* ]] ||
-            { [[ -n "$mounted_suffix" ]] && [[ ! "$mounted_suffix" =~ ^-[[:alnum:]_]+$ ]]; }; then
+        mounted_name="$(mapper_node_name "$mounted_source")"
+        if [[ -z "$mounted_name" ]]; then
             HEAL_REASON="something other than the backup mapper is mounted at ${MOUNT} (${mounted_source:-unknown}) — refusing to unmount it"
+            return 1
+        fi
+        if ! node_is_ours "$mounted_name"; then
+            HEAL_REASON="something other than the backup mapper is mounted at ${MOUNT} (${mounted_source} is not backed by ${DEVICE}) — refusing to unmount it"
             return 1
         fi
         if ! umount -l "$MOUNT"; then
