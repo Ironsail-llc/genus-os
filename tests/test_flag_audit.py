@@ -1087,3 +1087,69 @@ def test_parse_dropin_dir_survives_an_unbalanced_quote(tmp_path):
     d.mkdir()
     (d / "a.conf").write_text('[Service]\nEnvironment=ROBOTHOR_RBAC_MODE="enforce\n')
     assert fa.parse_dropin_dir(d) == {"ROBOTHOR_RBAC_MODE": "enforce"}
+
+
+# --- the running process is read once ---------------------------------------
+
+
+def test_main_reads_the_running_environ_exactly_once(tmp_path, monkeypatch, capsys):
+    """main() read /proc/<MainPID>/environ to decide whether to print the
+    "could not read the running engine" note, and audit() then read it again
+    to build the table. Two reads of the same file can disagree — the engine
+    can restart between them — and the report would then mix a note about one
+    process with a table about another.
+    """
+    manifest = _manifest(tmp_path, [{"name": "ROBOTHOR_RBAC_MODE", "mode": "enforce"}])
+    env_file = tmp_path / "robothor.env"
+    env_file.write_text("")
+    environ = tmp_path / "environ"
+    environ.write_bytes(b"ROBOTHOR_RBAC_ENABLED=1\x00ROBOTHOR_RBAC_MODE=enforce\x00")
+
+    seen: list = []
+    real = fa.read_environ
+
+    def counting(path):
+        seen.append(path)
+        return real(path)
+
+    monkeypatch.setattr(fa, "read_environ", counting)
+    fa.main(
+        [
+            "--no-db",
+            "--flags-yaml",
+            str(manifest),
+            "--env-file",
+            str(env_file),
+            "--dropin-dir",
+            str(tmp_path / "none"),
+            "--environ",
+            str(environ),
+        ]
+    )
+    capsys.readouterr()
+    assert len(seen) == 1, f"read {len(seen)} times: {seen}"
+
+
+def test_main_still_notes_an_unreadable_environ(tmp_path, capsys):
+    """The single read must keep the degradation notice — the note is the
+    only thing separating a simulated table from a measured one."""
+    manifest = _manifest(tmp_path, [{"name": "ROBOTHOR_RBAC_MODE", "mode": "enforce"}])
+    env_file = tmp_path / "robothor.env"
+    env_file.write_text("ROBOTHOR_RBAC_ENABLED=1\nROBOTHOR_RBAC_MODE=enforce\n")
+
+    fa.main(
+        [
+            "--no-db",
+            "--flags-yaml",
+            str(manifest),
+            "--env-file",
+            str(env_file),
+            "--dropin-dir",
+            str(tmp_path / "none"),
+            "--environ",
+            str(tmp_path / "no-such-environ"),
+        ]
+    )
+    out = capsys.readouterr().out
+    assert "could not read the running engine's environment" in out
+    assert "simulated" in out

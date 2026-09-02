@@ -210,6 +210,17 @@ def engine_environ_path(unit: str = ENGINE_UNIT) -> Path | None:
     return Path(f"/proc/{pid}/environ")
 
 
+class _Unread:
+    """Marks a caller that has not read the process environment yet.
+
+    Not None: None is the answer ``read_environ`` gives when the environ could
+    not be read, and that answer must survive being passed to :func:`audit`.
+    """
+
+
+_UNREAD = _Unread()
+
+
 def read_environ(path: Path | None) -> dict[str, str] | None:
     """The running process's environment, or None when it cannot be read."""
     if path is None:
@@ -549,6 +560,7 @@ def audit(
     env_file: Path = DEFAULT_ENV_FILE,
     dropin_dir: Path = DEFAULT_DROPIN_DIR,
     environ_path: Path | None = None,
+    environ: dict[str, str] | None | _Unread = _UNREAD,
     db: DbState | None = None,
     today: dt.date | None = None,
     notes: list[str] | None = None,
@@ -560,6 +572,10 @@ def audit(
     partial table as complete. *notes* is an out-parameter: anything the table
     itself cannot say (an out-of-range value the engine clamps) is appended
     for the caller to print beneath it.
+
+    *environ* lets a caller that has already read the process pass the result
+    in — ``None`` is a real answer there ("unreadable"), which is why the
+    default is a sentinel rather than None. See :func:`main`.
     """
     from robothor.flags.store import GOVERNED_FLAGS
 
@@ -567,7 +583,8 @@ def audit(
     manifest = load_manifest(flags_yaml)
     dropin = parse_dropin_dir(dropin_dir)
     envfile = parse_env_file(env_file.read_text(errors="replace")) if env_file.is_file() else {}
-    environ = read_environ(environ_path)
+    if isinstance(environ, _Unread):
+        environ = read_environ(environ_path)
     gates = mode_gate_map()
     pins = db.pins if db else {}
 
@@ -852,7 +869,11 @@ def main(argv: list[str] | None = None) -> int:
                 "report, not a silent skip."
             )
 
-    if read_environ(environ_path) is None:
+    # Read the running process ONCE and pass it down. Reading it here for the
+    # note and again inside audit() left the report free to describe two
+    # different processes: the engine can restart between the two reads.
+    environ = read_environ(environ_path)
+    if environ is None:
         notes.append(
             f"could not read the running engine's environment ({environ_path or 'no MainPID'}): "
             "the effective column is simulated from the file layers in systemd order "
@@ -864,6 +885,7 @@ def main(argv: list[str] | None = None) -> int:
         env_file=args.env_file,
         dropin_dir=args.dropin_dir,
         environ_path=environ_path,
+        environ=environ,
         db=db,
         notes=notes,
     )
