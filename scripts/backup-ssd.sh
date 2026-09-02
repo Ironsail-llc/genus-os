@@ -13,7 +13,10 @@ SSD_MOUNT="${ROBOTHOR_BACKUP_MOUNT:-/mnt/robothor-backup}"
 BACKUP_ROOT="$SSD_MOUNT/robothor"
 DATE=$(date +%Y%m%d)
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-LOG="${ROBOTHOR_BACKUP_LOG:-$HOME/robothor/scripts/backup.log}"
+# Default outside the checkout: written inside it, this log was one `git add -A`
+# away from being committed, and no logrotate glob covered it. /var/log/robothor
+# is the directory infra/logrotate/robothor.conf rotates.
+LOG="${ROBOTHOR_BACKUP_LOG:-/var/log/robothor/backup.log}"
 MANIFEST="$BACKUP_ROOT/backup-manifest.txt"
 MIN_FREE_GB=10
 

@@ -26,7 +26,20 @@ INSTALLED_NAMES = {
 
 
 def run(root: Path, *extra_args: str, env_extra: dict[str, str] | None = None):
-    env = dict(os.environ)
+    # The installer also renders infra/logrotate/robothor.conf through
+    # scripts/render-unit.sh, which requires the workspace and service account
+    # and fails loudly rather than installing a policy for the wrong paths.
+    # Pinned here so a developer's shell or a real /etc/robothor/robothor.env
+    # can never decide a test's outcome.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("ROBOTHOR_")}
+    env.update(
+        {
+            "ROBOTHOR_WORKSPACE": "/srv/genus",
+            "ROBOTHOR_SERVICE_USER": "alice",
+            "ROBOTHOR_SERVICE_HOME": "/home/alice",
+            "ROBOTHOR_ENV_FILE": "/nonexistent/robothor.env",
+        }
+    )
     if env_extra:
         env.update(env_extra)
     return subprocess.run(
