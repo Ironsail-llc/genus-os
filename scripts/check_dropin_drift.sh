@@ -113,6 +113,15 @@ mirror_has_placeholders() {
     stripped="$(sed 's/^[[:space:]]*[#;].*//' "$MIRROR")"
     grep -q -e '/opt/robothor' -e '/home/robothor' -e '%h' <<<"$stripped" && return 0
     grep -qE '^(User|Group)=robothor$' <<<"$stripped" && return 0
+    # The exact-line substitutions render-unit.sh also makes. Without these a
+    # mirror whose ONLY placeholder is one of them was diffed raw against the
+    # rendered live file, so any instance that renames the service account or
+    # the database read as permanently drifted on a file that is in sync — and
+    # a drift report that is always there is a drift report nobody reads.
+    grep -qE '^Environment=PGUSER=robothor$' <<<"$stripped" && return 0
+    grep -qE '^Environment=PGDATABASE=robothor_memory$' <<<"$stripped" && return 0
+    grep -qE '^Environment=ROBOTHOR_SLO_OS_USER=robothor$' <<<"$stripped" && return 0
+    grep -qE '^[[:space:]]*su[[:space:]]+robothor[[:space:]]+robothor[[:space:]]*$' <<<"$stripped" && return 0
     return 1
 }
 

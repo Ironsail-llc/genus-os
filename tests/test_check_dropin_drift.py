@@ -16,6 +16,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "check_dropin_drift.sh"
 
@@ -169,6 +171,61 @@ def test_missing_renderer_fails_loud_for_templated_mirror(tmp_path: Path):
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "renderer missing" in result.stdout
+
+
+# --- placeholders render-unit.sh substitutes but the detector did not see ----
+#
+# mirror_has_placeholders() decides whether a mirror is a TEMPLATE. It looked
+# for /opt/robothor, /home/robothor, %h and User=/Group=robothor — four of the
+# eight spellings render-unit.sh actually substitutes. A mirror whose only
+# placeholder is one of the other four was diffed raw against the rendered live
+# file, so on any instance that renames the service account or the database the
+# check reports permanent DRIFT on a file that is perfectly in sync — and a
+# permanent drift report is a drift report nobody reads.
+#
+# A hand-maintained list of what a mechanism covers drifts from what the
+# mechanism is (2026-08-22). These four are the ones it had already lost.
+
+PLACEHOLDER_ONLY_MIRRORS = [
+    # (mirror line, live line as render-unit.sh would produce it)
+    ("Environment=PGUSER=robothor", "Environment=PGUSER=alice"),
+    ("Environment=ROBOTHOR_SLO_OS_USER=robothor", "Environment=ROBOTHOR_SLO_OS_USER=alice"),
+    ("Environment=PGDATABASE=robothor_memory", "Environment=PGDATABASE=beta_memory"),
+    ("su robothor robothor", "su alice alice"),
+]
+
+
+@pytest.mark.parametrize("mirror_line,live_line", PLACEHOLDER_ONLY_MIRRORS)
+def test_a_mirror_whose_only_placeholder_is_rendered_is_not_reported_as_drift(
+    tmp_path: Path, mirror_line: str, live_line: str
+):
+    mirror = tmp_path / "mirror.conf"
+    live = tmp_path / "live.conf"
+    mirror.write_text(f"[Service]\n{mirror_line}\n")
+    live.write_text(f"[Service]\n{live_line}\n")
+    env = render_env(tmp_path) | {"ROBOTHOR_DB_NAME": "beta_memory"}
+    result = run(live, mirror, env=env)
+    assert result.returncode == 0, (
+        f"{mirror_line!r} was not recognised as a placeholder, so the mirror "
+        "was diffed raw against the rendered live file\n"
+        + result.stdout
+        + result.stderr
+    )
+
+
+@pytest.mark.parametrize("mirror_line,live_line", PLACEHOLDER_ONLY_MIRRORS)
+def test_such_a_mirror_still_detects_genuine_drift(
+    tmp_path: Path, mirror_line: str, live_line: str
+):
+    """Rendering more mirrors must not render any of them blind."""
+    mirror = tmp_path / "mirror.conf"
+    live = tmp_path / "live.conf"
+    mirror.write_text(f"[Service]\n{mirror_line}\n")
+    live.write_text(f"[Service]\n{live_line}\nEnvironment=ROBOTHOR_RBAC_MODE=off\n")
+    env = render_env(tmp_path) | {"ROBOTHOR_DB_NAME": "beta_memory"}
+    result = run(live, mirror, env=env)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "ROBOTHOR_RBAC_MODE" in result.stdout
 
 
 def test_host_scripts_keep_the_raw_diff(tmp_path: Path):
