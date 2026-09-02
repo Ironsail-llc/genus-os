@@ -36,6 +36,8 @@
 #     smartctl -d scsi -H          gate: never remount a disk SMART calls FAILED
 #                                  (-d scsi, not -d sat: sat does not work
 #                                  through this USB bridge)
+#     findmnt -o SOURCE            gate: the thing mounted at the path must be
+#                                  our mapper — the unmount below names a PATH
 #     umount -l <mount>            the mount is wedged; a clean umount hangs
 #     dmsetup info -o open         RE-READ here: umount -l returns before the
 #                                  last reference is dropped, and fsck on a
@@ -63,6 +65,9 @@
 #     disk holding the evidence.
 #   * Tear down what it cannot rebuild: no keyfile in crypttab, or a mapping
 #     something still holds, means it pages and touches nothing.
+#   * Unmount somebody else's filesystem. `umount -l` names a PATH and this
+#     runs as root, so what is mounted at the mountpoint is identified first
+#     and anything that is not this guard's own mapper is refused.
 #   * Mask a flaky bridge. EVERY heal pages, under its own dedup key, because
 #     three self-healed drops in a day is a hardware fault, not a quiet night.
 #
@@ -268,6 +273,9 @@ majmin() { sed -n 's/.*(\([0-9]*\)[,:][[:space:]]*\([0-9]*\)).*/\1:\2/p' | head 
 # turns a degraded volume into a corrupted one.
 MAPPER_OPEN_COUNT=""
 mapper_is_free() {
+    # A dmsetup that fails, or answers with nothing, leaves this empty and the
+    # test below says BUSY — deliberately: the only thing downstream of this
+    # question is an fsck, and "I could not ask" is not an answer of zero.
     MAPPER_OPEN_COUNT="$(dmsetup info -c --noheadings -o open "$1" 2>/dev/null | tr -dc '0-9')"
     [[ "$MAPPER_OPEN_COUNT" == "0" ]]
 }
@@ -386,7 +394,32 @@ heal() {
 
     # 3. Let go of the wedged mount. Lazy, because a plain umount blocks
     #    forever on a device that is gone.
+    #
+    #    `umount -l` names a PATH, and this runs as root: whatever is mounted
+    #    there is what gets detached. The mountpoint is an ordinary directory
+    #    anything can be mounted over — a rescue image, a staging tree, another
+    #    disk parked there while the real one was away — and in every one of
+    #    those cases the probe fails for the RIGHT reason and the unmount would
+    #    be aimed at the wrong filesystem. So identify the source first and act
+    #    only on this guard's own mapper.
+    #
+    #    "Ours" is ${MAPPER_DIR}/${MAPPER_BASE} plus at most ONE trailing
+    #    -<token> of letters, digits and underscores: a heal's <name>-N, and
+    #    ALSO the name a human recovered under by hand — this box is mounted
+    #    from robothor-backup-b right now, left by the 2026-08-27 recovery, and
+    #    a check that accepted only -[1-9] would have been inert on the machine
+    #    it was written for. The token cannot contain a slash, so
+    #    <name>-1/../../sda1 is not ours; and a name ours merely PREFIXES
+    #    (robothor-backupX, robothor-backup-1-other) is a different mapping.
     if findmnt -rn -o TARGET --mountpoint "$MOUNT" >/dev/null 2>&1; then
+        local mounted_source mounted_suffix
+        mounted_source="$(findmnt -rn -o SOURCE --mountpoint "$MOUNT" 2>/dev/null | head -n 1)"
+        mounted_suffix="${mounted_source#"${MAPPER_DIR}/${MAPPER_BASE}"}"
+        if [[ "$mounted_source" != "${MAPPER_DIR}/${MAPPER_BASE}"* ]] ||
+            { [[ -n "$mounted_suffix" ]] && [[ ! "$mounted_suffix" =~ ^-[[:alnum:]_]+$ ]]; }; then
+            HEAL_REASON="something other than the backup mapper is mounted at ${MOUNT} (${mounted_source:-unknown}) — refusing to unmount it"
+            return 1
+        fi
         if ! umount -l "$MOUNT"; then
             HEAL_REASON="umount -l ${MOUNT} failed"
             return 1
@@ -398,7 +431,7 @@ heal() {
         #     last reference is dropped, so ask the kernel now — everything
         #     below this point would be done TO this mapping.
         if ! mapper_is_free "$MAPPER_BASE"; then
-            HEAL_REASON="mapper ${MAPPER_BASE} still has ${MAPPER_OPEN_COUNT:-unknown} opener(s) after umount -l — refusing to fsck a referenced mapping"
+            HEAL_REASON="mapper ${MAPPER_BASE} still has ${MAPPER_OPEN_COUNT:-unknown} opener(s) after umount -l — refusing to fsck a referenced mapping; the volume is now UNMOUNTED and the next tick remounts it once the holder lets go"
             return 1
         fi
         # 4b. The cheapest repair that can work, tried first: put the existing
@@ -438,12 +471,16 @@ heal() {
     #    established HERE, against the name actually chosen — not inferred from
     #    the count read before `umount -l`, which returns early by design.
     #
-    #    Only the original name can be in this state: a container just opened
-    #    under <name>-N is ours alone. When the original is busy there is
-    #    nothing safe left to do to it, so the guard stops and pages rather
-    #    than repairing a filesystem out from under its users.
-    if [[ "$MAPPER_USED" == "$MAPPER_BASE" ]] && ! mapper_is_free "$MAPPER_BASE"; then
-        HEAL_REASON="mapper ${MAPPER_BASE} still has ${MAPPER_OPEN_COUNT:-unknown} opener(s) after umount -l — refusing to fsck a referenced mapping"
+    #    The question is whether the guard opened this mapping ITSELF, not what
+    #    it is called. A container opened above is ours alone and nothing has
+    #    had the chance to reference it — asking anyway refused heals whose
+    #    every step had just succeeded. Anything else is a mapping that was
+    #    somebody's before this run, whatever name it wears: the original, or a
+    #    <name>-N that appeared between pick_mapper_name and the open. When it
+    #    is busy there is nothing safe left to do to it, so the guard stops and
+    #    pages rather than repairing a filesystem out from under its users.
+    if ((opened_here == 0)) && ! mapper_is_free "$MAPPER_USED"; then
+        HEAL_REASON="mapper ${MAPPER_USED} still has ${MAPPER_OPEN_COUNT:-unknown} opener(s) after umount -l — refusing to fsck a referenced mapping; the volume is now UNMOUNTED and the next tick remounts it once the holder lets go"
         return 1
     fi
 

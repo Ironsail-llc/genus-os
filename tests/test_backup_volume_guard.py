@@ -106,6 +106,7 @@ class Box:
         self.check_log = tmp_path / "check.log"
         self.check_count = tmp_path / "check.count"
         self.mount_count = tmp_path / "mount.count"
+        self.dm_count = tmp_path / "dmsetup.count"
         self.alert_log = tmp_path / "alert.log"
 
         self._install_stubs()
@@ -118,7 +119,19 @@ class Box:
         )
 
     def _install_stubs(self) -> None:
-        self._stub("findmnt", 'exit "${FAKE_MOUNTED_RC:-0}"')
+        # findmnt answers two different questions during one heal: "is anything
+        # mounted at the path" (-o TARGET, output discarded) and "what is it"
+        # (-o SOURCE). FAKE_MOUNT_SOURCE defaults to the guard's OWN mapper, so
+        # every other test drives the normal path.
+        self._stub(
+            "findmnt",
+            'case " $* " in\n'
+            '  *" SOURCE "*) printf "%s\\n" "${FAKE_MOUNT_SOURCE:-'
+            f"$FAKE_MAPPER_DIR/{MAPPER}"
+            '}" ;;\n'
+            "esac\n"
+            'exit "${FAKE_MOUNTED_RC:-0}"',
+        )
         self._stub("umount", 'exit "${FAKE_UMOUNT_RC:-0}"')
         # FAKE_MOUNT_RC is a LIST, one rc per invocation (last value repeats),
         # because one heal can legitimately mount twice: the cheap remount of
@@ -144,10 +157,18 @@ class Box:
             '  printf "%s\\n" "${FAKE_UNIT_STATE:-inactive}"\n'
             "fi",
         )
+        # FAKE_DM_OPEN is a LIST, one open count per `dmsetup info` (last value
+        # repeats), because a single heal asks the kernel more than once and the
+        # answer is allowed to differ between the questions — a count that can
+        # change is the entire reason it is re-read rather than remembered.
         self._stub(
             "dmsetup",
             'case "$1" in\n'
-            '  info) printf "%s\\n" "${FAKE_DM_OPEN:-0}" ;;\n'
+            f'  info) n=$(cat "{self.dm_count}" 2>/dev/null || echo 0); n=$((n + 1))\n'
+            f'        printf "%s" "$n" > "{self.dm_count}"\n'
+            '        read -r -a counts <<<"${FAKE_DM_OPEN:-0}"\n'
+            "        i=$((n - 1)); (( i >= ${#counts[@]} )) && i=$(( ${#counts[@]} - 1 ))\n"
+            '        printf "%s\\n" "${counts[$i]}" ;;\n'
             '  deps) printf "1 dependencies : (%s)\\n" "${FAKE_DM_DEPS:-8:16}" ;;\n'
             "esac",
         )
@@ -256,9 +277,11 @@ class Box:
 
     def run(self, **extra: str) -> subprocess.CompletedProcess[str]:
         # FAKE_CHECK_RCS describes ONE guard run (probe, then post-heal
-        # re-probe), so the invocation counter resets per run.
+        # re-probe), so the invocation counter resets per run. So do the mount
+        # and dmsetup counters, for the same reason.
         self.check_count.unlink(missing_ok=True)
         self.mount_count.unlink(missing_ok=True)
+        self.dm_count.unlink(missing_ok=True)
         return subprocess.run(
             ["bash", str(GUARD)],
             capture_output=True,
@@ -782,6 +805,197 @@ def test_a_failed_umount_stops_before_anything_is_closed(box: Box):
     assert box.ran("mount") == []
     assert len(box.pages) == 1
     assert f"umount -l {box.mount} failed" in box.pages[0]
+
+
+def test_a_foreign_filesystem_at_the_mountpoint_is_never_unmounted(box: Box):
+    """``umount -l <path>`` names a PATH, and the guard is root.
+
+    The mountpoint is a directory anyone with root can mount over: a rescue
+    image, a rsync staging tree, another disk mounted there while the real one
+    was away. If that happens the probe fails (it is not the backup volume) and
+    the guard's first side effect would be to lazily unmount somebody else's
+    filesystem out from under whatever is using it. Identify what is actually
+    mounted there and refuse anything that is not this guard's own mapper.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_MOUNT_SOURCE="/dev/sda1",
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert box.ran("umount") == [], f"unmounted a filesystem that is not ours:\n{box.argv}"
+    assert box.ran("cryptsetup open") == []
+    assert box.ran("cryptsetup close") == []
+    assert box.ran("fsck.ext4") == []
+    assert box.ran("mount") == []
+
+    assert len(box.pages) == 1, f"expected exactly one page, got {box.pages}"
+    assert (
+        f"something other than the backup mapper is mounted at {box.mount} "
+        f"(/dev/sda1) — refusing to unmount it" in box.pages[0]
+    ), box.pages[0]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # our name is a PREFIX of it, which makes it a different mapping, not ours
+        f"{MAPPER}x",
+        f"{MAPPER}-1-other",
+        # a suffix is one name component: no escaping back out of /dev/mapper
+        f"{MAPPER}-1/../../sda1",
+    ],
+)
+def test_a_mapping_that_merely_starts_with_our_name_is_not_ours(box: Box, source: str):
+    """``robothor-backup`` being a prefix of a name does not make that name this
+    guard's mapper. The suffix has to be one ``-<token>`` component."""
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_MOUNT_SOURCE=str(box.mapper_dir / source),
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran("umount") == [], f"unmounted {source}:\n{box.argv}"
+    assert "refusing to unmount it" in box.pages[0]
+
+
+@pytest.mark.parametrize("suffix", ["-1", "-9", "-b"])
+def test_the_mapper_from_a_previous_heal_is_still_ours_to_unmount(box: Box, suffix: str):
+    """The control for the refusal above, and the case it must not break.
+
+    After one heal the mount's source is ``<name>-1``, not ``<name>`` — and a
+    volume recovered BY HAND wears whatever name the operator picked at 3am.
+    The box this guard ships to is mounted from ``/dev/mapper/robothor-backup-b``
+    right now, from the 2026-08-27 recovery. A check that only accepted the
+    base name, or only ``-[1-9]``, would refuse to heal the very box it was
+    written for — inert on arrival, and only discoverable during an outage.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1 0",
+        FAKE_MOUNT_SOURCE=str(box.mapper_dir / f"{MAPPER}{suffix}"),
+        FAKE_DM_DEPS="8:16",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran(f"umount -l {box.mount}"), f"refused its own mapper:\n{box.argv}"
+    assert len(box.pages) == 1
+    assert "auto-recovered" in box.pages[0]
+
+
+def test_a_mapping_this_run_opened_is_never_second_guessed_by_an_open_count(box: Box):
+    """The pre-fsck gate is about mappings the guard did NOT open.
+
+    A container this run opened under a free name is the guard's alone: nothing
+    else has had the chance to reference it, and an open count read afterwards
+    that says otherwise is the kernel's bookkeeping, not a user. Keying the gate
+    on the NAME (``MAPPER_USED == MAPPER_BASE``) refused the heal here — a heal
+    whose every step had just succeeded — and left the volume unmounted with a
+    page blaming an opener that does not exist. The invariant is "did I open
+    this myself", not "what is it called".
+    """
+    box.plug_in()
+    box.stale_mapper()
+    result = box.run(
+        FAKE_CHECK_RCS="1 0",
+        FAKE_DM_DEPS="8:16",  # stale: the node is closed and reopened
+        FAKE_MAJMIN="8:17",
+        # free when the stale node is closed, "held" when asked again after the
+        # guard has opened its own container under the freed name.
+        FAKE_DM_OPEN="0 1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran(f"cryptsetup close {MAPPER}"), f"never closed the stale node:\n{box.argv}"
+    assert box.ran(f"cryptsetup open {box.device} {MAPPER}"), (
+        f"never reopened under the freed name:\n{box.argv}"
+    )
+    assert box.ran(f"fsck.ext4 -p {box.mapper_dir / MAPPER}"), (
+        f"refused to fsck a mapping it had just opened itself:\n{box.argv}"
+    )
+    assert box.ran(f"mount {box.mapper_dir / MAPPER} {box.mount}"), box.argv
+    assert len(box.pages) == 1
+    assert "auto-recovered" in box.pages[0]
+
+
+def test_a_reused_mapping_that_becomes_referenced_before_the_fsck_is_refused(box: Box):
+    """The other half of that gate, and the half that has teeth.
+
+    The mapping the guard reuses is one it did not open, so between the check at
+    the unmount and the fsck a new opener can appear. It is re-read at the last
+    possible moment and a non-zero answer stops the heal — no fsck, no mount.
+    """
+    box.plug_in()
+    box.stale_mapper()
+    box.no_keyfile()  # the reuse path must not need one
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_MOUNT_RC="1",  # the cheap remount fails: fall through to the fsck
+        FAKE_DM_DEPS="8:17",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="0 1",  # free at the unmount, referenced at the fsck
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert box.ran("fsck.ext4") == [], (
+        f"fsck'd a mapping that acquired an opener after the unmount:\n{box.argv}"
+    )
+    assert box.ran("cryptsetup open") == []
+    assert len(box.pages) == 1
+    assert "refusing to fsck a referenced mapping" in box.pages[0]
+
+
+def test_the_busy_mapper_page_says_the_volume_is_now_unmounted(box: Box):
+    """This refusal happens AFTER the lazy unmount, so the operator is not
+    reading about a degraded volume — they are reading about a volume that is
+    now gone from the path until the holder lets go. A page that stops at
+    "refusing to fsck" reads as "nothing changed", and the one action that
+    matters (find the holder, stop it) looks optional."""
+    box.plug_in()
+    box.stale_mapper()
+    box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_DM_DEPS="8:17",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="1",
+    )
+    page = box.pages[0]
+    assert "the volume is now UNMOUNTED" in page, page
+    assert "the next tick remounts it once the holder lets go" in page, page
+
+
+def test_a_reused_mapping_is_never_closed_when_the_repaired_mount_fails(box: Box):
+    """The failure cleanup closes what THIS run opened. A mapping it merely
+    reused was somebody else's before the heal and stays theirs after it:
+    closing it would destroy the one thing the next tick can still remount, and
+    would burn the name while it is at it."""
+    box.plug_in()
+    box.stale_mapper()
+    box.no_keyfile()  # the reuse path must not need one
+    result = box.run(
+        FAKE_CHECK_RCS="1",
+        FAKE_MOUNT_RC="1 1",  # the cheap remount AND the repaired one both fail
+        FAKE_DM_DEPS="8:17",
+        FAKE_MAJMIN="8:17",
+        FAKE_DM_OPEN="0",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(box.ran(f"mount {box.mapper_dir / MAPPER} {box.mount}")) == 2, box.argv
+    assert box.ran("cryptsetup close") == [], (
+        f"closed a mapping it had only borrowed:\n{box.argv}"
+    )
+    assert len(box.pages) == 1
+    assert "auto-recovered" not in box.pages[0]
+    assert f"mount {box.mapper_dir / MAPPER} at {box.mount} failed" in box.pages[0]
 
 
 def test_a_close_that_fails_is_not_fatal_the_new_name_is_the_point(box: Box):
