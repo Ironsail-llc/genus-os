@@ -35,7 +35,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from contextvars import ContextVar
+import uuid
+from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.models import RunStatus
@@ -96,31 +97,50 @@ def parent_deadline_expired(grace: float = DEADLINE_GRACE_SECONDS) -> bool:
     return now >= deadline - grace
 
 
+#: The spawn frame that is currently inside ``runner.execute``. Read at
+#: registration time by every installed ``ChildRunWatch``; only the one whose
+#: token matches claims the session.
+#:
+#: Identity has to be POSITIONAL, not descriptive. ``spawn_agents`` gathers N
+#: children and explicitly supports the same agent id more than once — the
+#: wide-research pattern the dedup key was namespaced for. Matching on
+#: (agent_id, parent_run_id) makes those siblings indistinguishable: the first
+#: registration satisfies every unfilled watch, so one child is claimed twice
+#: and the other is abandoned exactly as before the fix. Measured with two
+#: concurrent same-agent children: 1 finalised, 1 abandoned.
+#:
+#: `asyncio.gather` runs each child in its own Task, and a Task copies the
+#: context at creation, so a value set inside one child's frame is invisible
+#: to its siblings. That is what makes this a position and not a global.
+_child_token: ContextVar[str | None] = ContextVar("_child_token", default=None)
+
+
+def current_child_token() -> str | None:
+    """Which spawn frame is inside ``runner.execute`` right now, if any."""
+    return _child_token.get()
+
+
 class ChildRunWatch:
-    """Capture the child's session as the runner registers it.
+    """Capture the child's session as the runner announces it.
 
     The spawn path has to know WHICH run it abandoned, and it cannot learn
     that from ``runner.execute`` — the call never returns when it is
-    cancelled. The runner registers every session it starts
-    (``session_registry.register``); this listens for exactly one, filtered to
-    the child that this spawn is waiting on.
+    cancelled. The runner announces every session it starts
+    (``session_registry.announce`` / ``register``); this claims exactly the
+    one carrying this frame's token.
     """
 
     def __init__(self, child_agent_id: str, parent_run_id: str) -> None:
         self._child_agent_id = child_agent_id
         self._parent_run_id = parent_run_id
+        self.token = uuid.uuid4().hex
         self.session: AgentSession | None = None
+        self._token_reset: Token[str | None] | None = None
 
     def _observe(self, session: AgentSession) -> None:
         if self.session is not None:
             return
-        run = getattr(session, "run", None)
-        if run is None or run.agent_id != self._child_agent_id:
-            return
-        # parent_run_id is written before register(); a child that somehow
-        # lacks it still matches on agent id, which is the only child this
-        # frame can be waiting on.
-        if run.parent_run_id and run.parent_run_id != self._parent_run_id:
+        if current_child_token() != self.token:
             return
         self.session = session
 
@@ -128,11 +148,15 @@ class ChildRunWatch:
         from robothor.engine import session_registry
 
         session_registry.add_observer(self._observe)
+        self._token_reset = _child_token.set(self.token)
         return self
 
     def __exit__(self, *exc: Any) -> None:
         from robothor.engine import session_registry
 
+        if self._token_reset is not None:
+            _child_token.reset(self._token_reset)
+            self._token_reset = None
         session_registry.remove_observer(self._observe)
 
 

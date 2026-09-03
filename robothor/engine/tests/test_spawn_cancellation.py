@@ -92,6 +92,7 @@ class _FakeRunner:
         self.config.manifest_dir = "/tmp/agents"
         self.bypass_own_handler = bypass_own_handler
         self.session: AgentSession | None = None
+        self.sessions: list[AgentSession] = []
         self.finished: list = []
 
     async def execute(self, **kwargs):
@@ -106,7 +107,14 @@ class _FakeRunner:
         if spawn_ctx is not None:
             session.run.parent_run_id = spawn_ctx.parent_run_id
         session.run.status = RunStatus.RUNNING
+        # The real runner registers ~275 lines into execute(), after prompt
+        # assembly, the planner call and sandbox start — so with concurrent
+        # spawns EVERY sibling's watch is already installed before the first
+        # child registers. A fake that registers on its first line hides
+        # exactly the collision this file exists to catch.
+        await asyncio.sleep(0.01)
         self.session = session
+        self.sessions.append(session)
         session_registry.register(session)
         try:
             # The child's next LLM call, which never returns.
@@ -240,3 +248,63 @@ class TestChildFinalisedOnParentCancel:
 
         assert len(runner.finished) == 1, "the spawn path wrote a second terminal row"
         assert runner.finished[0].status is RunStatus.CANCELLED
+
+
+class TestConcurrentChildrenOfOneParent:
+    """`spawn_agents` explicitly supports the same agent id twice.
+
+    `_handle_spawn_agents` gathers N `_handle_spawn_agent` coroutines, and the
+    "wide research pattern" the dedup key was namespaced for is precisely the
+    same agent spawned with different messages. A watch that identifies its
+    child by (agent_id, parent_run_id) cannot tell those siblings apart: the
+    first registration satisfies every unfilled watch, so one child is claimed
+    twice and the other is claimed by nobody and abandoned exactly as before.
+
+    Identify the child POSITIONALLY instead — each spawn mints a token, sets
+    it for the duration of its own `runner.execute`, and the watch claims only
+    the registration that carries its own token.
+    """
+
+    @pytest.mark.asyncio
+    async def test_both_concurrent_children_are_finalised(self, spawn_context, child_config):
+        from unittest.mock import patch
+
+        from robothor.engine.spawn_cancel import tool_deadline
+        from robothor.engine.tools import (
+            _current_spawn_context,
+            _handle_spawn_agents,
+            set_runner,
+        )
+
+        runner = _FakeRunner()
+        set_runner(runner)
+        _current_spawn_context.set(spawn_context)
+        try:
+            with (
+                patch("robothor.engine.config.load_agent_config", return_value=child_config),
+                patch("robothor.engine.dedup.try_acquire", return_value=True),
+                patch("robothor.engine.dedup.release"),
+            ):
+                call = _handle_spawn_agents(
+                    {
+                        "agents": [
+                            {"agent_id": "crm-hygiene", "message": "sweep the tasks"},
+                            {"agent_id": "crm-hygiene", "message": "sweep the people"},
+                        ]
+                    },
+                    agent_id="auto-researcher",
+                )
+                with pytest.raises(TimeoutError), tool_deadline(0.3):
+                    async with asyncio.timeout(0.3):
+                        await call
+        finally:
+            set_runner(None)  # type: ignore[arg-type]
+            _current_spawn_context.set(None)
+
+        assert len(runner.sessions) == 2, "both children should have started"
+        finalised = {r.id for r in runner.finished}
+        started = {s.run.id for s in runner.sessions}
+        assert finalised == started, (
+            f"every started child must be finalised — abandoned: {sorted(started - finalised)}"
+        )
+        assert all(r.status is RunStatus.TIMEOUT for r in runner.finished)
