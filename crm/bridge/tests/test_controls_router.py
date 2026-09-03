@@ -25,11 +25,18 @@ def test_operator_can_promote_and_it_is_audited(controls_client_as_operator, fak
     assert fake_store.last_write == ("ROBOTHOR_RBAC_MODE", "enforce")
 
 
-def test_get_lists_all_twelve_with_verdicts(controls_client_as_operator, fake_store, fake_verdict):
+def test_get_lists_every_governed_flag_with_verdicts(
+    controls_client_as_operator, fake_store, fake_verdict
+):
+    """Derived from GOVERNED_FLAGS, not a literal. A hardcoded count makes
+    adding a governed flag look like a broken test rather than a passing one,
+    and the fix people reach for is bumping the number without checking the
+    flag actually reached the surface."""
     r = controls_client_as_operator.get("/api/controls")
     assert r.status_code == 200
     body = r.json()
-    assert len(body) == 12
+    assert len(body) == len(fake_store.GOVERNED_FLAGS)
+    assert "ROBOTHOR_DNC_MODE" in {f["name"] for f in body}
     assert all("verdict" in f and "status" in f["verdict"] for f in body)
 
 
@@ -172,3 +179,32 @@ def test_get_payload_includes_valid_values_per_flag(
     assert by_name["ROBOTHOR_RIP_13_MODE"]["valid_values"] == ["observe", "enforce"]
     assert by_name["ROBOTHOR_RIP_1_ENABLED"]["valid_values"] == ["true", "false"]
     assert by_name["ROBOTHOR_RBAC_MODE"]["valid_values"] == ["off", "observe", "alert", "enforce"]
+
+
+def test_an_unwritten_dnc_flag_reports_the_mode_the_engine_actually_runs(
+    controls_client_as_operator, fake_store, fake_verdict
+):
+    """The unset default shown here must be the engine's unset default.
+
+    `_default_value_for` picked "observe" for anything non-boolean, which is
+    right for every flag that starts dark and gets promoted. ROBOTHOR_DNC_MODE
+    starts ENFORCING — it is a compliance control with no soak — so the same
+    rule would have this page report "observe" for a flag that is blocking
+    mail. A controls page that misreports the live mode is worse than no
+    controls page: an operator reading "observe" concludes the opt-out is not
+    on yet and goes looking for why it did not fire.
+    """
+    r = controls_client_as_operator.get("/api/controls")
+    assert r.status_code == 200
+    by_name = {f["name"]: f for f in r.json()}
+    assert by_name["ROBOTHOR_DNC_MODE"]["value"] == "enforce"
+    assert by_name["ROBOTHOR_DNC_MODE"]["valid_values"] == ["observe", "enforce"]
+
+
+def test_patch_rejects_off_on_the_dnc_flag(controls_client_as_operator):
+    r = controls_client_as_operator.patch(
+        "/api/controls/ROBOTHOR_DNC_MODE", json={"value": "off", "reason": "x"}
+    )
+    assert r.status_code == 422, (
+        "a compliance opt-out has no 'off' rung — the engine maps it to enforce"
+    )

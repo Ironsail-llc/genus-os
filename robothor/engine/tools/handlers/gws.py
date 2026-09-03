@@ -554,25 +554,25 @@ _DNC_RETRY_DELAY_SECONDS = 0.5
 
 
 def _dnc_mode() -> str:
-    """``enforce`` (default) or ``observe``, read from the environment per call.
+    """``enforce`` (default) or ``observe`` for this send.
 
-    Fail-closed is the right default for a compliance flag, but a default with
-    no lever is one nobody can respond to: when the guard is wrong at 3am the
-    only move left is editing code, and what actually happens is that someone
-    comments out the call. ``observe`` keeps the check running and still files
-    its evidence while the mail flows — a strictly better state than the guard
-    being deleted, and one that shows what enforcing would have cost.
+    Delegates to the governed flag ``ROBOTHOR_DNC_MODE``
+    (``robothor.engine.feature_flags.do_not_contact_mode``) rather than reading
+    ``os.environ`` here. Fail-closed is the right default for a compliance
+    flag, but a default with no lever is one nobody can respond to: when the
+    guard is wrong at 3am the only move left is editing code, and what actually
+    happens is that someone comments out the call. ``observe`` keeps the check
+    running and still files its evidence while the mail flows.
 
-    Read at call time, not at import, so flipping it takes an env change and a
-    restart rather than a deploy. Anything unrecognised enforces: a typo in an
-    env var must not switch off a compliance control.
+    Going through the flag store rather than the environment is what makes that
+    lever an operator control instead of a private edit: DB-store-first
+    resolution puts it in ``/api/controls``, on the dashboard, and in the flag
+    audit log. Read per call — the store caches the DB answer briefly and reads
+    the env live — so a flip needs no deploy. Anything unrecognised enforces.
     """
-    raw = os.environ.get("ROBOTHOR_DNC_MODE", "enforce").strip().lower()
-    if raw == "observe":
-        return "observe"
-    if raw not in ("", "enforce"):
-        logger.warning("ROBOTHOR_DNC_MODE=%r is not 'enforce' or 'observe' — enforcing.", raw)
-    return "enforce"
+    from robothor.engine.feature_flags import do_not_contact_mode
+
+    return do_not_contact_mode()
 
 
 def _dnc_lookup(addresses: list[str], tenant_id: str) -> set[str]:

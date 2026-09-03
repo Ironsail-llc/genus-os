@@ -1,4 +1,4 @@
-"""DB-backed resolution for the 12 governed guardrail flags.
+"""DB-backed resolution for the 13 governed guardrail flags.
 
 Resolution order, never violated: operator DB row -> os.environ -> None.
 
@@ -29,11 +29,16 @@ GOVERNED_FLAGS: frozenset[str] = frozenset(
         "ROBOTHOR_RIP_4_ENABLED",
         "ROBOTHOR_RIP_5_ENABLED",
         "ROBOTHOR_JUDGE_ENABLED",
+        "ROBOTHOR_DNC_MODE",
     }
 )
 
 _MODE_VALUES: tuple[str, ...] = ("off", "observe", "alert", "enforce")
 _RIP_13_VALUES: tuple[str, ...] = ("observe", "enforce")
+#: ``ROBOTHOR_DNC_MODE`` shares that two-rung shape for a different reason:
+#: it is a compliance opt-out, so it has no ``off``, and ``observe`` already
+#: writes the guardrail-event row an ``alert`` rung would page on.
+_TWO_RUNG_MODE_FLAGS: frozenset[str] = frozenset({"ROBOTHOR_RIP_13_MODE", "ROBOTHOR_DNC_MODE"})
 _BOOL_VALUES: tuple[str, ...] = ("true", "false")
 
 
@@ -41,8 +46,10 @@ def valid_values_for(name: str) -> tuple[str, ...]:
     """The single source of truth for what a governed flag may be set to.
 
     Boolean flags (``*_ENABLED``) accept ``true``/``false``. ``ROBOTHOR_RIP_13_MODE``
-    is a mode flag that only honors ``observe``/``enforce`` — the engine silently
-    drops any other value, so the API must not accept the full mode ladder for it.
+    and ``ROBOTHOR_DNC_MODE`` are mode flags that only honor ``observe``/``enforce``
+    — the engine maps any other value onto one of those, so the API must not accept
+    the full mode ladder for them. Offering a rung the engine does not honor lets an
+    operator set it, see it stored, and get different behaviour.
     Every other ``*_MODE`` flag accepts the full ladder: ``off``/``observe``/``alert``/``enforce``.
 
     Both the bridge's write-path validation (422 on an out-of-range value) and
@@ -52,7 +59,7 @@ def valid_values_for(name: str) -> tuple[str, ...]:
     """
     if name.endswith("_ENABLED"):
         return _BOOL_VALUES
-    if name == "ROBOTHOR_RIP_13_MODE":
+    if name in _TWO_RUNG_MODE_FLAGS:
         return _RIP_13_VALUES
     return _MODE_VALUES
 

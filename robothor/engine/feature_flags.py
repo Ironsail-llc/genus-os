@@ -52,6 +52,13 @@ _VALID_ENFORCEMENT_MODES = frozenset(("observe", "alert", "enforce"))
 HonestySuiteMode = Literal["off", "observe", "enforce"]
 _VALID_HONESTY_SUITE_MODES = frozenset(("off", "observe", "enforce"))
 
+# The do-not-contact opt-out has TWO rungs, not four. There is no "off": a
+# legal opt-out that can be switched off entirely is not a control. There is no
+# "alert" either — "observe" already notifies through the guardrail-event row
+# the check writes on every would-be block. See do_not_contact_mode().
+DoNotContactMode = Literal["observe", "enforce"]
+_VALID_DO_NOT_CONTACT_MODES = frozenset(("observe", "enforce"))
+
 
 def _resolve_raw(name: str, default: str = "") -> str:
     """Governed flags resolve through the DB store first, then env.
@@ -534,6 +541,47 @@ def honesty_suite_mode() -> HonestySuiteMode:
     if raw in _VALID_HONESTY_SUITE_MODES:
         return raw  # type: ignore[return-value]
     return "observe"
+
+
+def do_not_contact_mode() -> DoNotContactMode:
+    """Rollout mode for the ``crm_people.do_not_contact`` outbound-email guard.
+
+    Governed flag ``ROBOTHOR_DNC_MODE``, so it resolves DB-store-first and
+    falls back to the environment. That matters more here than for most: this
+    is the one control that can silence itself, and routing it through the
+    store is what makes a flip visible in ``/api/controls``, flippable from the
+    dashboard, and recorded in the flag audit log instead of being an
+    untraceable edit on a box.
+
+    - ``enforce`` (default): a message to anyone flagged ``do_not_contact`` is
+      refused, and so is a message whose opt-out lookup could not be read.
+    - ``observe``: the same checks run and still write their
+      ``agent_guardrail_events`` row (action ``observed``), but the message
+      goes out.
+
+    Two deliberate differences from every other flag in this module:
+
+    * **No ``off`` rung.** The ladder here is two rungs. An opt-out that can be
+      turned all the way off is not a compliance control, and ``observe``
+      already gives an operator everything ``off`` would — mail flows — while
+      keeping the evidence.
+    * **``ROBOTHOR_DISABLE_ALL_RIPS`` does NOT disable it.** The panic switch
+      exists to force new *behaviour* dark; this is a legal obligation, not a
+      new behaviour, and a panic state that mails the people who asked not to
+      be mailed is not a safe state to panic into.
+
+    Read on every call, never memoised here: the store's own TTL cache holds
+    the DB answer, and when there is none the environment is read live, so
+    ``systemctl set-environment`` takes effect without a code change.
+    Anything unrecognised enforces, loudly — a typo in an env var must not
+    switch off a compliance control.
+    """
+    raw = _resolve_raw("ROBOTHOR_DNC_MODE", "enforce").strip().lower()
+    if raw in _VALID_DO_NOT_CONTACT_MODES:
+        return raw  # type: ignore[return-value]
+    if raw not in ("", "enforce"):
+        logger.warning("ROBOTHOR_DNC_MODE=%r is not 'enforce' or 'observe' — enforcing.", raw)
+    return "enforce"
 
 
 def benchmark_sandbox_mode() -> EnforcementMode:

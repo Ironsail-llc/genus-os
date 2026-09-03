@@ -419,6 +419,42 @@ class TestObserveMode:
             )
         return result, run, audit
 
+    def test_the_mode_comes_from_the_governed_flag_not_raw_environ(self):
+        """The seam, pinned.
+
+        Reading os.environ here directly would work — and would make this the
+        one control an operator cannot see in /api/controls, cannot flip from
+        the dashboard, and whose flip leaves no audit row. A DB-store value
+        must beat the environment, which is the whole point of a governed flag
+        and is invisible unless something asserts it.
+        """
+        from robothor.flags import store
+
+        with (
+            patch.dict(gws.os.environ, {"ROBOTHOR_DNC_MODE": "enforce"}, clear=False),
+            patch.object(
+                store,
+                "resolve",
+                lambda name: "observe" if name == "ROBOTHOR_DNC_MODE" else None,
+            ),
+            patch("robothor.crm.dal.do_not_contact_emails", side_effect=_fake_lookup),
+            patch.object(gws, "_run_gws", return_value={"id": "m1"}) as run,
+            patch.object(gws, "_record_sent_email"),
+            patch("robothor.engine.tracking.log_guardrail_event") as audit,
+        ):
+            store.invalidate()
+            result = gws._handle_gws_tool(
+                "gws_gmail_send",
+                {"to": "bob@example.com", "subject": "s", "body": "b"},
+                run_id=RUN_ID,
+                tenant_id=TENANT,
+            )
+        store.invalidate()
+
+        assert "error" not in result
+        run.assert_called_once()
+        assert audit.call_args.args[2] == "observed"
+
     def test_observe_lets_the_send_through(self):
         result, run, _ = self._send_in_mode("observe")
 

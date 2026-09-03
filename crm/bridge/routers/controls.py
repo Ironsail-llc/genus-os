@@ -53,10 +53,28 @@ class FlagPatch(BaseModel):
     reason: str
 
 
+#: Flags whose unset default is NOT the bottom rung. A compliance control
+#: ships enforcing, so reporting "observe" for one nobody has written yet
+#: would have this page contradict the engine — an operator would read the
+#: opt-out as not-yet-on and go looking for why it never fired.
+_UNSET_DEFAULTS: dict[str, str] = {"ROBOTHOR_DNC_MODE": "enforce"}
+
+
 def _default_value_for(name: str) -> str:
-    """A flag-appropriate "unset" default: a boolean flag that has never been
-    written defaults to "false", never "observe" (which isn't even in its
-    value set)."""
+    """A flag-appropriate "unset" default.
+
+    A boolean flag that has never been written defaults to "false", never
+    "observe" (which isn't even in its value set). Everything else starts on
+    its lowest rung, which is where a flag being promoted through a soak
+    genuinely starts — except the flags in ``_UNSET_DEFAULTS``, which ship
+    enforcing and must be reported as such.
+
+    This must agree with the engine's own default for the same flag
+    (``robothor.engine.feature_flags``); the two are read by different people
+    for the same question, and only one of them is the truth.
+    """
+    if name in _UNSET_DEFAULTS:
+        return _UNSET_DEFAULTS[name]
     valid = store.valid_values_for(name)
     return "false" if "false" in valid else "observe"
 
