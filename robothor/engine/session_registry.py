@@ -15,11 +15,14 @@ never accumulate stale entries.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from robothor.engine.session import AgentSession
 
 logger = logging.getLogger(__name__)
@@ -28,11 +31,37 @@ logger = logging.getLogger(__name__)
 _lock = threading.RLock()
 _active: dict[str, AgentSession] = {}
 
+#: Called with every session as it registers. The spawn path uses this to
+#: learn WHICH run its child got, so it can finalise that row if the parent's
+#: cancellation abandons the child mid-flight (see spawn_cancel.py). A
+#: callback that raises is dropped on the floor: observing a registration may
+#: never be the reason a run fails to start.
+_observers: list[Callable[[AgentSession], None]] = []
+
+
+def add_observer(fn: Callable[[AgentSession], None]) -> None:
+    """Watch registrations until ``remove_observer``. Not for long-lived use."""
+    with _lock:
+        _observers.append(fn)
+
+
+def remove_observer(fn: Callable[[AgentSession], None]) -> None:
+    """Stop watching. Idempotent."""
+    with _lock:
+        with contextlib.suppress(ValueError):
+            _observers.remove(fn)
+
 
 def register(session: AgentSession) -> None:
     """Add a session to the registry, keyed by ``session.run_id``."""
     with _lock:
         _active[session.run_id] = session
+        watchers = list(_observers)
+    for fn in watchers:
+        try:
+            fn(session)
+        except Exception as e:  # noqa: BLE001 - an observer must not break a run
+            logger.warning("session_registry observer failed: %s", e)
 
 
 def unregister(session_or_run_id: AgentSession | str) -> None:

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from robothor.engine.models import SpawnContext
 from robothor.engine.sanitize import sanitize_log
+from robothor.engine.spawn_cancel import ChildRunWatch, finalize_abandoned_child
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
@@ -133,6 +134,61 @@ def _build_parent_context_block(parent_task_id: str, tenant_id: str = "") -> str
     return "\n".join(lines)
 
 
+def _narrow_child_config(
+    child_config: Any,
+    args: dict[str, Any],
+    spawn_ctx: SpawnContext,
+    child_depth: int,
+) -> None:
+    """Narrow the child's manifest config to what this spawn may grant.
+
+    Extracted from `_handle_spawn_agent` rather than pinning that function
+    past the decomposition ratchet: every branch here answers one question —
+    what the caller is allowed to loosen (nothing) and tighten (iterations,
+    timeout, tools). Mutates in place; the config is a per-spawn copy.
+    """
+    from robothor.engine.models import DeliveryMode
+
+    # Apply tools_override if provided
+    tools_override = args.get("tools_override")
+    if tools_override and isinstance(tools_override, list):
+        child_config.tools_allowed = tools_override
+
+    # Apply max_iterations override (never increase beyond parent's sub_agent_max_iterations)
+    child_max_iters = child_config.max_iterations
+    requested_iters = args.get("max_iterations")
+    if requested_iters is not None:
+        child_max_iters = min(child_max_iters, int(requested_iters))
+    child_max_iters = min(child_max_iters, 30)
+    # Floor at 1 — a 0 override (e.g. caller passed max_iterations=0) would
+    # produce a zero-iteration run that can never reach the LLM. Observed in
+    # live `main` sub-agent spawns at Apr 23 00:14+.
+    child_max_iters = max(1, child_max_iters)
+    child_config.max_iterations = child_max_iters
+
+    # Apply timeout override. 0 on either side means "no cap"; otherwise
+    # the stricter positive value wins. Previously min() treated 0 as the
+    # strictest — that killed spawned children immediately once the
+    # default moved to 0 (no cap).
+    requested_timeout = args.get("timeout_seconds")
+    if requested_timeout is not None:
+        req = int(requested_timeout)
+        cur = int(child_config.timeout_seconds)
+        if req <= 0:
+            pass  # caller said "no cap"; respect current value
+        elif cur <= 0:
+            child_config.timeout_seconds = req
+        else:
+            child_config.timeout_seconds = min(cur, req)
+
+    # Force delivery to NONE — sub-agents never message the owner
+    child_config.delivery_mode = DeliveryMode.NONE
+
+    # Disable spawning on child unless explicitly configured
+    if child_depth >= spawn_ctx.max_nesting_depth:
+        child_config.can_spawn_agents = False
+
+
 async def _handle_spawn_agent(
     args: dict[str, Any],
     ctx: ToolContext | None = None,
@@ -149,7 +205,7 @@ async def _handle_spawn_agent(
     applies only to the spawned task and any tasks it inherits from.
     """
     from robothor.engine.config import load_agent_config
-    from robothor.engine.models import DeliveryMode, TriggerType
+    from robothor.engine.models import TriggerType
 
     # Support both ToolContext and direct agent_id kwarg
     if ctx and not agent_id:
@@ -190,44 +246,7 @@ async def _handle_spawn_agent(
     if child_config is None:
         return {"error": f"Agent config not found: {child_agent_id}"}
 
-    # Apply tools_override if provided
-    tools_override = args.get("tools_override")
-    if tools_override and isinstance(tools_override, list):
-        child_config.tools_allowed = tools_override
-
-    # Apply max_iterations override (never increase beyond parent's sub_agent_max_iterations)
-    child_max_iters = child_config.max_iterations
-    requested_iters = args.get("max_iterations")
-    if requested_iters is not None:
-        child_max_iters = min(child_max_iters, int(requested_iters))
-    child_max_iters = min(child_max_iters, 30)
-    # Floor at 1 — a 0 override (e.g. caller passed max_iterations=0) would
-    # produce a zero-iteration run that can never reach the LLM. Observed in
-    # live `main` sub-agent spawns at Apr 23 00:14+.
-    child_max_iters = max(1, child_max_iters)
-    child_config.max_iterations = child_max_iters
-
-    # Apply timeout override. 0 on either side means "no cap"; otherwise
-    # the stricter positive value wins. Previously min() treated 0 as the
-    # strictest — that killed spawned children immediately once the
-    # default moved to 0 (no cap).
-    requested_timeout = args.get("timeout_seconds")
-    if requested_timeout is not None:
-        req = int(requested_timeout)
-        cur = int(child_config.timeout_seconds)
-        if req <= 0:
-            pass  # caller said "no cap"; respect current value
-        elif cur <= 0:
-            child_config.timeout_seconds = req
-        else:
-            child_config.timeout_seconds = min(cur, req)
-
-    # Force delivery to NONE — sub-agents never message the owner
-    child_config.delivery_mode = DeliveryMode.NONE
-
-    # Disable spawning on child unless explicitly configured
-    if child_depth >= spawn_ctx.max_nesting_depth:
-        child_config.can_spawn_agents = False
+    _narrow_child_config(child_config, args, spawn_ctx, child_depth)
 
     # Build child SpawnContext
     child_spawn_ctx = SpawnContext(
@@ -271,21 +290,42 @@ async def _handle_spawn_agent(
         review_whitelist_token = set_tool_whitelist(REVIEW_TOOL_WHITELIST)
 
     start_time = time.monotonic()
+    # The child is awaited INLINE, in the parent's task, under whatever
+    # deadline the parent carries — normally registry.py's 600s per-tool
+    # asyncio.timeout. When that fires it cancels this task and the child's
+    # run row is left `running` with nothing to explain it (run 0a78ed9f,
+    # 2026-09-03, and 16 more before it). The watch learns which run the child
+    # got; the except arm finalises it and lets the cancellation continue.
+    watch = ChildRunWatch(child_agent_id, spawn_ctx.parent_run_id)
     try:
         sem = _get_spawn_semaphore()
         async with sem:
-            run = await runner.execute(
-                agent_id=child_agent_id,
-                message=message,
-                trigger_type=TriggerType.SUB_AGENT,
-                trigger_detail=f"spawned_by:{agent_id}",
-                correlation_id=spawn_ctx.correlation_id,
-                agent_config=child_config,
-                spawn_context=child_spawn_ctx,
-                user_id=ctx.user_id if ctx else "",
-                user_role=ctx.user_role if ctx else "",
-                tenant_id=ctx.tenant_id if ctx else "",
-            )
+            with watch:
+                run = await runner.execute(
+                    agent_id=child_agent_id,
+                    message=message,
+                    trigger_type=TriggerType.SUB_AGENT,
+                    trigger_detail=f"spawned_by:{agent_id}",
+                    correlation_id=spawn_ctx.correlation_id,
+                    agent_config=child_config,
+                    spawn_context=child_spawn_ctx,
+                    user_id=ctx.user_id if ctx else "",
+                    user_role=ctx.user_role if ctx else "",
+                    tenant_id=ctx.tenant_id if ctx else "",
+                )
+    except (asyncio.CancelledError, TimeoutError):
+        # Synchronous on purpose: no suspension point means nothing can
+        # interrupt the write. And it re-raises — absorbing the cancel would
+        # turn the parent's deadline into a suggestion.
+        finalize_abandoned_child(
+            runner,
+            watch.session,
+            parent_run_id=spawn_ctx.parent_run_id,
+            elapsed_s=time.monotonic() - start_time,
+            agent_config=child_config,
+            spawn_context=child_spawn_ctx,
+        )
+        raise
     finally:
         if review_whitelist_token is not None:
             from robothor.engine.tools.dispatch import clear_tool_whitelist
