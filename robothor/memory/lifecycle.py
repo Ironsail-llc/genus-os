@@ -909,6 +909,33 @@ async def _perform_generation_model_unload(pause_after_s: float = 0.0) -> None:
         )
         return
 
+    # The fleet's offline tier is the model `config._with_last_resort` appends
+    # to EVERY agent's chain. Evicting it during memory pressure would take the
+    # whole fleet's fallback away at precisely the moment it is carrying the
+    # fleet — and memory pressure is exactly what a resident 27B creates.
+    #
+    # Latent rather than theoretical: GENERATION_MODEL defaults to qwen3:8b,
+    # but detect_generation_model()'s final fallback matches "any qwen3 that is
+    # not an embedder or reranker", which matches qwen3.8:27b. One env var or
+    # one caller away. Compared canonically so the ollama_chat/ routing prefix
+    # cannot defeat the check. Logged loudly and returned, never raised: an
+    # exception here would abort the whole nightly pass.
+    last_resort = os.environ.get("ROBOTHOR_LAST_RESORT_MODEL", "").strip()
+    if last_resort:
+        try:
+            from robothor.engine.model_registry import canonical_model_id
+
+            same = canonical_model_id(target_model) == canonical_model_id(last_resort)
+        except Exception:  # noqa: BLE001 - fall back to a plain comparison
+            same = target_model.split("/")[-1] == last_resort.split("/")[-1]
+        if same:
+            logger.error(
+                "autoDream refused to unload %r: it is the fleet's last-resort tier "
+                "(ROBOTHOR_LAST_RESORT_MODEL) and every agent's chain ends there",
+                target_model,
+            )
+            return
+
     logger.warning(
         "autoDream: unloading generation model (available=%.1fGiB < %.1fGiB)",
         available_gb,

@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 import litellm
 
 from robothor.db.connection import current_tenant_scope
+from robothor.engine.cancel_outcome import _cancel_outcome, terminal_run
 from robothor.engine.config import (
     EngineConfig,
     _prompt_cache,
@@ -72,6 +73,7 @@ from robothor.engine.prompts import (
 from robothor.engine.run_budget import (  # noqa: E402
     DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
 )
+from robothor.engine.run_budget import chain_for, effective_wallclock_ceiling, watchdog_budgets_for
 from robothor.engine.run_budget import (
     deadline_warning as deadline_warning,
 )
@@ -90,7 +92,6 @@ from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
 from robothor.engine.stall_watchdog import (
     _active_watchdog_var,
     _build_cancel_diagnostic,
-    _fleet_wallclock_ceiling,
     _StallWatchdog,
 )
 from robothor.engine.tool_admission import ToolAdmissionMixin  # noqa: E402
@@ -515,6 +516,8 @@ def _resolve_sandbox_decision(config: AgentConfig, mode: str) -> str:
 #: tool calls at the measured rate of roughly six seconds each, which is
 #: enough to write out what has been gathered. A warning at 95% is one the
 #: agent cannot act on.
+
+
 class AgentRunner(
     LLMCallMixin,
     RunLifecycleMixin,
@@ -751,17 +754,13 @@ class AgentRunner(
         # Create stall watchdog EARLY so it covers the setup phase too.
         # Previously the watchdog was only started after setup completed,
         # meaning a hang during warmup/adapter loading went undetected.
-        stall_timeout = getattr(agent_config, "stall_timeout_seconds", 300)
-        # Absolute wall-clock ceiling. When an agent sets timeout_seconds=0
-        # ("no cap" — e.g. main's heartbeat/worker) it previously had NO hard
-        # bound, so a slow-but-not-stalled run could grind for 25–128 min
-        # (audit 2026-05-29). Fall back to a generous fleet ceiling instead of
-        # leaving it unbounded; one turn never legitimately needs this long.
-        effective_hard_timeout = agent_config.timeout_seconds
-        if effective_hard_timeout <= 0:
-            effective_hard_timeout = _fleet_wallclock_ceiling()
+        # Every budget from ONE derivation, scaled for the chain that serves this
+        # run. A 0 budget still means "disabled" and stays 0.
+        _budgets = watchdog_budgets_for(agent_config)
+        stall_timeout = _budgets.stall
+        effective_hard_timeout = _budgets.hard
         hard_timeout = effective_hard_timeout if effective_hard_timeout > 0 else None
-        early_stall_timeout = getattr(agent_config, "early_stall_timeout_seconds", 0)
+        early_stall_timeout = _budgets.early_stall
         watchdog = _StallWatchdog(
             stall_timeout=stall_timeout,
             hard_timeout=effective_hard_timeout,
@@ -1196,6 +1195,13 @@ class AgentRunner(
             else:
                 session.run.token_budget = spawn_context.remaining_token_budget
 
+        # Stage 5 — propagate the CRM task this run is advancing so the
+        # agent_runs row carries it from INSERT time. Previously only the
+        # auto-task path set task_id (after a separate INSERT + UPDATE),
+        # leaving all sub-agent runs with NULL task_id — 0 of 44,611 rows.
+        if spawn_context and spawn_context.parent_task_id:
+            session.run.task_id = spawn_context.parent_task_id
+
         # Watchdog was created and started before setup phase (see above).
         # Stall timeout is the primary protection — kills on inactivity, not
         # elapsed wall-clock time.  Hard timeout only needed as fallback when
@@ -1567,12 +1573,14 @@ class AgentRunner(
                 )
             # Cancelled from outside (circuit breaker, daemon shutdown,
             # or a caller-level wait_for). Name what we know.
-            ht = agent_config.timeout_seconds
-            reason = abort_reason or (
-                f"Circuit-breaker hard timeout ({ht}s); last activity: {watchdog.last_activity_desc}"
-                if ht > 0
-                else f"Run cancelled externally; last activity: {watchdog.last_activity_desc}"
+            _outcome = _cancel_outcome(
+                timed_out=isinstance(_cancel_exc, TimeoutError),
+                declared_timeout_seconds=agent_config.timeout_seconds,
+                effective_ceiling=effective_hard_timeout,
+                last_activity=watchdog.last_activity_desc,
+                waiting_on=watchdog.waiting_on,
             )
+            reason = abort_reason or _outcome.reason
             logger.warning("Agent %s cancelled: %s", _sanitize(agent_id), _sanitize(reason))
             session.record_error(reason)
             # Diagnostic dump for the noon-storm investigation. Captures
@@ -1583,7 +1591,7 @@ class AgentRunner(
             # finalization_budget's module docstring for what that cost.
             _finish = asyncio.to_thread(
                 self._finish_run,
-                session.timeout(reason=reason, traceback=diag),
+                terminal_run(session, _outcome, reason, diag, bool(abort_reason)),
                 trace=trace,
                 agent_config=agent_config,
                 session=session,
@@ -2020,9 +2028,9 @@ class AgentRunner(
         _deadline_warned = False  # one-shot latch for the wrap-up note
         # ── [WALLCLOCK] the loop's own deadline — computed once, checked
         # every iteration. See the self-check below for why this exists.
-        from robothor.engine.run_budget import effective_wallclock_ceiling
-
-        _wallclock_ceiling = effective_wallclock_ceiling(agent_config.timeout_seconds)
+        _wallclock_ceiling = effective_wallclock_ceiling(
+            agent_config.timeout_seconds, chain_for(agent_config)
+        )
         _wallclock_deadline = (
             time.monotonic() + _wallclock_ceiling if _wallclock_ceiling > 0 else None
         )
@@ -2637,6 +2645,7 @@ class AgentRunner(
                         error_type=error_type.value
                         if error_type and hasattr(error_type, "value")
                         else (str(error_type) if error_type else None),
+                        error_message=error_msg,
                     )
 
                 # ── [SCRATCHPAD] Record tool call ──

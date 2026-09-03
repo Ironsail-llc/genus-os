@@ -15,8 +15,27 @@ Group=robothor
 WorkingDirectory=/opt/robothor/app
 ExecStartPre=/opt/robothor/scripts/decrypt-secrets.sh
 # Next standalone output does not include static assets — stage them in.
-ExecStartPre=/bin/bash -c 'cp -r .next/static .next/standalone/.next/static 2>/dev/null; cp -r public .next/standalone/public 2>/dev/null; true'
+# -T: treat the destination as a normal file. `cp -r SRC DST` where DST already
+# exists copies INTO it, so this was creating .next/standalone/public/public and
+# .next/standalone/.next/static/static, one level deeper on every restart.
+ExecStartPre=/bin/bash -c 'cp -rT .next/static .next/standalone/.next/static 2>/dev/null; cp -rT public .next/standalone/public 2>/dev/null; true'
 EnvironmentFile=-/run/robothor/secrets.env
+# Supplies ROBOTHOR_WORKSPACE, which registry.ts:86 honours when locating
+# robothor-services.json. Without it the standalone server chdirs to
+# .next/standalone, finds no manifest there, and logs "Service manifest not
+# found" -- which is why /api/system/services and /api/system/topology render
+# empty.
+EnvironmentFile=/etc/robothor/robothor.env
+# api/ready/route.ts:10 calls getConfiguredServiceUrl (registry.ts:160-165),
+# which reads ENV VARS ONLY and never consults the manifest. These four are
+# therefore the only thing that can make /api/ready truthful; copying the
+# manifest into .next/standalone would fix nothing and be wiped by the next
+# build. responseTime:0 on every service meant no socket was ever dialed.
+Environment=ROBOTHOR_ENGINE_URL=http://127.0.0.1:18800
+Environment=BRIDGE_URL=http://127.0.0.1:9100
+Environment=ORCHESTRATOR_URL=http://127.0.0.1:9099
+Environment=VISION_URL=http://127.0.0.1:8600
+Environment=GENUS_ENVIRONMENT=production
 Environment=NODE_ENV=production
 Environment=PORT=3004
 Environment=HOME=/home/robothor

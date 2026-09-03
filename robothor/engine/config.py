@@ -641,6 +641,24 @@ def _load_defaults(manifest_dir: Path) -> dict[str, Any]:
         return {}
 
 
+# ── Config validation warnings ──────────────────────────────────────
+
+#: ``(sanitized agent_id, warning text)`` pairs already logged by THIS process.
+#:
+#: ``load_agent_config`` runs on every schedule tick (scheduler reloads the
+#: manifest before each run), and a manifest that warns warns identically every
+#: time — the fleet was emitting ~350 identical lines a day, which is how a
+#: real warning gets lost. Keyed on the text, not just the agent, so a manifest
+#: that acquires a NEW problem is still news. Cleared only by a process
+#: restart, which is also when manifests are re-read from scratch.
+_logged_validation_warnings: set[tuple[str, str]] = set()
+
+
+def reset_validation_warning_log() -> None:
+    """Forget which warnings have been logged (tests, and re-load drills)."""
+    _logged_validation_warnings.clear()
+
+
 # ── Project-level config ────────────────────────────────────────────
 
 _project_config_cache: tuple[float, dict[str, Any]] = (0.0, {})
@@ -893,7 +911,17 @@ def load_agent_config(
         warnings = validate_manifest(merged)
         for w in warnings:
             sanitized_w = str(w).replace("\n", "\\n").replace("\r", "\\r")
-            logger.warning("Config validation [%s]: %s", _sanitize(agent_id), sanitized_w)
+            # Logged once per (agent, warning) per process — see
+            # _logged_validation_warnings. The full list still rides on
+            # config.validation_warnings, so nothing downstream loses it.
+            # Keyed on the SANITIZED id — the one the log line carries — so the
+            # key and the record it suppresses name the same agent.
+            sanitized_id = _sanitize(agent_id)
+            key = (sanitized_id, sanitized_w)
+            if key in _logged_validation_warnings:
+                continue
+            _logged_validation_warnings.add(key)
+            logger.warning("Config validation [%s]: %s", sanitized_id, sanitized_w)
 
         config = manifest_to_agent_config(merged)
         config.validation_warnings = warnings

@@ -10,9 +10,10 @@ the invariant plainly:
     injected agent the ability to stop or restart anything on the machine.
 
 The operator works from SSH and is never physically at the box, so the agent
-needs the same treatment for a handful of other units — it has been asking him
-to run `sudo systemctl restart robothor-delphi-engine.service` by hand. That
-list must grow WITHOUT weakening the invariant.
+needs the same treatment for a handful of other units, which it had been
+asking him to restart by hand. That list must grow WITHOUT weakening the
+invariant — and must SHRINK when a unit is decommissioned, or the allowlist
+becomes a resurrection path for something deliberately destroyed.
 
 So the request is a FILENAME, matched against a fixed allowlist compiled into a
 root-owned handler. File contents are never read, never executed, never used to
@@ -77,10 +78,20 @@ class TestAllowedUnits:
         _, log = _run(tmp_path, "robothor-engine")
         assert any("restart robothor-engine.service" in c for c in _restarted(log))
 
-    def test_the_delphi_engine_can_be_restarted(self, tmp_path: Path):
-        """The one the operator has been running by hand over SSH."""
+    def test_the_delphi_engine_can_no_longer_be_restarted(self, tmp_path: Path):
+        """Delphi was decommissioned 2026-08-27; the broker must not revive it.
+
+        It was on the allowlist because the operator had been restarting it by
+        hand over SSH. After the teardown that entry became a resurrection
+        path: the unit files were removed and the tables dropped, but one
+        Telegram message routed through this broker would have tried to start
+        it again. Inverted rather than deleted, so re-adding the entry fails
+        loudly instead of passing silently.
+        """
         _, log = _run(tmp_path, "robothor-delphi-engine")
-        assert any("restart robothor-delphi-engine.service" in c for c in _restarted(log))
+        assert not any(
+            "robothor-delphi-engine" in c for c in _restarted(log)
+        ), "the restart broker still accepts the decommissioned Delphi engine"
 
     def test_several_requests_are_all_honoured(self, tmp_path: Path):
         _, log = _run(tmp_path, "robothor-bridge", "robothor-app")

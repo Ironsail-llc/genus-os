@@ -37,13 +37,30 @@ REQUIRED_KEYS=(
     "OPENROUTER_API_KEY"
     "ROBOTHOR_TELEGRAM_BOT_TOKEN"
     "ROBOTHOR_TELEGRAM_CHAT_ID"
-    "OPENROUTER_API_KEY"
+)
+
+# Advisory, never required: a missing spare must warn, not block a boot.
+# 2026-08-27 — the slot below was once a duplicate of OPENROUTER_API_KEY, so
+# every boot validated the primary twice and nothing checked that the pool
+# had a spare at all. robothor/engine/key_pool.py exists precisely so one
+# dead key is not an outage; it shipped 2026-08-25 and then ran with a single
+# key for two days, because nothing on this path ever said the slot was empty.
+ADVISORY_KEYS=(
+    "OPENROUTER_API_KEY_2"
 )
 
 missing=()
 for key in "${REQUIRED_KEYS[@]}"; do
     if ! grep -q "^${key}=" "$OUTPUT_FILE"; then
         missing+=("$key")
+    fi
+done
+
+for key in "${ADVISORY_KEYS[@]}"; do
+    if ! grep -q "^${key}=" "$OUTPUT_FILE"; then
+        echo "WARNING: $key is not set — this credential pool has no spare." >&2
+        echo "         One capped or revoked key will take the whole fleet down." >&2
+        echo "         Add it with: sops $SOPS_FILE" >&2
     fi
 done
 

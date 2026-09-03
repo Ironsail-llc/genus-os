@@ -6,6 +6,7 @@ import pytest
 
 from robothor.engine.key_pool import (
     CREDIT_COOLDOWN_SECONDS,
+    PERIODIC_QUOTA_COOLDOWN_SECONDS,
     KeyPool,
     Retirement,
     keys_from_env,
@@ -195,3 +196,121 @@ def test_every_retirement_reason_is_loggable_without_the_key(reason):
     pool = KeyPool(["sk-alpha"])
     pool.retire("sk-alpha", reason)
     assert "sk-alpha" not in repr(pool.status())
+
+
+# ── Periodic quota caps (weekly/daily/monthly) ──────────────────────
+#
+# 2026-08-27: the fleet's single OpenRouter key hit its WEEKLY cap. That
+# error carries the prose "Key limit exceeded (weekly limit)", which the
+# markers already classified as CREDIT_EXHAUSTED — so the key was retried
+# every 900s, i.e. ~96 times a day, each revival firing a fresh burst of
+# 403s across 18 agents' fallback chains. A spend cap an operator can top
+# up in a minute and a weekly cap that resets on a calendar boundary are
+# not the same retirement, and must not share a cooldown.
+
+
+def test_a_weekly_cap_does_not_come_back_in_fifteen_minutes():
+    clock = FakeClock()
+    pool = KeyPool(["sk-alpha"], clock=clock)
+    pool.retire("sk-alpha", Retirement.QUOTA_EXHAUSTED_PERIODIC)
+
+    clock.advance(CREDIT_COOLDOWN_SECONDS + 1)
+
+    assert pool.current() is None, (
+        "a weekly cap revived on the short spend-cap cooldown — this is the "
+        "~96-revivals-per-day error storm"
+    )
+
+
+def test_a_spend_cap_still_comes_back_after_the_short_cooldown():
+    clock = FakeClock()
+    pool = KeyPool(["sk-alpha"], clock=clock)
+    pool.retire("sk-alpha", Retirement.CREDIT_EXHAUSTED)
+
+    clock.advance(CREDIT_COOLDOWN_SECONDS + 1)
+
+    assert pool.current() == "sk-alpha"
+
+
+def test_periodic_quota_returns_after_its_own_longer_cooldown():
+    clock = FakeClock()
+    pool = KeyPool(["sk-alpha"], clock=clock)
+    pool.retire("sk-alpha", Retirement.QUOTA_EXHAUSTED_PERIODIC)
+
+    clock.advance(PERIODIC_QUOTA_COOLDOWN_SECONDS + 1)
+
+    assert pool.current() == "sk-alpha"
+
+
+def test_a_periodic_cap_still_yields_to_a_healthy_spare_immediately():
+    """The long cooldown must not delay rotation; it only delays revival."""
+    clock = FakeClock()
+    pool = KeyPool(["sk-alpha", "sk-beta"], clock=clock)
+    pool.retire("sk-alpha", Retirement.QUOTA_EXHAUSTED_PERIODIC)
+
+    assert pool.current() == "sk-beta"
+
+
+# ── Exhaustion is the signal the operator never got ─────────────────
+#
+# 2026-08-27: the pool went exhausted and llm_client logged
+# "every configured credential for it is retired" 452 times — at info,
+# per model, per call — while `grep -c "from robothor.engine.alerts
+# import" llm_client.py` returned 0. The credential lifecycle could not
+# page at any level. The pool must announce the TRANSITION so one page
+# is emitted, not 452 log lines and no page.
+
+
+def test_exhausting_the_last_key_fires_the_callback_once():
+    fired = []
+    pool = KeyPool(["sk-alpha"], on_exhausted=lambda reason: fired.append(reason))
+
+    pool.retire("sk-alpha", Retirement.CREDIT_EXHAUSTED)
+    pool.current()
+    pool.current()
+    pool.exhausted()
+
+    assert fired == [Retirement.CREDIT_EXHAUSTED], (
+        "exhaustion must announce once per transition, not once per lookup"
+    )
+
+
+def test_retiring_a_key_while_spares_remain_does_not_fire():
+    fired = []
+    pool = KeyPool(["sk-alpha", "sk-beta"], on_exhausted=lambda reason: fired.append(reason))
+
+    pool.retire("sk-alpha", Retirement.CREDIT_EXHAUSTED)
+
+    assert fired == [], "a rotation is not an outage"
+
+
+def test_a_key_returning_from_cooldown_rearms_the_exhaustion_alert():
+    clock = FakeClock()
+    fired = []
+    pool = KeyPool(["sk-alpha"], clock=clock, on_exhausted=lambda r: fired.append(r))
+
+    pool.retire("sk-alpha", Retirement.CREDIT_EXHAUSTED)
+    assert pool.exhausted()
+    clock.advance(CREDIT_COOLDOWN_SECONDS + 1)
+    assert not pool.exhausted()          # recovered
+    pool.retire("sk-alpha", Retirement.CREDIT_EXHAUSTED)
+    assert pool.exhausted()              # and died again
+
+    assert len(fired) == 2, "a second, separate outage must page again"
+
+
+def test_a_pool_with_no_callback_still_works():
+    """The callback is optional; nothing may depend on it being set."""
+    pool = KeyPool(["sk-alpha"])
+    pool.retire("sk-alpha", Retirement.AUTH_FAILED)
+    assert pool.exhausted()
+
+
+def test_a_raising_callback_never_breaks_dispatch():
+    """Alerting is best-effort; it must not take the LLM path down with it."""
+    def boom(reason):
+        raise RuntimeError("telegram is down")
+
+    pool = KeyPool(["sk-alpha"], on_exhausted=boom)
+    pool.retire("sk-alpha", Retirement.CREDIT_EXHAUSTED)
+    assert pool.exhausted()

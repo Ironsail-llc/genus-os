@@ -14,6 +14,7 @@ target the embedding model.
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -179,3 +180,101 @@ class TestAvailableMemoryGb:
         meminfo.write_text("MemTotal:       65000000 kB\n")
         monkeypatch.setattr(lifecycle, "_MEMINFO_PATH", str(meminfo))
         assert lifecycle._available_memory_gb() is None
+
+
+class TestItRefusesTheFleetsOfflineTier:
+    """autoDream must never evict the model the whole fleet falls back to.
+
+    The existing guard refuses only the EMBEDDING model. The fleet's
+    last-resort tier — the one `config._with_last_resort` appends to every
+    agent's chain — had no such protection, and autoDream's trigger is memory
+    pressure, which is exactly the condition a resident 27B creates.
+
+    Latent, not theoretical: GENERATION_MODEL defaults to qwen3:8b today, but
+    `detect_generation_model()`'s final fallback matches "any qwen3 that is not
+    an embedder or reranker", which matches qwen3.8:27b. One env var or one
+    caller and autoDream would unload the fleet's only offline tier mid-outage,
+    while every agent was depending on it.
+    """
+
+    def _force_pressure(self, monkeypatch):
+        monkeypatch.setattr(lifecycle, "_available_memory_gb", lambda: 1.0)
+        monkeypatch.setenv("ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB", "999")
+
+    @pytest.mark.asyncio
+    async def test_it_refuses_to_unload_the_last_resort_model(self, monkeypatch):
+        self._force_pressure(monkeypatch)
+        monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/qwen3.8:27b")
+        monkeypatch.setattr(lifecycle.llm_client, "GENERATION_MODEL", "qwen3.8:27b")
+        monkeypatch.setattr(
+            lifecycle.llm_client, "_embedding_model", lambda: "qwen3-embedding:0.6b"
+        )
+
+        posted: list[Any] = []
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, *a, **k):
+                posted.append((a, k))
+
+        monkeypatch.setattr(lifecycle.httpx, "AsyncClient", lambda *a, **k: _Client())
+        await lifecycle._perform_generation_model_unload()
+        assert not posted, "autoDream unloaded the fleet's offline tier"
+
+    @pytest.mark.asyncio
+    async def test_the_refusal_compares_canonically(self, monkeypatch):
+        """The ollama_chat/ routing prefix must not defeat the guard."""
+        self._force_pressure(monkeypatch)
+        monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/qwen3.8:27b")
+        # bare id on one side, routed id on the other
+        monkeypatch.setattr(lifecycle.llm_client, "GENERATION_MODEL", "ollama_chat/qwen3.8:27b")
+        monkeypatch.setattr(
+            lifecycle.llm_client, "_embedding_model", lambda: "qwen3-embedding:0.6b"
+        )
+
+        posted: list[Any] = []
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, *a, **k):
+                posted.append((a, k))
+
+        monkeypatch.setattr(lifecycle.httpx, "AsyncClient", lambda *a, **k: _Client())
+        await lifecycle._perform_generation_model_unload()
+        assert not posted
+
+    @pytest.mark.asyncio
+    async def test_an_unrelated_generation_model_still_unloads(self, monkeypatch):
+        """The guard is a guard, not a disable — autoDream must still work."""
+        self._force_pressure(monkeypatch)
+        monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/qwen3.8:27b")
+        monkeypatch.setattr(lifecycle.llm_client, "GENERATION_MODEL", "qwen3:1.7b")
+        monkeypatch.setattr(
+            lifecycle.llm_client, "_embedding_model", lambda: "qwen3-embedding:0.6b"
+        )
+
+        posted: list[Any] = []
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, *a, **k):
+                posted.append((a, k))
+
+        monkeypatch.setattr(lifecycle.httpx, "AsyncClient", lambda *a, **k: _Client())
+        await lifecycle._perform_generation_model_unload()
+        assert posted, "the guard disabled autoDream entirely"

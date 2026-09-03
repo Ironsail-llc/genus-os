@@ -21,8 +21,8 @@ import signal
 import socket
 import sys
 import time
-from datetime import UTC
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 from robothor.engine.config import EngineConfig
 from robothor.engine.health import serve_health, validate_engine_auth_configuration
@@ -33,6 +33,9 @@ from robothor.engine.scheduler import CronScheduler
 from robothor.engine.telegram import TelegramBot
 from robothor.engine.workflow import WorkflowEngine
 from robothor.plugins import reload_plugins
+
+if TYPE_CHECKING:
+    from robothor.engine.resume import ResumeCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +67,175 @@ def _sd_notify(state: str) -> None:
 # restart from runs where the runner process itself crashed. ISO8601 string.
 _DAEMON_START_TS: str | None = None
 
+#: Head-room between a run's own wall-clock ceiling and the moment the reaper
+#: is willing to call it dead. Sized to cover FINALIZATION_TOTAL_BUDGET (a run
+#: may still be writing its summary after the loop ends) plus row-write latency.
+REAP_GRACE_SECONDS = 300
 
-async def resume_interrupted_runs() -> int:
+
+#: Cheap floor for the candidate scan. The real decision is per-agent below;
+#: this only keeps the query from returning every young row.
+REAP_MIN_SCAN_SECONDS = 300
+
+
+def _is_orphan(started_at: Any, daemon_start_ts: str | None) -> bool:
+    """Did this run start before the current daemon booted?
+
+    If so nothing is executing it, whatever its age, and it can be reaped at
+    once — strictly faster than the flat 30 minutes this replaced. 60s of slack
+    so a run started during boot is not mistaken for one that outlived the
+    previous daemon. Unknown timestamps are NOT orphans: the age-based gate is
+    the safe default, because guessing here destroys live work.
+    """
+    if not daemon_start_ts or started_at is None:
+        return False
+    try:
+        boot = datetime.fromisoformat(daemon_start_ts)
+        if boot.tzinfo is None:
+            boot = boot.replace(tzinfo=UTC)
+        return bool(started_at < boot - timedelta(seconds=60))
+    except Exception:  # noqa: BLE001 - a malformed stamp must not reap anything
+        return False
+
+
+def stale_run_cutoff_seconds(agent_id: str | None = None) -> int:
+    """How old a LIVE `running` row must be before the reaper touches it.
+
+    Previously a hardcoded 30 minutes. On the local tier `main`'s SUCCESSFUL
+    runs average 33.5 minutes and reach 47.3, so the reaper was tombstoning
+    healthy work and `classify_reap_reason` was filing it as a crash — while
+    the watchdog that owns the run's clock believed it had up to 7200s.
+
+    PER AGENT, because a fleet-wide number cannot be right for a fleet whose
+    ceilings span two orders of magnitude: `benchmark-runner` declares
+    timeout_seconds: 28800 while `curator` declares 600. A single global cutoff
+    either reaps the benchmark mid-run or lets a wedged curator sit for hours.
+
+    With no agent (or an unloadable one) it falls back to the most generous
+    ceiling any run could hold. Erring long is deliberate: a late reap costs a
+    stale row, an early one destroys live work and lies about why.
+    """
+    from robothor.engine.run_budget import effective_wallclock_ceiling
+    from robothor.engine.watchdog_budgets import chain_for, max_wallclock_ceiling
+
+    if agent_id:
+        try:
+            from robothor.engine.config import load_agent_config
+
+            cfg = load_agent_config(agent_id, EngineConfig.from_env().manifest_dir)
+            if cfg is not None:
+                return (
+                    effective_wallclock_ceiling(cfg.timeout_seconds, models=chain_for(cfg))
+                    + REAP_GRACE_SECONDS
+                )
+        except Exception as e:  # noqa: BLE001 - an unreadable manifest must not stop the reap
+            logger.debug("Reap cutoff fell back to the fleet ceiling for %s: %s", agent_id, e)
+    return max_wallclock_ceiling() + REAP_GRACE_SECONDS
+
+
+#: Live resume tasks, held so the event loop cannot collect one mid-run.
+_RESUME_TASKS: set[asyncio.Task[Any]] = set()
+
+#: Mirrors resume.MAX_RESUME_ATTEMPTS for the log line.
+MAX_RESUME_ATTEMPTS_DISPLAY = 3
+
+
+def _charge_resume_attempt(run_id: str) -> bool:
+    """Charge one resume attempt. False means do not resume this run.
+
+    Separated from the loop so the loop's real work — executing the run — can
+    be tested without a database.
+    """
+    from robothor.db.connection import get_connection
+
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE agent_runs SET resume_attempts = COALESCE(resume_attempts, 0) + 1 "
+                "WHERE id = %s",
+                (run_id,),
+            )
+            conn.commit()
+        return True
+    except Exception as e:  # noqa: BLE001 - one uncharged run must not stop the rest
+        logger.warning("Could not charge resume attempt for %s: %s", run_id, e)
+        return False
+
+
+async def _execute_resume(runner: Any, candidate: Any) -> None:
+    """Actually continue the run. The step this function exists to perform.
+
+    Same call shape as the operator-facing resume endpoint (health.py), so
+    there is one way to resume a run rather than two that can drift.
+    """
+    from robothor.engine.models import TriggerType
+
+    try:
+        # TriggerType.EVENT, not MANUAL. MANUAL is INTERACTIVE: runner.py:583
+        # gates it on a verified identity and, finding none, REJECTS the run —
+        # silently, returning normally without creating a row or raising. The
+        # operator-facing endpoint in health.py can use MANUAL because it has
+        # an authenticated caller to pass; the daemon at startup does not.
+        # Resume is a system action, so it takes a system trigger and inherits
+        # the service identity like every other daemon-initiated run.
+        await runner.execute(
+            agent_id=candidate.agent_id,
+            message="Resume from checkpoint — continue where you left off.",
+            trigger_type=TriggerType.EVENT,
+            trigger_detail=f"resume:{candidate.run_id}",
+            resume_from_run_id=candidate.run_id,
+        )
+    except Exception:
+        logger.exception("Resume of run %s failed", candidate.run_id)
+
+
+def _resume_scan() -> list[ResumeCandidate]:
+    """Every interrupted run the database knows about. [] when the scan fails.
+
+    A named seam, not just tidiness: this is the ONE step in resume that needs
+    a database, and while it was inline the only way for a test to reach the
+    rest of the function was to patch an attribute that did not exist. A
+    `monkeypatch.setattr(..., raising=False)` on a missing name patches
+    nothing, so the resume test ran this query against whatever database the
+    test host happened to have configured.
+    """
+    from robothor.engine.resume import RESUMABLE_STATUSES, ResumeCandidate
+
+    try:
+        from robothor.db.connection import get_connection
+        from robothor.engine.checkpoint import CheckpointManager
+
+        with get_connection() as conn:
+            cur = conn.cursor()
+            # Both interrupted states, not just `running`. A hard kill leaves
+            # a row `running`; a GRACEFUL restart writes `cancelled` on the way
+            # down -- and that is the restart that actually happens. On
+            # 2026-08-27 a normal `systemctl restart` tombstoned five in-flight
+            # runs two seconds before the new daemon scanned, three of them
+            # holding checkpoints, and resume recovered none of them.
+            cur.execute(
+                "SELECT id, agent_id, COALESCE(resume_attempts, 0) FROM agent_runs "
+                "WHERE status = ANY(%s) ORDER BY id",
+                (sorted(RESUMABLE_STATUSES),),
+            )
+            rows = cur.fetchall()
+    except Exception as e:
+        logger.warning("Resume scan failed: %s", _sanitize(e))
+        return []
+
+    return [
+        ResumeCandidate(
+            run_id=str(r[0]),
+            agent_id=str(r[1] or ""),
+            resume_attempts=int(r[2] or 0),
+            has_checkpoint=bool(CheckpointManager.load_latest(str(r[0]))),
+        )
+        for r in rows
+    ]
+
+
+async def resume_interrupted_runs(runner: Any = None) -> int:
     """Resume runs a restart interrupted, before the reaper reaches them.
 
     Off unless ROBOTHOR_RESUME_IN_FLIGHT is set: this changes what a restart
@@ -75,62 +245,43 @@ async def resume_interrupted_runs() -> int:
     marks every still-`running` row as timed out. Reaping first would destroy
     exactly the runs this exists to save.
     """
-    from robothor.engine.resume import ResumeCandidate, resume_batch, resume_enabled
+    from robothor.engine.resume import resume_batch, resume_enabled
 
     if not resume_enabled():
         return 0
 
-    try:
-        from robothor.db.connection import get_connection
-        from robothor.engine.checkpoint import CheckpointManager
-
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT id, agent_id, COALESCE(resume_attempts, 0) FROM agent_runs "
-                "WHERE status = 'running' ORDER BY id"
-            )
-            rows = cur.fetchall()
-    except Exception as e:
-        logger.warning("Resume scan failed: %s", _sanitize(e))
+    batch = resume_batch(_resume_scan())
+    if not batch:
         return 0
 
-    candidates = [
-        ResumeCandidate(
-            run_id=str(r[0]),
-            agent_id=str(r[1] or ""),
-            resume_attempts=int(r[2] or 0),
-            has_checkpoint=bool(CheckpointManager.load_latest(str(r[0]))),
-        )
-        for r in rows
-    ]
-    batch = resume_batch(candidates)
-    if not batch:
+    if runner is None:
+        # Without a runner there is nothing to resume WITH. Returning 0 rather
+        # than counting is the whole point: this function used to charge the
+        # attempt, log "Resuming run ...", and return a count, having executed
+        # nothing — so the daemon reported "resumed 3 interrupted agent runs"
+        # while all three stayed `cancelled` forever.
+        logger.warning("Resume skipped: no runner available to execute with")
         return 0
 
     started = 0
     for candidate in batch:
         # Charge the attempt BEFORE resuming: a run that dies during resume
         # must still have paid, or a crash loop resumes forever.
-        try:
-            with get_connection() as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    "UPDATE agent_runs SET resume_attempts = COALESCE(resume_attempts, 0) + 1 "
-                    "WHERE id = %s",
-                    (candidate.run_id,),
-                )
-                conn.commit()
-        except Exception as e:
-            logger.warning("Could not charge resume attempt for %s: %s", candidate.run_id, e)
+        if not _charge_resume_attempt(candidate.run_id):
             continue
         logger.info(
             "Resuming run %s (agent %s, attempt %d/%d)",
             candidate.run_id,
             _sanitize(candidate.agent_id),
             candidate.resume_attempts + 1,
-            3,
+            MAX_RESUME_ATTEMPTS_DISPLAY,
         )
+        # Launched, not awaited: these are full agent runs and the daemon is
+        # still coming up. Held in a module set because a bare create_task can
+        # be garbage-collected mid-flight (this repo has been bitten before).
+        task = asyncio.create_task(_execute_resume(runner, candidate))
+        _RESUME_TASKS.add(task)
+        task.add_done_callback(_RESUME_TASKS.discard)
         started += 1
     return started
 
@@ -265,16 +416,42 @@ def _cleanup_stale_runs() -> int:
 
         with get_connection() as conn:
             cur = conn.cursor()
+            # Two tiers, because one number cannot serve both cases.
+            #
+            # ORPHAN: a run that predates this daemon's boot has no process
+            # behind it, by definition. Reaped at once — strictly faster than
+            # the old flat 30 minutes. (60s of slack so a run started during
+            # boot is not mistaken for one that outlived the previous daemon.)
+            #
+            # LIVE: a run this daemon is still executing is reaped only past
+            # the ceiling its own watchdog would enforce, plus grace. Anything
+            # shorter means the reaper overrules the watchdog and calls healthy
+            # work a crash — which is exactly what the flat 30 minutes did to
+            # main's 33.5-minute average local-tier run.
             cur.execute(
                 "SELECT id, agent_id, started_at "
                 "FROM agent_runs "
-                "WHERE status='running' AND started_at < NOW() - INTERVAL '30 minutes'"
+                "WHERE status='running' AND ("
+                "  (%(boot)s IS NOT NULL"
+                "   AND started_at < %(boot)s::timestamptz - INTERVAL '60 seconds')"
+                "  OR started_at < NOW() - make_interval(secs => %(cutoff)s)"
+                ")",
+                {"boot": daemon_start_ts, "cutoff": REAP_MIN_SCAN_SECONDS},
             )
             stale = cur.fetchall()
             if not stale:
                 return wf_reaped
 
             for run_id, agent_id, started_at in stale:
+                # The scan floor is deliberately cheap; this is the real gate.
+                # An orphan (predating this boot) is reaped whatever its age —
+                # nothing is executing it. A live run is reaped only past ITS
+                # OWN agent's ceiling, so the reaper can never overrule the
+                # watchdog and call healthy work a crash.
+                if not _is_orphan(started_at, daemon_start_ts):
+                    age = (datetime.now(UTC) - started_at).total_seconds() if started_at else 0.0
+                    if age < stale_run_cutoff_seconds(str(agent_id or "")):
+                        continue
                 started_iso = started_at.isoformat() if started_at is not None else ""
                 category, message = classify_reap_reason(str(run_id), started_iso, daemon_start_ts)
                 cur.execute(
@@ -568,20 +745,6 @@ async def main() -> int:
     # can be classified as 'daemon_restart' rather than 'post_llm_crash'.
     _set_daemon_start_ts()
 
-    # Resume before reaping: `_cleanup_stale_runs` marks every still-running
-    # row as timed out, which would destroy exactly what resume recovers.
-    try:
-        resumed = await resume_interrupted_runs()
-        if resumed:
-            logger.info("Startup: resumed %d interrupted agent runs", resumed)
-    except Exception as e:
-        logger.warning("Startup resume failed, continuing to reap: %s", _sanitize(e))
-
-    # Clean up stale runs from previous crash/restart
-    cleaned = await asyncio.to_thread(_cleanup_stale_runs)
-    if cleaned:
-        logger.info("Startup: cleaned %d stale agent runs", cleaned)
-
     # Link the operator's CRM row to tenant_users.person_id (idempotent).
     # Driven by ~/.robothor/owner.yaml; no-op if not configured.
     try:
@@ -607,6 +770,22 @@ async def main() -> int:
 
     # Create subsystems
     runner = AgentRunner(config)
+
+    # Resume BEFORE reaping: `_cleanup_stale_runs` marks every interrupted row
+    # terminal, which would destroy exactly what resume recovers. This block
+    # sits after the runner is constructed because resume needs something to
+    # resume WITH — when it ran earlier it had no runner, and quietly counted
+    # runs it never executed.
+    try:
+        resumed = await resume_interrupted_runs(runner)
+        if resumed:
+            logger.info("Startup: resumed %d interrupted agent runs", resumed)
+    except Exception as e:
+        logger.warning("Startup resume failed, continuing to reap: %s", _sanitize(e))
+
+    cleaned = await asyncio.to_thread(_cleanup_stale_runs)
+    if cleaned:
+        logger.info("Startup: cleaned %d stale agent runs", cleaned)
 
     # Initialize fleet pool for admission control
     from robothor.engine.pool import init_fleet_pool

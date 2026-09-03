@@ -45,6 +45,17 @@ logger = logging.getLogger(__name__)
 #: enough that a top-up is picked up without anyone touching the engine.
 CREDIT_COOLDOWN_SECONDS = 900.0
 
+#: How long a key capped on a CALENDAR window (weekly/daily/monthly quota)
+#: sits out. The short credit cooldown is wrong here: a spend cap clears the
+#: moment an operator tops up, but a weekly cap clears when the provider says
+#: so and not before. On 2026-08-27 the fleet retried a weekly cap every 900s
+#: — ~96 revivals a day, each firing a fresh burst of 403s through every
+#: agent's fallback chain. That retry loop was the outage the operator
+#: actually experienced, far more than the missing capacity itself.
+PERIODIC_QUOTA_COOLDOWN_SECONDS = float(
+    os.environ.get("ROBOTHOR_PERIODIC_QUOTA_COOLDOWN_SECONDS", 6 * 60 * 60)
+)
+
 #: Numbered siblings are walked from _2 upward. The ceiling only stops a
 #: pathological environment from being scanned forever.
 _MAX_POOL_KEYS = 16
@@ -75,6 +86,7 @@ class Retirement(StrEnum):
     """Why a key was taken out of rotation, which decides whether it returns."""
 
     CREDIT_EXHAUSTED = "credit_exhausted"
+    QUOTA_EXHAUSTED_PERIODIC = "quota_exhausted_periodic"
     AUTH_FAILED = "auth_failed"
 
 
@@ -135,11 +147,22 @@ class KeyPool:
     as a queue. A key that comes back goes back where it was.
     """
 
-    def __init__(self, keys: list[str], clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        keys: list[str],
+        clock: Callable[[], float] = time.monotonic,
+        on_exhausted: Callable[[Retirement], None] | None = None,
+    ) -> None:
         self._keys = list(keys)
         self._clock = clock
         # key -> (reason, retired_at). Absent means available.
         self._retired: dict[str, tuple[Retirement, float]] = {}
+        # Fired when the LAST key goes out, so the operator gets one page
+        # per outage instead of one log line per skipped model. Latched so
+        # a sustained outage does not re-page on every lookup, and re-armed
+        # the moment any key returns — a second outage is a second page.
+        self._on_exhausted = on_exhausted
+        self._exhaustion_announced = False
 
     def fingerprint(self, key: str) -> str:
         """A short, stable, non-reversible name for a key.
@@ -149,6 +172,18 @@ class KeyPool:
         """
         return "key-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
 
+    @staticmethod
+    def _cooldown_for(reason: Retirement) -> float:
+        """How long this retirement reason sits out before a retry.
+
+        Keyed on the reason because the reasons recover differently: a spend
+        cap is operator-fixable in a minute, a calendar quota is not fixable
+        at all until the window rolls.
+        """
+        if reason is Retirement.QUOTA_EXHAUSTED_PERIODIC:
+            return PERIODIC_QUOTA_COOLDOWN_SECONDS
+        return CREDIT_COOLDOWN_SECONDS
+
     def _available(self, key: str) -> bool:
         entry = self._retired.get(key)
         if entry is None:
@@ -156,15 +191,18 @@ class KeyPool:
         reason, retired_at = entry
         if reason is Retirement.AUTH_FAILED:
             return False
-        if self._clock() - retired_at >= CREDIT_COOLDOWN_SECONDS:
+        cooldown = self._cooldown_for(reason)
+        if self._clock() - retired_at >= cooldown:
             # Cooled off. Drop the record so the key resumes its original
             # priority instead of being appended behind the one that
             # replaced it.
             del self._retired[key]
+            self._exhaustion_announced = False
             logger.info(
-                "%s returning to rotation after %.0fs cooldown",
+                "%s returning to rotation after %.0fs cooldown (%s)",
                 self.fingerprint(key),
-                CREDIT_COOLDOWN_SECONDS,
+                cooldown,
+                reason.value,
             )
             return True
         return False
@@ -191,6 +229,16 @@ class KeyPool:
             return
         self._retired[key] = (reason, self._clock())
         remaining = sum(1 for k in self._keys if self._available(k))
+        if remaining == 0 and not self._exhaustion_announced:
+            self._exhaustion_announced = True
+            if self._on_exhausted is not None:
+                try:
+                    self._on_exhausted(reason)
+                except Exception:
+                    # Alerting is best-effort. A pager that is itself down
+                    # must not take the LLM path down with it — that would
+                    # convert a degraded fleet into a stopped one.
+                    logger.exception("exhaustion callback failed")
         logger.warning(
             "%s retired (%s); %d of %d credentials still in rotation",
             self.fingerprint(key),
@@ -223,3 +271,67 @@ class KeyPool:
         """Never prints a credential — this object appears in traceback frames."""
         live = sum(1 for k in self._keys if self._available(k))
         return f"<KeyPool {live}/{len(self._keys)} available {self.status()!r}>"
+
+
+# ── Process-wide pools ──────────────────────────────────────────────
+#
+# A credential is a property of the process, not of whoever happens to hold
+# a client object. Before this, LLMClient cached pools per instance and
+# memory/generation kept its own, so retiring a key in one left the other
+# still dialling a credential the provider had already rejected. On
+# 2026-08-27 that is precisely what kept 403s flowing after the engine's own
+# pool had correctly given up.
+
+_SHARED: dict[str, KeyPool] = {}
+
+
+def reset_shared_pools() -> None:
+    """Drop every cached pool. For tests and for a secrets reload."""
+    _SHARED.clear()
+
+
+def shared_pool(
+    var: str, on_exhausted: Callable[[Retirement], None] | None = None
+) -> KeyPool | None:
+    """The one pool for ``var`` in this process, or None if unconfigured.
+
+    Built lazily: secrets land in tmpfs after import, so a pool constructed at
+    module scope would be permanently empty on a real box. Returning None for
+    an unconfigured provider preserves today's behaviour — litellm resolves
+    the environment itself — rather than reporting an empty pool "exhausted"
+    and skipping every model on it.
+    """
+    pool = _SHARED.get(var)
+    if pool is None:
+        keys = keys_from_env(var)
+        if not keys:
+            return None
+        pool = KeyPool(keys, on_exhausted=on_exhausted)
+        _SHARED[var] = pool
+    return pool
+
+
+def api_key_for_model(model: str) -> str | None:
+    """The credential this model should authenticate with right now.
+
+    None means "not pooled, or nothing left in rotation" — callers should then
+    fall through to their existing behaviour rather than inventing one.
+    """
+    var = env_var_for_model(model)
+    if var is None:
+        return None
+    pool = shared_pool(var)
+    if pool is None:
+        return None
+    key = pool.current()
+    return str(key) if key is not None else None
+
+
+def retire_for_model(model: str, key: str, reason: Retirement) -> None:
+    """Take a credential out of rotation for every caller in this process."""
+    var = env_var_for_model(model)
+    if var is None:
+        return
+    pool = shared_pool(var)
+    if pool is not None:
+        pool.retire(key, reason)

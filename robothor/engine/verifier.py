@@ -12,8 +12,11 @@ import json
 import logging
 from dataclasses import dataclass, field
 
-import litellm
-
+# Dial through the credential pool. A direct litellm call lets the SDK
+# resolve the provider key from the environment, which on 2026-08-27 meant
+# this path kept hammering a credential the pool had already retired and
+# could not rotate to a spare. No-op for unpooled providers.
+from robothor.engine.pooled_completion import acompletion as pooled_acompletion
 from robothor.engine.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
@@ -76,7 +79,7 @@ async def verify_output(
 
     for m in models:
         try:
-            response = await litellm.acompletion(
+            response = await pooled_acompletion(
                 model=m,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,

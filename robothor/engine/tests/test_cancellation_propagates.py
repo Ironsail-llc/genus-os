@@ -164,7 +164,11 @@ class TestTheRunIsStillRecorded:
                 await task
 
         assert finished, "the run was cancelled without recording a terminal status"
-        assert finished[0].status == RunStatus.TIMEOUT
+        # 2026-08-27: an EXTERNAL cancel is no longer filed as a timeout. Both
+        # outcomes used to write status='timeout', which hid real timeouts from
+        # the timeout rate and left `resume` (selecting status='running')
+        # nothing to recover from a graceful restart.
+        assert finished[0].status == RunStatus.CANCELLED
         assert "cancelled" in (finished[0].error_message or "").lower()
 
 
@@ -200,6 +204,14 @@ class TestAnOwnWatchdogKillStillReturns:
             p3,
             patch("litellm.acompletion", side_effect=slow_completion),
             patch.object(_StallWatchdog, "__init__", fast_init),
+            # 2026-08-27: an in-flight provider call now opens a bounded wait
+            # window, and time inside it is attributed rather than counted as
+            # idle -- that is the whole point of the fix. So a hang shorter
+            # than the provider's own ceiling is no longer a stall. Shrinking
+            # that ceiling keeps this test about the branch it names: the call
+            # is bounded and ends, the window closes WITHOUT touching, idle
+            # resumes from before the call, and the stall fires as it always did.
+            patch("robothor.engine.llm_client.LLM_REQUEST_TIMEOUT", 0.1),
         ):
             run = await asyncio.wait_for(
                 runner.execute("cancel-agent", "go", agent_config=agent_config),

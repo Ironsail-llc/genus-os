@@ -215,8 +215,19 @@ def test_strip_think_blocks_passthrough():
 
 
 class _FakeResponse:
-    def __init__(self, payload):
+    """Stands in for httpx.Response.
+
+    ``status_code`` and ``text`` are NOT optional here. A real response always
+    carries them, and generation.py inspects the status to decide whether the
+    credential should be retired before raising. A double that omits them lets
+    a test pass against behaviour the production path cannot reach — the same
+    unfaithful-double shape that hid three memory defects on 2026-08-22.
+    """
+
+    def __init__(self, payload, status_code: int = 200, text: str = ""):
         self._payload = payload
+        self.status_code = status_code
+        self.text = text
 
     def raise_for_status(self):
         pass

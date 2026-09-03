@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import random
@@ -58,6 +59,20 @@ logger = logging.getLogger(__name__)
 # the entire run (the stream *creation* timeout is separate — see
 # ``LLMClient._build_llm_kwargs``'s ``timeout``).
 STREAM_CHUNK_TIMEOUT = 90
+
+
+def stream_chunk_timeout(model: str) -> float:
+    """Per-chunk stream timeout, sized for the model producing the chunks.
+
+    The flat 90s was calibrated on cloud models. The local 27B's own registry
+    entry says ttft_hint_ms=9000 — the one budget here that genuinely is
+    per-model, and `model` is already in scope at the chunk loop, so this needs
+    no plumbing.
+    """
+    from robothor.engine.model_registry import tempo_factor
+
+    return STREAM_CHUNK_TIMEOUT * tempo_factor(model)
+
 
 # HTTP-level timeout passed to litellm.acompletion for the initial
 # request (stream creation for streaming, full response for
@@ -138,6 +153,18 @@ _CREDIT_EXHAUSTED_MARKERS = (
     "not enough credits",
 )
 
+#: A cap tied to a CALENDAR window rather than a balance. Still "the
+#: account cannot pay", so these stay inside _CREDIT_EXHAUSTED_MARKERS and
+#: the chain still stops dialling — but topping up does not clear them, so
+#: the key must not be retried on the short spend-cap cooldown. Retrying a
+#: weekly cap every 900s revives it ~96 times a day and turns one dead
+#: credential into an all-day error storm across every agent.
+_PERIODIC_QUOTA_MARKERS = (
+    "weekly limit",
+    "daily limit",
+    "monthly limit",
+)
+
 
 #: Extra in-place retries for the on-device tier when it answers "busy".
 #: Every agent's chain ends in one local model served with a small parallel
@@ -174,6 +201,32 @@ def is_credit_exhausted(e: Exception) -> bool:
         return True
     msg = str(e).lower()
     return any(marker in msg for marker in _CREDIT_EXHAUSTED_MARKERS)
+
+
+def _retirement_reason(e: Exception, *, spent: bool) -> Retirement:
+    """Which retirement a failed credential earns.
+
+    Split by how the condition RECOVERS, not by how it presents: an auth
+    failure never recovers, a spend cap recovers on a top-up, a calendar
+    quota recovers when the provider's window rolls.
+    """
+    if not spent:
+        return Retirement.AUTH_FAILED
+    if is_periodic_quota_exhausted(e):
+        return Retirement.QUOTA_EXHAUSTED_PERIODIC
+    return Retirement.CREDIT_EXHAUSTED
+
+
+def is_periodic_quota_exhausted(e: Exception) -> bool:
+    """Is this cap tied to a calendar window rather than a spent balance?
+
+    Prose only, never status: a 402 says the balance is gone, which a
+    top-up fixes immediately. Only the provider's own wording distinguishes
+    "you are out of money" from "you are out of allowance until Monday",
+    and the two need different cooldowns.
+    """
+    msg = str(e).lower()
+    return any(marker in msg for marker in _PERIODIC_QUOTA_MARKERS)
 
 
 def is_auth_failure(e: Exception) -> bool:
@@ -263,6 +316,110 @@ def _is_transient_model_error(e: BaseException) -> bool:
     if isinstance(e, TimeoutError | EmptyCompletionError):
         return True
     return getattr(e, "status_code", None) in _TRANSIENT_RETRY_STATUSES
+
+
+#: Retries for a model that emitted tool-call JSON nobody can parse. ONE: a
+#: truncated generation is worth re-rolling once, but the failure is usually
+#: deterministic — the unparseable arguments are already in the request being
+#: transformed — and spending the local tier's whole retry budget on it is how
+#: twelve parse errors became twelve dead runs.
+MALFORMED_TOOL_ARGS_RETRIES = 1
+
+#: What `json.JSONDecodeError` says when a payload stops MID-STRUCTURE. litellm
+#: parses a tool call's `arguments` inside its provider transformations and
+#: re-raises the decode failure as an `APIConnectionError` — status 500,
+#: indistinguishable by status from a provider that is actually down. These
+#: strings are the only thing left that tells the two apart, and a truncated
+#: generation is well-formed right up to where it stopped, so this is the shape
+#: it decodes to.
+#:
+#: `expecting value: line` is deliberately ABSENT. That is what an empty body
+#: or an HTML error page decodes to, never a truncated arguments blob — and
+#: litellm parses the RESPONSE with the same module (`raw_response.json()`,
+#: `json.loads(response_json_message["content"])`), re-raising it as the same
+#: exception. While it was listed here, an ollama that had fallen over behind a
+#: proxy was read as bad output: re-rolled, skipped, breaker never told, for as
+#: long as the outage lasted.
+_JSON_DECODE_MARKERS = (
+    "unterminated string starting at",
+    "expecting ',' delimiter",
+    "expecting ':' delimiter",
+    "expecting property name enclosed in double quotes",
+    "invalid control character at",
+    "invalid \\escape",
+    "extra data: line",
+)
+
+#: Words that place a decode failure on the REQUEST side. litellm reaches
+#: `tool_call["function"]["arguments"]` to build the request; a response-side
+#: parse names neither. Checked against every message in the cause chain and
+#: against the traceback's frame names, both of which are often absent — this
+#: only ever ADDS confidence, it is never required.
+_TOOL_ARGUMENT_HINTS = ("arguments", "tool")
+
+
+def _exception_chain(e: BaseException) -> list[BaseException]:
+    """`e` and everything it was raised from, cycle-guarded."""
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    cause: BaseException | None = e
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        chain.append(cause)
+        cause = cause.__cause__ or cause.__context__
+    return chain
+
+
+def _references_tool_arguments(chain: list[BaseException]) -> bool:
+    """True if anything in the chain names a tool call or its arguments.
+
+    Frame NAMES only, not filenames: a test module about tool arguments is
+    named after them, and matching the filename would make every such test
+    self-confirming.
+    """
+    for exc in chain:
+        if any(hint in str(exc).lower() for hint in _TOOL_ARGUMENT_HINTS):
+            return True
+        tb = exc.__traceback__
+        while tb is not None:
+            if any(hint in tb.tb_frame.f_code.co_name.lower() for hint in _TOOL_ARGUMENT_HINTS):
+                return True
+            tb = tb.tb_next
+    return False
+
+
+def is_malformed_tool_arguments(e: BaseException) -> bool:
+    """True when the model's tool-call arguments could not be parsed.
+
+    This is BAD OUTPUT, not a provider outage. Observed 12 times in 24 hours
+    on the on-device tier: `litellm.APIConnectionError: Unterminated string
+    starting at: line 1 column 3175`, raised from `json.loads` inside litellm's
+    ollama chat transformation. Read as a 500, it burned the local retry budget
+    and then opened the breaker on the tier every agent's chain ends in.
+
+    Deliberately narrow, and narrower than the exception type allows. A
+    `JSONDecodeError` in the cause chain is NOT on its own enough: litellm
+    parses the response with the same module it parses the request with, so a
+    provider returning an empty body or an HTML error page raises the same
+    exception from the same place. The two are otherwise indistinguishable —
+    nothing in the type, the status, or the provider tells them apart — so the
+    decoder's own words carry the verdict, backed by any mention of a tool call
+    or its arguments in the chain's messages or frame names.
+
+    A payload that stops mid-structure ("Unterminated string starting at",
+    "Expecting ',' delimiter") is a truncated generation. "Expecting value:
+    line 1 column 1" is an empty or non-JSON body, and stays a provider
+    failure: the cost of guessing wrong there is a breaker that never opens on
+    a real outage.
+    """
+    chain = _exception_chain(e)
+    has_decoder = any(isinstance(c, json.JSONDecodeError) for c in chain)
+    if not has_decoder and not isinstance(e, litellm.exceptions.APIConnectionError):
+        return False
+    text = " ".join(str(c) for c in chain).lower()
+    if any(marker in text for marker in _JSON_DECODE_MARKERS):
+        return True
+    return has_decoder and _references_tool_arguments(chain)
 
 
 def _safe_token_count(usage: Any, attr: str) -> int:
@@ -476,6 +633,29 @@ class LLMClient:
         """Read-only view over the per-task stall watchdog ContextVar."""
         return _active_watchdog_var.get()
 
+    @contextlib.contextmanager
+    def _watchdog_wait(self, label: str, budget: float) -> Any:
+        """Tell the watchdog this await is already bounded by `budget` seconds.
+
+        The whole point is that the run loop emits NO touch while a
+        non-streaming provider call is in flight, so a first token the engine
+        itself allows 600s for read as a 120s stall (2026-08-27, fleet-wide).
+
+        A context manager rather than a keepalive task: nothing to leak, no
+        interaction with the watchdog's own task.cancel(), no create_task GC
+        hazard, and exception-safe across an except arm with five exits.
+        No-ops when nothing is watching (sub-agents, out-of-loop callers).
+        """
+        wd = self._active_watchdog
+        if wd is None:
+            yield
+            return
+        wd.begin_wait(label, budget)
+        try:
+            yield
+        finally:
+            wd.end_wait()
+
     # ─── Credentials ─────────────────────────────────────────────────
 
     def _key_pool(self, model: str) -> KeyPool | None:
@@ -492,18 +672,25 @@ class LLMClient:
         var = env_var_for_model(model)
         if var is None:
             return None
-        cache: dict[str, KeyPool] = self.__dict__.setdefault("_key_pools", {})
-        if var not in cache:
-            keys = keys_from_env(var)
-            if not keys:
-                # No credential configured for this provider. Managing an
-                # empty pool would mean reporting it "exhausted" and skipping
-                # every model on it, when the correct behaviour is the one
-                # every deployment has today: let litellm resolve the
-                # environment itself.
-                return None
-            cache[var] = KeyPool(keys)
-        return cache.get(var)
+        # PROCESS-WIDE, not per-instance. A credential is a property of the
+        # process; caching pools on the client meant memory generation kept
+        # its own and went on dialling a key this pool had already retired.
+        #
+        # The pool announces its own death: retire() fires the hook on the
+        # exhaustion transition, so one page is emitted per outage instead of
+        # one 'credential retired' log line per skipped model (452 of them on
+        # 2026-08-27, and no page).
+        #
+        # None for an unconfigured provider is deliberate: managing an empty
+        # pool would mean reporting it "exhausted" and skipping every model on
+        # it, when the correct behaviour is the one every deployment has
+        # today — let litellm resolve the environment itself.
+        from robothor.engine.key_pool import shared_pool
+        from robothor.engine.provider_alerts import exhaustion_hook
+
+        return shared_pool(
+            var, on_exhausted=exhaustion_hook(var, pool_size=len(keys_from_env(var)))
+        )
 
     # ─── Cost ────────────────────────────────────────────────────────
 
@@ -927,6 +1114,26 @@ class LLMClient:
                 )
             ),
         }
+
+        # Local models: state residency explicitly instead of inheriting the
+        # server's defaults. Until 2026-08-27 the engine sent neither, so the
+        # fleet's offline tier sat at its full 262144-token context (18.9GB of
+        # a shared pool) and expired on the server's 10m default — shorter than
+        # several agents' cron cadence, so every cron paid a ~34s cold load.
+        #
+        # num_ctx comes from the REGISTRY, not a separate knob: the proactive
+        # compaction threshold is derived from max_input_tokens, so a window
+        # smaller than the registry believes means the engine fills context
+        # past what the server allocated and the server truncates in silence.
+        # One number, two consumers. test_local_tier_residency pins it.
+        if is_local_model(model):
+            from robothor.config import get_config
+
+            kwargs["num_ctx"] = limits.max_input_tokens
+            try:
+                kwargs["keep_alive"] = get_config().ollama.keep_alive_engine
+            except Exception as e:  # noqa: BLE001 - residency is an optimisation
+                logger.debug("keep_alive unavailable, using server default: %s", e)
         # Pin OpenRouter routing for Anthropic models to the Anthropic-direct
         # backend. OpenRouter's default load-balancing also fans out to Google
         # Vertex and Amazon Bedrock, both of which reject assistant-prefill
@@ -1022,6 +1229,60 @@ class LLMClient:
         else:
             suffix = " (streaming)" if streaming else ""
             logger.warning("Model %s%s failed: %s", _sanitize(model), suffix, _sanitize(e))
+
+    def _note_malformed_tool_call(self, e: Exception, model: str, *, reroll: bool) -> None:
+        """Log an unparseable tool call, and never tell the breaker about it.
+
+        The failure arrives as an `APIConnectionError` (status 500) raised from
+        inside litellm's request transformation, so by status alone it is
+        indistinguishable from the provider being down — and was treated as
+        such: five attempts at a deterministic parse failure, then a breaker
+        failure recorded against the on-device tier every agent's chain ends
+        in. Bad output is a fact about one completion, not about a provider's
+        health, so the chain advances and the breaker hears nothing.
+        """
+        if reroll:
+            logger.warning(
+                "Model %s returned unparseable tool-call arguments — "
+                "re-rolling the same model once (%s)",
+                _sanitize(model),
+                _sanitize(e),
+            )
+        else:
+            logger.warning(
+                "Model %s keeps returning unparseable tool-call arguments — falling "
+                "through to the next model. This is bad output, not a provider "
+                "outage; the breaker is not told.",
+                _sanitize(model),
+            )
+        if self._active_watchdog:
+            self._active_watchdog.touch(
+                f"model_retry:{model}" if reroll else f"model_fallback:{model}"
+            )
+
+    async def _wait_out_rate_limit(
+        self, e: Exception, model: str, attempt: int, attempts: int
+    ) -> bool:
+        """Sleep off a 429 if there is an attempt left. True means retry.
+
+        A rate limit is the provider saying "not right now", so the answer is
+        the interval it named and the SAME model — not the next one, which is
+        usually on the same key and will say the same thing.
+        """
+        wait = rate_limit_wait_seconds(e)
+        if wait is None or attempt >= attempts - 1:
+            return False
+        logger.warning(
+            "Model %s rate-limited — waiting %.1fs and retrying the same model (attempt %d/%d)",
+            _sanitize(model),
+            wait,
+            attempt + 1,
+            attempts,
+        )
+        if self._active_watchdog:
+            self._active_watchdog.touch(f"rate_limit_wait:{model}")
+        await asyncio.sleep(wait)
+        return True
 
     async def _call_with_image_fallback(
         self,
@@ -1139,6 +1400,7 @@ class LLMClient:
                 LOCAL_CAPACITY_RETRIES if is_local_model(model) else TRANSIENT_RETRIES_PER_MODEL
             )
             rotations_left = (len(pool) - 1) if pool is not None else 0
+            malformed_retries_left = MALFORMED_TOOL_ARGS_RETRIES
             attempt = 0
             while attempt < attempts:
                 attempt_key = None
@@ -1161,13 +1423,16 @@ class LLMClient:
                         attempt_key = pool.current()
                         if attempt_key is not None:
                             kwargs["api_key"] = attempt_key
-                    async with asyncio.timeout(per_call_timeout):
-                        if is_codex_model(model):
-                            result = await codex_acompletion(**kwargs)
-                        else:
-                            result = await self._call_with_image_fallback(
-                                model=model, messages=kwargs.get("messages", []), kwargs=kwargs
-                            )
+                    with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
+                        async with asyncio.timeout(per_call_timeout):
+                            if is_codex_model(model):
+                                result = await codex_acompletion(**kwargs)
+                            else:
+                                result = await self._call_with_image_fallback(
+                                    model=model,
+                                    messages=kwargs.get("messages", []),
+                                    kwargs=kwargs,
+                                )
                     if _is_empty_completion(result):
                         # Not a finished answer. Raising routes this into the
                         # transient-retry path below rather than returning a
@@ -1191,7 +1456,7 @@ class LLMClient:
                         assert pool is not None
                         pool.retire(
                             attempt_key,
-                            Retirement.CREDIT_EXHAUSTED if spent else Retirement.AUTH_FAILED,
+                            _retirement_reason(e, spent=spent),
                         )
                         if not pool.exhausted() and rotations_left > 0:
                             rotations_left -= 1
@@ -1242,21 +1507,19 @@ class LLMClient:
                             _sanitize(model),
                         )
                         raise
-                    # A rate limit is the provider saying "not right now".
-                    # Wait the interval it names and retry the SAME model.
-                    _wait = rate_limit_wait_seconds(e)
-                    if _wait is not None and attempt < attempts - 1:
-                        logger.warning(
-                            "Model %s rate-limited — waiting %.1fs and retrying "
-                            "the same model (attempt %d/%d)",
-                            _sanitize(model),
-                            _wait,
-                            attempt + 1,
-                            attempts,
-                        )
-                        if self._active_watchdog:
-                            self._active_watchdog.touch(f"rate_limit_wait:{model}")
-                        await asyncio.sleep(_wait)
+                    if is_malformed_tool_arguments(e):
+                        if malformed_retries_left > 0:
+                            malformed_retries_left -= 1
+                            # Advances `attempt`, unlike the key rotation above:
+                            # a re-roll is a real call and spends the budget.
+                            attempt += 1
+                            self._note_malformed_tool_call(e, model, reroll=True)
+                            continue
+                        # Skips `_handle_model_error`, so a chain naming this
+                        # model twice re-rolls it once more. Bounded, and cheap.
+                        self._note_malformed_tool_call(e, model, reroll=False)
+                        break
+                    if await self._wait_out_rate_limit(e, model, attempt, attempts):
                         attempt += 1
                         continue
                     if attempt < attempts - 1 and _is_transient_model_error(e):
@@ -1411,8 +1674,9 @@ class LLMClient:
                         if attempt_key is not None:
                             kwargs["api_key"] = attempt_key
                     if is_codex_model(model):
-                        async with asyncio.timeout(per_call_timeout):
-                            result = await codex_acompletion(**kwargs)
+                        with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
+                            async with asyncio.timeout(per_call_timeout):
+                                result = await codex_acompletion(**kwargs)
                         content = str(result.choices[0].message.content or "")
                         if on_content and content:
                             await on_content(content)
@@ -1430,8 +1694,9 @@ class LLMClient:
                         return result
 
                     stream_start = time.monotonic()
-                    async with asyncio.timeout(per_call_timeout):
-                        stream = await litellm.acompletion(**kwargs)
+                    with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
+                        async with asyncio.timeout(per_call_timeout):
+                            stream = await litellm.acompletion(**kwargs)
 
                     chunks: list[Any] = []
                     accumulated_content = ""
@@ -1445,7 +1710,8 @@ class LLMClient:
                     while True:
                         try:
                             chunk = await asyncio.wait_for(
-                                chunk_iter.__anext__(), timeout=STREAM_CHUNK_TIMEOUT
+                                chunk_iter.__anext__(),
+                                timeout=stream_chunk_timeout(model),
                             )
                         except StopAsyncIteration:
                             break
@@ -1552,7 +1818,7 @@ class LLMClient:
                         assert pool is not None
                         pool.retire(
                             attempt_key,
-                            Retirement.CREDIT_EXHAUSTED if spent else Retirement.AUTH_FAILED,
+                            _retirement_reason(e, spent=spent),
                         )
                         if not pool.exhausted() and rotations_left > 0:
                             rotations_left -= 1

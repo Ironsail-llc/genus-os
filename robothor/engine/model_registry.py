@@ -11,7 +11,10 @@ import re
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 from robothor.engine.sanitize import sanitize_log
 
@@ -19,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 # Default thinking budget for models that support extended thinking
 THINKING_BUDGET_TOKENS = 10_000
+
+#: The ttft_hint_ms every manifest budget was implicitly calibrated against.
+#: Equal to ModelLimits.ttft_hint_ms's own default, so a model nobody has
+#: measured is treated as "normal speed" rather than penalised.
+_TTFT_BASELINE_MS = 3000
 
 
 @dataclass(frozen=True)
@@ -118,7 +126,14 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
     # silently sent every request to a model that did not exist on :11434 —
     # keep the tier where the client actually looks.
     "ollama_chat/qwen3.8:27b": ModelLimits(
-        max_input_tokens=262_144,
+        # 65_536, not the model's full 262_144. The engine now sends num_ctx
+        # from THIS number, and Ollama allocates KV cache as
+        # num_ctx x OLLAMA_NUM_PARALLEL — at 262_144 the resident footprint was
+        # 18.9GB of a pool shared with a pinned embedder, a reranker and a
+        # 1.7B. Nothing on this fleet sends a 262k-token prompt.
+        # Must stay above proactive_compaction_threshold + max output, or the
+        # server truncates silently; test_local_tier_residency pins that.
+        max_input_tokens=65_536,
         max_output_tokens=32_768,
         default_output_tokens=8_192,
         input_cost_per_token=0.0,
@@ -126,7 +141,8 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         supports_thinking=False,
         ttft_hint_ms=9000,  # dense 27B on GB10 — slow, by design for disaster tier
     ),
-    # Local Qwen3 8B — pf-watchdog's configured primary. Pulled 2026-08-24;
+    # Local Qwen3 8B — was pf-watchdog's configured primary; that agent was
+    # retired 2026-08-27 and no live manifest requests this model. Pulled 2026-08-24;
     # before that the manifest named a model no local server carried.
     "ollama_chat/qwen3:8b": ModelLimits(
         max_input_tokens=40_960,
@@ -652,3 +668,38 @@ def get_output_tokens(model_id: str, estimated_input_tokens: int = 0) -> int:
         return min(1024, limits.max_output_tokens)
 
     return min(limits.default_output_tokens, limits.max_output_tokens, remaining)
+
+
+def tempo_factor(model_id: str) -> float:
+    """How much slower than the calibration baseline this model answers.
+
+    Budgets in manifests were written against cloud latency. Rather than
+    re-tune 20 manifests every time the fleet changes model, scale them by the
+    model's own registered time-to-first-token.
+
+    Never returns less than 1.0: a manifest number is a FLOOR, and a fast model
+    must not silently shrink a budget an operator chose deliberately.
+    Unknown models fall back to the registry default, i.e. exactly 1.0.
+    """
+    try:
+        hint = get_model_limits(model_id).ttft_hint_ms
+    except Exception:  # noqa: BLE001 - an unknown model is baseline, not an error
+        return 1.0
+    if not hint or hint <= 0:
+        return 1.0
+    return max(1.0, hint / _TTFT_BASELINE_MS)
+
+
+def chain_tempo_factor(models: Sequence[str]) -> float:
+    """Tempo of the slowest model a run could fall through to.
+
+    Computed once from the WHOLE configured chain rather than retuned when the
+    chain advances. ``_with_last_resort`` guarantees the local tier terminates
+    every chain, so sizing by the slowest member means a cloud->local fallback
+    finds its budgets already correct. That beats a mid-run rescale three ways:
+    nothing mutates a deadline the run is already relying on, the loop's cached
+    wall-clock deadline stays valid, and there is no code path that can fail to
+    fire.
+    """
+    factors = [tempo_factor(m) for m in models if m]
+    return max(factors) if factors else 1.0

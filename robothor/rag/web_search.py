@@ -19,6 +19,12 @@ from typing import Any
 
 import httpx
 
+# Dial through the credential pool. A direct litellm call lets the SDK
+# resolve the provider key from the environment, which on 2026-08-27 meant
+# this path kept hammering a credential the pool had already retired and
+# could not rotate to a spare. No-op for unpooled providers.
+from robothor.engine.pooled_completion import acompletion as pooled_acompletion
+
 
 def _searxng_url() -> str:
     """Get SearXNG URL from config or env."""
@@ -100,9 +106,7 @@ async def search_perplexity(
     Returns same format as search_web() for interchangeability.
     """
     try:
-        import litellm
-
-        response = await litellm.acompletion(
+        response = await pooled_acompletion(
             model="perplexity/sonar-pro",
             messages=[{"role": "user", "content": query}],
             temperature=0.0,

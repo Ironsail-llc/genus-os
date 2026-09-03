@@ -13,6 +13,7 @@ from __future__ import annotations
 
 # Pin DEFAULT_TENANT before any robothor import — the value is captured by
 # function-default kwargs at dal.py import time.
+import pytest
 import os as _os
 
 _os.environ["ROBOTHOR_DEFAULT_TENANT"] = "default"
@@ -108,3 +109,44 @@ def _hermetic_env() -> object:
     finally:
         os.environ.clear()
         os.environ.update(snapshot)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shared_key_pools():
+    """Never let one test's credential state reach the next.
+
+    ``key_pool`` caches one pool per provider for the whole PROCESS, which is
+    correct in production — a credential is a process-wide fact, and the
+    2026-08-27 outage was prolonged precisely because two callers kept
+    private pools and one went on dialling a key the other had retired.
+
+    Under pytest that same cache is cross-test contamination: a pool built
+    from one test's monkeypatched env would survive into the next and answer
+    with a stale key. Reset on both sides of every test.
+    """
+    from robothor.engine.key_pool import reset_shared_pools
+
+    reset_shared_pools()
+    yield
+    reset_shared_pools()
+
+
+@pytest.fixture(autouse=True)
+def _reset_validation_warning_log():
+    """Never let one test's config warnings suppress the next test's.
+
+    ``robothor.engine.config`` remembers every ``(agent, warning)`` it has
+    logged for the life of the PROCESS — correct in production, where the
+    loader runs on every schedule tick and the fleet was emitting ~350
+    identical lines a day.
+
+    Under pytest that memory is cross-test contamination in the direction
+    that hides defects: the second test to load the same manifest sees NO
+    warning and passes for the wrong reason. Reset on both sides of every
+    test, the same way shared key pools are.
+    """
+    from robothor.engine.config import reset_validation_warning_log
+
+    reset_validation_warning_log()
+    yield
+    reset_validation_warning_log()

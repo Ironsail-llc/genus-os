@@ -584,6 +584,12 @@ def delete_stale_schedules(
         return deleted
 
 
+#: Ceiling on a stored tool-failure reason. Long enough to carry a real
+#: message and a short traceback tail, short enough that one pathological
+#: payload cannot bloat a table that takes an insert per tool call.
+MAX_TOOL_ERROR_CHARS = 500
+
+
 def log_tool_event(
     run_id: str,
     tool_name: str,
@@ -591,17 +597,29 @@ def log_tool_event(
     success: bool,
     step_id: str | None = None,
     error_type: str | None = None,
+    error_message: str | None = None,
 ) -> None:
-    """Log a tool invocation event for observability."""
+    """Log a tool invocation event for observability.
+
+    ``error_message`` records WHY the call failed. Without it the table says
+    only THAT it failed: on 2026-08-27, 68.4% of failures over 7 days were
+    ``error_type='unknown'`` with no recoverable cause anywhere, so the
+    degradation detector paged about tools whose failure nobody could
+    diagnose. Stored only on failure, and truncated.
+    """
+    reason: str | None = None
+    if not success and error_message:
+        reason = str(error_message)[:MAX_TOOL_ERROR_CHARS]
     try:
         with get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
                 """
-                INSERT INTO agent_tool_events (run_id, step_id, tool_name, duration_ms, success, error_type)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO agent_tool_events
+                    (run_id, step_id, tool_name, duration_ms, success, error_type, error_message)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
-                (run_id, step_id, tool_name, duration_ms, success, error_type),
+                (run_id, step_id, tool_name, duration_ms, success, error_type, reason),
             )
     except Exception as e:
         logger.debug("Failed to log tool event: %s", e)
