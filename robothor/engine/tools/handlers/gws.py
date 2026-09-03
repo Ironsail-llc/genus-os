@@ -544,7 +544,109 @@ def _run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
         return {"error": f"gws failed: {e}"}
 
 
-def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
+# ── do-not-contact guard ─────────────────────────────────────────────────────
+
+
+def _dnc_refusal(
+    tool_name: str,
+    *recipient_fields: str,
+    run_id: str = "",
+    tenant_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Refuse an outbound email addressed to anyone flagged ``do_not_contact``.
+
+    Returns ``None`` when the send may proceed, or the tool error to return
+    instead of sending. ``recipient_fields`` are raw header-ish strings — a To
+    line, a Cc line, a joined reply-all list — and every address in them is
+    checked, because an opt-out honoured only on the primary To would leave
+    reply-all as an open door.
+
+    Two decisions worth stating plainly, since both are the kind that quietly
+    turn a control into decoration:
+
+    * A recipient the CRM has never heard of is ALLOWED. This is an opt-out
+      list, not an allow-list.
+    * A lookup that RAISES refuses the send. "We could not read the opt-out
+      list" is not "nobody opted out", and the engine writes its own run rows
+      to this same database — if it is unreachable the run is already failing,
+      so this costs a send that was not going to be recorded anyway.
+
+    The refusal is written to ``agent_guardrail_events`` so the control has
+    evidence independent of this function's own log line. That write needs a
+    real run (``run_id`` is NOT NULL and references ``agent_runs``), so a call
+    made outside a run still refuses — it just has nowhere to file the note.
+    """
+    from psycopg2.errors import UndefinedColumn, UndefinedTable
+
+    from robothor.constants import DEFAULT_TENANT
+    from robothor.crm.dal import do_not_contact_emails
+
+    addresses = sorted(
+        {a.lower() for field in recipient_fields for a in _EMAIL_RE.findall(field or "")}
+    )
+    if not addresses:
+        return None
+
+    try:
+        blocked = do_not_contact_emails(addresses, tenant_id=tenant_id or DEFAULT_TENANT)
+    except (UndefinedColumn, UndefinedTable) as exc:
+        # Deploy beat `robothor migrate`. Pre-113 nobody can have been flagged,
+        # so there is no opt-out to honour and refusing would only manufacture
+        # an outage. ERROR, not debug: the window is meant to be minutes.
+        logger.error(
+            "do_not_contact check skipped for %s — schema predates migration 113 (%s). "
+            "Run `robothor migrate` on this instance.",
+            tool_name,
+            exc,
+        )
+        return None
+    except Exception as exc:
+        logger.error("do_not_contact lookup failed for %s: %s", tool_name, exc)
+        reason = f"opt-out list could not be checked: {exc}"
+        message = (
+            f"{tool_name} refused: the do-not-contact list could not be read, so it is "
+            "unknown whether a recipient has opted out. Not sending. Retry once the CRM "
+            "database is reachable, or tell the operator plainly that it did not go out."
+        )
+    else:
+        if not blocked:
+            return None
+        listed = ", ".join(sorted(blocked))
+        reason = f"recipients flagged do_not_contact: {listed}"
+        message = (
+            f"{tool_name} refused: {listed} has opted out of contact "
+            "(crm_people.do_not_contact). Do not send to this address, and do not "
+            "work around it by using another channel or another address for the same "
+            "person. Remove them from the recipients and try again if the message is "
+            "for someone else."
+        )
+
+    _log_dnc_block(tool_name, reason, run_id)
+    return {"error": message, "guard": "do_not_contact"}
+
+
+def _log_dnc_block(tool_name: str, reason: str, run_id: str) -> None:
+    """File the refusal in ``agent_guardrail_events``; never raise."""
+    if not run_id:
+        return
+    try:
+        from robothor.engine.tracking import log_guardrail_event
+
+        log_guardrail_event(
+            run_id,
+            "do_not_contact",
+            "blocked",
+            tool_name=tool_name,
+            reason=reason,
+            mode="enforce",
+        )
+    except Exception as exc:  # noqa: BLE001 — evidence must never break a run
+        logger.error("could not record do_not_contact guardrail event: %s", exc)
+
+
+def _handle_gws_tool(
+    name: str, args: dict[str, Any], *, run_id: str = "", tenant_id: str | None = None
+) -> dict[str, Any]:
     """Handle all gws_* tool calls by mapping to gws CLI commands."""
     import json as _json
 
@@ -651,6 +753,12 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if not to_addresses and not cc_addresses:
             return {"error": "No recipients found in thread"}
 
+        refusal = _dnc_refusal(
+            name, *to_addresses, *cc_addresses, run_id=run_id, tenant_id=tenant_id
+        )
+        if refusal is not None:
+            return refusal
+
         # Build MIME message with proper threading headers
         msg = MIMEText(body)
         msg["To"] = ", ".join(to_addresses)
@@ -696,6 +804,10 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         cc = args.get("cc", "")
         thread_id = args.get("thread_id")
         in_reply_to = args.get("in_reply_to", "")
+
+        refusal = _dnc_refusal(name, to, cc, run_id=run_id, tenant_id=tenant_id)
+        if refusal is not None:
+            return refusal
 
         # Warn if this looks like a reply but has no thread_id
         if not thread_id and subject.lower().startswith("re:"):
@@ -1027,7 +1139,9 @@ async def _gws_handler(
             "error": f"Tool '{tool_name}' is disabled in benchmark mode.",
             "guard": "is_benchmark",
         }
-    return await asyncio.to_thread(_handle_gws_tool, tool_name, args)
+    return await asyncio.to_thread(
+        _handle_gws_tool, tool_name, args, run_id=ctx.run_id, tenant_id=ctx.tenant_id
+    )
 
 
 for _tool_name in (
@@ -1051,7 +1165,9 @@ for _tool_name in (
                     "error": f"Tool '{tn}' is disabled in benchmark mode.",
                     "guard": "is_benchmark",
                 }
-            return await asyncio.to_thread(_handle_gws_tool, tn, args)
+            return await asyncio.to_thread(
+                _handle_gws_tool, tn, args, run_id=ctx.run_id, tenant_id=ctx.tenant_id
+            )
 
         return handler
 
