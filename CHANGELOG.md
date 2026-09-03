@@ -1,3 +1,9 @@
+## [1.63.0](https://github.com/Ironsail-llc/genus-os/compare/v1.62.0...v1.63.0) (2026-09-03)
+
+### Features
+
+* **engine:** verify the named deliverable; make fleet posture movable ([#460](https://github.com/Ironsail-llc/genus-os/issues/460)) ([bd27b09](https://github.com/Ironsail-llc/genus-os/commit/bd27b09cfafd6f44ebcf9311eea7112124cd7124))
+
 ## [1.62.0](https://github.com/Ironsail-llc/genus-os/compare/v1.61.1...v1.62.0) (2026-09-03)
 
 ### Features
