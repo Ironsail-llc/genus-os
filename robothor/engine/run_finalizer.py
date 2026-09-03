@@ -396,6 +396,49 @@ class RunFinalizationMixin:
                             "completion contract enforce set_next_action failed: %s", exc
                         )
 
+        # Deliverable contracts. The complement of the check above: that one
+        # asks whether the agent's CLAIMS are backed by trace evidence, this
+        # one asks whether the artifact the TASK named actually exists. A run
+        # can pass the first and fail the second by doing the work correctly
+        # and saving it somewhere else — measured 2026-08-26 as -0.87 of a
+        # -1.04 competitive gap in which 7 of 10 tasks were at parity.
+        from robothor.engine.feature_flags import deliverable_contract_mode
+
+        dc_mode = deliverable_contract_mode()
+        if dc_mode != "off":
+            try:
+                from robothor.engine.deliverable_contract import check_run_deliverables
+
+                dreport = check_run_deliverables(run, session)
+            except Exception as exc:  # noqa: BLE001 — never block finalization
+                logger.debug("deliverable contract check raised: %s", exc)
+                dreport = None
+            # None means the task named no deliverable, which is most runs.
+            # Logging a vacuous pass on every one of them would bury the real
+            # verdicts in exactly the way the alert digest already does.
+            if dreport is not None and not dreport.satisfied:
+                try:
+                    from robothor.engine.tracking import log_guardrail_event
+
+                    log_guardrail_event(
+                        run_id=run.id,
+                        guardrail_name="deliverable_contract",
+                        action="blocked" if dc_mode == "enforce" else "observed",
+                        reason=dreport.message[:500],
+                        mode=dc_mode,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("deliverable contract event log failed: %s", exc)
+                if dc_mode in ("alert", "enforce"):
+                    from robothor.engine.feature_flags import notify_guardrail_alert
+
+                    notify_guardrail_alert(
+                        guardrail_name="deliverable_contract",
+                        agent_id=run.agent_id,
+                        reason=dreport.message[:500],
+                        tenant_id=getattr(run, "tenant_id", "") or "",
+                    )
+
     @staticmethod
     def _check_primary_model_reached(run: AgentRun, agent_config: Any) -> None:
         """Alert when a run answered on a fallback instead of the configured primary.

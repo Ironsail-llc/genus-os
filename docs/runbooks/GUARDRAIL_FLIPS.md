@@ -202,3 +202,49 @@ traffic (2026-08-21) produced 387 `no_claims`, 6 `verified`, 7
 the 7. The dominant residual class is briefing/summary agents reporting work a
 *different* run performed; that is signal, not a bug, but it is the thing to
 triage before promoting.
+
+## sandbox_default — read this before promoting it
+
+Measured 2026-08-27. Six agents hold `exec`. **Four of them declare
+`sandbox: host`** — `main`, `crm-hygiene`, `conversation-inbox`,
+`vision-monitor` — and that opt-out is honoured *before* the mode is consulted.
+
+So promoting `ROBOTHOR_SANDBOX_DEFAULT_MODE=enforce` today would containerise
+`auto-agent` and `email-analyst`, and nothing else. The dashboard would read
+`enforce` and be telling the truth. The four agents with the broadest host
+access would be exactly as uncontained as before.
+
+The would-block set is reassuring for the same reason: opted-out agents never
+appear in it, because they never reach the `observe` branch at all.
+
+### Seeing the real scope
+
+```bash
+python - <<'PY'
+from pathlib import Path
+from robothor.engine.config import load_all_manifests
+from robothor.engine.sandbox_policy import opted_out_of_containment
+print(opted_out_of_containment(load_all_manifests(Path.home() / "robothor" / "docs" / "agents")))
+PY
+```
+
+The engine also logs each one, once per agent, whenever `sandbox_default` is in
+`observe` or `enforce`.
+
+### Making enforce mean enforce
+
+```
+Environment=ROBOTHOR_SANDBOX_ENFORCE_OVERRIDES_MANIFEST=1
+```
+
+Under `observe` this changes no behaviour — opted-out agents still run on the
+host — but they now *appear* in the would-block set, so you can see what
+`enforce` would newly capture before you flip it. Under `enforce` it
+containerises them.
+
+Set it in `observe` first and read the new rows. Containerising `main` without
+knowing what it does on the host is a worse outcome than leaving it
+uncontained.
+
+An explicit `sandbox: docker` always wins, in every mode. Agents without `exec`
+are never in scope, with or without the override.

@@ -596,7 +596,7 @@ def log_tool_event(
     duration_ms: int,
     success: bool,
     step_id: str | None = None,
-    error_type: str | None = None,
+    error_type: Any = None,
     error_message: str | None = None,
 ) -> None:
     """Log a tool invocation event for observability.
@@ -607,6 +607,11 @@ def log_tool_event(
     degradation detector paged about tools whose failure nobody could
     diagnose. Stored only on failure, and truncated.
     """
+    # Accept an ErrorType enum, a bare string, or None. Callers should not
+    # have to know this enum's shape to record an event about it.
+    kind: str | None = getattr(error_type, "value", None)
+    if kind is None and error_type is not None:
+        kind = str(error_type)
     reason: str | None = None
     if not success and error_message:
         reason = str(error_message)[:MAX_TOOL_ERROR_CHARS]
@@ -619,7 +624,7 @@ def log_tool_event(
                     (run_id, step_id, tool_name, duration_ms, success, error_type, error_message)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
-                (run_id, step_id, tool_name, duration_ms, success, error_type, reason),
+                (run_id, step_id, tool_name, duration_ms, success, kind, reason),
             )
     except Exception as e:
         logger.debug("Failed to log tool event: %s", e)
