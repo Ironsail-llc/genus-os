@@ -1,3 +1,9 @@
+## [1.66.0](https://github.com/Ironsail-llc/genus-os/compare/v1.65.0...v1.66.0) (2026-09-03)
+
+### Features
+
+* **engine:** federation, capacity, do-not-contact, and run truth ([#468](https://github.com/Ironsail-llc/genus-os/issues/468)) ([543d709](https://github.com/Ironsail-llc/genus-os/commit/543d709f29c5ec93fd2bbb432f3909e1e0318232)), closes [#457](https://github.com/Ironsail-llc/genus-os/issues/457) [#463](https://github.com/Ironsail-llc/genus-os/issues/463) [#464](https://github.com/Ironsail-llc/genus-os/issues/464) [#465](https://github.com/Ironsail-llc/genus-os/issues/465) [#466](https://github.com/Ironsail-llc/genus-os/issues/466) [#467](https://github.com/Ironsail-llc/genus-os/issues/467) [#465](https://github.com/Ironsail-llc/genus-os/issues/465)
+
 ## [1.65.0](https://github.com/Ironsail-llc/genus-os/compare/v1.64.0...v1.65.0) (2026-09-03)
 
 ### Features
