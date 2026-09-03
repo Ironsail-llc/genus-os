@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -544,7 +545,249 @@ def _run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
         return {"error": f"gws failed: {e}"}
 
 
-def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
+# ── do-not-contact guard ─────────────────────────────────────────────────────
+
+#: How long the one retry waits. Long enough for a connection pool to hand
+#: back a live socket or a restarting Postgres to accept again; short enough
+#: that it is invisible next to the CLI call this guard sits in front of.
+_DNC_RETRY_DELAY_SECONDS = 0.5
+
+
+def _dnc_mode() -> str:
+    """``enforce`` (default) or ``observe`` for this send.
+
+    Delegates to the governed flag ``ROBOTHOR_DNC_MODE``
+    (``robothor.engine.feature_flags.do_not_contact_mode``) rather than reading
+    ``os.environ`` here. Fail-closed is the right default for a compliance
+    flag, but a default with no lever is one nobody can respond to: when the
+    guard is wrong at 3am the only move left is editing code, and what actually
+    happens is that someone comments out the call. ``observe`` keeps the check
+    running and still files its evidence while the mail flows.
+
+    Going through the flag store rather than the environment is what makes that
+    lever an operator control instead of a private edit: DB-store-first
+    resolution puts it in ``/api/controls``, on the dashboard, and in the flag
+    audit log. Read per call — the store caches the DB answer briefly and reads
+    the env live — so a flip needs no deploy. Anything unrecognised enforces.
+    """
+    from robothor.engine.feature_flags import do_not_contact_mode
+
+    return do_not_contact_mode()
+
+
+def _dnc_lookup(addresses: list[str], tenant_id: str) -> set[str]:
+    """Read the opt-out list, with ONE retry on a connection-level failure.
+
+    A dropped socket or a restarting Postgres is the common transient here and
+    is over in well under a second; refusing on the first blip turns routine
+    database churn into a mail outage, which is how an operator learns to
+    distrust a guard and switch it off. One attempt more, then the answer
+    stands — a retry loop inside a send path is how a transient fault becomes
+    a hung run. ``OperationalError`` only: a ``ProgrammingError`` means the
+    query is wrong, and asking again gets the same answer.
+    """
+    from psycopg2 import OperationalError
+
+    from robothor.crm.dal import do_not_contact_emails
+
+    try:
+        return do_not_contact_emails(addresses, tenant_id=tenant_id)
+    except OperationalError as exc:
+        logger.warning(
+            "do_not_contact lookup hit a connection error (%s) — one retry in %ss",
+            exc,
+            _DNC_RETRY_DELAY_SECONDS,
+        )
+        time.sleep(_DNC_RETRY_DELAY_SECONDS)
+        return do_not_contact_emails(addresses, tenant_id=tenant_id)
+
+
+def _dnc_outcome(
+    tool_name: str,
+    reason: str,
+    message: str,
+    run_id: str,
+    *,
+    record: bool = True,
+) -> dict[str, Any] | None:
+    """Turn a would-be refusal into the mode's answer: refuse, or note and pass.
+
+    ``record`` is False on the one path where the guardrail write cannot work —
+    a lookup that failed goes to the same database this write would.
+    """
+    if _dnc_mode() == "observe":
+        logger.warning(
+            "do_not_contact OBSERVE: %s would have been refused (%s) — sending anyway "
+            "because ROBOTHOR_DNC_MODE=observe.",
+            tool_name,
+            reason,
+        )
+        if record:
+            _log_dnc_block(tool_name, reason, run_id, action="observed", mode="observe")
+        return None
+
+    if record:
+        _log_dnc_block(tool_name, reason, run_id)
+    return {"error": message, "guard": "do_not_contact"}
+
+
+def _dnc_refusal(
+    tool_name: str,
+    *recipient_fields: str,
+    run_id: str = "",
+    tenant_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Refuse an outbound email addressed to anyone flagged ``do_not_contact``.
+
+    Returns ``None`` when the send may proceed, or the tool error to return
+    instead of sending. ``recipient_fields`` are raw header-ish strings — a To
+    line, a Cc line, a joined reply-all list — and every address in them is
+    checked, because an opt-out honoured only on the primary To would leave
+    reply-all as an open door.
+
+    Decisions worth stating plainly, since each is the kind that quietly turns
+    a control into decoration:
+
+    * A recipient the CRM has never heard of is ALLOWED. This is an opt-out
+      list, not an allow-list.
+    * A call with no tenant REFUSES. The list is per-tenant; reading some
+      other tenant's list would answer a question nobody asked.
+    * A lookup that RAISES refuses the send, after one bounded retry
+      (``_dnc_lookup``). "We could not read the opt-out list" is not "nobody
+      opted out", and the engine writes its own run rows to this same
+      database — if it is unreachable the run is already failing.
+    * ``ROBOTHOR_DNC_MODE=observe`` (``_dnc_mode``) turns every one of those
+      refusals into a logged, recorded note and lets the mail go. That is the
+      lever; it exists so nobody has to reach for the one below it, which is
+      commenting out this call.
+
+    The refusal is written to ``agent_guardrail_events`` so the control has
+    evidence independent of this function's own log line. That write needs a
+    real run (``run_id`` is NOT NULL and references ``agent_runs``), so a call
+    made outside a run still refuses — it just has nowhere to file the note.
+    """
+    from psycopg2.errors import UndefinedColumn, UndefinedTable
+
+    addresses = sorted(
+        {a.lower() for field in recipient_fields for a in _EMAIL_RE.findall(field or "")}
+    )
+    if not addresses:
+        return None
+
+    # The opt-out list is per-tenant. Falling back to DEFAULT_TENANT here would
+    # answer a question nobody asked — it can clear a recipient who is flagged
+    # in the tenant this send actually belongs to, while reporting itself as
+    # having checked. A guard may not guess whose list it is reading.
+    tenant = (tenant_id or "").strip()
+    if not tenant:
+        logger.error(
+            "do_not_contact refused %s: no tenant on the call, so there is no opt-out "
+            "list to read. The caller must pass tenant_id (ToolContext.tenant_id).",
+            tool_name,
+        )
+        return _dnc_outcome(
+            tool_name,
+            "no tenant on the call — opt-out list could not be scoped",
+            f"{tool_name} refused: this call carries no tenant, so the do-not-contact "
+            "list could not be scoped and it is unknown whether a recipient has opted "
+            "out. Not sending. This is a wiring fault, not something to work around — "
+            "report it to the operator.",
+            run_id,
+        )
+
+    try:
+        blocked = _dnc_lookup(addresses, tenant)
+    except (UndefinedColumn, UndefinedTable) as exc:
+        # Deploy beat `robothor migrate`. Pre-113 nobody can have been flagged,
+        # so there is no opt-out to honour and refusing would only manufacture
+        # an outage. ERROR, not debug: the window is meant to be minutes.
+        #
+        # Scoped to THIS column by name, not to the exception class. The same
+        # SQL also names crm_people.deleted_at/tenant_id/additional_emails and
+        # the whole contact_identifiers table; a carve-out keyed on the type
+        # would turn any of those going missing — a botched migration, a
+        # partial restore, a rename — into a silent allow, which is the exact
+        # failure this guard exists to prevent. Anything else is an unreadable
+        # list, and an unreadable list refuses.
+        if "do_not_contact" not in str(exc):
+            return _dnc_lookup_failed(tool_name, exc, run_id)
+        logger.error(
+            "do_not_contact check skipped for %s — schema predates migration 113 (%s). "
+            "Run `robothor migrate` on this instance.",
+            tool_name,
+            exc,
+        )
+        return None
+    except Exception as exc:
+        return _dnc_lookup_failed(tool_name, exc, run_id)
+
+    if not blocked:
+        return None
+
+    listed = ", ".join(sorted(blocked))
+    return _dnc_outcome(
+        tool_name,
+        f"recipients flagged do_not_contact: {listed}",
+        f"{tool_name} refused: {listed} has opted out of contact "
+        "(crm_people.do_not_contact). Do not send to this address, and do not "
+        "work around it by using another channel or another address for the same "
+        "person. Remove them from the recipients and try again if the message is "
+        "for someone else.",
+        run_id,
+    )
+
+
+def _dnc_lookup_failed(tool_name: str, exc: BaseException, run_id: str) -> dict[str, Any] | None:
+    """Refuse a send whose opt-out lookup could not be read.
+
+    Deliberately does NOT file a guardrail event. That write goes to the same
+    database the lookup just failed on, over its own connection, so it raises
+    too — buying nothing but a second traceback stacked on the real one. The
+    ERROR line below is the evidence for this branch; ``agent_guardrail_events``
+    records blocks, which is a claim about a person, and there is no person
+    here — only a list we could not read.
+    """
+    logger.error("do_not_contact lookup failed for %s: %s", tool_name, exc)
+    return _dnc_outcome(
+        tool_name,
+        f"opt-out list could not be checked: {exc}",
+        f"{tool_name} refused: the do-not-contact list could not be read, so it is "
+        "unknown whether a recipient has opted out. Not sending. Retry once the CRM "
+        "database is reachable, or tell the operator plainly that it did not go out.",
+        run_id,
+        record=False,
+    )
+
+
+def _log_dnc_block(
+    tool_name: str,
+    reason: str,
+    run_id: str,
+    *,
+    action: str = "blocked",
+    mode: str = "enforce",
+) -> None:
+    """File the refusal in ``agent_guardrail_events``; never raise."""
+    if not run_id:
+        return
+    try:
+        from robothor.engine.tracking import log_guardrail_event
+
+        log_guardrail_event(
+            run_id,
+            "do_not_contact",
+            action,
+            tool_name=tool_name,
+            reason=reason,
+            mode=mode,
+        )
+    except Exception as exc:  # noqa: BLE001 — evidence must never break a run
+        logger.error("could not record do_not_contact guardrail event: %s", exc)
+
+
+def _handle_gws_tool(
+    name: str, args: dict[str, Any], *, run_id: str = "", tenant_id: str | None = None
+) -> dict[str, Any]:
     """Handle all gws_* tool calls by mapping to gws CLI commands."""
     import json as _json
 
@@ -651,6 +894,12 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if not to_addresses and not cc_addresses:
             return {"error": "No recipients found in thread"}
 
+        refusal = _dnc_refusal(
+            name, *to_addresses, *cc_addresses, run_id=run_id, tenant_id=tenant_id
+        )
+        if refusal is not None:
+            return refusal
+
         # Build MIME message with proper threading headers
         msg = MIMEText(body)
         msg["To"] = ", ".join(to_addresses)
@@ -696,6 +945,10 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         cc = args.get("cc", "")
         thread_id = args.get("thread_id")
         in_reply_to = args.get("in_reply_to", "")
+
+        refusal = _dnc_refusal(name, to, cc, run_id=run_id, tenant_id=tenant_id)
+        if refusal is not None:
+            return refusal
 
         # Warn if this looks like a reply but has no thread_id
         if not thread_id and subject.lower().startswith("re:"):
@@ -859,6 +1112,14 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
         if not summary or not start or not end:
             return {"error": "summary, start, and end are required"}
 
+        # Google emails every attendee on insert and on every edit, so this is
+        # outbound mail with a different sender. Checked first, before even the
+        # dedup read, so nothing goes out for a blocked invitation.
+        attendee_emails = [e for e in (args.get("attendees") or []) if e]
+        refusal = _dnc_refusal(name, *attendee_emails, run_id=run_id, tenant_id=tenant_id)
+        if refusal is not None:
+            return refusal
+
         calendar_id = args.get("calendar_id", "primary")
         owner_email = _resolve_owner_email()
 
@@ -866,7 +1127,7 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             dup = _find_duplicate_event(
                 summary=summary,
                 start=start,
-                attendees=args.get("attendees", []) or [],
+                attendees=attendee_emails,
                 calendar_id=calendar_id,
                 owner_email=owner_email,
             )
@@ -903,7 +1164,7 @@ def _handle_gws_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
             event_body["description"] = args["description"]
         if args.get("location"):
             event_body["location"] = args["location"]
-        attendees = [{"email": e} for e in args.get("attendees", [])]
+        attendees = [{"email": e} for e in attendee_emails]
         if owner_email and not any(a["email"].lower() == owner_email for a in attendees):
             attendees.append({"email": owner_email})
         event_body["attendees"] = attendees
@@ -1027,7 +1288,9 @@ async def _gws_handler(
             "error": f"Tool '{tool_name}' is disabled in benchmark mode.",
             "guard": "is_benchmark",
         }
-    return await asyncio.to_thread(_handle_gws_tool, tool_name, args)
+    return await asyncio.to_thread(
+        _handle_gws_tool, tool_name, args, run_id=ctx.run_id, tenant_id=ctx.tenant_id
+    )
 
 
 for _tool_name in (
@@ -1051,7 +1314,9 @@ for _tool_name in (
                     "error": f"Tool '{tn}' is disabled in benchmark mode.",
                     "guard": "is_benchmark",
                 }
-            return await asyncio.to_thread(_handle_gws_tool, tn, args)
+            return await asyncio.to_thread(
+                _handle_gws_tool, tn, args, run_id=ctx.run_id, tenant_id=ctx.tenant_id
+            )
 
         return handler
 

@@ -109,6 +109,8 @@ def api_update_person(
         fields["last_name"] = body.lastName
     if body.email is not None:
         fields["email"] = body.email
+    if body.doNotContact is not None:
+        fields["do_not_contact"] = body.doNotContact
 
     result = update_person(person_id, tenant_id=tenant_id, **fields)
     if result:

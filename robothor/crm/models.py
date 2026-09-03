@@ -50,6 +50,9 @@ def person_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         else None,
         "tenantId": row.get("tenant_id") or DEFAULT_TENANT,
         "schedulingPolicy": row.get("scheduling_policy") or "stable",
+        # Outreach opt-out (migration 113). Absent on rows read through a
+        # projection that predates the column, and absent is not opted out.
+        "doNotContact": bool(row.get("do_not_contact", False)),
         "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
         "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
     }

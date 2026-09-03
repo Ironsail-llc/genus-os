@@ -92,6 +92,16 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
     "ROBOTHOR_ADMISSION_MODE": EvidenceSource(
         "agent_guardrail_events", "guardrail_name = 'execution_mode_admission'"
     ),
+    # Written by robothor/engine/tools/handlers/gws.py::_log_dnc_block, on both
+    # rungs: action 'blocked' under enforce, 'observed' under observe. Not
+    # filtered on action — an observed row is still proof the check ran, which
+    # is exactly what this detector asks. The one refusal that files NO row is
+    # the unreadable-list branch, whose write would go to the database that had
+    # just failed; that branch's evidence is an ERROR log line, so a run of them
+    # correctly reads here as no evidence.
+    "ROBOTHOR_DNC_MODE": EvidenceSource(
+        "agent_guardrail_events", "guardrail_name = 'do_not_contact'"
+    ),
     "ROBOTHOR_RIP_7_MODE": EvidenceSource(
         "memory_facts_audit",
         "reason = 'pre_update_drift_detected'",

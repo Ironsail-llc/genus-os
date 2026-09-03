@@ -211,6 +211,43 @@ fails if one is re-dated without a reason.
 | `ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE` | observe (2026-09-20) | BLOCKER: the observe reporter has produced 0 rows; probe one before flipping (analytics-only) |
 | `ROBOTHOR_RUN_VERIFICATION_MODE` | observe (2026-09-05) | soak the `unverified_claims` rate before alert |
 | `ROBOTHOR_PLUGIN_MANIFEST_MODE` | observe, permanent | `promotion: n/a-on-this-instance` — zero plugins installed, so enforce is a no-op here |
+| `ROBOTHOR_DNC_MODE` | enforce | shipped enforcing — **no ladder**, see below |
+
+### `ROBOTHOR_DNC_MODE` — the one flag with no ladder
+
+The `crm_people.do_not_contact` opt-out
+(`robothor/engine/tools/handlers/gws.py::_dnc_refusal`, enforced on
+`gws_gmail_send`, `gws_gmail_reply` and `gws_calendar_create`) is a compliance
+control, not a containment experiment, so it shipped straight to `enforce` and
+has no `planned_promotion`. Two rungs only.
+
+| Rung | Behaviour |
+|------|-----------|
+| `observe` | the checks run and still file an `agent_guardrail_events` row (`guardrail_name='do_not_contact'`, action `observed`) — **and the message goes out anyway**. The one exception is the unreadable-list branch, which files nothing because that write would go to the database whose failure caused the refusal. |
+| `enforce` (default) | the send is refused; the row is filed with action `blocked`. |
+
+There is no `off` — an opt-out that can be switched off entirely is not a
+control — and no `alert`, because `observe` already writes the row an alert
+rung would page on. `valid_values_for` rejects both, so the dashboard will not
+offer them.
+
+**Read the ladder backwards for this one.** Everywhere else in this runbook,
+`observe` is a rung on the way up and `enforce` is the goal. Here `enforce` is
+the shipped state and `observe` is an incident lever: it exists so an operator
+whose CRM is unreachable at 3am has something to reach for other than
+commenting out the call, and a guard that is watching and recording beats a
+guard that has been deleted. While it is set, people who asked not to be
+contacted will be contacted.
+
+So: **if `flag_audit` shows this flag in `observe`, that is an incident to
+close, not a soak in progress.** Its evidence verdict is the other exception:
+`ENFORCING` needs at least one `do_not_contact` row, so on an instance where
+nobody has opted out the flag reads `INERT` indefinitely — that is the guard
+having nothing to refuse, not the guard being disconnected; probe it by
+flagging a test person and sending to them. It will never appear in the `OVERDUE` list —
+`overdue_flags` only nags flags that carry a `planned_promotion`, and this one
+deliberately has none. Nothing will remind you. Put the reason in the flip's
+`reason` field and set it back.
 
 ### `ROBOTHOR_RUN_VERIFICATION_MODE` — what each rung does
 

@@ -371,6 +371,13 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                     "companyId": {"type": "string", "description": "Company UUID to link"},
                     "linkedinUrl": {"type": "string"},
                     "avatarUrl": {"type": "string"},
+                    "doNotContact": {
+                        "type": "boolean",
+                        "description": (
+                            "Outreach opt-out. True refuses every outbound email to this "
+                            "person; false lifts it. Set true when they ask to be removed."
+                        ),
+                    },
                 },
                 "required": ["id"],
             },
@@ -1174,6 +1181,7 @@ async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, An
             "companyId": "company_id",
             "linkedinUrl": "linkedin_url",
             "avatarUrl": "avatar_url",
+            "doNotContact": "do_not_contact",
         }
         kwargs = {
             dal_key: arguments[arg_key]

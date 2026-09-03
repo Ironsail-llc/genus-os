@@ -298,3 +298,28 @@ def test_buddy_cutover_enforces_soak_and_archives_before_drop() -> None:
     assert preflight < archive < destructive_change
     assert "to_jsonb(s)" in sql
     assert "RAISE EXCEPTION" in sql
+
+
+def test_do_not_contact_migration_is_manifested_after_federation_principals() -> None:
+    """113 must be discoverable, and must apply after 112.
+
+    A migration file that exists on disk but not in the manifest is invisible
+    to `_discover` — the shape PR #457 found: an untracked 113 that no
+    deployment would ever run. Ordering is derived from the prefix, so the
+    manifest line has to sit after 112 for the ledger to read in apply order.
+    """
+    lines = [
+        line.strip()
+        for line in migrate._MIGRATION_MANIFEST.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert "crm/113_add_do_not_contact.sql" in lines
+    assert lines.index("crm/113_add_do_not_contact.sql") == (
+        lines.index("crm/112_federation_principals.sql") + 1
+    )
+
+    sql = (migrate._REPO_ROOT / "crm/migrations/113_add_do_not_contact.sql").read_text()
+    assert "ADD COLUMN IF NOT EXISTS do_not_contact BOOLEAN NOT NULL DEFAULT FALSE" in sql
+    assert "idx_crm_people_dnc" in sql
+
+    assert "113_add_do_not_contact" in [m.migration_id for m in migrate._discover()]

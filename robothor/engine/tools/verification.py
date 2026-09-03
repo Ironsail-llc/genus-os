@@ -378,6 +378,10 @@ _PERSON_FIELDS: dict[str, tuple[str, ...]] = {
     "phone": ("phones", "primaryPhoneNumber"),
     "jobTitle": ("jobTitle",),
     "city": ("city",),
+    # Outreach opt-out. Included because an opt-out that silently did not
+    # take is the failure the flag exists to prevent, and `_same` already
+    # compares booleans by identity rather than string form.
+    "doNotContact": ("doNotContact",),
 }
 
 

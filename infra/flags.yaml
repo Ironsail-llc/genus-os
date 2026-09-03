@@ -478,3 +478,31 @@ flags:
       `critical:` count is zero. If it is not, that is a bug report, not a
       flag flip.
 
+  - name: ROBOTHOR_DNC_MODE
+    owner: ops
+    mode: enforce
+    soak: |
+      Shipped straight to enforce, with no soak and no planned_promotion,
+      because it is a compliance control rather than a performance or
+      containment experiment. `crm_people.do_not_contact` records that a
+      person asked not to be contacted; a rung that observes the request and
+      mails them anyway is the violation the flag exists to prevent, so there
+      is no rung below enforce to soak in.
+
+      The ladder is two rungs, not four. There is no `off` — an opt-out that
+      can be switched off entirely is not a control — and no `alert`, because
+      `observe` already writes the agent_guardrail_events row an alert rung
+      would page on.
+
+      `observe` exists solely as an incident lever: it keeps the check running
+      and still files evidence (action `observed`) while the mail flows. That
+      DISABLES the control for as long as it is set — people who asked not to
+      be contacted will be contacted. It is here because the alternative an
+      operator reaches for when the CRM is down at 3am is commenting out the
+      call, and a guard that is watching and recording beats a guard that has
+      been deleted. If this flag is ever found sitting in observe, that is an
+      incident to close, not a soak in progress.
+
+      Enforced on outbound email (gws_gmail_send, gws_gmail_reply) and
+      calendar invitations (gws_calendar_create). Telegram, SMS and chat are
+      NOT enforced — see docs/CRM_DATA_FABRIC.md.
