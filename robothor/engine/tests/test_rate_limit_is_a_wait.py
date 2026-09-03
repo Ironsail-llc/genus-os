@@ -122,9 +122,19 @@ class TestTheDispatcherUsesThem:
         return body[start : body.index("# Giving up on this model", start)]
 
     def test_the_retry_path_consults_the_wait(self):
+        """The except-block hands rate limits to ``_wait_out_rate_limit``,
+        and THAT helper is the one that computes the wait and sleeps it.
+        Checking the helper's own body (not the whole file) keeps the
+        definition of ``rate_limit_wait_seconds`` from satisfying the test."""
+        import inspect
+
+        from robothor.engine.llm_client import LLMClient
+
         block = self._retry_block()
-        assert "rate_limit_wait_seconds(" in block, "the wait is computed but never used"
-        assert "await asyncio.sleep(_wait)" in block, "it computes a wait and does not wait"
+        assert "_wait_out_rate_limit(" in block, "the retry path never consults the wait"
+        helper = inspect.getsource(LLMClient._wait_out_rate_limit)
+        assert "rate_limit_wait_seconds(" in helper, "the wait is computed but never used"
+        assert "await asyncio.sleep(" in helper, "it computes a wait and does not wait"
 
     def test_credit_exhaustion_short_circuits_the_chain(self):
         """Walking the fallback chain on a spent key wastes every model on it."""
