@@ -602,43 +602,52 @@ def _dnc_refusal(
         # failure this guard exists to prevent. Anything else is an unreadable
         # list, and an unreadable list refuses.
         if "do_not_contact" not in str(exc):
-            reason, message = _dnc_lookup_failed(tool_name, exc)
-        else:
-            logger.error(
-                "do_not_contact check skipped for %s — schema predates migration 113 (%s). "
-                "Run `robothor migrate` on this instance.",
-                tool_name,
-                exc,
-            )
-            return None
-    except Exception as exc:
-        reason, message = _dnc_lookup_failed(tool_name, exc)
-    else:
-        if not blocked:
-            return None
-        listed = ", ".join(sorted(blocked))
-        reason = f"recipients flagged do_not_contact: {listed}"
-        message = (
-            f"{tool_name} refused: {listed} has opted out of contact "
-            "(crm_people.do_not_contact). Do not send to this address, and do not "
-            "work around it by using another channel or another address for the same "
-            "person. Remove them from the recipients and try again if the message is "
-            "for someone else."
+            return _dnc_lookup_failed(tool_name, exc)
+        logger.error(
+            "do_not_contact check skipped for %s — schema predates migration 113 (%s). "
+            "Run `robothor migrate` on this instance.",
+            tool_name,
+            exc,
         )
+        return None
+    except Exception as exc:
+        return _dnc_lookup_failed(tool_name, exc)
 
+    if not blocked:
+        return None
+
+    listed = ", ".join(sorted(blocked))
+    reason = f"recipients flagged do_not_contact: {listed}"
+    message = (
+        f"{tool_name} refused: {listed} has opted out of contact "
+        "(crm_people.do_not_contact). Do not send to this address, and do not "
+        "work around it by using another channel or another address for the same "
+        "person. Remove them from the recipients and try again if the message is "
+        "for someone else."
+    )
     _log_dnc_block(tool_name, reason, run_id)
     return {"error": message, "guard": "do_not_contact"}
 
 
-def _dnc_lookup_failed(tool_name: str, exc: BaseException) -> tuple[str, str]:
-    """The reason and the tool error for a lookup that could not be read."""
+def _dnc_lookup_failed(tool_name: str, exc: BaseException) -> dict[str, Any]:
+    """Refuse a send whose opt-out lookup could not be read.
+
+    Deliberately does NOT file a guardrail event. That write goes to the same
+    database the lookup just failed on, over its own connection, so it raises
+    too — buying nothing but a second traceback stacked on the real one. The
+    ERROR line below is the evidence for this branch; ``agent_guardrail_events``
+    records blocks, which is a claim about a person, and there is no person
+    here — only a list we could not read.
+    """
     logger.error("do_not_contact lookup failed for %s: %s", tool_name, exc)
-    return (
-        f"opt-out list could not be checked: {exc}",
-        f"{tool_name} refused: the do-not-contact list could not be read, so it is "
-        "unknown whether a recipient has opted out. Not sending. Retry once the CRM "
-        "database is reachable, or tell the operator plainly that it did not go out.",
-    )
+    return {
+        "error": (
+            f"{tool_name} refused: the do-not-contact list could not be read, so it is "
+            "unknown whether a recipient has opted out. Not sending. Retry once the CRM "
+            "database is reachable, or tell the operator plainly that it did not go out."
+        ),
+        "guard": "do_not_contact",
+    }
 
 
 def _log_dnc_block(tool_name: str, reason: str, run_id: str) -> None:

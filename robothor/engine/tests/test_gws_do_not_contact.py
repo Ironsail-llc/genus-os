@@ -144,7 +144,7 @@ class TestGmailSend:
                 side_effect=RuntimeError("connection refused"),
             ),
             patch.object(gws, "_run_gws") as run,
-            patch("robothor.engine.tracking.log_guardrail_event") as audit,
+            patch("robothor.engine.tracking.log_guardrail_event"),
         ):
             result = gws._handle_gws_tool(
                 "gws_gmail_send",
@@ -154,8 +154,25 @@ class TestGmailSend:
 
         assert "error" in result
         run.assert_not_called()
-        assert audit.call_args.args[2] == "blocked"
-        assert "could not be checked" in audit.call_args.kwargs["reason"]
+
+    def test_an_unreadable_list_files_no_guardrail_row(self):
+        """The evidence write goes to the same database the lookup just failed
+        on, through its own connection. Trying it there buys nothing — it
+        raises too — and the only thing it can produce is a second, more
+        confusing traceback stacked on the real one. When the failure WAS the
+        lookup, log it and stop; the tool error is what the agent sees, and
+        the ERROR line is what the operator greps for.
+        """
+        from psycopg2.errors import UndefinedColumn
+
+        for exc in (
+            RuntimeError("connection refused"),
+            UndefinedColumn("column crm_people.deleted_at does not exist"),
+        ):
+            result, run, audit = _send_raising(exc)
+            assert "error" in result
+            run.assert_not_called()
+            audit.assert_not_called()
 
     def test_a_missing_column_is_a_pending_migration_not_a_refusal(self):
         """The one carve-out in the fail-closed rule.
