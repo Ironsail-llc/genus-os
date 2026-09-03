@@ -233,8 +233,12 @@ def test_all_three_arms_of_the_lookup_match_against_a_real_database(
         """,
         (willing, DEFAULT_TENANT),
     )
-    db_conn.commit()
-
+    # No commit. The DAL reads through `mock_get_connection`, which hands it
+    # THIS connection, so the uncommitted INSERTs above are visible to it —
+    # and the fixture's teardown rollback is then able to undo them. A
+    # `db_conn.commit()` here goes to the raw connection, not the no-commit
+    # wrapper, so it lands for real and leaves these rows in the test database
+    # after every run.
     blocked = do_not_contact_emails(
         [
             "DANA@example.com",  # primary, mixed case
