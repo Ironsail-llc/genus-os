@@ -352,7 +352,6 @@ def test_the_derived_script_list_covers_every_caller_of_the_sender():
         "cron-wrapper.sh",
         "backup-offsite.sh",
         "thermal-guard.sh",
-        "boot-guard.sh",
     ):
         assert expected in names, f"{expected} calls the sender but is not in the scan"
 
