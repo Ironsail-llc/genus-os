@@ -196,7 +196,11 @@ guard that has been deleted. While it is set, people who asked not to be
 contacted will be contacted.
 
 So: **if `flag_audit` shows this flag in `observe`, that is an incident to
-close, not a soak in progress.** It will never appear in the `OVERDUE` list —
+close, not a soak in progress.** Its evidence verdict is the other exception:
+`ENFORCING` needs at least one `do_not_contact` row, so on an instance where
+nobody has opted out the flag reads `INERT` indefinitely — that is the guard
+having nothing to refuse, not the guard being disconnected; probe it by
+flagging a test person and sending to them. It will never appear in the `OVERDUE` list —
 `overdue_flags` only nags flags that carry a `planned_promotion`, and this one
 deliberately has none. Nothing will remind you. Put the reason in the flip's
 `reason` field and set it back.
