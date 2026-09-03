@@ -1,3 +1,9 @@
+## [1.64.0](https://github.com/Ironsail-llc/genus-os/compare/v1.63.0...v1.64.0) (2026-09-03)
+
+### Features
+
+* **engine:** decompose the runner; gate big functions and swallows ([#461](https://github.com/Ironsail-llc/genus-os/issues/461)) ([f06d210](https://github.com/Ironsail-llc/genus-os/commit/f06d2100a182c74428c2e4a291d5f176e09f1160))
+
 ## [1.63.0](https://github.com/Ironsail-llc/genus-os/compare/v1.62.0...v1.63.0) (2026-09-03)
 
 ### Features
