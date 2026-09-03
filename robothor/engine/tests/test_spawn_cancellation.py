@@ -448,3 +448,37 @@ class TestTheRegistryEndIsWired:
 
         assert runner.finished
         assert runner.finished[-1].status is RunStatus.CANCELLED
+
+
+class TestTheSeamIsCountable:
+    """A control that silently does nothing is this repo's recurring failure.
+
+    `finalize_abandoned_child` returns None both when it did its job earlier
+    (some other frame already owns the row) and when it had no row at all —
+    the watch never claimed a session. The second is a dead seam and must be
+    visible without adding a log line to trust, so it is counted.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_unclaimed_cancellation_is_counted(self, parent_run_id):
+        from robothor.engine.spawn_cancel import finalisation_stats, finalize_abandoned_child
+
+        before = finalisation_stats()
+        finalize_abandoned_child(None, None, parent_run_id=parent_run_id, elapsed_s=1.0)
+        after = finalisation_stats()
+
+        assert after["unclaimed"] == before["unclaimed"] + 1
+        assert after["finalised"] == before["finalised"]
+
+    @pytest.mark.asyncio
+    async def test_a_real_finalisation_is_counted(self, spawn_context, child_config):
+        from robothor.engine.spawn_cancel import finalisation_stats
+
+        runner = _FakeRunner()
+        before = finalisation_stats()
+        with pytest.raises(TimeoutError):
+            await _spawn_under_parent_timeout(runner, spawn_context, child_config, tool_timeout=0.2)
+        after = finalisation_stats()
+
+        assert after["finalised"] == before["finalised"] + 1
+        assert after["unclaimed"] == before["unclaimed"]

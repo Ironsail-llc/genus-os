@@ -172,6 +172,24 @@ def _diagnostic(session: AgentSession, parent_run_id: str, elapsed_s: float) -> 
     )
 
 
+#: What this seam has actually done. A control that silently does nothing is
+#: the failure this repo keeps rediscovering — six controls once shipped
+#: built, wired, tested and inert. `unclaimed` is the dead-seam counter: a
+#: cancellation reached the spawn path with no session to finalise, which
+#: means the watch never heard about the child.
+_STATS: dict[str, int] = {
+    "cancellations": 0,
+    "finalised": 0,
+    "unclaimed": 0,
+    "already_terminal": 0,
+}
+
+
+def finalisation_stats() -> dict[str, int]:
+    """Snapshot of what the abandoned-child seam has done this process."""
+    return dict(_STATS)
+
+
 def finalize_abandoned_child(
     runner: Any,
     session: AgentSession | None,
@@ -189,13 +207,27 @@ def finalize_abandoned_child(
     and an exception here would replace the cancellation the caller must
     re-raise.
     """
+    _STATS["cancellations"] += 1
     if session is None:
+        _STATS["unclaimed"] += 1
+        logger.info(
+            "Sub-agent cancellation from parent %s had no run to finalise "
+            "(the child was never announced); seam totals: %s",
+            parent_run_id,
+            finalisation_stats(),
+        )
         return None
     try:
         run = session.run
         if run.status not in (RunStatus.PENDING, RunStatus.RUNNING):
             # Some other frame — most likely the runner's own cancel arm —
             # already owns this row. Its account is the first-hand one.
+            _STATS["already_terminal"] += 1
+            logger.info(
+                "Sub-agent run %s was already %s; leaving that account alone",
+                run.id,
+                run.status.value,
+            )
             return None
 
         seconds = int(elapsed_s)
@@ -213,6 +245,7 @@ def finalize_abandoned_child(
             finished.status.value,
             reason,
         )
+        _STATS["finalised"] += 1
         return runner._finish_run(
             finished,
             agent_config=agent_config,
