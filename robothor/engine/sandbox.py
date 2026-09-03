@@ -34,6 +34,40 @@ SANDBOX_PIDS_LIMIT = 256
 SANDBOX_WORKDIR = "/workspace"
 
 
+#: Extra attempts `Sandbox.start()` makes after the first one fails. 1 covers
+#: the observed boot race without turning a real misconfiguration into a loop.
+DEFAULT_START_RETRIES = 1
+
+#: Seconds between those attempts. Long enough for `newuidmap` and the
+#: subuid/subgid plumbing to finish coming up, short enough that a run waiting
+#: on a genuinely dead runtime finds out promptly.
+DEFAULT_START_RETRY_SECONDS = 3.0
+
+
+def _env_number(name: str, default: float) -> float:
+    """Read an operator override, falling back rather than failing closed."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("%s is not a number (%r) — using %s", name, raw, default)
+        return default
+
+
+def start_retries() -> int:
+    """How many times to retry a failed container start. 0 disables retrying."""
+    return max(0, int(_env_number("ROBOTHOR_SANDBOX_START_RETRIES", DEFAULT_START_RETRIES)))
+
+
+def start_retry_seconds() -> float:
+    """How long to wait before the retry."""
+    return max(
+        0.0, _env_number("ROBOTHOR_SANDBOX_START_RETRY_SECONDS", DEFAULT_START_RETRY_SECONDS)
+    )
+
+
 def sandbox_binary() -> str:
     """The container runtime to shell out to, safest available first.
 
@@ -253,7 +287,22 @@ class Sandbox:
         }
 
     async def start(self) -> None:
-        """Start the sandbox (container or no-op for local)."""
+        """Start the sandbox (container or no-op for local).
+
+        One bounded retry on a non-zero exit. Rootless podman needs the setuid
+        `newuidmap` helper and the invoking user's subuid/subgid ranges, and
+        early in boot that plumbing is not always ready:
+
+            newuidmap: write to uid_map failed: Operation not permitted
+
+        Seen once, twelve minutes after a reboot on 2026-09-03, and never
+        since — a boot race, which is exactly the failure a single attempt
+        turns into a dead run for an agent that declared `sandbox: docker`.
+
+        A retry, not a loop. A runtime that is genuinely misconfigured must
+        still fail with its own error: "cannot start a container" is a
+        security-relevant fact and may not be retried into silence.
+        """
         if self.mode == SandboxMode.LOCAL:
             self._started = True
             return
@@ -262,25 +311,39 @@ class Sandbox:
         self.cdp_port = cdp_port
 
         cmd = self._run_argv(workspace=self.workspace, cdp_port=cdp_port)
+        attempts = start_retries() + 1
 
-        try:
-            proc = await asyncio.to_thread(
-                subprocess.run, cmd, capture_output=True, text=True, timeout=30
-            )
-            if proc.returncode != 0:
+        for attempt in range(1, attempts + 1):
+            try:
+                proc = await asyncio.to_thread(
+                    subprocess.run, cmd, capture_output=True, text=True, timeout=30
+                )
+            except subprocess.TimeoutExpired as e:
+                raise RuntimeError("Sandbox start timed out") from e
+
+            if proc.returncode == 0:
+                self.container_id = proc.stdout.strip()[:64]
+                self.display = ":0"  # Inside container
+                self._started = True
+
+                # Wait for Xvfb to be ready
+                await asyncio.sleep(1)
+                logger.info("Sandbox started: %s (CDP port %d)", self.container_id[:12], cdp_port)
+                return
+
+            if attempt == attempts:
                 logger.error("Failed to start sandbox: %s", proc.stderr)
                 raise RuntimeError(f"Sandbox start failed: {proc.stderr}")
 
-            self.container_id = proc.stdout.strip()[:64]
-            self.display = ":0"  # Inside container
-            self._started = True
-
-            # Wait for Xvfb to be ready
-            await asyncio.sleep(1)
-            logger.info("Sandbox started: %s (CDP port %d)", self.container_id[:12], cdp_port)
-
-        except subprocess.TimeoutExpired as e:
-            raise RuntimeError("Sandbox start timed out") from e
+            delay = start_retry_seconds()
+            logger.warning(
+                "Sandbox start failed (attempt %d of %d), retrying in %.1fs: %s",
+                attempt,
+                attempts,
+                delay,
+                proc.stderr.strip(),
+            )
+            await asyncio.sleep(delay)
 
     async def exec(self, cmd: list[str], timeout: int = 30) -> dict[str, Any]:
         """Execute a command inside the sandbox.

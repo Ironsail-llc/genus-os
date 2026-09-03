@@ -106,3 +106,89 @@ async def test_a_real_container_actually_starts():
         pytest.skip("container runtime disappeared mid-test")
     finally:
         subprocess.run([binary, "rm", "-f", name], capture_output=True, timeout=30)
+
+
+class TestStartRetriesOnce:
+    """A boot race must not hard-fail a run that declared `sandbox: docker`.
+
+    2026-09-03, twelve minutes after a reboot and never since:
+
+        newuidmap: write to uid_map failed: Operation not permitted
+
+    Rootless podman needs the setuid `newuidmap` helper and the user's
+    subuid/subgid ranges; early in boot that plumbing is not always ready. A
+    single `subprocess.run` was the whole of `start()`, so one transient
+    refusal took the run with it.
+
+    One bounded retry — not a loop. A runtime that is genuinely misconfigured
+    must still fail, and fail with its own error, because "cannot start a
+    container" is a security-relevant fact that may not be retried into
+    silence. Exactly two invocations: the fake binary counts them, so a retry
+    that silently became three would fail this.
+    """
+
+    @staticmethod
+    def _fake_binary(tmp_path, fail_times: int):
+        """A runtime that refuses `fail_times` times, then succeeds."""
+        counter = tmp_path / "invocations"
+        script = tmp_path / "fake-podman"
+        script.write_text(
+            "#!/bin/sh\n"
+            f'n=$(cat "{counter}" 2>/dev/null || echo 0)\n'
+            "n=$((n+1))\n"
+            f'echo "$n" > "{counter}"\n'
+            f'if [ "$n" -le {fail_times} ]; then\n'
+            '  echo "newuidmap: write to uid_map failed: Operation not permitted" >&2\n'
+            "  exit 125\n"
+            "fi\n"
+            'echo "deadbeefcafe0123"\n'
+        )
+        script.chmod(0o755)
+        return script, counter
+
+    @staticmethod
+    def _sandbox(monkeypatch, script, retry_seconds="0"):
+        from robothor.engine.sandbox import Sandbox, SandboxMode
+
+        monkeypatch.setenv("ROBOTHOR_SANDBOX_BINARY", str(script))
+        monkeypatch.setenv("ROBOTHOR_SANDBOX_START_RETRY_SECONDS", retry_seconds)
+        return Sandbox(mode=SandboxMode.DOCKER, run_id=uuid.uuid4().hex, workspace="/tmp")
+
+    @pytest.mark.asyncio
+    async def test_one_transient_failure_is_retried_and_the_sandbox_starts(
+        self, tmp_path, monkeypatch
+    ):
+        script, counter = self._fake_binary(tmp_path, fail_times=1)
+        sb = self._sandbox(monkeypatch, script)
+
+        await sb.start()
+
+        assert sb.container_id == "deadbeefcafe0123"
+        assert sb._started is True
+        assert counter.read_text().strip() == "2", "expected exactly two invocations"
+
+    @pytest.mark.asyncio
+    async def test_a_second_failure_raises_the_original_error_class(self, tmp_path, monkeypatch):
+        script, counter = self._fake_binary(tmp_path, fail_times=2)
+        sb = self._sandbox(monkeypatch, script)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await sb.start()
+
+        assert "newuidmap" in str(excinfo.value), "the runtime's own stderr must survive"
+        assert sb._started is False
+        assert counter.read_text().strip() == "2", (
+            "one bounded retry, not a loop — a third attempt means the bound is gone"
+        )
+
+    @pytest.mark.asyncio
+    async def test_retries_can_be_turned_off(self, tmp_path, monkeypatch):
+        """The knob is real, and 0 restores the pre-fix single attempt."""
+        script, counter = self._fake_binary(tmp_path, fail_times=1)
+        monkeypatch.setenv("ROBOTHOR_SANDBOX_START_RETRIES", "0")
+        sb = self._sandbox(monkeypatch, script)
+
+        with pytest.raises(RuntimeError):
+            await sb.start()
+
+        assert counter.read_text().strip() == "1"
