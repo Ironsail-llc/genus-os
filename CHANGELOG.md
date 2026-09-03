@@ -1,3 +1,9 @@
+## [1.65.0](https://github.com/Ironsail-llc/genus-os/compare/v1.64.0...v1.65.0) (2026-09-03)
+
+### Features
+
+* **plugins:** governance before execution, a real plugin, and the CLI ([#462](https://github.com/Ironsail-llc/genus-os/issues/462)) ([370a710](https://github.com/Ironsail-llc/genus-os/commit/370a710936b9621155b17491b7f81f1efcfd82b5))
+
 ## [1.64.0](https://github.com/Ironsail-llc/genus-os/compare/v1.63.0...v1.64.0) (2026-09-03)
 
 ### Features
