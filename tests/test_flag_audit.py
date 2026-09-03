@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _spec = importlib.util.spec_from_file_location(
@@ -84,7 +86,33 @@ def test_parse_dropin_dir_missing_dir_is_empty():
     assert fa.parse_dropin_dir(Path("/nonexistent/drop-in/dir")) == {}
 
 
+# --- the ENABLED/MODE gate map is derived, never hand-maintained ------------
+
+
+def test_mode_gate_map_is_parsed_from_feature_flags_source():
+    """The ENABLED companion of each *_MODE flag is read out of
+    feature_flags.py itself.
+
+    A hand-written parallel list is how ROBOTHOR_APPROVAL_MODE would silently
+    get paired with a nonexistent ROBOTHOR_APPROVAL_ENABLED instead of its real
+    gate, ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED.
+    """
+    gates = fa.mode_gate_map()
+    assert gates["ROBOTHOR_APPROVAL_MODE"].enabled_var == "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED"
+    assert gates["ROBOTHOR_ADMISSION_MODE"].enabled_var == "ROBOTHOR_ADMISSION_ENABLED"
+    assert gates["ROBOTHOR_RIP_7_MODE"].enabled_var == "ROBOTHOR_RIP_7_ENABLED"
+    # The honesty suite is gated on its MODE alone and defaults to observe.
+    assert gates["ROBOTHOR_HONESTY_SUITE_MODE"].enabled_var is None
+    assert gates["ROBOTHOR_HONESTY_SUITE_MODE"].default == "observe"
+
+
 # --- effective value: _enforcement_mode semantics ---------------------------
+
+
+def test_effective_is_off_when_the_enabled_companion_is_falsy():
+    gates = fa.mode_gate_map()
+    resolved = {"ROBOTHOR_ADMISSION_MODE": "enforce"}  # no *_ENABLED at all
+    assert fa.effective_value("ROBOTHOR_ADMISSION_MODE", resolved, gates) == "off"
 
 
 def test_effective_is_observe_when_enabled_with_no_mode_set():
@@ -562,6 +590,29 @@ def test_every_governed_flag_is_audited(tmp_path):
     )
     audited = {r.flag for r in rows}
     assert audited >= GOVERNED_FLAGS
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "ROBOTHOR_RUN_VERIFICATION_MODE",
+        "ROBOTHOR_TOOL_VERIFY_MODE",
+        "ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE",
+        "ROBOTHOR_DELIVERABLE_CONTRACT_MODE",
+        "ROBOTHOR_HONESTY_SUITE_MODE",
+        "ROBOTHOR_BENCHMARK_SANDBOX_MODE",
+    ],
+)
+def test_newly_governed_flags_are_operator_settable_and_have_evidence(flag):
+    """These six controls shipped with a rollout ladder but were unreachable
+    from the controls API and had no evidence source — the dashboard could not
+    show them and nothing could say whether they had ever fired."""
+    from robothor.flags.evidence import EVIDENCE_SOURCES
+    from robothor.flags.store import GOVERNED_FLAGS, valid_values_for
+
+    assert flag in GOVERNED_FLAGS
+    assert flag in EVIDENCE_SOURCES
+    assert "observe" in valid_values_for(flag)
 
 
 # --- guardrail_watch wiring -------------------------------------------------
