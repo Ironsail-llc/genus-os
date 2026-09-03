@@ -66,6 +66,17 @@
 #       1 a breach was found and its page could NOT be delivered, or an SLO
 #         could NOT be evaluated at all — an inert dead-man must be loud, and
 #         the unit's OnFailure= is the only voice an unevaluated check has
+#
+#       UNEVALUATED therefore has TWO meanings, and only one of them fails the
+#       unit. An SLO whose INSTRUMENT failed (no systemctl, no database, an
+#       unreadable directory) exits 1: silence there is indistinguishable from
+#       health. An SLO that is NOT YET MEASURABLE — today only S8, on a box
+#       that booted less than its budget ago and has neither a systemd exit
+#       timestamp nor a marker — exits 0 and pages nobody: nothing is
+#       unmeasured, there is simply nothing yet to measure, and failing the
+#       unit for it would page hourly through OnFailure= for the first 26 hours
+#       of every boot. Both print the word UNEVALUATED and emit an UNEVALUATED
+#       row; neither is ever OK.
 #       2 the probe is misconfigured and cannot answer — including a tool it
 #         needs that does not resolve on PATH, which is named on stderr
 #
@@ -677,7 +688,18 @@ check_guardrail_watch() {
         # the same measurement, not a second, softer rule.
         if marker_epoch="$(guardrail_marker_epoch)"; then
             age="$(hours_since "$marker_epoch")"
-            if (( age > GUARDRAIL_WATCH_MAX_HOURS )); then
+            if (( age < 0 )); then
+                # A marker from the FUTURE is evidence of nothing. The
+                # arithmetic reads it as "completed -4h ago" — fresher than any
+                # real run, and permanently, because the condition does not age
+                # out: a dead watchdog would be reported healthier than a live
+                # one for as long as the clock stays wrong. NTP correcting a
+                # box that booted with a bad RTC does this, and so does a
+                # marker restored from a box in another zone.
+                emit "$label" "$target" "marker is dated $(( -age ))h in the FUTURE — unusable" "BREACH"
+                page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
+                    "S8 BREACHED: ${GUARDRAIL_MARKER} is dated $(( -age ))h in the FUTURE, so S8 has no usable evidence that the daily report ran — systemd's exit timestamp is empty (normal after a reboot) and the marker cannot be believed. This is CLOCK SKEW on this box, not a backup problem: check timedatectl/NTP first, then delete the marker and run robothor-guardrail-watch.service by hand. Runbook: docs/runbooks/SLOS.md (S8)." || true
+            elif (( age > GUARDRAIL_WATCH_MAX_HOURS )); then
                 emit "$label" "$target" "marker says last completed ${age}h ago (systemd has no timestamp)" "BREACH"
                 page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
                     "S8 BREACHED: robothor-guardrail-watch.service last completed ${age}h ago (budget ${GUARDRAIL_WATCH_MAX_HOURS}h), per ${GUARDRAIL_MARKER}. systemd has no exit timestamp for it, which is normal after a reboot — the marker is the surviving evidence, and it says the daily report has stopped running. Runbook: docs/runbooks/SLOS.md (S8)." || true

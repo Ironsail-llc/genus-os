@@ -895,3 +895,47 @@ class TestMainStampsTheS8Marker:
         assert (tmp_path / "slo-state" / "last-guardrail-watch").exists(), (
             "a report that found problems is still a report that ran"
         )
+
+    @pytest.mark.skipif(
+        os.geteuid() == 0, reason="root ignores the mode bits this test relies on"
+    )
+    def test_a_marker_another_account_left_behind_is_still_refreshed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The marker directory is 2775 — group-writable, setgid — because the
+        writer is not always the same account. The daily report runs as the
+        service user, but an operator debugging it runs
+        `sudo systemctl start robothor-guardrail-watch.service`, or the script
+        by hand under sudo, and leaves a root-owned marker behind.
+
+        Opening THAT file for writing then fails for the service user forever,
+        and `mark_run_completed` swallows the error by design. The marker would
+        freeze at the timestamp of whichever run happened to create it — and a
+        frozen marker is the one failure S8 cannot survive, because after 26h
+        it reads as a daily report that stopped running and pages every 12h
+        about a box that is fine.
+
+        Rename over it instead: the permission that decides a rename is on the
+        DIRECTORY, which every writer here has.
+        """
+        self._quiet(monkeypatch, tmp_path)
+        state = tmp_path / "slo-state"
+        state.mkdir(parents=True, exist_ok=True)
+        marker = state / "last-guardrail-watch"
+        stale = "2026-01-01T00:00:00+00:00"
+        marker.write_text(f"{stale} guardrail-watch\n")
+        marker.chmod(0o444)
+        assert not os.access(marker, os.W_OK), "the fixture must be unwritable in place"
+
+        gw.main()
+
+        assert marker.read_text().split()[0] != stale, (
+            "the stamp did not refresh: a marker left by another account has "
+            "frozen S8's evidence at whenever that run happened"
+        )
+        assert marker.stat().st_mode & 0o777 == 0o664, (
+            "0664 so the NEXT account to run the report can replace it too"
+        )
+        assert sorted(q.name for q in state.iterdir()) == ["last-guardrail-watch"], (
+            f"a temp file was left in the marker directory: {list(state.iterdir())}"
+        )

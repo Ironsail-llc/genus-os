@@ -961,6 +961,60 @@ class TestS8SurvivesAReboot:
 
         assert log.exists(), "an unknown uptime must not become a silent pass"
 
+    def test_a_stale_marker_beats_the_uptime_excuse(self, tmp_path: Path):
+        """Order matters, and it is not negotiable: the marker is EVIDENCE,
+        uptime is only an excuse for the ABSENCE of evidence.
+
+        A box rebooted two hours ago whose marker says the last completed run
+        was 30h back has genuinely missed a daily run — the boot is not what
+        stopped it, and the marker proves the report was capable of running on
+        this box. Checking uptime first would turn every reboot into a 26-hour
+        amnesty during which a genuinely dead watchdog pages nobody.
+        """
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        self._forgotten_stamp(tmp_path, env)
+        write_guardrail_marker(tmp_path, age_hours=30)
+        env["ROBOTHOR_SLO_UPTIME_FILE"] = str(write_uptime(tmp_path, 2))
+        log = with_recording_alert(tmp_path, env)
+
+        run_probe(env)
+
+        assert log.exists(), (
+            "a fresh boot must not excuse a marker that says the report "
+            "stopped running 30h ago — evidence outranks the excuse"
+        )
+        body = log.read_text()
+        assert "slo:guardrail-watch-stale" in body
+        assert "30" in body, body
+
+    def test_a_future_dated_marker_is_unusable_not_the_freshest_run(self, tmp_path: Path):
+        """A marker dated in the future is evidence of nothing.
+
+        `now - marker` goes negative when the clock jumps forward, when NTP
+        corrects a box that booted with a bad RTC, or when a marker is restored
+        from a box in another zone. Read arithmetically that is "completed -4h
+        ago", i.e. the freshest possible run — a dead watchdog reported as
+        healthier than a healthy one, and permanently, because the condition
+        does not age out. Unusable has to mean unusable.
+        """
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        self._forgotten_stamp(tmp_path, env)
+        write_guardrail_marker(tmp_path, age_hours=-4)
+        log = with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        assert log.exists(), "a marker from the future must never read as a fresh run"
+        body = log.read_text()
+        assert "slo:guardrail-watch-stale" in body
+        assert "future" in body.lower(), "the page must say what is wrong with the marker"
+        assert "clock" in body.lower(), "and name the cause the operator has to go fix"
+        assert "-4h" not in result.stdout, (
+            f"a negative age must never be printed as an age: {result.stdout}"
+        )
+
     def test_report_mode_shows_the_same_reasoning(self, tmp_path: Path):
         """--report is the daily surface's only view of S8, and it must not be
         a second implementation: same marker, same words."""

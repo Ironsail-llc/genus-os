@@ -1129,22 +1129,45 @@ def mark_run_completed(state_dir: str | Path | None = None) -> bool:
     pager. The failure is loud on stdout instead, because a marker that
     silently fails to write is an S8 that pages after the next reboot with
     nobody knowing why.
+
+    Write-then-rename, at 0664. The marker directory is 2775 precisely because
+    the writer is not always the same account: the unit runs as the service
+    user, but an operator debugging the report runs it by hand under sudo and
+    leaves a root-owned marker behind. Opening THAT file in place fails for the
+    service user forever, and the swallow above would hide it — the marker
+    would freeze at whenever that one run happened, and a frozen marker reads,
+    26 hours later, as a daily report that stopped running. A rename needs
+    permission on the DIRECTORY, which every writer here has, and it is atomic:
+    a probe reading the marker while this runs sees the old line or the new
+    one, never half of either.
     """
     root = Path(
         state_dir
         if state_dir is not None
         else os.environ.get("ROBOTHOR_SLO_STATE_DIR", SLO_STATE_DIR_DEFAULT)
     )
+    marker = root / GUARDRAIL_WATCH_MARKER
+    scratch = root / f".{GUARDRAIL_WATCH_MARKER}.{os.getpid()}.tmp"
     try:
         root.mkdir(parents=True, exist_ok=True)
         # With its UTC offset: a bare local time reads as hours of drift the
         # moment the box changes zone, and S8 does date arithmetic on this.
         stamp = dt.datetime.now().astimezone().isoformat(timespec="seconds")
-        (root / GUARDRAIL_WATCH_MARKER).write_text(f"{stamp} guardrail-watch\n")
+        try:
+            scratch.write_text(f"{stamp} guardrail-watch\n")
+            # Explicit, not umask: the next account to run the report has to be
+            # able to replace this one, and a 0644 marker under a stricter
+            # umask is the frozen-marker bug with extra steps.
+            scratch.chmod(0o664)
+            scratch.replace(marker)
+        finally:
+            # A scratch file left behind in the marker directory is litter the
+            # operator has to explain; os.replace consumed it on the happy path.
+            scratch.unlink(missing_ok=True)
     except OSError as exc:
         print(
             f"  WARNING: could not stamp the S8 marker at "
-            f"{root / GUARDRAIL_WATCH_MARKER}: {exc}. This run is unaffected, "
+            f"{marker}: {exc}. This run is unaffected, "
             "but S8 will have no evidence it happened once a reboot clears "
             "systemd's ExecMainExitTimestamp."
         )
