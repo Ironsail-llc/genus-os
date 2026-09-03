@@ -307,6 +307,181 @@ class TestGmailSend:
         audit.assert_not_called()
 
 
+class TestTransientDatabaseError:
+    """Fail-closed is right for a compliance flag, but it must not be brittle.
+
+    A dropped connection or a restarting Postgres is the common case, and it
+    is over in under a second. Refusing the send on the first blip converts
+    routine database churn into a mail outage — and an operator who watches
+    that happen learns to distrust the guard, which is how a control ends up
+    switched off. One bounded retry absorbs the blip; a second failure is a
+    real outage and still refuses. One retry, not a loop: a retry loop inside
+    a send path is how a transient fault becomes a hung run.
+    """
+
+    def _send_with_lookup(self, side_effect):
+        calls: list[float] = []
+        with (
+            patch("robothor.crm.dal.do_not_contact_emails", side_effect=side_effect) as lookup,
+            patch.object(gws.time, "sleep", side_effect=calls.append),
+            patch.object(gws, "_run_gws", return_value={"id": "m1"}) as run,
+            patch.object(gws, "_record_sent_email"),
+        ):
+            result = gws._handle_gws_tool(
+                "gws_gmail_send",
+                {"to": "alice@example.com", "subject": "s", "body": "b"},
+                run_id=RUN_ID,
+                tenant_id=TENANT,
+            )
+        return result, run, lookup, calls
+
+    def test_a_blip_is_retried_once_and_the_send_proceeds(self):
+        from psycopg2 import OperationalError
+
+        result, run, lookup, slept = self._send_with_lookup(
+            [OperationalError("server closed the connection unexpectedly"), set()]
+        )
+
+        assert "error" not in result
+        run.assert_called_once()
+        assert lookup.call_count == 2
+        assert slept == [gws._DNC_RETRY_DELAY_SECONDS]
+
+    def test_a_second_failure_still_refuses(self):
+        from psycopg2 import OperationalError
+
+        result, run, lookup, _ = self._send_with_lookup(
+            [
+                OperationalError("could not connect to server"),
+                OperationalError("could not connect to server"),
+            ]
+        )
+
+        assert "error" in result
+        run.assert_not_called()
+        assert lookup.call_count == 2
+
+    def test_the_retry_is_one_attempt_not_a_loop(self):
+        """A retry loop in a send path turns a transient fault into a hung run."""
+        from psycopg2 import OperationalError
+
+        _, _, lookup, slept = self._send_with_lookup(
+            OperationalError("could not connect to server")
+        )
+
+        assert lookup.call_count == 2
+        assert len(slept) == 1
+
+    def test_a_query_error_is_not_retried(self):
+        """OperationalError is the connection-level class. A ProgrammingError
+        means the query is wrong, and asking again gets the same answer."""
+        from psycopg2 import ProgrammingError
+
+        result, run, lookup, slept = self._send_with_lookup(
+            ProgrammingError("syntax error at or near")
+        )
+
+        assert "error" in result
+        run.assert_not_called()
+        assert lookup.call_count == 1
+        assert slept == []
+
+
+class TestObserveMode:
+    """The lever that makes fail-closed operable.
+
+    Fail-closed is the right default for a compliance flag, but a default with
+    no override is a default nobody can respond to: when the guard is wrong at
+    3am the only lever left is editing code, and what actually happens is that
+    someone comments out the call. `ROBOTHOR_DNC_MODE=observe` keeps the
+    control watching and writing evidence while the mail flows, which is a
+    strictly better state than the guard being deleted. It is read from the
+    environment at call time so flipping it does not need a code change, and
+    anything other than `observe` enforces.
+    """
+
+    def _send_in_mode(self, mode, lookup=_fake_lookup):
+        env = {} if mode is None else {"ROBOTHOR_DNC_MODE": mode}
+        with (
+            patch.dict(gws.os.environ, env, clear=False),
+            patch("robothor.crm.dal.do_not_contact_emails", side_effect=lookup),
+            patch.object(gws, "_run_gws", return_value={"id": "m1"}) as run,
+            patch.object(gws, "_record_sent_email"),
+            patch("robothor.engine.tracking.log_guardrail_event") as audit,
+        ):
+            if mode is None:
+                gws.os.environ.pop("ROBOTHOR_DNC_MODE", None)
+            result = gws._handle_gws_tool(
+                "gws_gmail_send",
+                {"to": "bob@example.com", "subject": "s", "body": "b"},
+                run_id=RUN_ID,
+                tenant_id=TENANT,
+            )
+        return result, run, audit
+
+    def test_observe_lets_the_send_through(self):
+        result, run, _ = self._send_in_mode("observe")
+
+        assert "error" not in result
+        run.assert_called_once()
+
+    def test_observe_still_files_the_evidence_as_observed(self):
+        """The whole point of observe is that it is not off. The row still
+        lands, naming the address, so the operator can see what enforcing
+        would have cost before turning it back on."""
+        _, _, audit = self._send_in_mode("observe")
+
+        audit.assert_called_once()
+        assert audit.call_args.args[1] == "do_not_contact"
+        assert audit.call_args.args[2] == "observed"
+        assert audit.call_args.kwargs["mode"] == "observe"
+        assert "bob@example.com" in audit.call_args.kwargs["reason"]
+
+    def test_the_default_is_enforce(self):
+        result, run, audit = self._send_in_mode(None)
+
+        assert "error" in result
+        run.assert_not_called()
+        assert audit.call_args.args[2] == "blocked"
+
+    def test_an_unrecognised_value_enforces(self):
+        """A typo in an env var must not silently disable a compliance control."""
+        for value in ("off", "disabled", "OBSERVE_ALL", ""):
+            result, run, _ = self._send_in_mode(value)
+
+            assert "error" in result, f"ROBOTHOR_DNC_MODE={value!r} must enforce"
+            run.assert_not_called()
+
+    def test_observe_is_case_and_whitespace_tolerant(self):
+        result, run, _ = self._send_in_mode("  Observe  ")
+
+        assert "error" not in result
+        run.assert_called_once()
+
+    def test_observe_also_lets_an_unreadable_list_through(self):
+        """Observe means the guard cannot stop mail, whatever its reason for
+        wanting to. A failure that refuses in observe mode would be enforce
+        wearing the wrong label."""
+        with (
+            patch.dict(gws.os.environ, {"ROBOTHOR_DNC_MODE": "observe"}, clear=False),
+            patch(
+                "robothor.crm.dal.do_not_contact_emails",
+                side_effect=RuntimeError("connection refused"),
+            ),
+            patch.object(gws, "_run_gws", return_value={"id": "m1"}) as run,
+            patch.object(gws, "_record_sent_email"),
+        ):
+            result = gws._handle_gws_tool(
+                "gws_gmail_send",
+                {"to": "alice@example.com", "subject": "s", "body": "b"},
+                run_id=RUN_ID,
+                tenant_id=TENANT,
+            )
+
+        assert "error" not in result
+        run.assert_called_once()
+
+
 _THREAD = {
     "messages": [
         {

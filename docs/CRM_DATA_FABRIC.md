@@ -130,11 +130,34 @@ files nothing (`run_id` is NOT NULL and references `agent_runs`).
 
 - A recipient absent from the CRM is **allowed**. This is an opt-out list,
   not an allow-list.
-- A lookup that fails **refuses** the send. "We could not read the opt-out
-  list" is not "nobody opted out".
-- The one exception is a missing column or table, which means the deploy
-  beat `robothor migrate`. Nobody can have been flagged before 113 applies,
-  so the send proceeds and the skipped check is logged at ERROR.
+- A call carrying no tenant **refuses**. The list is per-tenant, and reading
+  `default`'s list on a call that could not say whose it is would clear a
+  recipient who is flagged in the tenant the send actually belongs to.
+- A lookup that fails **refuses** the send, after one bounded retry (0.5s,
+  on a connection-level `OperationalError` only — a query error gets the
+  same answer the second time). "We could not read the opt-out list" is not
+  "nobody opted out". No `agent_guardrail_events` row is written on this
+  branch: that write goes to the database that just failed, so it only
+  produces a second traceback. The ERROR log line is its evidence.
+- The one exception is a missing `do_not_contact` column, which means the
+  deploy beat `robothor migrate`. Nobody can have been flagged before 113
+  applies, so the send proceeds and the skipped check is logged at ERROR.
+  The carve-out is matched on the column NAME, not on the exception class —
+  the same SQL reads `deleted_at`, `tenant_id`, `additional_emails` and
+  `contact_identifiers`, and any of those going missing is an unreadable
+  list, not a pending migration.
+
+**The lever — `ROBOTHOR_DNC_MODE`:** `enforce` (default) or `observe`, read
+from the environment at call time. In `observe` every refusal above becomes
+a WARNING plus an `agent_guardrail_events` row with action `observed` and
+mode `observe`, and the message goes out. It is documented in
+`infra/systemd/robothor.env.example`. **`observe` disables a compliance
+control** — people who asked not to be contacted will be contacted. It exists
+because a fail-closed default with no lever is one nobody can respond to: the
+alternative an operator reaches for at 3am is commenting out the call, and a
+guard that is watching and logging is strictly better than a guard that has
+been deleted. Anything unrecognised enforces, so a typo cannot switch the
+control off.
 
 **Setting it:** `PATCH /api/people/{id}` with `{"doNotContact": true}`, the
 `update_person` tool (`doNotContact`) on the MCP and engine surfaces, or

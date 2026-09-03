@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -546,6 +547,89 @@ def _run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
 
 # ── do-not-contact guard ─────────────────────────────────────────────────────
 
+#: How long the one retry waits. Long enough for a connection pool to hand
+#: back a live socket or a restarting Postgres to accept again; short enough
+#: that it is invisible next to the CLI call this guard sits in front of.
+_DNC_RETRY_DELAY_SECONDS = 0.5
+
+
+def _dnc_mode() -> str:
+    """``enforce`` (default) or ``observe``, read from the environment per call.
+
+    Fail-closed is the right default for a compliance flag, but a default with
+    no lever is one nobody can respond to: when the guard is wrong at 3am the
+    only move left is editing code, and what actually happens is that someone
+    comments out the call. ``observe`` keeps the check running and still files
+    its evidence while the mail flows — a strictly better state than the guard
+    being deleted, and one that shows what enforcing would have cost.
+
+    Read at call time, not at import, so flipping it takes an env change and a
+    restart rather than a deploy. Anything unrecognised enforces: a typo in an
+    env var must not switch off a compliance control.
+    """
+    raw = os.environ.get("ROBOTHOR_DNC_MODE", "enforce").strip().lower()
+    if raw == "observe":
+        return "observe"
+    if raw not in ("", "enforce"):
+        logger.warning("ROBOTHOR_DNC_MODE=%r is not 'enforce' or 'observe' — enforcing.", raw)
+    return "enforce"
+
+
+def _dnc_lookup(addresses: list[str], tenant_id: str) -> set[str]:
+    """Read the opt-out list, with ONE retry on a connection-level failure.
+
+    A dropped socket or a restarting Postgres is the common transient here and
+    is over in well under a second; refusing on the first blip turns routine
+    database churn into a mail outage, which is how an operator learns to
+    distrust a guard and switch it off. One attempt more, then the answer
+    stands — a retry loop inside a send path is how a transient fault becomes
+    a hung run. ``OperationalError`` only: a ``ProgrammingError`` means the
+    query is wrong, and asking again gets the same answer.
+    """
+    from psycopg2 import OperationalError
+
+    from robothor.crm.dal import do_not_contact_emails
+
+    try:
+        return do_not_contact_emails(addresses, tenant_id=tenant_id)
+    except OperationalError as exc:
+        logger.warning(
+            "do_not_contact lookup hit a connection error (%s) — one retry in %ss",
+            exc,
+            _DNC_RETRY_DELAY_SECONDS,
+        )
+        time.sleep(_DNC_RETRY_DELAY_SECONDS)
+        return do_not_contact_emails(addresses, tenant_id=tenant_id)
+
+
+def _dnc_outcome(
+    tool_name: str,
+    reason: str,
+    message: str,
+    run_id: str,
+    *,
+    record: bool = True,
+) -> dict[str, Any] | None:
+    """Turn a would-be refusal into the mode's answer: refuse, or note and pass.
+
+    ``record`` is False on the one path where the guardrail write cannot work —
+    a lookup that failed goes to the same database this write would.
+    """
+    if _dnc_mode() == "observe":
+        logger.warning(
+            "do_not_contact OBSERVE: %s would have been refused (%s) — sending anyway "
+            "because ROBOTHOR_DNC_MODE=observe.",
+            tool_name,
+            reason,
+        )
+        if record:
+            _log_dnc_block(tool_name, reason, run_id, action="observed", mode="observe")
+        return None
+
+    if record:
+        _log_dnc_block(tool_name, reason, run_id)
+    return {"error": message, "guard": "do_not_contact"}
+
 
 def _dnc_refusal(
     tool_name: str,
@@ -561,15 +645,21 @@ def _dnc_refusal(
     checked, because an opt-out honoured only on the primary To would leave
     reply-all as an open door.
 
-    Two decisions worth stating plainly, since both are the kind that quietly
-    turn a control into decoration:
+    Decisions worth stating plainly, since each is the kind that quietly turns
+    a control into decoration:
 
     * A recipient the CRM has never heard of is ALLOWED. This is an opt-out
       list, not an allow-list.
-    * A lookup that RAISES refuses the send. "We could not read the opt-out
-      list" is not "nobody opted out", and the engine writes its own run rows
-      to this same database — if it is unreachable the run is already failing,
-      so this costs a send that was not going to be recorded anyway.
+    * A call with no tenant REFUSES. The list is per-tenant; reading some
+      other tenant's list would answer a question nobody asked.
+    * A lookup that RAISES refuses the send, after one bounded retry
+      (``_dnc_lookup``). "We could not read the opt-out list" is not "nobody
+      opted out", and the engine writes its own run rows to this same
+      database — if it is unreachable the run is already failing.
+    * ``ROBOTHOR_DNC_MODE=observe`` (``_dnc_mode``) turns every one of those
+      refusals into a logged, recorded note and lets the mail go. That is the
+      lever; it exists so nobody has to reach for the one below it, which is
+      commenting out this call.
 
     The refusal is written to ``agent_guardrail_events`` so the control has
     evidence independent of this function's own log line. That write needs a
@@ -577,8 +667,6 @@ def _dnc_refusal(
     made outside a run still refuses — it just has nowhere to file the note.
     """
     from psycopg2.errors import UndefinedColumn, UndefinedTable
-
-    from robothor.crm.dal import do_not_contact_emails
 
     addresses = sorted(
         {a.lower() for field in recipient_fields for a in _EMAIL_RE.findall(field or "")}
@@ -597,20 +685,18 @@ def _dnc_refusal(
             "list to read. The caller must pass tenant_id (ToolContext.tenant_id).",
             tool_name,
         )
-        reason = "no tenant on the call — opt-out list could not be scoped"
-        _log_dnc_block(tool_name, reason, run_id)
-        return {
-            "error": (
-                f"{tool_name} refused: this call carries no tenant, so the do-not-contact "
-                "list could not be scoped and it is unknown whether a recipient has opted "
-                "out. Not sending. This is a wiring fault, not something to work around — "
-                "report it to the operator."
-            ),
-            "guard": "do_not_contact",
-        }
+        return _dnc_outcome(
+            tool_name,
+            "no tenant on the call — opt-out list could not be scoped",
+            f"{tool_name} refused: this call carries no tenant, so the do-not-contact "
+            "list could not be scoped and it is unknown whether a recipient has opted "
+            "out. Not sending. This is a wiring fault, not something to work around — "
+            "report it to the operator.",
+            run_id,
+        )
 
     try:
-        blocked = do_not_contact_emails(addresses, tenant_id=tenant)
+        blocked = _dnc_lookup(addresses, tenant)
     except (UndefinedColumn, UndefinedTable) as exc:
         # Deploy beat `robothor migrate`. Pre-113 nobody can have been flagged,
         # so there is no opt-out to honour and refusing would only manufacture
@@ -624,7 +710,7 @@ def _dnc_refusal(
         # failure this guard exists to prevent. Anything else is an unreadable
         # list, and an unreadable list refuses.
         if "do_not_contact" not in str(exc):
-            return _dnc_lookup_failed(tool_name, exc)
+            return _dnc_lookup_failed(tool_name, exc, run_id)
         logger.error(
             "do_not_contact check skipped for %s — schema predates migration 113 (%s). "
             "Run `robothor migrate` on this instance.",
@@ -633,25 +719,25 @@ def _dnc_refusal(
         )
         return None
     except Exception as exc:
-        return _dnc_lookup_failed(tool_name, exc)
+        return _dnc_lookup_failed(tool_name, exc, run_id)
 
     if not blocked:
         return None
 
     listed = ", ".join(sorted(blocked))
-    reason = f"recipients flagged do_not_contact: {listed}"
-    message = (
+    return _dnc_outcome(
+        tool_name,
+        f"recipients flagged do_not_contact: {listed}",
         f"{tool_name} refused: {listed} has opted out of contact "
         "(crm_people.do_not_contact). Do not send to this address, and do not "
         "work around it by using another channel or another address for the same "
         "person. Remove them from the recipients and try again if the message is "
-        "for someone else."
+        "for someone else.",
+        run_id,
     )
-    _log_dnc_block(tool_name, reason, run_id)
-    return {"error": message, "guard": "do_not_contact"}
 
 
-def _dnc_lookup_failed(tool_name: str, exc: BaseException) -> dict[str, Any]:
+def _dnc_lookup_failed(tool_name: str, exc: BaseException, run_id: str) -> dict[str, Any] | None:
     """Refuse a send whose opt-out lookup could not be read.
 
     Deliberately does NOT file a guardrail event. That write goes to the same
@@ -662,17 +748,25 @@ def _dnc_lookup_failed(tool_name: str, exc: BaseException) -> dict[str, Any]:
     here — only a list we could not read.
     """
     logger.error("do_not_contact lookup failed for %s: %s", tool_name, exc)
-    return {
-        "error": (
-            f"{tool_name} refused: the do-not-contact list could not be read, so it is "
-            "unknown whether a recipient has opted out. Not sending. Retry once the CRM "
-            "database is reachable, or tell the operator plainly that it did not go out."
-        ),
-        "guard": "do_not_contact",
-    }
+    return _dnc_outcome(
+        tool_name,
+        f"opt-out list could not be checked: {exc}",
+        f"{tool_name} refused: the do-not-contact list could not be read, so it is "
+        "unknown whether a recipient has opted out. Not sending. Retry once the CRM "
+        "database is reachable, or tell the operator plainly that it did not go out.",
+        run_id,
+        record=False,
+    )
 
 
-def _log_dnc_block(tool_name: str, reason: str, run_id: str) -> None:
+def _log_dnc_block(
+    tool_name: str,
+    reason: str,
+    run_id: str,
+    *,
+    action: str = "blocked",
+    mode: str = "enforce",
+) -> None:
     """File the refusal in ``agent_guardrail_events``; never raise."""
     if not run_id:
         return
@@ -682,10 +776,10 @@ def _log_dnc_block(tool_name: str, reason: str, run_id: str) -> None:
         log_guardrail_event(
             run_id,
             "do_not_contact",
-            "blocked",
+            action,
             tool_name=tool_name,
             reason=reason,
-            mode="enforce",
+            mode=mode,
         )
     except Exception as exc:  # noqa: BLE001 — evidence must never break a run
         logger.error("could not record do_not_contact guardrail event: %s", exc)
