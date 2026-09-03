@@ -161,3 +161,36 @@ class TestHandleToolCall:
         result = await handle_tool_call("create_task", {"title": "Bad budget"})
         assert result == err
         assert "id" not in result
+
+
+class TestDoNotContactSurface:
+    """The opt-out flag has to be reachable by an agent, not just by SQL.
+
+    ``get_tool_definitions`` is the single schema source for BOTH surfaces:
+    the MCP server advertises it directly, and the engine's ToolRegistry
+    converts the same definitions into function schemas
+    (``robothor/engine/tools/registry.py::_register_all``). A field missing
+    here is a field no agent can ever set.
+    """
+
+    def test_update_person_schema_exposes_the_flag(self):
+        schema = next(t for t in get_tool_definitions() if t["name"] == "update_person")
+        prop = schema["inputSchema"]["properties"]["doNotContact"]
+        assert prop["type"] == "boolean"
+
+    @pytest.mark.asyncio
+    async def test_update_person_maps_the_flag_to_the_dal(self, monkeypatch):
+        captured: dict = {}
+
+        def _fake_update_person(pid, **kwargs):
+            captured["pid"] = pid
+            captured.update(kwargs)
+            return True
+
+        import robothor.crm.dal as dal
+
+        monkeypatch.setattr(dal, "update_person", _fake_update_person)
+        result = await handle_tool_call("update_person", {"id": "p1", "doNotContact": True})
+
+        assert result == {"success": True, "id": "p1"}
+        assert captured["do_not_contact"] is True

@@ -381,6 +381,34 @@ class TestCrmCheckers:
         assert rec["verified"] is False
         assert "city" in str(rec["detail"])
 
+    async def test_do_not_contact_that_did_not_take_fails(
+        self, observe: None, evidence: Any
+    ) -> None:
+        """An opt-out the row never took is the worst possible silent success:
+        the agent reports the person removed and the next campaign mails them."""
+        row = {"id": "p1", "name": {"firstName": "Alice"}, "doNotContact": False}
+        with patch("robothor.crm.dal.get_person", return_value=row):
+            await verify_tool_result(
+                "update_person",
+                {"id": "p1", "doNotContact": True},
+                {"success": True, "id": "p1"},
+                _ctx(),
+            )
+        rec = _rows(evidence)[0]
+        assert rec["verified"] is False
+        assert "doNotContact" in str(rec["detail"])
+
+    async def test_do_not_contact_that_took_verifies(self, observe: None, evidence: Any) -> None:
+        row = {"id": "p1", "name": {"firstName": "Alice"}, "doNotContact": True}
+        with patch("robothor.crm.dal.get_person", return_value=row):
+            await verify_tool_result(
+                "update_person",
+                {"id": "p1", "doNotContact": True},
+                {"success": True, "id": "p1"},
+                _ctx(),
+            )
+        assert _rows(evidence)[0]["verified"] is True
+
     async def test_resolve_task_requires_done_status(self, observe: None, evidence: Any) -> None:
         with patch("robothor.crm.dal.get_task", return_value={"id": "t1", "status": "TODO"}):
             await verify_tool_result(

@@ -42,6 +42,9 @@ class UpdatePersonRequest(BaseModel):
     city: str | None = None
     linkedinUrl: str | None = None
     avatarUrl: str | None = None
+    # Outreach opt-out (migration 113). Tri-state on purpose: None means
+    # "not mentioned in this PATCH", True sets the flag, False clears it.
+    doNotContact: bool | None = None
 
 
 class MergeRequest(BaseModel):
