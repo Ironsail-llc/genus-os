@@ -1,3 +1,9 @@
+## [1.62.0](https://github.com/Ironsail-llc/genus-os/compare/v1.61.1...v1.62.0) (2026-09-03)
+
+### Features
+
+* **ops:** the pager tells the truth and the box audits itself ([#459](https://github.com/Ironsail-llc/genus-os/issues/459)) ([1248a79](https://github.com/Ironsail-llc/genus-os/commit/1248a795973cecaad064bc5489dcb4519129c6a3))
+
 ## [1.61.1](https://github.com/Ironsail-llc/genus-os/compare/v1.61.0...v1.61.1) (2026-09-03)
 
 ### Bug Fixes
