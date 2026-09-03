@@ -61,11 +61,17 @@ def start_retries() -> int:
     return max(0, int(_env_number("ROBOTHOR_SANDBOX_START_RETRIES", DEFAULT_START_RETRIES)))
 
 
+#: Ceiling on the retry delay. `Sandbox.start` is awaited before the run loop
+#: begins and carries no deadline of its own, so a typo here (3000, or a
+#: millisecond value left in) would stall every containerised run on the
+#: failure path while the run's own clock is already running.
+MAX_START_RETRY_SECONDS = 60.0
+
+
 def start_retry_seconds() -> float:
-    """How long to wait before the retry."""
-    return max(
-        0.0, _env_number("ROBOTHOR_SANDBOX_START_RETRY_SECONDS", DEFAULT_START_RETRY_SECONDS)
-    )
+    """How long to wait before the retry, clamped at both ends."""
+    raw = _env_number("ROBOTHOR_SANDBOX_START_RETRY_SECONDS", DEFAULT_START_RETRY_SECONDS)
+    return min(MAX_START_RETRY_SECONDS, max(0.0, raw))
 
 
 def sandbox_binary() -> str:

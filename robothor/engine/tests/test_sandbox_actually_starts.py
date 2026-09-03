@@ -280,3 +280,32 @@ class TestRetryCleansUpTheNameItLeft:
         )
         assert "attempt 2:" in message
         assert sb._started is False
+
+
+class TestTheRetryDelayIsBounded:
+    """A typo in the delay must not wedge every run that wants a sandbox.
+
+    The retry sits inside `Sandbox.start`, which the runner awaits before the
+    loop begins and under no deadline of its own. An operator writing
+    `ROBOTHOR_SANDBOX_START_RETRY_SECONDS=3000` (or leaving a millisecond
+    value in) would stall every containerised run for the better part of an
+    hour, on the failure path, with the run's own clock already running.
+    """
+
+    def test_the_delay_is_clamped_above(self, monkeypatch):
+        from robothor.engine.sandbox import MAX_START_RETRY_SECONDS, start_retry_seconds
+
+        monkeypatch.setenv("ROBOTHOR_SANDBOX_START_RETRY_SECONDS", "3000")
+        assert start_retry_seconds() == MAX_START_RETRY_SECONDS
+
+    def test_a_sane_value_is_untouched(self, monkeypatch):
+        from robothor.engine.sandbox import start_retry_seconds
+
+        monkeypatch.setenv("ROBOTHOR_SANDBOX_START_RETRY_SECONDS", "5")
+        assert start_retry_seconds() == 5.0
+
+    def test_a_negative_value_becomes_no_wait(self, monkeypatch):
+        from robothor.engine.sandbox import start_retry_seconds
+
+        monkeypatch.setenv("ROBOTHOR_SANDBOX_START_RETRY_SECONDS", "-1")
+        assert start_retry_seconds() == 0.0
