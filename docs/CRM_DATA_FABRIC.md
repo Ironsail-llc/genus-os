@@ -161,10 +161,18 @@ files nothing (`run_id` is NOT NULL and references `agent_runs`).
   `contact_identifiers`, and any of those going missing is an unreadable
   list, not a pending migration.
 
-**The lever — `ROBOTHOR_DNC_MODE`:** `enforce` (default) or `observe`, read
-from the environment at call time. In `observe` every refusal above becomes
-a WARNING plus an `agent_guardrail_events` row with action `observed` and
-mode `observe`, and the message goes out. It is documented in
+**The lever — `ROBOTHOR_DNC_MODE`:** `enforce` (default) or `observe`. It is a
+governed flag (`robothor/flags/store.py::GOVERNED_FLAGS`), so it resolves
+DB-store-first and falls back to the environment, read at call time via
+`robothor/engine/feature_flags.py::do_not_contact_mode` — which means a flip
+shows up in `/api/controls`, can be made from the dashboard, and lands in the
+flag audit log instead of being an untraceable edit on a box. In `observe`
+every refusal above becomes a WARNING plus an `agent_guardrail_events` row
+with action `observed` and mode `observe`, and the message goes out — except
+the unreadable-list branch, which files nothing for the reason given above.
+The ladder is two rungs: there is no `off` (an opt-out that can be switched
+off entirely is not a control) and no `alert` (`observe` already writes the
+row an alert rung would page on). It is documented in `infra/flags.yaml` and
 `infra/systemd/robothor.env.example`. **`observe` disables a compliance
 control** — people who asked not to be contacted will be contacted. It exists
 because a fail-closed default with no lever is one nobody can respond to: the
