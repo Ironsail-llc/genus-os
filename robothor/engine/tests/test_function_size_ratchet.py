@@ -42,7 +42,11 @@ KNOWN_LARGE: dict[str, int] = {
     # +12: run/tenant threaded onto the signature, and the do-not-contact
     # refusal at the head of both outbound-mail branches. The check itself
     # lives in _dnc_refusal; only the two call sites are in here.
-    "tools/handlers/gws.py::_handle_gws_tool": 465,
+    # 465 -> 473: gws_calendar_create is the third outbound-mail branch —
+    # Google invites every attendee by email — so it gets the same call site.
+    # Five irreducible lines (normalise the list, call, branch, return) plus
+    # three of comment; the guard itself is still in _dnc_refusal.
+    "tools/handlers/gws.py::_handle_gws_tool": 473,
     "daemon.py::main": 404,  # -14: fleet capacity init extracted to _init_fleet_capacity
     "telegram.py::_run_interactive": 384,
     "tools/handlers/benchmark.py::_benchmark_run": 370,

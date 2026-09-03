@@ -110,14 +110,28 @@ with a partial index on the TRUE rows) is the outreach opt-out. Set it when
 someone asks to be removed; clear it if they come back.
 
 **Where it is enforced:** `robothor/engine/tools/handlers/gws.py::_dnc_refusal`,
-called at the head of both outbound-mail branches of `_handle_gws_tool` —
-`gws_gmail_send` (its To and Cc) and `gws_gmail_reply` (the reply-all set
-derived from the thread, which is the branch that can address someone the
-agent never typed). Nothing reaches the `gws` CLI until the check passes.
-The lookup is `robothor/crm/dal.py::do_not_contact_emails`, which matches an
-address three ways — `crm_people.email`, the `additional_emails` JSONB list,
-and `contact_identifiers` rows on the `email` channel — so an opt-out cannot
-be sidestepped by using a person's secondary address.
+called at the head of all three branches of `_handle_gws_tool` that put a
+message in someone's inbox:
+
+| Tool | Addresses checked |
+|---|---|
+| `gws_gmail_send` | its `to` and `cc` |
+| `gws_gmail_reply` | the reply-all set derived from the thread — the branch that can address someone the agent never typed |
+| `gws_calendar_create` | its `attendees`; Google emails an invitation to each on insert and again on every edit |
+
+Nothing reaches the `gws` CLI until the check passes — for a calendar event
+that includes the dedup read. The lookup is
+`robothor/crm/dal.py::do_not_contact_emails`, which matches an address three
+ways — `crm_people.email`, the `additional_emails` JSONB list, and
+`contact_identifiers` rows on the `email` channel — so an opt-out cannot be
+sidestepped by using a person's secondary address.
+
+**Scope: email and calendar invitations only.** Telegram, SMS and chat are
+NOT enforced. A person flagged `do_not_contact` can still be reached on those
+channels, because the guard lives in the gws handler and matches on email
+addresses; extending it means resolving a person from a chat id or phone
+number at each of those senders. Anyone reading this row as "we will not
+contact them" is reading more than the control delivers.
 
 **What a block looks like:** the tool returns an error naming the address,
 and a row lands in `agent_guardrail_events` with

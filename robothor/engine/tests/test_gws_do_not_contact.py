@@ -538,6 +538,106 @@ class TestGmailReply:
         audit.assert_not_called()
 
 
+class TestCalendarInvitations:
+    """A calendar invitation is outbound mail with a different sender.
+
+    Google emails every address in `attendees` the moment the event is
+    inserted, and mails them again on every subsequent edit. Guarding
+    gws_gmail_send while leaving gws_calendar_create open would mean the
+    control refuses to write to someone and then invites them to a meeting —
+    the same person, the same inbox, a guard that only watches one door.
+    """
+
+    def _create(self, args, lookup=_fake_lookup, **kwargs):
+        kwargs.setdefault("run_id", RUN_ID)
+        kwargs.setdefault("tenant_id", TENANT)
+        with (
+            patch("robothor.crm.dal.do_not_contact_emails", side_effect=lookup),
+            patch.object(gws, "_run_gws", return_value={"id": "e1"}) as run,
+            patch.object(gws, "_record_calendar_event"),
+            patch.object(gws, "_find_duplicate_event", return_value=None),
+            patch.object(gws, "_resolve_owner_email", return_value="owner@example.com"),
+            patch("robothor.engine.tracking.log_guardrail_event") as audit,
+        ):
+            result = gws._handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Sync",
+                    "start": "2026-09-10T09:00:00-04:00",
+                    "end": "2026-09-10T09:30:00-04:00",
+                    **args,
+                },
+                **kwargs,
+            )
+        return result, run, audit
+
+    def test_a_flagged_attendee_is_refused(self):
+        result, run, _ = self._create({"attendees": ["bob@example.com"]})
+
+        assert "error" in result
+        assert result["guard"] == "do_not_contact"
+        assert "bob@example.com" in result["error"]
+        run.assert_not_called()
+
+    def test_the_refusal_is_recorded_as_a_guardrail_event(self):
+        _, _, audit = self._create({"attendees": ["bob@example.com"]})
+
+        audit.assert_called_once()
+        assert audit.call_args.args[1] == "do_not_contact"
+        assert audit.call_args.args[2] == "blocked"
+        assert audit.call_args.kwargs["tool_name"] == "gws_calendar_create"
+        assert "bob@example.com" in audit.call_args.kwargs["reason"]
+
+    def test_one_flagged_attendee_blocks_the_whole_invitation(self):
+        """Google mails the whole list at once; there is no partial send to
+        fall back on, and quietly dropping the flagged address would create a
+        meeting the caller did not ask for."""
+        result, run, _ = self._create({"attendees": ["alice@example.com", "bob@example.com"]})
+
+        assert "error" in result
+        run.assert_not_called()
+
+    def test_willing_attendees_proceed(self):
+        result, run, audit = self._create({"attendees": ["alice@example.com", "carol@example.com"]})
+
+        assert "error" not in result
+        run.assert_called_once()
+        audit.assert_not_called()
+
+    def test_an_event_with_no_attendees_is_unaffected(self):
+        """A solo block on your own calendar mails nobody. Nothing to guard."""
+        for args in ({}, {"attendees": []}, {"attendees": None}):
+            result, run, audit = self._create(args)
+
+            assert "error" not in result, f"attendees={args!r} should proceed"
+            run.assert_called_once()
+            audit.assert_not_called()
+
+    def test_a_flagged_attendee_is_refused_before_the_dedup_lookup(self):
+        """Nothing about a flagged invitation should reach the CLI, not even
+        the read that decides whether it is a duplicate."""
+        with (
+            patch("robothor.crm.dal.do_not_contact_emails", side_effect=_fake_lookup),
+            patch.object(gws, "_run_gws") as run,
+            patch.object(gws, "_record_calendar_event"),
+            patch.object(gws, "_resolve_owner_email", return_value="owner@example.com"),
+        ):
+            result = gws._handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Sync",
+                    "start": "2026-09-10T09:00:00-04:00",
+                    "end": "2026-09-10T09:30:00-04:00",
+                    "attendees": ["bob@example.com"],
+                },
+                run_id=RUN_ID,
+                tenant_id=TENANT,
+            )
+
+        assert "error" in result
+        run.assert_not_called()
+
+
 class TestWiring:
     """A guard the dispatcher never reaches is the inert shape this repo keeps
     finding. The registered handler must hand the run and tenant down."""

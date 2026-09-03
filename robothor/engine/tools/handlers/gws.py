@@ -1112,6 +1112,14 @@ def _handle_gws_tool(
         if not summary or not start or not end:
             return {"error": "summary, start, and end are required"}
 
+        # Google emails every attendee on insert and on every edit, so this is
+        # outbound mail with a different sender. Checked first, before even the
+        # dedup read, so nothing goes out for a blocked invitation.
+        attendee_emails = [e for e in (args.get("attendees") or []) if e]
+        refusal = _dnc_refusal(name, *attendee_emails, run_id=run_id, tenant_id=tenant_id)
+        if refusal is not None:
+            return refusal
+
         calendar_id = args.get("calendar_id", "primary")
         owner_email = _resolve_owner_email()
 
@@ -1119,7 +1127,7 @@ def _handle_gws_tool(
             dup = _find_duplicate_event(
                 summary=summary,
                 start=start,
-                attendees=args.get("attendees", []) or [],
+                attendees=attendee_emails,
                 calendar_id=calendar_id,
                 owner_email=owner_email,
             )
@@ -1156,7 +1164,7 @@ def _handle_gws_tool(
             event_body["description"] = args["description"]
         if args.get("location"):
             event_body["location"] = args["location"]
-        attendees = [{"email": e} for e in args.get("attendees", [])]
+        attendees = [{"email": e} for e in attendee_emails]
         if owner_email and not any(a["email"].lower() == owner_email for a in attendees):
             attendees.append({"email": owner_email})
         event_body["attendees"] = attendees
