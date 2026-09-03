@@ -688,3 +688,90 @@ class TestWiring:
 
         assert inner.call_args.kwargs["run_id"] == RUN_ID
         assert inner.call_args.kwargs["tenant_id"] == "t1"
+
+
+class TestTheRunnerAlwaysNamesATenant:
+    """The other half of the tenant refusal.
+
+    `_dnc_refusal` refuses a call that carries no tenant, because the opt-out
+    list is per-tenant and a guard may not guess whose list it is reading.
+    That is only safe while the runner actually supplies one: if the kwarg
+    were ever dropped from the dispatch call, every outbound email on the
+    instance would start refusing, and the refusal would blame a "wiring
+    fault" without saying whose. So both ends are pinned — the guard's
+    behaviour on an empty tenant (above) and the fact that the real path
+    never produces one (here).
+    """
+
+    def test_a_session_run_always_carries_a_tenant(self):
+        """AgentSession defaults tenant_id to DEFAULT_TENANT, never ''."""
+        from robothor.engine.session import AgentSession
+
+        assert AgentSession(agent_id="a").run.tenant_id
+        assert AgentSession(agent_id="a", tenant_id="tenant-a").run.tenant_id == "tenant-a"
+
+    def test_every_runner_dispatch_site_passes_the_tenant(self):
+        """Source-level, because that is the mistake being guarded against.
+
+        runner.py calls `self.registry.execute(...)` twice — once inside the
+        trace span, once without — and a kwarg is easy to add to one and
+        forget on the other. Reading the calls catches a dropped
+        `tenant_id=` that no mocked dispatch test would notice, since a
+        missing kwarg just falls back to the parameter default of "".
+        """
+        import ast
+        import inspect
+        from pathlib import Path
+
+        from robothor.engine import runner as runner_mod
+
+        tree = ast.parse(Path(inspect.getfile(runner_mod)).read_text())
+        sites = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "execute"
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "registry"
+        ]
+
+        assert sites, "no self.registry.execute(...) call found — did the dispatch move?"
+        for site in sites:
+            names = {kw.arg for kw in site.keywords}
+            assert "tenant_id" in names, (
+                f"runner.py:{site.lineno} dispatches a tool without tenant_id — "
+                "the do-not-contact guard refuses a tenant-less call, so dropping "
+                "this kwarg takes out all outbound email"
+            )
+
+    @pytest.mark.asyncio
+    async def test_the_dispatched_tool_context_has_a_non_empty_tenant(self):
+        """End to end through the real registry and dispatcher: what the
+        handler receives carries the run's tenant, not an empty string."""
+        from robothor.engine.session import AgentSession
+        from robothor.engine.tools import dispatch
+        from robothor.engine.tools.registry import ToolRegistry
+
+        session = AgentSession(agent_id="a")
+        captured: dict[str, Any] = {}
+
+        async def _capture(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
+            captured["tenant_id"] = ctx.tenant_id
+            return {"ok": True}
+
+        registry = ToolRegistry.__new__(ToolRegistry)
+        with patch.object(dispatch, "_get_handlers", return_value={"probe": _capture}):
+            await ToolRegistry.execute(
+                registry,
+                "probe",
+                {},
+                agent_id="a",
+                run_id=session.run.id,
+                tenant_id=session.run.tenant_id,
+                user_role="service",
+                timeout=0,
+            )
+
+        assert captured["tenant_id"], "a dispatched tool must never see an empty tenant"
+        assert captured["tenant_id"] == session.run.tenant_id
