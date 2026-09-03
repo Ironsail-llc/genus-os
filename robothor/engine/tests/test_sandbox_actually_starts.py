@@ -129,11 +129,17 @@ class TestStartRetriesOnce:
 
     @staticmethod
     def _fake_binary(tmp_path, fail_times: int):
-        """A runtime that refuses `fail_times` times, then succeeds."""
+        """A runtime that refuses `fail_times` times, then succeeds.
+
+        Counts START attempts only. The retry also issues a `rm -f` to free
+        the name it left behind (see TestRetryCleansUpTheNameItLeft), and
+        counting that as an attempt would make "exactly two" mean nothing.
+        """
         counter = tmp_path / "invocations"
         script = tmp_path / "fake-podman"
         script.write_text(
             "#!/bin/sh\n"
+            'if [ "$1" = "rm" ]; then exit 0; fi\n'
             f'n=$(cat "{counter}" 2>/dev/null || echo 0)\n'
             "n=$((n+1))\n"
             f'echo "$n" > "{counter}"\n'
@@ -192,3 +198,85 @@ class TestStartRetriesOnce:
             await sb.start()
 
         assert counter.read_text().strip() == "1"
+
+
+class TestRetryCleansUpTheNameItLeft:
+    """The retry reuses the identical argv, `--name sandbox-<run_id[:12]>` and all.
+
+    A container runtime can create the container and THEN fail (network setup,
+    the uid_map write, a hook). Attempt 2 then dies on
+
+        Error: creating container storage: the container name
+        "sandbox-abc123" is already in use
+
+    which is not the fault the operator needs to read: the retry converts a
+    diagnosable "newuidmap: Operation not permitted" into a name collision
+    that says nothing about why the first attempt failed. So the name is
+    cleaned up between attempts, and the final error carries attempt 1's
+    stderr alongside the last one.
+    """
+
+    @staticmethod
+    def _fake_binary(tmp_path, fail_times: int):
+        """A runtime that owns its name: `run` refuses a duplicate, `rm` frees it."""
+        counter = tmp_path / "runs"
+        held = tmp_path / "name-held"
+        script = tmp_path / "fake-podman"
+        script.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "rm" ]; then\n'
+            f'  rm -f "{held}"\n'
+            "  exit 0\n"
+            "fi\n"
+            f'if [ -f "{held}" ]; then\n'
+            '  echo "Error: creating container storage: the container name is already in use" >&2\n'
+            "  exit 125\n"
+            "fi\n"
+            f'n=$(cat "{counter}" 2>/dev/null || echo 0)\n'
+            "n=$((n+1))\n"
+            f'echo "$n" > "{counter}"\n'
+            # The container exists from here on, even if the start then fails.
+            f'touch "{held}"\n'
+            f'if [ "$n" -le {fail_times} ]; then\n'
+            '  echo "attempt $n: newuidmap: write to uid_map failed: Operation not permitted" >&2\n'
+            "  exit 125\n"
+            "fi\n"
+            'echo "deadbeefcafe0123"\n'
+        )
+        script.chmod(0o755)
+        return script, counter
+
+    @staticmethod
+    def _sandbox(monkeypatch, script):
+        from robothor.engine.sandbox import Sandbox, SandboxMode
+
+        monkeypatch.setenv("ROBOTHOR_SANDBOX_BINARY", str(script))
+        monkeypatch.setenv("ROBOTHOR_SANDBOX_START_RETRY_SECONDS", "0")
+        return Sandbox(mode=SandboxMode.DOCKER, run_id=uuid.uuid4().hex, workspace="/tmp")
+
+    @pytest.mark.asyncio
+    async def test_the_retry_frees_the_name_the_first_attempt_took(self, tmp_path, monkeypatch):
+        script, counter = self._fake_binary(tmp_path, fail_times=1)
+        sb = self._sandbox(monkeypatch, script)
+
+        await sb.start()
+
+        assert sb.container_id == "deadbeefcafe0123", (
+            "attempt 2 collided with the name attempt 1 left behind"
+        )
+        assert counter.read_text().strip() == "2"
+
+    @pytest.mark.asyncio
+    async def test_the_final_error_carries_the_first_attempts_stderr(self, tmp_path, monkeypatch):
+        script, _ = self._fake_binary(tmp_path, fail_times=2)
+        sb = self._sandbox(monkeypatch, script)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await sb.start()
+
+        message = str(excinfo.value)
+        assert "attempt 1:" in message, (
+            "the first failure is the diagnosable one and must survive the retry"
+        )
+        assert "attempt 2:" in message
+        assert sb._started is False

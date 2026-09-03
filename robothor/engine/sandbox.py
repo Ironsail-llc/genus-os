@@ -173,6 +173,12 @@ class Sandbox:
     workspace: str = ""
     _started: bool = False
 
+    @property
+    def container_name(self) -> str:
+        """The `--name` this sandbox claims. One definition, because the retry
+        has to be able to release exactly the name the run argv takes."""
+        return f"sandbox-{self.run_id[:12]}"
+
     def _run_argv(self, workspace: str, cdp_port: int | None = None) -> list[str]:
         """Build the `run` argv.
 
@@ -195,7 +201,7 @@ class Sandbox:
             "run",
             "-d",
             "--name",
-            f"sandbox-{self.run_id[:12]}",
+            self.container_name,
             "--read-only",
             "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=256m",
@@ -312,6 +318,7 @@ class Sandbox:
 
         cmd = self._run_argv(workspace=self.workspace, cdp_port=cdp_port)
         attempts = start_retries() + 1
+        first_error = ""
 
         for attempt in range(1, attempts + 1):
             try:
@@ -331,9 +338,18 @@ class Sandbox:
                 logger.info("Sandbox started: %s (CDP port %d)", self.container_id[:12], cdp_port)
                 return
 
+            stderr = proc.stderr.strip()
+            if not first_error:
+                first_error = stderr
+
             if attempt == attempts:
-                logger.error("Failed to start sandbox: %s", proc.stderr)
-                raise RuntimeError(f"Sandbox start failed: {proc.stderr}")
+                # The LAST attempt's stderr is not necessarily the diagnosable
+                # one — see _release_name below.
+                detail = stderr
+                if first_error and first_error != stderr:
+                    detail = f"{stderr} (first attempt: {first_error})"
+                logger.error("Failed to start sandbox: %s", detail)
+                raise RuntimeError(f"Sandbox start failed: {detail}")
 
             delay = start_retry_seconds()
             logger.warning(
@@ -341,9 +357,36 @@ class Sandbox:
                 attempt,
                 attempts,
                 delay,
-                proc.stderr.strip(),
+                stderr,
             )
+            await self._release_name()
             await asyncio.sleep(delay)
+
+    async def _release_name(self) -> None:
+        """Free `--name` before retrying, best effort.
+
+        The retry reuses the identical argv, name and all. A runtime can create
+        the container and THEN fail (network setup, the uid_map write, a hook),
+        so attempt 2 dies on
+
+            Error: creating container storage: the container name
+            "sandbox-abc123" is already in use
+
+        and the operator reads a name collision instead of the boot race that
+        actually happened. Nothing here may raise: this runs on a path that is
+        already failing, and a cleanup error must never replace the start
+        error the caller is about to report.
+        """
+        try:
+            await asyncio.to_thread(
+                subprocess.run,
+                [sandbox_binary(), "rm", "-f", self.container_name],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except Exception as e:  # noqa: BLE001 - cleanup must not mask the start failure
+            logger.debug("Could not remove %s before retrying: %s", self.container_name, e)
 
     async def exec(self, cmd: list[str], timeout: int = 30) -> dict[str, Any]:
         """Execute a command inside the sandbox.
