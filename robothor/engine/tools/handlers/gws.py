@@ -593,21 +593,26 @@ def _dnc_refusal(
         # Deploy beat `robothor migrate`. Pre-113 nobody can have been flagged,
         # so there is no opt-out to honour and refusing would only manufacture
         # an outage. ERROR, not debug: the window is meant to be minutes.
-        logger.error(
-            "do_not_contact check skipped for %s — schema predates migration 113 (%s). "
-            "Run `robothor migrate` on this instance.",
-            tool_name,
-            exc,
-        )
-        return None
+        #
+        # Scoped to THIS column by name, not to the exception class. The same
+        # SQL also names crm_people.deleted_at/tenant_id/additional_emails and
+        # the whole contact_identifiers table; a carve-out keyed on the type
+        # would turn any of those going missing — a botched migration, a
+        # partial restore, a rename — into a silent allow, which is the exact
+        # failure this guard exists to prevent. Anything else is an unreadable
+        # list, and an unreadable list refuses.
+        if "do_not_contact" not in str(exc):
+            reason, message = _dnc_lookup_failed(tool_name, exc)
+        else:
+            logger.error(
+                "do_not_contact check skipped for %s — schema predates migration 113 (%s). "
+                "Run `robothor migrate` on this instance.",
+                tool_name,
+                exc,
+            )
+            return None
     except Exception as exc:
-        logger.error("do_not_contact lookup failed for %s: %s", tool_name, exc)
-        reason = f"opt-out list could not be checked: {exc}"
-        message = (
-            f"{tool_name} refused: the do-not-contact list could not be read, so it is "
-            "unknown whether a recipient has opted out. Not sending. Retry once the CRM "
-            "database is reachable, or tell the operator plainly that it did not go out."
-        )
+        reason, message = _dnc_lookup_failed(tool_name, exc)
     else:
         if not blocked:
             return None
@@ -623,6 +628,17 @@ def _dnc_refusal(
 
     _log_dnc_block(tool_name, reason, run_id)
     return {"error": message, "guard": "do_not_contact"}
+
+
+def _dnc_lookup_failed(tool_name: str, exc: BaseException) -> tuple[str, str]:
+    """The reason and the tool error for a lookup that could not be read."""
+    logger.error("do_not_contact lookup failed for %s: %s", tool_name, exc)
+    return (
+        f"opt-out list could not be checked: {exc}",
+        f"{tool_name} refused: the do-not-contact list could not be read, so it is "
+        "unknown whether a recipient has opted out. Not sending. Retry once the CRM "
+        "database is reachable, or tell the operator plainly that it did not go out.",
+    )
 
 
 def _log_dnc_block(tool_name: str, reason: str, run_id: str) -> None:

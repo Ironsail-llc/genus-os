@@ -39,6 +39,23 @@ def _fake_lookup(emails, tenant_id="default"):
     return {e.strip().lower() for e in emails if e and e.strip().lower() in FLAGGED}
 
 
+def _send_raising(exc: BaseException, **kwargs: Any):
+    """Run gws_gmail_send with the CRM lookup raising `exc`."""
+    kwargs.setdefault("run_id", RUN_ID)
+    with (
+        patch("robothor.crm.dal.do_not_contact_emails", side_effect=exc),
+        patch.object(gws, "_run_gws", return_value={"id": "m1"}) as run,
+        patch.object(gws, "_record_sent_email"),
+        patch("robothor.engine.tracking.log_guardrail_event") as audit,
+    ):
+        result = gws._handle_gws_tool(
+            "gws_gmail_send",
+            {"to": "alice@example.com", "subject": "s", "body": "b"},
+            **kwargs,
+        )
+    return result, run, audit
+
+
 def _send(args: dict[str, Any], **kwargs: Any):
     """Run gws_gmail_send with the CRM lookup faked and the CLI stubbed."""
     with (
@@ -172,6 +189,37 @@ class TestGmailSend:
         assert "error" not in result
         run.assert_called_once()
         audit.assert_not_called()
+
+    def test_an_unrelated_missing_column_is_not_the_carve_out(self):
+        """The carve-out is scoped to the column the migration adds, not to
+        `UndefinedColumn` as a class.
+
+        The lookup SQL also names `crm_people.deleted_at`, `tenant_id`,
+        `additional_emails` and the whole `contact_identifiers` table. A
+        carve-out that keyed off the exception TYPE would turn any one of
+        those going missing — a botched migration, a partial restore, a
+        renamed column — into a silent allow, which is the failure this
+        guard exists to prevent. Only "the flag's own column is not there
+        yet" is a pending migration; everything else is an unreadable list.
+        """
+        from psycopg2.errors import UndefinedColumn
+
+        result, run, _ = _send_raising(
+            UndefinedColumn("column crm_people.deleted_at does not exist")
+        )
+
+        assert "error" in result
+        run.assert_not_called()
+
+    def test_a_missing_identifier_table_is_not_the_carve_out(self):
+        from psycopg2.errors import UndefinedTable
+
+        result, run, _ = _send_raising(
+            UndefinedTable('relation "contact_identifiers" does not exist')
+        )
+
+        assert "error" in result
+        run.assert_not_called()
 
     def test_no_run_id_still_refuses_but_writes_no_orphan_row(self):
         """agent_guardrail_events.run_id is NOT NULL and references agent_runs,
