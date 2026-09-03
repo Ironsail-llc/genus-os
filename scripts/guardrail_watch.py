@@ -517,6 +517,22 @@ BACKUP_STATE_DIR_DEFAULT = "/var/lib/robothor/backup-state"
 #: The one implementation of the DB-free SLOs, shared with the hourly pager.
 SLO_PROBE = REPO_ROOT / "scripts" / "slo_probe.sh"
 
+#: Where this report writes down that it finished, and under what name.
+#:
+#: S8 (scripts/slo_probe.sh) used to ask systemd alone: `ExecMainExitTimestamp`
+#: of robothor-guardrail-watch.service. That property is per-unit RUNTIME
+#: state, and a reboot empties it — so at 03:01 on 2026-09-03, hours after a
+#: boot, the hourly probe paged "no completed run on this box" while the 08:30
+#: run the day before had finished cleanly. Every reboot day produced that
+#: false page.
+#:
+#: So the run history systemd forgets is written down, on NVMe, in the same
+#: one-line `<date -Is> <identifier>` shape as scripts/backup-state.sh's
+#: markers and for the same reason: the evidence of when something last worked
+#: must outlive the thing that forgets it.
+SLO_STATE_DIR_DEFAULT = "/var/lib/robothor/slo-state"
+GUARDRAIL_WATCH_MARKER = "last-guardrail-watch"
+
 #: marker file -> (label, budget env var, default hours). Nightly tiers get 26h
 #: (a 24h cycle plus room for a late run); the base backup is weekly, and a
 #: stale one costs restore TIME rather than data, so it carries a much wider
@@ -1103,7 +1119,54 @@ def check_instance_manifests(
     return True
 
 
+def mark_run_completed(state_dir: str | Path | None = None) -> bool:
+    """Stamp "this report reached its end" where S8 can read it after a reboot.
+
+    This is BOOKKEEPING, so it never fails its caller — the same contract as
+    `backup_state_mark` in scripts/backup-state.sh. A report that genuinely ran
+    and found nothing must not come back as a failed unit because /var/lib was
+    read-only; that would fire OnFailure= and page the operator about the
+    pager. The failure is loud on stdout instead, because a marker that
+    silently fails to write is an S8 that pages after the next reboot with
+    nobody knowing why.
+    """
+    root = Path(
+        state_dir
+        if state_dir is not None
+        else os.environ.get("ROBOTHOR_SLO_STATE_DIR", SLO_STATE_DIR_DEFAULT)
+    )
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        # With its UTC offset: a bare local time reads as hours of drift the
+        # moment the box changes zone, and S8 does date arithmetic on this.
+        stamp = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        (root / GUARDRAIL_WATCH_MARKER).write_text(f"{stamp} guardrail-watch\n")
+    except OSError as exc:
+        print(
+            f"  WARNING: could not stamp the S8 marker at "
+            f"{root / GUARDRAIL_WATCH_MARKER}: {exc}. This run is unaffected, "
+            "but S8 will have no evidence it happened once a reboot clears "
+            "systemd's ExecMainExitTimestamp."
+        )
+        return False
+    return True
+
+
 def main() -> int:
+    exit_code = _run_all_checks()
+    # The run reached its end. Exit 0 (clean) and exit 1 (findings, or a
+    # partial report after a database outage) are both "this report RAN",
+    # which is the only question S8 asks — the unit is a Type=oneshot that
+    # exits 1 BY DESIGN when it has something to say.
+    #
+    # An exception propagating out of _run_all_checks() skips this line on
+    # purpose: a run that died halfway must not leave evidence that it
+    # completed, or S8 would read a crash loop as a healthy daily report.
+    mark_run_completed()
+    return exit_code
+
+
+def _run_all_checks() -> int:
     # DB-free checks run FIRST and unconditionally. 2026-08-16: this unit's
     # Persistent=true timer fired at boot before postgres was up. The
     # DB-dependent section used to run first in this function; get_connection()

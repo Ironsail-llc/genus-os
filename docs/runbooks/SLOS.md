@@ -51,7 +51,7 @@ tomorrow.
 | S6 | LLM availability | `agent_runs`, 24h: `All models failed` share, `ollama_chat/%` share | all-failed < 1%/day, local fallback < 30% | **page** `slo:llm-availability` (6h cooldown) at ≥ 5 all-failed in an hour |
 | S6 | Credential pool | `keys_from_env('OPENROUTER_API_KEY')` — the pool every model shares | ≥ 2 keys | digest line `pool size N`, never a page |
 | S7 | Workflows | `workflow_runs`, 7d, worst workflow | bad ≤ 10% | digest |
-| S8 | Guardrail-watch ran | `systemctl show robothor-guardrail-watch.service -p ExecMainExitTimestamp,ExecMainStatus,Result`, read hourly | **completed** < 26h ago (exit 1 = findings reported, still completed) | **page** `slo:guardrail-watch-stale` (12h cooldown) |
+| S8 | Guardrail-watch ran | `systemctl show robothor-guardrail-watch.service -p ExecMainExitTimestamp,ExecMainStatus,Result`, read hourly, falling back to the `last-guardrail-watch` marker (and then to uptime) after a reboot | **completed** < 26h ago (exit 1 = findings reported, still completed) | **page** `slo:guardrail-watch-stale` (12h cooldown) |
 
 S5 and S8 were both the string `OK` until the hourly probe learned to ask
 systemd. S8's evidence was the daily report printing itself — which says
@@ -177,16 +177,66 @@ reached the operator by the time S8 looks. So a fresh `ExecMainExitTimestamp`
 with `ExecMainStatus=1` is **OK** for S8; reading it as a breach meant two
 pages for one event, the second one saying the opposite of the truth.
 
-S8 breaches on exactly three states:
+S8 breaches on exactly these states:
 
 | State | Why |
 |---|---|
-| no `ExecMainExitTimestamp` | no run has ever completed on this box |
+| no `ExecMainExitTimestamp`, no marker, uptime ≥ 26h | no run has ever completed on this box |
 | `ExecMainExitTimestamp` older than 26h | the report has stopped running |
+| no `ExecMainExitTimestamp`, marker older than 26h | same, measured after a reboot |
 | `Result` in `timeout`, `signal`, `core-dump`, `watchdog` | the run stopped mid-way, so no findings page fired either |
 
 An exit status that is neither 0 nor 1 also breaches: the report has no
 vocabulary for one, so something killed it after it started.
+
+#### After a reboot: the marker, and then uptime
+
+`ExecMainExitTimestamp` is **per-unit runtime state, and a reboot empties it**.
+At 03:01 on 2026-09-03, hours after a boot, S8 read the empty property as "no
+completed run on this box" and paged — while the 08:30 run the previous morning
+had finished cleanly. Every reboot day produced that page, on the surface whose
+whole value is being believed the one time it speaks.
+
+So the run history systemd forgets is written down. On its last step,
+`scripts/guardrail_watch.py` (`mark_run_completed()`) stamps
+
+```
+/var/lib/robothor/slo-state/last-guardrail-watch
+```
+
+with one line — `<date -Is> guardrail-watch` — in the same shape, on the same
+NVMe, and for the same reason as the backup tier's last-good markers
+(`scripts/backup-state.sh`): the evidence of when something last worked must
+outlive the thing that forgets it. The directory is created by
+`infra/tmpfiles/robothor-slo-state.conf`, and `mark_run_completed()` creates it
+too if it is missing.
+
+Two properties of that stamp:
+
+- It is written when the run **finished** — exit 0 (clean) *and* exit 1
+  (findings, or a partial report after a database outage). S8 asks whether the
+  report RAN, not whether it liked what it found.
+- It is **never** written when the run died on an exception, so a crash loop
+  cannot read as a healthy daily report.
+- Stamping is bookkeeping and **never changes the exit code**. A read-only
+  `/var/lib` logs a `WARNING` on stdout and nothing else; a healthy report
+  turning into a failed unit would fire `OnFailure=` and page about the pager.
+
+S8 therefore resolves in this order:
+
+1. `ExecMainExitTimestamp` — the normal case.
+2. the marker — a reboot has cleared systemd's copy. Same 26h budget: this is a
+   second *source*, not a second, softer rule.
+3. **uptime** (`/proc/uptime`) — neither source has an answer. A box up for less
+   than 26h has not missed a daily run yet, so S8 reports
+   `UNEVALUATED — no run yet this boot (up Nh)`, in that word, and pages nobody.
+   Unlike every other `UNEVALUATED`, this one does **not** fail the unit: exit 1
+   fires the probe's own `OnFailure=`, which would page hourly for the first 26
+   hours of every boot — a louder version of the false page this replaces. Past
+   26h of uptime, or when uptime cannot be read at all, it is the breach above.
+
+Both fallbacks appear identically in `slo_probe.sh --report`, which is the only
+view the daily surface has of S8 — there is one implementation, not two.
 
 ```bash
 systemctl status robothor-guardrail-watch.timer robothor-guardrail-watch.service
@@ -252,7 +302,9 @@ variables:
 | `ROBOTHOR_SLO_OFFSITE_MAX_HOURS` | `26` | S4 offsite |
 | `ROBOTHOR_SLO_BASEBACKUP_MAX_HOURS` | `192` (8d) | S4 basebackup |
 | `ROBOTHOR_BASEBACKUP_DIR` | `/mnt/robothor-backup/robothor/basebackup` | S4 basebackup's marker-free fallback (same spelling as `pg-basebackup.sh`) |
-| `ROBOTHOR_SLO_GUARDRAIL_WATCH_MAX_HOURS` | `26` | S8 |
+| `ROBOTHOR_SLO_GUARDRAIL_WATCH_MAX_HOURS` | `26` | S8 (also the uptime below which "no run yet this boot" is not a breach) |
+| `ROBOTHOR_SLO_STATE_DIR` | `/var/lib/robothor/slo-state` | S8's `last-guardrail-watch` marker — written by `guardrail_watch.py`, read by the probe after a reboot. Both surfaces must be given the same value or the report vouches for a marker the probe never reads. |
+| `ROBOTHOR_SLO_UPTIME_FILE` | `/proc/uptime` | S8's last resort, when there is neither a timestamp nor a marker. Seamed for tests. |
 | `ROBOTHOR_SLO_LIVENESS_MAX_HOURS` | `1` | S5 |
 
 Set them in `/etc/robothor/robothor.env`, which both units load with
