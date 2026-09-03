@@ -190,3 +190,41 @@ def check_run_deliverables(run: object, session: object = None) -> DeliverableRe
     if not required:
         return None
     return check_deliverables(required)
+
+
+#: One nudge per run. An unbounded "you are not done" is a loop, and the agent
+#: may have a good reason the artifact is absent that it cannot fix by trying
+#: again.
+MAX_DELIVERABLE_NUDGES = 1
+
+
+def deliverable_nudge(session: object, nudges_used: int = 0) -> str | None:
+    """What to tell an agent that stopped short of the artifact it was asked for.
+
+    Returns None when there is nothing to say — no session, no named
+    deliverable (most runs), the artifact exists, or the nudge budget is spent.
+
+    The contract's verdict already lands in `run_finalizer`, but that runs AFTER
+    the loop: it can record a missing artifact, never prevent one. This is the
+    same verdict delivered while iterations remain. WildClawBench task_4 is the
+    case — 333 requests, 704 seconds, status "completed", nothing written — and
+    a post-hoc verdict there turns a 0.0 into a documented 0.0.
+    """
+    if session is None or nudges_used >= MAX_DELIVERABLE_NUDGES:
+        return None
+    text = str(getattr(session, "originating_message", "") or "")
+    if not text:
+        return None
+    required = required_deliverables(text)
+    if not required:
+        return None
+    report = check_deliverables(required)
+    if report.satisfied:
+        return None
+    missing = ", ".join(report.missing)
+    return (
+        "[SYSTEM] You have stopped without producing the deliverable this task "
+        f"named: {missing}. It does not exist, or is empty. If the work is done, "
+        "write it to that exact path now. If you cannot, say plainly what "
+        "prevented it — do not end as though the artifact exists."
+    )

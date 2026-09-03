@@ -8,6 +8,7 @@ Validates end-to-end correctness of audit logging:
 - Error resilience (audit failures don't break CRM operations)
 """
 
+import contextlib
 import os
 import sys
 import uuid
@@ -363,7 +364,9 @@ class TestAuditErrorResilience:
 def cleanup_test_data():
     """Clean up all test data after the session."""
     yield
-    try:
+    # Session teardown, after the last assertion: a failure here cannot fail
+    # a test, so it is stated as suppressed rather than swallowed by a bare pass.
+    with contextlib.suppress(Exception):
         import psycopg2
 
         conn = psycopg2.connect(PG_DSN)
@@ -383,5 +386,3 @@ def cleanup_test_data():
         cur.execute("DELETE FROM crm_companies WHERE name LIKE %s", (f"%{TEST_PREFIX}%",))
         conn.commit()
         conn.close()
-    except Exception:
-        pass

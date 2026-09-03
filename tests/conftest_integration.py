@@ -141,12 +141,12 @@ def _install_session_patch():
 
     # Session teardown — restore every patched site.
     for name, orig in patched:
-        try:
+        # A module that vanished from sys.modules mid-session has nothing left
+        # to restore; suppressed rather than passed so the intent is explicit.
+        with contextlib.suppress(Exception):
             module = sys.modules.get(name)
             if module is not None:
                 module.get_connection = orig
-        except Exception:
-            pass
     _constants.DEFAULT_TENANT = _saved_tenant
 
 

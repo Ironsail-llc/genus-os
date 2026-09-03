@@ -44,17 +44,30 @@ from robothor.engine.config import (
     load_agent_config,
 )
 
+# ── Log-injection sanitizer ──
+# CodeQL py/log-injection: user-controlled values (model names, error
+# messages) must not inject newlines into log output.
+from robothor.engine.context_budget import keep_context_within_budget
+
 # Re-exported for existing importers. The `as` form is what marks a name as
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
 from robothor.engine.deliverables import deadline_note, task_text_from  # noqa: E402
+from robothor.engine.error_actions import apply_error_recovery
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
+from robothor.engine.injection_screen import screen_run_prompt
+from robothor.engine.journal_resume import maybe_prepend_journal_resume
 
 # LLM dispatch/cost/streaming + the request-timeout constants now live in
 # llm_client.LLMClient (Phase A / Slice 1). AgentRunner delegates to an
 # instance of it; the historical method surface is preserved via thin
 # delegators/aliases below so existing call sites keep working unchanged.
 from robothor.engine.llm_client import LLMClient  # noqa: E402
+from robothor.engine.loop_guards import (
+    GuardState,
+    check_iteration_guards,
+    nudge_for_missing_deliverable,
+)
 from robothor.engine.models import (
     AgentConfig,
     AgentRun,
@@ -63,12 +76,9 @@ from robothor.engine.models import (
     StepType,
     TriggerType,
 )
+from robothor.engine.post_execution import apply_post_execution_guardrails
 from robothor.engine.prompts import (
-    DEEP_PLAN_PREAMBLE,
-    DEEP_PLAN_SUFFIX,
     EXECUTION_MODE_PREAMBLE,
-    PLAN_MODE_PREAMBLE,
-    PLAN_MODE_SUFFIX,
 )
 from robothor.engine.run_budget import (  # noqa: E402
     DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
@@ -81,12 +91,9 @@ from robothor.engine.run_budget import (
     proactive_compaction_threshold as proactive_compaction_threshold,
 )
 from robothor.engine.run_finalizer import RunFinalizationMixin
+from robothor.engine.run_identity import resolve_run_identity
 from robothor.engine.run_lifecycle import RunLifecycleMixin
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
-
-# ── Log-injection sanitizer ──
-# CodeQL py/log-injection: user-controlled values (model names, error
-# messages) must not inject newlines into log output.
 from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
@@ -96,8 +103,11 @@ from robothor.engine.stall_watchdog import (
     _StallWatchdog,
 )
 from robothor.engine.tool_admission import ToolAdmissionMixin  # noqa: E402
+from robothor.engine.tool_outcome import record_tool_outcome
 from robothor.engine.tools import get_registry
+from robothor.engine.toolset_prep import prepare_toolset
 from robothor.engine.tracking import create_run, update_run
+from robothor.engine.warmup_steps import record_warmup_steps
 
 #: Tools whose work is several sub-agent runs, so the agent-level per-tool cap
 #: (120s by default) is far too short. Kept at a 600s floor.
@@ -601,39 +611,20 @@ class AgentRunner(
                 return session.fail("Authentication identity required for interactive run")
 
         # ── Identity — who is this run's message addressed to? ────────────
-        # Precedence: explicit `identity` kwarg > WEBCHAT DB resolution >
-        # legacy Telegram `|sender:` trigger_detail parse (back-compat until
-        # every caller passes `identity=` explicitly). A spawn_context-carried
-        # identity (sub-agent attribution only) is folded in further below,
-        # after spawn inheritance is resolved.
-        effective_identity = identity
-        if effective_identity is None:
-            if trigger_type == TriggerType.WEBCHAT and not _is_service_caller(
-                effective_user_role, effective_user_id
-            ):
-                from robothor.identity import resolve_identity
-
-                effective_identity = resolve_identity("webchat", effective_user_id, resolved_tenant)
-            elif (
-                trigger_type == TriggerType.TELEGRAM
-                and trigger_detail
-                and "|sender:" in trigger_detail
-            ):
-                from robothor.identity import IdentityContext as _IdentityContext
-
-                _legacy_sender = trigger_detail.split("|sender:", 1)[1]
-                effective_identity = _IdentityContext(
-                    tenant_id=resolved_tenant,
-                    channel="telegram",
-                    identifier=effective_user_id,
-                    verified=bool(effective_user_id and effective_user_role),
-                    display_name=_legacy_sender,
-                    role=effective_user_role or "",
-                )
-                logger.debug(
-                    "execute: using legacy sender parse fallback for identity (agent=%s)",
-                    _sanitize(agent_id),
-                )
+        # Precedence and its reasoning live in robothor/engine/run_identity.py:
+        # explicit kwarg > webchat DB resolution > legacy Telegram `|sender:`
+        # parse. A spawn_context-carried identity (sub-agent attribution only)
+        # is folded in further below, after spawn inheritance is resolved.
+        effective_identity = resolve_run_identity(
+            identity,
+            agent_id=agent_id,
+            trigger_type=trigger_type,
+            trigger_detail=trigger_detail,
+            user_id=effective_user_id,
+            user_role=effective_user_role,
+            tenant_id=resolved_tenant,
+            is_service_caller=_is_service_caller(effective_user_role, effective_user_id),
+        )
 
         # Per-run reasoning effort → extended-thinking budget (task-local).
         from robothor.engine.model_registry import set_reasoning_effort
@@ -907,176 +898,66 @@ class AgentRunner(
         watchdog.touch("warmup_complete")
 
         # ── [INJECTION] Scan the assembled system-run prompt ──
-        # Cron/hook/workflow runs are unattended; recalled memory, skills, or
-        # context files folded into the prompt above could carry an injection.
-        # Gated by ROBOTHOR_INJECTION_SCAN_* (observe logs; enforce aborts).
-        if trigger_type in (
-            TriggerType.CRON,
-            TriggerType.HOOK,
-            TriggerType.WORKFLOW,
-        ):
-            from robothor.engine.cron_safety import (
-                CronPromptInjectionBlockedError,
-                screen_cron_prompt,
+        # robothor/engine/injection_screen.py. Cron/hook/workflow runs are
+        # unattended; recalled memory, skills or context files folded into the
+        # prompt above could carry an injection. The screen owns the ordering
+        # that makes a block auditable (terminal row inserted BEFORE the
+        # guardrail event, which is an FK to it); teardown stays here, because
+        # the watchdog token and _finish_run belong to the runner.
+        _screen = await screen_run_prompt(
+            session,
+            agent_id=agent_id,
+            trigger_type=trigger_type,
+            system_prompt=system_prompt,
+            message=message,
+        )
+        if _screen.blocked:
+            # The watchdog started before setup is normally torn down by the
+            # try/finally around the main run loop — but this return sits above
+            # that try entirely. Without an explicit stop the watchdog is
+            # orphaned: it keeps monitoring whatever task is
+            # asyncio.current_task() here (the daemon's own loop task, on an
+            # inline cron fire) and cancels it ~150s later, taking the whole
+            # daemon down (Aug 5/9).
+            watchdog.stop()
+            with contextlib.suppress(Exception):
+                _active_watchdog_var.reset(_wd_token)
+            return self._finish_run(
+                _screen.blocked_run,
+                trace=None,
+                agent_config=agent_config,
+                session=session,
+                spawn_context=spawn_context,
             )
-
-            try:
-                _inj_finding = screen_cron_prompt(
-                    f"{system_prompt}\n{message}", context=f"{trigger_type.value}:{agent_id}"
-                )
-            except CronPromptInjectionBlockedError as _inj_exc:
-                # A blocked run must leave a complete trail. Ordering matters:
-                #   1. mark the run FAILED, then INSERT it — _finish_run's
-                #      persistence is a *background* task, which a short-lived
-                #      caller (CLI) exits before it lands, stranding the row in
-                #      'pending'. Inserting the already-terminal state is the
-                #      one write guaranteed to survive.
-                #   2. log the guardrail event only after the row exists —
-                #      agent_guardrail_events.run_id is an FK to agent_runs, so
-                #      logging first violates it and the audit event is lost.
-                # Both were live defects: enforce-mode blocks were invisible to
-                # the soak report and left 'pending' runs behind.
-                _blocked_run = session.fail(f"Blocked by injection scan: {_inj_exc}")
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(create_run, _blocked_run)
-                try:
-                    from robothor.engine.tracking import log_guardrail_event
-
-                    log_guardrail_event(
-                        run_id=_blocked_run.id,
-                        guardrail_name="injection_scan",
-                        action="blocked",
-                        tool_name=None,
-                        reason=str(_inj_exc),
-                        mode="enforce",
-                        step_number=0,
-                    )
-                except Exception as _audit_exc:
-                    # A security control fired; losing its audit trail is itself
-                    # an incident. Never swallow this silently.
-                    logger.error(
-                        "injection_scan blocked run %s but the guardrail event "
-                        "could not be recorded: %s",
-                        _sanitize(_blocked_run.id),
-                        _sanitize(_audit_exc),
-                    )
-                # The watchdog started before setup (above) is normally torn
-                # down by the try/finally around the main run loop — but this
-                # return sits above that try entirely. Without an explicit
-                # stop here the watchdog is orphaned: it keeps monitoring
-                # whatever task is asyncio.current_task() at this point (the
-                # daemon's own loop task, on an inline cron fire) and cancels
-                # it ~150s later, taking the whole daemon down (Aug 5/9).
-                watchdog.stop()
-                with contextlib.suppress(Exception):
-                    _active_watchdog_var.reset(_wd_token)
-                return self._finish_run(
-                    _blocked_run,
-                    trace=None,
-                    agent_config=agent_config,
-                    session=session,
-                    spawn_context=spawn_context,
-                )
-            if _inj_finding:
-                try:
-                    from robothor.engine.tracking import log_guardrail_event
-
-                    log_guardrail_event(
-                        run_id=session.run.id,
-                        guardrail_name="injection_scan",
-                        action="observed",
-                        tool_name=None,
-                        reason=_inj_finding,
-                        mode="observe",
-                        step_number=0,
-                    )
-                except Exception as _audit_exc:  # noqa: BLE001
-                    # A control fired; losing its audit trail is itself an
-                    # incident. Never let this write fail silently.
-                    logger.error(
-                        "guardrail event could not be recorded: %s",
-                        _sanitize(_audit_exc),
-                    )
 
         # ── Warmup phase instrumentation ──────────────────────────────────────
-        # Record setup milestones as warmup_phase steps so stalls are visible
-        # in agent_run_steps instead of only in watchdog touch logs.
-        # Per-section timings from build_warmth_preamble let us pinpoint
-        # exactly which warmup section (history, memory_blocks, context_files,
-        # peers, breadcrumbs, preferences, agent_hooks) stalled — crucial for
-        # diagnosing fleet-wide warmup stalls (FIX-WARMUP-STALL task).
-        _warmup_phase_steps: list[tuple[str, int, dict[str, Any]]] = [
-            (
-                "system_prompt_build",
-                t_sys_prompt_ms,
-                {"cached": "hit" if _prompt_cache.get(agent_config.id) else "miss"},
-            ),
-            (
-                "warmup_preamble_build",
-                t_warmup_ms,
-                {
-                    "kind": warmup_kind or "none",
-                    "chars": len(warmup_preamble) if warmup_preamble else 0,
-                },
-            ),
-        ]
-        # Inject per-section timings as individual warmup_phase steps so we
-        # can pinpoint stalls at section granularity, not just total warmup ms.
-        for _sec_name, _sec_elapsed in _warmup_section_timings.items():
-            _warmup_phase_steps.append(
-                (
-                    f"warmup_section:{_sec_name}",
-                    int(_sec_elapsed * 1000),
-                    {"section": _sec_name, "slow": _sec_elapsed > 0.5},
-                )
-            )
-        for _wp_name, _wp_ms, _wp_meta in _warmup_phase_steps:
-            try:
-                _wp_step = RunStep(
-                    id=str(_uuid.uuid4()),
-                    run_id=session.run.id,
-                    step_number=0,  # pre-iteration; grader ignores step_number for warmup_phase
-                    step_type=StepType.WARMUP_PHASE,
-                    tool_name=_wp_name,
-                    tool_input={},
-                    tool_output=_wp_meta,
-                    duration_ms=_wp_ms,
-                )
-                session.run.steps.append(_wp_step)
-            except Exception as _wp_err:
-                logger.debug("warmup_phase step record failed (%s): %s", _wp_name, _wp_err)
+        # robothor/engine/warmup_steps.py. Warmup runs before the first
+        # iteration, so a stall there shows nothing in agent_run_steps — only
+        # watchdog touch logs, which nobody reads until it is already too late.
+        # Section granularity is the point: "warmup took 40s" says nothing,
+        # "memory_blocks took 39 of them" says everything.
+        record_warmup_steps(
+            session,
+            prompt_ms=t_sys_prompt_ms,
+            prompt_cached=bool(_prompt_cache.get(agent_config.id)),
+            warmup_ms=t_warmup_ms,
+            warmup_kind=warmup_kind or "",
+            warmup_chars=len(warmup_preamble) if warmup_preamble else 0,
+            section_timings=_warmup_section_timings,
+        )
 
         # ── Cross-run journal resume ──────────────────────────────────────────
-        # If the agent has resume_on_start=true and a journal_file configured,
-        # load the journal and inject it as a preamble to the message so the
-        # agent wakes up knowing exactly where it left off.
-        if (
-            trigger_type in (TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW)
-            and agent_config.resume_on_start
-            and agent_config.journal_file
-        ):
-            try:
-                from robothor.engine.journal import JournalManager
-
-                journal_state = JournalManager.load(
-                    agent_id, agent_config.journal_file, self.config.workspace
-                )
-                if journal_state:
-                    journal_preamble = JournalManager.format_resume_preamble(journal_state)
-                    message = f"{journal_preamble}\n\n{message}"
-                    logger.info(
-                        "Journal resume injected for %s: experiment=%s iteration=%d next_action=%s",
-                        _sanitize(agent_id),
-                        _sanitize(journal_state.experiment_id),
-                        journal_state.iteration,
-                        _sanitize(journal_state.next_action),
-                    )
-            except Exception as e:
-                logger.warning(
-                    "Journal resume failed for %s (non-fatal): %s",
-                    _sanitize(agent_id),
-                    _sanitize(e),
-                )
+        # robothor/engine/journal_resume.py. Only CRON/HOOK/WORKFLOW resume:
+        # an interactive run already has a human saying what it wants, and a
+        # "here is where you left off" preamble would steer it back to
+        # yesterday's task.
+        message = maybe_prepend_journal_resume(
+            message,
+            agent_id=agent_id,
+            agent_config=agent_config,
+            trigger_type=trigger_type,
+            workspace=self.config.workspace,
+        )
 
         watchdog.touch("setup_phase_complete")
         t_setup_ms = int((time.monotonic() - t_setup_start) * 1000)
@@ -1089,43 +970,23 @@ class AgentRunner(
             "hit" if _prompt_cache.get(agent_config.id) else "miss",
         )
 
-        # ── Load business adapters (external MCP servers) ──
-        try:
-            from robothor.engine.adapters import get_adapters_for_agent
-            from robothor.engine.mcp_client import configure_mcp_servers, register_adapter
-
-            # Wire up v2.mcp_servers from manifest (previously dead code)
-            if agent_config.mcp_servers:
-                configure_mcp_servers(agent_config.mcp_servers)
-
-            # Load and register business adapters
-            adapters = get_adapters_for_agent(agent_id)
-            for adapter in adapters:
-                register_adapter(adapter)
-            if adapters:
-                await self.registry.register_adapter_tools(adapters)
-        except Exception as e:
-            logger.warning("Adapter loading failed (non-fatal): %s", _sanitize(e))
+        # ── [TOOLSET] Adapters, then this run's tools and prompt wrapping ──
+        # robothor/engine/toolset_prep.py. Adapter loading is non-fatal there
+        # (a dead MCP server costs its own tools, not the run), and plan mode
+        # sandwiches the prompt — constraints BEFORE the identity, reminder
+        # AFTER — so plan rules are not buried mid-SOUL.md.
+        _prepared = await prepare_toolset(
+            self.registry,
+            agent_config,
+            agent_id=agent_id,
+            system_prompt=system_prompt,
+            readonly_mode=readonly_mode,
+            deep_plan=deep_plan,
+        )
+        tool_schemas = _prepared.tool_schemas
+        tool_names = _prepared.tool_names
+        system_prompt = _prepared.system_prompt
         watchdog.touch("adapters_loaded")
-
-        # Get filtered tools for this agent
-        if readonly_mode:
-            # Plan mode: sandwich pattern — prepend constraints BEFORE identity,
-            # append reminder AFTER, so plan rules aren't buried by SOUL.md directives.
-            tool_schemas = self.registry.build_readonly_for_agent(agent_config)
-            tool_names = self.registry.get_readonly_tool_names(agent_config)
-            if deep_plan:
-                system_prompt = DEEP_PLAN_PREAMBLE + system_prompt + DEEP_PLAN_SUFFIX
-            else:
-                # Inject actual tool names into the preamble
-                tool_list_str = (
-                    ", ".join(f"`{t}`" for t in sorted(tool_names)) if tool_names else "(none)"
-                )
-                preamble = PLAN_MODE_PREAMBLE.replace("{tool_names_placeholder}", tool_list_str)
-                system_prompt = preamble + system_prompt + PLAN_MODE_SUFFIX
-        else:
-            tool_schemas = self.registry.build_for_agent(agent_config)
-            tool_names = self.registry.get_tool_names(agent_config)
 
         watchdog.touch("tools_built")
         try:
@@ -2004,8 +1865,7 @@ class AgentRunner(
         _iteration = 0
         _pre_iteration_msg_idx = len(session.messages)
         _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
-        _runaway_alerted = False  # one-shot latch for 500K alert
-        _secret_notified = False  # one-shot latch for the credential-exposure note
+        _guard_state = GuardState()  # carries the 500K alert's one-shot latch
         _deadline_warned = False  # one-shot latch for the wrap-up note
         # ── [WALLCLOCK] the loop's own deadline — computed once, checked
         # every iteration. See the self-check below for why this exists.
@@ -2017,118 +1877,22 @@ class AgentRunner(
         )
 
         while True:
-            # ── [WALLCLOCK] The loop bounds itself ──
-            # On 2026-08-25 a run blew through its 1200s ceiling to 3110s
-            # with THREE layers silent at once: the outer asyncio.timeout,
-            # the watchdog's task.cancel(), and the deadline warning. All
-            # three live BESIDE the loop — an outer context manager, a
-            # sibling task, a message injection — and can go silent
-            # together while the loop keeps iterating. This check is the
-            # loop reading its own clock: it cannot be cancelled, starved,
-            # or unhooked without also ending the loop it is part of.
-            if _wallclock_deadline is not None and time.monotonic() >= _wallclock_deadline:
-                _reason = (
-                    f"Circuit-breaker hard timeout ({_wallclock_ceiling}s) — "
-                    f"loop self-check; last activity: "
-                    f"{self._active_watchdog.last_activity_desc if self._active_watchdog else 'unknown'}"
-                )
-                logger.warning("Run loop self-check: %s", _reason)
-                if self._active_watchdog is not None:
-                    # Trip the watchdog's flag so the cooperative check below
-                    # ends the run and execute() maps it to TIMEOUT exactly
-                    # as if the watchdog had fired.
-                    self._active_watchdog.trip(_reason)
-                else:
-                    session.record_error(_reason)
-                    return
-            # ── [STEER / INTERRUPT] live operator influence (Rip 9) ──
-            # An external caller may have set a steer (inject + continue) or an
-            # interrupt (halt) on this session via session_registry.
-            _steer_text = session.consume_pending_steer()
-            if _steer_text:
-                session.messages.append(
-                    {"role": "user", "content": f"[operator steering update]\n{_steer_text}"}
-                )
-                logger.info("Live steer injected into run %s", session.run_id)
-            # ── [INTERRUPT] Operator halt requested via interrupt_api (Rip 9 / G3) ──
-            # Consume any pending interrupt and stop the run gracefully: record a
-            # distinct terminal state (CANCELLED, not COMPLETED/FAILED, verifier
-            # skipped) AND an outcome note so the halt is visible. The message may
-            # be "" when the operator halted without text, or None if no interrupt.
-            _interrupt_msg = session.consume_interrupt()
-            if _interrupt_msg is not None:
-                note = (
-                    f"Run interrupted by operator: {_interrupt_msg}"
-                    if _interrupt_msg
-                    else "Run interrupted by operator"
-                )
-                session.messages.append({"role": "user", "content": f"[operator interrupt] {note}"})
-                session.run.outcome_notes = (
-                    f"{session.run.outcome_notes}; {note}" if session.run.outcome_notes else note
-                )
-                session.mark_interrupted(note)
-                logger.info("Run %s interrupted by operator", session.run_id)
+            # ── [GUARDS] May the loop take another iteration? ──
+            # wallclock -> steer -> interrupt -> watchdog -> runaway, in that
+            # order, in robothor/engine/loop_guards.py. The order is
+            # load-bearing (the wallclock branch TRIPS the watchdog rather than
+            # returning, so execute() maps the run to TIMEOUT rather than
+            # ERROR) and could not be asserted anywhere while it lived inline
+            # in a 1,059-line method.
+            if check_iteration_guards(
+                session,
+                agent_config,
+                watchdog=self._active_watchdog,
+                wallclock_deadline=_wallclock_deadline,
+                wallclock_ceiling=_wallclock_ceiling,
+                state=_guard_state,
+            ):
                 return
-
-            # ── [WATCHDOG] Cooperative abort — catches stalls even when task.cancel() fails ──
-            if self._active_watchdog and self._active_watchdog.should_abort:
-                logger.warning(
-                    "Run loop aborting: watchdog flagged abort — %s",
-                    self._active_watchdog.abort_reason,
-                )
-                session.record_error(self._active_watchdog.abort_reason)
-                return
-
-            # ── [RUNAWAY] Fleet-wide token guard (500K alert, 5M hard cap) ──
-            _used_tokens = (session.run.input_tokens or 0) + (session.run.output_tokens or 0)
-            if _used_tokens >= RUNAWAY_TOKEN_HARD_CAP:
-                reason = f"runaway_token_cap_hit ({_used_tokens}/{RUNAWAY_TOKEN_HARD_CAP})"
-                logger.error(
-                    "Runaway-token hard cap hit: agent=%s run=%s tokens=%d",
-                    agent_config.id,
-                    session.run_id,
-                    _used_tokens,
-                )
-                # Fire-and-forget alert — don't block the stop path. Use the task
-                # registry's spawn (not bare create_task, which the loop only
-                # weakly references and can GC before it runs — losing exactly
-                # the alert we can least afford to lose; audit 2026-05-29).
-                try:
-                    from robothor.engine.alerts import alert as _alert
-                    from robothor.engine.task_registry import get_task_registry
-
-                    get_task_registry().spawn(
-                        _alert(
-                            "critical",
-                            f"Runaway-token hard cap: {agent_config.id}",
-                            f"run_id={session.run_id} tokens={_used_tokens:,} "
-                            f"model={session.run.model_used}",
-                        ),
-                        name=f"runaway-hardcap-alert:{agent_config.id}",
-                    )
-                except Exception:
-                    logger.debug("Runaway-token alert dispatch failed", exc_info=True)
-                session.run.budget_exhausted = True
-                session.record_error(reason)
-                return
-            if not _runaway_alerted and _used_tokens >= RUNAWAY_TOKEN_ALERT:
-                _runaway_alerted = True
-                logger.warning(
-                    "Runaway-token alert: agent=%s run=%s tokens=%d",
-                    agent_config.id,
-                    session.run_id,
-                    _used_tokens,
-                )
-                try:
-                    _send_soft_runaway_alert(
-                        agent_config.id,
-                        str(session.run_id),
-                        _used_tokens,
-                        session.run.model_used,
-                        session.run.total_cost_usd or 0.0,
-                    )
-                except Exception:
-                    logger.debug("Runaway-token alert dispatch failed", exc_info=True)
 
             # ── [SAFETY VALVE] Absolute iteration cap (infinite-loop protection) ──
             # safety_cap=0 is the manifest sentinel for "no cap" (main.yaml sets
@@ -2220,89 +1984,20 @@ class AgentRunner(
             ):
                 await self._send_progress_report(session, agent_config, _iteration)
 
-            # ── [EAGER COMPRESSION] Thin previous iterations' tool results ──
-            if agent_config.eager_tool_compression and _iteration > 0:
-                chars_saved = session.thin_previous_tool_results(
-                    protect_after_index=_pre_iteration_msg_idx,
-                )
-                if chars_saved > 0:
-                    logger.debug(
-                        "Eager tool compression saved ~%d tokens",
-                        chars_saved // 4,
-                    )
-
-            # ── [PROACTIVE COMPACTION] Compress before hitting the 75% cliff ──
-            if _iteration > 0:
-                try:
-                    from robothor.engine.context import estimate_tokens, maybe_compress
-                    from robothor.engine.model_registry import get_model_limits
-
-                    est_tokens = estimate_tokens(session.messages)
-                    # G2b: size against the model that will actually be tried
-                    # next (first non-broken), not the configured primary —
-                    # otherwise a run on a smaller-window fallback compacts at
-                    # the primary's (larger) threshold and can overflow.
-                    #
-                    # Checked EVERY iteration (was every 5th): at ~10K
-                    # tokens/iteration a 5-gap overshoots the budget by half
-                    # the budget again before anyone looks, and estimate_tokens
-                    # is a cheap length sum.
-                    model_limits = get_model_limits(LLMClient.sizing_model(models, broken_models))
-                    proactive_threshold = proactive_compaction_threshold(
-                        model_limits.max_input_tokens
-                    )
-                    if est_tokens > proactive_threshold:
-                        pre_len = len(session.messages)
-
-                        # Dispatch PRE_COMPACTION hook
-                        if hook_registry:
-                            with contextlib.suppress(Exception):
-                                await hook_registry.dispatch(
-                                    HookEvent.PRE_COMPACTION,
-                                    HookContext(
-                                        event=HookEvent.PRE_COMPACTION,
-                                        agent_id=agent_config.id,
-                                        run_id=session.run_id,
-                                        metadata={
-                                            "est_tokens": est_tokens,
-                                            "threshold": proactive_threshold,
-                                            "message_count": pre_len,
-                                        },
-                                    ),
-                                )
-
-                        session.messages[:] = await maybe_compress(
-                            session.messages,
-                            models,
-                            threshold=proactive_threshold,
-                        )
-                        logger.info(
-                            "Proactive compaction at iter %d: %d→%d messages "
-                            "(est %d tokens, threshold %d)",
-                            _iteration,
-                            pre_len,
-                            len(session.messages),
-                            est_tokens,
-                            proactive_threshold,
-                        )
-
-                        # Dispatch POST_COMPACTION hook
-                        if hook_registry:
-                            with contextlib.suppress(Exception):
-                                await hook_registry.dispatch(
-                                    HookEvent.POST_COMPACTION,
-                                    HookContext(
-                                        event=HookEvent.POST_COMPACTION,
-                                        agent_id=agent_config.id,
-                                        run_id=session.run_id,
-                                        metadata={
-                                            "pre_message_count": pre_len,
-                                            "post_message_count": len(session.messages),
-                                        },
-                                    ),
-                                )
-                except Exception as e:
-                    logger.warning("Proactive compaction failed: %s", _sanitize(e))
+            # ── [CONTEXT BUDGET] Thin, then compact, before the call ──
+            # Both steps live in robothor/engine/context_budget.py. It sizes
+            # against the model that will actually be tried next (G2b), runs
+            # every iteration, and never raises — losing compaction costs
+            # money, taking the run down with it costs the work.
+            await keep_context_within_budget(
+                session,
+                agent_config,
+                iteration=_iteration,
+                models=models,
+                broken_models=broken_models,
+                hook_registry=hook_registry,
+                pre_iteration_msg_idx=_pre_iteration_msg_idx,
+            )
 
             # ── [SCRATCHPAD] Inject working state summary ──
             if scratchpad and scratchpad.should_inject():
@@ -2377,6 +2072,9 @@ class AgentRunner(
                             ),
                         }
                     )
+                    continue
+
+                if nudge_for_missing_deliverable(session):  # still owes an artifact
                     continue
                 return
 
@@ -2487,49 +2185,17 @@ class AgentRunner(
                 error_msg: str | None = result.get("error") if isinstance(result, dict) else None
 
                 # ── [GUARDRAILS] Post-execution check ──
-                if guardrail_engine and not error_msg:
-                    post_gr = guardrail_engine.check_post_execution(tool_name, result)
-                    if post_gr.action == "warned":
-                        logger.warning("Guardrail warning for %s: %s", tool_name, post_gr.reason)
-                        # And tell the AGENT. This used to be the log line
-                        # alone, which meant the platform could detect a
-                        # credential in a file the agent had just read and the
-                        # agent would never know: it carried on, published it,
-                        # and never warned the user. Detection that reaches no
-                        # one is the same shape as a control that never runs.
-                        #
-                        # Once per run, not per tool call — repeating it every
-                        # iteration would crowd out the task. The reason string
-                        # names the KIND of credential and never the value,
-                        # because this message is persisted with the
-                        # conversation.
-                        # Redact before the result reaches the model. The
-                        # agent needs to know a credential is THERE — which
-                        # file, what kind — and never needs the characters.
-                        # Without this it quotes the key back while correctly
-                        # explaining why the key is dangerous, which leaks it
-                        # into the transcript, the session store, and every
-                        # log downstream of them.
-                        if post_gr.guardrail_name == "no_sensitive_data":
-                            from robothor.engine.guardrails import redact_secrets
-
-                            result = redact_secrets(result)
-
-                        if post_gr.guardrail_name == "no_sensitive_data" and not _secret_notified:
-                            _secret_notified = True
-                            session.messages.append(
-                                {
-                                    "role": ENGINE_CONTEXT_ROLE,
-                                    "content": (
-                                        f"[SYSTEM] {post_gr.reason} Treat this as a "
-                                        "credential exposure: tell the user which file "
-                                        "or output contains it — WITHOUT repeating the "
-                                        "value — and that it should be removed from the "
-                                        "code and rotated. Do not commit, push, send, or "
-                                        "otherwise publish content containing it."
-                                    ),
-                                }
-                            )
+                # robothor/engine/post_execution.py. Redaction happens EVERY
+                # time a credential is found; the notice to the agent happens
+                # ONCE per run. Collapsing that pair the wrong way is a leak.
+                result = apply_post_execution_guardrails(
+                    session,
+                    guardrail_engine,
+                    tool_name=tool_name,
+                    result=result,
+                    error_msg=error_msg,
+                    state=_guard_state,
+                )
 
                 # ── [HOOKS] Post-tool-use lifecycle hook ──
                 if hook_registry:
@@ -2607,52 +2273,20 @@ class AgentRunner(
                 if self._active_watchdog:
                     self._active_watchdog.touch(f"tool:{tool_name}")
 
-                # ── [ERROR CLASSIFICATION] Classify error type ──
-                error_type = None
-                if error_msg:
-                    from robothor.engine.error_recovery import classify_error
-
-                    error_type = classify_error(tool_name, error_msg)
-
-                # ── [TOOL EVENTS] Log tool invocation for observability ──
-                with contextlib.suppress(Exception):
-                    from robothor.engine.tracking import log_tool_event
-
-                    log_tool_event(
-                        run_id=session.run.id,
-                        tool_name=tool_name,
-                        duration_ms=tool_elapsed,
-                        success=error_msg is None,
-                        error_type=error_type,
-                        error_message=error_msg,
-                    )
-
-                # ── [SCRATCHPAD] Record tool call ──
-                if scratchpad:
-                    # Result and args feed the no-progress detector; without
-                    # them every call looks identical and it can never fire.
-                    scratchpad.record_tool_call(
-                        tool_name,
-                        error=error_msg,
-                        result=result,
-                        tool_input=tool_args,
-                    )
-
-                # ── [CIRCUIT BREAKER] Stop calling tools that keep failing ──
-                if error_msg:
-                    _tool_failures[tool_name] = _tool_failures.get(tool_name, 0) + 1
-                    if _tool_failures[tool_name] >= 3:
-                        session.messages.append(
-                            {
-                                "role": ENGINE_CONTEXT_ROLE,
-                                "content": (
-                                    f"[SYSTEM] Tool '{tool_name}' has failed "
-                                    f"{_tool_failures[tool_name]} times this run. "
-                                    "Do NOT call it again. Find an alternative "
-                                    "approach or skip this step and move on."
-                                ),
-                            }
-                        )
+                # ── [OUTCOME] Classify, log, record, count ──
+                # robothor/engine/tool_outcome.py. The scratchpad is given the
+                # result AND the args there — they feed the no-progress
+                # detector, and without them every call looks identical.
+                error_type = record_tool_outcome(
+                    session,
+                    tool_name=tool_name,
+                    tool_args=tool_args,
+                    result=result,
+                    error_msg=error_msg,
+                    elapsed_ms=tool_elapsed,
+                    scratchpad=scratchpad,
+                    failures=_tool_failures,
+                )
 
                 # ── [TODO LIST] Emit event + verification nudge ──
                 if tool_name == "todo_write" and session.todo_list and not error_msg:
@@ -2708,83 +2342,26 @@ class AgentRunner(
                     )
 
             # ── [ERROR RECOVERY] Attempt autonomous recovery before escalation ──
-            recovery_applied = False
-            if iteration_errors and not readonly_mode:
-                from robothor.engine.error_recovery import get_recovery_action
-
-                for err_tool, err_msg, err_type in iteration_errors:
-                    if err_type is None:
-                        continue
-                    consec = escalation.consecutive_errors if escalation else 1
-                    logger.debug(
-                        "Error recovery: tool=%s type=%s consecutive=%d spawns_used=%d",
-                        err_tool,
-                        err_type,
-                        consec,
-                        _helper_spawns_used,
-                    )
-                    action = get_recovery_action(
-                        error_type=err_type,
-                        consecutive_count=consec,
-                        agent_config=agent_config,
-                        tool_name=err_tool,
-                        error_msg=err_msg,
-                        helper_spawns_used=_helper_spawns_used,
-                    )
-                    if action is None:
-                        continue
-                    logger.debug("Error recovery: action=%s for %s", action.action, err_tool)
-
-                    if action.action == "backoff":
-                        await asyncio.sleep(action.delay_seconds)
-                        session.messages.append(
-                            {
-                                "role": ENGINE_CONTEXT_ROLE,
-                                "content": f"[SYSTEM] {action.message} Retrying now.",
-                            }
-                        )
-                        recovery_applied = True
-
-                    elif action.action == "retry":
-                        session.messages.append(
-                            {
-                                "role": ENGINE_CONTEXT_ROLE,
-                                "content": f"[SYSTEM] {action.message}",
-                            }
-                        )
-                        recovery_applied = True
-
-                    elif action.action == "spawn" and agent_config.can_spawn_agents:
-                        logger.debug("Error recovery: spawning helper for %s", err_tool)
-                        helper_result = await self._spawn_recovery_helper(
-                            agent_config=agent_config,
-                            session=session,
-                            action=action,
-                            spawn_context=spawn_context,
-                            trace=trace,
-                        )
-                        if helper_result:
-                            _helper_spawns_used += 1
-                            session.messages.append(
-                                {
-                                    "role": ENGINE_CONTEXT_ROLE,
-                                    "content": (
-                                        f"[ERROR RECOVERY — Helper agent result]\n"
-                                        f"{helper_result}\n\n"
-                                        "Use this information to adjust your approach."
-                                    ),
-                                }
-                            )
-                            recovery_applied = True
-
-                    elif action.action == "inject":
-                        session.messages.append(
-                            {
-                                "role": ENGINE_CONTEXT_ROLE,
-                                "content": f"[SYSTEM — Recovery guidance] {action.message}",
-                            }
-                        )
-                        recovery_applied = True
+            # robothor/engine/error_actions.py. `applied` suppresses the error
+            # feedback below: doing both tells the agent to analyse a failure
+            # the platform has just handled.
+            _recovery = await apply_error_recovery(
+                session,
+                agent_config,
+                iteration_errors=iteration_errors,
+                escalation=escalation,
+                readonly_mode=readonly_mode,
+                helper_spawns_used=_helper_spawns_used,
+                spawn_helper=lambda action: self._spawn_recovery_helper(
+                    agent_config=agent_config,
+                    session=session,
+                    action=action,
+                    spawn_context=spawn_context,
+                    trace=trace,
+                ),
+            )
+            recovery_applied = _recovery.applied
+            _helper_spawns_used = _recovery.helper_spawns_used
 
             # ── [ERROR FEEDBACK] Inject analysis prompt on errors ──
             if iteration_errors and agent_config.error_feedback and not recovery_applied:

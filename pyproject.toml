@@ -208,10 +208,41 @@ exclude = ["brain/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "C4", "RET", "PERF",
-          "TCH", "FURB", "ERA", "PTH", "DTZ", "A"]
+          "TCH", "FURB", "ERA", "PTH", "DTZ", "A",
+          # S110 (try-except-pass) only. Every inert control found on
+          # 2026-08-27 shared one mechanism: something failed and nothing said
+          # so, and the most literal form of that is a bare `except: pass`.
+          # The worst instance swallowed the failure to PAGE that PostgreSQL
+          # was unreachable, so an outage and a broken pager looked identical.
+          # Selected repo-wide to stop new ones; the files that still hold
+          # non-control-path instances are listed below rather than blanket-
+          # suppressed, so the remaining work stays visible.
+          "S110"]
 ignore = ["E501", "SIM108", "SIM110", "SIM117", "RET504", "RET505"]
 
 [tool.ruff.lint.per-file-ignores]
+# S110 backlog (2026-08-27). These are cosmetic or best-effort swallows, NOT
+# control paths — test_control_paths_do_not_swallow.py holds the modules that
+# report trouble to a stricter standard. Listed individually so the cleanup is
+# a visible to-do rather than an erased one.
+"robothor/engine/autodream.py" = ["S110"]
+"robothor/engine/dashboards/*.py" = ["S110"]
+"robothor/engine/self_model.py" = ["S110"]
+"robothor/engine/telegram_plan_mode.py" = ["S110"]
+"robothor/engine/warmup.py" = ["S110"]
+"robothor/engine/tools/dispatch.py" = ["S110"]
+"robothor/engine/tools/handlers/*.py" = ["S110"]
+"robothor/engine/tests/*.py" = ["S110"]
+"robothor/api/orchestrator.py" = ["S110"]
+"robothor/cli/workflow.py" = ["S110"]
+"robothor/health_contract.py" = ["S110"]
+"robothor/memory/facts.py" = ["S110"]
+"robothor/memory/lifecycle.py" = ["S110"]
+"robothor/rag/web_search.py" = ["S110"]
+"robothor/setup.py" = ["S110"]
+"robothor/templates/installer.py" = ["S110"]
+"robothor/templates/manifest_checks.py" = ["S110"]
+"robothor/templates/validators.py" = ["S110"]
 "conftest.py" = ["SIM105"]
 "crm/bridge/*.py" = ["E402", "N815", "SIM105"]
 "crm/bridge/models.py" = ["N815"]
@@ -222,8 +253,8 @@ ignore = ["E501", "SIM108", "SIM110", "SIM117", "RET504", "RET505"]
 # structured record construction) — PERF401 style suggestion not worth the rewrite
 "robothor/engine/buddy_critic.py" = ["PERF401"]
 "robothor/engine/session.py" = ["PERF401"]
-"robothor/engine/telegram.py" = ["PERF401"]
-"robothor/engine/telegram_handlers.py" = ["PERF401"]
+"robothor/engine/telegram.py" = ["PERF401", "S110"]
+"robothor/engine/telegram_handlers.py" = ["PERF401", "S110"]
 # Test files: B017 blind-exception checks for DB constraint violations, N801/N802
 # test-name conventions mirror the camelCase flag being tested, A002 `id` shadows
 # builtin intentionally (matches the production field name), ERA001 commented

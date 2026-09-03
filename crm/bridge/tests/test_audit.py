@@ -13,6 +13,7 @@ Tests cover:
 - Error resilience (audit never breaks callers)
 """
 
+import contextlib
 import os
 import sys
 import uuid
@@ -379,7 +380,9 @@ def configure_robothor_audit():
 def cleanup_test_audit_entries():
     """Clean up test audit entries after the session."""
     yield
-    try:
+    # Session teardown, after the last assertion: a failure here cannot fail a
+    # test, so it is stated as suppressed rather than swallowed by a bare pass.
+    with contextlib.suppress(Exception):
         import psycopg2
 
         conn = psycopg2.connect("dbname=robothor_memory user=robothor host=/var/run/postgresql")
@@ -389,5 +392,3 @@ def cleanup_test_audit_entries():
         cur.execute("DELETE FROM telemetry WHERE service LIKE 'test%'")
         conn.commit()
         conn.close()
-    except Exception:
-        pass

@@ -19,83 +19,117 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from robothor.engine.cron_safety import CronPromptInjectionBlockedError
-from robothor.engine.models import RunStatus
+from robothor.engine.models import RunStatus, TriggerType
 
 
 class TestInjectionBlockAuditTrail:
-    def test_guardrail_event_is_logged_after_the_run_row_exists(self):
-        """The event write must not precede the run insert (FK ordering)."""
-        from robothor.engine import runner as runner_mod
+    """These were source greps over `execute`, because the ordering they check
+    could not be observed from outside a 1,100-line method. It moved to
+    `injection_screen`, where the calls can simply be watched — so they are
+    behavioural now. The reasoning each one encodes is a live incident and is
+    kept verbatim.
+    """
 
-        body = Path(runner_mod.__file__).read_text()
+    @staticmethod
+    async def _block_a_run():
+        """Drive a real block and return the call order plus the failed run."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
 
-        block_start = body.index("except CronPromptInjectionBlockedError as _inj_exc:")
-        block_end = body.index("if _inj_finding:", block_start)
-        block = body[block_start:block_end]
+        from robothor.engine.cron_safety import CronPromptInjectionBlockedError
+        from robothor.engine.injection_screen import screen_run_prompt
 
-        create_pos = block.index("create_run")
-        log_pos = block.index("log_guardrail_event(")
-        assert create_pos < log_pos, (
-            "log_guardrail_event() runs before create_run() persists the run row — "
-            "the agent_guardrail_events.run_id FK will violate and the audit "
-            "event will be silently dropped"
+        order: list[str] = []
+        failed = SimpleNamespace(id="blocked-1", status=RunStatus.FAILED)
+        session = SimpleNamespace(
+            run=SimpleNamespace(id="run-1"),
+            fail=lambda reason: (order.append("fail"), failed)[1],
         )
+        with (
+            patch(
+                "robothor.engine.cron_safety.screen_cron_prompt",
+                side_effect=CronPromptInjectionBlockedError("ignore previous"),
+            ),
+            patch(
+                "robothor.engine.tracking.create_run",
+                side_effect=lambda r: order.append("insert"),
+            ),
+            patch(
+                "robothor.engine.tracking.log_guardrail_event",
+                side_effect=lambda **k: order.append("audit"),
+            ),
+        ):
+            verdict = await screen_run_prompt(
+                session,
+                agent_id="crm-hygiene",
+                trigger_type=TriggerType.CRON,
+                system_prompt="SOUL",
+                message="do the thing",
+            )
+        return order, verdict
 
-    def test_blocked_event_write_failure_is_logged_not_swallowed(self):
-        """A failed audit write must surface in the log, not vanish.
+    async def test_guardrail_event_is_logged_after_the_run_row_exists(self):
+        """The event write must not precede the run insert (FK ordering).
 
-        (``create_run`` may still be best-effort — it is the *audit* write whose
-        failure must never be silent.)
+        `agent_guardrail_events.run_id` is an FK to `agent_runs`. Logging first
+        violates it and the audit event is silently dropped.
         """
-        from robothor.engine import runner as runner_mod
+        order, _ = await self._block_a_run()
 
-        body = Path(runner_mod.__file__).read_text()
+        assert order.index("insert") < order.index("audit")
 
-        block_start = body.index("except CronPromptInjectionBlockedError as _inj_exc:")
-        block_end = body.index("if _inj_finding:", block_start)
-        block = body[block_start:block_end]
-
-        log_pos = block.index("log_guardrail_event(")
-        preceding = block[:log_pos]
-        # the audit call must sit under a real try/except, not a blanket suppress
-        assert (
-            preceding.rstrip().endswith(("import log_guardrail_event", "log_guardrail_event"))
-            or "try:" in preceding
-        ), "audit write is not inside an explicit try block"
-
-        suppress_before_audit = preceding.rfind("contextlib.suppress(Exception)")
-        try_before_audit = preceding.rfind("try:")
-        assert try_before_audit > suppress_before_audit, (
-            "log_guardrail_event() still sits under contextlib.suppress — a "
-            "failed audit write for a fired security control would be silent"
-        )
-        assert "logger.error" in block, (
-            "no logger.error on the audit-failure path; a lost guardrail event must be reported"
-        )
-
-    def test_run_is_marked_failed_before_it_is_inserted(self):
+    async def test_run_is_marked_failed_before_it_is_inserted(self):
         """The INSERT must carry the terminal status.
 
-        ``_finish_run`` persists in a *background* task; a short-lived caller
+        `_finish_run` persists in a *background* task; a short-lived caller
         (the CLI) exits before it lands, so a row inserted as 'pending' stays
         'pending' forever. Inserting the already-failed run is the only write
         guaranteed to survive.
         """
-        from robothor.engine import runner as runner_mod
+        order, verdict = await self._block_a_run()
 
-        body = Path(runner_mod.__file__).read_text()
+        assert order.index("fail") < order.index("insert")
+        assert verdict.blocked_run.status == RunStatus.FAILED
 
-        block_start = body.index("except CronPromptInjectionBlockedError as _inj_exc:")
-        block_end = body.index("if _inj_finding:", block_start)
-        block = body[block_start:block_end]
+    async def test_blocked_event_write_failure_is_logged_not_swallowed(self, caplog):
+        """A failed audit write must surface in the log, not vanish.
 
-        fail_pos = block.index("session.fail(")
-        create_pos = block.index("create_run")
-        assert fail_pos < create_pos, (
-            "create_run() runs before session.fail() — the run row is inserted "
-            "as 'pending' and, because _finish_run persists in the background, "
-            "a CLI-invoked blocked run never reaches a terminal status"
+        (`create_run` may still be best-effort — it is the *audit* write whose
+        failure must never be silent: a security control fired.)
+        """
+        import logging
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from robothor.engine.cron_safety import CronPromptInjectionBlockedError
+        from robothor.engine.injection_screen import screen_run_prompt
+
+        session = SimpleNamespace(
+            run=SimpleNamespace(id="run-1"),
+            fail=lambda reason: SimpleNamespace(id="blocked-1", status=RunStatus.FAILED),
         )
+        with (
+            patch(
+                "robothor.engine.cron_safety.screen_cron_prompt",
+                side_effect=CronPromptInjectionBlockedError("ignore previous"),
+            ),
+            patch("robothor.engine.tracking.create_run"),
+            patch(
+                "robothor.engine.tracking.log_guardrail_event",
+                side_effect=RuntimeError("db gone"),
+            ),
+            caplog.at_level(logging.ERROR),
+        ):
+            verdict = await screen_run_prompt(
+                session,
+                agent_id="crm-hygiene",
+                trigger_type=TriggerType.CRON,
+                system_prompt="SOUL",
+                message="do the thing",
+            )
+
+        assert verdict.blocked is True, "a lost audit write must not unblock the run"
+        assert any("could not be recorded" in r.getMessage() for r in caplog.records)
 
     def test_watchdog_is_stopped_before_the_injection_block_return(self):
         """The stall watchdog started for this run must not survive the block.
@@ -108,12 +142,15 @@ class TestInjectionBlockAuditTrail:
         that moment — the daemon's own long-running loop task — and cancels
         it ~150s later, taking the whole daemon down (Aug 5/9 crashes).
         """
+        # Teardown deliberately stayed in the RUNNER when the screening logic
+        # moved out: the watchdog token and _finish_run belong to it, and a
+        # screening function has no business ending a run.
         from robothor.engine import runner as runner_mod
 
         body = Path(runner_mod.__file__).read_text()
 
-        block_start = body.index("except CronPromptInjectionBlockedError as _inj_exc:")
-        block_end = body.index("if _inj_finding:", block_start)
+        block_start = body.index("if _screen.blocked:")
+        block_end = body.index("# ── Warmup phase instrumentation", block_start)
         block = body[block_start:block_end]
 
         return_pos = block.index("return self._finish_run(")

@@ -300,10 +300,20 @@ class TestHardCapAlwaysPages:
         # Soft-alert state is untouched by anything outside
         # _send_soft_runaway_alert — a hard-cap alert() call elsewhere in
         # the loop never reads or mutates _soft_runaway_window_started_at.
+        # Soft-alert state is untouched by anything outside
+        # _send_soft_runaway_alert — a hard-cap alert() call never reads or
+        # mutates _soft_runaway_window_started_at, so a run that blows the hard
+        # cap pages even if a soft alert already fired in this window.
+        #
+        # The guard moved out of `_run_loop` into `loop_guards` when that
+        # 1,059-line method was decomposed; the assertion follows it rather
+        # than being dropped.
         import inspect
 
-        source = inspect.getsource(runner_module.AgentRunner._run_loop)
-        start = source.index("RUNAWAY_TOKEN_HARD_CAP")
+        from robothor.engine import loop_guards
+
+        source = inspect.getsource(loop_guards._runaway)
+        start = source.index("used >= RUNAWAY_TOKEN_HARD_CAP")  # the comparison, not the import
         end = source.index("RUNAWAY_TOKEN_ALERT", start)
         hard_cap_block = source[start:end]
         assert "_send_soft_runaway_alert" not in hard_cap_block

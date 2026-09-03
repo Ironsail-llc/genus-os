@@ -21,6 +21,7 @@ keep.
 from __future__ import annotations
 
 import ast
+import functools
 from pathlib import Path
 
 from robothor.plugins.loader import _GROUPS, PluginSet
@@ -41,6 +42,33 @@ def _production_files() -> list[Path]:
     ]
 
 
+@functools.cache
+def _bound_trees() -> tuple[tuple[Path, ast.AST, frozenset[str]], ...]:
+    """Every production file that binds a name to load_plugins(...), parsed ONCE.
+
+    The first version re-parsed the whole package for every declared group;
+    on a slow CI runner that crossed pytest-timeout's 30s and failed main.
+    """
+    out: list[tuple[Path, ast.AST, frozenset[str]]] = []
+    for path in _production_files():
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            continue
+        bound: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+                fn = node.value.func
+                name = getattr(fn, "id", None) or getattr(fn, "attr", None)
+                if name == "load_plugins":
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            bound.add(target.id)
+        if bound:
+            out.append((path, tree, frozenset(bound)))
+    return tuple(out)
+
+
 def _readers_of(attribute: str) -> list[str]:
     """Production files that read `<result of load_plugins()>.<attribute>`.
 
@@ -51,25 +79,7 @@ def _readers_of(attribute: str) -> list[str]:
     that anything reads it.
     """
     hits: list[str] = []
-    for path in _production_files():
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, SyntaxError):
-            continue
-
-        # names bound to the result of load_plugins(...)
-        bound: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-                fn = node.value.func
-                name = getattr(fn, "id", None) or getattr(fn, "attr", None)
-                if name == "load_plugins":
-                    for target in node.targets:
-                        if isinstance(target, ast.Name):
-                            bound.add(target.id)
-
-        if not bound:
-            continue
+    for path, tree, bound in _bound_trees():
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Attribute)
