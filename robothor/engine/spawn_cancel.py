@@ -246,12 +246,15 @@ def finalize_abandoned_child(
             reason,
         )
         _STATS["finalised"] += 1
-        return runner._finish_run(
+        # runner._finish_run is untyped at its definition; name the result so
+        # mypy sees the declared return type rather than Any.
+        finalised_run: AgentRun | None = runner._finish_run(
             finished,
             agent_config=agent_config,
             session=session,
             spawn_context=spawn_context,
         )
+        return finalised_run
     except Exception as e:  # noqa: BLE001 - a cancellation is in flight
         logger.error("Failed to finalise abandoned sub-agent: %s", e)
         return None
