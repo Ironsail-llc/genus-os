@@ -16,6 +16,7 @@ is rootless and needs no group membership.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import uuid
@@ -44,7 +45,6 @@ class TestIsolationFlags:
         "flag,value",
         [
             ("--network", "none"),
-            ("--user", "1000:1000"),
             ("--memory", "512m"),
         ],
     )
@@ -52,6 +52,20 @@ class TestIsolationFlags:
         argv = self._argv()
         assert flag in argv, f"{flag} absent — the container would not be isolated"
         assert argv[argv.index(flag) + 1] == value
+
+    def test_user_is_the_invoking_account_and_never_root(self):
+        """The uid is whoever ran the engine, which is NOT a constant: this
+        asserted 1000:1000 and so passed only on a workstation whose first
+        user is the operator. CI runs as 1001 and the gate went red for a
+        reason that had nothing to do with isolation.
+
+        The property worth holding is the one the flag exists for — files come
+        back owned by the caller, and the container is never root.
+        """
+        argv = self._argv()
+        assert "--user" in argv, "--user absent — the container would run as root"
+        assert argv[argv.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
+        assert argv[argv.index("--user") + 1] != "0:0"
 
     @pytest.mark.parametrize(
         "token",
