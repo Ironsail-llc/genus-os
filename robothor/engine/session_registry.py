@@ -52,16 +52,35 @@ def remove_observer(fn: Callable[[AgentSession], None]) -> None:
             _observers.remove(fn)
 
 
-def register(session: AgentSession) -> None:
-    """Add a session to the registry, keyed by ``session.run_id``."""
+def announce(session: AgentSession) -> None:
+    """Tell observers a run exists, WITHOUT adding it to the live registry.
+
+    `register` happens ~275 lines into `AgentRunner.execute`, after prompt
+    assembly, the planner call and sandbox start — that is the right moment
+    for the interrupt/steer registry, which only means anything once the loop
+    is running. It is far too late for the spawn path's cancellation watch: a
+    child cancelled anywhere in that stretch leaves the incident's exact
+    signature (`running`, NULL traceback, zero steps) with nothing to finalise
+    it. `AgentSession.start` announces, so the window closes at the point the
+    run actually begins.
+
+    Announcing does not register: nothing here can leak an entry into
+    `_active` for a run whose loop never started.
+    """
     with _lock:
-        _active[session.run_id] = session
         watchers = list(_observers)
     for fn in watchers:
         try:
             fn(session)
         except Exception as e:  # noqa: BLE001 - an observer must not break a run
             logger.warning("session_registry observer failed: %s", e)
+
+
+def register(session: AgentSession) -> None:
+    """Add a session to the registry, keyed by ``session.run_id``."""
+    with _lock:
+        _active[session.run_id] = session
+    announce(session)
 
 
 def unregister(session_or_run_id: AgentSession | str) -> None:

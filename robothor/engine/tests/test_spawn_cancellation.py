@@ -308,3 +308,51 @@ class TestConcurrentChildrenOfOneParent:
             f"every started child must be finalised — abandoned: {sorted(started - finalised)}"
         )
         assert all(r.status is RunStatus.TIMEOUT for r in runner.finished)
+
+
+class _PlannerBlockedRunner(_FakeRunner):
+    """A child cancelled BEFORE the runner reaches `session_registry.register`.
+
+    The real `execute()` starts the session, then spends ~275 lines assembling
+    the prompt, calling the planner and starting the sandbox before it
+    registers. A cancellation anywhere in that stretch leaves the incident's
+    exact signature — `running`, NULL traceback, zero steps — and a watch that
+    only hears about registrations has nothing to finalise.
+    """
+
+    async def execute(self, **kwargs):
+        session = AgentSession(
+            kwargs.get("agent_id", "crm-hygiene"),
+            TriggerType.SUB_AGENT,
+            kwargs.get("trigger_detail"),
+        )
+        spawn_ctx = kwargs.get("spawn_context")
+        if spawn_ctx is not None:
+            session.run.parent_run_id = spawn_ctx.parent_run_id
+        self.session = session
+        self.sessions.append(session)
+        session.start("sys", kwargs.get("message", ""), [])
+        # The planner LLM call, which never returns. `register` is never
+        # reached, exactly as in the pre-loop window.
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")  # pragma: no cover
+
+
+class TestCancelBeforeTheLoopStarts:
+    @pytest.mark.asyncio
+    async def test_a_child_cancelled_in_its_planner_call_is_finalised(
+        self, spawn_context, child_config
+    ):
+        runner = _PlannerBlockedRunner()
+
+        with pytest.raises(TimeoutError):
+            await _spawn_under_parent_timeout(runner, spawn_context, child_config, tool_timeout=0.2)
+
+        assert runner.finished, (
+            "a child cancelled before the run loop is the incident signature: "
+            "running, NULL traceback, zero steps"
+        )
+        run = runner.finished[-1]
+        assert run.status is RunStatus.TIMEOUT
+        assert run.completed_at is not None
+        assert run.error_traceback
