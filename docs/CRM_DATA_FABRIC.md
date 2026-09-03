@@ -103,6 +103,46 @@ is the one canonical function that maps a channel identifier to a
 `person_id`. Owner-priority, tenant-aware. Every write-through goes
 through this — no ad-hoc contact matching anywhere.
 
+## Do-not-contact
+
+`crm_people.do_not_contact` (migration 113, BOOLEAN NOT NULL DEFAULT FALSE
+with a partial index on the TRUE rows) is the outreach opt-out. Set it when
+someone asks to be removed; clear it if they come back.
+
+**Where it is enforced:** `robothor/engine/tools/handlers/gws.py::_dnc_refusal`,
+called at the head of both outbound-mail branches of `_handle_gws_tool` —
+`gws_gmail_send` (its To and Cc) and `gws_gmail_reply` (the reply-all set
+derived from the thread, which is the branch that can address someone the
+agent never typed). Nothing reaches the `gws` CLI until the check passes.
+The lookup is `robothor/crm/dal.py::do_not_contact_emails`, which matches an
+address three ways — `crm_people.email`, the `additional_emails` JSONB list,
+and `contact_identifiers` rows on the `email` channel — so an opt-out cannot
+be sidestepped by using a person's secondary address.
+
+**What a block looks like:** the tool returns an error naming the address,
+and a row lands in `agent_guardrail_events` with
+`guardrail_name='do_not_contact'`, `action='blocked'`, `mode='enforce'` and
+the tool name. That row is the evidence the control is live; the guardrail
+health surface reads it. A send made outside an agent run still refuses, but
+files nothing (`run_id` is NOT NULL and references `agent_runs`).
+
+**Edges, all deliberate:**
+
+- A recipient absent from the CRM is **allowed**. This is an opt-out list,
+  not an allow-list.
+- A lookup that fails **refuses** the send. "We could not read the opt-out
+  list" is not "nobody opted out".
+- The one exception is a missing column or table, which means the deploy
+  beat `robothor migrate`. Nobody can have been flagged before 113 applies,
+  so the send proceeds and the skipped check is logged at ERROR.
+
+**Setting it:** `PATCH /api/people/{id}` with `{"doNotContact": true}`, the
+`update_person` tool (`doNotContact`) on the MCP and engine surfaces, or
+`dal.update_person(person_id, do_not_contact=True)`. Reads come back as
+`doNotContact` on the person shape. Every write is audit-logged like any
+other person edit, and the post-condition checker re-reads the row, so an
+opt-out that reported success without taking is caught rather than believed.
+
 ## Read path — DAL
 
 ```python
@@ -176,6 +216,7 @@ per-test rollback stays intact.
 | `crm/migrations/047_messaging_kernel.sql` | connected_account, message_thread, message, message_participant, message_attachment |
 | `crm/migrations/048_voice_calendar.sql` | call_log, calendar_event, calendar_event_participant |
 | `crm/migrations/049_timeline_activity.sql` | timeline_activity + initial backfill |
+| `crm/migrations/113_add_do_not_contact.sql` | `crm_people.do_not_contact` + partial index on the opted-out rows |
 
 ## Open work
 
