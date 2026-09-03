@@ -184,9 +184,6 @@ def _resolve_task_timeout(task: dict[str, Any], suite: dict[str, Any]) -> float:
 #: adapter-registered and so never appear in the static schema registry.
 _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
     {
-        "apollo_enrich_person",
-        "apollo_enrich_company",
-        "apollo_search_companies",
         "find_procedure",
         "git_branch",
         "impetus_list_resources",

@@ -129,6 +129,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     # init
+    subparsers.add_parser("plugin", help="List installed plugins and why any were refused")
     init_parser = subparsers.add_parser("init", help="Interactive setup wizard")
     init_parser.add_argument("--yes", "-y", action="store_true", help="Non-interactive mode")
     init_parser.add_argument("--docker", action="store_true", help="Use Docker for infrastructure")
@@ -794,6 +795,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # Dispatch to submodules (lazy imports inside branches for fast startup)
+    if args.command == "plugin":
+        from robothor.cli.plugins import cmd_plugin_list
+
+        return cmd_plugin_list()
+
     if args.command == "init":
         from robothor.cli.admin import cmd_init
 

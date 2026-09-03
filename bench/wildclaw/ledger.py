@@ -157,7 +157,64 @@ def render(standings: list[CategoryStanding]) -> str:
     lines.append(
         f"{sum(s.runs for s in standings)} runs recorded across {len(standings)} categories."
     )
+    lines.extend(_leader_footer(standings))
     return "\n".join(lines) + "\n"
+
+
+#: The model this harness is configured to run. The baseline column compares
+#: against OpenClaw because baselines.json is OpenClaw's per-task file; the
+#: footer exists because OpenClaw is not the harness to beat.
+BENCH_MODEL = "MiMo V2 Pro"
+
+#: WildClawBench ships six task categories. A standing that averages fewer is
+#: not comparable to a published harness aggregate.
+BENCH_CATEGORIES = 6
+
+
+def _leader_footer(standings: list[CategoryStanding]) -> list[str]:
+    """Name the harness actually in front, and the distance to it.
+
+    Every standing this project has produced read "Genus vs OpenClaw". The
+    published table says OpenClaw leads on ZERO of the four models and Hermes
+    on three: on MiMo V2 Pro, OpenClaw scores 40.2 and Hermes 48.1. Reporting
+    only the OpenClaw delta is what let "near parity" stand in for
+    "front-runner", and best_harness()/leader_gap() were written to say so and
+    then read by nothing.
+    """
+    from bench.wildclaw.harness_baselines import leader_gap
+
+    gap = leader_gap(BENCH_MODEL, 0.0)
+    leader = gap.get("leader")
+    if not leader:
+        return []
+    out = [
+        "",
+        f"Leader on {BENCH_MODEL}: {leader} ({gap['scores'][leader]:.1f}). The baseline "
+        f"column above is OpenClaw, which leads on NONE of the four published models.",
+    ]
+
+    graded = [s for s in standings if s.runs]
+    # Only compare like with like. A published harness aggregate spans every
+    # category; a partial ledger does not. Averaging what happens to be graded
+    # invents a number — with 01 at 28.3 and a single 06 run at 100.0 this
+    # footer would have announced "ahead of the leader" on a mean of 64.2,
+    # which is the exact "standing table the ledger contradicts" failure this
+    # correction exists to end.
+    if len(graded) < BENCH_CATEGORIES:
+        out.append(
+            f"No comparison yet: {len(graded)} of {BENCH_CATEGORIES} categories graded. "
+            f"A harness aggregate covers all of them, so a partial mean is not "
+            f"comparable to one — it is a different measurement wearing the same units."
+        )
+        return out
+
+    ours = sum(s.mean for s in graded) / len(graded) * 100
+    behind = leader_gap(BENCH_MODEL, ours).get("behind_leader")
+    if behind is not None and behind > 0:
+        out.append(f"Our {ours:.1f} across all categories is {behind:.1f} points behind.")
+    else:
+        out.append(f"Our {ours:.1f} across all categories is at or ahead of the leader.")
+    return out
 
 
 def main() -> int:

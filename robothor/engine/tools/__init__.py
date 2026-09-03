@@ -10,7 +10,6 @@ from typing import Any
 
 # ── Core exports ──
 from robothor.engine.tools.constants import (
-    APOLLO_TOOLS,
     DEVOPS_METRICS_TOOLS,
     FEDERATION_TOOLS,
     GIT_TOOLS,
@@ -19,7 +18,6 @@ from robothor.engine.tools.constants import (
     GWS_TOOLS,
     IDENTITY_TOOLS,
     JIRA_TOOLS,
-    PF_TOOLS,
     PROTECTED_BRANCHES,
     READONLY_TOOLS,
     REPORT_TOOLS,
@@ -46,7 +44,6 @@ MAX_CONCURRENT_SPAWNS = DEFAULT_MAX_CONCURRENT_SPAWNS
 
 __all__ = [
     # Constants
-    "APOLLO_TOOLS",
     "DEVOPS_METRICS_TOOLS",
     "FEDERATION_TOOLS",
     "GOAL_TOOLS",
@@ -55,7 +52,6 @@ __all__ = [
     "GWS_TOOLS",
     "IDENTITY_TOOLS",
     "JIRA_TOOLS",
-    "PF_TOOLS",
     "PROTECTED_BRANCHES",
     "READONLY_TOOLS",
     "REPORT_TOOLS",

@@ -58,9 +58,6 @@ DESKTOP_TOOLS = frozenset(
 # Federation tools
 FEDERATION_TOOLS = frozenset({"federation_query", "federation_trigger", "federation_sync_status"})
 
-# Princess Freya (PF) vessel tools
-PF_TOOLS = frozenset({"pf_system_status"})
-
 # Skill tools
 SKILL_TOOLS = frozenset({"invoke_skill", "list_skills", "create_skill", "update_skill"})
 
@@ -98,16 +95,6 @@ BENCHMARK_TOOLS = frozenset(
         "benchmark_compare",
         "benchmark_run_for_agent",
         "benchmark_run_fleet",
-    }
-)
-
-# Apollo.io contact enrichment & search tools
-APOLLO_TOOLS = frozenset(
-    {
-        "apollo_search_people",
-        "apollo_enrich_person",
-        "apollo_search_companies",
-        "apollo_enrich_company",
     }
 )
 
@@ -238,8 +225,6 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # Federation read-only tools
         "federation_query",
         "federation_sync_status",
-        # PF vessel read-only tools
-        "pf_system_status",
         # Git read-only tools
         "git_status",
         "git_diff",
@@ -264,8 +249,6 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "experiment_status",
         # Benchmark read-only tools
         "benchmark_compare",
-        # Apollo read-only tools (search is free, no side effects)
-        "apollo_search_people",
         # Skill tools (list is read-only; invoke_skill writes usage metadata)
         "list_skills",
         # MCP client read-only tools

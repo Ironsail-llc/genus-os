@@ -150,7 +150,6 @@ def _cfg() -> Config:
 def _collect_handlers() -> dict[str, Any]:
     """Collect all HANDLERS dicts from handler modules."""
     from robothor.engine.tools.handlers import (  # noqa: E501
-        apollo,
         approvals,
         benchmark,
         browser,
@@ -175,7 +174,6 @@ def _collect_handlers() -> dict[str, Any]:
         messaging,
         observability,
         pdf,
-        pf,
         reasoning,
         reports,
         skills,
@@ -198,7 +196,6 @@ def _collect_handlers() -> dict[str, Any]:
         symbolic,
         vision,
         web,
-        apollo,
         filesystem,
         crm,
         browser,
@@ -215,7 +212,6 @@ def _collect_handlers() -> dict[str, Any]:
         pdf,
         reasoning,
         federation,
-        pf,
         messaging,
         skills,
         jira,

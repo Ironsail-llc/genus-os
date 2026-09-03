@@ -87,6 +87,10 @@ class PluginSet:
     commands: dict[str, Any] = field(default_factory=dict)
     sandboxes: dict[str, Any] = field(default_factory=dict)
     memory: dict[str, Any] = field(default_factory=dict)
+    #: Tool names the providing plugin declared read-only. Absent means
+    #: WRITE, which is the safe default and today's behaviour: a plugin
+    #: that says nothing must never be assumed harmless.
+    read_only: set[str] = field(default_factory=set)
     loaded: list[Any] = field(default_factory=list)
     failures: list[PluginFailure] = field(default_factory=list)
 
@@ -167,6 +171,34 @@ def load_plugins(
         if group not in _GROUPS:
             continue
 
+        # GOVERNANCE BEFORE EXECUTION. `ep.load()` below imports the
+        # distribution's module into this process; every other check in this
+        # function happens after that, so without this gate a "refused" plugin
+        # has already run arbitrary code inside the daemon. An undeclared
+        # distribution is refused here, before it executes.
+        from robothor.plugins.manifest import MANIFEST_NAME, manifest_mode, read_manifest
+
+        _mode = manifest_mode()
+        manifest = read_manifest(getattr(ep, "dist", None))
+        if manifest is None and _mode != "off":
+            if _mode == "enforce":
+                result.failures.append(
+                    PluginFailure(
+                        name,
+                        group,
+                        f"no {MANIFEST_NAME} in the distribution — refused before import",
+                    )
+                )
+                logger.warning("Plugin %r ships no %s; refusing before import", name, MANIFEST_NAME)
+                continue
+            logger.warning(
+                "Plugin %r ships no %s — importing anyway (mode=observe). The "
+                "pre-import guarantee applies only in enforce.",
+                name,
+                MANIFEST_NAME,
+            )
+        _declared = manifest.declares(_GROUPS[group]) if manifest else None
+
         try:
             payload = ep.load()
         except Exception as e:
@@ -204,6 +236,22 @@ def load_plugins(
             result.failures.append(PluginFailure(name, group, f"no {_GROUPS[group]!r} in payload"))
             continue
 
+        # Hold the payload to what the distribution declared. This half is
+        # necessarily post-import — a module's exports cannot be read without
+        # executing it — but the manifest is what makes them reviewable BEFORE
+        # install, and undeclared names are never registered.
+        undeclared = (
+            sorted(k for k in contributions if k not in _declared)
+            if (_declared is not None and _mode == "enforce")
+            else []
+        )
+        if undeclared:
+            result.failures.append(
+                PluginFailure(name, group, f"undeclared in {MANIFEST_NAME}: {undeclared} — refused")
+            )
+            logger.warning("Plugin %r offered undeclared %s %s", name, group, undeclared)
+            continue
+
         target = result._target(group)
         clash = [k for k in contributions if k in reserved]
         if clash:
@@ -219,8 +267,38 @@ def load_plugins(
             )
             continue
 
+        # A plugin may classify its OWN tools as read-only. Safety
+        # classification used to be core's hardcoded table, so extracting an
+        # integration to a plugin left a fact about that instance behind in
+        # core -- the fork this seam exists to prevent.
+        declared_ro: set[str] = set()
+        if group == "genus.tools" and "read_only" in payload:
+            raw = payload.get("read_only")
+            if not isinstance(raw, list | tuple | set) or not all(isinstance(x, str) for x in raw):
+                result.failures.append(
+                    PluginFailure(name, group, "read_only must be a list of tool names — refused")
+                )
+                continue
+            foreign = sorted(set(raw) - set(contributions))
+            if foreign:
+                # Reclassifying a tool it does not provide is privilege
+                # escalation, not extension.
+                result.failures.append(
+                    PluginFailure(
+                        name,
+                        group,
+                        f"read_only names {foreign} are not provided by this plugin — refused",
+                    )
+                )
+                logger.warning(
+                    "Plugin %r tried to classify tool(s) it does not own: %s", name, foreign
+                )
+                continue
+            declared_ro = set(raw)
+
         # All-or-nothing: validated above, applied here.
         target.update(contributions)
+        result.read_only |= declared_ro
         result.loaded.append(ep)
         logger.info("Plugin %r loaded %d %s", name, len(contributions), _GROUPS[group])
 
