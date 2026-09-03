@@ -338,7 +338,6 @@ def test_unknown_robothor_var_fails_the_render(tmp_path: Path):
 #: new drop-in has to be added deliberately, in a reviewed diff.
 EXPECTED_DROPINS: dict[str, set[str]] = {
     "robothor-engine.service.d": {
-        "boot-guard.conf",
         "hardening.conf",
         "onfailure.conf",
         "restart-forever.conf",
