@@ -100,6 +100,35 @@ def _is_orphan(started_at: Any, daemon_start_ts: str | None) -> bool:
         return False
 
 
+def _started_before_boot(started_at_iso: str, daemon_start_ts: str | None) -> bool:
+    """Did this run start before the daemon booted? Compared as INSTANTS.
+
+    This was `started_at_iso < daemon_start_ts` — a lexicographic compare of
+    two ISO-8601 strings carrying DIFFERENT UTC offsets. `daemon_start_ts` is
+    always UTC (`datetime.now(UTC).isoformat()`); `started_at_iso` comes off
+    the psycopg2 row in the session's local offset. On 2026-09-03 that filed
+    run 0a78ed9f as `daemon_restart` because "…T03:00…" sorts below
+    "…T06:51…" — while 03:00:16−04:00 is 07:00:16Z, nine minutes AFTER the
+    06:51:20Z boot. The run was blamed on a restart it postdated, and the
+    truthful category (`post_tool_crash`, from its last step) never got a say.
+
+    `_is_orphan` above has always parsed first; this is the one place that
+    skipped it, so delegate rather than write the comparison twice — its 60s
+    of slack is the same property wanted here, for the same reason.
+    """
+    if not daemon_start_ts or not started_at_iso:
+        return False
+    try:
+        started_at = datetime.fromisoformat(started_at_iso)
+    except (TypeError, ValueError):
+        # An unparseable stamp is not evidence of a restart. Fall through to
+        # the step history, which is first-hand.
+        return False
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=UTC)
+    return _is_orphan(started_at, daemon_start_ts)
+
+
 def stale_run_cutoff_seconds(agent_id: str | None = None) -> int:
     """How old a LIVE `running` row must be before the reaper touches it.
 
@@ -313,7 +342,7 @@ def classify_reap_reason(
         daemon_restart   — run started before current daemon boot
     """
     # daemon_restart wins if we know the daemon booted after this run started
-    if daemon_start_ts and started_at_iso and started_at_iso < daemon_start_ts:
+    if _started_before_boot(started_at_iso, daemon_start_ts):
         return (
             "daemon_restart",
             f"Reaped by watchdog: likely cancelled by daemon restart at {daemon_start_ts}",

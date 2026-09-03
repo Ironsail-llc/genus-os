@@ -112,6 +112,28 @@ The consequence line is only added to the **composed** page. A two-argument
 call supplies its own body and gets neither a headline nor a consequence — see
 below.
 
+## Reading `reap_category` on a reaped run
+
+When the engine's watchdog tombstones a stale `agent_runs` row it records WHY
+in `reap_category` (`classify_reap_reason`, `robothor/engine/daemon.py`). That
+column is the first thing to read before blaming a restart:
+
+| `reap_category` | What it claims | Where to look |
+|---|---|---|
+| `no_steps` | No `agent_run_steps` at all — the runner died during setup | the engine journal around `started_at` |
+| `post_llm_crash` | Last step was `llm_call` / `llm_response` | the provider, and `slo:llm-availability` |
+| `post_tool_crash` | Last step was `tool_call` / `tool_result` — including a sub-agent abandoned by its parent's tool deadline | the named tool; `error_traceback` now carries the cancel diagnostic |
+| `post_error_crash` | Last step was an `error` step | that step's `error_message` |
+| `daemon_restart` | The run started BEFORE the current daemon booted | `_set_daemon_start_ts`; was the restart intended? |
+
+`daemon_restart` used to be over-claimed. It was decided by comparing two
+ISO-8601 **strings** whose UTC offsets differ — `daemon_start_ts` is always
+UTC, `started_at` comes off the row in the session's local offset — so on
+2026-09-03 a run that started nine minutes AFTER the boot was filed against
+it, and the truthful `post_tool_crash` never got a say. Both sides are parsed
+to instants now. If you are reading a `daemon_restart` row older than that
+fix, re-check it by hand before concluding a restart killed anything.
+
 ## Why the alert unit has no systemd start limit
 
 `robothor-alert@.service` sets `StartLimitIntervalSec=0` — deliberately, and
