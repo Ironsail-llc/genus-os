@@ -33,13 +33,18 @@ MAX_NEW_FUNCTION_LINES = 200
 #: an entry is more than 10% larger than reality, so shrinking forces the cap
 #: down with it. Delete an entry when its function drops under the threshold.
 KNOWN_LARGE: dict[str, int] = {
-    # 3675 here, 3520 once the plugins PR removes the Apollo/pf tool schemas
-    # from core; this branch is measured before that removal.
-    "tools/schemas.py::get_engine_schemas": 3675,
+    "tools/schemas.py::get_engine_schemas": 3520,
     "health.py::create_health_app": 1477,  # +1: execution_mode block in /health
     "runner.py::execute": 990,  # +7: task_id propagated onto the run at INSERT time
     "runner.py::_run_loop": 775,
-    "tools/handlers/gws.py::_handle_gws_tool": 453,
+    # +12: run/tenant threaded onto the signature, and the do-not-contact
+    # refusal at the head of both outbound-mail branches. The check itself
+    # lives in _dnc_refusal; only the two call sites are in here.
+    # 465 -> 473: gws_calendar_create is the third outbound-mail branch —
+    # Google invites every attendee by email — so it gets the same call site.
+    # Five irreducible lines (normalise the list, call, branch, return) plus
+    # three of comment; the guard itself is still in _dnc_refusal.
+    "tools/handlers/gws.py::_handle_gws_tool": 473,
     "daemon.py::main": 397,  # -14: fleet capacity init extracted to _init_fleet_capacity
     "telegram.py::_run_interactive": 384,
     "tools/handlers/benchmark.py::_benchmark_run": 370,
@@ -47,7 +52,10 @@ KNOWN_LARGE: dict[str, int] = {
     "daemon.py::_watchdog": 303,
     "chat.py::plan_approve": 286,
     "compaction.py::compact": 276,
-    "llm_client.py::_call_llm": 270,  # +1: mode signal on the success path
+    # -7: rate-limit wait and the malformed-tool-call verdict extracted;
+    # +4: review-requested comments on the malformed-tool-call branch (why the
+    # re-roll spends `attempt`, and what skipping `_handle_model_error` costs)
+    "llm_client.py::_call_llm": 267,
     "config.py::manifest_to_agent_config": 268,
     "scheduler.py::start": 266,
     "llm_client.py::_call_llm_streaming": 261,  # +1: mode signal on the success path

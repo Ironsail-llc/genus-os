@@ -73,8 +73,10 @@ CAPS = {
     # TYPE_CHECKING import four; trimming to fit would have meant deleting
     # the docstring that says why watchdog_fired overrides the status.
     "robothor/engine/cancel_outcome.py": 86,
-    # admission.py's cap travels with the capacity PR that introduces the
-    # module; this branch does not carry it yet.
+    # Fleet admission (2026-08-27): extracted from the scheduler rather than
+    # growing it past its cap — the pool it drives had no production caller for
+    # its whole existence, and the wiring is a cohesive unit of its own.
+    "robothor/engine/admission.py": 105,  # +23: observe/enforce ladder; the evidence writer was extracted to admission_evidence.py
     # The finalization cluster (what a run may spend AFTER its loop ends)
     # was extracted here rather than growing run_budget past its cap.
     "robothor/engine/finalization_budget.py": 160,
@@ -85,7 +87,7 @@ CAPS = {
     # ratchet did its job — it forced the extraction and made this residual
     # an explicit decision rather than drift. Do not raise again without
     # extracting something real.
-    "robothor/engine/scheduler.py": 1607,
+    "robothor/engine/scheduler.py": 1626,  # +19: catch-up stagger (paces spawns after downtime)
 }
 
 

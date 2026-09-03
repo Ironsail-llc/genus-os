@@ -124,7 +124,7 @@ async def _classify_run_failure(args: dict[str, Any], ctx: ToolContext) -> dict[
 
     # Derive category the same way the reaper does (reuse classify_reap_reason
     # so the tool and the reaper can never disagree).
-    from robothor.engine.daemon import classify_reap_reason
+    from robothor.engine.daemon import _started_before_boot, classify_reap_reason
 
     daemon_start_ts = os.environ.get("ROBOTHOR_DAEMON_START_TS")
     started_at = run.get("started_at")
@@ -136,7 +136,12 @@ async def _classify_run_failure(args: dict[str, Any], ctx: ToolContext) -> dict[
     category, _ = classify_reap_reason(str(run_id), started_iso, daemon_start_ts)
 
     tokens_used = int(run.get("input_tokens") or 0) + int(run.get("output_tokens") or 0)
-    started_before_daemon = bool(daemon_start_ts and started_iso and started_iso < daemon_start_ts)
+    # The same instant comparison classify_reap_reason uses. This line kept the
+    # lexicographic string compare after the reaper was fixed, so the tool
+    # answered "category: post_tool_crash" and "daemon_restart_in_window: true"
+    # about one run — two halves of one diagnosis contradicting each other,
+    # with nothing to tell the investigator which half to believe.
+    started_before_daemon = _started_before_boot(started_iso, daemon_start_ts)
 
     return {
         "run_id": str(run_id),

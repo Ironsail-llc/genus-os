@@ -26,6 +26,16 @@ class FederationConfig:
     nats_url: str = "nats://127.0.0.1:4222"
     nats_enabled: bool = False
 
+    # The credential this instance's own engine presents to its broker. Once
+    # the server has an `authorization` block — which it must, or every peer
+    # lands in the same global account as the engine — connecting with nothing
+    # is refused. `_start_federation` built `NATSManager(nats_url)` with no
+    # credential at all, so hardening the broker would have taken federation
+    # down on the next restart with only a warning line to show for it.
+    # Deliberately env-only: a password does not belong in federation.yaml.
+    nats_user: str = ""
+    nats_password: str = ""
+
     # Endpoint that peers use to reach this instance
     public_endpoint: str = ""
 
@@ -73,6 +83,8 @@ class FederationConfig:
             public_endpoint=os.environ.get(
                 "ROBOTHOR_PUBLIC_ENDPOINT", file_config.get("public_endpoint", "")
             ),
+            nats_user=os.environ.get("ROBOTHOR_NATS_USER", ""),
+            nats_password=os.environ.get("ROBOTHOR_NATS_PASSWORD", ""),
             config_dir=config_dir,
             identity_file=config_dir / "identity.json",
         )

@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Any
 from psycopg2.extras import RealDictCursor
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from robothor.identity.scope import DataScope
 
 from robothor.constants import DEFAULT_TENANT as DEFAULT_TENANT
@@ -251,6 +253,10 @@ def update_person(person_id: str, tenant_id: str = DEFAULT_TENANT, **fields: Any
         "first_name": "first_name",
         "last_name": "last_name",
         "email": "email",
+        # Outreach opt-out (migration 113). Booleans go through the same
+        # "skip only None" filter as every other field, so passing False
+        # clears the flag rather than being dropped as falsy.
+        "do_not_contact": "do_not_contact",
     }
     sets: list[str] = []
     vals: list[Any] = []
@@ -575,6 +581,68 @@ def list_people(
             (*params, limit),
         )
         return [person_to_dict(r) for r in cur.fetchall()]
+
+
+def do_not_contact_emails(
+    emails: Iterable[str | None],
+    tenant_id: str = DEFAULT_TENANT,
+) -> set[str]:
+    """Return the subset of ``emails`` that belongs to an opted-out person.
+
+    The read side of ``crm_people.do_not_contact`` (migration 113). Outbound
+    email paths call this with every recipient of a message and refuse the
+    send if the result is non-empty; see
+    ``robothor.engine.tools.handlers.gws``.
+
+    An address reaches a person three ways, and all three are checked —
+    honouring the opt-out on the primary address only would leave the exact
+    hole the flag exists to close:
+
+    * ``crm_people.email`` — the primary address,
+    * ``crm_people.additional_emails`` — the JSONB list of secondaries,
+    * ``contact_identifiers`` rows on the ``email`` channel — how inbound
+      mail actually resolves to a person.
+
+    Comparison is case-insensitive and the returned addresses are lowercased,
+    so a caller matching them back against its own recipient list must
+    lowercase too. Soft-deleted people are ignored: a deleted row is not a
+    live opt-out, and ``crm_people`` rows are never hard-deleted.
+
+    Raises whatever the database raises. This is deliberate — the caller
+    treats a failed lookup as a refusal, because "we could not check the
+    opt-out list" is not the same as "nobody opted out".
+    """
+    wanted = sorted({e.strip().lower() for e in emails if e and e.strip()})
+    if not wanted:
+        return set()
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT LOWER(p.email) AS addr
+              FROM crm_people p
+             WHERE p.tenant_id = %s AND p.deleted_at IS NULL AND p.do_not_contact
+               AND LOWER(p.email) = ANY(%s)
+            UNION
+            SELECT LOWER(ae.value #>> '{}') AS addr
+              FROM crm_people p
+              CROSS JOIN LATERAL jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(p.additional_emails) = 'array'
+                       THEN p.additional_emails ELSE '[]'::jsonb END) AS ae(value)
+             WHERE p.tenant_id = %s AND p.deleted_at IS NULL AND p.do_not_contact
+               AND LOWER(ae.value #>> '{}') = ANY(%s)
+            UNION
+            SELECT LOWER(ci.identifier) AS addr
+              FROM contact_identifiers ci
+              JOIN crm_people p ON p.id = ci.person_id
+             WHERE ci.tenant_id = %s AND ci.channel = 'email'
+               AND p.tenant_id = %s AND p.deleted_at IS NULL AND p.do_not_contact
+               AND LOWER(ci.identifier) = ANY(%s)
+            """,
+            (tenant_id, wanted, tenant_id, wanted, tenant_id, tenant_id, wanted),
+        )
+        return {row["addr"] for row in cur.fetchall() if row["addr"]}
 
 
 # ─── Companies ───────────────────────────────────────────────────────────

@@ -57,6 +57,63 @@ class TestClassifyReapReason:
         assert category == "post_llm_crash"
         assert "daemon restart" not in msg
 
+    def test_offsets_are_compared_as_instants_not_as_strings(self, run_id: str) -> None:
+        """Run 0a78ed9f, 2026-09-03: filed as `daemon_restart` nine minutes
+        AFTER the daemon it was supposedly killed by had already booted.
+
+        Both operands were `str`. `daemon_start_ts` is always UTC
+        (`datetime.now(UTC).isoformat()`); `started_at_iso` comes off the
+        psycopg2 row in the session's local offset. Lexicographically
+        "…T03:00…" < "…T06:51…" because '3' < '6' at the hour position — but
+        03:00:16−04:00 is 07:00:16Z, nine minutes after the 06:51:20Z boot.
+
+        The run's last step was `tool_call list_tasks` with nothing after it
+        and the daemon stayed up throughout, so the true category is the one
+        the fallback would have produced had the string compare not
+        short-circuited first.
+        """
+        steps = [
+            {"step_type": "llm_call", "tool_name": None},
+            {"step_type": "tool_call", "tool_name": "list_tasks", "error_message": None},
+        ]
+        with _patch_list_steps(steps):
+            category, msg = classify_reap_reason(
+                run_id,
+                "2026-09-03T03:00:16.508797-04:00",
+                "2026-09-03T06:51:20.843732+00:00",
+            )
+        assert category == "post_tool_crash", (
+            "a run that started AFTER the boot cannot have been killed by it"
+        )
+        assert "daemon restart" not in msg
+        assert "list_tasks" in msg
+
+    def test_a_run_that_genuinely_predates_the_boot_across_offsets(self, run_id: str) -> None:
+        """The mirror case, so the fix cannot be "always return post_tool_crash".
+
+        01:00:16−04:00 is 05:00:16Z, an hour and fifty-one minutes BEFORE the
+        06:51:20Z boot. Same offsets, same step history, opposite verdict.
+        """
+        steps = [
+            {"step_type": "llm_call", "tool_name": None},
+            {"step_type": "tool_call", "tool_name": "list_tasks", "error_message": None},
+        ]
+        with _patch_list_steps(steps):
+            category, msg = classify_reap_reason(
+                run_id,
+                "2026-09-03T01:00:16.508797-04:00",
+                "2026-09-03T06:51:20.843732+00:00",
+            )
+        assert category == "daemon_restart"
+        assert "daemon restart" in msg
+
+    def test_an_unparseable_timestamp_does_not_claim_a_restart(self, run_id: str) -> None:
+        """Guessing here destroys the evidence — fall through to the steps."""
+        steps = [{"step_type": "tool_call", "tool_name": "list_tasks"}]
+        with _patch_list_steps(steps):
+            category, _ = classify_reap_reason(run_id, "not-a-timestamp", "also-not-a-timestamp")
+        assert category == "post_tool_crash"
+
     def test_post_llm_crash(self, run_id: str) -> None:
         steps = [
             {"step_type": "llm_call", "tool_name": None, "error_message": None},

@@ -103,6 +103,91 @@ is the one canonical function that maps a channel identifier to a
 `person_id`. Owner-priority, tenant-aware. Every write-through goes
 through this — no ad-hoc contact matching anywhere.
 
+## Do-not-contact
+
+`crm_people.do_not_contact` (migration 113, BOOLEAN NOT NULL DEFAULT FALSE
+with a partial index on the TRUE rows) is the outreach opt-out. Set it when
+someone asks to be removed; clear it if they come back.
+
+**Where it is enforced:** `robothor/engine/tools/handlers/gws.py::_dnc_refusal`,
+called at the head of all three branches of `_handle_gws_tool` that put a
+message in someone's inbox:
+
+| Tool | Addresses checked |
+|---|---|
+| `gws_gmail_send` | its `to` and `cc` |
+| `gws_gmail_reply` | the reply-all set derived from the thread — the branch that can address someone the agent never typed |
+| `gws_calendar_create` | its `attendees`; Google emails an invitation to each on insert and again on every edit |
+
+Nothing reaches the `gws` CLI until the check passes — for a calendar event
+that includes the dedup read. The lookup is
+`robothor/crm/dal.py::do_not_contact_emails`, which matches an address three
+ways — `crm_people.email`, the `additional_emails` JSONB list, and
+`contact_identifiers` rows on the `email` channel — so an opt-out cannot be
+sidestepped by using a person's secondary address.
+
+**Scope: email and calendar invitations only.** Telegram, SMS and chat are
+NOT enforced. A person flagged `do_not_contact` can still be reached on those
+channels, because the guard lives in the gws handler and matches on email
+addresses; extending it means resolving a person from a chat id or phone
+number at each of those senders. Anyone reading this row as "we will not
+contact them" is reading more than the control delivers.
+
+**What a block looks like:** the tool returns an error naming the address,
+and a row lands in `agent_guardrail_events` with
+`guardrail_name='do_not_contact'`, `action='blocked'`, `mode='enforce'` and
+the tool name. That row is the evidence the control is live; the guardrail
+health surface reads it. A send made outside an agent run still refuses, but
+files nothing (`run_id` is NOT NULL and references `agent_runs`).
+
+**Edges, all deliberate:**
+
+- A recipient absent from the CRM is **allowed**. This is an opt-out list,
+  not an allow-list.
+- A call carrying no tenant **refuses**. The list is per-tenant, and reading
+  `default`'s list on a call that could not say whose it is would clear a
+  recipient who is flagged in the tenant the send actually belongs to.
+- A lookup that fails **refuses** the send, after one bounded retry (0.5s,
+  on a connection-level `OperationalError` only — a query error gets the
+  same answer the second time). "We could not read the opt-out list" is not
+  "nobody opted out". No `agent_guardrail_events` row is written on this
+  branch: that write goes to the database that just failed, so it only
+  produces a second traceback. The ERROR log line is its evidence.
+- The one exception is a missing `do_not_contact` column, which means the
+  deploy beat `robothor migrate`. Nobody can have been flagged before 113
+  applies, so the send proceeds and the skipped check is logged at ERROR.
+  The carve-out is matched on the column NAME, not on the exception class —
+  the same SQL reads `deleted_at`, `tenant_id`, `additional_emails` and
+  `contact_identifiers`, and any of those going missing is an unreadable
+  list, not a pending migration.
+
+**The lever — `ROBOTHOR_DNC_MODE`:** `enforce` (default) or `observe`. It is a
+governed flag (`robothor/flags/store.py::GOVERNED_FLAGS`), so it resolves
+DB-store-first and falls back to the environment, read at call time via
+`robothor/engine/feature_flags.py::do_not_contact_mode` — which means a flip
+shows up in `/api/controls`, can be made from the dashboard, and lands in the
+flag audit log instead of being an untraceable edit on a box. In `observe`
+every refusal above becomes a WARNING plus an `agent_guardrail_events` row
+with action `observed` and mode `observe`, and the message goes out — except
+the unreadable-list branch, which files nothing for the reason given above.
+The ladder is two rungs: there is no `off` (an opt-out that can be switched
+off entirely is not a control) and no `alert` (`observe` already writes the
+row an alert rung would page on). It is documented in `infra/flags.yaml` and
+`infra/systemd/robothor.env.example`. **`observe` disables a compliance
+control** — people who asked not to be contacted will be contacted. It exists
+because a fail-closed default with no lever is one nobody can respond to: the
+alternative an operator reaches for at 3am is commenting out the call, and a
+guard that is watching and logging is strictly better than a guard that has
+been deleted. Anything unrecognised enforces, so a typo cannot switch the
+control off.
+
+**Setting it:** `PATCH /api/people/{id}` with `{"doNotContact": true}`, the
+`update_person` tool (`doNotContact`) on the MCP and engine surfaces, or
+`dal.update_person(person_id, do_not_contact=True)`. Reads come back as
+`doNotContact` on the person shape. Every write is audit-logged like any
+other person edit, and the post-condition checker re-reads the row, so an
+opt-out that reported success without taking is caught rather than believed.
+
 ## Read path — DAL
 
 ```python
@@ -176,6 +261,7 @@ per-test rollback stays intact.
 | `crm/migrations/047_messaging_kernel.sql` | connected_account, message_thread, message, message_participant, message_attachment |
 | `crm/migrations/048_voice_calendar.sql` | call_log, calendar_event, calendar_event_participant |
 | `crm/migrations/049_timeline_activity.sql` | timeline_activity + initial backfill |
+| `crm/migrations/113_add_do_not_contact.sql` | `crm_people.do_not_contact` + partial index on the opted-out rows |
 
 ## Open work
 

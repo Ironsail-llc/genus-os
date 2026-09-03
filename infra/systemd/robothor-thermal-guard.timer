@@ -6,7 +6,11 @@ Description=Robothor — thermal guard every 30s
 
 [Timer]
 OnBootSec=60
-OnUnitActiveSec=30
+# 10s, not 30s. With the GPU clock capped the residual thermal driver is CPU
+# transients, and those move faster than a 30s poll: the 2026-08-28 soak's only
+# excursion (87C) was a single CPU-driven spike at 30W GPU that a 30s timer would
+# not have seen. The unit reads sysfs and writes a frequency cap — it is cheap.
+OnUnitActiveSec=10
 
 [Install]
 WantedBy=timers.target

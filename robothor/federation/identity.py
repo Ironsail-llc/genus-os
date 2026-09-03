@@ -17,7 +17,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.federation.config import FederationConfig, load_identity, save_identity
+from robothor.federation.connections import save_connection
 from robothor.federation.models import (
     Connection,
     ConnectionState,
@@ -25,6 +27,7 @@ from robothor.federation.models import (
     InviteToken,
     Relationship,
     default_exports_for,
+    principal_role_for_peer,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,10 +123,19 @@ def _load_private_key(instance: Instance) -> Ed25519PrivateKey:
     return serialization.load_pem_private_key(private_pem, password=None)  # type: ignore[return-value]
 
 
+def _secret_proof_hash(secret: str, connection_id: str) -> str:
+    # Imported lazily: handshake imports identity, so a module-level import
+    # here would be a cycle.
+    from robothor.federation.handshake import secret_proof_hash
+
+    return secret_proof_hash(secret, connection_id)
+
+
 def create_invite_token(
     config: FederationConfig,
     relationship: Relationship = Relationship.PEER,
     ttl_hours: int = 24,
+    tenant_id: str = "",
 ) -> InviteToken:
     """Generate a one-time invite token for connection establishment.
 
@@ -138,8 +150,32 @@ def create_invite_token(
     now = datetime.now(UTC)
     expires = now + timedelta(hours=ttl_hours)
 
+    # The issuer mints the connection id, and BOTH sides adopt it. The NATS
+    # subject is robothor.{connection_id}.command, so if each side minted its
+    # own the child would subscribe on a subject the parent never serves. That
+    # is exactly what v1 did, and it is why this feature has been silent since
+    # 2026-03-09 without ever logging an error.
+    connection_id = str(uuid.uuid4())
+
+    # The credential this peer will present to our broker, minted here so the
+    # signed token carries it. Without this the operator hands over a token and
+    # the peer still has to be told which broker to dial and what password to
+    # use — so the credential travels by chat message instead of inside the
+    # signed blob designed to carry exactly this.
+    from robothor.federation.provisioning import peer_credentials
+
+    pending = Connection(id=connection_id, transport={})
+    credentials = peer_credentials(pending)
+    transport: dict[str, Any] = {
+        "kind": "nats",
+        "url": config.public_endpoint or config.nats_url,
+        **credentials,
+    }
+
     token_data = {
-        "v": 1,  # token format version
+        "v": 2,  # token format version
+        "connection_id": connection_id,
+        "transport": transport,
         "issuer_id": identity.id,
         "issuer_name": identity.display_name,
         "issuer_endpoint": config.public_endpoint,
@@ -163,14 +199,49 @@ def create_invite_token(
     }
     token_str = base64.urlsafe_b64encode(json.dumps(bundle).encode()).decode()
 
+    # Persist OUR side before the token leaves the building. An invite whose row
+    # does not exist can never be redeemed: `load_connections()` at boot finds
+    # nothing, so the daemon serves no responder and the peer's first request
+    # times out against a subject nobody is listening on.
+    iso_now = now.isoformat()
+    save_connection(
+        Connection(
+            id=connection_id,
+            peer_id="",  # unknown until the peer completes the handshake
+            peer_name="",
+            peer_endpoint="",
+            peer_public_key="",
+            relationship=relationship,
+            state=ConnectionState.PENDING,
+            exports=default_exports_for(_invert_relationship(relationship)),
+            imports=default_exports_for(relationship),
+            tenant_id=tenant_id or DEFAULT_TENANT,
+            local_principal_id=f"federation:{connection_id}",
+            local_principal_role=principal_role_for_peer(relationship),
+            direction="inbound",  # we issued the invite, so the peer dials us
+            transport=dict(pending.transport),
+            metadata={
+                # sha256 of the HMAC the consumer will present — precomputed
+                # here so the secret itself is never stored. See
+                # handshake.secret_proof_hash.
+                "secret_proof_hash": _secret_proof_hash(connection_secret, connection_id),
+                "invite_expires_at": expires.isoformat(),
+            },
+            created_at=iso_now,
+            updated_at=iso_now,
+        )
+    )
+
     return InviteToken(
         token=token_str,
+        connection_id=connection_id,
         issuer_id=identity.id,
         issuer_name=identity.display_name,
         issuer_endpoint=config.public_endpoint,
         issuer_public_key=identity.public_key,
         relationship=relationship,
         connection_secret=connection_secret,
+        transport=dict(transport),
         created_at=now.isoformat(),
         expires_at=expires.isoformat(),
     )
@@ -224,12 +295,24 @@ def decode_invite_token(token_str: str, *, verify_signature: bool = True) -> Inv
     else:
         logger.warning("Signature verification skipped (--trust mode)")
 
-    # Check version
-    if payload.get("v") != 1:
-        raise ValueError(f"Unsupported token version: {payload.get('v')}")
+    # v1 tokens carried no connection_id, so both sides minted their own and
+    # silently failed to find each other. Refusing them is the point: a
+    # downgrade must be an error the operator sees, not a pairing that appears
+    # to succeed and then never carries a message.
+    version = payload.get("v")
+    if version != 2:
+        raise ValueError(
+            f"Unsupported token version: {version}. Tokens issued before "
+            f"connection ids were shared (v1) cannot be paired — reissue with "
+            f"`robothor federation invite`."
+        )
+    if not payload.get("connection_id"):
+        raise ValueError("Token has no connection_id — reissue the invite")
 
     return InviteToken(
         token=token_str,
+        connection_id=payload["connection_id"],
+        transport=dict(payload.get("transport") or {}),
         issuer_id=payload["issuer_id"],
         issuer_name=payload["issuer_name"],
         issuer_endpoint=payload["issuer_endpoint"],
@@ -246,6 +329,7 @@ def consume_invite_token(
     token_str: str,
     *,
     trust: bool = False,
+    tenant_id: str = "",
 ) -> Connection:
     """Consume an invite token to establish a connection.
 
@@ -273,15 +357,22 @@ def consume_invite_token(
 
     now = datetime.now(UTC).isoformat()
     connection = Connection(
-        id=str(uuid.uuid4()),
+        # Adopt the ISSUER's id. Both sides must name the same connection or
+        # the subjects never line up.
+        id=invite.connection_id,
         peer_id=invite.issuer_id,
         peer_name=invite.issuer_name,
         peer_endpoint=invite.issuer_endpoint,
         peer_public_key=invite.issuer_public_key,
         relationship=our_relationship,
         state=ConnectionState.PENDING,
-        exports=default_exports_for(our_relationship),
-        imports=default_exports_for(invite.relationship),
+        exports=default_exports_for(invite.relationship),
+        imports=default_exports_for(our_relationship),
+        tenant_id=tenant_id or DEFAULT_TENANT,
+        local_principal_id=f"federation:{invite.connection_id}",
+        local_principal_role=principal_role_for_peer(our_relationship),
+        direction="outbound",  # we consumed the invite, so we dial them
+        transport=dict(invite.transport),
         metadata={
             "connection_secret_hash": hashlib.sha256(invite.connection_secret.encode()).hexdigest(),
         },

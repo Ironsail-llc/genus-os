@@ -69,6 +69,9 @@ install_one() {
 # removes its check too. Keep the literal two-argument form.
 install_one "${REPO_ROOT}/scripts/wal-archive.sh" "robothor-wal-archive.sh"
 install_one "${REPO_ROOT}/scripts/thermal-guard.sh" "robothor-thermal-guard.sh"
+install_one "${REPO_ROOT}/scripts/thermal-shed.sh" "robothor-thermal-shed.sh"
+install_one "${REPO_ROOT}/scripts/boot-guard.sh" "robothor-boot-guard.sh"
+install_one "${REPO_ROOT}/scripts/gpu-clock-cap.sh" "robothor-gpu-clock-cap.sh"
 
 # ── Retired mirrors ───────────────────────────────────────────────────────────
 # pg-basebackup.sh and wal-offsite.sh were mirrored here and never invoked:

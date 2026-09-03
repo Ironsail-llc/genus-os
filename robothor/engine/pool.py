@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from enum import StrEnum
 from threading import Lock
 from typing import Any
 
@@ -34,6 +35,26 @@ class CostRecord:
     completed_at: float  # monotonic clock
 
 
+class Priority(StrEnum):
+    """How a run competes for a slot.
+
+    INTERACTIVE bypasses admission entirely — a human is waiting, and queueing
+    them behind a nightly CRM sweep is the inversion this exists to prevent.
+    CRITICAL may take a reserved slot; BACKGROUND may not.
+    """
+
+    INTERACTIVE = "interactive"
+    CRITICAL = "critical"
+    BACKGROUND = "background"
+
+
+#: Extra slots CRITICAL work may take when the cap is one, where the
+#: interactive reservation is impossible by construction. ONE, not more: the
+#: point is that a CRITICAL run is never queued *behind background work*, not
+#: that CRITICAL is unbounded — at two active runs the next one still waits.
+CRITICAL_OVERFLOW_AT_ONE_SLOT = 1
+
+
 class FleetPool:
     """Fleet-wide admission control for agent runs.
 
@@ -49,9 +70,15 @@ class FleetPool:
         self,
         max_concurrent: int = 3,
         hourly_cost_cap_usd: float = 5.0,
+        reserved_slots: int = 0,
     ) -> None:
         self._max_concurrent = max_concurrent
         self._hourly_cost_cap_usd = hourly_cost_cap_usd
+        # Slots BACKGROUND work may not occupy. A cap alone still lets nightly
+        # sweeps fill every slot and leave an operator's message third in line;
+        # holding one back makes that structurally impossible. Default 0 keeps
+        # existing behaviour byte-for-byte.
+        self._reserved_slots = reserved_slots
         self._active: dict[str, ActiveRun] = {}  # run_id → ActiveRun
         self._cost_history: list[CostRecord] = []
         self._lock = Lock()
@@ -67,14 +94,40 @@ class FleetPool:
         with self._lock:
             return self._hourly_cost_total()
 
-    def can_start(self, agent_id: str) -> tuple[bool, str]:
+    def can_start(self, agent_id: str, priority: Priority = Priority.CRITICAL) -> tuple[bool, str]:
         """Check if a new run can start.
 
         Returns (allowed, reason). If not allowed, reason explains why.
+
+        Default priority is CRITICAL so every existing caller keeps its current
+        behaviour: it competes for the whole pool and ignores the reservation.
         """
+        if priority is Priority.INTERACTIVE:
+            # Never queued. Local inference has its own backpressure
+            # (OLLAMA_MAX_QUEUE, LOCAL_CAPACITY_RETRIES) to absorb the overshoot;
+            # a person waiting on an answer does not.
+            return True, ""
+
         with self._lock:
+            limit = self._max_concurrent
+            if priority is Priority.BACKGROUND and self._reserved_slots > 0:
+                limit = max(0, self._max_concurrent - self._reserved_slots)
+                if len(self._active) >= limit:
+                    return False, (
+                        f"Background run refused: {len(self._active)}/{self._max_concurrent} "
+                        f"slots used and {self._reserved_slots} reserved for interactive work"
+                    )
+            elif priority is Priority.CRITICAL and self._max_concurrent <= 1:
+                # A one-slot cap is the size at which the reservation above
+                # cannot exist: holding the only slot back would stall the
+                # fleet, so `mode_policy` sets reserved_slots=0 there and the
+                # slot goes to whoever asked first. Whoever asks first is cron.
+                # Measured on a LOCAL episode: main's CRITICAL heartbeat was
+                # refused 12 times while BACKGROUND sweeps held the single GPU
+                # slot. Overflow, not reservation, is the only lever left.
+                limit = self._max_concurrent + CRITICAL_OVERFLOW_AT_ONE_SLOT
             # Concurrency check
-            if len(self._active) >= self._max_concurrent:
+            if len(self._active) >= limit:
                 return False, (
                     f"Fleet at capacity: {len(self._active)}/{self._max_concurrent} concurrent runs"
                 )
@@ -111,6 +164,22 @@ class FleetPool:
                     )
                 )
             self._prune_cost_history()
+
+    def set_limits(
+        self, max_concurrent: int | None = None, reserved_slots: int | None = None
+    ) -> None:
+        """Retune the live pool without a restart.
+
+        The right limit is not a constant: it is the device's inference
+        capacity, which changes the moment the fleet falls back from a cloud
+        provider to a single local GPU. Waiting for a restart to apply that is
+        waiting through the outage.
+        """
+        with self._lock:
+            if max_concurrent is not None:
+                self._max_concurrent = max_concurrent
+            if reserved_slots is not None:
+                self._reserved_slots = reserved_slots
 
     def update_cost(self, run_id: str, cost_usd: float) -> None:
         """Update the running cost of an active run."""
@@ -154,11 +223,16 @@ def get_fleet_pool() -> FleetPool | None:
     return _fleet_pool
 
 
-def init_fleet_pool(max_concurrent: int = 3, hourly_cost_cap_usd: float = 5.0) -> FleetPool:
+def init_fleet_pool(
+    max_concurrent: int = 3,
+    hourly_cost_cap_usd: float = 5.0,
+    reserved_slots: int = 0,
+) -> FleetPool:
     """Initialize the fleet pool singleton."""
     global _fleet_pool
     _fleet_pool = FleetPool(
         max_concurrent=max_concurrent,
         hourly_cost_cap_usd=hourly_cost_cap_usd,
+        reserved_slots=reserved_slots,
     )
     return _fleet_pool

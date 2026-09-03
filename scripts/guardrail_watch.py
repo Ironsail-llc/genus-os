@@ -295,6 +295,18 @@ def check_stale_goals() -> None:
 DROPIN_MIRROR_DIR = REPO_ROOT / "infra" / "systemd" / "robothor-engine.service.d"
 DROPIN_LIVE_DIR = Path("/etc/systemd/system/robothor-engine.service.d")
 
+#: Every unit whose drop-ins are mirrored and drift-checked, as
+#: (repo mirror dir, live dir). The engine was the only entry for a long time,
+#: which is why the local model server's thermal containment and model
+#: residency lived only in /etc — a rebuilt box would have lost both silently.
+DROPIN_UNITS: tuple[tuple[Path, Path], ...] = (
+    (DROPIN_MIRROR_DIR, DROPIN_LIVE_DIR),
+    (
+        REPO_ROOT / "infra" / "systemd" / "ollama.service.d",
+        Path("/etc/systemd/system/ollama.service.d"),
+    ),
+)
+
 
 def dropin_conf_pairs(
     mirror_dir: Path = DROPIN_MIRROR_DIR, live_dir: Path = DROPIN_LIVE_DIR
@@ -304,9 +316,18 @@ def dropin_conf_pairs(
     Kept separate from check_dropin_drift() so discovery is testable without
     touching /etc, per the injectable-pairs pattern below.
     """
-    if not mirror_dir.exists():
-        return []
-    return [(str(live_dir / p.name), str(p)) for p in sorted(mirror_dir.glob("*.conf"))]
+    if mirror_dir is not DROPIN_MIRROR_DIR or live_dir is not DROPIN_LIVE_DIR:
+        # Explicit override (tests, or a caller checking one unit).
+        if not mirror_dir.exists():
+            return []
+        return [(str(live_dir / p.name), str(p)) for p in sorted(mirror_dir.glob("*.conf"))]
+
+    pairs: list[tuple[str, str]] = []
+    for mirror, live in DROPIN_UNITS:
+        if not mirror.exists():
+            continue
+        pairs.extend((str(live / p.name), str(p)) for p in sorted(mirror.glob("*.conf")))
+    return pairs
 
 
 def check_dropin_drift(pairs: list[tuple[str, str]] | None = None) -> None:
@@ -349,6 +370,11 @@ HOST_SCRIPT_DRIFT_PAIRS: list[tuple[str, str]] = [
     # The thermal guard is a SAFETY control (Aug 2026 GPU event) that ran for
     # weeks with no repo mirror at all — a rebuilt box would have lost it.
     ("/usr/local/bin/robothor-thermal-guard.sh", "scripts/thermal-guard.sh"),
+    # The shedding half, and the crash-loop breaker that keeps a remote-only box
+    # reachable. Both are SAFETY controls; drift on either is silent until it matters.
+    ("/usr/local/bin/robothor-thermal-shed.sh", "scripts/thermal-shed.sh"),
+    ("/usr/local/bin/robothor-boot-guard.sh", "scripts/boot-guard.sh"),
+    ("/usr/local/bin/robothor-gpu-clock-cap.sh", "scripts/gpu-clock-cap.sh"),
     # /etc/logrotate.d/robothor existed with NO repo source and covered one
     # glob, so brain/memory_system/logs/ reached 205 MB unrotated. A rotation
     # policy nothing checks is one edit away from being that gap again.
@@ -490,6 +516,22 @@ BACKUP_STATE_DIR_DEFAULT = "/var/lib/robothor/backup-state"
 
 #: The one implementation of the DB-free SLOs, shared with the hourly pager.
 SLO_PROBE = REPO_ROOT / "scripts" / "slo_probe.sh"
+
+#: Where this report writes down that it finished, and under what name.
+#:
+#: S8 (scripts/slo_probe.sh) used to ask systemd alone: `ExecMainExitTimestamp`
+#: of robothor-guardrail-watch.service. That property is per-unit RUNTIME
+#: state, and a reboot empties it — so at 03:01 on 2026-09-03, hours after a
+#: boot, the hourly probe paged "no completed run on this box" while the 08:30
+#: run the day before had finished cleanly. Every reboot day produced that
+#: false page.
+#:
+#: So the run history systemd forgets is written down, on NVMe, in the same
+#: one-line `<date -Is> <identifier>` shape as scripts/backup-state.sh's
+#: markers and for the same reason: the evidence of when something last worked
+#: must outlive the thing that forgets it.
+SLO_STATE_DIR_DEFAULT = "/var/lib/robothor/slo-state"
+GUARDRAIL_WATCH_MARKER = "last-guardrail-watch"
 
 #: marker file -> (label, budget env var, default hours). Nightly tiers get 26h
 #: (a 24h cycle plus room for a late run); the base backup is weekly, and a
@@ -1077,7 +1119,77 @@ def check_instance_manifests(
     return True
 
 
+def mark_run_completed(state_dir: str | Path | None = None) -> bool:
+    """Stamp "this report reached its end" where S8 can read it after a reboot.
+
+    This is BOOKKEEPING, so it never fails its caller — the same contract as
+    `backup_state_mark` in scripts/backup-state.sh. A report that genuinely ran
+    and found nothing must not come back as a failed unit because /var/lib was
+    read-only; that would fire OnFailure= and page the operator about the
+    pager. The failure is loud on stdout instead, because a marker that
+    silently fails to write is an S8 that pages after the next reboot with
+    nobody knowing why.
+
+    Write-then-rename, at 0664. The marker directory is 2775 precisely because
+    the writer is not always the same account: the unit runs as the service
+    user, but an operator debugging the report runs it by hand under sudo and
+    leaves a root-owned marker behind. Opening THAT file in place fails for the
+    service user forever, and the swallow above would hide it — the marker
+    would freeze at whenever that one run happened, and a frozen marker reads,
+    26 hours later, as a daily report that stopped running. A rename needs
+    permission on the DIRECTORY, which every writer here has, and it is atomic:
+    a probe reading the marker while this runs sees the old line or the new
+    one, never half of either.
+    """
+    root = Path(
+        state_dir
+        if state_dir is not None
+        else os.environ.get("ROBOTHOR_SLO_STATE_DIR", SLO_STATE_DIR_DEFAULT)
+    )
+    marker = root / GUARDRAIL_WATCH_MARKER
+    scratch = root / f".{GUARDRAIL_WATCH_MARKER}.{os.getpid()}.tmp"
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        # With its UTC offset: a bare local time reads as hours of drift the
+        # moment the box changes zone, and S8 does date arithmetic on this.
+        stamp = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        try:
+            scratch.write_text(f"{stamp} guardrail-watch\n")
+            # Explicit, not umask: the next account to run the report has to be
+            # able to replace this one, and a 0644 marker under a stricter
+            # umask is the frozen-marker bug with extra steps.
+            scratch.chmod(0o664)
+            scratch.replace(marker)
+        finally:
+            # A scratch file left behind in the marker directory is litter the
+            # operator has to explain; os.replace consumed it on the happy path.
+            scratch.unlink(missing_ok=True)
+    except OSError as exc:
+        print(
+            f"  WARNING: could not stamp the S8 marker at "
+            f"{marker}: {exc}. This run is unaffected, "
+            "but S8 will have no evidence it happened once a reboot clears "
+            "systemd's ExecMainExitTimestamp."
+        )
+        return False
+    return True
+
+
 def main() -> int:
+    exit_code = _run_all_checks()
+    # The run reached its end. Exit 0 (clean) and exit 1 (findings, or a
+    # partial report after a database outage) are both "this report RAN",
+    # which is the only question S8 asks — the unit is a Type=oneshot that
+    # exits 1 BY DESIGN when it has something to say.
+    #
+    # An exception propagating out of _run_all_checks() skips this line on
+    # purpose: a run that died halfway must not leave evidence that it
+    # completed, or S8 would read a crash loop as a healthy daily report.
+    mark_run_completed()
+    return exit_code
+
+
+def _run_all_checks() -> int:
     # DB-free checks run FIRST and unconditionally. 2026-08-16: this unit's
     # Persistent=true timer fired at boot before postgres was up. The
     # DB-dependent section used to run first in this function; get_connection()

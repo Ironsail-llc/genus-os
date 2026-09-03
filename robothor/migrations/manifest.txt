@@ -114,3 +114,5 @@ crm/108_run_resume_attempts.sql
 crm/109_facts_entities_lower_gin.sql
 crm/110_tool_event_error_message.sql
 crm/111_drop_shadowing_ann_index.sql
+crm/112_federation_principals.sql
+crm/113_add_do_not_contact.sql

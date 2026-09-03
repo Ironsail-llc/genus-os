@@ -193,6 +193,9 @@ def test_the_derivation_finds_the_scripts_it_is_supposed_to_guard():
         "liveness_probe.sh",
         "send_failure_alert.sh",
         "thermal-guard.sh",
+        "thermal-shed.sh",
+        "boot-guard.sh",
+        "gpu-clock-cap.sh",
         "backup-ssd.sh",
         "backup-offsite.sh",
         "wal-offsite.sh",
@@ -329,3 +332,25 @@ def test_cron_wrapper_does_not_hand_the_operator_PATH_to_the_command_it_wraps(
 
 
 # ── preflight completeness ───────────────────────────────────────────────────
+
+
+def test_boot_guard_preflights_every_tool_it_shells_out_to():
+    """``tr`` trims the boot count read out of ``wc`` — it is not in the
+    ``require_tools`` preflight, so a missing ``tr`` would read as an empty or
+    malformed count instead of a named, loud failure at start-up."""
+    source = (SCRIPTS / "boot-guard.sh").read_text()
+    line = next(
+        (
+            stripped
+            for stripped in (raw.strip() for raw in source.splitlines())
+            if stripped.startswith("require_tools ")
+        ),
+        None,
+    )
+    assert line is not None, "boot-guard.sh has no preflight at all"
+    required = set(line.split()) - {"require_tools"}
+    assert "tr" in required, (
+        "boot-guard.sh calls `tr` (trimming the boot count) but does not "
+        "preflight it — a missing tr would read as an empty/bad count "
+        "rather than a named, loud failure"
+    )

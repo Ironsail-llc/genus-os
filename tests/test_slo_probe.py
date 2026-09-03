@@ -266,6 +266,25 @@ def write_all_markers(state_dir: Path, age_hours: float = 1) -> None:
         write_marker(state_dir, name, age_hours)
 
 
+def write_guardrail_marker(tmp_path: Path, age_hours: float) -> Path:
+    """The marker scripts/guardrail_watch.py stamps when the daily report
+    FINISHES — the run history systemd forgets across a reboot. Same one-line
+    ``<date -Is> <identifier>`` shape as the backup markers."""
+    state_dir = tmp_path / "slo-state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    when = dt.datetime.now().astimezone() - dt.timedelta(hours=age_hours)
+    path = state_dir / "last-guardrail-watch"
+    path.write_text(f"{when.isoformat(timespec='seconds')} guardrail-watch\n")
+    return path
+
+
+def write_uptime(tmp_path: Path, up_hours: float) -> Path:
+    """/proc/uptime's own format: seconds up, then seconds idle."""
+    path = tmp_path / "uptime"
+    path.write_text(f"{up_hours * 3600:.2f} {up_hours * 3600 * 3:.2f}\n")
+    return path
+
+
 def write_dump(dump_dir: Path, age_hours: float, name: str = "robothor_memory-fixture.sql.gz"):
     dump_dir.mkdir(parents=True, exist_ok=True)
     path = dump_dir / name
@@ -344,6 +363,16 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
             "HOME": str(tmp_path),
             # The two live paths this probe would otherwise read.
             "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "backup-state"),
+            # S8's post-reboot fallback reads a marker under the LIVE
+            # /var/lib/robothor/slo-state and the LIVE /proc/uptime. Both are
+            # pinned so the suite's verdict cannot depend on when this box last
+            # booted or on whether the operator's daily report ran this
+            # morning. The default uptime is deliberately long: "this box has
+            # been up for a month" is the state in which every pre-existing S8
+            # case was written, so pinning it keeps those cases measuring what
+            # they always measured.
+            "ROBOTHOR_SLO_STATE_DIR": str(tmp_path / "slo-state"),
+            "ROBOTHOR_SLO_UPTIME_FILE": str(write_uptime(tmp_path, 720)),
             "ROBOTHOR_SLO_LOCAL_DUMP_DIR": str(tmp_path / "dumps"),
             "ROBOTHOR_SLO_BASEBACKUP_DIR": str(tmp_path / "basebackup"),
             # Seams: no volume probe, no rclone, no psql by default, and a
@@ -380,6 +409,13 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
 def run_probe(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["bash", str(PROBE)], capture_output=True, text=True, timeout=120, env=env
+    )
+
+
+def run_probe_report(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """--report: the machine-readable rows the daily surface consumes."""
+    return subprocess.run(
+        ["bash", str(PROBE), "--report"], capture_output=True, text=True, timeout=120, env=env
     )
 
 
@@ -684,6 +720,8 @@ class TestTheGuardrailWatchStalenessSlo:
         assert log.exists() and "slo:guardrail-watch-stale" in log.read_text()
 
     def test_a_unit_that_never_completed_is_a_breach_not_silence(self, tmp_path: Path):
+        """No exit timestamp, no marker, and a box that has been up for a
+        month: the report really has never completed here."""
         healthy_tree(tmp_path)
         env = base_env(tmp_path)
         units = healthy_units()
@@ -792,6 +830,215 @@ class TestS8MeasuresWhetherTheReportRanNotWhetherItFoundNothing:
 
         assert log.exists(), "30h since the last completed run is the breach S8 exists for"
         assert "slo:guardrail-watch-stale" in log.read_text()
+
+
+class TestS8SurvivesAReboot:
+    """`ExecMainExitTimestamp` is per-unit RUNTIME state, and a reboot empties
+    it.
+
+    THE FAILURE THIS CLOSES
+
+        2026-09-03, 03:01. The box had rebooted overnight. S8 asked systemd
+        when robothor-guardrail-watch.service last exited, got an empty
+        property back, and paged:
+
+            S8 BREACHED: robothor-guardrail-watch.service has no completed run
+            on this box.
+
+        It had one. The daily report ran at 08:30 the previous morning and
+        finished cleanly; systemd simply does not carry a oneshot's exit
+        timestamp across a boot. So the dead-man for the daily watchdog cried
+        wolf on every reboot day — on the surface whose entire value is being
+        believed the one time it speaks.
+
+    THE FIX
+
+        The run history systemd forgets is written down. guardrail_watch.py
+        stamps ``${ROBOTHOR_SLO_STATE_DIR}/last-guardrail-watch`` when it
+        finishes, on NVMe, for the same reason the backup jobs stamp theirs:
+        the evidence of when something last worked must outlive the thing that
+        forgets it. With no timestamp AND no marker, the question becomes how
+        long this box has been up — because a report whose 08:30 slot has not
+        come round yet is not a report that stopped running.
+    """
+
+    @staticmethod
+    def _forgotten_stamp(tmp_path: Path, env: dict[str, str]) -> None:
+        """A box that has just booted: systemd answers with an empty
+        ExecMainExitTimestamp, exactly as it did at 03:01."""
+        units = healthy_units()
+        units["robothor-guardrail-watch.service"]["ExecMainExitTimestamp"] = ""
+        with_units(tmp_path, env, units)
+
+    def test_a_fresh_marker_answers_for_the_timestamp_systemd_forgot(self, tmp_path: Path):
+        """(a) Yesterday's 08:30 run, this morning's reboot. Not a breach."""
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        self._forgotten_stamp(tmp_path, env)
+        write_guardrail_marker(tmp_path, age_hours=19)
+        log = with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        assert not log.exists(), (
+            "the report completed 19h ago and said so on disk; paging here is "
+            f"the false alarm this test exists for: {log.read_text() if log.exists() else ''}"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "19h" in result.stdout, (
+            "the journal must show the age it actually measured, and where it "
+            f"came from: {result.stdout}"
+        )
+        assert "marker" in result.stdout.lower()
+
+    def test_a_stale_marker_still_breaches(self, tmp_path: Path):
+        """(b) The fallback is a measurement, not an excuse: a marker 30h old
+        is still a daily report that has not run since the day before."""
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        self._forgotten_stamp(tmp_path, env)
+        write_guardrail_marker(tmp_path, age_hours=30)
+        log = with_recording_alert(tmp_path, env)
+
+        run_probe(env)
+
+        assert log.exists(), "30h since the last completed run is a breach however it was measured"
+        body = log.read_text()
+        assert "slo:guardrail-watch-stale" in body
+        assert "30" in body, "the page must carry the AGE"
+
+    def test_a_box_that_just_booted_is_unevaluated_not_a_breach(self, tmp_path: Path):
+        """(c) No timestamp, no marker, up two hours: the 08:30 slot has not
+        come round yet. Nothing has been proven wrong, so nobody is woken."""
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        self._forgotten_stamp(tmp_path, env)
+        env["ROBOTHOR_SLO_UPTIME_FILE"] = str(write_uptime(tmp_path, 2))
+        log = with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        assert not log.exists(), (
+            "a box that booted two hours ago has not missed a daily run yet — "
+            f"this is the 03:01 page: {log.read_text() if log.exists() else ''}"
+        )
+        output = result.stdout + result.stderr
+        assert "UNEVALUATED" in output, "not measurable yet must be said in that word, not implied"
+        assert "S8" in output and "2h" in output, output
+        assert result.returncode == 0, (
+            "exit 1 fires the unit's own OnFailure= — that would page the "
+            "operator HOURLY for the first 26h of every boot, which is a worse "
+            f"version of the false page this branch removes: {output}"
+        )
+
+    def test_a_long_uptime_with_no_marker_is_still_a_breach(self, tmp_path: Path):
+        """(d) Up 40 hours, no marker, no timestamp: the daily report really
+        has not completed here, and the boot excuse has expired."""
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        self._forgotten_stamp(tmp_path, env)
+        env["ROBOTHOR_SLO_UPTIME_FILE"] = str(write_uptime(tmp_path, 40))
+        log = with_recording_alert(tmp_path, env)
+
+        run_probe(env)
+
+        assert log.exists(), (
+            "40h of uptime with no completed run and no marker is the breach "
+            "S8 exists for — the reboot fallback must not swallow it"
+        )
+        assert "slo:guardrail-watch-stale" in log.read_text()
+
+    def test_an_unreadable_uptime_source_falls_back_to_the_breach(self, tmp_path: Path):
+        """A probe that cannot read /proc/uptime must not invent an excuse.
+        Unknown uptime reads as the old behaviour, which errs towards paging."""
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        self._forgotten_stamp(tmp_path, env)
+        env["ROBOTHOR_SLO_UPTIME_FILE"] = str(tmp_path / "no-such-uptime")
+        log = with_recording_alert(tmp_path, env)
+
+        run_probe(env)
+
+        assert log.exists(), "an unknown uptime must not become a silent pass"
+
+    def test_a_stale_marker_beats_the_uptime_excuse(self, tmp_path: Path):
+        """Order matters, and it is not negotiable: the marker is EVIDENCE,
+        uptime is only an excuse for the ABSENCE of evidence.
+
+        A box rebooted two hours ago whose marker says the last completed run
+        was 30h back has genuinely missed a daily run — the boot is not what
+        stopped it, and the marker proves the report was capable of running on
+        this box. Checking uptime first would turn every reboot into a 26-hour
+        amnesty during which a genuinely dead watchdog pages nobody.
+        """
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        self._forgotten_stamp(tmp_path, env)
+        write_guardrail_marker(tmp_path, age_hours=30)
+        env["ROBOTHOR_SLO_UPTIME_FILE"] = str(write_uptime(tmp_path, 2))
+        log = with_recording_alert(tmp_path, env)
+
+        run_probe(env)
+
+        assert log.exists(), (
+            "a fresh boot must not excuse a marker that says the report "
+            "stopped running 30h ago — evidence outranks the excuse"
+        )
+        body = log.read_text()
+        assert "slo:guardrail-watch-stale" in body
+        assert "30" in body, body
+
+    def test_a_future_dated_marker_is_unusable_not_the_freshest_run(self, tmp_path: Path):
+        """A marker dated in the future is evidence of nothing.
+
+        `now - marker` goes negative when the clock jumps forward, when NTP
+        corrects a box that booted with a bad RTC, or when a marker is restored
+        from a box in another zone. Read arithmetically that is "completed -4h
+        ago", i.e. the freshest possible run — a dead watchdog reported as
+        healthier than a healthy one, and permanently, because the condition
+        does not age out. Unusable has to mean unusable.
+        """
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        self._forgotten_stamp(tmp_path, env)
+        write_guardrail_marker(tmp_path, age_hours=-4)
+        log = with_recording_alert(tmp_path, env)
+
+        result = run_probe(env)
+
+        assert log.exists(), "a marker from the future must never read as a fresh run"
+        body = log.read_text()
+        assert "slo:guardrail-watch-stale" in body
+        assert "future" in body.lower(), "the page must say what is wrong with the marker"
+        assert "clock" in body.lower(), "and name the cause the operator has to go fix"
+        assert "-4h" not in result.stdout, (
+            f"a negative age must never be printed as an age: {result.stdout}"
+        )
+
+    def test_report_mode_shows_the_same_reasoning(self, tmp_path: Path):
+        """--report is the daily surface's only view of S8, and it must not be
+        a second implementation: same marker, same words."""
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        self._forgotten_stamp(tmp_path, env)
+        write_guardrail_marker(tmp_path, age_hours=19)
+
+        rows = [r for r in run_probe_report(env).stdout.splitlines() if "S8" in r]
+
+        assert rows, "S8 must still emit a row in report mode"
+        assert rows[0].endswith("OK"), rows[0]
+        assert "marker" in rows[0].lower() and "19h" in rows[0], rows[0]
+
+    def test_report_mode_says_not_yet_measurable_after_a_boot(self, tmp_path: Path):
+        healthy_tree(tmp_path)
+        env = base_env(tmp_path)
+        self._forgotten_stamp(tmp_path, env)
+        env["ROBOTHOR_SLO_UPTIME_FILE"] = str(write_uptime(tmp_path, 2))
+
+        rows = [r for r in run_probe_report(env).stdout.splitlines() if "S8" in r]
+
+        assert rows and rows[0].endswith("UNEVALUATED"), rows
+        assert "2h" in rows[0], rows[0]
 
 
 class TestTheLivenessSlo:

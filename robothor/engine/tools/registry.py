@@ -8,6 +8,7 @@ import math
 import re
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.spawn_cancel import tool_deadline
 from robothor.engine.tools.constants import (
     CORE_TOOLS,
     GOAL_TOOLS,
@@ -654,21 +655,26 @@ class ToolRegistry:
 
         try:
             if timeout > 0:
-                async with asyncio.timeout(timeout):
-                    return await _execute_tool(
-                        tool_name,
-                        arguments,
-                        agent_id=agent_id,
-                        run_id=run_id,
-                        tenant_id=tenant_id,
-                        workspace=workspace,
-                        user_id=user_id,
-                        user_role=user_role,
-                        accessible_tenant_ids=accessible_tenant_ids,
-                        task_author_override=task_author_override,
-                        is_benchmark=is_benchmark,
-                        identity=identity,
-                    )
+                # tool_deadline names this deadline for the frames below it.
+                # A sub-agent runs inline under it, and on cancellation the
+                # spawn path has to say whether the deadline fired (timeout)
+                # or something else cancelled the parent (cancelled).
+                with tool_deadline(timeout):
+                    async with asyncio.timeout(timeout):
+                        return await _execute_tool(
+                            tool_name,
+                            arguments,
+                            agent_id=agent_id,
+                            run_id=run_id,
+                            tenant_id=tenant_id,
+                            workspace=workspace,
+                            user_id=user_id,
+                            user_role=user_role,
+                            accessible_tenant_ids=accessible_tenant_ids,
+                            task_author_override=task_author_override,
+                            is_benchmark=is_benchmark,
+                            identity=identity,
+                        )
             else:
                 return await _execute_tool(
                     tool_name,

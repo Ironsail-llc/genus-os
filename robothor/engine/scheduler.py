@@ -18,6 +18,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from croniter import croniter  # type: ignore[import-untyped,unused-ignore]
 
+from robothor.engine.admission import admit, complete, register
 from robothor.engine.config import (
     ManifestScan,
     load_manifest_dir,
@@ -243,6 +244,13 @@ def _persistent_save_skip_reason(run: AgentRun) -> str | None:
     if text and len(text) < 200 and "\n" not in text:
         return "short_no_structure"
     return None
+
+
+#: Gap between catch-up spawns after downtime. Catching up must not become the
+#: next outage: the loop launched every missed agent at once, at a device that
+#: serves a handful of concurrent requests. This paces them; the catch_up /
+#: stale_after_minutes policy still decides WHETHER each one runs.
+CATCH_UP_STAGGER_SECONDS = 5.0
 
 
 class CronScheduler:
@@ -533,22 +541,30 @@ class CronScheduler:
         """Fire, at most once each, any cron occurrence missed while the
         daemon was down. Best-effort per agent — one bad schedule row or
         cron expression must never stop the others from being checked."""
+        spawned = 0
         for agent_config in agent_configs:
             try:
-                self._catch_up_one(agent_config)
+                if self._catch_up_one(
+                    agent_config, delay_seconds=spawned * CATCH_UP_STAGGER_SECONDS
+                ):
+                    spawned += 1
             except Exception as e:
                 logger.warning("Cron catch-up check failed for %s: %s", agent_config.id, e)
 
-    def _catch_up_one(self, agent_config: AgentConfig) -> None:
+    def _catch_up_one(self, agent_config: AgentConfig, delay_seconds: float = 0.0) -> bool:
         """Spawn exactly one catch-up run for `agent_config` if the most
-        recent scheduled occurrence happened after its last recorded run."""
+        recent scheduled occurrence happened after its last recorded run.
+
+        Returns True when a run was spawned, so the caller advances the
+        stagger only for agents that actually launched -- otherwise one
+        skipped agent would push every later one out for no reason."""
         schedule = get_schedule(agent_config.id)
         if not schedule:
-            return  # no schedule row — nothing to catch up against
+            return False  # no schedule row — nothing to catch up against
 
         last_run_at = schedule.get("last_run_at")
         if last_run_at is None:
-            return  # no baseline — avoid a stampede on first-ever start
+            return False  # no baseline — avoid a stampede on first-ever start
 
         if last_run_at.tzinfo is None:
             last_run_at = last_run_at.replace(tzinfo=UTC)
@@ -559,15 +575,15 @@ class CronScheduler:
             prev_occurrence = croniter(agent_config.cron_expr, now).get_prev(datetime)
         except Exception as e:
             logger.warning("Cron catch-up: invalid cron expression for %s: %s", agent_config.id, e)
-            return
+            return False
 
         if prev_occurrence <= last_run_at:
-            return  # last run already covers the most recent occurrence
+            return False  # last run already covers the most recent occurrence
 
         if agent_config.catch_up == "skip_if_stale":
             stale_after = timedelta(minutes=agent_config.stale_after_minutes)
             if now - prev_occurrence > stale_after:
-                return  # missed occurrence is older than the policy allows
+                return False  # missed occurrence is older than the policy allows
 
         logger.info(
             "Cron catch-up: %s missed %s, running now",
@@ -575,9 +591,17 @@ class CronScheduler:
             prev_occurrence.isoformat(),
         )
         get_task_registry().spawn(
-            self._run_agent(agent_config.id),
+            self._run_agent_after(agent_config.id, delay_seconds),
             name=f"cron-catchup:{agent_config.id}",
         )
+        return True
+
+    async def _run_agent_after(self, agent_id: str, delay_seconds: float) -> None:
+        """Run `agent_id` after `delay_seconds`, so a batch of catch-ups arrives
+        paced rather than all at once."""
+        if delay_seconds > 0:
+            await asyncio.sleep(delay_seconds)
+        await self._run_agent(agent_id)
 
     # ─── Shared execution path ────────────────────────────────────────
 
@@ -618,6 +642,8 @@ class CronScheduler:
             if self._circuit_breaker_tripped(dedup_key, agent_config):
                 return
 
+            if not admit(agent_id, agent_config, self.config):
+                return
             # No scheduler-level wall-clock cap. When the agent has an
             # explicit timeout_seconds > 0 the runner's asyncio.timeout
             # handles it; otherwise the run goes until completion. A
@@ -625,6 +651,7 @@ class CronScheduler:
             # caught by the progress-based stall watchdog if the operator
             # opts in.
             try:
+                register(dedup_key, agent_id)  # released in the finally below
                 if agent_config.timeout_seconds > 0:
                     safety_timeout = agent_config.timeout_seconds + 120
                     async with asyncio.timeout(safety_timeout):
@@ -652,6 +679,7 @@ class CronScheduler:
                 self._record_timeout(dedup_key)
 
         finally:
+            complete(dedup_key)
             await release(dedup_key)
 
     def _circuit_breaker_tripped(self, dedup_key: str, agent_config: AgentConfig) -> bool:

@@ -66,6 +66,17 @@
 #       1 a breach was found and its page could NOT be delivered, or an SLO
 #         could NOT be evaluated at all — an inert dead-man must be loud, and
 #         the unit's OnFailure= is the only voice an unevaluated check has
+#
+#       UNEVALUATED therefore has TWO meanings, and only one of them fails the
+#       unit. An SLO whose INSTRUMENT failed (no systemctl, no database, an
+#       unreadable directory) exits 1: silence there is indistinguishable from
+#       health. An SLO that is NOT YET MEASURABLE — today only S8, on a box
+#       that booted less than its budget ago and has neither a systemd exit
+#       timestamp nor a marker — exits 0 and pages nobody: nothing is
+#       unmeasured, there is simply nothing yet to measure, and failing the
+#       unit for it would page hourly through OnFailure= for the first 26 hours
+#       of every boot. Both print the word UNEVALUATED and emit an UNEVALUATED
+#       row; neither is ever OK.
 #       2 the probe is misconfigured and cannot answer — including a tool it
 #         needs that does not resolve on PATH, which is named on stderr
 #
@@ -88,6 +99,16 @@
 #                                      (scripts/backup-volume-check.sh --ro)
 #   ROBOTHOR_SLO_SYSTEMCTL_CMD         systemctl, for S5 and S8
 #   ROBOTHOR_SLO_GUARDRAIL_WATCH_MAX_HOURS  S8 budget (26)
+#   ROBOTHOR_SLO_STATE_DIR             S8's last-guardrail-watch marker
+#                                      (/var/lib/robothor/slo-state), written
+#                                      by scripts/guardrail_watch.py. It is
+#                                      what S8 reads after a reboot empties
+#                                      systemd's ExecMainExitTimestamp.
+#   ROBOTHOR_SLO_UPTIME_FILE           where "how long has this box been up"
+#                                      comes from (/proc/uptime). With neither
+#                                      a timestamp nor a marker, a box up for
+#                                      less than the S8 budget has not missed a
+#                                      daily run yet. Overridable for tests.
 #   ROBOTHOR_SLO_LIVENESS_MAX_HOURS         S5 budget (1)
 #   ROBOTHOR_SLO_GUARDRAIL_COOLDOWN_SECONDS 12h
 #   ROBOTHOR_SLO_LIVENESS_COOLDOWN_SECONDS  12h
@@ -189,6 +210,12 @@ BASEBACKUP_MAX_HOURS="${ROBOTHOR_SLO_BASEBACKUP_MAX_HOURS:-192}"
 BASEBACKUP_DIR="${ROBOTHOR_SLO_BASEBACKUP_DIR:-${ROBOTHOR_BASEBACKUP_DIR:-/mnt/robothor-backup/robothor/basebackup}}"
 # S8: the daily report runs at 08:30, so 26h is one missed run plus slack.
 GUARDRAIL_WATCH_MAX_HOURS="${ROBOTHOR_SLO_GUARDRAIL_WATCH_MAX_HOURS:-26}"
+# S8's post-reboot evidence. Same spelling and default as
+# scripts/guardrail_watch.py's SLO_STATE_DIR_DEFAULT, which writes it.
+SLO_STATE_DIR="${ROBOTHOR_SLO_STATE_DIR:-/var/lib/robothor/slo-state}"
+GUARDRAIL_MARKER="${SLO_STATE_DIR}/last-guardrail-watch"
+# /proc/uptime, seamed so a test can say when this box booted.
+UPTIME_FILE="${ROBOTHOR_SLO_UPTIME_FILE:-/proc/uptime}"
 # S5: the liveness timer fires every 5 minutes. An hour is twelve missed ticks.
 LIVENESS_MAX_HOURS="${ROBOTHOR_SLO_LIVENESS_MAX_HOURS:-1}"
 
@@ -341,6 +368,36 @@ marker_epoch() {
 }
 
 hours_since() { echo $(( (NOW - $1) / 3600 )); }
+
+# Epoch seconds of the guardrail-watch marker, or non-zero when there is none.
+#
+# Its own file rather than backup_state_last: the backup helpers are keyed on
+# ROBOTHOR_BACKUP_STATE_DIR, and folding an SLO marker into the BACKUP marker
+# directory would make one env var move two unrelated measurements.
+guardrail_marker_epoch() {
+    local line ts
+    [[ -r "$GUARDRAIL_MARKER" ]] || return 1
+    line="$(head -n 1 "$GUARDRAIL_MARKER" 2>/dev/null || true)"
+    # Field 1 is the timestamp; the identifier after it is for a human reading
+    # the file. Trim surrounding whitespace and any \r first — a marker
+    # restored through a Windows box must not read as a different time.
+    line="${line#"${line%%[![:space:]]*}"}"
+    ts="${line%%[[:space:]]*}"
+    [[ -n "$ts" ]] || return 1
+    date -d "$ts" +%s 2>/dev/null || return 1
+}
+
+# Whole hours since this box booted, or non-zero when that cannot be read.
+# /proc/uptime's first field is seconds up, as a float.
+uptime_hours() {
+    local raw secs
+    [[ -r "$UPTIME_FILE" ]] || return 1
+    raw="$(head -n 1 "$UPTIME_FILE" 2>/dev/null || true)"
+    secs="${raw%%[[:space:]]*}"
+    secs="${secs%%.*}"
+    [[ "$secs" =~ ^[0-9]+$ ]] || return 1
+    echo $(( secs / 3600 ))
+}
 
 # ── S4: backup freshness (the dead-man) ──────────────────────────────────────
 
@@ -575,6 +632,21 @@ unevaluated() {
     UNEVALUATED=1
 }
 
+# UNEVALUATED, but WITHOUT failing the unit.
+#
+# `unevaluated` above sets UNEVALUATED=1, and an unevaluated run exits 1 so the
+# unit's own OnFailure= pages. That is right when the INSTRUMENT failed —
+# silence there is indistinguishable from health, which is how six built-and-
+# wired controls turned out to be inert.
+#
+# This is a different state. The instrument answered, and the answer is a fact:
+# this box booted N hours ago and the daily report's 08:30 slot has not come
+# round yet. Nothing is unmeasured; there is simply nothing yet to measure.
+# Failing the unit for it would page the operator EVERY HOUR for the first 26
+# hours of every boot, through OnFailure= instead of through page() — a louder
+# version of exactly the false page this branch exists to remove.
+not_yet_measurable() { err "  $1 UNEVALUATED — $2"; }
+
 # The Results that mean the run did not FINISH. Everything else that has an
 # exit timestamp completed, whatever status it completed with.
 #
@@ -591,7 +663,7 @@ unevaluated() {
 INCOMPLETE_RESULTS="timeout signal core-dump watchdog"
 
 check_guardrail_watch() {
-    local out result status stamp epoch age how
+    local out result status stamp epoch age how marker_epoch up_hours
     local label="S8 guardrail-watch ran" target="completed < ${GUARDRAIL_WATCH_MAX_HOURS}h ago"
     out="$(show_props robothor-guardrail-watch.service ExecMainExitTimestamp,ExecMainStatus,Result)"
     if [[ -z "$out" ]]; then
@@ -604,9 +676,54 @@ check_guardrail_watch() {
     stamp="$(prop_of "$out" ExecMainExitTimestamp)"
 
     if ! epoch="$(stamp_epoch "$stamp")"; then
+        # SYSTEMD FORGETS ACROSS A REBOOT. ExecMainExitTimestamp is per-unit
+        # RUNTIME state: it is empty after every boot, whatever this unit did
+        # yesterday. At 03:01 on 2026-09-03, hours after a reboot, that empty
+        # property read as "never ran here" and paged — while the 08:30 run the
+        # day before had completed cleanly. Every reboot day produced it.
+        #
+        # So the run history systemd lost is read off NVMe instead:
+        # guardrail_watch.py stamps ${SLO_STATE_DIR}/last-guardrail-watch on
+        # its last step. The BUDGET is unchanged — this is a second source for
+        # the same measurement, not a second, softer rule.
+        if marker_epoch="$(guardrail_marker_epoch)"; then
+            age="$(hours_since "$marker_epoch")"
+            if (( age < 0 )); then
+                # A marker from the FUTURE is evidence of nothing. The
+                # arithmetic reads it as "completed -4h ago" — fresher than any
+                # real run, and permanently, because the condition does not age
+                # out: a dead watchdog would be reported healthier than a live
+                # one for as long as the clock stays wrong. NTP correcting a
+                # box that booted with a bad RTC does this, and so does a
+                # marker restored from a box in another zone.
+                emit "$label" "$target" "marker is dated $(( -age ))h in the FUTURE — unusable" "BREACH"
+                page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
+                    "S8 BREACHED: ${GUARDRAIL_MARKER} is dated $(( -age ))h in the FUTURE, so S8 has no usable evidence that the daily report ran — systemd's exit timestamp is empty (normal after a reboot) and the marker cannot be believed. This is CLOCK SKEW on this box, not a backup problem: check timedatectl/NTP first, then delete the marker and run robothor-guardrail-watch.service by hand. Runbook: docs/runbooks/SLOS.md (S8)." || true
+            elif (( age > GUARDRAIL_WATCH_MAX_HOURS )); then
+                emit "$label" "$target" "marker says last completed ${age}h ago (systemd has no timestamp)" "BREACH"
+                page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
+                    "S8 BREACHED: robothor-guardrail-watch.service last completed ${age}h ago (budget ${GUARDRAIL_WATCH_MAX_HOURS}h), per ${GUARDRAIL_MARKER}. systemd has no exit timestamp for it, which is normal after a reboot — the marker is the surviving evidence, and it says the daily report has stopped running. Runbook: docs/runbooks/SLOS.md (S8)." || true
+            else
+                log "  S8 guardrail-watch: systemd has no exit timestamp (a reboot clears it); the marker says last completed ${age}h ago (budget ${GUARDRAIL_WATCH_MAX_HOURS}h) — OK"
+                emit "$label" "$target" "marker says last completed ${age}h ago (systemd has no timestamp)" "OK"
+            fi
+            return
+        fi
+
+        # Neither source has an answer. Before calling that a breach, ask how
+        # long this box has been up: a report whose 08:30 slot has not come
+        # round yet is not a report that stopped running. An uptime that cannot
+        # be read is NOT an excuse — unknown falls through to the breach below,
+        # because a dead-man that invents reasons to stay quiet is not one.
+        if up_hours="$(uptime_hours)" && (( up_hours < GUARDRAIL_WATCH_MAX_HOURS )); then
+            not_yet_measurable "S8" "no run yet this boot (up ${up_hours}h): systemd's exit timestamp is cleared by a reboot and ${GUARDRAIL_MARKER} does not exist yet. The daily report's next slot has not passed — this becomes a breach at ${GUARDRAIL_WATCH_MAX_HOURS}h of uptime."
+            emit "$label" "$target" "no run yet this boot (up ${up_hours}h)" "UNEVALUATED"
+            return
+        fi
+
         emit "$label" "$target" "no completed run on this box" "BREACH"
         page "slo:guardrail-watch-stale" "$GUARDRAIL_COOLDOWN" \
-            "S8 BREACHED: robothor-guardrail-watch.service has no completed run on this box. The daily SLO report, the drop-in/host-script drift checks and instance manifest validation have never produced a result here. Runbook: docs/runbooks/SLOS.md (S8)." || true
+            "S8 BREACHED: robothor-guardrail-watch.service has no completed run on this box — no exit timestamp from systemd and no ${GUARDRAIL_MARKER} marker, on a box that has been up long enough to have run one. The daily SLO report, the drop-in/host-script drift checks and instance manifest validation have never produced a result here. Runbook: docs/runbooks/SLOS.md (S8)." || true
         return
     fi
     age="$(hours_since "$epoch")"

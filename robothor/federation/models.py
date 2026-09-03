@@ -124,6 +124,31 @@ class Connection:
     created_at: str = ""
     updated_at: str = ""
 
+    # ── Migration 112: the principal this peer acts as, locally ──────
+    # The authorization gate reads these three on every inbound op. They are
+    # deliberately unset by default: `_principal()` then falls back to
+    # `federation_child`, which migration 112 seeds `'*' -> deny`. A peer that
+    # was never explicitly granted a role therefore has none.
+    tenant_id: str = "default"
+    local_principal_id: str = ""
+    local_principal_role: str = ""
+
+    # Which way the link was established. `inbound` means the peer dialled us.
+    direction: str = "outbound"
+
+    # How to reach the peer: {"kind": "nats", "url": ..., "account": ...}.
+    # A dict rather than a string because a connection carries credentials and
+    # an endpoint, not just a protocol name.
+    transport: dict[str, Any] = field(default_factory=dict)
+
+    # Set by the handshake, not by `save_connection`. `activated_at` is the
+    # only honest answer to "since when?"; `last_seen_at` is the only honest
+    # answer to "is the transport alive?" — `state` answers neither, which is
+    # why `federation status` printed `active` for a dead link.
+    activated_at: str = ""
+    last_seen_at: str = ""
+    last_error: str = ""
+
 
 # ── Invite Token ─────────────────────────────────────────────────────
 
@@ -133,6 +158,10 @@ class InviteToken:
     """One-time token for connection establishment (Consul pattern)."""
 
     token: str = ""  # base64-encoded blob
+    connection_id: str = ""  # minted by the issuer; BOTH sides adopt it
+    #: How to reach the issuer's broker, and the credential minted for this
+    #: peer. Signed with the rest of the payload.
+    transport: dict[str, Any] = field(default_factory=dict)
     issuer_id: str = ""
     issuer_name: str = ""
     issuer_endpoint: str = ""
@@ -160,32 +189,74 @@ class SyncEvent:
     created_at: str = ""
 
 
-# ── Default export templates per relationship ────────────────────────
+# ── Capabilities ─────────────────────────────────────────────────────
+#
+# Read every name below as "what the PEER may do TO US". That direction is the
+# whole point, and the old vocabulary did not encode it.
+#
+# The previous set conflated reading with executing: `agent_runs` was the
+# required capability for BOTH `list_runs` and `trigger`, and it sat in
+# CHILD_DEFAULT_EXPORTS. A child therefore got the right to run arbitrary
+# agents on its parent BY DEFAULT — the exact inversion of the intended
+# hierarchy, where a parent has authority over its children and a child has
+# none over its parent.
 
-PARENT_DEFAULT_EXPORTS = [
-    "memory_search",
-    "crm_read",
-    "config_push",
-]
+CAP_REPORT_UP = "report_up"  # peer may push telemetry/escalations to us
+CAP_READ_HEALTH = "read_health"  # peer may read our liveness
+CAP_READ_RUNS = "read_runs"  # peer may LIST our runs
+CAP_TRIGGER_AGENT = "trigger_agent"  # peer may EXECUTE on us — never a default
+CAP_SEARCH_MEMORY = "search_memory"  # peer may query our memory
+CAP_PUSH_CONFIG = "push_config"  # peer may change our config — never a default
 
-CHILD_DEFAULT_EXPORTS = [
-    "health",
-    "agent_runs",
-    "sensor_data",
-    "alerts",
-    "escalation",
-]
+#: Capabilities that let a peer CHANGE this instance. Neither may ever appear
+#: in a default template; both require an explicit, audited grant.
+WRITE_CAPABILITIES = frozenset({CAP_TRIGGER_AGENT, CAP_PUSH_CONFIG})
 
-PEER_DEFAULT_EXPORTS: list[str] = []  # No defaults — fully negotiated
+#: What a CHILD peer may do to us: report upward, and nothing else. This is
+#: what makes "children have no control over the parent" the default rather
+#: than an opt-in.
+CHILD_DEFAULT_EXPORTS = [CAP_REPORT_UP]
+
+#: What a PARENT peer may do to us: read-only. A parent that got owned should
+#: have a blast radius the child's operator chose deliberately.
+PARENT_DEFAULT_EXPORTS = [CAP_READ_HEALTH, CAP_READ_RUNS]
+
+#: A symmetric peer negotiates everything explicitly.
+PEER_DEFAULT_EXPORTS: list[str] = []
 
 
 def default_exports_for(relationship: Relationship) -> list[str]:
-    """Return default export capabilities for a relationship type."""
+    """Default capabilities granted TO a peer of this relationship type."""
     if relationship == Relationship.PARENT:
         return list(PARENT_DEFAULT_EXPORTS)
     if relationship == Relationship.CHILD:
         return list(CHILD_DEFAULT_EXPORTS)
     return list(PEER_DEFAULT_EXPORTS)
+
+
+# ── The role a peer acts as, locally ─────────────────────────────────
+#
+# Seeded by migration 112. `federation_parent` gets read-only allows;
+# `federation_child` gets `'*' -> deny`. `check_tool_permission` fails closed
+# on an unseeded role, so these two strings must keep matching the migration —
+# `test_wiring.py` asserts exactly that.
+
+ROLE_FEDERATION_PARENT = "federation_parent"
+ROLE_FEDERATION_CHILD = "federation_child"
+
+
+def principal_role_for_peer(our_relationship: Relationship) -> str:
+    """The local role the PEER acts as, given OUR relationship to them.
+
+    Inverted, and deliberately so: if we are the PARENT, the peer is our child
+    and gets the deny-all role. PEER links are not part of the organisational
+    model Genus OS exposes, so they also get deny-all rather than defaulting
+    into anything elevated — a symmetric peer must be granted capabilities one
+    at a time, explicitly.
+    """
+    if our_relationship == Relationship.CHILD:
+        return ROLE_FEDERATION_PARENT
+    return ROLE_FEDERATION_CHILD
 
 
 # ── Conflict resolution strategies ───────────────────────────────────

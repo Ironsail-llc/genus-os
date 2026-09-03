@@ -15,6 +15,43 @@ def _set_robothor_email():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _no_opted_out_recipients():
+    """Nobody in this file's fixtures has opted out of contact.
+
+    The send and reply paths consult `crm_people.do_not_contact` before
+    handing anything to the CLI, and an unreadable opt-out list refuses the
+    send (see `test_gws_do_not_contact.py`). Left unpatched these tests would
+    reach for a real database to answer a question about threading, duplicate
+    guards and MIME encoding — passing or failing on whether a Postgres
+    happens to be running. The opt-out behaviour has its own file; here it is
+    pinned out of the way.
+    """
+    with patch("robothor.crm.dal.do_not_contact_emails", return_value=set()):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _calls_carry_a_tenant():
+    """Give every call in this file the tenant a real dispatch carries.
+
+    The opt-out list is per-tenant, so the guard refuses a call that names no
+    tenant rather than silently reading `default`'s list. Real calls arrive
+    from `ToolContext.tenant_id`; these tests call the handler directly, and
+    47 call sites should not each have to restate a fact about a guard they
+    are not testing. Injected here rather than stubbed out, so the guard still
+    runs — it just gets the scope it would have in production.
+    """
+    from robothor.engine.tools.handlers.gws import _handle_gws_tool as _real
+
+    def _with_tenant(name, args, **kwargs):
+        kwargs.setdefault("tenant_id", "tenant-a")
+        return _real(name, args, **kwargs)
+
+    with patch("robothor.engine.tools._handle_gws_tool", _with_tenant):
+        yield
+
+
 # ─── Tool registration ──────────────────────────────────────────────
 
 

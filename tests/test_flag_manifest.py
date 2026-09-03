@@ -31,17 +31,76 @@ def test_manifest_exists_and_parses():
     assert isinstance(data.get("flags"), list) and data["flags"], "flags list empty"
 
 
+#: Marker a soak note uses to state what is actually blocking a promotion.
+#: A date pushed out with no reason is indistinguishable from a date nobody
+#: read, which is how "48h soak" became 44 days.
+BLOCKER_MARKER = "BLOCKER:"
+
+#: The one legitimate way an entry may sit in a pre-enforce mode with no
+#: promotion date: the promotion is not applicable on this instance, and that
+#: is a recorded decision rather than a missing one.
+PROMOTION_NA = "n/a-on-this-instance"
+
+
+def blocker_lines(entry: dict) -> list[str]:
+    """The non-empty ``BLOCKER:`` lines in an entry's soak note."""
+    return [
+        line.strip()
+        for line in str(entry.get("soak", "")).splitlines()
+        if line.strip().startswith(BLOCKER_MARKER)
+        and line.strip().removeprefix(BLOCKER_MARKER).strip()
+    ]
+
+
 def test_manifest_entries_have_required_fields():
     data = yaml.safe_load(MANIFEST.read_text())
     for entry in data["flags"]:
         for field in ("name", "owner", "mode", "soak"):
             assert field in entry, f"{entry.get('name', entry)} missing {field!r}"
         assert entry["mode"] in ("off", "observe", "alert", "enforce", "on"), entry["name"]
-        # every non-terminal flag must carry a promotion deadline
+        # every non-terminal flag must carry a promotion deadline, or say in
+        # `promotion:` why it will never have one
         if entry["mode"] in ("observe", "alert"):
-            assert entry.get("planned_promotion"), (
-                f"{entry['name']} is in {entry['mode']} but has no planned_promotion date"
+            assert entry.get("planned_promotion") or entry.get("promotion") == PROMOTION_NA, (
+                f"{entry['name']} is in {entry['mode']} but has neither a "
+                f"planned_promotion date nor promotion: {PROMOTION_NA}"
             )
+        # ... and never both: two answers to one question is no answer.
+        assert not (entry.get("planned_promotion") and entry.get("promotion")), (
+            f"{entry['name']} carries both planned_promotion and promotion"
+        )
+
+
+def test_blocker_lines_reads_only_non_empty_markers():
+    assert blocker_lines({"soak": "text\nBLOCKER: the probe has never run\nmore"}) == [
+        "BLOCKER: the probe has never run"
+    ]
+    assert blocker_lines({"soak": "no marker here"}) == []
+    assert blocker_lines({"soak": "BLOCKER:"}) == []
+    assert blocker_lines({}) == []
+
+
+def test_overdue_entries_name_what_is_blocking_them():
+    """Re-dating a missed promotion without writing down why is how a deadline
+    becomes wallpaper. Any entry still in observe/alert past its own
+    planned_promotion must say, in its soak note, what has to happen first."""
+    today = dt.datetime.now(tz=dt.UTC).date()
+    data = yaml.safe_load(MANIFEST.read_text())
+    silent = []
+    for entry in data["flags"]:
+        if entry.get("mode") not in ("observe", "alert"):
+            continue
+        planned = entry.get("planned_promotion")
+        if not planned:
+            continue
+        if dt.date.fromisoformat(str(planned)) >= today:
+            continue
+        if not blocker_lines(entry):
+            silent.append(entry["name"])
+    assert not silent, (
+        f"overdue with no stated blocker: {silent}. Add a '{BLOCKER_MARKER} ...' "
+        "line to soak: naming what must happen before the flip."
+    )
 
 
 def test_manifest_covers_live_dropin_mode_flags():

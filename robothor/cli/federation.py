@@ -32,16 +32,38 @@ def cmd_federation(args: argparse.Namespace) -> int:
 
     if sub == "invite":
         from robothor.federation.config import FederationConfig
+        from robothor.federation.connections import load_connections
         from robothor.federation.identity import create_invite_token
         from robothor.federation.models import Relationship
+        from robothor.federation.provisioning import provision_broker, reload_broker
 
         config = FederationConfig.from_env()
         relationship = Relationship(args.relationship)
         token = create_invite_token(config, relationship=relationship, ttl_hours=args.ttl)
+
+        # Provision the broker account BEFORE printing the token. Until
+        # 2026-08-27 this step did not exist: the token was minted, the row was
+        # persisted, and no NATS account was created — so the peer would redeem
+        # it, do everything right, and be refused with an Authorization
+        # Violation. The whole accounts block is regenerated from the current
+        # connection list, so a revoked peer's credential goes away too.
+        provisioned = provision_broker(load_connections())
+        reloaded, detail = reload_broker()
+
         print(f"Invite token (expires in {args.ttl}h):\n")
         print(token.token)
         print(f"\nRelationship: {relationship.value}")
         print(f"Peer sees you as: {_invert_rel(relationship)}")
+        print(f"Connection ID:    {token.connection_id}")
+        print(f"\nBroker: {len(provisioned.peers)} account(s) in {provisioned.accounts_path}")
+        if reloaded:
+            print("        reloaded — the peer can connect now.")
+        else:
+            # Not a warning buried in a log: the operator is about to hand this
+            # token to someone, and it will not work until the broker has read
+            # the account.
+            print(f"        \033[31mNOT RELOADED\033[0m — {detail}")
+            return 1
         return 0
 
     if sub == "connect":
@@ -77,21 +99,47 @@ def cmd_federation(args: argparse.Namespace) -> int:
         if not identity:
             print("No instance identity. Run: robothor federation init")
             return 1
+        from robothor.federation.health import fleet_health
+
         print(f"Instance: {identity.display_name} ({identity.id[:12]}...)")
         print()
         connections = load_connections()
         if not connections:
             print("No connections.")
             return 0
-        for conn in connections:
+
+        # `state` records that a link was once established. It cannot say
+        # whether the transport exists now, and printing it alone is what made
+        # a five-month outage look like a healthy fleet. The verdict below
+        # comes from last_seen_at, which only the daemon writes and only when
+        # it has actually verified the wire.
+        summary = fleet_health(connections)
+        for conn, health in summary.links:
+            peer = conn.peer_name or "(unpaired)"
             print(
-                f"  {conn.peer_name:<24} {conn.state.value:<12} {conn.relationship.value:<8} {conn.id[:12]}..."
+                f"  {peer:<24} {conn.state.value:<10} {health.verdict.value:<15} "
+                f"{conn.relationship.value:<8} {conn.id[:12]}..."
             )
+            print(f"    {health.detail}")
+            if conn.last_error:
+                print(f"    last error: {conn.last_error}")
             if conn.exports:
                 print(f"    exports: {', '.join(conn.exports)}")
             if conn.imports:
                 print(f"    imports: {', '.join(conn.imports)}")
-        print(f"\n{len(connections)} connection(s)")
+
+        print(
+            f"\n{summary.total} connection(s), {summary.attached} carrying traffic"
+            + (f", {summary.alarming} NOT ATTACHED" if summary.alarming else "")
+        )
+        if summary.alarming:
+            print(
+                "\nThis instance is not federated on the links above, whatever "
+                "their state column says. Check the engine log for "
+                "'Federation:' lines, and that ROBOTHOR_NATS_URL and "
+                "ROBOTHOR_NATS_USER/PASSWORD are set for the daemon."
+            )
+            return 1
         return 0
 
     if sub == "list":

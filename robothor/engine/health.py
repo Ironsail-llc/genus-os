@@ -34,6 +34,33 @@ def validate_engine_auth_configuration() -> None:
     )
 
 
+def _execution_mode_block() -> dict[str, Any]:
+    """Which economics are in force, and why we believe the numbers.
+
+    Reported rather than asserted: a capability probe that cannot be inspected
+    is indistinguishable from a guess, so every host number carries its source.
+    Never raises -- a sensor problem must not take down the health endpoint
+    that would be used to diagnose it.
+    """
+    try:
+        from robothor.engine.execution_mode import tracker
+        from robothor.engine.host_profile import detect_host_profile
+        from robothor.engine.mode_policy import policy_for
+
+        snapshot = tracker().snapshot()
+        host = detect_host_profile()
+        policy = policy_for(tracker().mode(), host)
+        return {
+            "available": True,
+            **snapshot,
+            "host": host.describe(),
+            "policy": policy.describe(),
+        }
+    except Exception:
+        logger.warning("Execution-mode block unavailable", exc_info=True)
+        return {"available": False}
+
+
 def create_health_app(
     config: EngineConfig, runner: AgentRunner | None = None, workflow_engine: Any = None
 ) -> Any:
@@ -728,6 +755,7 @@ def create_health_app(
                 "tenant_id": config.tenant_id,
                 "bot_configured": bool(config.bot_token),
                 "agents": agents,
+                "execution_mode": _execution_mode_block(),
             }
         except Exception:
             logger.exception("Health check failed")
@@ -835,12 +863,40 @@ def create_health_app(
                 raise RuntimeError(f"required agents missing: {', '.join(sorted(missing))}")
             return "ok"
 
+        async def check_federation() -> str:
+            """Federation is ready when every link that says it is running,
+            is. An instance with no connections is ready — most are.
+
+            Deliberately reports the gap between "rows exist" and "transport
+            attached", because that gap was invisible for five months and
+            `federation status` agreed with the wrong answer the whole time.
+            """
+            import asyncio
+
+            from robothor.federation.connections import load_connections
+            from robothor.federation.health import fleet_health
+
+            connections = await asyncio.to_thread(load_connections)
+            summary = fleet_health(connections)
+            if summary.healthy:
+                return "ok"
+            broken = [
+                f"{c.peer_name or c.id[:12]}: {h.verdict.value}"
+                for c, h in summary.links
+                if h.alarming
+            ]
+            raise RuntimeError(
+                f"{summary.alarming} of {summary.total} federation link(s) are not "
+                f"carrying traffic ({'; '.join(broken)})"
+            )
+
         try:
             checks: dict[str, Any] = {
                 "database": check_db,
                 "redis": check_redis,
                 "schedules": check_schedules,
                 "fleet": check_fleet,
+                "federation": check_federation,
             }
             body, status = await readiness_response("engine", __version__, checks)
             return JSONResponse(body, status_code=status)

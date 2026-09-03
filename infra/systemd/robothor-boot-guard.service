@@ -1,0 +1,25 @@
+# Crash-loop breaker — runs once per boot, BEFORE anything that can heat the box.
+#
+# This instance is remote-access only. A reboot loop is therefore not merely an
+# outage, it is a loss of administrative access: on 2026-08-28 the box rebooted
+# every ~2 minutes and the only way back in was that narrow window. This unit
+# counts boots and, on detecting a loop, inhibits inference so the machine stays
+# up, idle and reachable instead of cycling.
+#
+# After=network.target, NOT multi-user.target: units ordered after
+# multi-user.target never start on this box when plymouth-quit-wait hangs.
+[Unit]
+Description=Robothor — crash-loop breaker (inhibits inference after repeated boots)
+After=network.target
+Before=ollama.service robothor-engine.service
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/usr/local/bin/robothor-boot-guard.sh
+
+[Install]
+WantedBy=multi-user.target

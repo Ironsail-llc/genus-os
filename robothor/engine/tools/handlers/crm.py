@@ -168,6 +168,7 @@ async def _update_person(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "companyId": "company_id",
         "linkedinUrl": "linkedin_url",
         "avatarUrl": "avatar_url",
+        "doNotContact": "do_not_contact",
     }
     kwargs = {dal_key: args[k] for k, dal_key in field_map.items() if k in args and k != "id"}
     ok = await asyncio.to_thread(update_person, pid, tenant_id=ctx.tenant_id, **kwargs)

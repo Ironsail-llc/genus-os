@@ -73,6 +73,26 @@ variable present in both files. The env file holds instance data (secrets,
 tenant ids) so it cannot be mirrored into the repo — keep each flag in exactly
 one place, and prefer the versioned drop-in.
 
+### Rule: `/etc/robothor/robothor.env` carries no `*_MODE=` and no `*_ENABLED=`
+
+The mirror test in `tests/test_flag_manifest.py` binds `infra/flags.yaml` to
+the drop-in and to nothing else — it reads
+`infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf` and cannot see
+the env file, which is not in git and never will be. So a guardrail set only
+in the env file is invisible to every gate in CI: the manifest can say
+`observe` while the box runs `enforce` and no test anywhere disagrees.
+
+That is not hypothetical either. On 2026-09-02 three controls were found
+living only there — completion-contracts (`enforce`), admission (`enforce`)
+and the deliverable contract (`observe`). `flags.yaml` said admission was in
+`observe`; it had been enforcing since 2026-08-27. Nothing in git recorded any
+of it, and a rebuilt instance would have come up without all three. They now
+ship in the drop-in and the env-file lines are gone.
+
+If you are adding a guardrail flag, it goes in the drop-in and in
+`infra/flags.yaml`, in the same PR. The env file is for instance data —
+secrets, tenant ids, paths — not for posture.
+
 **Before trusting a flip, confirm the running process actually changed:**
 
 ```sh
@@ -106,8 +126,21 @@ Tags:
 | `SHADOW-LAYER:db` | a `feature_flags` row governs — every file layer is inert |
 | `SHADOW-LAYER:envfile` | `robothor.env` governs — a drop-in flip would do nothing, and nothing in git records this posture |
 | `SHADOW-LAYER:environ` | the value came from neither file (`systemctl set-environment`, the unit itself, the launching shell) |
+| `PINNED:db@<actor>` | a `feature_flags` row governs **and an operator surface wrote it** — the supported way to flip a governed flag |
 | `OVERDUE` | still in a pre-promotion mode past its `planned_promotion` |
 | `DEBUG-ENV` | a panic switch or self-test hook is set on this box |
+
+`PINNED:db@<actor>` and `SHADOW-LAYER:db` are the same layer with different
+provenance, and the difference is deliberate. `robothor.flags.store.set_flag`
+is called from exactly one place — the Controls dashboard, whose
+`require_operator` stamps `updated_by` as `operator:<actor_id>` — so a row
+carrying that actor is a decision an operator made on a surface built for it,
+and the audit reports it without failing. Any other actor (a sync job, a
+script, a stray `psql`) is unversioned posture that nothing would restore, and
+still exits 1. Tagging the legitimate case as a shadow made every dashboard
+flip page every morning forever, which is how a daily nag becomes wallpaper.
+A `PINNED` row still beats every file layer, so a drop-in edit to that flag
+does nothing until the row is cleared.
 
 Note the wider `SHADOW-LAYER:envfile` rule: `check_dropin_drift.sh` reports
 `SHADOWED` only when a name is in **both** files, so a guardrail living
@@ -155,18 +188,66 @@ Then revert the mirror in a follow-up PR so drift-check stays green — never
 leave live and mirror disagreeing, and never leave a `.bak-` copy behind as
 "the rollback": git already holds it, with the diff and the reason attached.
 
-## Current promotion ladder (2026-07-13)
+## Current promotion ladder (2026-09-02)
+
+`infra/flags.yaml` is the authority for every row here; this table is the
+index. Each pre-enforce flag past its date carries a `BLOCKER:` line in its
+`soak:` note saying what must happen first —
+`tests/test_flag_manifest.py::test_overdue_entries_name_what_is_blocking_them`
+fails if one is re-dated without a reason.
 
 | Flag | Mode | Status |
 |------|------|--------|
 | `ROBOTHOR_RBAC_MODE` | enforce | done 2026-07-02 |
-| `ROBOTHOR_INJECTION_SCAN_MODE` | observe → enforce | 0 events in 11d — flip #1 |
-| `ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE` | observe → enforce | 0 events in 11d — flip #2 |
-| `ROBOTHOR_APPROVAL_MODE` | observe → enforce | 0 events in 11d — flip #3, on a watched day (see `docs/runbooks/approval-enforce.md`) |
-| `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | observe → alert | 3 events — review, then 7-day ladder |
-| `ROBOTHOR_RIP_7_MODE`, `ROBOTHOR_RIP_13_MODE` | observe → alert | ladder overdue |
-| `ROBOTHOR_SANDBOX_DEFAULT_MODE` | observe | 363 would-blocks — triage + canary before any flip |
-| `ROBOTHOR_RUN_VERIFICATION_MODE` | observe | new 2026-08-21 — soak the `unverified_claims` rate before alert |
+| `ROBOTHOR_INJECTION_SCAN_MODE` | enforce | done 2026-07-13 — 0 events in 11d |
+| `ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE` | enforce | done 2026-07-13 |
+| `ROBOTHOR_APPROVAL_MODE` | enforce | done 2026-07-13, on a watched day (see `docs/runbooks/approval-enforce.md`) |
+| `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | enforce | done 2026-07-14 — 3 events, evidence gap fixed |
+| `ROBOTHOR_RIP_7_MODE` | enforce | done 2026-07-13 — the only positively PROVEN mechanism |
+| `ROBOTHOR_ADMISSION_MODE` | enforce | **enforcing since 2026-08-27**; recorded in `flags.yaml` 2026-09-02. 52 `execution_mode_admission` rows 08-28..30 prove it fires. 14 are `critical:` — a pool reservation defect, fixed separately, NOT a reason to drop back to observe |
+| `ROBOTHOR_DELIVERABLE_CONTRACT_MODE` | observe → alert (2026-09-30) | new entry 2026-09-02; 1 observed row. `docs/runbooks/DELIVERABLE_CONTRACT.md` |
+| `ROBOTHOR_SANDBOX_DEFAULT_MODE` | observe (2026-09-16) | BLOCKER: settle the six exec-holding manifests first — 4 declare `sandbox: host`, checked before the mode |
+| `ROBOTHOR_RIP_13_MODE` | observe (2026-09-20) | BLOCKER: 0 evidence rows ever; nothing writes `rip_13_symbolic_memory`. Wire evidence or set it off with a reason |
+| `ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE` | observe (2026-09-20) | BLOCKER: the observe reporter has produced 0 rows; probe one before flipping (analytics-only) |
+| `ROBOTHOR_RUN_VERIFICATION_MODE` | observe (2026-09-05) | soak the `unverified_claims` rate before alert |
+| `ROBOTHOR_PLUGIN_MANIFEST_MODE` | observe, permanent | `promotion: n/a-on-this-instance` — zero plugins installed, so enforce is a no-op here |
+| `ROBOTHOR_DNC_MODE` | enforce | shipped enforcing — **no ladder**, see below |
+
+### `ROBOTHOR_DNC_MODE` — the one flag with no ladder
+
+The `crm_people.do_not_contact` opt-out
+(`robothor/engine/tools/handlers/gws.py::_dnc_refusal`, enforced on
+`gws_gmail_send`, `gws_gmail_reply` and `gws_calendar_create`) is a compliance
+control, not a containment experiment, so it shipped straight to `enforce` and
+has no `planned_promotion`. Two rungs only.
+
+| Rung | Behaviour |
+|------|-----------|
+| `observe` | the checks run and still file an `agent_guardrail_events` row (`guardrail_name='do_not_contact'`, action `observed`) — **and the message goes out anyway**. The one exception is the unreadable-list branch, which files nothing because that write would go to the database whose failure caused the refusal. |
+| `enforce` (default) | the send is refused; the row is filed with action `blocked`. |
+
+There is no `off` — an opt-out that can be switched off entirely is not a
+control — and no `alert`, because `observe` already writes the row an alert
+rung would page on. `valid_values_for` rejects both, so the dashboard will not
+offer them.
+
+**Read the ladder backwards for this one.** Everywhere else in this runbook,
+`observe` is a rung on the way up and `enforce` is the goal. Here `enforce` is
+the shipped state and `observe` is an incident lever: it exists so an operator
+whose CRM is unreachable at 3am has something to reach for other than
+commenting out the call, and a guard that is watching and recording beats a
+guard that has been deleted. While it is set, people who asked not to be
+contacted will be contacted.
+
+So: **if `flag_audit` shows this flag in `observe`, that is an incident to
+close, not a soak in progress.** Its evidence verdict is the other exception:
+`ENFORCING` needs at least one `do_not_contact` row, so on an instance where
+nobody has opted out the flag reads `INERT` indefinitely — that is the guard
+having nothing to refuse, not the guard being disconnected; probe it by
+flagging a test person and sending to them. It will never appear in the `OVERDUE` list —
+`overdue_flags` only nags flags that carry a `planned_promotion`, and this one
+deliberately has none. Nothing will remind you. Put the reason in the flip's
+`reason` field and set it back.
 
 ### `ROBOTHOR_RUN_VERIFICATION_MODE` — what each rung does
 

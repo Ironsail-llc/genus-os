@@ -163,15 +163,35 @@ def save_connection(conn: Connection) -> None:
             INSERT INTO federation_connections
                 (id, peer_id, peer_name, peer_endpoint, peer_public_key,
                  relationship, state, exports, imports, nats_account,
-                 metadata, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 metadata, created_at, updated_at,
+                 tenant_id, local_principal_id, local_principal_role,
+                 direction, transport, activated_at, last_seen_at, last_error)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
+                -- The issuer writes its row BEFORE it knows who will redeem
+                -- the invite; the handshake is where it learns. Without these
+                -- four the identity it just verified is dropped on the floor,
+                -- and the connection has no peer key to verify anything
+                -- against after a restart.
+                peer_id = EXCLUDED.peer_id,
+                peer_name = EXCLUDED.peer_name,
+                peer_endpoint = EXCLUDED.peer_endpoint,
+                peer_public_key = EXCLUDED.peer_public_key,
                 state = EXCLUDED.state,
                 exports = EXCLUDED.exports,
                 imports = EXCLUDED.imports,
                 nats_account = EXCLUDED.nats_account,
                 metadata = EXCLUDED.metadata,
-                updated_at = EXCLUDED.updated_at
+                updated_at = EXCLUDED.updated_at,
+                tenant_id = EXCLUDED.tenant_id,
+                local_principal_id = EXCLUDED.local_principal_id,
+                local_principal_role = EXCLUDED.local_principal_role,
+                direction = EXCLUDED.direction,
+                transport = EXCLUDED.transport,
+                activated_at = EXCLUDED.activated_at,
+                last_seen_at = EXCLUDED.last_seen_at,
+                last_error = EXCLUDED.last_error
             """,
             (
                 conn.id,
@@ -187,6 +207,14 @@ def save_connection(conn: Connection) -> None:
                 json.dumps(conn.metadata),
                 conn.created_at,
                 conn.updated_at,
+                conn.tenant_id or "default",
+                conn.local_principal_id or None,
+                conn.local_principal_role or None,
+                conn.direction or "outbound",
+                json.dumps(conn.transport or {}),
+                conn.activated_at or None,
+                conn.last_seen_at or None,
+                conn.last_error or None,
             ),
         )
         db.commit()
@@ -205,7 +233,10 @@ def load_connections() -> list[Connection]:
                 """
                 SELECT id, peer_id, peer_name, peer_endpoint, peer_public_key,
                        relationship, state, exports, imports, nats_account,
-                       metadata, created_at, updated_at
+                       metadata, created_at, updated_at,
+                       tenant_id, local_principal_id, local_principal_role,
+                       direction, transport, activated_at, last_seen_at,
+                       last_error
                 FROM federation_connections
                 ORDER BY created_at
                 """
@@ -227,6 +258,14 @@ def load_connections() -> list[Connection]:
                 metadata=json.loads(row[10]) if isinstance(row[10], str) else (row[10] or {}),
                 created_at=str(row[11]) if row[11] else "",
                 updated_at=str(row[12]) if row[12] else "",
+                tenant_id=row[13] or "default",
+                local_principal_id=row[14] or "",
+                local_principal_role=row[15] or "",
+                direction=row[16] or "outbound",
+                transport=(json.loads(row[17]) if isinstance(row[17], str) else (row[17] or {})),
+                activated_at=str(row[18]) if row[18] else "",
+                last_seen_at=str(row[19]) if row[19] else "",
+                last_error=row[20] or "",
             )
             for row in rows
         ]
@@ -248,4 +287,30 @@ def delete_connection(connection_id: str) -> bool:
         return deleted
     except Exception as e:
         logger.warning("Failed to delete connection: %s", e)
+        return False
+
+
+def touch_last_seen(connection_id: str, *, error: str = "") -> bool:
+    """Record that the transport for this link was verified alive just now.
+
+    Deliberately its own tiny write rather than a full `save_connection`: the
+    heartbeat runs for every link on a schedule, and it must not race a
+    concurrent export change by rewriting the whole row.
+    """
+    try:
+        from robothor.db.connection import get_connection
+
+        with get_connection() as db:
+            cur = db.cursor()
+            cur.execute(
+                "UPDATE federation_connections "
+                "SET last_seen_at = NOW(), last_error = %s, updated_at = NOW() "
+                "WHERE id = %s",
+                (error or None, connection_id),
+            )
+            touched: bool = cur.rowcount > 0
+            db.commit()
+        return touched
+    except Exception as e:
+        logger.warning("Failed to touch last_seen_at for %s: %s", connection_id, e)
         return False

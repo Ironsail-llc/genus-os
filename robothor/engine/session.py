@@ -291,6 +291,13 @@ class AgentSession:
         """
         self.run.status = RunStatus.RUNNING
         self.run.started_at = datetime.now(UTC)
+        # The run has begun — tell anyone watching for it now, not when the
+        # loop starts. A sub-agent cancelled in the stretch between here and
+        # `session_registry.register` (prompt assembly, the planner call,
+        # sandbox start) is the incident signature this closes.
+        from robothor.engine import session_registry
+
+        session_registry.announce(self)
         self.run.system_prompt_chars = len(system_prompt)
         self.run.user_prompt_chars = len(user_message)
         # Retained, not recoverable. agent_runs stores only the CHAR COUNT, and

@@ -388,3 +388,59 @@ class TestCronHealthCheck:
         assert "# Cron Health Status" in content
         assert "test-agent" in content
         assert "Fleet Summary" in content
+
+
+# ─── classify_run_failure Tests ─────────────────────────────────────
+
+
+class TestClassifyRunFailureAgreesWithTheReaper:
+    """The tool reported `daemon_restart_in_window` from its own comparison.
+
+    `classify_reap_reason` was fixed to parse both timestamps to instants
+    before comparing them; this line kept the lexicographic string compare, so
+    the tool now answered "category: post_tool_crash" and
+    "daemon_restart_in_window: true" about the same run — worse than the
+    original bug, because the two halves of one answer disagree and the
+    operator has no way to tell which half is lying.
+    """
+
+    @staticmethod
+    async def _diagnose(started_iso: str, daemon_ts: str) -> dict:
+        from robothor.engine.tools.handlers.observability import HANDLERS
+
+        run = {
+            "id": "run-1",
+            "agent_id": "crm-hygiene",
+            "status": "timeout",
+            "started_at": started_iso,
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+        steps = [
+            {"step_type": "llm_call", "tool_name": None},
+            {"step_type": "tool_call", "tool_name": "list_tasks", "error_message": None},
+        ]
+        with (
+            patch("robothor.engine.tracking.get_run", return_value=run),
+            patch("robothor.engine.tracking.list_steps", return_value=steps),
+            patch.dict("os.environ", {"ROBOTHOR_DAEMON_START_TS": daemon_ts}),
+        ):
+            return await HANDLERS["classify_run_failure"]({"run_id": "run-1"}, None)
+
+    @pytest.mark.asyncio
+    async def test_a_run_that_started_after_the_boot_is_not_in_the_window(self):
+        """03:00:16-04:00 is 07:00:16Z — nine minutes AFTER a 06:51:20Z boot."""
+        out = await self._diagnose(
+            "2026-09-03T03:00:16.508797-04:00", "2026-09-03T06:51:20.843732+00:00"
+        )
+        assert out["daemon_restart_in_window"] is False
+        assert out["category"] == "post_tool_crash"
+
+    @pytest.mark.asyncio
+    async def test_the_mirror_case_still_reports_the_window(self):
+        """01:00:16-04:00 is 05:00:16Z — well before the same boot."""
+        out = await self._diagnose(
+            "2026-09-03T01:00:16.508797-04:00", "2026-09-03T06:51:20.843732+00:00"
+        )
+        assert out["daemon_restart_in_window"] is True
+        assert out["category"] == "daemon_restart"

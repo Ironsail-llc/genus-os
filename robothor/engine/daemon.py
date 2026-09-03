@@ -100,6 +100,35 @@ def _is_orphan(started_at: Any, daemon_start_ts: str | None) -> bool:
         return False
 
 
+def _started_before_boot(started_at_iso: str, daemon_start_ts: str | None) -> bool:
+    """Did this run start before the daemon booted? Compared as INSTANTS.
+
+    This was `started_at_iso < daemon_start_ts` — a lexicographic compare of
+    two ISO-8601 strings carrying DIFFERENT UTC offsets. `daemon_start_ts` is
+    always UTC (`datetime.now(UTC).isoformat()`); `started_at_iso` comes off
+    the psycopg2 row in the session's local offset. On 2026-09-03 that filed
+    run 0a78ed9f as `daemon_restart` because "…T03:00…" sorts below
+    "…T06:51…" — while 03:00:16−04:00 is 07:00:16Z, nine minutes AFTER the
+    06:51:20Z boot. The run was blamed on a restart it postdated, and the
+    truthful category (`post_tool_crash`, from its last step) never got a say.
+
+    `_is_orphan` above has always parsed first; this is the one place that
+    skipped it, so delegate rather than write the comparison twice — its 60s
+    of slack is the same property wanted here, for the same reason.
+    """
+    if not daemon_start_ts or not started_at_iso:
+        return False
+    try:
+        started_at = datetime.fromisoformat(started_at_iso)
+    except (TypeError, ValueError):
+        # An unparseable stamp is not evidence of a restart. Fall through to
+        # the step history, which is first-hand.
+        return False
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=UTC)
+    return _is_orphan(started_at, daemon_start_ts)
+
+
 def stale_run_cutoff_seconds(agent_id: str | None = None) -> int:
     """How old a LIVE `running` row must be before the reaper touches it.
 
@@ -313,7 +342,7 @@ def classify_reap_reason(
         daemon_restart   — run started before current daemon boot
     """
     # daemon_restart wins if we know the daemon booted after this run started
-    if daemon_start_ts and started_at_iso and started_at_iso < daemon_start_ts:
+    if _started_before_boot(started_at_iso, daemon_start_ts):
         return (
             "daemon_restart",
             f"Reaped by watchdog: likely cancelled by daemon restart at {daemon_start_ts}",
@@ -497,6 +526,7 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
     try:
         from robothor.federation.config import FederationConfig
         from robothor.federation.connections import load_connections
+        from robothor.federation.models import ConnectionState
         from robothor.federation.nats import NATSManager
 
         # Resolve federation config: engine env vars → federation.yaml fallback
@@ -513,33 +543,172 @@ async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:
             return None
 
         if not nats_url:
-            logger.info("Federation: %d connections but no NATS URL configured", len(connections))
+            # Configured-but-dead. This is NOT the quiet case above: rows exist,
+            # so an operator believes this instance is federated. It has been in
+            # exactly this state since 2026-03-09 with nothing louder than an
+            # info line, which is why five months of total silence read as normal.
+            await _alert_federation_dead(
+                f"{len(connections)} federation connection(s) configured but no NATS "
+                f"URL is set, so none can attach. This instance is NOT federated. "
+                f"Set nats_url in federation.yaml or ROBOTHOR_NATS_URL."
+            )
             return None
 
-        nats_mgr = NATSManager(nats_url)
+        # The transport owns every endpoint this instance holds. An instance
+        # in the middle of an organisation is a child upward and a parent
+        # downward, which one NATSManager cannot represent — so the manager is
+        # now something the transport routes TO, not the thing held directly.
+        from robothor.federation.transport import FederationTransport, set_transport
+
+        # The engine's own credential for its own broker. Empty means an
+        # unauthenticated server, which is only safe on loopback — and is what
+        # this box ran until the leafnode listener was removed.
+        hub_auth: dict[str, Any] = {}
+        if fed_config.nats_user:
+            hub_auth = {"user": fed_config.nats_user, "password": fed_config.nats_password}
+
+        transport = FederationTransport(hub_url=nats_url, hub_options=hub_auth)
+
+        nats_mgr = NATSManager(nats_url, **hub_auth)
         connected = await nats_mgr.connect()
         if connected:
+            # Register the singleton HERE, not at the call site.
+            # daemon.py:771 assigned the connected manager to a local variable
+            # and nothing ever called set_nats_manager(), so
+            # tools/handlers/federation.py's get_nats_manager() returned None
+            # forever: a peer could query US (the responder below gets the
+            # manager directly) but we could never query THEM. Outbound
+            # federation was dead for five months and no test noticed, because
+            # test_nats_request.py mocks the manager and calls the one function
+            # production never reached. Registering inside the function that
+            # creates it removes the possibility of forgetting.
+            from robothor.federation.nats import set_nats_manager
+
+            set_nats_manager(nats_mgr)
+            set_transport(transport)
             logger.info(
                 "Federation: NATS connected, %d connections loaded",
                 len(connections),
             )
-            # Ensure streams + register an inbound responder for active
-            # connections so peer federation_query/trigger calls are answered.
-            for conn in connections:
-                if conn.state.value == "active":
-                    await nats_mgr.ensure_stream(conn.id)
-                    if runner is not None:
-                        from robothor.engine.federation_responder import make_command_handler
 
-                        await nats_mgr.serve_requests(conn.id, make_command_handler(conn, runner))
+            # Attach every ACTIVE connection. Inbound peers are served on our
+            # hub; outbound parents get their own dialled endpoint. A PENDING
+            # row attaches nothing — activation is the handshake completing.
+            from robothor.engine.federation_responder import make_command_handler
+            from robothor.federation.connections import save_connection
+
+            attached = 0
+            pairing = 0
+            for conn in connections:
+                if conn.state not in (ConnectionState.ACTIVE, ConnectionState.PENDING):
+                    continue
+
+                # A PENDING inbound connection is admitted for pairing only:
+                # the peer's hello is what activates it, so the parent has to
+                # be listening first. The responder serves exactly one op in
+                # that state.
+                is_pairing = conn.state == ConnectionState.PENDING
+                if is_pairing and conn.direction != "inbound":
+                    continue  # we dial THEM to pair; that is `federation accept`
+
+                handler = (
+                    make_command_handler(
+                        conn,
+                        runner,
+                        config=fed_config,
+                        on_activate=save_connection,
+                    )
+                    if runner is not None
+                    else None
+                )
+                if await transport.attach(conn, handler=handler, pending_ok=is_pairing):
+                    if is_pairing:
+                        pairing += 1
+                    else:
+                        attached += 1
+                        # `last_seen_at` is the only honest answer to "is this
+                        # link alive?", and it is written ONLY where the
+                        # transport has actually been verified — here and in
+                        # the heartbeat. Anything looser turns it into a record
+                        # of the writer running.
+                        from robothor.federation.connections import touch_last_seen
+
+                        await asyncio.to_thread(touch_last_seen, conn.id)
+                        if conn.direction == "inbound":
+                            await nats_mgr.ensure_stream(conn.id)
+
+            if pairing:
+                logger.info(
+                    "Federation: %d connection(s) listening for a pairing handshake", pairing
+                )
+
+            active = sum(1 for c in connections if c.state == ConnectionState.ACTIVE)
+            if active and not attached:
+                # Rows say active, the wire says nothing. This is the state the
+                # box has been in since March, and it used to be a debug line.
+                await _alert_federation_dead(
+                    f"{active} federation connection(s) are marked ACTIVE but none "
+                    f"could be attached to the transport. This instance is NOT "
+                    f"federated despite what `federation status` reports."
+                )
+            elif attached < active:
+                logger.warning("Federation: %d of %d active connections attached", attached, active)
         else:
-            logger.warning("Federation: NATS connection failed, federation disabled")
+            from robothor.federation.nats import set_nats_manager
+
+            set_nats_manager(None)
+            set_transport(None)
+            await _alert_federation_dead(
+                f"NATS connection to {nats_url} failed, so {len(connections)} "
+                f"configured federation connection(s) are dead. This instance is "
+                f"NOT federated."
+            )
             return None
 
         return nats_mgr
     except Exception as e:
-        logger.warning("Federation startup failed (non-fatal): %s", e)
+        # A crash here used to be a warning line. If connections are configured,
+        # the operator needs to know federation is down, not find out months later.
+        logger.exception("Federation startup failed (non-fatal)")
+        await _alert_federation_dead(f"Federation startup raised {type(e).__name__}: {e}")
         return None
+
+
+async def _federation_heartbeat() -> None:
+    """Keep `last_seen_at` truthful, and page when a link drops.
+
+    Runs unconditionally: an instance with no connections falls straight
+    through, and an instance whose transport died is exactly the case that went
+    unnoticed from 2026-03-09 to 2026-08-27.
+    """
+    from robothor.federation.heartbeat import heartbeat_loop
+
+    try:
+        await heartbeat_loop()
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        logger.exception("Federation heartbeat stopped")
+
+
+async def _alert_federation_dead(detail: str) -> None:
+    """Page when federation is configured but not carrying traffic.
+
+    Deliberately NOT fired when there are no connections at all -- an instance
+    that was never federated is not broken, and paging every single-box install
+    would train the operator to mute the channel. The signal is the gap between
+    "rows exist" and "transport attached".
+    """
+    try:
+        from robothor.engine.alerts import alert
+
+        await alert(
+            "critical",
+            "Federation is configured but not connected",
+            f"{detail}\n\nCheck: robothor federation status",
+        )
+    except Exception:  # noqa: BLE001 - an alert must never break daemon startup
+        logger.exception("could not alert on dead federation")
 
 
 async def _maybe_run_alert_selftest() -> None:
@@ -803,18 +972,7 @@ async def main() -> int:
     if cleaned:
         logger.info("Startup: cleaned %d stale agent runs", cleaned)
 
-    # Initialize fleet pool for admission control
-    from robothor.engine.pool import init_fleet_pool
-
-    init_fleet_pool(
-        max_concurrent=config.max_concurrent_agents,
-        hourly_cost_cap_usd=config.hourly_cost_cap_usd,
-    )
-    logger.info(
-        "Fleet pool: max_concurrent=%d, hourly_cost_cap=$%.2f",
-        config.max_concurrent_agents,
-        config.hourly_cost_cap_usd,
-    )
+    _init_fleet_capacity(config)
 
     # Initialize inter-agent messaging + teams so the send_agent_message /
     # receive_agent_messages / create_team / team_scratchpad_* tools work
@@ -975,9 +1133,13 @@ async def main() -> int:
         ),
         asyncio.create_task(_watchdog(config, scheduler, workflow_engine), name="watchdog"),
         asyncio.create_task(_autodream_loop(), name="autodream"),
+        asyncio.create_task(_federation_heartbeat(), name="federation-heartbeat"),
         asyncio.create_task(_curiosity_density_loop(scheduler), name="curiosity-density"),
         asyncio.create_task(_curator_loop(scheduler), name="curator"),
         asyncio.create_task(_extension_watcher_loop(), name="extensions"),
+        asyncio.create_task(
+            _capacity_governor_loop(config.max_concurrent_agents), name="capacity-governor"
+        ),
         asyncio.create_task(_elector.run(), name="leader"),
     ]
     if bot is not None:
@@ -1035,6 +1197,21 @@ async def main() -> int:
     subsystem_crashed = _log_task_results(done)
 
     logger.info("Shutting down subsystems...")
+
+    # A stale singleton after shutdown would let a tool call reach a manager
+    # whose connection is gone, and report "transport not connected" as though
+    # federation were merely unconfigured.
+    try:
+        from robothor.federation.nats import set_nats_manager
+        from robothor.federation.transport import get_transport, set_transport
+
+        set_nats_manager(None)
+        live = get_transport()
+        set_transport(None)
+        if live is not None:
+            await live.close()
+    except Exception as e:  # noqa: BLE001 - shutdown must not raise
+        logger.debug("Error closing live-steering channel during shutdown: %s", e)
 
     # Shutdown announcement (best-effort)
     try:
@@ -1581,6 +1758,81 @@ async def _curator_loop(scheduler: Any) -> None:
             return
         except Exception as e:  # noqa: BLE001
             logger.warning("curator loop error: %s", e)
+
+
+def _init_fleet_capacity(config: EngineConfig) -> None:
+    """Build the fleet pool and size it to THIS machine before any run is admitted.
+
+    ``max_concurrent_agents`` is a cloud-shaped constant. On a device-bound instance
+    it is the wrong number from the first tick -- and the first tick is when cron
+    catch-up fires, which is precisely when the box is least able to absorb it.
+    """
+    from robothor.engine.capacity_governor import CapacityGovernor
+    from robothor.engine.pool import init_fleet_pool
+
+    # One slot held back for interactive work. A cap alone still lets nightly
+    # sweeps fill every slot: measured 2026-08-27, an operator's Telegram turn
+    # took 1.2 min with the box idle and 17.9 min with two background runs in
+    # flight, because nothing knew a human was waiting. The reservation makes
+    # that inversion structurally impossible rather than merely unlikely.
+    try:
+        reserved = int(os.environ.get("ROBOTHOR_RESERVED_INTERACTIVE_SLOTS", "1"))
+    except ValueError:
+        # A malformed knob must not stop a remote-only box from booting.
+        logger.warning("Invalid ROBOTHOR_RESERVED_INTERACTIVE_SLOTS — using 1")
+        reserved = 1
+
+    init_fleet_pool(
+        max_concurrent=config.max_concurrent_agents,
+        hourly_cost_cap_usd=config.hourly_cost_cap_usd,
+        reserved_slots=max(0, min(reserved, config.max_concurrent_agents - 1)),
+    )
+    applied = CapacityGovernor(cloud_max_concurrent=config.max_concurrent_agents).apply_once()
+    _size_spawn_fan_out(config)
+    logger.info(
+        "Fleet pool: configured max_concurrent=%d, hourly_cost_cap=$%.2f, applied=%s",
+        config.max_concurrent_agents,
+        config.hourly_cost_cap_usd,
+        applied,
+    )
+
+
+def _size_spawn_fan_out(config: EngineConfig) -> None:
+    """Bound sub-agent fan-out by what this device can actually run.
+
+    ``ROBOTHOR_MAX_CONCURRENT_SPAWNS`` defaults to 10 regardless of device, so
+    on a one-slot LOCAL box ten sub-agents queue against a single inference
+    slot while their parent holds a fleet slot waiting for them. Admission
+    cannot fix that from the spawn path -- a child asking for a slot its
+    parent already holds is a deadlock -- so the bound is applied here, from
+    the same ``ModePolicy`` the pool is sized from.
+
+    Only ever narrows: an operator who configured 4 keeps 4 on an 8-slot box.
+    Fails open, like every other governor: an unreadable policy leaves the
+    configured value in place rather than stopping the daemon.
+    """
+    try:
+        from robothor.engine.mode_policy import current_policy
+        from robothor.engine.tools.handlers.spawn import set_max_concurrent_spawns
+
+        policy = current_policy(cloud_max_concurrent=config.max_concurrent_agents)
+        limit = max(1, min(config.max_concurrent_spawns, policy.max_concurrent_runs))
+        set_max_concurrent_spawns(limit)
+        logger.info(
+            "Sub-agent fan-out: %d (configured %d, device policy %d)",
+            limit,
+            config.max_concurrent_spawns,
+            policy.max_concurrent_runs,
+        )
+    except Exception:  # noqa: BLE001 - a limit is a guard, not a dependency
+        logger.warning("Could not size sub-agent fan-out — keeping the configured limit")
+
+
+async def _capacity_governor_loop(cloud_max_concurrent: int) -> None:
+    """Keep the fleet's limits matched to the device and its temperature."""
+    from robothor.engine.capacity_governor import run_forever
+
+    await run_forever(cloud_max_concurrent=cloud_max_concurrent)
 
 
 async def _extension_watcher_loop() -> None:
