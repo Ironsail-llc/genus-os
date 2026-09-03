@@ -76,7 +76,9 @@ _GAP = r"(?:[ \t]*:)?[ \t]*(?:\r?\n[ \t]*)*(?:[-*+][ \t]+)?`?"
 _CONTRACT_PATTERNS = [
     # "save them to X", "write the output to X", "export results into X",
     # including "save them to:" followed by a bulleted path on the next line.
-    re.compile(rf"{_OUTPUT_VERB}\b[^.\n]{{0,60}}?\b(?:to|into|in|at)\b{_GAP}{_PATH}", re.IGNORECASE),
+    re.compile(
+        rf"{_OUTPUT_VERB}\b[^.\n]{{0,60}}?\b(?:to|into|in|at)\b{_GAP}{_PATH}", re.IGNORECASE
+    ),
     # "save as X", "output as X"
     re.compile(rf"{_OUTPUT_VERB}\b[^.\n]{{0,30}}?\bas\b{_GAP}{_PATH}", re.IGNORECASE),
 ]
