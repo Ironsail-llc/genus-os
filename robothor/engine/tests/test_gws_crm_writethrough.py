@@ -25,6 +25,28 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture(autouse=True)
+def _calls_carry_the_seeded_tenant():
+    """Every call in this file names the tenant the seed rows live in.
+
+    The do-not-contact guard refuses a call with no tenant rather than reading
+    `default`'s opt-out list by accident. These tests call the handler
+    directly, so they supply what `ToolContext.tenant_id` carries in
+    production — the same "default" the integration seed writes — and the
+    guard still runs against it. Injected, not stubbed, on purpose.
+    """
+    from robothor.engine.tools.handlers import gws
+
+    real = gws._handle_gws_tool
+
+    def _with_tenant(name, args, **kwargs):
+        kwargs.setdefault("tenant_id", "default")
+        return real(name, args, **kwargs)
+
+    with patch.object(gws, "_handle_gws_tool", _with_tenant):
+        yield
+
+
 @pytest.fixture
 def seeded_recipient(db_cursor):
     person_id = str(uuid.uuid4())
