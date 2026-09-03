@@ -356,3 +356,95 @@ class TestCancelBeforeTheLoopStarts:
         assert run.status is RunStatus.TIMEOUT
         assert run.completed_at is not None
         assert run.error_traceback
+
+
+class TestTheRegistryEndIsWired:
+    """The deadline the finaliser reads must come from the REAL tool path.
+
+    Every test above hand-rolls `tool_deadline`, so deleting the
+    `with tool_deadline(timeout)` in `ToolRegistry.execute` would break none of
+    them and the wiring would rot silently — the shape of inert control this
+    repo keeps re-learning. These drive `ToolRegistry.execute("spawn_agent")`
+    itself, so the deadline has to be set where production sets it.
+    """
+
+    @staticmethod
+    def _patches(child_config):
+        from unittest.mock import patch
+
+        return (
+            patch("robothor.engine.config.load_agent_config", return_value=child_config),
+            patch("robothor.engine.dedup.try_acquire", return_value=True),
+            patch("robothor.engine.dedup.release"),
+            # RBAC is not what this test is about, and it is database-backed.
+            patch("robothor.engine.permissions.check_tool_permission", return_value=None),
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_per_tool_deadline_makes_the_child_a_timeout(
+        self, spawn_context, child_config
+    ):
+        from contextlib import ExitStack
+
+        from robothor.engine.tools import _current_spawn_context, set_runner
+        from robothor.engine.tools.registry import ToolRegistry
+
+        runner = _FakeRunner()
+        set_runner(runner)
+        _current_spawn_context.set(spawn_context)
+        try:
+            with ExitStack() as stack:
+                for p in self._patches(child_config):
+                    stack.enter_context(p)
+                result = await ToolRegistry().execute(
+                    "spawn_agent",
+                    {"agent_id": "crm-hygiene", "message": "tidy the CRM"},
+                    agent_id="auto-researcher",
+                    timeout=1,
+                )
+        finally:
+            set_runner(None)  # type: ignore[arg-type]
+            _current_spawn_context.set(None)
+
+        # The parent's side is unchanged: it gets an error dict and carries on.
+        assert "timed out" in result.get("error", "")
+        # The child's side is the fix.
+        assert runner.finished, "the child was abandoned by the real tool path"
+        assert runner.finished[-1].status is RunStatus.TIMEOUT
+        assert "tool timeout" in (runner.finished[-1].error_message or "")
+
+    @pytest.mark.asyncio
+    async def test_an_uncapped_tool_call_cancelled_from_outside_is_a_cancel(
+        self, spawn_context, child_config
+    ):
+        """timeout=0 is "no cap", so a cancel there is nobody's deadline."""
+        from contextlib import ExitStack
+
+        from robothor.engine.tools import _current_spawn_context, set_runner
+        from robothor.engine.tools.registry import ToolRegistry
+
+        runner = _FakeRunner()
+        set_runner(runner)
+        _current_spawn_context.set(spawn_context)
+        try:
+            with ExitStack() as stack:
+                for p in self._patches(child_config):
+                    stack.enter_context(p)
+                task = asyncio.create_task(
+                    ToolRegistry().execute(
+                        "spawn_agent",
+                        {"agent_id": "crm-hygiene", "message": "tidy the CRM"},
+                        agent_id="auto-researcher",
+                        timeout=0,
+                    )
+                )
+                await asyncio.sleep(0.1)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+        finally:
+            set_runner(None)  # type: ignore[arg-type]
+            _current_spawn_context.set(None)
+
+        assert runner.finished
+        assert runner.finished[-1].status is RunStatus.CANCELLED
