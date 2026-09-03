@@ -30,6 +30,10 @@ from robothor.engine.tools.handlers import gws
 
 RUN_ID = "11111111-2222-3333-4444-555555555555"
 
+#: A real call always carries one. The guard refuses without it — the opt-out
+#: list is per-tenant, and a guard may not guess whose list it is reading.
+TENANT = "tenant-a"
+
 #: Only this address is flagged. Everyone else is either a known-but-willing
 #: contact or absent from the CRM entirely, and both must be allowed through.
 FLAGGED = {"bob@example.com"}
@@ -42,6 +46,7 @@ def _fake_lookup(emails, tenant_id="default"):
 def _send_raising(exc: BaseException, **kwargs: Any):
     """Run gws_gmail_send with the CRM lookup raising `exc`."""
     kwargs.setdefault("run_id", RUN_ID)
+    kwargs.setdefault("tenant_id", TENANT)
     with (
         patch("robothor.crm.dal.do_not_contact_emails", side_effect=exc),
         patch.object(gws, "_run_gws", return_value={"id": "m1"}) as run,
@@ -58,6 +63,7 @@ def _send_raising(exc: BaseException, **kwargs: Any):
 
 def _send(args: dict[str, Any], **kwargs: Any):
     """Run gws_gmail_send with the CRM lookup faked and the CLI stubbed."""
+    kwargs.setdefault("tenant_id", TENANT)
     with (
         patch("robothor.crm.dal.do_not_contact_emails", side_effect=_fake_lookup),
         patch.object(gws, "_run_gws", return_value={"id": "m1", "threadId": "t1"}) as run,
@@ -150,6 +156,7 @@ class TestGmailSend:
                 "gws_gmail_send",
                 {"to": "alice@example.com", "subject": "s", "body": "b"},
                 run_id=RUN_ID,
+                tenant_id=TENANT,
             )
 
         assert "error" in result
@@ -201,6 +208,7 @@ class TestGmailSend:
                 "gws_gmail_send",
                 {"to": "bob@example.com", "subject": "s", "body": "b"},
                 run_id=RUN_ID,
+                tenant_id=TENANT,
             )
 
         assert "error" not in result
@@ -237,6 +245,56 @@ class TestGmailSend:
 
         assert "error" in result
         run.assert_not_called()
+
+    def test_an_unknown_tenant_refuses_rather_than_checking_default(self):
+        """`tenant_id or DEFAULT_TENANT` is a silent fallback inside a guard.
+
+        The opt-out list is per-tenant. If the caller could not say which
+        tenant it is acting for, checking `default`'s list answers a question
+        nobody asked: it can clear a recipient who is flagged in the tenant
+        the send actually belongs to, and report itself as having checked.
+        A guard may not guess whose list it is reading — an unknown tenant is
+        an unknown answer, and an unknown answer refuses, the same as an
+        unreadable list.
+        """
+        for absent in (None, "", "   "):
+            result, run, _ = _send(
+                {"to": "alice@example.com", "subject": "s", "body": "b"},
+                run_id=RUN_ID,
+                tenant_id=absent,
+            )
+
+            assert "error" in result, f"tenant_id={absent!r} should refuse"
+            assert result["guard"] == "do_not_contact"
+            run.assert_not_called()
+
+    def test_the_default_tenant_is_only_used_when_it_was_actually_named(self):
+        """Nothing here forbids DEFAULT_TENANT — a single-tenant instance names
+        it explicitly and is checked against it. What is forbidden is reaching
+        for it because the caller said nothing."""
+        from robothor.constants import DEFAULT_TENANT
+
+        seen: list[str] = []
+
+        def _record(emails, tenant_id="unset"):
+            seen.append(tenant_id)
+            return set()
+
+        with (
+            patch("robothor.crm.dal.do_not_contact_emails", side_effect=_record),
+            patch.object(gws, "_run_gws", return_value={"id": "m1"}) as run,
+            patch.object(gws, "_record_sent_email"),
+        ):
+            result = gws._handle_gws_tool(
+                "gws_gmail_send",
+                {"to": "alice@example.com", "subject": "s", "body": "b"},
+                run_id=RUN_ID,
+                tenant_id=DEFAULT_TENANT,
+            )
+
+        assert "error" not in result
+        run.assert_called_once()
+        assert seen == [DEFAULT_TENANT]
 
     def test_no_run_id_still_refuses_but_writes_no_orphan_row(self):
         """agent_guardrail_events.run_id is NOT NULL and references agent_runs,
@@ -284,6 +342,7 @@ class TestGmailReply:
                 "gws_gmail_reply",
                 {"thread_id": "t1", "body": "here you go"},
                 run_id=RUN_ID,
+                tenant_id=TENANT,
             )
         sends = [c for c in calls if "send" in c]
         return result, sends, audit

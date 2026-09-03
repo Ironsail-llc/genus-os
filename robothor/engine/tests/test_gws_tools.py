@@ -31,6 +31,27 @@ def _no_opted_out_recipients():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _calls_carry_a_tenant():
+    """Give every call in this file the tenant a real dispatch carries.
+
+    The opt-out list is per-tenant, so the guard refuses a call that names no
+    tenant rather than silently reading `default`'s list. Real calls arrive
+    from `ToolContext.tenant_id`; these tests call the handler directly, and
+    47 call sites should not each have to restate a fact about a guard they
+    are not testing. Injected here rather than stubbed out, so the guard still
+    runs — it just gets the scope it would have in production.
+    """
+    from robothor.engine.tools.handlers.gws import _handle_gws_tool as _real
+
+    def _with_tenant(name, args, **kwargs):
+        kwargs.setdefault("tenant_id", "tenant-a")
+        return _real(name, args, **kwargs)
+
+    with patch("robothor.engine.tools._handle_gws_tool", _with_tenant):
+        yield
+
+
 # ─── Tool registration ──────────────────────────────────────────────
 
 

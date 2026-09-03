@@ -578,7 +578,6 @@ def _dnc_refusal(
     """
     from psycopg2.errors import UndefinedColumn, UndefinedTable
 
-    from robothor.constants import DEFAULT_TENANT
     from robothor.crm.dal import do_not_contact_emails
 
     addresses = sorted(
@@ -587,8 +586,31 @@ def _dnc_refusal(
     if not addresses:
         return None
 
+    # The opt-out list is per-tenant. Falling back to DEFAULT_TENANT here would
+    # answer a question nobody asked — it can clear a recipient who is flagged
+    # in the tenant this send actually belongs to, while reporting itself as
+    # having checked. A guard may not guess whose list it is reading.
+    tenant = (tenant_id or "").strip()
+    if not tenant:
+        logger.error(
+            "do_not_contact refused %s: no tenant on the call, so there is no opt-out "
+            "list to read. The caller must pass tenant_id (ToolContext.tenant_id).",
+            tool_name,
+        )
+        reason = "no tenant on the call — opt-out list could not be scoped"
+        _log_dnc_block(tool_name, reason, run_id)
+        return {
+            "error": (
+                f"{tool_name} refused: this call carries no tenant, so the do-not-contact "
+                "list could not be scoped and it is unknown whether a recipient has opted "
+                "out. Not sending. This is a wiring fault, not something to work around — "
+                "report it to the operator."
+            ),
+            "guard": "do_not_contact",
+        }
+
     try:
-        blocked = do_not_contact_emails(addresses, tenant_id=tenant_id or DEFAULT_TENANT)
+        blocked = do_not_contact_emails(addresses, tenant_id=tenant)
     except (UndefinedColumn, UndefinedTable) as exc:
         # Deploy beat `robothor migrate`. Pre-113 nobody can have been flagged,
         # so there is no opt-out to honour and refusing would only manufacture
