@@ -1,7 +1,15 @@
 """Integration test fixtures — real PostgreSQL and Redis connections.
 
 These fixtures are only used by tests marked ``@pytest.mark.integration``.
-They are skipped in pre-commit (``pytest -m "not integration"``).
+
+The marker does NOT de-select those tests by itself: run_tests.sh's default
+expression is ``not slow and not llm and not e2e``, and neither it nor the
+pre-commit hook excludes ``integration``. Pass ``-m "not integration"``
+explicitly if that is what you want. A test that does something destructive to
+a live server therefore needs its own opt-in gate as well — see
+``ROBOTHOR_TEST_ADMIN_DSN`` in tests/test_restore_drill.py, added after every
+default run on the operator's box did ``createdb``/``dropdb`` on the
+operator's own cluster.
 
 Configure via environment variables:
     ROBOTHOR_TEST_DB_DSN     default: dbname=robothor_test user=robothor host=/var/run/postgresql

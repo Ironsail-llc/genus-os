@@ -1,0 +1,76 @@
+# The reliability dead-man — pages on the AGE of the newest good backup
+# (scripts/slo_probe.sh), not on a unit's exit code.
+#
+# On 2026-08-27 the encrypted USB backup volume dropped off the bus for two
+# days. Every backup unit pages via OnFailure= and they did — ~22 Telegram
+# messages whose entire content was a unit name, none of which said how old the
+# newest restorable copy was. Then scripts/backup-volume-check.sh landed as
+# ExecCondition= on those units, which (deliberately, to end a 96-page-a-day
+# storm) makes a wedged volume SKIP them: Result=exec-condition fires no
+# OnFailure= at all.
+#
+# Both of those signals are edge-triggered — they can only speak when a run
+# happens. This one is level-triggered: it reads the age of the newest good
+# backup every hour and keeps paging while that age is out of budget.
+#
+# Enable with: sudo systemctl enable --now robothor-slo.timer
+#
+# Template — instance values use the canonical placeholder spellings
+# (see infra/systemd/README.md) and are substituted by scripts/render-unit.sh
+# at install time.
+[Unit]
+Description=Robothor SLO probe (backup-freshness dead-man)
+# The pager needs DNS, so wait for the network at boot.
+After=network-online.target
+Wants=network-online.target
+#
+# Deliberately NO RequiresMountsFor= and NO ExecCondition= on the backup
+# volume. Both would stop this unit from starting exactly when the volume is
+# gone — the one moment it has something to say. The backup units gate on the
+# volume so they skip quietly; this one is the loud half of that arrangement
+# and must run regardless.
+#
+# The probe itself failing (a breach whose page could not be delivered) is also
+# operator-visible news.
+OnFailure=robothor-alert@%n.service
+
+[Service]
+Type=oneshot
+# No User= — this runs as root, like robothor-alert@.service. The sender it
+# calls recovers /run/robothor/secrets.env via the root-readable age key when
+# the secrets have not been decrypted yet. Reading the backup volume and the
+# marker directory needs no privilege; the pager does.
+EnvironmentFile=/etc/robothor/robothor.env
+# Optional '-': /run is tmpfs, so this file does not exist on a cold boot and a
+# non-optional EnvironmentFile would fail the unit outright (tests/test_cold_boot.py).
+EnvironmentFile=-/run/robothor/secrets.env
+# The two DB-backed SLOs (S2 heartbeat delivery, S6 LLM availability) shell out
+# to psql. Without these they connected as root to a database named "root":
+# pg_hba uses peer auth on the Unix socket, so BOTH the role and the database
+# have to be named. Environment= is not expanded from EnvironmentFile=, so each
+# value is a rendered placeholder (scripts/render-unit.sh substitutes the
+# instance's own) rather than ${ROBOTHOR_DB_USER}.
+#
+# THE ROLE AND THE ACCOUNT ARE TWO DIFFERENT NAMES. pg_ident maps an OS account
+# onto a database role, and the role typically has no passwd entry at all. This
+# unit runs as root, which pg_ident maps to nothing, so the probe hops with
+# `runuser -u ${ROBOTHOR_SLO_OS_USER}` and carries PGUSER across. Rendering the
+# role into both makes that hop fail with "user <role> does not exist" — every
+# hour, paging via OnFailure= while measuring nothing.
+Environment=PGUSER=robothor
+Environment=ROBOTHOR_SLO_OS_USER=robothor
+Environment=PGDATABASE=robothor_memory
+ExecStart=/usr/bin/bash /opt/robothor/scripts/slo_probe.sh
+# The sender retries a page for ~5 minutes to ride out the boot DNS/secrets
+# window. systemd's default TimeoutStartSec (90s) would SIGTERM it mid-retry
+# and lose the page. Doubled again here because the probe can page for more
+# than one SLO in a single run.
+TimeoutStartSec=1200
+
+# Containment: the probe needs curl (via the sender), findmnt, rclone and
+# psql. It never needs to raise privileges. Filesystem protections are
+# deliberately NOT set — the workspace legitimately lives under the service
+# user's home on some instances, and ProtectHome= would break the ExecStart
+# path itself.
+NoNewPrivileges=yes
+PrivateTmp=yes

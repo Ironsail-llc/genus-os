@@ -5,8 +5,20 @@ The engine's guardrail/feature-flag posture lives in a systemd drop-in:
 - **Live**: `/etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf`
 - **Mirror (source of truth for review/audit)**: `infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf`
 
-`scripts/check_dropin_drift.sh` compares the two (exit 0 in sync, 1 drift, 2 missing).
-The daily guardrail-watch report runs it, so unversioned live edits surface within 24h.
+`scripts/check_dropin_drift.sh` compares the two (exit 0 in sync, 1 drift or
+`STALE` backup copies or a `SHADOWED` variable, 2 missing/unresolvable).
+The daily guardrail-watch report runs it, so unversioned live edits surface
+within 24h.
+
+> **Drift is REPORTED, not PAGED.** `guardrail_watch.check_dropin_drift()`
+> prints each comparison's output and returns nothing —
+> `scripts/guardrail_watch.py`'s exit code is built from `check_flag_truth`,
+> `check_instance_manifests` and `check_instance_doctor` only. So a drifted
+> drop-in shows up in the daily report and nowhere else: no non-zero rc, no
+> `OnFailure=`, no Telegram. The same is true of
+> `check_host_script_drift()`. **Someone has to read the report** — or the
+> drift sits in `/etc` indefinitely with every control still green. (The flag
+> *audit* is different: see below.)
 
 ## Flip procedure (observe → enforce, or any mode/flag change)
 
@@ -16,13 +28,19 @@ The daily guardrail-watch report runs it, so unversioned live edits surface with
 2. **Apply to live** (operator or ops agent on the box):
 
    ```bash
-   sudo cp /etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf \
-        /etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf.bak-$(date +%Y%m%d-%H%M%S)
-   sudo cp infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf \
-        /etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf
+   sudo scripts/install-units.sh          # renders + installs every drop-in
    sudo systemctl daemon-reload && sudo systemctl restart robothor-engine
    scripts/check_dropin_drift.sh   # must print OK
    ```
+
+   **Do not take a dated `.bak-` copy first.** That step is what this
+   procedure used to say, and it left twelve `upgrade-rip-flags.conf.bak-*` /
+   `.pre-*` files in the live directory going back to 2026-05-30 — none of
+   which systemd reads, all of which made the one directory carrying the
+   production guardrail posture unreadable at a glance. The rollback source is
+   git (see below), which is strictly better: it has the diff, the review and
+   the reason. `check_dropin_drift.sh` now reports any such copy as `STALE`
+   and exits 1 until it is cleared.
 
 3. **Watch**: one flip per 24h. After each flip confirm in the daily
    guardrail-watch report (or ad hoc `python scripts/guardrail_watch.py`):
@@ -46,6 +64,10 @@ mirror matched, drift-check printed OK, and the running process kept the old
 value because `robothor.env:45` also set it. Five RIP flags were duplicated
 that way; four happened to agree, which is why it had never been noticed.
 
+`scripts/instance_doctor.sh` reports the same collision as an `env-shadow`
+finding over *every* live drop-in, not only the mirrored one — see
+[`INSTANCE_DOCTOR.md`](INSTANCE_DOCTOR.md).
+
 `check_dropin_drift.sh` now fails with a `SHADOWED` verdict listing any
 variable present in both files. The env file holds instance data (secrets,
 tenant ids) so it cannot be mirrored into the repo — keep each flag in exactly
@@ -58,17 +80,80 @@ PID=$(systemctl show robothor-engine -p MainPID --value)
 tr '\0' '\n' < /proc/$PID/environ | grep YOUR_FLAG
 ```
 
+## `scripts/flag_audit.py` — the whole truth table in one command
+
+The one-flag `grep` above is the manual version of the audit. Run it for every
+flag at once, straight from the engine's own `/proc/<MainPID>/environ`:
+
+```sh
+python scripts/flag_audit.py          # aligned table; exit 1 on drift
+python scripts/flag_audit.py --json   # same data, machine-readable
+python scripts/flag_audit.py --no-db  # file layers only, no database needed
+```
+
+Per flag it prints the manifest's mode, the drop-in, the env file, the
+`feature_flags` DB pin, the **effective** value, and **which layer won** —
+plus 7-day evidence rows by action, the last fire, and the last probe. It is
+read-only (SELECTs only; it never touches `/etc`, the database or the engine)
+and degrades rather than lying: no database prints `?` in the evidence columns
+and says so.
+
+Tags:
+
+| Tag | Meaning |
+|-----|---------|
+| `MISMATCH` | the running process disagrees with `infra/flags.yaml` |
+| `SHADOW-LAYER:db` | a `feature_flags` row governs — every file layer is inert |
+| `SHADOW-LAYER:envfile` | `robothor.env` governs — a drop-in flip would do nothing, and nothing in git records this posture |
+| `SHADOW-LAYER:environ` | the value came from neither file (`systemctl set-environment`, the unit itself, the launching shell) |
+| `OVERDUE` | still in a pre-promotion mode past its `planned_promotion` |
+| `DEBUG-ENV` | a panic switch or self-test hook is set on this box |
+
+Note the wider `SHADOW-LAYER:envfile` rule: `check_dropin_drift.sh` reports
+`SHADOWED` only when a name is in **both** files, so a guardrail living
+**only** in `robothor.env` passes it silently — nothing in git says the control
+is on, and a rebuilt box would come up without it.
+
+`guardrail_watch` runs this daily (`check_flag_truth`) and **does** exit
+non-zero on `MISMATCH`/`SHADOW-LAYER`, so the unit's `OnFailure=` pager fires.
+This is the one drift-shaped finding that reaches a phone, and it is worth
+being precise about why: `check_flag_truth`'s result is carried into
+`main()`'s return value, whereas `check_dropin_drift()` and
+`check_host_script_drift()` return `None` and only print. A `SHADOWED` verdict
+from `check_dropin_drift.sh` is therefore report-only; the same collision seen
+by `flag_audit.py` as `SHADOW-LAYER:envfile` pages.
+
+A non-zero rc from `flag_audit.py` that carries **no table on stdout** is
+treated as "the audit could not run" rather than as drift — a missing
+`infra/flags.yaml` or a drifted evidence schema used to page as though a
+guardrail had moved, which sends the operator to the wrong place.
+
+The fix is always the same: keep each flag in exactly one place — prefer the
+versioned drop-in — then update `infra/flags.yaml` to match.
+
 
 ## Rollback (< 2 minutes)
 
+Roll back from git, not from a copy left in `/etc`:
+
 ```bash
-sudo cp /etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf.bak-<STAMP> \
-     /etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf
+git -C "$ROBOTHOR_WORKSPACE" log --oneline -- \
+    infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf
+git -C "$ROBOTHOR_WORKSPACE" checkout <good-sha> -- \
+    infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf
+sudo scripts/install-units.sh
 sudo systemctl daemon-reload && sudo systemctl restart robothor-engine
+scripts/check_dropin_drift.sh   # must print OK
 ```
 
+For a single flag on a governed name, the Controls dashboard is faster still
+and needs no restart — it writes a `feature_flags` row that beats every file
+layer, and `flag_audit.py` shows it as `PINNED:db@operator:<id>`. Clear the row
+when the file layers are back in agreement, or the drop-in stays inert.
+
 Then revert the mirror in a follow-up PR so drift-check stays green — never
-leave live and mirror disagreeing.
+leave live and mirror disagreeing, and never leave a `.bak-` copy behind as
+"the rollback": git already holds it, with the diff and the reason attached.
 
 ## Current promotion ladder (2026-07-13)
 

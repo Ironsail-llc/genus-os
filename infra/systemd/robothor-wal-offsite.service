@@ -16,6 +16,13 @@ User=robothor
 EnvironmentFile=/etc/robothor/robothor.env
 EnvironmentFile=-/run/robothor/secrets.env
 Environment=ROBOTHOR_WAL_ARCHIVE_DIR=/var/lib/robothor/wal_archive
+# NOTE: unlike its four siblings this unit has no backup-volume-check gate, on
+# purpose. The WAL archive lives on NVMe and this 15-minute push IS the RPO;
+# skipping the unit whenever the USB backup volume is wedged would trade a
+# paging storm for real data loss. wal-offsite.sh runs the same probe itself
+# and DEGRADES instead: it skips the basebackup replication and the WAL prune
+# (both of which read the backup volume), still pushes WAL offsite, and exits 0
+# so this unit does not page four times an hour about a disk it does not need.
 ExecStart=/opt/robothor/scripts/wal-offsite.sh
 TimeoutStartSec=1800
 

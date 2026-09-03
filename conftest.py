@@ -111,6 +111,34 @@ def _hermetic_env() -> object:
         os.environ.update(snapshot)
 
 
+#: The two variables that turn any Python sender reading ``os.environ`` into a
+#: live line to the operator's phone.
+LIVE_TELEGRAM_ENV = ("ROBOTHOR_TELEGRAM_BOT_TOKEN", "ROBOTHOR_TELEGRAM_CHAT_ID")
+
+
+def strip_live_telegram_credentials(monkeypatch) -> None:
+    """Remove the operator's Telegram credentials from this test's environment.
+
+    The shell pager has an API-base seam, a spool and a cooldown, and the
+    ratchet in tests/test_alert_never_pages_from_tests.py makes every test that
+    can reach it pin all three. ``scripts/guardrail_watch.py`` has none of
+    that: ``send_telegram()`` POSTs to a hardcoded api.telegram.org with
+    whatever token is in ``os.environ``. On the operator's box those variables
+    are exported, so a test that drives ``main()`` and forgets one stub does
+    not spool a page for later — it delivers a fixture nag, immediately.
+
+    Take the credentials away from every test, so forgetting a stub is a
+    silent no-op instead of a message.
+    """
+    for key in LIVE_TELEGRAM_ENV:
+        monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_telegram_credentials(monkeypatch):
+    strip_live_telegram_credentials(monkeypatch)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_shared_key_pools():
     """Never let one test's credential state reach the next.

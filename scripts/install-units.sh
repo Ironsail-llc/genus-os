@@ -172,8 +172,10 @@ else
     log "WARNING: ${HELPER_SRC} missing — robothor-restart.service will fail."
 fi
 
-# The request directory the agent writes into. 0700 for the engine's user: the
-# FILENAME is the authorization, so nobody else may create one.
+# ── tmpfiles.d templates ─────────────────────────────────────────────────────
+# The runtime and state directories the units need before they first run: the
+# restart broker's request directory (0700 — the FILENAME is the
+# authorization), and the backup guard's last-good marker directory.
 #
 # Rendered like every other template. A tmpfiles.d line's user/group columns
 # are POSITIONAL — no `User=` prefix — so render-unit.sh needs --tmpfiles to
@@ -182,21 +184,29 @@ fi
 # exist: systemd-tmpfiles then chowns the request directory away from the
 # engine and the broker silently stops working, with no error, because the
 # failure is a permission denial inside the engine.
-TMPFILES_SRC="${REPO_ROOT}/infra/tmpfiles/robothor-restart.conf"
-TMPFILES_DST="${ROOT}/etc/tmpfiles.d/robothor-restart.conf"
-if [[ -f "$TMPFILES_SRC" ]]; then
-    bash "$RENDER" --tmpfiles "$TMPFILES_SRC" "${TMP_DIR}/robothor-restart.conf" \
-        || die "render failed for robothor-restart.conf"
-    install_file "${TMP_DIR}/robothor-restart.conf" "$TMPFILES_DST" 0644
+#
+# The whole directory, not one hardcoded filename. This block named
+# robothor-restart.conf literally, so the second template to arrive would have
+# been gated by every tmpfiles test in tests/test_install_units.py and still
+# never installed on any box — a control that is correct, tested, and inert.
+tmpfiles_confs=( "${REPO_ROOT}"/infra/tmpfiles/*.conf )
+if [[ ${#tmpfiles_confs[@]} -eq 0 ]]; then
+    log "WARNING: no tmpfiles templates in ${REPO_ROOT}/infra/tmpfiles — the"
+    log "WARNING: restart request directory will not be created and the broker"
+    log "WARNING: will never fire."
+fi
+for tmpfiles_src in "${tmpfiles_confs[@]}"; do
+    tmpfiles_name="$(basename "$tmpfiles_src")"
+    tmpfiles_dst="${ROOT}/etc/tmpfiles.d/${tmpfiles_name}"
+    bash "$RENDER" --tmpfiles "$tmpfiles_src" "${TMP_DIR}/${tmpfiles_name}" \
+        || die "render failed for ${tmpfiles_name}"
+    install_file "${TMP_DIR}/${tmpfiles_name}" "$tmpfiles_dst" 0644
     # Unconditional, not gated on change: /run is a tmpfs, so the directory is
     # gone after every reboot even when the conf itself is unchanged.
     if [[ -z "$ROOT" ]]; then
-        systemd-tmpfiles --create "$TMPFILES_DST" || true
+        systemd-tmpfiles --create "$tmpfiles_dst" || true
     fi
-else
-    log "WARNING: ${TMPFILES_SRC} missing — the restart request directory will"
-    log "WARNING: not be created and the broker will never fire."
-fi
+done
 
 # ── Post-install invariants ───────────────────────────────────────────────────
 # Every service sources /etc/robothor/robothor.env; a missing file means

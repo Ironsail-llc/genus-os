@@ -90,13 +90,28 @@ def test_validator_crash_is_a_failure_not_a_pass(tmp_path: Path, capsys):
     assert "could not run" in out.lower()
 
 
+def _stub_sibling_checks(monkeypatch, gw):
+    """Default every check `main()` calls to a safe pass, matching each
+    check's real signature, so a test driving `main()` to exercise instance
+    manifest validation does not also spawn the real flag_audit.py or
+    instance_doctor.sh subprocesses, or let a nag reach this box's live
+    Telegram credentials. Call first, then override check_instance_manifests
+    — the check this file actually targets.
+    """
+    monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: True)
+    monkeypatch.setattr(gw, "check_instance_doctor", lambda script=None: True)
+    monkeypatch.setattr(gw, "send_telegram", lambda text: False)
+
+
 def test_main_exits_nonzero_when_manifests_fail(tmp_path: Path, monkeypatch):
     """The finding must reach the pager, and OnFailure only fires on rc != 0."""
     (tmp_path / "probe-broken.yaml").write_text(BROKEN)
+    _stub_sibling_checks(monkeypatch, gw)
     monkeypatch.setattr(gw, "check_soak_deadlines", lambda: None)
     monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
     monkeypatch.setattr(gw, "check_host_script_drift", lambda: None)
-    monkeypatch.setattr(gw, "_run_db_dependent_checks", lambda: None)
+    monkeypatch.setattr(gw, "check_slos", lambda: [])
+    monkeypatch.setattr(gw, "_run_db_dependent_checks", lambda *args, **kwargs: None)
     real_check = gw.check_instance_manifests
     monkeypatch.setattr(
         gw,

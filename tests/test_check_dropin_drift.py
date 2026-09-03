@@ -16,6 +16,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "check_dropin_drift.sh"
 
@@ -100,7 +102,7 @@ RENDERED = (
     "[Service]\n"
     "User=alice\n"
     "WorkingDirectory=/srv/workspace\n"
-    "ReadWritePaths=/home/alice/.cache\n"
+    "ReadWritePaths=/srv/alice/.cache\n"
 )
 
 
@@ -111,7 +113,7 @@ def render_env(tmp_path: Path) -> dict[str, str]:
         "PATH": os.environ["PATH"],
         "ROBOTHOR_WORKSPACE": "/srv/workspace",
         "ROBOTHOR_SERVICE_USER": "alice",
-        "ROBOTHOR_SERVICE_HOME": "/home/alice",
+        "ROBOTHOR_SERVICE_HOME": "/srv/alice",
         "ROBOTHOR_ENV_FILE": str(tmp_path / "no-such.env"),
     }
 
@@ -171,6 +173,61 @@ def test_missing_renderer_fails_loud_for_templated_mirror(tmp_path: Path):
     assert "renderer missing" in result.stdout
 
 
+# --- placeholders render-unit.sh substitutes but the detector did not see ----
+#
+# mirror_has_placeholders() decides whether a mirror is a TEMPLATE. It looked
+# for /opt/robothor, /home/robothor, %h and User=/Group=robothor — four of the
+# eight spellings render-unit.sh actually substitutes. A mirror whose only
+# placeholder is one of the other four was diffed raw against the rendered live
+# file, so on any instance that renames the service account or the database the
+# check reports permanent DRIFT on a file that is perfectly in sync — and a
+# permanent drift report is a drift report nobody reads.
+#
+# A hand-maintained list of what a mechanism covers drifts from what the
+# mechanism is (2026-08-22). These four are the ones it had already lost.
+
+PLACEHOLDER_ONLY_MIRRORS = [
+    # (mirror line, live line as render-unit.sh would produce it)
+    ("Environment=PGUSER=robothor", "Environment=PGUSER=alice"),
+    ("Environment=ROBOTHOR_SLO_OS_USER=robothor", "Environment=ROBOTHOR_SLO_OS_USER=alice"),
+    ("Environment=PGDATABASE=robothor_memory", "Environment=PGDATABASE=beta_memory"),
+    ("su robothor robothor", "su alice alice"),
+]
+
+
+@pytest.mark.parametrize("mirror_line,live_line", PLACEHOLDER_ONLY_MIRRORS)
+def test_a_mirror_whose_only_placeholder_is_rendered_is_not_reported_as_drift(
+    tmp_path: Path, mirror_line: str, live_line: str
+):
+    mirror = tmp_path / "mirror.conf"
+    live = tmp_path / "live.conf"
+    mirror.write_text(f"[Service]\n{mirror_line}\n")
+    live.write_text(f"[Service]\n{live_line}\n")
+    env = render_env(tmp_path) | {"ROBOTHOR_DB_NAME": "beta_memory"}
+    result = run(live, mirror, env=env)
+    assert result.returncode == 0, (
+        f"{mirror_line!r} was not recognised as a placeholder, so the mirror "
+        "was diffed raw against the rendered live file\n"
+        + result.stdout
+        + result.stderr
+    )
+
+
+@pytest.mark.parametrize("mirror_line,live_line", PLACEHOLDER_ONLY_MIRRORS)
+def test_such_a_mirror_still_detects_genuine_drift(
+    tmp_path: Path, mirror_line: str, live_line: str
+):
+    """Rendering more mirrors must not render any of them blind."""
+    mirror = tmp_path / "mirror.conf"
+    live = tmp_path / "live.conf"
+    mirror.write_text(f"[Service]\n{mirror_line}\n")
+    live.write_text(f"[Service]\n{live_line}\nEnvironment=ROBOTHOR_RBAC_MODE=off\n")
+    env = render_env(tmp_path) | {"ROBOTHOR_DB_NAME": "beta_memory"}
+    result = run(live, mirror, env=env)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "ROBOTHOR_RBAC_MODE" in result.stdout
+
+
 def test_host_scripts_keep_the_raw_diff(tmp_path: Path):
     """*.sh mirrors are never rendered — bash's own ${ROBOTHOR_*} defaults and
     literal paths must compare byte-for-byte (host-script drift check)."""
@@ -185,3 +242,75 @@ def test_host_scripts_keep_the_raw_diff(tmp_path: Path):
     result = run(live, mirror, env=env)
     assert result.returncode == 1
     assert "DRIFT" in result.stdout
+
+
+# --- stale backup copies beside the live drop-in ------------------------------
+#
+# The live directory had accumulated TWELVE `upgrade-rip-flags.conf.bak-*` and
+# `.pre-*` files, going back to 2026-05-30. systemd reads only `*.conf`, so
+# none of them did anything — which is exactly the problem: the one directory
+# carrying the production guardrail posture became unreadable, every rollback
+# left another copy, and nothing ever said so. The flip runbook's own rollback
+# step is what creates them.
+#
+# Matched as siblings of the file being checked (`<live>.bak*`, `<live>.pre*`,
+# `<live>.orig*`, `<live>.save*`, `<live>~`) rather than "anything in the
+# directory": guardrail-watch runs this once per mirrored .conf, and a
+# directory-wide scan would print the same list six times.
+
+
+def stale(tmp_path: Path, *names: str) -> tuple[Path, Path]:
+    live = tmp_path / "upgrade-rip-flags.conf"
+    mirror = tmp_path / "mirror.conf"
+    live.write_text(CONF)
+    mirror.write_text(CONF)
+    for name in names:
+        (tmp_path / name).write_text("old posture\n")
+    return live, mirror
+
+
+def test_stale_backup_copies_are_reported_even_when_in_sync(tmp_path: Path):
+    live, mirror = stale(
+        tmp_path,
+        "upgrade-rip-flags.conf.bak-20260713-174439",
+        "upgrade-rip-flags.conf.pre-cutover-20260702",
+    )
+    result = run(live, mirror)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "STALE" in result.stdout
+    assert "upgrade-rip-flags.conf.bak-20260713-174439" in result.stdout
+    assert "upgrade-rip-flags.conf.pre-cutover-20260702" in result.stdout
+
+
+def test_stale_report_names_the_count_and_how_to_clear_it(tmp_path: Path):
+    live, mirror = stale(tmp_path, "upgrade-rip-flags.conf.bak-1", "upgrade-rip-flags.conf.bak-2")
+    result = run(live, mirror)
+    assert "2" in result.stdout
+    assert "rm" in result.stdout
+
+
+def test_stale_copies_do_not_mask_a_real_drift(tmp_path: Path):
+    live, mirror = stale(tmp_path, "upgrade-rip-flags.conf.bak-1")
+    live.write_text(CONF + "Environment=ROBOTHOR_INJECTION_SCAN_MODE=enforce\n")
+    result = run(live, mirror)
+    assert result.returncode == 1
+    assert "STALE" in result.stdout
+    assert "DRIFT" in result.stdout
+    assert "ROBOTHOR_INJECTION_SCAN_MODE" in result.stdout
+
+
+def test_the_live_conf_itself_is_never_reported_as_stale(tmp_path: Path):
+    """`.conf` is what systemd loads; a sibling drop-in is not a backup."""
+    live, mirror = stale(tmp_path, "zz-sandbox.conf", "hardening.conf")
+    result = run(live, mirror)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "STALE" not in result.stdout
+
+
+def test_unrelated_backups_belong_to_their_own_pair(tmp_path: Path):
+    """Only siblings OF THIS FILE are reported, so guardrail-watch does not
+    print the same list once per mirrored .conf."""
+    live, mirror = stale(tmp_path, "zz-sandbox.conf.bak-20260820")
+    result = run(live, mirror)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "STALE" not in result.stdout

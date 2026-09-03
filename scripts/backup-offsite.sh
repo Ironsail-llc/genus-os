@@ -21,6 +21,42 @@
 #   ROBOTHOR_OFFSITE_LOG         log file
 set -uo pipefail
 
+# ── PATH: fixed, and NOT inherited ───────────────────────────────────────────
+# The unit that starts this loads EnvironmentFile=, and the instance file there
+# carries the OPERATOR's PATH: user-writable directories first (~/.local/bin,
+# ~/.npm-global/bin) and no /usr/sbin or /sbin at all. Both halves are bugs for
+# something running as root — it must not execute a user-writable binary, and
+# dmsetup, cryptsetup, fsck.ext4, smartctl and runuser all live in /usr/sbin,
+# where "not found" reaches a script that reads output as an empty ANSWER
+# rather than as an error (2026-09-02, scripts/backup-volume-guard.sh).
+#
+# So the PATH is SET, not extended, and it is the same line in every root
+# script. ROBOTHOR_EXTRA_PATH is a TEST-ONLY leading directory, where the suites
+# put their stub binaries — it is never set in a unit or in
+# /etc/robothor/robothor.env. Anything from the workspace venv is called by
+# absolute path (SCRIPT_DIR), never found on PATH.
+# See infra/systemd/README.md.
+export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# ── The tools this script cannot work without ────────────────────────────────
+# The verify step compares file LISTS: a tool that is not found prints an
+# empty list, and an empty list of differences reads as a clean offsite
+# copy. rclone has its own check further down, which names the remote.
+require_tools() {
+    local tool missing=0
+    for tool in "$@"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "backup-offsite: required tool not found on PATH: ${tool}" >&2
+            missing=1
+        fi
+    done
+    if [ "$missing" = 1 ]; then
+        echo "backup-offsite: PATH=${PATH}" >&2
+        exit 1
+    fi
+}
+require_tools find sort tail wc paste mktemp
+
 REMOTE="${ROBOTHOR_OFFSITE_REMOTE:-}"
 SOURCE="${ROBOTHOR_OFFSITE_SOURCE:-/mnt/robothor-backup/robothor/db}"
 DROPIN_DIR="${ROBOTHOR_OFFSITE_DROPIN_DIR:-/etc/systemd/system/robothor-engine.service.d}"
@@ -40,6 +76,8 @@ LOG="${ROBOTHOR_OFFSITE_LOG:-$_default_log}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
 
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
 fail() {
     log "FAILED: $*"
     # Page the operator — a backup that quietly stops running is the whole risk.
@@ -48,6 +86,17 @@ fail() {
     fi
     exit 1
 }
+
+# Last-good markers: a freshness guard needs to know when this last WORKED,
+# not only whether the most recent run failed. See scripts/backup-state.sh.
+#
+# Loaded HERE, before any work, and fatally. This script runs `set -uo pipefail`
+# without -e, so a failed `source` does not stop it: it would replicate
+# everything, then die on the final backup_state_mark with "command not found"
+# and exit 127 — an hour of upload followed by a page for a backup that worked.
+# shellcheck source=scripts/backup-state.sh
+source "$SCRIPT_DIR/backup-state.sh" \
+    || fail "cannot load $SCRIPT_DIR/backup-state.sh — the last-good marker helper is missing from this install"
 
 command -v rclone >/dev/null 2>&1 || fail "rclone is not installed"
 [[ -n "$REMOTE" ]] || fail "ROBOTHOR_OFFSITE_REMOTE is not set — no offsite destination configured"
@@ -221,3 +270,9 @@ done
 # old line reported the pre-prune total and read as an off-by-one every night.
 remaining=$(rclone lsf "$REMOTE/db" --include "*.sql.gz" 2>/dev/null | wc -l | tr -d ' ')
 log "offsite replication OK ($remaining object(s) offsite, ${#keep_files[@]} retained generations, keeping $KEEP, pruned $pruned)"
+
+# The dumps are now offsite and verified. Verify-only runs exit above and
+# deliberately do not stamp this: they upload nothing, so they say nothing
+# about whether replication is still working.
+backup_state_mark last-offsite-ok "$REMOTE/db/${keep_files[-1]}"
+

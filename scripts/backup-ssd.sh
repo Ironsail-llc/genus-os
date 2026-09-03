@@ -5,21 +5,99 @@
 
 set -euo pipefail
 
-SSD_MOUNT="/mnt/robothor-backup"
+# ── PATH: fixed, and NOT inherited ───────────────────────────────────────────
+# The unit that starts this loads EnvironmentFile=, and the instance file there
+# carries the OPERATOR's PATH: user-writable directories first (~/.local/bin,
+# ~/.npm-global/bin) and no /usr/sbin or /sbin at all. Both halves are bugs for
+# something running as root — it must not execute a user-writable binary, and
+# dmsetup, cryptsetup, fsck.ext4, smartctl and runuser all live in /usr/sbin,
+# where "not found" reaches a script that reads output as an empty ANSWER
+# rather than as an error (2026-09-02, scripts/backup-volume-guard.sh).
+#
+# So the PATH is SET, not extended, and it is the same line in every root
+# script. ROBOTHOR_EXTRA_PATH is a TEST-ONLY leading directory, where the suites
+# put their stub binaries — it is never set in a unit or in
+# /etc/robothor/robothor.env. Anything from the workspace venv is called by
+# absolute path (SCRIPT_DIR), never found on PATH.
+# See infra/systemd/README.md.
+export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# ── The tools this script cannot work without ────────────────────────────────
+# Every one of these is read for its OUTPUT: a missing df makes the free
+# space unparseable, a missing find silently prunes nothing. gzip is the
+# dump itself.
+require_tools() {
+    local tool missing=0
+    for tool in "$@"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "backup-ssd: required tool not found on PATH: ${tool}" >&2
+            missing=1
+        fi
+    done
+    if [ "$missing" = 1 ]; then
+        echo "backup-ssd: PATH=${PATH}" >&2
+        exit 1
+    fi
+}
+require_tools df du find gzip
+
+# The destination and the log are overridable so this script can be driven
+# under test. The defaults are the production values and are unchanged: without
+# a seam the only way to test that the volume probe actually gates the backup is
+# to run the real backup at the real encrypted volume.
+SSD_MOUNT="${ROBOTHOR_BACKUP_MOUNT:-/mnt/robothor-backup}"
 BACKUP_ROOT="$SSD_MOUNT/robothor"
 DATE=$(date +%Y%m%d)
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-LOG="$HOME/robothor/scripts/backup.log"
+# Default outside the checkout: written inside it, this log was one `git add -A`
+# away from being committed, and no logrotate glob covered it. /var/log/robothor
+# is the directory infra/logrotate/robothor.conf rotates.
+#
+# But the log is used by a bare `>>` under `set -euo pipefail`, so on an
+# instance where that directory is absent or unwritable the FIRST log line
+# kills the script — before the volume probe, before the free-space guard,
+# before anything. A log destination must never be able to cancel the backup.
+# Same pattern as scripts/backup-offsite.sh: create it, prove the file is
+# writable, otherwise fall back to the old in-tree path and say so on stderr.
+_log_dir="${ROBOTHOR_LOG_DIR:-/var/log/robothor}"
+_default_log="${_log_dir}/backup.log"
+if [[ -z "${ROBOTHOR_BACKUP_LOG:-}" ]] \
+   && ! { mkdir -p "$_log_dir" 2>/dev/null && touch "$_default_log" 2>/dev/null; }; then
+    _default_log="${ROBOTHOR_WORKSPACE:-${HOME:-/tmp}/robothor}/scripts/backup.log"
+    echo "backup-ssd: ${_log_dir} is not writable — logging to ${_default_log}" >&2
+    mkdir -p "$(dirname "$_default_log")" 2>/dev/null || true
+fi
+LOG="${ROBOTHOR_BACKUP_LOG:-$_default_log}"
 MANIFEST="$BACKUP_ROOT/backup-manifest.txt"
 MIN_FREE_GB=10
+
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+VOLUME_CHECK="${ROBOTHOR_VOLUME_CHECK:-$SCRIPT_DIR/backup-volume-check.sh}"
+
+# Last-good markers: a freshness guard needs to know when this last WORKED,
+# not only whether the most recent run failed. See scripts/backup-state.sh.
+# shellcheck source=scripts/backup-state.sh
+source "$SCRIPT_DIR/backup-state.sh"
 
 log() { echo "[$TIMESTAMP] $1" >> "$LOG"; }
 
 # ── Pre-flight checks ───────────────────────────────────────────
 
-# Check SSD is mounted — fail loudly if not
-if ! mountpoint -q "$SSD_MOUNT" 2>/dev/null; then
-    log "ERROR: SSD not mounted at $SSD_MOUNT — backup FAILED"
+# Is the SSD actually usable? This used to be `mountpoint -q`, which is a
+# stat() check — and stat() keeps succeeding on the `emergency_ro` volume the
+# USB drive leaves behind when it drops off the bus (2026-08-27). The backup
+# then "passed" its guard, ran, wrote nothing, and failed.
+# backup-volume-check.sh does a real readdir and a real write.
+#
+# robothor-backup-local.service also runs this probe as ExecCondition=, so the
+# unit SKIPS instead of failing. Keeping it here too means the guarantee holds
+# however the script is invoked — including by hand.
+if [[ ! -x "$VOLUME_CHECK" ]]; then
+    log "ERROR: volume probe not found at $VOLUME_CHECK — backup FAILED"
+    exit 1
+fi
+if ! "$VOLUME_CHECK" --rw "$SSD_MOUNT" >> "$LOG" 2>&1; then
+    log "ERROR: backup volume at $SSD_MOUNT is not usable — backup FAILED"
     exit 1
 fi
 
@@ -203,3 +281,8 @@ backup_docker_volumes || log "WARNING: docker volume backup incomplete"
 
 TOTAL_SIZE=$(du -sh "$BACKUP_ROOT" | cut -f1)
 log "Backup complete. ${TOTAL_SIZE} total on SSD."
+
+# The identifier is the dump this run left behind, so a freshness page can
+# name the generation it is talking about.
+backup_state_mark last-local-dump "$(basename "$DUMP_FILE")"
+

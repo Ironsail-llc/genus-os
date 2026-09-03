@@ -11,6 +11,42 @@
 # base-restore + replay of at most a week of WAL.
 set -euo pipefail
 
+# ── PATH: fixed, and NOT inherited ───────────────────────────────────────────
+# The unit that starts this loads EnvironmentFile=, and the instance file there
+# carries the OPERATOR's PATH: user-writable directories first (~/.local/bin,
+# ~/.npm-global/bin) and no /usr/sbin or /sbin at all. Both halves are bugs for
+# something running as root — it must not execute a user-writable binary, and
+# dmsetup, cryptsetup, fsck.ext4, smartctl and runuser all live in /usr/sbin,
+# where "not found" reaches a script that reads output as an empty ANSWER
+# rather than as an error (2026-09-02, scripts/backup-volume-guard.sh).
+#
+# So the PATH is SET, not extended, and it is the same line in every root
+# script. ROBOTHOR_EXTRA_PATH is a TEST-ONLY leading directory, where the suites
+# put their stub binaries — it is never set in a unit or in
+# /etc/robothor/robothor.env. Anything from the workspace venv is called by
+# absolute path (SCRIPT_DIR), never found on PATH.
+# See infra/systemd/README.md.
+export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# ── The tools this script cannot work without ────────────────────────────────
+# stat is the one that matters: the setgid bit is CONFIRMED by reading it
+# back, because chmod exits 0 while silently clearing it, and a stat that
+# was never found would confirm nothing while looking like it had.
+require_tools() {
+    local tool missing=0
+    for tool in "$@"; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "pg-basebackup: required tool not found on PATH: ${tool}" >&2
+            missing=1
+        fi
+    done
+    if [ "$missing" = 1 ]; then
+        echo "pg-basebackup: PATH=${PATH}" >&2
+        exit 1
+    fi
+}
+require_tools stat du cut tar
+
 DEST="${ROBOTHOR_BASEBACKUP_DIR:-/mnt/robothor-backup/robothor/basebackup}"
 KEEP="${ROBOTHOR_BASEBACKUP_KEEP:-3}"
 STAMP="$(date -u +%Y%m%d-%H%M%S)"
@@ -19,12 +55,26 @@ log()  { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
 fail() { log "ERROR: $*"; exit 1; }
 
 # The backup volume is USB and has physically dropped off the bus before
-# (2026-07-14). Fail loudly rather than writing a "base backup" into an empty
-# mountpoint on the root filesystem — which would look like success.
+# (2026-07-14, 2026-08-27). Fail loudly rather than writing a "base backup"
+# into an empty mountpoint on the root filesystem — which would look like
+# success.
+#
+# `mountpoint -q` used to be this guard, and it is a stat() check: when the
+# drive drops off the bus ext4 remounts the volume `emergency_ro`, stat() keeps
+# succeeding, and the guard passed all through the outage. backup-volume-check.sh
+# does a real readdir and a real write. robothor-basebackup.service runs the
+# same probe as ExecCondition= so the unit skips rather than failing; this copy
+# keeps the guarantee for a hand-run.
 MOUNT="${DEST%%/robothor/*}"
-if ! mountpoint -q "$MOUNT" 2>/dev/null; then
-    fail "$MOUNT is not mounted — refusing to write a base backup to the root filesystem"
-fi
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+VOLUME_CHECK="${ROBOTHOR_VOLUME_CHECK:-$SCRIPT_DIR/backup-volume-check.sh}"
+# Last-good markers: a freshness guard needs to know when this last WORKED,
+# not only whether the most recent run failed. See scripts/backup-state.sh.
+# shellcheck source=scripts/backup-state.sh
+source "$SCRIPT_DIR/backup-state.sh"
+[[ -x "$VOLUME_CHECK" ]] || fail "volume probe not found at $VOLUME_CHECK"
+"$VOLUME_CHECK" --rw "$MOUNT" \
+    || fail "$MOUNT is not a usable backup volume — refusing to write a base backup that would go nowhere"
 
 mkdir -p "$DEST"
 OUT="$DEST/base-$STAMP"
@@ -97,3 +147,5 @@ for d in "${OLD[@]:-}"; do
 done
 
 log "done"
+
+backup_state_mark last-basebackup "$(basename "$OUT")"

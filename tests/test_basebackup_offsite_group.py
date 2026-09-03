@@ -55,7 +55,6 @@ def _run_basebackup(
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    _stub(bin_dir / "mountpoint", "exit 0")
     _stub(
         bin_dir / "pg_basebackup",
         'out=""\n'
@@ -68,9 +67,21 @@ def _run_basebackup(
 
     env = {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        # The script SETS its PATH (a root unit must not inherit the operator's
+        # user-writable directories), so the stub directory reaches it through the
+        # one documented seam — see infra/systemd/README.md.
+        "ROBOTHOR_EXTRA_PATH": str(bin_dir),
         "ROBOTHOR_BASEBACKUP_DIR": str(dest),
         "ROBOTHOR_BACKUP_GROUP": group,
         "ROBOTHOR_BASEBACKUP_KEEP": "3",
+        # The `mountpoint -q` guard this script used to carry is now
+        # scripts/backup-volume-check.sh, which also refuses a path on the root
+        # filesystem — and a pytest tmp_path always is one. An unprivileged test
+        # cannot create a real mount; tests/test_backup_volume_check.py is what
+        # proves that step is armed by default.
+        "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT": "0",
+        # Keep the last-good marker out of /var/lib/robothor.
+        "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "backup-state"),
     }
     result = subprocess.run(
         ["bash", str(SCRIPT)], capture_output=True, text=True, timeout=30, env=env

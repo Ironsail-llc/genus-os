@@ -25,4 +25,12 @@ Type=oneshot
 User=robothor
 WorkingDirectory=/opt/robothor
 EnvironmentFile=/etc/robothor/robothor.env
+# The flag-soak nag goes out over Telegram (guardrail_watch.send_telegram),
+# and those credentials live in the tmpfs secrets file, not robothor.env. With
+# only the line above, send_telegram() found no token, returned False without
+# a word, and the nag reached the journal and nowhere else. `-` so a boot-time
+# catch-up before the secrets are decrypted degrades to a journal-only report
+# instead of failing the unit. systemd reads this as root before dropping to
+# User=robothor, so the 0600 service-user file is still readable.
+EnvironmentFile=-/run/robothor/secrets.env
 ExecStart=/opt/robothor/venv/bin/python /opt/robothor/scripts/guardrail_watch.py

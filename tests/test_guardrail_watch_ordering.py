@@ -21,10 +21,8 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import pytest
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,6 +35,48 @@ _spec.loader.exec_module(gw)
 
 SERVICE = REPO_ROOT / "infra" / "systemd" / "robothor-guardrail-watch.service"
 TIMER = REPO_ROOT / "infra" / "systemd" / "robothor-guardrail-watch.timer"
+
+
+def _stub_sibling_checks(monkeypatch: "pytest.MonkeyPatch", gw) -> None:
+    """Default every check `main()` calls to a safe pass, matching each
+    check's real signature, so a test driving `main()` for the DB-outage
+    ordering does not also run its siblings for real. `check_instance_doctor`
+    hits the live box, `check_slos` shells out to `scripts/slo_probe.sh
+    --report` (a readdir over the live backup volume, a volume probe and a
+    `systemctl show` of the live units), and `send_telegram` has real
+    credentials on it — a test that forgets to stub any of them does not just
+    fail loud, it pages the operator, shells out to instance_doctor.sh, or
+    measures this morning's backup state. Call this first, then override
+    whichever check this test actually targets.
+    """
+    monkeypatch.setattr(gw, "check_flag_truth", lambda **kw: True)
+    monkeypatch.setattr(gw, "check_instance_doctor", lambda script=None: True)
+    monkeypatch.setattr(gw, "check_slos", lambda: [])
+    monkeypatch.setattr(gw, "send_telegram", lambda text: False)
+
+
+@pytest.fixture(autouse=True)
+def _the_real_slo_probe_never_runs(monkeypatch: "pytest.MonkeyPatch", tmp_path: Path):
+    """Sentinel, not trust: point `gw.SLO_PROBE` at a stand-in that records
+    every invocation, and fail the test if anything ran it.
+
+    `check_slos()` runs `bash scripts/slo_probe.sh --report` as a subprocess.
+    Nothing in this file wants that: it walks the live backup volume, runs the
+    volume probe and asks `systemctl show` about the live units, so every test
+    here silently depended on how the operator's box happened to be this
+    morning — and a probe with a dropped USB device blocks in readdir. A stub
+    that is asserted, rather than a stub that is assumed.
+    """
+    ran = tmp_path / "slo-probe-ran.txt"
+    stand_in = tmp_path / "fake-slo-probe.sh"
+    stand_in.write_text(f'#!/usr/bin/env bash\necho ran >> "{ran}"\nexit 0\n')
+    stand_in.chmod(0o755)
+    monkeypatch.setattr(gw, "SLO_PROBE", stand_in)
+    yield
+    assert not ran.exists(), (
+        "this test ran the real SLO probe against the live box — call "
+        "_stub_sibling_checks(monkeypatch, gw) before driving main()"
+    )
 
 
 class TestRepoUnitOrdersAfterPostgresAndPages:
@@ -65,6 +105,24 @@ class TestRepoUnitOrdersAfterPostgresAndPages:
             "died at boot with nobody told"
         )
 
+    def test_service_loads_the_telegram_secrets(self) -> None:
+        """The nag has to be able to reach the operator under the unit.
+
+        guardrail_watch.send_telegram() reads the bot token and the chat id
+        out of the environment and returns False in silence when either is
+        missing. /etc/robothor/robothor.env carries neither — those
+        credentials live in the tmpfs secrets file that every other
+        unit that talks to Telegram loads — so under the unit the flag-soak
+        nag was inert: it printed into the journal and nowhere else, and only
+        the generic OnFailure page ever reached the operator.
+        """
+        body = SERVICE.read_text()
+        assert "EnvironmentFile=-/run/robothor/secrets.env" in body, (
+            "the unit does not load /run/robothor/secrets.env, so the "
+            "flag-soak nag has no Telegram credentials and send_telegram() "
+            "returns False without saying anything"
+        )
+
     def test_timer_has_a_repo_mirror_and_is_persistent(self) -> None:
         assert TIMER.exists(), "robothor-guardrail-watch.timer has no repo copy"
         body = TIMER.read_text()
@@ -76,19 +134,13 @@ class TestDBFreeChecksSurviveADatabaseOutage:
     """The bug: get_connection() raising took the drift checks down with it."""
 
     @staticmethod
-    def _silence_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
-        # This environment carries real, live Telegram credentials — a test
-        # must never let a nag actually send.
-        monkeypatch.setattr(gw, "send_telegram", lambda text: False)
-
-    @staticmethod
     def _raising_get_connection(autocommit: bool = False):
         raise RuntimeError("connection to server failed: postgres is not up yet")
 
     def test_drift_checks_still_run_when_the_db_is_down(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        self._silence_telegram(monkeypatch)
+        _stub_sibling_checks(monkeypatch, gw)
 
         calls: list[str] = []
         monkeypatch.setattr(
@@ -125,7 +177,7 @@ class TestDBFreeChecksSurviveADatabaseOutage:
         """Ordering, not just presence: a partial report only works if the
         DB-free section's output reaches the report before the DB section
         can abort the run."""
-        self._silence_telegram(monkeypatch)
+        _stub_sibling_checks(monkeypatch, gw)
         monkeypatch.setattr(gw, "check_dropin_drift", lambda: print("SENTINEL-DROPIN-OK"))
         monkeypatch.setattr(
             gw, "check_host_script_drift", lambda pairs=None: print("SENTINEL-HOST-OK")
@@ -146,7 +198,7 @@ class TestDBFreeChecksSurviveADatabaseOutage:
     def test_report_says_clearly_that_it_is_partial(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        self._silence_telegram(monkeypatch)
+        _stub_sibling_checks(monkeypatch, gw)
         monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
         monkeypatch.setattr(gw, "check_host_script_drift", lambda pairs=None: None)
         monkeypatch.setattr(

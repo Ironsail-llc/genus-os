@@ -155,6 +155,84 @@ def test_other_service_accounts_are_untouched(tmp_path: Path):
     assert "User=postgres\n" in result.stdout
 
 
+def test_renders_the_database_role(tmp_path: Path):
+    """`Environment=PGUSER=robothor` is the DB-account placeholder.
+
+    systemd does NOT expand `${ROBOTHOR_DB_USER}` inside Environment= (only
+    ExecStart= and friends get expansion), so a unit that needs a role has to
+    carry it rendered. Without one, robothor-slo.service queried as root under
+    peer auth and both DB-backed SLOs printed UNEVALUATED forever.
+    """
+    unit = tmp_path / "robothor-db.service"
+    unit.write_text(
+        "[Service]\nUser=robothor\nEnvironment=PGUSER=robothor\n"
+        "Environment=NOT_A_USER=robothor\nExecStart=/opt/robothor/scripts/x.sh\n"
+    )
+    result = render(unit, base_env(ROBOTHOR_DB_USER="pgrole"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Environment=PGUSER=pgrole\n" in result.stdout
+    assert "Environment=NOT_A_USER=robothor\n" in result.stdout, (
+        "the substitution is exact-line anchored, like User=/Group="
+    )
+
+
+def test_database_role_defaults_to_the_service_account(tmp_path: Path):
+    """One account by default — peer auth wants the OS user and the PG role to
+    be the same name, which is the arrangement every other unit already has."""
+    unit = tmp_path / "robothor-db.service"
+    unit.write_text("[Service]\nUser=robothor\nEnvironment=PGUSER=robothor\n")
+    result = render(unit, base_env(ROBOTHOR_DB_USER=None))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"Environment=PGUSER={USER}\n" in result.stdout
+
+
+def test_renders_the_os_account_a_root_unit_hops_to(tmp_path: Path):
+    """`Environment=ROBOTHOR_SLO_OS_USER=robothor` is the OS-ACCOUNT
+    placeholder, and it is not the database role.
+
+    `runuser -u` takes an OS account; `PGUSER=` takes a libpq role, and
+    pg_ident maps one onto the other. Rendering the role into both made
+    robothor-slo.service run `runuser -u <role>` — "user does not exist" on
+    every run, S2/S6 unmeasured, and an hourly page saying nothing.
+    """
+    unit = tmp_path / "robothor-hop.service"
+    unit.write_text(
+        "[Service]\n"
+        "Environment=ROBOTHOR_SLO_OS_USER=robothor\n"
+        "Environment=PGUSER=robothor\n"
+        "Environment=NOT_A_USER=robothor\n"
+    )
+    result = render(unit, base_env(ROBOTHOR_DB_USER="pgrole"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"Environment=ROBOTHOR_SLO_OS_USER={USER}\n" in result.stdout, (
+        "the hop target is the service ACCOUNT"
+    )
+    assert "Environment=PGUSER=pgrole\n" in result.stdout, "the role is a separate value"
+    assert "Environment=NOT_A_USER=robothor\n" in result.stdout
+
+
+def test_renders_the_database_name(tmp_path: Path):
+    """`Environment=PGDATABASE=robothor_memory` is the database placeholder.
+
+    The platform spells this `ROBOTHOR_DB_NAME` in /etc/robothor/robothor.env;
+    hardcoding the default in the template means an instance that renamed its
+    database gets a unit that connects to one that does not exist.
+    """
+    unit = tmp_path / "robothor-db.service"
+    unit.write_text("[Service]\nEnvironment=PGDATABASE=robothor_memory\n")
+    result = render(unit, base_env(ROBOTHOR_DB_NAME="genus_memory"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Environment=PGDATABASE=genus_memory\n" in result.stdout
+
+
+def test_database_name_defaults_to_the_platform_default(tmp_path: Path):
+    unit = tmp_path / "robothor-db.service"
+    unit.write_text("[Service]\nEnvironment=PGDATABASE=robothor_memory\n")
+    result = render(unit, base_env(ROBOTHOR_DB_NAME=None))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Environment=PGDATABASE=robothor_memory\n" in result.stdout
+
+
 def test_renders_home_placeholder(sample_unit: Path):
     result = render(sample_unit, base_env())
     assert result.returncode == 0, result.stdout + result.stderr
@@ -247,6 +325,43 @@ def test_unknown_robothor_var_fails_the_render(tmp_path: Path):
 
 # ── Installer: --root install ────────────────────────────────────────────────
 
+#: Every mirrored drop-in directory, and the closed set of .conf files in it.
+#:
+#: A drop-in directory is a closed set because it is where production posture
+#: lives outside the unit file. The engine's live copy had accumulated twelve
+#: `.bak-*`/`.pre-*` files plus two drop-ins (onfailure, restart-forever) that
+#: existed ONLY on the box — installed by hand, mirrored nowhere, therefore not
+#: reproducible on a rebuild. The bridge, orchestrator and vision directories
+#: were the same story one unit over: seven hand-written .conf files, two of
+#: which (zz-rls.conf) carry the RLS posture and one (zz-bind-loopback.conf)
+#: the fix for an unauthenticated 0.0.0.0 bind. Pinning the sets here means a
+#: new drop-in has to be added deliberately, in a reviewed diff.
+EXPECTED_DROPINS: dict[str, set[str]] = {
+    "robothor-engine.service.d": {
+        "hardening.conf",
+        "onfailure.conf",
+        "restart-forever.conf",
+        "upgrade-rip-flags.conf",
+        "zz-sandbox.conf",
+    },
+    "robothor-bridge.service.d": {
+        "onfailure.conf",
+        "restart-forever.conf",
+    },
+    "robothor-orchestrator.service.d": {
+        "instance-env.conf",
+        "onfailure.conf",
+        "restart-forever.conf",
+        "zz-bind-loopback.conf",
+        "zz-rls.conf",
+    },
+    "robothor-vision.service.d": {
+        "onfailure.conf",
+        "restart-forever.conf",
+        "zz-rls.conf",
+    },
+}
+
 EXPECTED_INSTALLED = [
     "robothor-engine.service",
     "robothor-bridge.service",
@@ -257,9 +372,62 @@ EXPECTED_INSTALLED = [
     "robothor-liveness.timer",
     "robothor-bench-rotation.service",
     "robothor-bench-rotation.timer",
-    "robothor-engine.service.d/hardening.conf",
-    "robothor-engine.service.d/upgrade-rip-flags.conf",
-]
+    "robothor-backup-volume-guard.service",
+    "robothor-backup-volume-guard.timer",
+] + [f"{d}/{conf}" for d, confs in EXPECTED_DROPINS.items() for conf in sorted(confs)]
+
+
+def test_the_set_of_mirrored_dropin_dirs_is_closed():
+    """A drop-in directory that appears in infra/systemd/ without a line in
+    EXPECTED_DROPINS is a directory nothing pins — which is how the engine's
+    grew two untracked files."""
+    present = {p.name for p in UNIT_DIR.glob("robothor-*.service.d") if p.is_dir()}
+    assert present == set(EXPECTED_DROPINS)
+
+
+@pytest.mark.parametrize("dirname", sorted(EXPECTED_DROPINS), ids=lambda d: d)
+def test_dropin_dir_is_a_closed_set(dirname: str):
+    """Exactly the pinned .conf mirrors, no more and no fewer."""
+    present = {p.name for p in (UNIT_DIR / dirname).glob("*.conf")}
+    assert present == EXPECTED_DROPINS[dirname]
+
+
+@pytest.mark.parametrize("dirname", sorted(EXPECTED_DROPINS), ids=lambda d: d)
+def test_dropin_dir_carries_no_backup_files(dirname: str):
+    """`.bak-*`/`.pre-*` copies are how the live directory became unreadable;
+    they must never be mirrored into the repo."""
+    strays = [p.name for p in (UNIT_DIR / dirname).iterdir() if p.is_file() and p.suffix != ".conf"]
+    assert not strays, f"backup/scratch files in the drop-in mirror: {strays}"
+
+
+ONFAILURE_MIRRORS = sorted(d for d, confs in EXPECTED_DROPINS.items() if "onfailure.conf" in confs)
+
+
+@pytest.mark.parametrize("dirname", ONFAILURE_MIRRORS, ids=lambda d: d)
+def test_onfailure_dropin_matches_its_other_installer_byte_for_byte(dirname: str):
+    """Two installers write this file — scripts/install_onfailure_alerts.sh
+    (for every paged unit) and scripts/install-units.sh (from these mirrors).
+    If they disagree by one byte they overwrite each other in turn and the
+    drift check flaps forever, so every mirror is pinned to the generator's
+    heredoc."""
+    generator = (REPO_ROOT / "scripts" / "install_onfailure_alerts.sh").read_text()
+    body = generator.split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0] + "\n"
+    mirror = (UNIT_DIR / dirname / "onfailure.conf").read_text()
+    assert mirror == body
+
+
+def test_restart_forever_dropins_agree_on_their_directives():
+    """The comment header explains why THIS unit restarts forever and so
+    differs per unit; the directives must not. A drop-in that sets a different
+    key is a drop-in that does something else and should not share the name."""
+    bodies = {
+        dirname: directives((UNIT_DIR / dirname / "restart-forever.conf").read_text()).strip()
+        for dirname, confs in EXPECTED_DROPINS.items()
+        if "restart-forever.conf" in confs
+    }
+    assert len(bodies) == 4, bodies
+    assert len(set(bodies.values())) == 1, bodies
+    assert set(bodies.values()) == {"[Unit]\nStartLimitIntervalSec=0"}, bodies
 
 
 def test_installs_rendered_units_into_root(tmp_path: Path):
@@ -584,6 +752,28 @@ def test_positional_account_is_invisible_without_the_flag(tmp_path: Path):
     assert "robothor robothor" in result.stdout, (
         "if this now renders, the flag is redundant — delete it and this test"
     )
+
+
+def test_installs_every_tracked_tmpfiles_conf(tmp_path: Path):
+    """The installer used to name robothor-restart.conf literally, so the
+    SECOND tmpfiles template (robothor-backup-state.conf, which creates the
+    last-good marker directory the backup guard reads) would have been added to
+    the repo, gated by every test above, and never installed on any box — an
+    inert control with a full set of passing tests.
+    """
+    result = run_install(tmp_path, base_env())
+    assert result.returncode == 0, result.stdout + result.stderr
+    installed = tmp_path / "etc/tmpfiles.d"
+    for conf in repo_tmpfiles():
+        dest = installed / conf.name
+        assert dest.exists(), f"{conf.name} was never installed\n{result.stdout}"
+        assert dest.stat().st_mode & 0o777 == 0o644
+        rows = tmpfiles_rows(dest.read_text())
+        assert rows, f"{conf.name}: no tmpfiles row installed"
+        for fields in rows:
+            assert fields[3] in (USER, "-") and fields[4] in (USER, "-"), (
+                f"{conf.name}: unrendered account {fields}"
+            )
 
 
 def test_installs_the_privileged_helper_and_tmpfiles_conf(tmp_path: Path):

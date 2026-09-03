@@ -18,11 +18,13 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import shlex
 import subprocess
 import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import NamedTuple
 
 import yaml
 
@@ -76,6 +78,20 @@ def format_nag(overdue: list[dict], today: dt.date | None = None) -> str:
 
 
 def send_telegram(text: str) -> bool:
+    """Deliver a nag to the operator. False when it did not go out.
+
+    Never from inside a test. This sender has none of the shell pager's fuses
+    — no ROBOTHOR_TELEGRAM_API_BASE to redirect, no spool, no cooldown — it
+    POSTs to api.telegram.org with whatever token is in the environment. On
+    the operator's box those credentials ARE in the environment, so one test
+    that drives main() with an unstubbed nag path puts fixture text on the
+    operator's phone with nothing in the way. Same guard the shell pager and
+    model_breaker._in_pytest() already apply, at the one place every caller
+    crosses.
+    """
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        print("  (telegram nag suppressed: running under pytest)", file=sys.stderr)
+        return False
     token = os.environ.get("ROBOTHOR_TELEGRAM_BOT_TOKEN", "")
     chat_id = os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:
@@ -99,6 +115,100 @@ def check_soak_deadlines() -> None:
     print(nag)
     if send_telegram(nag):
         print("  (nag sent to Telegram)")
+
+
+def _stderr_tail(text: str, *, lines: int = 3, chars: int = 400) -> str:
+    """The last few stderr lines, one line, bounded — the part that names the
+    failure. Empty stderr yields ``"(no stderr)"`` rather than a blank space,
+    so a message never reads as if the tail were the explanation."""
+    tail = " | ".join(part.strip() for part in text.strip().splitlines()[-lines:] if part.strip())
+    if not tail:
+        return "(no stderr)"
+    return tail[-chars:]
+
+
+def _flag_audit_could_not_run(rc: str, detail: str) -> bool:
+    """Report a DEAD audit as dead, and page with that wording.
+
+    Distinct from drift on purpose. Until 2026-09 every non-zero rc paged
+    "FLAG LAYERS DISAGREE", so an audit that crashed on an import error, a
+    missing infra/flags.yaml or a drifted evidence schema sent the operator to
+    stare at flags that were fine — and the stderr that said what actually
+    broke was captured and then thrown away, printed nowhere. Still returns
+    False: a watchdog whose probe died must not report health.
+    """
+    nag = f"⚠️ flag audit could not run (rc={rc}): {detail}"
+    print(f"  FAIL: {nag}")
+    if send_telegram(nag):
+        print("  (nag sent to Telegram)")
+    return False
+
+
+def check_flag_truth(*, no_db: bool = False, timeout: int = 180) -> bool:
+    """Print the per-flag truth table and fail when a layer is shadowed.
+
+    ``check_soak_deadlines`` above nags about the manifest's *intent*;
+    ``check_dropin_drift`` below compares the drop-in against its repo mirror.
+    Neither answers the question an operator actually has — *which layer is
+    governing this flag in the process that is running right now* — and the
+    gap is not theoretical: this instance runs ADMISSION at ``enforce`` from
+    ``/etc/robothor/robothor.env`` while ``infra/flags.yaml`` records
+    ``observe``, and a dozen ``feature_flags`` rows pin flags over both.
+
+    Run as a subprocess, like ``check_instance_manifests``: the audit imports
+    the flag store and touches the database, and a crash in that import must
+    fail THIS CHECK rather than take the whole watch down. Returns False on
+    drift so ``main()`` exits non-zero and the unit's ``OnFailure=`` pager
+    fires. The audit is read-only — SELECTs only, no writes anywhere.
+
+    ``no_db=True`` runs it as a DB-free check (``--no-db``): the file layers
+    alone answer "which layer governs this flag", and that half of the watch
+    must survive a postgres outage. The second, DB-backed pass is what sees a
+    ``feature_flags`` pin and the evidence columns.
+
+    Exactly one non-zero code means drift: rc=1 *with a table on stdout*, the
+    audit's own verdict. Anything else is the audit dying, and
+    :func:`_flag_audit_could_not_run` says so instead of crying wolf.
+    """
+    script = Path(__file__).resolve().parent / "flag_audit.py"
+    print(f"\n=== flag truth table ({'file layers only' if no_db else 'with DB evidence'}) ===")
+    if not script.exists():
+        print("  FAIL: flag_audit.py missing — the layer audit could not run")
+        return False
+    cmd = [sys.executable, str(script)]
+    if no_db:
+        cmd.append("--no-db")
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(REPO_ROOT),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return _flag_audit_could_not_run("?", f"{type(exc).__name__}: {exc}")
+
+    for line in result.stdout.rstrip().splitlines():
+        print(f"  {line}")
+    # Print it, always. Captured-and-discarded stderr is how a crash looked
+    # exactly like a disagreement from the report alone.
+    for line in result.stderr.rstrip().splitlines():
+        print(f"  stderr: {line}")
+
+    if result.returncode == 0:
+        return True
+    if result.returncode != 1 or not result.stdout.strip():
+        return _flag_audit_could_not_run(str(result.returncode), _stderr_tail(result.stderr))
+    nag = (
+        "⚠️ FLAG LAYERS DISAGREE — a flag is set in more than one "
+        "place, or the running engine does not match infra/flags.yaml. "
+        "Run scripts/flag_audit.py for the table."
+    )
+    print(f"  {nag}")
+    if send_telegram(nag):
+        print("  (nag sent to Telegram)")
+    return False
 
 
 # A session goal that has not moved in this long is finished, wrong, or
@@ -226,12 +336,23 @@ def check_dropin_drift(pairs: list[tuple[str, str]] | None = None) -> None:
 # repo source is exactly how a month-old permission fix in pg-basebackup.sh
 # stayed unapplied on the live box.
 HOST_SCRIPT_DRIFT_PAIRS: list[tuple[str, str]] = [
-    ("/usr/local/bin/robothor-pg-basebackup.sh", "scripts/pg-basebackup.sh"),
-    ("/usr/local/bin/robothor-wal-offsite.sh", "scripts/wal-offsite.sh"),
+    # Postgres runs this one straight out of /usr/local/bin via archive_command,
+    # so the installed copy is the copy that executes.
     ("/usr/local/bin/robothor-wal-archive.sh", "scripts/wal-archive.sh"),
+    # No pair for robothor-pg-basebackup.sh or robothor-wal-offsite.sh:
+    # scripts/install-host-scripts.sh stopped mirroring them and now deletes
+    # any left behind. Their units ExecStart the workspace copy, and the
+    # scripts source sibling helpers /usr/local/bin does not have — so a mirror
+    # could not run even if something tried. A drift pair for a file nothing
+    # installs reports "missing" forever, and a permanently red check is one
+    # the operator stops reading.
     # The thermal guard is a SAFETY control (Aug 2026 GPU event) that ran for
     # weeks with no repo mirror at all — a rebuilt box would have lost it.
     ("/usr/local/bin/robothor-thermal-guard.sh", "scripts/thermal-guard.sh"),
+    # /etc/logrotate.d/robothor existed with NO repo source and covered one
+    # glob, so brain/memory_system/logs/ reached 205 MB unrotated. A rotation
+    # policy nothing checks is one edit away from being that gap again.
+    ("/etc/logrotate.d/robothor", "infra/logrotate/robothor.conf"),
 ]
 
 
@@ -258,6 +379,35 @@ def check_host_script_drift(pairs: list[tuple[str, str]] | None = None) -> None:
             timeout=30,
         )
         print(result.stdout.rstrip())
+
+
+def check_instance_doctor(script: Path | None = None) -> bool:
+    """Install truth: what is on this box that no repo template describes?
+
+    install-units.sh reports installed/updated/unchanged — one direction only.
+    The other direction (a unit symlinked into the checkout, nine live units
+    with no template, inert .bak files in a drop-in directory, a hand drop-in,
+    a service enabled but not running) was invisible to every command on the
+    box. Needs no database, so it belongs in main()'s DB-free block.
+
+    Returns False on any finding OR when the doctor itself could not run — a
+    watchdog whose probe is missing must never report health.
+    """
+    doctor = script or (Path(__file__).resolve().parent / "instance_doctor.sh")
+    print("\n=== instance install truth ===")
+    if not Path(doctor).exists():
+        print(f"  FAIL: {Path(doctor).name} missing — install truth was NOT checked")
+        return False
+    try:
+        result = subprocess.run(["bash", str(doctor)], capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  FAIL: instance doctor could not run: {exc}")
+        return False
+    print(result.stdout.rstrip())
+    if result.returncode not in (0, 1):
+        print(f"  FAIL: instance doctor exited {result.returncode}\n{result.stderr.rstrip()}")
+        return False
+    return result.returncode == 0
 
 
 def scoping_is_vacuous(non_privileged: int, linked_facts: int) -> bool:
@@ -324,7 +474,504 @@ def check_memory_scoping_is_not_vacuous() -> None:
         send_telegram(msg)
 
 
-def _run_db_dependent_checks() -> None:
+# ── SLOs ─────────────────────────────────────────────────────────────────────
+# The daily, non-paging surface for the reliability targets. scripts/slo_probe.sh
+# is the hourly pager for the three that must interrupt someone; this section
+# reports ALL of them and leaves exactly one alert_digest row for the heartbeat.
+#
+# The backup tier is measured from the last-good markers on NVMe, with no
+# database involved, and it is reported FIRST. A database outage is one of the
+# conditions under which an operator most needs to know the backup age, so that
+# measurement must not be downstream of a connection — the same lesson main()
+# learned about the drift checks on 2026-08-16.
+
+#: The one spelling of the marker directory, shared with scripts/backup-state.sh.
+BACKUP_STATE_DIR_DEFAULT = "/var/lib/robothor/backup-state"
+
+#: The one implementation of the DB-free SLOs, shared with the hourly pager.
+SLO_PROBE = REPO_ROOT / "scripts" / "slo_probe.sh"
+
+#: marker file -> (label, budget env var, default hours). Nightly tiers get 26h
+#: (a 24h cycle plus room for a late run); the base backup is weekly, and a
+#: stale one costs restore TIME rather than data, so it carries a much wider
+#: 8-day budget. The env var names are scripts/slo_probe.sh's own: a budget set
+#: once in /etc/robothor/robothor.env has to move BOTH surfaces, or the daily
+#: report measures something the dead-man does not.
+BACKUP_SLO_BUDGETS: tuple[tuple[str, str, str, int], ...] = (
+    ("last-local-dump", "S4 backup freshness: local dump", "ROBOTHOR_SLO_LOCAL_DUMP_MAX_HOURS", 26),
+    ("last-offsite-ok", "S4 backup freshness: offsite", "ROBOTHOR_SLO_OFFSITE_MAX_HOURS", 26),
+    (
+        "last-basebackup",
+        "S4 backup freshness: basebackup",
+        "ROBOTHOR_SLO_BASEBACKUP_MAX_HOURS",
+        192,
+    ),
+)
+
+#: Statuses that are not an outcome. `cancelled` is an operator or scheduler
+#: decision, not a failure (#438), and the non-terminal ones have not happened
+#: yet — counting either as a denominator makes the success rate a measure of
+#: how busy the box is.
+_NON_OUTCOME_STATUSES = ("pending", "running", "cancelled", "skipped", "awaiting_approval")
+
+
+class Slo(NamedTuple):
+    """One reliability target and what this run actually measured for it.
+
+    ``status`` is deliberately three-valued. "Could not evaluate" is NOT "OK":
+    a check that has only ever been seen staying silent is indistinguishable
+    from one that cannot fire, which is how six built-and-wired controls turned
+    out to be inert.
+    """
+
+    name: str
+    target: str
+    measured: str
+    status: str  # "OK" | "BREACH" | "UNEVALUATED"
+
+
+def _marker_age_hours(path: Path, now: dt.datetime) -> float | None:
+    """Hours since a backup-state marker, or None when it cannot be read.
+
+    Format is scripts/backup-state.sh's: ``<date -Is> <identifier>``. An
+    absent, empty or unparseable marker returns None — never a fresh-looking
+    number. An absent marker reads as "recent" to anything that only checks for
+    a non-empty string; it means the opposite.
+    """
+    try:
+        first = path.read_text().splitlines()[0].strip()
+    except (OSError, IndexError):
+        return None
+    try:
+        when = dt.datetime.fromisoformat(first.split(" ", 1)[0])
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.astimezone()
+    return (now - when).total_seconds() / 3600
+
+
+def budget_hours(env_var: str, default: int) -> int:
+    """A budget from the environment, under scripts/slo_probe.sh's own name.
+
+    An unparseable value falls back to the default and says so: a typo in
+    robothor.env must never quietly widen a budget to infinity, which is a
+    dead-man that reports every backup as fresh.
+    """
+    raw = os.environ.get(env_var, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"  ({env_var}={raw!r} is not an integer — using the {default}h default)")
+        return default
+
+
+def probe_report_slos(probe: Path | None = None) -> list[Slo]:
+    """Run ``scripts/slo_probe.sh --report`` and render what IT measured.
+
+    Deliberately a subprocess rather than a second implementation. This
+    surface used to read the last-good markers only, while the probe takes the
+    worse of (marker, newest file) and adds a readdir and a volume probe — and
+    the 2026-08-27 volume drop is exactly the state those two answer
+    differently. The markers live on NVMe and stay fresh forever, so the daily
+    report said OK for two days while the pager said BREACH.
+
+    Falls back to the marker-only reading when the probe cannot run, and says
+    so: a daily report that goes silent because a shell script moved is the
+    inert-control failure in a new costume.
+    """
+    probe = probe or SLO_PROBE
+    if not probe.exists():
+        print(f"  (SLO probe missing at {probe} — falling back to the markers alone)")
+        return backup_freshness_slos()
+    try:
+        result = subprocess.run(
+            ["bash", str(probe), "--report"], capture_output=True, text=True, timeout=300
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  (SLO probe could not run: {exc} — falling back to the markers alone)")
+        return backup_freshness_slos()
+
+    out = []
+    for line in result.stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) == 5 and fields[0] == "SLO":
+            out.append(Slo(fields[1], fields[2], fields[3], fields[4]))
+    if not out:
+        print(f"  (SLO probe reported nothing, exit {result.returncode} — falling back)")
+        for line in result.stderr.splitlines()[-5:]:
+            print(f"    {line}")
+        return backup_freshness_slos()
+    return out
+
+
+def backup_freshness_slos(
+    state_dir: Path | str | None = None, now: dt.datetime | None = None
+) -> list[Slo]:
+    """S4 from the markers alone — the fallback for when the probe cannot run.
+
+    scripts/slo_probe.sh is the primary measurement (see probe_report_slos);
+    this reads the same markers with the same budgets and no database, so a
+    box whose probe is missing still gets an answer rather than a blank.
+    """
+    root = Path(
+        state_dir
+        if state_dir is not None
+        else os.environ.get("ROBOTHOR_BACKUP_STATE_DIR", BACKUP_STATE_DIR_DEFAULT)
+    )
+    now = now or dt.datetime.now().astimezone()
+    out = []
+    for marker, label, env_var, default in BACKUP_SLO_BUDGETS:
+        budget = budget_hours(env_var, default)
+        target = f"< {budget}h"
+        age = _marker_age_hours(root / marker, now)
+        if age is None:
+            out.append(Slo(label, target, "unknown — no successful run recorded", "BREACH"))
+        else:
+            status = "BREACH" if age > budget else "OK"
+            out.append(Slo(label, target, f"{age:.0f}h", status))
+    return out
+
+
+#: S2 is "heartbeat DELIVERY". A heartbeat that ran on time and reached the
+#: operator ten minutes later is a briefing nobody acted on, so the lag is part
+#: of the objective, not a footnote to it.
+HEARTBEAT_LAG_BUDGET_SECONDS = 60
+
+#: S6: every model shares one credential pool (2026-08-27 — one capped
+#: OpenRouter key stopped the whole fleet, and the spare slot was empty). A
+#: pool of one is a single point of failure; this is a digest line, never a
+#: page, because a thin pool is a risk rather than an outage.
+MIN_CREDENTIAL_POOL = 2
+
+
+def _pct(bad: int, total: int) -> str:
+    return f"{100 * bad / total:.1f}% ({bad}/{total})" if total else "no runs"
+
+
+def heartbeat_slo(delivered: int, beats: int, worst_lag_seconds: float | None) -> Slo:
+    """S2 — did the operator-facing agent run, AND did the result arrive?"""
+    if worst_lag_seconds is None:
+        lag = "lag unknown"
+        lag_breach = False
+    else:
+        lag = f"worst lag {worst_lag_seconds:.0f}s"
+        lag_breach = worst_lag_seconds >= HEARTBEAT_LAG_BUDGET_SECONDS
+    breached = beats == 0 or 100 * delivered / beats < 95 or lag_breach
+    return Slo(
+        "S2 heartbeat delivery",
+        f">= 95% delivered, lag < {HEARTBEAT_LAG_BUDGET_SECONDS}s",
+        f"{delivered}/{beats} in 24h, {lag} over 7d",
+        "BREACH" if breached else "OK",
+    )
+
+
+def alert_journal_failures(since: str = "-7d") -> int | None:
+    """Pages the sender logged as undeliverable, from the alert unit's journal.
+
+    The other half of S3. ``alert_fallback`` rows only exist for a page that
+    got as far as writing one; a send that failed outright says so in the
+    journal and nowhere else — which is how 432 alerts once went nowhere.
+    Returns None when the journal cannot be read: unknown is not zero, and
+    zero is the answer that means the pager is healthy.
+    """
+    cmd = os.environ.get("ROBOTHOR_SLO_JOURNALCTL_CMD", "journalctl")
+    argv = [*shlex.split(cmd), "-u", "robothor-alert@*", "--since", since, "-o", "cat"]
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  (the alert journal could not be read: {exc})")
+        return None
+    if result.returncode != 0:
+        print(f"  (the alert journal could not be read: journalctl exit {result.returncode})")
+        return None
+    return sum(1 for line in result.stdout.splitlines() if "failed to send" in line)
+
+
+def pager_slo(fallback_rows: int, journal_failures: int | None) -> Slo:
+    """S3 — every page that did not reach the operator, from both halves."""
+    if journal_failures is None:
+        journal = "journal unknown"
+        lost = fallback_rows
+    else:
+        journal = f"{journal_failures} 'failed to send' in the journal"
+        lost = fallback_rows + journal_failures
+    return Slo(
+        "S3 pager delivery",
+        "0 lost pages / 7d",
+        f"{fallback_rows} alert_fallback rows, {journal}",
+        "BREACH" if lost else "OK",
+    )
+
+
+def credential_pool_size() -> int | None:
+    """How many keys the OpenRouter pool actually holds.
+
+    A subprocess, not an import: the engine's import graph crashing must fail
+    THIS measurement rather than the whole daily report. None when it cannot
+    be counted — an uncountable pool is UNEVALUATED, not OK.
+    """
+    cmd = os.environ.get("ROBOTHOR_SLO_KEY_POOL_CMD", "")
+    argv = (
+        shlex.split(cmd)
+        if cmd
+        else [
+            sys.executable,
+            "-c",
+            "from robothor.engine.key_pool import keys_from_env; "
+            "print(len(keys_from_env('OPENROUTER_API_KEY')))",
+        ]
+    )
+    try:
+        result = subprocess.run(
+            argv, capture_output=True, text=True, timeout=60, cwd=str(REPO_ROOT)
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  (the credential pool could not be counted: {exc})")
+        return None
+    try:
+        return int(result.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        print(f"  (the credential pool could not be counted: exit {result.returncode})")
+        return None
+
+
+def credential_pool_slo(size: int | None) -> Slo:
+    if size is None:
+        return Slo(
+            "S6 credential pool", f">= {MIN_CREDENTIAL_POOL} keys", "uncountable", "UNEVALUATED"
+        )
+    return Slo(
+        "S6 credential pool",
+        f">= {MIN_CREDENTIAL_POOL} keys",
+        f"pool size {size}",
+        "BREACH" if size < MIN_CREDENTIAL_POOL else "OK",
+    )
+
+
+def db_slos() -> list[Slo]:
+    """The SLOs that need a read-only query. Never raises: an unreachable
+    database yields UNEVALUATED rows, not missing ones."""
+    from robothor.db.connection import get_connection
+
+    placeholder = [
+        Slo("S1 run success", "bad <= 5%", "", "UNEVALUATED"),
+        Slo("S2 heartbeat delivery", ">= 95% delivered", "", "UNEVALUATED"),
+        Slo("S3 pager delivery", "0 lost pages / 7d", "", "UNEVALUATED"),
+        Slo("S6 LLM availability", "'all models failed' < 1%/day", "", "UNEVALUATED"),
+        Slo("S7 workflows", "bad <= 10%", "", "UNEVALUATED"),
+    ]
+    # Read before the connection is opened: the journal half of S3 needs no
+    # database, and a page the sender could not deliver is exactly the news an
+    # operator needs on a morning when the database is also down.
+    journal_failures = alert_journal_failures()
+    try:
+        with get_connection() as conn:
+            cur = conn.cursor()
+            out = []
+
+            # S1 — terminal outcomes only, benchmark harness runs excluded:
+            # a benchmark suite deliberately drives agents into failure, so
+            # counting it makes the fleet's reliability track the test plan.
+            cur.execute(
+                """
+                SELECT count(*) FILTER (WHERE status IN ('failed', 'timeout')), count(*)
+                FROM agent_runs
+                WHERE started_at >= now() - interval '7 days'
+                  AND status <> ALL(%s)
+                  AND COALESCE(trigger_detail, '') NOT LIKE 'benchmark:%%'
+                """,
+                (list(_NON_OUTCOME_STATUSES),),
+            )
+            bad, total = cur.fetchone()
+            out.append(
+                Slo(
+                    "S1 run success",
+                    "bad <= 5%",
+                    _pct(bad, total),
+                    "BREACH" if total and 100 * bad / total > 5 else "OK",
+                )
+            )
+
+            # S2 — a heartbeat that ran but was never delivered is invisible to
+            # the operator, which is the same as not having run.
+            agent = os.environ.get("ROBOTHOR_SLO_HEARTBEAT_AGENT", "main")
+            cur.execute(
+                """
+                SELECT count(*) FILTER (WHERE delivered_at IS NOT NULL), count(*)
+                FROM agent_runs
+                WHERE started_at >= now() - interval '24 hours'
+                  AND agent_id = %s AND trigger_detail LIKE 'heartbeat:%%'
+                """,
+                (agent,),
+            )
+            delivered, beats = cur.fetchone()
+            # ...and how late the delivered ones were. A heartbeat that ran on
+            # time and arrived ten minutes later is a briefing nobody acted on.
+            cur.execute(
+                """
+                SELECT max(EXTRACT(EPOCH FROM (delivered_at - completed_at)))
+                FROM agent_runs
+                WHERE started_at >= now() - interval '7 days'
+                  AND agent_id = %s AND trigger_detail LIKE 'heartbeat:%%'
+                  AND delivered_at IS NOT NULL AND completed_at IS NOT NULL
+                """,
+                (agent,),
+            )
+            (worst_lag,) = cur.fetchone()
+            out.append(
+                heartbeat_slo(delivered, beats, float(worst_lag) if worst_lag is not None else None)
+            )
+
+            # S3 — every alert_fallback row is a page that was NOT delivered
+            # and had to be left for the next briefing instead.
+            cur.execute(
+                """
+                SELECT count(*) FROM crm_agent_notifications
+                WHERE created_at >= now() - interval '7 days'
+                  AND notification_type = 'alert_fallback'
+                """
+            )
+            (lost,) = cur.fetchone()
+            out.append(pager_slo(lost, journal_failures))
+
+            # S6 — two different outages wear the same face here: every model
+            # exhausted (one shared credential pool), and everything quietly
+            # riding the local fallback tier.
+            cur.execute(
+                """
+                SELECT count(*) FILTER (WHERE error_message ILIKE '%%All models failed%%'),
+                       count(*) FILTER (WHERE model_used LIKE 'ollama_chat/%%'),
+                       count(*)
+                FROM agent_runs
+                WHERE started_at >= now() - interval '24 hours'
+                """
+            )
+            all_failed, local, runs = cur.fetchone()
+            share = 100 * all_failed / runs if runs else 0
+            local_share = 100 * local / runs if runs else 0
+            out.append(
+                Slo(
+                    "S6 LLM availability",
+                    "'all models failed' < 1%/day, local fallback < 30%",
+                    f"{share:.1f}% all-failed, {local_share:.0f}% local fallback ({runs} runs)",
+                    "BREACH" if share >= 1 or local_share >= 30 else "OK",
+                )
+            )
+
+            # S7 — per workflow, because one broken pipeline hides inside a
+            # healthy fleet average.
+            cur.execute(
+                """
+                SELECT workflow_id,
+                       count(*) FILTER (WHERE status IN ('failed', 'timeout')), count(*)
+                FROM workflow_runs
+                WHERE started_at >= now() - interval '7 days'
+                  AND status <> ALL(%s)
+                GROUP BY workflow_id ORDER BY 1
+                """,
+                (list(_NON_OUTCOME_STATUSES),),
+            )
+            rows = cur.fetchall()
+            worst = max(
+                ((w, b, t) for w, b, t in rows if t), key=lambda r: r[1] / r[2], default=None
+            )
+            if worst is None:
+                out.append(Slo("S7 workflows", "bad <= 10%", "no workflow runs", "OK"))
+            else:
+                workflow, bad, total = worst
+                out.append(
+                    Slo(
+                        "S7 workflows",
+                        "bad <= 10%",
+                        f"worst: {workflow} {_pct(bad, total)}",
+                        "BREACH" if 100 * bad / total > 10 else "OK",
+                    )
+                )
+            return out
+    except Exception as exc:
+        print(f"  (SLO queries could not run: {exc})")
+        return placeholder
+
+
+def format_slo_report(slos: list[Slo]) -> str:
+    # Spelled out, never abbreviated. "UNEVAL" is the kind of shorthand a
+    # reader skims past as a variant of OK, and the whole point of the third
+    # state is that it is not one.
+    return "\n".join(
+        f"  {s.status:<11} {s.name}: {s.measured or '-'} (target {s.target})" for s in slos
+    )
+
+
+def write_slo_digest(subject: str, body: str) -> bool:
+    """One ``alert_digest`` row for the whole run, read by main's heartbeat.
+
+    One row, not one per breach: four breached SLOs on a bad morning must not
+    become four notification rows racing each other into the briefing.
+    """
+    try:
+        from robothor.crm.dal import send_notification
+
+        return bool(
+            send_notification(
+                from_agent="guardrail-watch",
+                to_agent="main",
+                notification_type="alert_digest",
+                subject=subject,
+                body=body,
+            )
+        )
+    except Exception as exc:
+        print(f"  (could not write the SLO digest row: {exc})")
+        return False
+
+
+def check_slos() -> list[Slo]:
+    """The database-free half of the roster: S4, S5, S8 and the pool size.
+
+    Runs in main()'s DB-free section and opens no connection. S4, S5 and S8
+    all come from the hourly probe's --report mode, so the daily surface and
+    the pager can never disagree about what they measured, and the credential
+    pool is counted from the environment. The rows are returned so the digest
+    written in the database section covers the whole run.
+    """
+    print("\n=== SLOs (database-free) ===")
+    slos = probe_report_slos()
+    slos.append(credential_pool_slo(credential_pool_size()))
+    print(format_slo_report(slos))
+    return slos
+
+
+def check_db_slos(db_free: list[Slo] | None = None) -> list[Slo]:
+    """The database-backed half, plus ONE digest row for the whole run.
+
+    Deliberately called from _run_db_dependent_checks(): these are five SQL
+    queries, and they used to run inside main()'s DB-FREE section — the
+    section that exists precisely because a DB-dependent call raising once
+    took the drift checks down with it. A database that hangs there also
+    stalls the instance manifest validation that follows, which is the check
+    that catches the class of YAML typo that deleted the primary agent for
+    3h48m.
+    """
+    print("\n=== SLOs (database-backed) ===")
+    slos = db_slos()
+    print(format_slo_report(slos))
+
+    everything = list(db_free or []) + slos
+    breached = [s for s in everything if s.status == "BREACH"]
+    if not breached:
+        print("  every evaluated SLO is inside target")
+        return slos
+    body = "\n".join(f"{s.name}: {s.measured} (target {s.target})" for s in breached)
+    print(f"  <-- {len(breached)} SLO(s) breached; see docs/runbooks/SLOS.md")
+    if write_slo_digest(f"SLO breach x{len(breached)}", body):
+        print("  (digest row written for the heartbeat)")
+    return slos
+
+
+def _run_db_dependent_checks(db_free_slos: list[Slo] | None = None) -> None:
     """Everything here needs a live database connection.
 
     Kept out of main()'s DB-free section deliberately: if this raises (DB
@@ -332,6 +979,10 @@ def _run_db_dependent_checks() -> None:
     the drift-check output before this ever ran.
     """
     from robothor.db.connection import get_connection
+
+    # First, so the digest row covering the whole run is attempted before any
+    # other query can abort the section.
+    check_db_slos(db_free_slos)
 
     with get_connection() as conn:
         cur = conn.cursor()
@@ -435,27 +1086,44 @@ def main() -> int:
     # reached anyone, no report, nothing. A DB outage must never take the
     # DB-free checks down with it.
     check_soak_deadlines()
+    # --no-db: the file layers alone answer "which layer governs this flag",
+    # and a DB read here would put the same outage back in the DB-free half.
+    flags_ok = check_flag_truth(no_db=True)
     check_dropin_drift()
     check_host_script_drift()
+    doctor_ok = check_instance_doctor()
+    db_free_slos = check_slos()
     manifests_ok = check_instance_manifests()
 
     try:
-        _run_db_dependent_checks()
+        _run_db_dependent_checks(db_free_slos)
+        # Second pass, with the database. The `feature_flags` pin, its actor
+        # and the evidence columns (rows_7d, last_fired, last_probe) exist
+        # only here — and a DB pin beats every file layer the pass above can
+        # see, so dropping this pass would make an unversioned pin invisible.
+        # 60s, not 180: postgres has just answered the checks above.
+        flags_ok = check_flag_truth(no_db=False, timeout=60) and flags_ok
     except Exception as exc:
         print(
             f"\n=== DATABASE UNAVAILABLE: {exc} ===\n"
-            "guardrail-watch: the DB-dependent checks (guardrail events, run "
-            "outcomes, stale goals, memory scoping) were skipped. The DB-free "
-            "checks above (flag soak deadlines, drop-in drift, host-script "
-            "drift) already ran and are valid — this is a partial report, "
+            "guardrail-watch: the DB-dependent checks (the database-backed "
+            "SLOs, guardrail events, run outcomes, stale goals, memory "
+            "scoping) were skipped. The DB-free checks above (flag soak "
+            "deadlines, drop-in drift, host-script drift, the database-free "
+            "SLOs, manifest validation) already ran and are valid — this is a "
+            "partial report, "
             "not a silent skip. Exiting non-zero so systemd marks the run "
             "failed and OnFailure pages."
         )
         return 1
 
-    if not manifests_ok:
-        # The fleet's manifests are the fleet. A failing validation must reach
-        # the operator; rc=1 fires the unit's OnFailure= pager.
+    if not manifests_ok or not flags_ok or not doctor_ok:
+        # The fleet's manifests are the fleet; a guardrail whose effective mode
+        # is not the one the manifest records is a control nobody is actually
+        # running; and a box that no longer matches its templates is a box
+        # nobody can rebuild. Any of the three must reach the operator; rc=1
+        # fires the unit's OnFailure= pager. The way to silence a KNOWN
+        # instance-only unit is instance-units.allow, not a swallowed exit code.
         return 1
     return 0
 

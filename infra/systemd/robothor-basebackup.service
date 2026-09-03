@@ -13,6 +13,19 @@ User=postgres
 EnvironmentFile=/etc/robothor/robothor.env
 EnvironmentFile=-/run/robothor/secrets.env
 Environment=ROBOTHOR_BACKUP_GROUP=%i
+# The mount existing is not the same as the volume working. When the encrypted
+# USB drive drops off the bus ext4 remounts it `emergency_ro`: stat() still
+# succeeds, so RequiresMountsFor= above is satisfied and the job runs, writes
+# nothing, and fails — and every failure pages. ExecCondition= runs a probe that
+# does a real readdir (and write, for --rw); its exit 1 makes systemd record
+# Result=exec-condition and SKIP this unit without firing OnFailure=, while exit
+# 255 still fails the unit so a broken probe stays loud.
+#
+# The gated path is created nightly by robothor-backup-local (backup-ssd.sh), so
+# this weekly job finds it. It used to be .../robothor/basebackup, which only
+# pg-basebackup.sh — this unit's own ExecStart= — creates: on a fresh volume the
+# condition never held, the unit skipped silently, and nothing ever created it.
+ExecCondition=/opt/robothor/scripts/backup-volume-check.sh --rw /mnt/robothor-backup/robothor
 ExecStart=/opt/robothor/scripts/pg-basebackup.sh
 TimeoutStartSec=7200
 

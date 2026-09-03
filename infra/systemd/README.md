@@ -26,8 +26,10 @@ values use exactly these placeholder spellings, substituted at install time:
 |---|---|---|
 | `/opt/robothor` | workspace root (the repo checkout) | `$ROBOTHOR_WORKSPACE` |
 | `/home/robothor` | the service user's home | `$ROBOTHOR_SERVICE_HOME` (or the user's passwd entry) |
-| `User=robothor` / `Group=robothor` (exact lines) | the service account | `$ROBOTHOR_SERVICE_USER` |
+| `User=robothor` (exact line) | the service account | `$ROBOTHOR_SERVICE_USER` |
+| `Group=robothor` (exact line) | the service account's group | `$ROBOTHOR_SERVICE_GROUP` (defaults to `$ROBOTHOR_SERVICE_USER`) |
 | `robothor robothor` in the USER/GROUP **columns** of an `infra/tmpfiles/*.conf` row | the service account | `$ROBOTHOR_SERVICE_USER`, via `render-unit.sh --tmpfiles` |
+| `su robothor robothor` in a logrotate stanza | the account logrotate rotates as | `$ROBOTHOR_SERVICE_USER` / `$ROBOTHOR_SERVICE_GROUP` |
 
 Rules (enforced by `tests/test_install_units.py`):
 
@@ -65,3 +67,64 @@ never substituted.
 
 `robothor.env.example` is the template for `/etc/robothor/robothor.env`,
 which every service sources via `EnvironmentFile=`.
+
+## `EnvironmentFile=` carries a PATH, so every root script sets its own
+
+`/etc/robothor/robothor.env` is instance-land: this repo ships
+`robothor.env.example`, and what a box actually has is whatever its operator
+wrote. On the first instance that file sets
+
+```
+PATH=<user bins>:/usr/local/bin:/usr/bin:/bin
+```
+
+— the operator's own PATH, which begins with user-writable directories
+(`~/.local/bin`, `~/.npm-global/bin`) and contains no `/usr/sbin` and no
+`/sbin`. Every `robothor-*.service` loads that file, so every unit inherits it,
+and most of them run as **root**. Both halves of that are bugs:
+
+- **root must not execute a user-writable binary.** Any of those leading
+  directories can be rewritten without privilege; a unit that inherits the
+  PATH runs whatever it finds there first.
+- **`/usr/sbin` is missing**, which is where `dmsetup`, `cryptsetup`,
+  `fsck.ext4`, `smartctl` and `runuser` live. On 2026-09-02 the backup volume
+  guard therefore could not run any of them: `dmsetup deps` printed nothing
+  because it was never found, the guard reads that *output*, and "the tool is
+  absent" arrived as "this mapper is backed by nothing". It called its own live
+  mapping a stranger's, refused a heal that works by hand, and paged DOWN.
+
+The instance file cannot be fixed from here, and fixing one box would not fix
+the next one. **So every root script started by a unit sets its own PATH,
+first, before any external command:**
+
+```sh
+export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+```
+
+One line, identical in every root script — including the ones no unit starts
+(`slo_probe.sh`, `restore-drill.sh`), which need it for `runuser`. Set, not extended: appending the system directories to an
+inherited PATH still takes the first `dmsetup` it finds, which is the
+user-writable one. `/usr/local/*` is in the list because `rclone` and `sops`
+live there.
+
+**`ROBOTHOR_EXTRA_PATH` is test-only.** It is a leading directory where a test
+suite puts stub binaries, which is how those suites still interpose a fake
+`curl`, `systemctl` or `dmsetup` now that these scripts inherit nothing. It is
+**never** set in a unit and never in `/etc/robothor/robothor.env` — a unit that
+set it would be handing root a directory ahead of `/usr/sbin`, which is the
+thing this line exists to prevent. Anything from the workspace venv is called
+by absolute path (via `SCRIPT_DIR` or `ROBOTHOR_WORKSPACE`), never found on
+PATH. `scripts/flag_audit.py` lists it in `DEBUG_ENV_KEYS`, so if a live
+process ever has it set, the audit flags it under `DEBUG-ENV` instead of the
+leak going unnoticed.
+
+Each such script then runs a `require_tools` preflight naming the tools it
+cannot answer a question without, and exits non-zero if one is missing — the
+unit's own `OnFailure=` then pages, instead of the script reporting on
+something it never examined. Optional tools stay optional: `smartctl` in the
+volume guard is a gate that says it did not run, and `nvidia-smi` in
+`gpu-clock-cap.sh` means there is nothing to cap.
+
+`tests/test_root_scripts_set_path.py` enforces the first half of this for every
+script an `EnvironmentFile=` unit starts, deriving the list from the units
+themselves so a new one cannot be added without the prelude.

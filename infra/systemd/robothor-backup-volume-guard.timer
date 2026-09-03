@@ -1,0 +1,25 @@
+# Drives robothor-backup-volume-guard.service — see that file for the incident
+# this closes.
+#
+# Ten minutes: fast enough that a drop is healed before the 04:30 nightly dump
+# or the next quarter-hourly WAL ship needs the volume, slow enough that a
+# genuinely dead disk is not fsck'd 144 times a day. The guard pages at most
+# once per heal and once a day while down, so the tick rate does not set the
+# page rate.
+[Unit]
+Description=Robothor backup volume guard every 10 minutes
+
+[Timer]
+# The volume can be wedged BEFORE the box boots — the 2026-08-27 drop survived
+# a reboot as an orphaned dm target. Without OnBootSec the timer only starts
+# counting from its first manual activation. Three minutes lets udev settle and
+# the normal mount attempt happen first.
+OnBootSec=3min
+OnUnitActiveSec=10min
+AccuracySec=30s
+# Persistent= is deliberately absent: the guard's state lives on tmpfs and is
+# re-armed by the boot anyway, so a catch-up run for every 10-minute tick the
+# box was switched off would only page about an outage that is already over.
+
+[Install]
+WantedBy=timers.target

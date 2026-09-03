@@ -27,6 +27,22 @@ Type=oneshot
 User=robothor
 EnvironmentFile=/etc/robothor/robothor.env
 EnvironmentFile=-/run/robothor/secrets.env
+# The mount existing is not the same as the volume working. When the encrypted
+# USB drive drops off the bus ext4 remounts it `emergency_ro`: stat() still
+# succeeds, so RequiresMountsFor= above is satisfied and the job runs, writes
+# nothing, and fails — and every failure pages. ExecCondition= runs a probe that
+# does a real readdir (and write, for --rw); its exit 1 makes systemd record
+# Result=exec-condition and SKIP this unit without firing OnFailure=, while exit
+# 255 still fails the unit so a broken probe stays loud.
+#
+# The gated path is the MOUNT ROOT, which is created by the mount itself. It
+# used to be /mnt/robothor-backup/robothor — a directory backup-ssd.sh creates
+# AFTER this guard, so on a fresh volume the condition never held, the unit was
+# SKIPPED (silently: a skipped unit does not fire OnFailure=), the directory was
+# never created, and the nightly backup never ran again. Gate on something an
+# earlier actor creates. The probe's separate-mount check is what proves this
+# root is the real volume and not an empty directory on the root filesystem.
+ExecCondition=/opt/robothor/scripts/backup-volume-check.sh --rw /mnt/robothor-backup
 ExecStart=/opt/robothor/scripts/backup-ssd.sh
 # The dumps are large; do not let a stalled USB link hang the job forever.
 TimeoutStartSec=3600

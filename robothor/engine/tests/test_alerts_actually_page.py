@@ -2,12 +2,15 @@
 
 Two found by a sweep for built-but-unreachable controls:
 
-* The alert self-test fires at ``info``. ``_PAGE_LEVELS`` is
-  ``frozenset({"critical"})``, so ``info`` writes a database row and never
-  touches the Telegram sender. Its own docstring says it exists "so the
-  alert() -> send_fn(chat_id, text) path can be verified end-to-end" — the
-  one thing it cannot do. An operator sets the flag, sees no error, and
-  concludes pages work; a revoked bot token or unset chat id is invisible.
+* The alert self-test fired at ``info`` while its docstring claimed to
+  verify the ``alert() -> send_fn(chat_id, text)`` path end-to-end — the one
+  thing ``info`` cannot do, since ``_PAGE_LEVELS`` is
+  ``frozenset({"critical"})``. Raising it to ``critical`` made it honest and
+  made it a pager: the engine restarts, so it paged the operator CRITICAL on
+  every start (52 pages in 7 days, none an incident). It is now a DIGEST
+  probe that says so — it must write its ``alert_digest`` row, and it must
+  not reach the Telegram sender. Real delivery is proved by the paths that
+  page for real, not by an alert the engine fires at itself on every boot.
 
 * A blocked workflow's "immediate page" is not a page. It alerts at
   ``warning``, which is also a database row, and the code then writes a
@@ -26,22 +29,32 @@ from robothor.engine import alerts
 
 
 @pytest.mark.asyncio
-async def test_the_selftest_exercises_the_telegram_sender(monkeypatch):
-    """Anything short of the real sender proves nothing about delivery."""
+async def test_the_selftest_writes_its_row_without_paging(monkeypatch):
+    """The probe must reach durable storage and stop there.
+
+    Both halves matter. A probe that writes nothing proves nothing; a probe
+    that pages fires CRITICAL on every engine start, which is how a pager
+    gets muted.
+    """
     from robothor.engine.daemon import _maybe_run_alert_selftest
 
     monkeypatch.setenv("ROBOTHOR_ALERT_SELFTEST", "1")
-    sent: list[tuple[str, str]] = []
+    rows: list[tuple[str, str, str]] = []
 
-    async def fake_send(level, title, body):
-        sent.append((level, title))
+    async def fake_write(notification_type, level, title, body, metadata):
+        rows.append((notification_type, level, title))
         return True
 
-    with patch.object(alerts, "_send_telegram", AsyncMock(side_effect=fake_send)):
+    with (
+        patch.object(alerts, "_send_telegram", AsyncMock()) as sender,
+        patch.object(alerts, "_write_notification", AsyncMock(side_effect=fake_write)),
+    ):
         await _maybe_run_alert_selftest()
 
-    assert sent, "the self-test never reached the Telegram sender"
-    assert sent[0][0] in alerts._PAGE_LEVELS
+    assert rows, "the self-test wrote no notification row — it proves nothing"
+    assert rows[0][0] == "alert_digest", rows
+    assert rows[0][1] not in alerts._PAGE_LEVELS, rows
+    assert sender.await_count == 0, "the self-test paged the operator"
 
 
 @pytest.mark.asyncio
@@ -49,21 +62,26 @@ async def test_the_selftest_is_silent_when_not_requested(monkeypatch):
     from robothor.engine.daemon import _maybe_run_alert_selftest
 
     monkeypatch.delenv("ROBOTHOR_ALERT_SELFTEST", raising=False)
-    with patch.object(alerts, "_send_telegram", AsyncMock()) as sender:
+    with (
+        patch.object(alerts, "_send_telegram", AsyncMock()) as sender,
+        patch.object(alerts, "_write_notification", AsyncMock(return_value=True)) as writer,
+    ):
         await _maybe_run_alert_selftest()
     assert sender.await_count == 0
+    assert writer.await_count == 0
 
 
 @pytest.mark.asyncio
 async def test_a_failed_selftest_is_loud(monkeypatch, caplog):
-    """A probe that fails quietly is worse than no probe: it reads as success."""
+    """A probe that fails quietly is worse than no probe: it reads as success.
+    The level dropped to info; the loudness did not."""
     import logging
 
     from robothor.engine.daemon import _maybe_run_alert_selftest
 
     monkeypatch.setenv("ROBOTHOR_ALERT_SELFTEST", "1")
     caplog.set_level(logging.ERROR)
-    with patch.object(alerts, "_send_telegram", AsyncMock(return_value=False)):
+    with patch.object(alerts, "_write_notification", AsyncMock(return_value=False)):
         await _maybe_run_alert_selftest()
 
     assert "self-test" in caplog.text.lower()

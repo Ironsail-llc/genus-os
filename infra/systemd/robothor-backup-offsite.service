@@ -17,4 +17,17 @@ Type=oneshot
 User=robothor
 EnvironmentFile=/etc/robothor/robothor.env
 EnvironmentFile=-/run/robothor/secrets.env
+# The mount existing is not the same as the volume working. When the encrypted
+# USB drive drops off the bus ext4 remounts it `emergency_ro`: stat() still
+# succeeds, so RequiresMountsFor= above is satisfied and the job runs, writes
+# nothing, and fails — and every failure pages. ExecCondition= runs a probe that
+# does a real readdir (and write, for --rw); its exit 1 makes systemd record
+# Result=exec-condition and SKIP this unit without firing OnFailure=, while exit
+# 255 still fails the unit so a broken probe stays loud.
+#
+# The gated path is created by robothor-backup-local (backup-ssd.sh), never by
+# this unit — so it cannot deadlock on a fresh volume. It holds the dumps this
+# job replicates: if it is absent there is nothing to replicate and skipping is
+# the correct answer.
+ExecCondition=/opt/robothor/scripts/backup-volume-check.sh --ro /mnt/robothor-backup/robothor/db
 ExecStart=/usr/bin/bash /opt/robothor/scripts/backup-offsite.sh

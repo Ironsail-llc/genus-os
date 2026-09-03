@@ -15,6 +15,8 @@ cloud credentials.
 from __future__ import annotations
 
 import gzip
+import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -46,6 +48,30 @@ def _run(tmp_path: Path, src: Path, dest: Path, **env_extra) -> subprocess.Compl
         "ROBOTHOR_OFFSITE_SOURCE": str(src),
         "ROBOTHOR_OFFSITE_KEEP": "2",
         "ROBOTHOR_OFFSITE_LOG": str(tmp_path / "offsite.log"),
+        # This script pages the operator on failure, and several cases here
+        # FAIL on purpose. Without this the suite delivers fixture failures to
+        # a real phone -- it did, on 2026-08-27, including a fake "CORRUPT
+        # offsite" that reads like a data-integrity emergency.
+        "ROBOTHOR_ALERT_SUPPRESS": "1",
+        "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",  # never resolves
+        # The pager writes DURABLE state of its own, and suppression is not a
+        # substitute for pinning it: ROBOTHOR_ALERT_SUPPRESS covers the call
+        # sites that set it, and every case below that reaches the sender
+        # WITHOUT it (see test_missing_remote_config_fails_loudly) would
+        # otherwise spool a fixture page into /var/lib/robothor/alert-spool,
+        # which root's liveness tick delivers for real five minutes later, and
+        # stamp a cooldown that suppresses a genuine page for an hour.
+        "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+        "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+        "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-cooldown-fallback"),
+        # /run/robothor/secrets.env is real and readable on a live box: with
+        # no override the sender recovers the operator's actual Telegram
+        # credentials and pages for real, whatever the API base says.
+        "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+        # The last-good marker lands on NVMe, not on the backup volume, so a
+        # wedged volume cannot erase the evidence of when it last worked.
+        # Redirect it here or the suite writes into /var/lib/robothor.
+        "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "backup-state"),
     }
     env.update(env_extra)
     return subprocess.run(
@@ -127,6 +153,18 @@ def test_missing_remote_config_fails_loudly(tmp_path: Path):
             "HOME": str(tmp_path),
             "ROBOTHOR_OFFSITE_SOURCE": str(src),
             "ROBOTHOR_OFFSITE_LOG": str(tmp_path / "offsite.log"),
+            # This case reaches fail(), which runs the REAL pager. With no
+            # secrets override the sender recovers the operator's actual
+            # credentials from /run/robothor/secrets.env and delivers
+            # "offsite-backup: ROBOTHOR_OFFSITE_REMOTE is not set" to their
+            # phone; with no spool pin an undelivered one is parked in
+            # /var/lib/robothor/alert-spool for root's next drain to send.
+            "ROBOTHOR_ALERT_SUPPRESS": "1",
+            "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+            "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+            "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+            "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+            "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-cooldown-fallback"),
         },
     )
     assert result.returncode != 0
@@ -306,3 +344,292 @@ def test_verify_distinguishes_missing_from_corrupt(tmp_path: Path):
         f"corruption was reported as a missing file: {corrupt_out}"
     )
     assert intact.name in corrupt_out, f"the page must name the bad generation: {corrupt_out}"
+
+
+# ── last-good markers ────────────────────────────────────────────────────────
+
+
+STATE_LIB = REPO_ROOT / "scripts" / "backup-state.sh"
+UNKNOWN = "unknown (no successful run recorded)"
+# `date -Is` — local time WITH the offset, e.g. 2026-09-02T04:30:11+02:00.
+# The offset is the point: a bare local timestamp is unorderable against
+# anything, and a guard that compares it to `now` on a box that changed zone
+# reads hours of drift as a stale backup.
+TS_RE = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}"
+
+
+def _state_dir(tmp_path: Path) -> Path:
+    return tmp_path / "backup-state"
+
+
+class TestTheOffsiteRunRecordsWhenItLastWorked:
+    """"When did this last actually work?" had no answer anywhere.
+
+    Every backup job's success was a line in a log file, so the only signal a
+    wedged volume produced was a failing unit — and the fix for the paging
+    storm is to stop those units failing. Something has to carry the "it has
+    been N hours since a good run" signal instead, and it cannot live on the
+    backup volume: the disk that breaks must not be the disk that holds the
+    evidence. These markers live on NVMe under
+    ${ROBOTHOR_BACKUP_STATE_DIR:-/var/lib/robothor/backup-state}.
+    """
+
+    def test_a_successful_run_records_last_offsite_ok(self, tmp_path: Path):
+        src = _make_source(tmp_path)
+        result = _run(tmp_path, src, tmp_path / "remote")
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        marker = _state_dir(tmp_path) / "last-offsite-ok"
+        assert marker.exists(), (
+            "nothing recorded that the offsite replication worked, so a "
+            "freshness guard has nothing to quote"
+        )
+        assert marker.read_text().strip(), "the marker is empty"
+        assert UNKNOWN not in marker.read_text()
+
+    def test_the_marker_is_a_timestamp_a_guard_can_compare(self, tmp_path: Path):
+        src = _make_source(tmp_path)
+        _run(tmp_path, src, tmp_path / "remote")
+        stamp = (_state_dir(tmp_path) / "last-offsite-ok").read_text().strip()
+        ts, _, identifier = stamp.partition(" ")
+        assert re.fullmatch(TS_RE, ts), stamp
+        assert identifier, (
+            "the marker says WHEN but not WHAT — a freshness guard that pages "
+            "'offsite is 40 hours stale' has to be able to name the generation "
+            f"it is talking about\n{stamp}"
+        )
+
+    def test_the_marker_names_the_object_that_went_offsite(self, tmp_path: Path):
+        src = _make_source(tmp_path)
+        dest = tmp_path / "remote"
+        _run(tmp_path, src, dest)
+        stamp = (_state_dir(tmp_path) / "last-offsite-ok").read_text().strip()
+        newest = sorted(f.name for f in src.glob("*.sql.gz"))[-1]
+        assert newest in stamp, (
+            "the identifier must be the object that actually landed offsite\n"
+            f"{stamp}"
+        )
+
+    def test_a_failed_run_records_nothing(self, tmp_path: Path):
+        """A marker written on failure is worse than no marker: it makes a
+        broken backup look fresh."""
+        src = _make_source(tmp_path)
+        dest = tmp_path / "remote"
+        dest.mkdir()
+        dest.chmod(0o500)  # rclone cannot write here
+        try:
+            result = _run(tmp_path, src, dest)
+        finally:
+            dest.chmod(0o700)
+
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert not (_state_dir(tmp_path) / "last-offsite-ok").exists(), (
+            "a failed replication recorded a successful run — the freshness "
+            "guard would report a broken offsite copy as healthy"
+        )
+
+    def test_a_verify_only_run_does_not_stamp_a_replication(self, tmp_path: Path):
+        """Verify-only uploads nothing, so it says nothing about whether
+        replication still works. Stamping there would let a dead upload path
+        look fresh forever."""
+        src = _make_source(tmp_path)
+        dest = tmp_path / "remote"
+        _run(tmp_path, src, dest)
+        marker = _state_dir(tmp_path) / "last-offsite-ok"
+        marker.unlink(missing_ok=True)
+
+        result = _run(tmp_path, src, dest, ROBOTHOR_OFFSITE_VERIFY_ONLY="1")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert not marker.exists()
+
+
+class TestTheMarkerHelper:
+    """scripts/backup-state.sh is shared by all four backup jobs, so its
+    failure modes are everyone's failure modes."""
+
+    @staticmethod
+    def _sh(tmp_path: Path, body: str, **env_extra) -> subprocess.CompletedProcess[str]:
+        env = {
+            "PATH": os.environ["PATH"],
+            "ROBOTHOR_BACKUP_STATE_DIR": str(_state_dir(tmp_path)),
+            # backup-state.sh does not page today. It is sourced by scripts
+            # that do, one edit away from calling fail(), and this file is
+            # scanned per call site precisely so that edit cannot arrive
+            # unpinned — see
+            # tests/test_alert_never_pages_from_tests.py::test_every_subprocess_call_in_a_pager_reaching_test_pins_the_sender_seams.
+            "ROBOTHOR_ALERT_SUPPRESS": "1",
+            "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+            "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+            "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+            "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+            "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-cooldown-fallback"),
+        }
+        env.update(env_extra)
+        return subprocess.run(
+            ["bash", "-c", f'set -euo pipefail\nsource "{STATE_LIB}"\n{body}'],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+
+    def test_reading_a_marker_that_was_never_written_says_so(self, tmp_path: Path):
+        result = self._sh(tmp_path, 'backup_state_last last-basebackup || true')
+        assert UNKNOWN in result.stdout, (
+            "an absent marker must read as unknown, never as an empty string a "
+            "caller can mistake for a fresh timestamp\n" + result.stdout + result.stderr
+        )
+
+    def test_an_unknown_marker_reports_a_nonzero_status(self, tmp_path: Path):
+        result = self._sh(tmp_path, 'backup_state_last last-basebackup')
+        assert result.returncode != 0, (
+            "a guard must be able to branch on 'no successful run recorded' "
+            "without string-matching"
+        )
+
+    def test_a_recorded_marker_reads_back(self, tmp_path: Path):
+        result = self._sh(
+            tmp_path,
+            "backup_state_mark last-local-dump dump-20260902.sql.gz\n"
+            "backup_state_last last-local-dump",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert UNKNOWN not in result.stdout
+        assert re.search(TS_RE, result.stdout), result.stdout
+
+    def test_the_marker_file_is_a_timestamp_then_an_identifier(self, tmp_path: Path):
+        """The whole contract, in one line on disk.
+
+        It used to be a bare UTC timestamp, so every marker said WHEN a job
+        last worked and nothing about WHAT it produced. A freshness page that
+        cannot name the dump, the offsite object or the base backup it is
+        talking about sends the operator to the box to find out.
+        """
+        self._sh(tmp_path, "backup_state_mark last-local-dump dump-20260902.sql.gz")
+        line = (_state_dir(tmp_path) / "last-local-dump").read_text()
+        assert line.endswith("\n"), "the marker must be one newline-terminated line"
+        ts, _, identifier = line.strip().partition(" ")
+        assert re.fullmatch(TS_RE, ts), line
+        assert identifier == "dump-20260902.sql.gz", line
+
+    def test_reading_a_marker_keeps_the_identifier(self, tmp_path: Path):
+        """backup_state_last stripped ALL whitespace, so the moment a marker
+        carried two fields the reader glued them into one unparseable token."""
+        result = self._sh(
+            tmp_path,
+            "backup_state_mark last-local-dump dump-20260902.sql.gz\n"
+            "backup_state_last last-local-dump",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        ts, _, identifier = result.stdout.strip().partition(" ")
+        assert re.fullmatch(TS_RE, ts), result.stdout
+        assert identifier == "dump-20260902.sql.gz", result.stdout
+
+    def test_the_timestamp_can_be_read_on_its_own(self, tmp_path: Path):
+        """A guard doing date arithmetic wants field 1 and nothing else."""
+        result = self._sh(
+            tmp_path,
+            "backup_state_mark last-local-dump dump-20260902.sql.gz\n"
+            "backup_state_last_ts last-local-dump",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert re.fullmatch(TS_RE, result.stdout.strip()), result.stdout
+
+    def test_an_unwritten_marker_has_no_timestamp_either(self, tmp_path: Path):
+        result = self._sh(tmp_path, "backup_state_last_ts last-basebackup || true")
+        assert UNKNOWN in result.stdout, result.stdout + result.stderr
+        result = self._sh(tmp_path, "backup_state_last_ts last-basebackup")
+        assert result.returncode != 0, (
+            "a guard must be able to branch on 'no successful run recorded'"
+        )
+
+    def test_recording_never_fails_the_backup_that_calls_it(self, tmp_path: Path):
+        """The marker is bookkeeping. A backup that succeeded must not be
+        reported as failed because /var/lib was read-only."""
+        blocked = tmp_path / "blocked"
+        blocked.mkdir()
+        blocked.chmod(0o500)
+        try:
+            result = self._sh(
+                tmp_path,
+                'backup_state_mark last-local-dump dump.sql.gz\necho survived',
+                ROBOTHOR_BACKUP_STATE_DIR=str(blocked / "state"),
+            )
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert "survived" in result.stdout
+        finally:
+            blocked.chmod(0o700)
+
+
+class TestEveryBackupJobRecordsItsMarker:
+    """backup-ssd.sh rsyncs the whole system, so it is not run here; this is a
+    wiring check that it calls the shared helper with the agreed name."""
+
+    @pytest.mark.parametrize(
+        ("script", "marker"),
+        [
+            ("backup-ssd.sh", "last-local-dump"),
+            ("backup-offsite.sh", "last-offsite-ok"),
+            ("wal-offsite.sh", "last-wal-offsite-ok"),
+            ("pg-basebackup.sh", "last-basebackup"),
+        ],
+    )
+    def test_the_job_records_its_own_marker(self, script: str, marker: str):
+        body = (REPO_ROOT / "scripts" / script).read_text()
+        assert f"backup_state_mark {marker}" in body, (
+            f"{script} never records {marker}; the freshness guard cannot tell "
+            "a job that stopped running from one that is merely quiet"
+        )
+
+
+class TestAMissingHelperFailsBeforeTheWork:
+    """backup-offsite.sh runs `set -uo pipefail` WITHOUT -e.
+
+    That is deliberate (the retention and verification steps decide their own
+    failure handling), but it means a `source` of a missing
+    scripts/backup-state.sh does not stop the script — it carries on, does the
+    whole replication, and then dies on the last line with "backup_state_mark:
+    command not found" and exit 127. A successful backup reported as a failed
+    one is a page for nothing, which is the exact behaviour this branch exists
+    to end.
+    """
+
+    def test_it_refuses_to_start_without_the_marker_helper(self, tmp_path: Path):
+        lone = tmp_path / "scripts"
+        lone.mkdir()
+        shutil.copy2(SCRIPT, lone / SCRIPT.name)  # deliberately no backup-state.sh
+
+        src = _make_source(tmp_path)
+        dest = tmp_path / "remote"
+        result = subprocess.run(
+            ["bash", str(lone / SCRIPT.name)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env={
+                "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "HOME": str(tmp_path),
+                "ROBOTHOR_OFFSITE_REMOTE": str(dest),
+                "ROBOTHOR_OFFSITE_SOURCE": str(src),
+                "ROBOTHOR_OFFSITE_LOG": str(tmp_path / "offsite.log"),
+                "ROBOTHOR_ALERT_SUPPRESS": "1",
+                "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+                "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+                "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+                "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+                "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-cooldown-fallback"),
+                "ROBOTHOR_BACKUP_STATE_DIR": str(_state_dir(tmp_path)),
+            },
+        )
+
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert not dest.exists(), (
+            "the script replicated everything and only then noticed it could "
+            "not load backup-state.sh — an hour of upload followed by a page "
+            f"for a backup that worked\n{result.stdout}{result.stderr}"
+        )
+        assert "backup-state.sh" in result.stdout + result.stderr, (
+            "the page must name the missing file, not read as "
+            f"'command not found'\n{result.stdout}{result.stderr}"
+        )

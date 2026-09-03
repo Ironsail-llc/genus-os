@@ -9,14 +9,23 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SEND = REPO_ROOT / "scripts" / "send_failure_alert.sh"
 INSTALL = REPO_ROOT / "scripts" / "install_onfailure_alerts.sh"
 ALERT_UNIT = REPO_ROOT / "infra" / "systemd" / "robothor-alert@.service"
+
+# A base URL that cannot be reached and cannot be mistaken for the real API.
+# Pinned in run_send's own env below: the fake curl is what normally stops the
+# send, and a case that forgets to install one would otherwise POST fixture
+# text to api.telegram.org with whatever token was in scope.
+STUB_API_BASE = "http://127.0.0.1:1"
 
 
 def fake_curl(tmp_path: Path) -> Path:
@@ -49,11 +58,34 @@ def fake_curl_failing(tmp_path: Path) -> Path:
     return log
 
 
+def fake_journal(tmp_path: Path, payload: bytes) -> Path:
+    """A journalctl stand-in emitting exactly ``payload``, ignoring its argv.
+
+    The sender tails the journal of the failed unit into the page body. Read
+    from the LIVE host journal that is whatever this box happened to log a few
+    minutes ago: unstable, unassertable, and — as of 2026-09-02 — not even
+    valid UTF-8, which crashed two tests in this file outright. The seam
+    (ROBOTHOR_ALERT_JOURNAL_CMD) exists so a test supplies the tail itself.
+    """
+    journal = tmp_path / "bin" / "fake-journalctl"
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    blob = tmp_path / "bin" / "journal-fixture.bin"
+    blob.write_bytes(payload)
+    journal.write_text(f'#!/usr/bin/env bash\ncat "{blob}"\nexit 0\n')
+    journal.chmod(journal.stat().st_mode | stat.S_IEXEC)
+    return journal
+
+
 def curl_call_count(log: Path) -> int:
-    """Each invocation writes exactly one Telegram API URL arg; count those."""
+    """Each invocation writes exactly one Telegram API URL arg; count those.
+
+    Counted by the ENDPOINT, not the host: the base URL is a pinned stub
+    (STUB_API_BASE), and counting "api.telegram.org" would silently return 0
+    for every call — a send-count assertion that can only ever pass.
+    """
     if not log.exists():
         return 0
-    return log.read_text().count("api.telegram.org")
+    return log.read_text().count("/sendMessage")
 
 
 def stamp_files(tmp_path: Path) -> list[Path]:
@@ -69,17 +101,68 @@ def stamp_files(tmp_path: Path) -> list[Path]:
     return sorted(p for p in state_dir.iterdir() if p.is_file())
 
 
+def page_text(log: Path) -> str:
+    """The Telegram message body exactly as the sender composed it.
+
+    The fake curl writes one argv entry per line, so the multi-line
+    ``text=`` payload spans several lines; the API URL is the final argv
+    entry, and nothing follows it.
+    """
+    raw = log.read_text()
+    assert "\ntext=" in raw, f"no text= payload recorded in {raw!r}"
+    body = raw.split("\ntext=", 1)[1]
+    # Drop the trailing API-URL argv line (and the trailing newline).
+    return body.rsplit("\n", 2)[0]
+
+
 def run_send(
-    tmp_path: Path, unit: str, env_extra: dict[str, str]
+    tmp_path: Path, unit: str, env_extra: dict[str, str], body: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     env = {
         "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+        # The script SETS its PATH (a root unit must not inherit the operator's
+        # user-writable directories), so the stub directory reaches it through the
+        # one documented seam — see infra/systemd/README.md.
+        "ROBOTHOR_EXTRA_PATH": str(tmp_path / "bin"),
         "HOME": str(tmp_path),
         # Isolate the cooldown state dir per test — the default lives under
         # /run/robothor, which is real and writable on this box, and a test
         # run pointed at it would leave a stamp that could suppress a real
         # page later.
         "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-cooldown"),
+        # Same reasoning for the backup markers the consequence line quotes:
+        # the default dir is real on this box, and a test must not read the
+        # operator's actual backup state into an assertion.
+        "ROBOTHOR_BACKUP_STATE_DIR": str(tmp_path / "backup-state"),
+        # /run/robothor/secrets.env is real and readable on a live box. Without
+        # this default, a call site that forgets to pass a fake token AND
+        # forgets to override this itself falls through to the operator's
+        # actual credentials — see
+        # test_run_send_default_env_never_sources_the_real_secrets_file.
+        "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+        # The cooldown fallback lives at a fixed, shared, real path
+        # (/tmp/robothor-alert-cooldown-<uid>) that this box uses for actual
+        # production pages. Without this default, any test that makes the
+        # primary state dir unwritable plants a real stamp there — see
+        # test_run_send_default_env_never_touches_the_shared_fallback_dir.
+        "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "fallback-state"),
+        # The spool is durable (/var/lib/robothor/alert-spool, NOT tmpfs) and
+        # every later send drains it. A test that spools into the real
+        # directory therefore pages the operator with fixture text on the next
+        # tick — see test_run_send_default_env_never_spools_to_the_real_dir.
+        "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+        # Second seam on delivery, independent of the fake curl: see
+        # STUB_API_BASE above.
+        "ROBOTHOR_TELEGRAM_API_BASE": STUB_API_BASE,
+        # The journal tail comes from a fixture, never from this box. The live
+        # journal is not reproducible between runs and is not guaranteed to be
+        # valid UTF-8 — on 2026-09-02 it was not, and TestConsequenceLine died
+        # decoding the page it had just composed.
+        "ROBOTHOR_ALERT_JOURNAL_CMD": str(
+            (tmp_path / "bin" / "fake-journalctl")
+            if (tmp_path / "bin" / "fake-journalctl").exists()
+            else fake_journal(tmp_path, b"fixture journal line\n")
+        ),
         # These tests predate the boot-window retry loop and assert on exact
         # curl call counts — pin a single fast attempt so they keep testing
         # what they always tested. The retry behavior itself is covered in
@@ -88,9 +171,10 @@ def run_send(
         "ROBOTHOR_ALERT_RETRY_DELAY": "0",
     }
     env.update(env_extra)
-    return subprocess.run(
-        ["bash", str(SEND), unit], capture_output=True, text=True, timeout=30, env=env
-    )
+    argv = ["bash", str(SEND), unit]
+    if body is not None:
+        argv.append(body)
+    return subprocess.run(argv, capture_output=True, text=True, timeout=30, env=env)
 
 
 def test_scripts_exist_and_are_executable():
@@ -118,7 +202,7 @@ def test_send_posts_unit_name_to_telegram(tmp_path: Path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     args = log.read_text()
-    assert "api.telegram.org/bottok123/sendMessage" in args
+    assert f"{STUB_API_BASE}/bottok123/sendMessage" in args
     assert "robothor-engine.service" in args
     assert "42" in args
 
@@ -138,6 +222,194 @@ def test_send_fails_loudly_without_token(tmp_path: Path):
     )
     assert result.returncode != 0
     assert "ROBOTHOR_TELEGRAM_BOT_TOKEN" in result.stdout + result.stderr
+
+
+# Shape of a real Telegram bot token ("<digits>:<35 base64url-ish chars>"), used
+# to detect a leaked real credential generically rather than hardcoding one.
+_REAL_TOKEN_SHAPE = re.compile(r"\d{6,10}:[A-Za-z0-9_-]{30,40}")
+
+
+def test_run_send_default_env_never_sources_the_real_secrets_file(tmp_path: Path):
+    """run_send's own base env must be the seam that keeps every test in this
+    file off /run/robothor/secrets.env — not each call site remembering to
+    override ROBOTHOR_SECRETS_FILE.
+
+    That file is real and readable on a live box (this one included): without
+    an isolating default, a caller of run_send() that forgets to pass a fake
+    token AND forgets to override ROBOTHOR_SECRETS_FILE silently sources the
+    operator's real Telegram credentials and would page for real.
+    """
+    log = fake_curl(tmp_path)
+    # Deliberately no ROBOTHOR_TELEGRAM_BOT_TOKEN/CHAT_ID and no
+    # ROBOTHOR_SECRETS_FILE override — this must rely entirely on run_send's
+    # own defaults to stay hermetic.
+    result = run_send(tmp_path, "robothor-something-new.service", {})
+    assert result.returncode != 0, (
+        "a hermetic test run must never find real credentials to send with"
+    )
+    assert "ROBOTHOR_TELEGRAM_BOT_TOKEN" in result.stdout + result.stderr
+    assert curl_call_count(log) == 0, (
+        "no send should have been attempted at all — any curl call here "
+        "means a token (real or otherwise) was found and used"
+    )
+    assert not _REAL_TOKEN_SHAPE.search(log.read_text() if log.exists() else "")
+
+
+def test_run_send_sources_only_the_explicit_fake_secrets_file(tmp_path: Path):
+    """When credentials DO come from a sourced secrets file, the curl args
+    log must carry only the fake token from that file — never anything
+    shaped like a real Telegram bot token."""
+    log = fake_curl(tmp_path)
+    fake_secrets = tmp_path / "fake-secrets.env"
+    fake_secrets.write_text(
+        'ROBOTHOR_TELEGRAM_BOT_TOKEN="tok123"\nROBOTHOR_TELEGRAM_CHAT_ID="42"\n'
+    )
+    result = run_send(
+        tmp_path,
+        "robothor-engine.service",
+        {"ROBOTHOR_SECRETS_FILE": str(fake_secrets)},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = log.read_text()
+    assert f"{STUB_API_BASE}/bottok123/sendMessage" in args
+    assert not _REAL_TOKEN_SHAPE.search(args), (
+        f"curl args must contain only the fake token, found a real-shaped "
+        f"one: {args!r}"
+    )
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="root ignores directory permissions, so 0555 is writable"
+)
+def test_run_send_default_env_never_touches_the_shared_fallback_dir(tmp_path: Path):
+    """run_send's base env must also isolate the cooldown FALLBACK dir.
+
+    The fallback lives at a fixed, shared, real path
+    (/tmp/robothor-alert-cooldown-<uid>) that this box already uses for
+    production pages. Without a default override, a test that only makes
+    the primary ROBOTHOR_ALERT_STATE_DIR unwritable (without separately
+    remembering the fallback var) plants a real stamp file in that shared
+    directory, which can suppress a genuine future page.
+    """
+    real_fallback = Path(f"/tmp/robothor-alert-cooldown-{os.getuid()}")
+    before = set(real_fallback.iterdir()) if real_fallback.exists() else set()
+
+    fake_curl(tmp_path)
+    unwritable = tmp_path / "unwritable-state"
+    unwritable.mkdir()
+    unwritable.chmod(0o555)
+    env = {
+        "ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123",
+        "ROBOTHOR_TELEGRAM_CHAT_ID": "42",
+        "ROBOTHOR_ALERT_STATE_DIR": str(unwritable),
+    }
+    result = run_send(tmp_path, "robothor-fallback-isolation-test.service", env)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    after = set(real_fallback.iterdir()) if real_fallback.exists() else set()
+    assert after == before, (
+        "a test run stamped the shared real fallback cooldown dir: "
+        f"{after - before}"
+    )
+
+
+def test_run_send_default_env_never_spools_to_the_real_dir(tmp_path: Path):
+    """run_send's base env must isolate the SPOOL as well.
+
+    The spool is worse than the cooldown stamp: a stamp only suppresses a
+    page, while a spooled file is a page the next send or the next 5-minute
+    liveness tick will actually DELIVER. A test that spools into
+    /var/lib/robothor/alert-spool hands the operator a page composed of
+    fixture text minutes later — the 2026-08-27 accident with a longer fuse,
+    and one no `pytest` marker would reach.
+    """
+    real_spool = Path("/var/lib/robothor/alert-spool")
+    before = set(real_spool.iterdir()) if real_spool.exists() else set()
+
+    fake_curl_failing(tmp_path)  # nothing delivers, so the page must be spooled
+    result = run_send(
+        tmp_path,
+        "robothor-spool-isolation-test.service",
+        {"ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123", "ROBOTHOR_TELEGRAM_CHAT_ID": "42"},
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert list((tmp_path / "alert-spool").glob("*.msg")), (
+        "the page was not spooled anywhere — this test is not exercising the spool"
+    )
+
+    after = set(real_spool.iterdir()) if real_spool.exists() else set()
+    assert after == before, f"a test run spooled a real, deliverable page: {after - before}"
+
+
+class TestJournalTailIsUtf8Safe:
+    """The journal tail is sliced by BYTES; Telegram rejects invalid UTF-8.
+
+    ``compose_text`` cut the tail with ``tail -c 500``, which lands wherever it
+    lands — including the middle of a multi-byte character (the consequence
+    lines are full of em dashes, and journal lines carry arbitrary bytes).
+    Telegram answers such a body with an HTTP 400, and a 400 on a SPOOLED page
+    used to stop the drain at that file forever: one mis-sliced character
+    wedged every page behind it.
+
+    It is not hypothetical: on 2026-09-02 this box's own journal put a raw
+    0x80 into the page, and two tests in TestConsequenceLine failed decoding
+    the payload they had just captured.
+    """
+
+    ENV = {"ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123", "ROBOTHOR_TELEGRAM_CHAT_ID": "42"}
+
+    def send_with_journal(self, tmp_path: Path, payload: bytes) -> bytes:
+        log = fake_curl(tmp_path)
+        fake_journal(tmp_path, payload)
+        result = run_send(tmp_path, "robothor-something-new.service", dict(self.ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        return log.read_bytes()
+
+    def test_the_journal_command_is_a_seam(self, tmp_path: Path):
+        """Without it every consequence test asserts against this host's
+        journal — a different body on every box and every run."""
+        src = SEND.read_text()
+        assert "ROBOTHOR_ALERT_JOURNAL_CMD" in src, (
+            "send_failure_alert.sh shells straight out to journalctl, so no "
+            "test can supply a journal tail; the page body is whatever this "
+            "box logged a few minutes ago"
+        )
+
+    def test_run_send_default_env_pins_the_journal_command(self, tmp_path: Path):
+        fake_curl(tmp_path)
+        result = run_send(tmp_path, "robothor-something-new.service", dict(self.ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "fixture journal line" in page_text(tmp_path / "curl-args.txt"), (
+            "run_send's default env does not pin the journal seam, so the page "
+            "body still comes from the live host journal"
+        )
+
+    def test_a_raw_invalid_byte_never_reaches_the_page(self, tmp_path: Path):
+        """A journal line with binary in it must not become the page body."""
+        raw = self.send_with_journal(tmp_path, b"boom \xff\xfe binary \x80 tail\n")
+        # 0xfe and 0xff never occur in valid UTF-8 at all (0x80 does, as a
+        # continuation byte — the page's own em dash carries one).
+        assert b"\xff" not in raw and b"\xfe" not in raw, (
+            "invalid UTF-8 from the journal reached the Telegram payload; "
+            "Telegram answers that with a 400 and the page is rejected"
+        )
+        raw.decode("utf-8")  # must not raise
+
+    def test_a_multibyte_character_is_not_cut_by_the_byte_slice(self, tmp_path: Path):
+        """Em dashes are 3 bytes each; a 500-byte slice through 900 of them
+        lands mid-character on 2 boundaries out of 3."""
+        raw = self.send_with_journal(tmp_path, ("—" * 900).encode("utf-8") + b"\n")
+        raw.decode("utf-8")  # must not raise
+
+    def test_the_journal_tail_stays_within_its_byte_budget(self, tmp_path: Path):
+        """Scrubbing must not become an excuse to grow the page."""
+        raw = self.send_with_journal(tmp_path, ("—" * 900).encode("utf-8") + b"\n")
+        text = raw.decode("utf-8")
+        tail = text.split("Last journal lines:\n", 1)[1].split("\n\nCheck:", 1)[0]
+        assert len(tail.encode("utf-8")) <= 500, (
+            f"the journal tail is {len(tail.encode('utf-8'))} bytes, over the 500-byte budget"
+        )
+        assert tail.startswith("—"), "the scrub ate the whole tail"
 
 
 def test_install_creates_onfailure_dropins(tmp_path: Path):
@@ -259,3 +531,286 @@ class TestCooldownDedup:
             "two unit names that sanitize to the same key must not share a "
             "cooldown — each is a distinct unit and must page independently"
         )
+
+
+class TestConsequenceLine:
+    """A page must name the CONSEQUENCE, not just the unit.
+
+    Every page read "🔴 <unit> FAILED on <host>" — a unit name is a fact
+    about systemd, not about what the operator has lost. ~50 of them were
+    ignored while every backup path was down, because nothing in the text
+    distinguished "a log shipper is behind" from "there is no restorable
+    copy of the database tonight".
+    """
+
+    ENV = {"ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123", "ROBOTHOR_TELEGRAM_CHAT_ID": "42"}
+
+    def page_for(self, tmp_path: Path, unit: str, **env_extra: str) -> str:
+        log = fake_curl(tmp_path)
+        env = dict(self.ENV)
+        env.update(env_extra)
+        result = run_send(tmp_path, unit, env)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return page_text(log)
+
+    def test_wal_offsite_names_the_pitr_recovery_point(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-wal-offsite.service")
+        assert "PITR" in text
+        assert "15 min" in text
+
+    def test_backup_local_names_the_dump_and_the_rpo_cost(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-backup-local.service")
+        assert "dump" in text
+        assert "RPO" in text
+
+    def test_backup_offsite_names_what_a_box_loss_would_restore_from(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-backup-offsite.service")
+        assert "Offsite NOT refreshed" in text
+        assert "box loss" in text
+
+    def test_engine_says_the_agents_are_down(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-engine.service")
+        assert "Agents are DOWN" in text
+
+    def test_search_engine_does_not_match_the_engine_arm(self, tmp_path: Path):
+        """The *engine* arm was a bare substring match — a unit or cron
+        label merely containing "engine" (e.g. a search-engine indexer)
+        must not be misdiagnosed as the robothor agent engine being down."""
+        text = self.page_for(tmp_path, "search-engine-reindex.service")
+        assert "Agents are DOWN" not in text
+        assert "(no consequence mapped — add one in send_failure_alert.sh)" in text
+
+    def test_vision_says_presence_and_face_recognition_are_blind(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-vision.service")
+        assert "Vision capture is down" in text
+
+    def test_provision_and_supervision_do_not_match_the_vision_arm(self, tmp_path: Path):
+        """The *vision* arm was a bare substring match — "provision" and
+        "supervision" both contain "vision" and must not be misdiagnosed as
+        the camera/vision pipeline being down."""
+        for unit in ("cloud-provision.service", "agent-supervision.service"):
+            text = self.page_for(tmp_path, unit)
+            assert "Vision capture is down" not in text, unit
+            assert (
+                "(no consequence mapped — add one in send_failure_alert.sh)" in text
+            ), unit
+
+    # ── the watchdogs' own OnFailure pages ───────────────────────────────────
+    #
+    # Four units added on this branch all carry
+    # OnFailure=robothor-alert@%n.service and none of them had an arm, so their
+    # page was the unit name plus "(no consequence mapped — add one in
+    # send_failure_alert.sh)": a maintenance note where the consequence
+    # belongs, on the pages that say a WATCHDOG has stopped. Those are the
+    # hardest pages to triage from a preview, because nothing is visibly
+    # broken yet — what has been lost is the thing that would tell you.
+
+    def test_the_backup_volume_guard_says_what_stops_being_watched(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-backup-volume-guard.service")
+        assert "no consequence mapped" not in text
+        assert "volume" in text.lower()
+
+    def test_the_slo_probe_says_which_breaches_stop_paging(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-slo.service")
+        assert "no consequence mapped" not in text
+        assert "SLO" in text
+
+    def test_the_restore_drill_says_the_backups_are_unproven(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-restore-drill.service")
+        assert "no consequence mapped" not in text
+        assert "restore" in text.lower()
+
+    def test_the_guardrail_watch_says_which_checks_stop_running(self, tmp_path: Path):
+        text = self.page_for(tmp_path, "robothor-guardrail-watch.service")
+        assert "no consequence mapped" not in text
+        assert "drift" in text.lower()
+
+    def test_the_four_mapped_watchdog_units_exist(self):
+        """A consequence for a unit that does not exist is a comment.
+
+        Each arm is keyed on a real unit's name, so if one is renamed the map
+        goes stale silently — the page would fall back to the maintainer note
+        the four tests above exist to keep off the operator's phone.
+        """
+        unit_dir = REPO_ROOT / "infra" / "systemd"
+        for unit in (
+            "robothor-backup-volume-guard.service",
+            "robothor-slo.service",
+            "robothor-restore-drill.service",
+            "robothor-guardrail-watch.service",
+        ):
+            assert (unit_dir / unit).exists(), f"{unit} has no repo mirror"
+            assert "OnFailure=robothor-alert@%n.service" in (unit_dir / unit).read_text(), (
+                f"{unit} does not page on failure, so its consequence arm is dead code"
+            )
+
+    def test_an_unmapped_unit_says_so_instead_of_inventing_one(self, tmp_path: Path):
+        """A wrong consequence is worse than an absent one — the default has
+        to read as a gap in the map, and as a chore to close it."""
+        text = self.page_for(tmp_path, "robothor-something-new.service")
+        assert (
+            "(no consequence mapped — add one in send_failure_alert.sh)" in text
+        )
+
+    def test_the_consequence_is_the_second_line_of_the_page(self, tmp_path: Path):
+        """Telegram truncates the preview; the consequence must be visible
+        without opening the message."""
+        text = self.page_for(tmp_path, "robothor-engine.service")
+        lines = text.splitlines()
+        assert lines[0].startswith("🔴 robothor-engine.service FAILED on ")
+        assert "Agents are DOWN" in lines[1]
+
+    def test_the_marker_file_supplies_the_newest_good_backup(self, tmp_path: Path):
+        state = tmp_path / "backup-state"
+        state.mkdir()
+        (state / "last-local-dump").write_text("2026-08-30T02:15:04+00:00\n")
+        text = self.page_for(tmp_path, "robothor-backup-local.service")
+        assert "2026-08-30T02:15:04+00:00" in text
+
+    def test_a_missing_marker_says_unknown_rather_than_blank(self, tmp_path: Path):
+        """A blank where a timestamp belongs reads as "recent"; it is the
+        opposite — nothing has ever succeeded."""
+        text = self.page_for(tmp_path, "robothor-backup-offsite.service")
+        assert "unknown (no successful run recorded)" in text
+
+    def test_the_offsite_scripts_own_alert_key_is_mapped(self, tmp_path: Path):
+        """scripts/backup-offsite.sh pages with "offsite-backup: ..." — the
+        map must recognise the key its real caller actually sends, not only
+        the systemd unit name."""
+        text = self.page_for(tmp_path, "offsite-backup: 2 CORRUPT archives")
+        assert "no consequence mapped" not in text
+        assert "Offsite NOT refreshed" in text
+
+
+class TestBodyOverride:
+    """``send_failure_alert.sh <key> [body]``: callers that already know what
+    went wrong (thermal-guard, boot-guard) can say it, instead of the pager
+    tailing a journal for a pseudo-unit that has none."""
+
+    ENV = {"ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123", "ROBOTHOR_TELEGRAM_CHAT_ID": "42"}
+
+    def test_the_body_replaces_the_journal_tail(self, tmp_path: Path):
+        log = fake_curl(tmp_path)
+        result = run_send(
+            tmp_path,
+            "robothor-engine.service",
+            dict(self.ENV),
+            body="Restore drill FAILED: pg_restore exited 1 on the newest dump",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        text = page_text(log)
+        assert "Restore drill FAILED: pg_restore exited 1 on the newest dump" in text
+        assert "Last journal lines:" not in text
+
+    def test_the_first_argument_is_still_the_dedup_key(self, tmp_path: Path):
+        """Two different bodies under one key are one incident, and must
+        page once — otherwise a per-tick body defeats the cooldown."""
+        log = fake_curl(tmp_path)
+        env = dict(self.ENV)
+        first = run_send(tmp_path, "thermal-guard", env, body="THERMAL-CRITICAL 96C")
+        assert first.returncode == 0, first.stdout + first.stderr
+        assert curl_call_count(log) == 1
+        second = run_send(tmp_path, "thermal-guard", env, body="THERMAL-CRITICAL 97C")
+        assert second.returncode == 0, second.stdout + second.stderr
+        assert curl_call_count(log) == 1
+        assert "suppressed duplicate page for thermal-guard" in (second.stdout + second.stderr)
+
+    def test_one_argument_callers_still_get_the_journal_tail(self, tmp_path: Path):
+        """Backward compatibility: every existing caller passes one argument."""
+        log = fake_curl(tmp_path)
+        result = run_send(tmp_path, "robothor-engine.service", dict(self.ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        text = page_text(log)
+        assert "Last journal lines:" in text
+        assert "Check: systemctl status robothor-engine.service" in text
+
+    def test_the_body_is_the_whole_message(self, tmp_path: Path):
+        """When the caller supplies the body, the body IS the page.
+
+        The sender kept prepending "🔴 <key> FAILED on <host>" and a
+        consequence line to it. A caller sending a RECOVERY notice therefore
+        paged "🔴 backup-volume-recovered FAILED on box" above a ✅ body —
+        the pager contradicting its own message — and any key outside the
+        consequence map added "(no consequence mapped — add one in
+        send_failure_alert.sh)", a maintenance note, to the operator's phone.
+        $1 stays what it always was: the dedup key, not a headline.
+        """
+        log = fake_curl(tmp_path)
+        result = run_send(
+            tmp_path,
+            "backup-volume-recovered",
+            dict(self.ENV),
+            body="✅ backup volume is back: /mnt/robothor-backup mounted rw",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        text = page_text(log)
+        assert text.startswith("✅ backup volume is back: /mnt/robothor-backup mounted rw"), (
+            f"the body is not the first thing the operator reads: {text!r}"
+        )
+        assert "FAILED" not in text, (
+            "a recovery notice was paged under a FAILED headline — the pager "
+            "contradicting the message it was asked to send"
+        )
+        assert "no consequence mapped" not in text, (
+            "a note addressed to whoever maintains the pager was delivered to "
+            "the operator instead"
+        )
+
+    def test_the_body_page_is_stamped_with_the_time_and_host(self, tmp_path: Path):
+        """Losing the headline must not lose WHEN and WHERE."""
+        log = fake_curl(tmp_path)
+        run_send(tmp_path, "backup-volume-recovered", dict(self.ENV), body="✅ all good")
+        text = page_text(log)
+        host = subprocess.run(
+            ["hostname", "-s"], capture_output=True, text=True
+        ).stdout.strip()
+        assert re.search(
+            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2} on " + re.escape(host) + r"$",
+            text.splitlines()[-1],
+        ), f"no '<timestamp> on <host>' trailer: {text!r}"
+
+    def test_the_body_page_keeps_its_own_shape_through_the_spool(self, tmp_path: Path):
+        """The drain prefixes the STORED text; it must not re-compose a
+        headline around a body-override page on the way out."""
+        fake_curl_failing(tmp_path)
+        result = run_send(
+            tmp_path, "backup-volume-recovered", dict(self.ENV), body="✅ all good"
+        )
+        assert result.returncode != 0
+        spooled = sorted((tmp_path / "alert-spool").glob("*.msg"))
+        assert len(spooled) == 1, "nothing was spooled — this test proves nothing"
+        text = spooled[0].read_text()
+        assert text.startswith("✅ all good")
+        assert "FAILED" not in text
+
+    def test_a_one_argument_page_still_leads_with_the_headline(self, tmp_path: Path):
+        """The unchanged contract for every existing caller."""
+        log = fake_curl(tmp_path)
+        result = run_send(tmp_path, "robothor-engine.service", dict(self.ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        lines = page_text(log).splitlines()
+        assert lines[0].startswith("🔴 robothor-engine.service FAILED on ")
+        assert "Agents are DOWN" in lines[1]
+
+
+class TestDeliveryIsAnnounced:
+    """A successful send printed nothing, so a cron log carried no evidence
+    a page had gone out — only the failures were visible, which made an
+    entirely silent pager indistinguishable from a quiet night."""
+
+    ENV = {"ROBOTHOR_TELEGRAM_BOT_TOKEN": "tok123", "ROBOTHOR_TELEGRAM_CHAT_ID": "42"}
+
+    def test_a_delivered_page_is_logged_with_its_http_status(self, tmp_path: Path):
+        fake_curl(tmp_path)
+        result = run_send(tmp_path, "robothor-engine.service", dict(self.ENV))
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (
+            "send_failure_alert: delivered page for robothor-engine.service (http 200)"
+            in result.stdout + result.stderr
+        )
+
+    def test_an_undelivered_page_is_not_announced_as_delivered(self, tmp_path: Path):
+        fake_curl_failing(tmp_path)
+        result = run_send(tmp_path, "robothor-engine.service", dict(self.ENV))
+        assert result.returncode != 0
+        assert "delivered page for" not in result.stdout + result.stderr
