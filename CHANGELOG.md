@@ -1,3 +1,9 @@
+## [1.61.1](https://github.com/Ironsail-llc/genus-os/compare/v1.61.0...v1.61.1) (2026-09-03)
+
+### Bug Fixes
+
+* **engine:** outage resilience — key pool, bounded waits, resume, reaper ([#458](https://github.com/Ironsail-llc/genus-os/issues/458)) ([ba7ee29](https://github.com/Ironsail-llc/genus-os/commit/ba7ee29f4fa56e614dea45213bba3f88a6bc1efb))
+
 ## [1.61.0](https://github.com/Ironsail-llc/genus-os/compare/v1.60.0...v1.61.0) (2026-08-27)
 
 ### Features
