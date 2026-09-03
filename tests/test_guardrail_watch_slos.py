@@ -116,6 +116,19 @@ def healthy_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
+def _pin_the_slo_marker_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`main()` now stamps ``${ROBOTHOR_SLO_STATE_DIR}/last-guardrail-watch``
+    when it finishes, and scripts/slo_probe.sh reads that marker after a reboot
+    to decide whether S8 pages.
+
+    Unpinned, a test driving `main()` would write a FRESH marker into the live
+    /var/lib/robothor/slo-state — a fixture vouching, for the next 26 hours,
+    for a daily report that never ran.
+    """
+    monkeypatch.setenv("ROBOTHOR_SLO_STATE_DIR", str(tmp_path / "slo-state"))
+
+
+@pytest.fixture(autouse=True)
 def _forbid_live_sibling_checks(monkeypatch: pytest.MonkeyPatch) -> None:
     """`main()` calls two checks that reach THIS box, and neither belongs in a
     unit test: ``check_flag_truth`` runs the flag audit as a subprocess (up to
@@ -743,4 +756,142 @@ class TestTheRunbookMatchesTheCode:
         assert "never" in window and "production" in window, (
             "the runbook must say this is test-only and must never be set in "
             "production"
+        )
+
+
+# ── the S8 marker: the run history systemd forgets ───────────────────────────
+
+
+class TestMainStampsTheS8Marker:
+    """S8 asked systemd when this unit last exited. `ExecMainExitTimestamp` is
+    per-unit RUNTIME state and a reboot empties it, so at 03:01 on
+    2026-09-03 — hours after a reboot — the hourly probe paged
+
+        S8 BREACHED: robothor-guardrail-watch.service has no completed run on
+        this box.
+
+    while the 08:30 run the day before had finished cleanly. The report's own
+    history therefore has to outlive systemd's memory of it, the same way the
+    backup jobs' last-good markers outlive a wedged volume: one line on NVMe,
+    written on the run's last step.
+
+    Two properties, and the second matters as much as the first: stamping is
+    BOOKKEEPING. A report that genuinely ran and found nothing must never come
+    back as a failed unit because /var/lib was read-only — that would page the
+    operator about the pager.
+    """
+
+    @staticmethod
+    def _quiet(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Every sibling check stubbed: this class is about the marker."""
+        write_dump(probe_env(monkeypatch, tmp_path))
+        fresh_markers(tmp_path)
+        _stub_sibling_checks(monkeypatch)
+        monkeypatch.setattr(gw, "check_soak_deadlines", lambda: None)
+        monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
+        monkeypatch.setattr(gw, "check_host_script_drift", lambda pairs=None: None)
+        monkeypatch.setattr(gw, "check_slos", lambda: [])
+        monkeypatch.setattr(gw, "check_instance_manifests", lambda: True)
+        monkeypatch.setattr(gw, "write_slo_digest", lambda subject, body: True)
+        monkeypatch.setattr(gw, "db_slos", lambda: [])
+        monkeypatch.setattr(
+            "robothor.db.connection.get_connection",
+            lambda autocommit=False: (_ for _ in ()).throw(RuntimeError("postgres is down")),
+        )
+
+    def test_a_clean_run_writes_the_marker(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._quiet(monkeypatch, tmp_path)
+
+        gw.main()
+
+        marker = tmp_path / "slo-state" / "last-guardrail-watch"
+        assert marker.exists(), (
+            "the report finished, so S8 must be able to prove it ran after the "
+            "next reboot empties ExecMainExitTimestamp"
+        )
+        stamp = marker.read_text().split()[0]
+        when = dt.datetime.fromisoformat(stamp)
+        assert when.tzinfo is not None, (
+            "the timestamp must carry its UTC offset — a bare local time reads "
+            "as hours of drift the moment the box changes zone"
+        )
+        age = (dt.datetime.now().astimezone() - when).total_seconds()
+        assert -5 < age < 120, f"the marker must record NOW, not {stamp}"
+
+    def test_the_marker_directory_is_created_when_it_is_missing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """First boot after an install: tmpfiles has not run yet, or the path
+        was never created. A marker that needs a directory nobody made is a
+        marker that is never written."""
+        self._quiet(monkeypatch, tmp_path)
+        state = tmp_path / "never-created" / "slo-state"
+        monkeypatch.setenv("ROBOTHOR_SLO_STATE_DIR", str(state))
+
+        gw.main()
+
+        assert (state / "last-guardrail-watch").exists()
+
+    def test_an_unwritable_marker_directory_does_not_change_the_exit_code(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Bookkeeping never fails its caller — scripts/backup-state.sh's own
+        contract. A read-only /var/lib must not turn a healthy report into a
+        failed unit, which is an OnFailure= page about nothing."""
+        self._quiet(monkeypatch, tmp_path)
+        monkeypatch.setattr(gw, "check_instance_manifests", lambda: True)
+        blocked = tmp_path / "blocked"
+        blocked.write_text("this is a file, not a directory")
+        monkeypatch.setenv("ROBOTHOR_SLO_STATE_DIR", str(blocked / "slo-state"))
+
+        with_marker = gw.main()
+
+        monkeypatch.setenv("ROBOTHOR_SLO_STATE_DIR", str(tmp_path / "slo-state"))
+        without_marker = gw.main()
+
+        assert with_marker == without_marker, (
+            "a marker that could not be written changed the run's verdict — "
+            "that is the bookkeeping-fails-the-backup bug, moved"
+        )
+        assert "WARNING" in capsys.readouterr().out, (
+            "a marker that silently fails to write is an S8 that pages after "
+            "the next reboot with nobody knowing why"
+        )
+
+    def test_a_run_that_died_halfway_leaves_no_marker(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The marker means "this report reached its end". A run killed by an
+        exception did not, and must not leave evidence that it did — S8 would
+        then read a crash loop as a healthy daily report."""
+        self._quiet(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            gw,
+            "check_instance_manifests",
+            lambda: (_ for _ in ()).throw(RuntimeError("killed mid-report")),
+        )
+
+        with pytest.raises(RuntimeError):
+            gw.main()
+
+        assert not (tmp_path / "slo-state" / "last-guardrail-watch").exists()
+
+    def test_a_run_with_findings_still_counts_as_having_run(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Exit 1 is the by-design findings exit, and S8's whole question is
+        whether the report RAN — not whether it liked what it found."""
+        self._quiet(monkeypatch, tmp_path)
+        # The DB section stubbed out entirely, so the 1 below can only come
+        # from the findings — not from the partial-report exit.
+        monkeypatch.setattr(gw, "_run_db_dependent_checks", lambda slos: None)
+        monkeypatch.setattr(gw, "check_instance_manifests", lambda: False)
+
+        exit_code = gw.main()
+
+        assert exit_code == 1
+        assert (tmp_path / "slo-state" / "last-guardrail-watch").exists(), (
+            "a report that found problems is still a report that ran"
         )

@@ -56,6 +56,15 @@ def _stub_sibling_checks(monkeypatch: "pytest.MonkeyPatch", gw) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _pin_the_slo_marker_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`main()` stamps ``${ROBOTHOR_SLO_STATE_DIR}/last-guardrail-watch`` when
+    it finishes; scripts/slo_probe.sh reads it after a reboot to decide whether
+    S8 pages. Unpinned, these tests would write a FRESH marker into the live
+    /var/lib/robothor/slo-state and vouch for a report that never ran."""
+    monkeypatch.setenv("ROBOTHOR_SLO_STATE_DIR", str(tmp_path / "slo-state"))
+
+
+@pytest.fixture(autouse=True)
 def _the_real_slo_probe_never_runs(monkeypatch: "pytest.MonkeyPatch", tmp_path: Path):
     """Sentinel, not trust: point `gw.SLO_PROBE` at a stand-in that records
     every invocation, and fail the test if anything ran it.
