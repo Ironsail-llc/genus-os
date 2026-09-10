@@ -215,10 +215,7 @@ class TestRunMigration:
 
     def test_connection_failure_returns_negative(self):
         """If DB is unreachable, should return -1."""
-        with (
-            patch("psycopg2.connect", side_effect=Exception("Connection refused")),
-            patch("robothor.cli._find_migration_sql", return_value="CREATE TABLE t (id int);"),
-        ):
+        with patch("psycopg2.connect", side_effect=Exception("Connection refused")):
             db = DatabaseConfig(host="nonexistent")
             count = run_migration(db)
         assert count == -1

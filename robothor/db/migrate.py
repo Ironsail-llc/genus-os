@@ -51,6 +51,18 @@ MIGRATIONS_DIR = (
 )
 
 _HISTORY_TABLE = "schema_migrations_v2"
+
+# Evidence that the baseline snapshot already ran outside the ledger.  Older
+# deployments booted PostgreSQL with ``001_init.sql`` mounted into
+# ``docker-entrypoint-initdb.d``, so the schema exists while the ledger is
+# empty.  Re-running the baseline against such a database is destructive, so
+# ``apply()`` refuses until the operator adopts it explicitly.
+BASELINE_EVIDENCE_TABLE = "memory_facts"
+
+BASELINE_UNADOPTED_STATUS = "baseline-unadopted"
+BASELINE_UNADOPTED_MESSAGE = (
+    "ledger empty but schema present — run `robothor migrate --adopt-baseline`"
+)
 _LOCK_KEY = int.from_bytes(
     hashlib.sha256(b"genusos:canonical-schema-migrations:v2").digest()[:8],
     byteorder="big",
@@ -207,6 +219,21 @@ def _discover(migrations_dir: Path | None = None) -> list[Migration]:
     if not migrations:
         raise MigrationDiscoveryError("No migration files found")
     return migrations
+
+
+def manifest_count() -> int:
+    """Number of migrations listed in the canonical manifest."""
+
+    return len(_manifest_paths())
+
+
+def _baseline_schema_present(conn: Any) -> bool:
+    """True when the baseline snapshot ran outside the ledger."""
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT to_regclass(%s)", (f"public.{BASELINE_EVIDENCE_TABLE}",))
+    row = cursor.fetchone()
+    return bool(row and row[0] is not None)
 
 
 def _strip_outer_transaction(sql: str) -> str:
@@ -486,8 +513,22 @@ def status(
     with _connection(connection) as conn, _advisory_lock(conn):
         unmanaged = _prepare_history(conn, migrations)
         applied = _applied(conn)
+        baseline_unadopted = not applied and _baseline_schema_present(conn)
 
     rows: list[dict[str, Any]] = []
+    if baseline_unadopted:
+        baseline = migrations[0]
+        rows.append(
+            {
+                "migration_id": baseline.migration_id,
+                "version": baseline.version,
+                "filename": baseline.filename,
+                "source": baseline.source,
+                "status": BASELINE_UNADOPTED_STATUS,
+                "applied_at": None,
+                "message": BASELINE_UNADOPTED_MESSAGE,
+            }
+        )
     discovered_ids = {migration.migration_id for migration in migrations}
     for migration in migrations:
         record = applied.get(migration.migration_id)
@@ -547,11 +588,19 @@ def apply(
     migrations_dir: Path | None = None,
     *,
     connection: Any | None = None,
+    adopt_baseline: bool = False,
 ) -> list[str]:
     """Apply selected pending migrations and return their immutable IDs.
 
     ``version`` is retained for API compatibility, but accepts the preferred
     full migration ID or filename.  A numeric prefix works only when unique.
+
+    ``adopt_baseline`` covers databases whose schema was created by the retired
+    ``docker-entrypoint-initdb.d`` mount: the ledger is empty but the baseline
+    already ran.  The flag records the manifest's first migration as applied
+    *without executing it*, then continues with the rest of the chain.  Without
+    the flag such a database is refused outright — replaying the baseline over
+    live data is exactly the accident this guard prevents.
     """
 
     migrations = _discover(migrations_dir)
@@ -569,6 +618,14 @@ def apply(
     with _connection(connection) as conn, _advisory_lock(conn):
         _prepare_history(conn, migrations)
         applied = _applied(conn)
+        if not applied and _baseline_schema_present(conn):
+            if not adopt_baseline:
+                raise MigrationHistoryError(BASELINE_UNADOPTED_MESSAGE)
+            baseline = migrations[0]
+            _insert_history(conn, baseline)
+            conn.commit()
+            print(f"Adopted baseline {baseline.filename} into the ledger (not executed).")
+            applied = _applied(conn)
         _validate_history(migrations, applied)
         to_apply = [migration for migration in selected if migration.migration_id not in applied]
         if not to_apply:

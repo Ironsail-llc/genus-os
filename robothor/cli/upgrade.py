@@ -1,6 +1,10 @@
 """robothor upgrade — pull platform updates and run new migrations.
 
 Instance configuration (brain/, docs/agents/*.yaml, .env) is never touched.
+
+Schema changes go through the canonical migrator in ``robothor.db.migrate``
+(manifest, ``schema_migrations_v2`` ledger, advisory lock, SHA-256 checksums).
+This command owns no migration mechanism of its own.
 """
 
 from __future__ import annotations
@@ -28,68 +32,6 @@ def _state_file() -> Path:
     return _workspace() / ".robothor" / "migrations_applied.yaml"
 
 
-def _load_applied() -> list[str]:
-    """Load list of already-applied migration filenames."""
-    state = _state_file()
-    if not state.exists():
-        return []
-    data = yaml.safe_load(state.read_text()) or {}
-    return [entry["file"] for entry in data.get("migrations", [])]
-
-
-def _save_applied(migrations: list[dict[str, Any]]) -> None:
-    """Write migration tracking state (legacy helper for seed)."""
-    state_data = _load_state()
-    state_data["migrations"] = migrations
-    _save_state(state_data)
-
-
-def _discover_migrations() -> list[Path]:
-    """Find all migration SQL files, sorted by number."""
-    workspace = _workspace()
-    migration_dirs = [
-        workspace / "infra" / "migrations",
-        workspace / "crm" / "migrations",
-    ]
-    files: list[Path] = []
-    for d in migration_dirs:
-        if d.is_dir():
-            files.extend(d.glob("*.sql"))
-    return sorted(files, key=lambda p: p.name)
-
-
-def _seed_tracking_if_needed(applied: list[str], all_migrations: list[Path]) -> list[str]:
-    """On first run, detect existing tables and seed all migrations as applied."""
-    if applied:
-        return applied  # Already tracking
-
-    # Check if this is an existing instance (has a database with tables)
-    try:
-        from robothor.db.connection import get_connection
-
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT COUNT(*) FROM information_schema.tables "
-                "WHERE table_schema = 'public' AND table_name = 'agent_runs'"
-            )
-            row = cur.fetchone()
-            if row and row[0] > 0:
-                # Existing instance — seed all current migrations as applied
-                from datetime import UTC, datetime
-
-                entries = [
-                    {"file": m.name, "applied_at": datetime.now(UTC).isoformat()}
-                    for m in all_migrations
-                ]
-                _save_applied(entries)
-                return [m.name for m in all_migrations]
-    except Exception:
-        logger.debug("Could not check database state for migration seeding", exc_info=True)
-
-    return applied
-
-
 def _pull_latest(dry_run: bool) -> bool:
     """Pull latest from remote. Returns True if successful."""
     workspace = _workspace()
@@ -98,7 +40,7 @@ def _pull_latest(dry_run: bool) -> bool:
         return True
 
     if dry_run:
-        result = subprocess.run(
+        subprocess.run(
             ["git", "fetch", "--dry-run"],
             cwd=workspace,
             capture_output=True,
@@ -129,26 +71,53 @@ def _pull_latest(dry_run: bool) -> bool:
     return True
 
 
-def _apply_migration(path: Path, dry_run: bool) -> bool:
-    """Apply a single SQL migration. Returns True on success."""
-    if dry_run:
-        print(f"  Would apply: {path.name}")
-        return True
+def _run_migrations(dry_run: bool) -> int:
+    """Bring the schema current through the canonical migrator.
+
+    Mirrors the error handling of ``robothor migrate`` (``cli/admin.py``) so
+    both entry points fail the same way.
+    """
 
     try:
-        from robothor.db.connection import get_connection
+        import psycopg2
 
-        sql = path.read_text()
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(sql)
-            conn.commit()
-        print(f"  Applied: {path.name}")
-        return True
+        from robothor.config import get_config
+        from robothor.db.migrate import MigrationError, apply, status
+
+        if dry_run:
+            rows = status()
+            pending = [row for row in rows if row["status"] != "applied"]
+            print(f"  {len(pending)} of {len(rows)} canonical migration(s) not applied.")
+            for row in pending:
+                print(f"    - {row['migration_id']}: {row['status']}")
+                message = row.get("message")
+                if message:
+                    print(f"      {message}")
+            return 0
+
+        cfg = get_config().db
+        print(f"  Connecting to {cfg.host}:{cfg.port}/{cfg.name}...")
+        conn = psycopg2.connect(**cfg.dict, connect_timeout=5)
+        try:
+            rows = status(connection=conn)
+            pending = [row for row in rows if row["status"] != "applied"]
+            print(f"  {len(pending)} of {len(rows)} canonical migration(s) not applied.")
+            applied = apply(connection=conn)
+            print(f"  Migration completed successfully ({len(applied)} applied).")
+            return 0
+        finally:
+            conn.close()
+
+    except ImportError:
+        print("  Error: psycopg2 is required. Install with: pip install genusos")
+        return 1
+    except MigrationError as e:
+        print(f"  Error: Migration safety check failed: {e}")
+        return 1
     except Exception as e:
-        logger.error("Migration %s failed: %s", path.name, e)
-        print(f"  FAILED: {path.name} — {e}")
-        return False
+        print(f"  Error: Migration failed: {e}")
+        print("  Check ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.")
+        return 1
 
 
 # Template source name → instance destination (relative to brain/)
@@ -166,7 +135,7 @@ def _hash_file(path: Path) -> str:
 
 
 def _load_state() -> dict[str, Any]:
-    """Load full upgrade state (migrations + template hashes)."""
+    """Load full upgrade state (template hashes)."""
     state = _state_file()
     if not state.exists():
         return {}
@@ -174,7 +143,13 @@ def _load_state() -> dict[str, Any]:
 
 
 def _save_state(data: dict[str, Any]) -> None:
-    """Write full upgrade state."""
+    """Write full upgrade state, dropping the retired ``migrations`` ledger.
+
+    The YAML side-ledger was a second source of truth for applied migrations.
+    ``schema_migrations_v2`` is the only one now, so any surviving key is
+    stripped on the next write rather than left to mislead a future reader.
+    """
+    data.pop("migrations", None)
     state = _state_file()
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text(yaml.dump(data, default_flow_style=False))
@@ -218,7 +193,7 @@ def _check_template_updates() -> list[tuple[str, str]]:
 def cmd_upgrade(args: argparse.Namespace) -> int:
     """Run the upgrade process."""
     dry_run = getattr(args, "dry_run", False)
-    skip_pull = getattr(args, "skip_pull", False)
+    pull = getattr(args, "pull", False)
     skip_migrations = getattr(args, "skip_migrations", False)
 
     import robothor
@@ -226,38 +201,21 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     print(f"Genus OS v{robothor.__version__}")
     print()
 
-    # 1. Pull latest
-    if not skip_pull:
+    # 1. Pull latest (opt-in: a pip install has no checkout to pull)
+    if pull:
         print("Pulling latest platform code...")
         if not _pull_latest(dry_run):
             return 1
     else:
-        print("Skipping pull (--skip-pull)")
+        print("Skipping git pull (pass --pull for a git checkout).")
+        print("  Installed from a wheel? Update with: pip install -U genusos")
     print()
 
-    # 2. Migrations
+    # 2. Migrations — canonical migrator only
     if not skip_migrations:
         print("Checking migrations...")
-        all_migrations = _discover_migrations()
-        applied = _load_applied()
-        applied = _seed_tracking_if_needed(applied, all_migrations)
-
-        new_migrations = [m for m in all_migrations if m.name not in applied]
-        if new_migrations:
-            print(f"  {len(new_migrations)} new migration(s):")
-            from datetime import UTC, datetime
-
-            state_data = _load_state()
-            entries = state_data.get("migrations", [])
-            for m in new_migrations:
-                if not _apply_migration(m, dry_run):
-                    return 1
-                if not dry_run:
-                    entries.append({"file": m.name, "applied_at": datetime.now(UTC).isoformat()})
-                    state_data["migrations"] = entries
-                    _save_state(state_data)
-        else:
-            print("  All migrations already applied.")
+        if _run_migrations(dry_run) != 0:
+            return 1
     else:
         print("Skipping migrations (--skip-migrations)")
     print()
