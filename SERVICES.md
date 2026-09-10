@@ -8,16 +8,11 @@ Logs: `journalctl -u <unit> -f`
 | Unit | Port | Working Dir | Description |
 |------|------|-------------|-------------|
 | robothor-vision.service | 8600 | brain/memory_system | Vision: smart detection (YOLO+InsightFace+Telegram alerts), modes: disarmed/basic/armed |
-| mediamtx-webcam.service | 8554, 8890 | — | USB webcam → RTSP + HLS stream |
 | robothor-orchestrator.service | 9099 | brain/memory_system | FastAPI RAG orchestrator + vision endpoints |
-| robothor-voice.service | 8765 | brain/voice-server | Twilio voice: inbound ConversationRelay + outbound calling (Gemini Live) |
-| robothor-sms.service | 8766 | brain/sms-server | Twilio SMS webhooks |
 | ~~robothor-status.service~~ | ~~3000~~ | ~~brain/robothor-status~~ | **RETIRED** — consolidated into engine dashboards (port 18800) |
 | ~~robothor-status-dashboard.service~~ | ~~3001~~ | ~~brain/robothor-status-dashboard~~ | **RETIRED** — consolidated into engine dashboards (port 18800) |
 | ~~robothor-dashboard.service~~ | ~~3003~~ | ~~brain/dashboard~~ | **RETIRED** — consolidated into engine dashboards (port 18800) |
 | ~~robothor-privacy.service~~ | ~~3002~~ | ~~brain/privacy-policy~~ | **RETIRED** — consolidated into engine dashboards (port 18800) |
-| robothor-transcript.service | — | brain/memory_system | Voice transcript watcher |
-| robothor-crm.service | 3010, 8880 | crm/ | Docker Compose: Uptime Kuma, Kokoro TTS (2 containers) |
 | robothor-bridge.service | 9100 | crm/bridge | Bridge: contact resolution, webhooks, CRM integration |
 | bridge-watchdog.timer | — | scripts/ | Self-healing watchdog: checks bridge every 5min, auto-restarts on 2 failures |
 | robothor-liveness.timer | — | scripts/ | Independent engine liveness watchdog: probes `/live` every 5min, pages via `send_failure_alert.sh` after 3 consecutive failures (covers SIGKILL, where OnFailure= never fires) |
@@ -29,10 +24,30 @@ Logs: `journalctl -u <unit> -f`
 | robothor-engine.service | 18800 | ~/robothor | Python Agent Engine: agents, Telegram, scheduler, hooks (Type=notify, WatchdogSec=90) |
 | robothor-nats.service | 4222, 7422 | — | NATS server with JetStream: federation transport (config: /etc/nats/nats-server.conf) |
 | robothor-xvfb.service | — | — | Virtual display server (Xvfb :99, 1280x1024) for computer use |
-| robothor-desktop.service | — | — | Openbox window manager on virtual display :99 |
 | robothor-vnc.service | 5900 | — | x11vnc server for monitoring virtual display (localhost only) |
 | cloudflared.service | — | — | Cloudflare tunnel (${INSTANCE_DOMAIN}) |
 | tailscaled.service | — | — | Tailscale VPN (your Tailscale tailnet) |
+
+## Instance-only services (not shipped with the platform)
+
+These units run on this deployment but **no unit template ships in
+`infra/systemd/`**, and the code they start lives in the instance's `brain/`
+workspace rather than in the platform tree. A clean checkout has neither the
+unit nor the program. They are listed so the information is not lost, not as
+something a new instance can enable.
+
+| Unit | Port | Working Dir | Description |
+|------|------|-------------|-------------|
+| mediamtx-webcam.service | 8554, 8890 | — | USB webcam → RTSP + HLS stream (third-party MediaMTX) |
+| robothor-voice.service | 8765 | instance `brain/voice-server` | Twilio voice: inbound ConversationRelay + outbound calling |
+| robothor-sms.service | 8766 | instance `brain/sms-server` | Twilio SMS webhooks |
+| robothor-transcript.service | — | instance `brain/memory_system` | Voice transcript watcher |
+| robothor-crm.service | 3010, 8880 | `crm/` | Docker Compose wrapper: Uptime Kuma, Kokoro TTS |
+| robothor-desktop.service | — | — | Openbox window manager on virtual display :99 |
+
+The platform's own units are the ones with a template in `infra/systemd/`;
+`docs/runbooks/INSTANCE_DOCTOR.md` and `scripts/install-units.sh` only know
+about those.
 
 ## CLI Dependencies
 
@@ -168,7 +183,7 @@ All services that need credentials use SOPS+age decryption:
 
 ## System Crontab
 
-View: `crontab -l` | Full reference: `docs/CRON_MAP.md`
+View: `crontab -l` | Full reference: `docs/CRON_MAP.md` (instance-local, not shipped)
 Cron jobs that need credentials are wrapped with `scripts/cron-wrapper.sh` (sources `/run/robothor/secrets.env`).
 
 | Schedule | Job | Log |
@@ -217,18 +232,20 @@ View: `robothor engine list` | Manifests: `docs/agents/*.yaml` | Model: **Kimi K
 All services are system-level, enabled, and start automatically. If anything fails:
 
 ```bash
-# 1. Verify all services
-for svc in cloudflared tailscaled mediamtx-webcam robothor-orchestrator \
-  robothor-vision robothor-status robothor-status-dashboard robothor-voice \
-  robothor-dashboard robothor-privacy robothor-transcript \
-  robothor-crm robothor-bridge robothor-app robothor-engine \
-  robothor-xvfb robothor-desktop robothor-vnc; do
+# 1. Verify all services. The retired dashboard units (robothor-status,
+#    robothor-status-dashboard, robothor-dashboard, robothor-privacy) are
+#    gone -- the engine serves those on 18800. Add any instance-only unit
+#    from the section above to this list if your deployment runs it.
+for svc in cloudflared tailscaled robothor-orchestrator \
+  robothor-vision robothor-bridge robothor-app robothor-engine \
+  robothor-nats robothor-xvfb robothor-vnc; do
   printf "%-35s %s\n" "$svc" "$(sudo systemctl is-active $svc)"
 done
 
 # 2. If orchestrator didn't start (depends on ollama + postgres + docker)
 sudo systemctl restart robothor-orchestrator
 
-# 3. If Docker containers are down (Uptime Kuma, Kokoro TTS)
+# 3. If Docker containers are down (Uptime Kuma, Kokoro TTS) — this unit is
+#    instance-only, see the section above
 sudo systemctl restart robothor-crm
 ```
