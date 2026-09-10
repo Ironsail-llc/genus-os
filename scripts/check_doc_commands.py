@@ -222,8 +222,10 @@ def _parses(parser: argparse.ArgumentParser, argv: list[str]) -> bool:
 
     `parse_known_args` does not reject an unknown flag -- it hands it back in
     the second element of the tuple. Discarding that return made the checker
-    blind to the exact defect it exists to catch: `robothor migrate --status`,
-    a flag that has never existed, parsed clean. Unrecognised *positionals*
+    blind to the exact defect it exists to catch: `robothor migrate --status`
+    parsed clean while no such flag existed. (It exists now, added by the
+    one-migrator change; the defect it illustrates does not.) Unrecognised
+    *positionals*
     stay tolerated (the docs write `[--tenant TENANT]`-style notation and
     bracket-optional arguments), but a leftover starting with `-` is a flag
     the CLI does not have.
