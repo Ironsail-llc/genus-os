@@ -154,7 +154,7 @@ def test_pipeline_with_mock_llm(mock_llm):
 
 ## Shared Fixtures Pattern
 
-Every test module directory gets a `conftest.py`. Follow the pattern from `brain/memory_system/conftest.py`:
+Every test module directory gets a `conftest.py`. Follow the pattern in the repository root `conftest.py`:
 
 ```python
 import uuid
@@ -215,9 +215,10 @@ def mock_crm_dal():
 
 Tests that are written and running today.
 
-### Memory System (`brain/memory_system/`)
+### Memory System — instance-local, not shipped
 
-Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.sh`
+This suite lives in the instance workspace under `brain/memory_system/`, not in the platform tree, so a clean checkout will not have it.
+Instance venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.sh`
 
 | Test File | Tests | Level | What It Covers |
 |-----------|-------|-------|----------------|
@@ -240,8 +241,8 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 | Test File | Tests | Level | What It Covers |
 |-----------|-------|-------|----------------|
 | `crm/bridge/tests/test_bridge_api.py` | ~15 | Unit | Health endpoint, resolve-contact, webhook ingestion, CRM proxy endpoints |
-| `crm/bridge/tests/test_contact_resolver.py` | ~8 | Unit | Mapping lookup, gap-filling, new contact creation, upsert logic |
-| `crm/tests/test_phase3_memory_blocks.py` | 18 | Integration | Memory block CRUD, size limits, timestamps (uses memory venv) |
+| `crm/bridge/tests/test_merge.py` | ~14 | Unit | Person merge, identifier reassignment, conflict handling |
+| `robothor/crm/tests/` | — | Unit + Integration | CRM data-access layer: tasks, data scoping, do-not-contact, session goals |
 
 ### CRM Shell Tests (`crm/tests/`)
 
@@ -259,6 +260,7 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 
 ### Phase 1 (Week 1-2): Core Service Smoke + Unit Tests — DONE
 
+<!-- doc-check: skip -->
 | Component | Test File | Tests | What They Assert | Status |
 |-----------|-----------|-------|------------------|--------|
 | Bridge API | `crm/bridge/tests/test_bridge_api.py` | ~15 | Health endpoint, resolve-contact validation, webhook ingestion, CRM proxy endpoints, log-interaction | Done |
@@ -273,6 +275,7 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 
 ### Phase 2 (Week 3-4): Communication Layer
 
+<!-- doc-check: skip -->
 | Component | Test File | Tests | What They Assert |
 |-----------|-----------|-------|------------------|
 | Voice webhooks | `brain/voice-server/tests/test_voice_webhooks.py` | ~8 | Twilio signature validation, TwiML response format, ConversationRelay events |
@@ -284,6 +287,7 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 
 ### Phase 3 (Week 5-6): MCP + Plugin Tools
 
+<!-- doc-check: skip -->
 | Component | Test File | Tests | What They Assert |
 |-----------|-----------|-------|------------------|
 | CRM MCP tools | `brain/memory_system/test_phase3_mcp_server.py` | ~10 | Tool schema validation, argument mapping, CRM CRUD via crm_dal |
@@ -293,6 +297,7 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 
 ### Phase 4 (Week 7-8): AI Quality
 
+<!-- doc-check: skip -->
 | Component | Test File | Tests | What They Assert |
 |-----------|-----------|-------|------------------|
 | Triage worker | `brain/tests/test_triage_golden.py` | ~8 | Golden dataset: known inputs → correct categorization (>=80%) |
@@ -304,6 +309,7 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 
 ### Phase 5 (Week 9-10): Cron + Maintenance
 
+<!-- doc-check: skip -->
 | Component | Test File | Tests | What They Assert |
 |-----------|-----------|-------|------------------|
 | Calendar sync | `brain/scripts/tests/test_calendar_edge_cases.py` | ~6 | Timezone handling, all-day events, recurring events, deleted events |

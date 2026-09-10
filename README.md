@@ -176,7 +176,7 @@ Every agent is defined by a YAML manifest and an optional instruction file. Scaf
 robothor agent scaffold support-triage --description "Classify incoming support tickets"
 ```
 
-This creates `docs/agents/support-triage.yaml` (manifest) and `brain/SUPPORT_TRIAGE.md` (instruction file) from templates. For a guided experience, use the Agent Builder wizard (`robothor agent build`) — it captures your intent, generates the manifest and instructions, and scaffolds an eval framework. Edit the result to fit your needs:
+This creates `docs/agents/support-triage.yaml` (manifest) and `brain/SUPPORT_TRIAGE.md` (instruction file) from templates. Both are instance data — gitignored, yours alone, and they survive platform upgrades. `docs/AGENT_BUILDER.md` walks through filling them in, including the eval suite. Edit the result to fit your needs:
 
 ```yaml
 # docs/agents/support-triage.yaml
@@ -814,6 +814,7 @@ We follow **[Git Flow](https://nvie.com/posts/a-successful-git-branching-model/)
 
 **Branch naming** — branch from `main`, name by type:
 
+<!-- doc-check: skip -->
 | Prefix | When to use | Example |
 |---|---|---|
 | `feature/<topic>` | New capability or non-trivial enhancement | `feature/containerize-app-services` |

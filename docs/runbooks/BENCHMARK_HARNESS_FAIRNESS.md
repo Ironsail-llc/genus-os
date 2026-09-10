@@ -60,7 +60,7 @@ live at the end.
 ## 3. A timeout is an outcome, not a grade
 
 The per-task wall-clock cap was hardcoded at 240s, against a production fleet
-that runs with **no** wall-clock kill (`docs/agents/_defaults.yaml` sets
+that runs with **no** wall-clock kill (the instance's `docs/agents/_defaults.yaml` sets
 `timeout_seconds: 0`).
 
 Measured for agent-architect: production runs over 30 days mean **512.8s**, max

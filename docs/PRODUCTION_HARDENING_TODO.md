@@ -360,7 +360,7 @@ The implemented boundary deliberately treats two cases separately:
   integration branch's unrelated commits.
 - [x] Transfer only hardening changes. Explicitly exclude the owner's existing
   changes under `agents/skills/*/meta.json`, `docs/benchmarks/`, `.superpowers/`,
-  `agents/skills/fix-broken-typecheck/`, and `brain/docs/`.
+  `agents/skills/fix-broken-typecheck/`, and the instance's `brain/docs/`.
 - [x] Regenerate `uv.lock` on the clean base so unrelated integration-branch
   dependencies do not enter the PR.
 - [x] Organize the PR into reviewable conventional commits:

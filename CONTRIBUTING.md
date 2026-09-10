@@ -89,7 +89,7 @@ Genus OS separates platform code (tracked in git, ships to everyone) from instan
 - `validate-agents` — validates agent manifest YAML
 - `ruff` — code style and formatting
 
-If the leak checker flags your code, move the personal data to `brain/CLAUDE.md` or `.env`, or replace with a generic alternative.
+If the leak checker flags your code, move the personal data to your instance's `brain/CLAUDE.md` or `.env` (both gitignored), or replace it with a generic alternative.
 
 ## Testing
 

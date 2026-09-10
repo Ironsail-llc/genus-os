@@ -21,7 +21,7 @@ Claude Code reads `CLAUDE.md` files from the directory tree:
 - `robothor/engine/CLAUDE.md` — **Subsystem rules**. Tracked. Engine-specific dev guidance.
 - `crm/CLAUDE.md` — **Subsystem rules**. Tracked. CRM-specific dev guidance.
 
-Claude sees all of them in a session, but only the tracked files enter git. Your personal `brain/CLAUDE.md` stays local.
+Claude sees all of them in a session, but only the tracked files enter git. Your personal instance file `brain/CLAUDE.md` stays local.
 
 ## How Engine Agents Access Rules
 
@@ -30,7 +30,7 @@ Engine agents don't read `CLAUDE.md` files — they use:
 - **Instruction files** (`brain/agents/*.md`) — per-agent behavior rules
 - **Warmup context** — memory blocks, status files, peer agent state
 - **Tool calls** — `read_file` to access `docs/*.md` when they need reference material
-- `brain/SOUL.md` — personality injected via warmup
+- `brain/SOUL.md` — instance personality, injected via warmup
 
 ## Decision Tree: Where Does This Go?
 
