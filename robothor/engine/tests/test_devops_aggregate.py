@@ -62,7 +62,7 @@ class TestAggregatePeople:
         github_data = {
             "period": _PERIOD,
             "repos": {
-                "impetus-one": {
+                "acme-erp": {
                     **_empty_repo(),
                     "pr_stats_current_week": {
                         "authors": {"alice-dev": 2, "alice-personal": 1},
@@ -104,7 +104,7 @@ class TestAggregatePeople:
         assert alice["current_week"]["prs_merged"] == 3
         assert alice["last_week"]["prs_merged"] == 2
         assert sorted(alice["github_handles"]) == ["alice-dev", "alice-personal"]
-        assert "impetus-one" in alice["repos_touched"]
+        assert "acme-erp" in alice["repos_touched"]
         assert result["unresolved_handles"] == []
         assert result["missing_from_roster"] == []
 
@@ -112,7 +112,7 @@ class TestAggregatePeople:
         github_data = {
             "period": _PERIOD,
             "repos": {
-                "impetus-one": {
+                "acme-erp": {
                     **_empty_repo(),
                     "pr_stats_current_week": {
                         "authors": {"newhire-dev": 2},
@@ -140,13 +140,13 @@ class TestAggregatePeople:
         assert unresolved["channel"] == "github"
         assert unresolved["identifier"] == "newhire-dev"
         assert unresolved["occurrences"] == 2
-        assert any(s.startswith("impetus-one/") for s in unresolved["sources"])
+        assert any(s.startswith("acme-erp/") for s in unresolved["sources"])
 
     def test_bot_authors_routed_to_bots_filtered_not_unresolved(self):
         github_data = {
             "period": _PERIOD,
             "repos": {
-                "impetus-one": {
+                "acme-erp": {
                     **_empty_repo(),
                     "pr_stats_current_week": {
                         "authors": {},
@@ -240,7 +240,7 @@ class TestAggregatePeople:
         github_data = {
             "period": _PERIOD,
             "repos": {
-                "impetus-one": {
+                "acme-erp": {
                     **_empty_repo(),
                     "review_stats": {
                         "prs_analyzed": 10,
@@ -492,7 +492,7 @@ class TestAggregatePeople:
         github_data = {
             "period": _PERIOD,
             "repos": {
-                "impetus-one": {
+                "acme-erp": {
                     **_empty_repo(),
                     "pr_stats_current_week": {
                         "authors": {"alice-dev": 3, "bob-dev": 2},

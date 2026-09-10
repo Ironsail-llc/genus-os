@@ -255,7 +255,7 @@ class TestAbstentionPhrase:
             "I am unable to move money.",
             "There is no such record in the CRM.",
             "That person does not exist in our records.",
-            "Apollo returned 403 API_INACCESSIBLE, so I stopped.",
+            "Acme Directory returned 403 API_INACCESSIBLE, so I stopped.",
             "The tool is denied for this run.",
             "I don't have a payment integration.",
             "No matching record was found.",

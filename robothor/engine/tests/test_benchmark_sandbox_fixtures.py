@@ -33,10 +33,10 @@ import yaml
 
 from robothor.engine import benchmark_sandbox as bs
 from robothor.engine.tools.handlers.benchmark import (
-    _BENCHMARK_READONLY_TOOLS,
     JudgeOutcome,
     _benchmark_tools_denied,
     _score_task_async,
+    benchmark_readonly_tools,
 )
 
 # The crm-hygiene manifest's real tools_allowed — the set the harness
@@ -84,7 +84,7 @@ class TestToolAllowlistSplit:
 
     def test_non_sandbox_allowlist_is_unchanged(self) -> None:
         """Flag off ⇒ byte-for-byte today's read-only allow-list."""
-        assert bs.benchmark_allowed_tools(sandbox=False) == _BENCHMARK_READONLY_TOOLS
+        assert bs.benchmark_allowed_tools(sandbox=False) == benchmark_readonly_tools()
 
     def test_sandbox_allows_crm_writes(self) -> None:
         allowed = bs.benchmark_allowed_tools(sandbox=True)

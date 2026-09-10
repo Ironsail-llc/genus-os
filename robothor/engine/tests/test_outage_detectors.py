@@ -2,7 +2,7 @@
 
 Two live outages ran for weeks with nothing alerting:
 
-* ``apollo_search_people`` failed 32/32 (error_type=auth) over 14 days. The
+* ``acme_search_people`` failed 32/32 (error_type=auth) over 14 days. The
   1-hour ``tool_degradation_detector`` cannot see it — a tool called twice a
   day never reaches 5 failures in an hour, so a *total* outage is invisible
   precisely because it is total.
@@ -133,7 +133,7 @@ class TestCheckToolOutage:
     ) -> None:
         tool = f"t_{uuid.uuid4().hex[:8]}"
         # Last known-good 8 days ago, nothing but failures since — the shape of
-        # the live apollo_search_people outage.
+        # the live acme_search_people outage.
         _seed_tool_events(
             db_cursor,
             tool,
@@ -168,7 +168,7 @@ class TestToolOutageDetector:
     async def test_warning_alert_names_tool_count_and_error_type(self) -> None:
         flagged = [
             {
-                "tool_name": "apollo_search_people",
+                "tool_name": "acme_search_people",
                 "total": 18,
                 "failures": 18,
                 "failure_rate": 1.0,
@@ -186,7 +186,7 @@ class TestToolOutageDetector:
         assert fired == 1
         level, title, body = mock_alert.await_args.args
         assert level == "warning"
-        assert "apollo_search_people" in title
+        assert "acme_search_people" in title
         assert "18" in body
         assert "auth" in body
 
@@ -194,7 +194,7 @@ class TestToolOutageDetector:
     async def test_persistent_outage_pages_critical(self) -> None:
         flagged = [
             {
-                "tool_name": "apollo_search_people",
+                "tool_name": "acme_search_people",
                 "total": 18,
                 "failures": 18,
                 "failure_rate": 1.0,
@@ -229,7 +229,7 @@ class TestToolOutageDetector:
                 "severity": "critical",
             },
             {
-                "tool_name": "apollo_search_people",
+                "tool_name": "acme_search_people",
                 "total": 18,
                 "failures": 18,
                 "failure_rate": 1.0,
@@ -246,7 +246,7 @@ class TestToolOutageDetector:
             fired = await detectors.tool_outage_detector()
 
         assert fired == 1, "only the undeclared outage should alert"
-        assert "apollo_search_people" in mock_alert.await_args.args[1]
+        assert "acme_search_people" in mock_alert.await_args.args[1]
         assert any("carrier contract ended" in rec.message for rec in caplog.records), (
             "a suppression must state the declared reason, not vanish silently"
         )
@@ -285,7 +285,7 @@ class TestToolOutageDetector:
         """A warning already sent must not swallow the critical escalation."""
         warning = [
             {
-                "tool_name": "apollo_search_people",
+                "tool_name": "acme_search_people",
                 "total": 18,
                 "failures": 18,
                 "failure_rate": 1.0,
@@ -314,7 +314,7 @@ class TestToolOutageDetector:
     async def test_failed_delivery_logs_a_warning(self, caplog) -> None:
         flagged = [
             {
-                "tool_name": "apollo_search_people",
+                "tool_name": "acme_search_people",
                 "total": 18,
                 "failures": 18,
                 "failure_rate": 1.0,
