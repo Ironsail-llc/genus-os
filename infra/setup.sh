@@ -269,22 +269,38 @@ if [[ "$SKIP_DB" == false ]]; then
         warn "ROBOTHOR_DB_PASSWORD not set. Trying peer authentication."
     fi
 
-    MIGRATION_FILE="$SCRIPT_DIR/migrations/001_init.sql"
+    # The canonical migrator owns the schema: it reads the manifest, records
+    # every applied file in schema_migrations_v2 with its SHA-256, and holds an
+    # advisory lock. Applying 001_init.sql with psql would apply one file of the
+    # manifest and leave the ledger empty.
+    REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+    if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+        PYTHON="$REPO_ROOT/.venv/bin/python"
+    elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+        PYTHON="$VIRTUAL_ENV/bin/python"
+    else
+        PYTHON="$(command -v python3 || true)"
+    fi
 
-    if [[ ! -f "$MIGRATION_FILE" ]]; then
-        err "Migration file not found: $MIGRATION_FILE"
+    if [[ -z "$PYTHON" ]]; then
+        err "No Python interpreter found; cannot run 'robothor migrate'"
         exit 1
     fi
 
-    if [[ "$USE_DOCKER" == true ]]; then
-        # Run migration inside the Docker container
-        docker compose exec -T postgres \
-            psql -U "$DB_USER" -d "$DB_NAME" -f /docker-entrypoint-initdb.d/001_init.sql
-    else
-        # Run migration against a local or remote PostgreSQL
-        export PGPASSWORD="$DB_PASSWORD"
-        psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -f "$MIGRATION_FILE"
-        unset PGPASSWORD
+    export ROBOTHOR_DB_HOST="$DB_HOST"
+    export ROBOTHOR_DB_PORT="$DB_PORT"
+    export ROBOTHOR_DB_NAME="$DB_NAME"
+    export ROBOTHOR_DB_USER="$DB_USER"
+    if [[ -n "$DB_PASSWORD" ]]; then
+        export ROBOTHOR_DB_PASSWORD="$DB_PASSWORD"
+    fi
+
+    if ! "$PYTHON" -m robothor.cli migrate; then
+        err "Database migration failed"
+        err "If this database predates the ledger (schema exists, no"
+        err "schema_migrations_v2 rows), adopt the baseline once:"
+        err "  $PYTHON -m robothor.cli migrate --adopt-baseline"
+        exit 1
     fi
 
     ok "Database migration complete"

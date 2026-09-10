@@ -16,11 +16,20 @@ cp infra/robothor.env.example .env
 # Start infrastructure
 docker compose -f infra/docker-compose.yml up -d
 
+# Create the schema
+robothor migrate
+
 # Verify
 docker compose -f infra/docker-compose.yml ps
+robothor migrate --status
 ```
 
-The Compose file includes health checks for all services. PostgreSQL auto-runs migrations from `infra/migrations/` on first start.
+The Compose file includes health checks for all services. It does **not** seed
+the schema: `robothor migrate` is the only thing that creates or changes it, so
+every applied file is recorded in the `schema_migrations_v2` ledger with its
+SHA-256 checksum. A schema created any other way (an SQL file mounted into
+`docker-entrypoint-initdb.d`, `psql -f`) leaves that ledger empty and later
+upgrades cannot tell it apart from an empty database.
 
 ### Ollama Model Setup
 
@@ -98,14 +107,28 @@ sudo -u postgres createdb robothor_memory
 sudo -u postgres psql -d robothor_memory -c "CREATE EXTENSION vector"
 sudo -u postgres psql -d robothor_memory -c "CREATE EXTENSION \"uuid-ossp\""
 
-# Run schema migration
-sudo -u postgres psql -d robothor_memory -f infra/migrations/001_init.sql
-
 # Create application user
 sudo -u postgres psql -c "CREATE USER robothor WITH PASSWORD 'your-password'"
 sudo -u postgres psql -c "GRANT ALL ON DATABASE robothor_memory TO robothor"
+
+# Run schema migrations (the whole manifest, recorded in schema_migrations_v2)
+robothor migrate
+robothor migrate --status
+
 sudo -u postgres psql -d robothor_memory -c "GRANT ALL ON ALL TABLES IN SCHEMA public TO robothor"
 sudo -u postgres psql -d robothor_memory -c "GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO robothor"
+```
+
+`robothor migrate` reads `ROBOTHOR_DB_HOST`, `ROBOTHOR_DB_PORT`,
+`ROBOTHOR_DB_NAME`, `ROBOTHOR_DB_USER` and `ROBOTHOR_DB_PASSWORD`.
+
+If you are upgrading a database whose schema was created before the ledger
+existed (or by an SQL file mounted into `docker-entrypoint-initdb.d`), the
+migrator refuses to replay the baseline over your data. Adopt it once — this
+records the baseline as applied without executing it — then migrate normally:
+
+```bash
+robothor migrate --adopt-baseline
 ```
 
 ### Redis
