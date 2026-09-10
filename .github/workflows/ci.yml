@@ -62,6 +62,19 @@ jobs:
       - run: pip install --upgrade pip
       - run: pip install pip-audit==2.10.1
       - run: pip install -e ".[api]"
+      # Documentation gates, siblings of the instance-data gate above. They
+      # sit here rather than next to it because check_doc_commands parses each
+      # quoted command with the REAL `robothor.cli` parser, which needs the
+      # package importable -- the leak check runs on bare python3 before the
+      # install. The published Getting Started opened with `pip install
+      # robothor` (a package that does not exist; the distribution is
+      # `genusos`) and the Reading Guide sent readers into the gitignored
+      # `brain/` tree. Nothing failed, because no gate had ever parsed a
+      # command or resolved a path printed in the docs.
+      - name: Check every command quoted in the docs parses
+        run: python scripts/check_doc_commands.py
+      - name: Check every path referenced in the docs exists
+        run: python scripts/check_doc_links.py
       # No standing advisory exceptions: a newly reported dependency issue
       # must fail the gate and receive an explicit, reviewed remediation.
       - run: pip-audit
