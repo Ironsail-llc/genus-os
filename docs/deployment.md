@@ -149,6 +149,22 @@ list is the only record of what the old path applied. `robothor upgrade` retires
 that list on its own, once `schema_migrations_v2` covers every entry it names.
 `robothor migrate --status` shows the provenance of each row.
 
+If that side-ledger is gone and the schema is past the baseline, `--adopt-baseline`
+refuses a second time: adopting only `001_init` and then running everything after
+it would be the same replay. Say how far the schema actually got instead:
+
+```bash
+robothor migrate --status                        # find the last migration you hold
+robothor migrate --adopt-through 040_memory_episodes
+```
+
+`--adopt-through <migration_id>` adopts every migration up to and including that
+id without executing any of them, then applies the rest normally. It implies
+`--adopt-baseline`, so it can be used on its own. Pick the id by checking which
+tables and columns the database already has — erring *later* than the truth skips
+migrations that never ran, so when unsure, name the earliest id you are certain of
+and let the rest apply.
+
 ### Redis
 
 ```bash

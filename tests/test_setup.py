@@ -251,10 +251,22 @@ class TestRunMigration:
         ):
             count = run_migration(DatabaseConfig())
 
-        assert count == -1
+        from robothor.setup import MIGRATION_SAFETY_FAILURE
+
+        assert count == MIGRATION_SAFETY_FAILURE
+        assert count < 0  # still a failure to the caller's `>= 0` check
         out = capsys.readouterr().out
         assert "ledger empty but schema present" in out
         assert "--adopt-baseline" in out
+
+    def test_a_plain_failure_is_still_the_generic_negative(self):
+        """Only a safety refusal gets the distinct code; everything else is -1."""
+        mock_conn = MagicMock()
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch("robothor.db.migrate.apply", side_effect=RuntimeError("boom")),
+        ):
+            assert run_migration(DatabaseConfig()) == -1
 
 
 class TestPullModels:

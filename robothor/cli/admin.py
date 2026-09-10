@@ -67,6 +67,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
             applied = apply(
                 connection=conn,
                 adopt_baseline=getattr(args, "adopt_baseline", False),
+                adopt_through=getattr(args, "adopt_through", None),
             )
             print(f"Migration completed successfully ({len(applied)} applied).")
             return cmd_migrate_check(connection=conn)

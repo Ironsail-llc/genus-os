@@ -17,6 +17,7 @@ Usage::
     python -m robothor.db.migrate apply 071_memory_vault
     python -m robothor.db.migrate apply --dry-run
     python -m robothor.db.migrate apply --adopt-baseline
+    python -m robothor.db.migrate apply --adopt-through 040_memory_episodes
 """
 
 from __future__ import annotations
@@ -278,17 +279,35 @@ def _legacy_yaml_ledger_path() -> Path:
 
 
 def _legacy_yaml_filenames() -> set[str]:
-    """Migration filenames the retired ``robothor upgrade`` glob recorded."""
+    """Migration filenames the retired ``robothor upgrade`` glob recorded.
+
+    An absent file means no evidence and returns an empty set.  A file that
+    exists but cannot be parsed is *not* the same thing: it is evidence that
+    cannot be read, and degrading it to "no evidence" would silently narrow
+    the adoption to the baseline alone.  That raises.
+    """
 
     path = _legacy_yaml_ledger_path()
     if not path.is_file():
         return set()
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        logger.warning("could not read legacy migration ledger %s", path, exc_info=True)
-        return set()
-    entries = data.get("migrations") or []
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as error:
+        raise MigrationHistoryError(
+            f"Legacy migration ledger {path} exists but could not be read: {error}. "
+            "It is the record of what the retired upgrade path applied — repair or "
+            "remove it rather than migrating past it."
+        ) from error
+    if data is None:
+        data = {}
+    entries = data.get("migrations") if isinstance(data, dict) else None
+    if entries is None:
+        entries = []
+    if not isinstance(entries, list):
+        raise MigrationHistoryError(
+            f"Legacy migration ledger {path} exists but could not be read: its "
+            f"'migrations' key is {type(entries).__name__}, expected a list."
+        )
     return {
         Path(str(entry["file"])).name
         for entry in entries
@@ -300,23 +319,71 @@ def _adopt_without_executing(
     conn: Any,
     migrations: list[Migration],
     applied: dict[str, AppliedMigration],
+    adopt_through: str | None = None,
 ) -> list[tuple[str, str]]:
     """Record history the operator vouches for, running none of its SQL.
 
-    Adopts the manifest's first entry (the baseline every install has run) plus
-    every entry the legacy YAML side-ledger names.  Anything unnamed stays
-    pending and is applied normally, so this narrows the replay to files that
-    have no evidence of having run.
+    Adopts the manifest's first entry (the baseline every install has run),
+    everything up to and including ``adopt_through`` when given, and every
+    entry the legacy YAML side-ledger names.  Anything unnamed stays pending
+    and is applied normally, so this narrows the replay to files with no
+    evidence of having run.
+
+    Refuses outright in the one case where the adoption set would be a lie: the
+    legacy ``schema_migrations`` table vouches for migrations past the baseline
+    — so the schema is further along than 001 — while nothing says how much
+    further.  Adopting the baseline alone there and executing the remainder is
+    the very replay this guard exists to prevent, so the operator has to say
+    where the schema actually is.
     """
 
-    yaml_filenames = _legacy_yaml_filenames()
     baseline_id = migrations[0].migration_id
+    yaml_filenames = _legacy_yaml_filenames()
+
+    through_ids: set[str] = set()
+    if adopt_through is not None:
+        by_id = {migration.migration_id: index for index, migration in enumerate(migrations)}
+        if adopt_through not in by_id:
+            raise MigrationSelectionError(
+                f"Unknown migration id for --adopt-through: {adopt_through!r}. "
+                "Use the full immutable id exactly as `robothor migrate --status` prints it."
+            )
+        through_ids = {
+            migration.migration_id for migration in migrations[: by_id[adopt_through] + 1]
+        }
+
+    if adopt_through is None and not yaml_filenames:
+        hearsay_beyond_baseline = sorted(
+            record.migration_id
+            for record in applied.values()
+            if record.reconciled_from_legacy and record.migration_id != baseline_id
+        )
+        if hearsay_beyond_baseline:
+            pending = [
+                migration.migration_id
+                for migration in migrations
+                if migration.migration_id not in applied
+            ]
+            next_pending = pending[0] if pending else "the remaining migrations"
+            raise MigrationHistoryError(
+                f"The ledger vouches for {len(hearsay_beyond_baseline)} migration(s) past "
+                f"the baseline (through {hearsay_beyond_baseline[-1]}) from the legacy "
+                "schema_migrations table alone, and no side-ledger was found at "
+                f"{_legacy_yaml_ledger_path()} to say how far the schema really got. "
+                f"Adopting only the baseline would then execute {next_pending} onward "
+                "over live data. Re-run with `--adopt-through <migration_id>` naming the "
+                "last migration this database already holds; `robothor migrate --status` "
+                "lists the ids."
+            )
+
     adopted: list[tuple[str, str]] = []
     for migration in migrations:
         if migration.migration_id in applied:
             continue
         if migration.migration_id == baseline_id:
             source = "baseline"
+        elif migration.migration_id in through_ids:
+            source = "operator"
         elif migration.filename in yaml_filenames:
             source = "yaml_ledger"
         else:
@@ -682,6 +749,7 @@ def apply(
     *,
     connection: Any | None = None,
     adopt_baseline: bool = False,
+    adopt_through: str | None = None,
 ) -> list[str]:
     """Apply selected pending migrations and return their immutable IDs.
 
@@ -694,6 +762,12 @@ def apply(
     *without executing it*, then continues with the rest of the chain.  Without
     the flag such a database is refused outright — replaying the baseline over
     live data is exactly the accident this guard prevents.
+
+    ``adopt_through`` names the last migration the schema already holds and
+    adopts everything up to and including it, again without executing.  It
+    implies ``adopt_baseline`` and is the answer when the ledger's only
+    evidence is the legacy table and no side-ledger survives to bound the
+    adoption.
     """
 
     migrations = _discover(migrations_dir)
@@ -717,10 +791,10 @@ def apply(
         # Only a replay can hurt, so the guard is skipped when nothing is
         # pending — an unverified but complete ledger has nothing to re-run.
         if to_apply and _ledger_is_unverified(applied) and _baseline_schema_present(conn):
-            if not adopt_baseline:
+            if not adopt_baseline and adopt_through is None:
                 raise MigrationHistoryError(BASELINE_UNADOPTED_MESSAGE)
             for migration_id, adoption_source in _adopt_without_executing(
-                conn, migrations, applied
+                conn, migrations, applied, adopt_through
             ):
                 print(f"Adopted {migration_id} into the ledger from {adoption_source}.")
             applied = _applied(conn)
@@ -770,18 +844,33 @@ def main() -> None:
             print()
             print(f"Manifest: {manifest_count()} migration(s).")
         elif args[0] == "apply":
-            flags = {"--dry-run", "--adopt-baseline"}
-            selector = next((arg for arg in args[1:] if arg not in flags), None)
+            selector: str | None = None
+            adopt_through: str | None = None
+            rest = list(args[1:])
+            while rest:
+                argument = rest.pop(0)
+                if argument == "--adopt-through":
+                    if not rest:
+                        print("--adopt-through requires a migration id", file=sys.stderr)
+                        raise SystemExit(1)
+                    adopt_through = rest.pop(0)
+                elif argument.startswith("--adopt-through="):
+                    adopt_through = argument.split("=", 1)[1]
+                elif argument in {"--dry-run", "--adopt-baseline"}:
+                    continue
+                elif selector is None:
+                    selector = argument
             apply(
                 version=selector,
                 dry_run="--dry-run" in args,
                 adopt_baseline="--adopt-baseline" in args,
+                adopt_through=adopt_through,
             )
         else:
             print(f"Unknown command: {args[0]}", file=sys.stderr)
             print(
-                "Usage: python -m robothor.db.migrate "
-                "[status|apply [ID] [--dry-run] [--adopt-baseline]]"
+                "Usage: python -m robothor.db.migrate [status|apply [ID] [--dry-run] "
+                "[--adopt-baseline] [--adopt-through MIGRATION_ID]]"
             )
             raise SystemExit(1)
     except MigrationError as error:

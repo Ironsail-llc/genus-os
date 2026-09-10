@@ -191,6 +191,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "snapshot or the retired 'robothor upgrade' glob."
         ),
     )
+    migrate_parser.add_argument(
+        "--adopt-through",
+        metavar="MIGRATION_ID",
+        help=(
+            "Adopt every migration up to and including MIGRATION_ID without executing "
+            "them — name the last migration this database already holds. Implies "
+            "--adopt-baseline. Use when the ledger's only evidence is the legacy "
+            "schema_migrations table and no side-ledger survives."
+        ),
+    )
 
     # snapshot — versioned disaster recovery for PostgreSQL + workspace state
     snapshot_parser = subparsers.add_parser(

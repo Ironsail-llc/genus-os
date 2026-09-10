@@ -49,9 +49,15 @@ def _apply_quietly(connection, migration_id: str) -> None:
         migrate.apply(version=migration_id, connection=connection)
 
 
-def _apply_all_quietly(connection, *, adopt_baseline: bool = False) -> list[str]:
+def _apply_all_quietly(
+    connection, *, adopt_baseline: bool = False, adopt_through: str | None = None
+) -> list[str]:
     with redirect_stdout(StringIO()):
-        return migrate.apply(connection=connection, adopt_baseline=adopt_baseline)
+        return migrate.apply(
+            connection=connection,
+            adopt_baseline=adopt_baseline,
+            adopt_through=adopt_through,
+        )
 
 
 @contextmanager
@@ -102,6 +108,14 @@ def _ledger_ids(connection) -> set[str]:
         return {row[0] for row in cursor.fetchall()}
 
 
+def _adopted_ids(connection) -> set[str]:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT migration_id FROM schema_migrations_v2 WHERE adopted_from IS NOT NULL"
+        )
+        return {row[0] for row in cursor.fetchall()}
+
+
 def _write_yaml_side_ledger(workspace: Path, filenames: list[str]) -> None:
     path = workspace / ".robothor" / "migrations_applied.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,6 +161,56 @@ def test_initdb_baseline_is_refused_then_adopted_and_the_rest_applies(
             assert cursor.fetchone() == (1,)
 
 
+_CUTOFF_ID = "040_memory_episodes"
+
+
+def _stage_glob_migrated_database(connection, cutoff_id: str = _CUTOFF_ID):
+    """Leave a database in the state the retired `robothor upgrade` glob would.
+
+    Applies the chain to ``cutoff_id`` for real, then erases the v2 ledger and
+    installs 018's legacy backfill, so all that survives is what the glob path
+    left behind. Also inserts a `chat_sessions` row matching 019's DELETE
+    predicate (plus a message): if anything replays the chain, that row and its
+    message disappear by CASCADE, which is the assertion.
+
+    Returns ``(through_cutoff, session_id)``.
+    """
+    migrations = migrate._discover()
+    by_id = {item.migration_id: index for index, item in enumerate(migrations)}
+    through_cutoff = migrations[: by_id[cutoff_id] + 1]
+
+    for migration in through_cutoff:
+        _apply_quietly(connection, migration.migration_id)
+    with connection.cursor() as cursor:
+        cursor.execute("DELETE FROM schema_migrations_v2")
+        cursor.executemany(
+            "INSERT INTO schema_migrations (version, filename) VALUES (%s, %s) "
+            "ON CONFLICT (version) DO NOTHING",
+            _LEGACY_BACKFILL,
+        )
+        cursor.execute(
+            "INSERT INTO chat_sessions (tenant_id, session_key, channel) "
+            "VALUES ('default', 'agent:main:webchat-live', 'webchat') RETURNING id"
+        )
+        session_id = cursor.fetchone()[0]
+        cursor.execute(
+            "INSERT INTO chat_messages (session_id, message) VALUES (%s, %s)",
+            (session_id, '{"role": "user", "content": "keep me"}'),
+        )
+    connection.commit()
+    return through_cutoff, session_id
+
+
+def _assert_live_session_survived(connection, session_id: int) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT count(*) FROM chat_sessions WHERE session_key = 'agent:main:webchat-live'"
+        )
+        assert cursor.fetchone() == (1,), "019 replayed and deleted a live session"
+        cursor.execute("SELECT count(*) FROM chat_messages WHERE session_id = %s", (session_id,))
+        assert cursor.fetchone() == (1,)
+
+
 def test_glob_migrated_instance_is_refused_and_adopts_through_the_yaml_ledger(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -159,39 +223,11 @@ def test_glob_migrated_instance_is_refused_and_adopts_through_the_yaml_ledger(
     """
     monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
     migrations = migrate._discover()
-    by_id = {item.migration_id: index for index, item in enumerate(migrations)}
-    cutoff = by_id["040_memory_episodes"] + 1
-    through_cutoff = migrations[:cutoff]
 
     with _scratch_database() as connection:
-        # Get the database genuinely to 040, then erase the v2 ledger so all
-        # that remains is what the glob path would have left behind.
-        for migration in through_cutoff:
-            _apply_quietly(connection, migration.migration_id)
-        with connection.cursor() as cursor:
-            cursor.execute("DELETE FROM schema_migrations_v2")
-            cursor.executemany(
-                "INSERT INTO schema_migrations (version, filename) VALUES (%s, %s) "
-                "ON CONFLICT (version) DO NOTHING",
-                _LEGACY_BACKFILL,
-            )
-        connection.commit()
+        through_cutoff, session_id = _stage_glob_migrated_database(connection)
+        cutoff = len(through_cutoff)
         _write_yaml_side_ledger(tmp_path, [item.filename for item in through_cutoff])
-
-        # A live row matching 019's DELETE predicate. If the chain is replayed
-        # it disappears (CASCADE takes its messages with it), so its survival
-        # is the assertion that nothing re-executed.
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO chat_sessions (tenant_id, session_key, channel) "
-                "VALUES ('default', 'agent:main:webchat-live', 'webchat') RETURNING id"
-            )
-            session_id = cursor.fetchone()[0]
-            cursor.execute(
-                "INSERT INTO chat_messages (session_id, message) VALUES (%s, %s)",
-                (session_id, '{"role": "user", "content": "keep me"}'),
-            )
-        connection.commit()
 
         with pytest.raises(migrate.MigrationHistoryError, match="--adopt-baseline"):
             _apply_all_quietly(connection)
@@ -204,13 +240,8 @@ def test_glob_migrated_instance_is_refused_and_adopts_through_the_yaml_ledger(
         assert applied == [item.migration_id for item in migrations[cutoff:]]
         assert len(_ledger_ids(connection)) == migrate.manifest_count()
 
+        _assert_live_session_survived(connection, session_id)
         with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT count(*) FROM chat_sessions WHERE session_key = 'agent:main:webchat-live'"
-            )
-            assert cursor.fetchone() == (1,), "019 replayed and deleted a live session"
-            cursor.execute("SELECT count(*) FROM chat_messages WHERE session_id = %s", (session_id,))
-            assert cursor.fetchone() == (1,)
             # Provenance: nothing through the cutoff was executed by this
             # runner — each row is either reconciled from the legacy table or
             # adopted from the side-ledger/baseline. Everything after it was.
@@ -220,9 +251,7 @@ def test_glob_migrated_instance_is_refused_and_adopts_through_the_yaml_ledger(
             )
             not_executed = {row[0] for row in cursor.fetchall()}
         assert not_executed == {item.migration_id for item in through_cutoff}
-        assert migrate._legacy_yaml_filenames() >= {
-            item.filename for item in through_cutoff
-        }
+        assert migrate._legacy_yaml_filenames() >= {item.filename for item in through_cutoff}
 
 
 def test_legacy_data_is_preserved_and_buddy_cutover_is_enforced() -> None:
@@ -313,3 +342,79 @@ def test_legacy_data_is_preserved_and_buddy_cutover_is_enforced() -> None:
             )
             cursor.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(database)))
         admin.close()
+
+
+def test_glob_migrated_instance_without_a_side_ledger_demands_a_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--adopt-baseline` alone would become the hazard it exists to prevent.
+
+    The legacy table vouches for migrations past the baseline, so the schema is
+    further along than 001 — but with no side-ledger nothing says how far.
+    Adopting only 001 and then executing 019 onward is exactly the replay this
+    guard was written for, so the remedy has to refuse too, until the operator
+    says where the schema actually is.
+    """
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))  # no side-ledger written
+    migrations = migrate._discover()
+
+    with _scratch_database() as connection:
+        through_cutoff, session_id = _stage_glob_migrated_database(connection)
+        assert not (tmp_path / ".robothor" / "migrations_applied.yaml").exists()
+
+        with pytest.raises(migrate.MigrationHistoryError, match="--adopt-through"):
+            _apply_all_quietly(connection, adopt_baseline=True)
+        _assert_live_session_survived(connection, session_id)
+        assert not _adopted_ids(connection), "a refused adoption must adopt nothing"
+
+        applied = _apply_all_quietly(connection, adopt_through=_CUTOFF_ID)
+
+        assert applied == [item.migration_id for item in migrations[len(through_cutoff) :]]
+        assert len(_ledger_ids(connection)) == migrate.manifest_count()
+        _assert_live_session_survived(connection, session_id)
+
+
+def test_a_mid_chain_failure_resumes_without_demanding_the_flag_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Adoption is the operator vouching once, not once per attempt.
+
+    If a migration fails halfway, the ledger still holds only adopted rows. A
+    guard keyed on "did this runner write a row" would refuse the resume and
+    push the operator to re-pass an adoption flag they already gave — which is
+    how an operator learns to reach for the dangerous flag by reflex.
+    """
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    target_id = "041_memory_procedures"
+    migrations = migrate._discover()
+    target = next(item for item in migrations if item.migration_id == target_id)
+    target_sql = target.path.read_text(encoding="utf-8")
+    real_strip = migrate._strip_outer_transaction
+    should_fail = {"now": True}
+
+    def failing_strip(sql: str) -> str:
+        body = real_strip(sql)
+        if should_fail["now"] and sql == target_sql:
+            return body + "\nSELECT 1 / 0;\n"
+        return body
+
+    monkeypatch.setattr(migrate, "_strip_outer_transaction", failing_strip)
+
+    with _scratch_database() as connection:
+        through_cutoff, session_id = _stage_glob_migrated_database(connection)
+        _write_yaml_side_ledger(tmp_path, [item.filename for item in through_cutoff])
+
+        with pytest.raises(psycopg2.Error):
+            _apply_all_quietly(connection, adopt_baseline=True)
+
+        # The adoption committed; the failing file did not.
+        ledger = _ledger_ids(connection)
+        assert {item.migration_id for item in through_cutoff} <= ledger
+        assert target_id not in ledger
+
+        should_fail["now"] = False
+        resumed = _apply_all_quietly(connection)  # no adoption flag this time
+
+        assert resumed[0] == target_id
+        assert len(_ledger_ids(connection)) == migrate.manifest_count()
+        _assert_live_session_survived(connection, session_id)

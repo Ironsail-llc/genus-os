@@ -222,9 +222,7 @@ def test_legacy_migrations_key_is_retired_once_the_v2_ledger_covers_it(
 ) -> None:
     state_file = _write_state(workspace, ["001_init.sql", "040_later.sql"])
 
-    rc = _upgrade_with_ledger(
-        _ledger_rows(applied=["001_init.sql", "040_later.sql"], pending=[])
-    )
+    rc = _upgrade_with_ledger(_ledger_rows(applied=["001_init.sql", "040_later.sql"], pending=[]))
 
     assert rc == 0
     saved = yaml.safe_load(state_file.read_text())

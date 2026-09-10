@@ -112,7 +112,24 @@ class TestMigrate:
             rc = main(["migrate", "--adopt-baseline"])
 
         assert rc == 0
-        mock_apply.assert_called_once_with(connection=mock_conn, adopt_baseline=True)
+        mock_apply.assert_called_once_with(
+            connection=mock_conn, adopt_baseline=True, adopt_through=None
+        )
+
+    def test_adopt_through_flag_reaches_the_migrator(self):
+        """The bound on how far adoption goes must survive the CLI boundary."""
+        mock_conn = MagicMock()
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch("robothor.db.migrate.apply", return_value=[]) as mock_apply,
+            patch("robothor.cli.admin.cmd_migrate_check", return_value=0),
+        ):
+            rc = main(["migrate", "--adopt-through", "040_memory_episodes"])
+
+        assert rc == 0
+        mock_apply.assert_called_once_with(
+            connection=mock_conn, adopt_baseline=False, adopt_through="040_memory_episodes"
+        )
 
     def test_dry_run_prints_sql(self, capsys):
         rc = main(["migrate", "--dry-run"])
