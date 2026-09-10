@@ -4,18 +4,18 @@ When infrastructure, agents, services, or cron jobs change, update docs as part 
 
 | Change | Update these docs |
 |--------|-------------------|
-| New systemd service | `SERVICES.md`, `INFRASTRUCTURE.md` (tunnel table if port-bearing) |
+| New systemd service | `SERVICES.md`, `docs/SYSTEM_ARCHITECTURE.md` (tunnel table if port-bearing) |
 | New cron job (system) | **Regenerate, do not hand-edit**: `python scripts/gen_cron_map.py > docs/CRON_MAP.md` (it reads the crontab, systemd timers and `agent_schedules`, and marks a missing target `MISSING`; the file is gitignored instance data, which is why the generator writes stdout and never the file). Then `brain/CRON_DESIGN.md` (if architectural), `SERVICES.md` |
-| New agent | `robothor agent scaffold <id>`, edit manifest + instruction file per contracts, `PLAYBOOK.md` fleet table, `brain/AGENTS.md`, `docs/CRON_MAP.md`, `validate_agents.py` |
-| Modified agent config | Agent manifest YAML (update first), then `validate_agents.py --agent <id>` |
-| New MCP/plugin tool | `brain/AGENTS.md` (tool list) |
-| New Cloudflare route | `INFRASTRUCTURE.md` (tunnel table), `SERVICES.md` (external access table) |
-| New database table | `INFRASTRUCTURE.md` |
-| Federation changes | `docs/FEDERATION.md`, `INFRASTRUCTURE.md` (Federation section), `SERVICES.md` |
-| New interactive mode | `brain/TOOLS.md`, `brain/AGENTS.md`, `CLAUDE.md` (reading guide), `SERVICES.md` (endpoints) |
-| Vault credential changes | `brain/TOOLS.md` (Vault section), `INFRASTRUCTURE.md` (Secrets Management) |
+| New agent | `robothor agent scaffold <id>`, edit manifest + instruction file per contracts, the instance's fleet table + `brain/AGENTS.md` + `docs/CRON_MAP.md`, `scripts/validate_agents.py` |
+| Modified agent config | Agent manifest YAML (update first), then `scripts/validate_agents.py --agent <id>` |
+| New MCP/plugin tool | `docs/CONNECTORS.md` + the instance's `brain/AGENTS.md` tool list |
+| New Cloudflare route | `infra/tunnel/README.md`, `SERVICES.md` (external access table) |
+| New database table | `robothor/migrations/manifest.txt` + `docs/SYSTEM_ARCHITECTURE.md` |
+| Federation changes | `docs/FEDERATION.md`, `docs/SYSTEM_ARCHITECTURE.md` (federation section), `SERVICES.md` |
+| New interactive mode | the instance's `brain/TOOLS.md` + `brain/AGENTS.md`, `CLAUDE.md` (reading guide), `SERVICES.md` (endpoints) |
+| Vault credential changes | `robothor/vault/` + the instance's `brain/TOOLS.md` Vault section, `docs/SYSTEM_ARCHITECTURE.md` (secrets management) |
 | Deployment/fix with gotchas | Auto-memory `MEMORY.md` (session-to-session learning) |
-| Task-lifecycle change (planner / promoter / todo escalation / autonomy defaults) | `docs/SYSTEM_ARCHITECTURE.md` (Task Lifecycle section), `docs/AGENT_BUILDER.md` (Section 2a), `brain/HEARTBEAT.md`, `brain/AGENTS.md`, `brain/SOUL.md`, `brain/memory/autonomy_defaults.md` if budgets shift |
+| Task-lifecycle change (planner / promoter / todo escalation / autonomy defaults) | `docs/SYSTEM_ARCHITECTURE.md` (Task Lifecycle section), `docs/AGENT_BUILDER.md` (Section 2a), and the instance's `brain/HEARTBEAT.md`, `brain/AGENTS.md`, `brain/SOUL.md`, `brain/memory/autonomy_defaults.md` if budgets shift |
 | New off/observe/enforce rollout flag | A runbook in `docs/runbooks/` documenting the ladder + soak procedure (see `GUARDRAIL_FLIPS.md` for the systemd-drop-in-governed pattern, `IDENTITY_ROLLOUT.md` for the plain-env-var pattern); note any cross-flag ordering dependency explicitly |
 | New systemd unit template, host ops script, or install-truth finding class (`scripts/instance_doctor.sh`) | `docs/runbooks/INSTANCE_DOCTOR.md` (finding table + allow-file scope), `SERVICES.md` |
 | New root script started by a systemd unit, or a change to the shared PATH-reset prelude | `infra/systemd/README.md` ("`EnvironmentFile=` carries a PATH" section) — every such script must discard the inherited PATH and set its own, first, before any external command; `tests/test_root_scripts_set_path.py` derives the list of scripts that must carry the prelude from the units themselves |
@@ -27,7 +27,7 @@ When infrastructure, agents, services, or cron jobs change, update docs as part 
 | New/changed last-good marker (`scripts/backup-state.sh` and its callers) | `docs/runbooks/RESTORE_DRILL.md` (marker table), `docs/runbooks/OFFSITE_BACKUP.md`, `docs/runbooks/PAGING.md` (the consequence lines quote these) |
 | Offsite/PITR/WAL pipeline change (`scripts/backup-offsite.sh`, `scripts/wal-offsite.sh`, `scripts/wal-archive.sh`, `scripts/pg-basebackup.sh`) | `docs/runbooks/OFFSITE_BACKUP.md`, `docs/runbooks/PITR.md` (degraded-mode table), `docs/runbooks/RESTORE_DRILL.md` |
 | Deliverable-contract change (`ROBOTHOR_DELIVERABLE_CONTRACT_MODE` and its verifier) | `docs/runbooks/DELIVERABLE_CONTRACT.md`, `docs/runbooks/GUARDRAIL_FLIPS.md` (promotion ladder row), `infra/flags.yaml` |
-| Federation change (parent/child handshake, NATS accounts, peer capabilities) | `docs/runbooks/FEDERATION.md` (the operational side: what a peer can do by default, the two-instance ship gate, suspending a child), `docs/FEDERATION.md`, `INFRASTRUCTURE.md`, `SERVICES.md` |
+| Federation change (parent/child handshake, NATS accounts, peer capabilities) | `docs/runbooks/FEDERATION.md` (the operational side: what a peer can do by default, the two-instance ship gate, suspending a child), `docs/FEDERATION.md`, `docs/SYSTEM_ARCHITECTURE.md`, `SERVICES.md` |
 | New or changed service role / RBAC grant | `docs/runbooks/SERVICE_ROLES.md` (roles available, the observe-first rollout) |
 | Thermal policy change (`scripts/thermal-guard.sh`, `scripts/thermal-shed.sh`, `scripts/gpu-clock-cap.sh`, `ollama.service.d/thermal-limits.conf`) | `docs/runbooks/THERMAL.md` — **re-measure and update the measured table**; the numbers there are what the clock cap and shed thresholds are derived from |
 | **Any new runbook** | Add its row here, in the same PR. A runbook nothing points at is a runbook nobody opens during the incident it was written for |

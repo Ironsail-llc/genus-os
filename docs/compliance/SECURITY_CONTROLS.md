@@ -224,7 +224,7 @@ Status meanings:
 ### CM-02 — Canonical schema change
 
 - **Status:** Implemented.
-- **Implementation:** One runner executes the 83-entry manifest-ordered
+- **Implementation:** One runner executes the manifest-ordered
   migration chain, locks concurrent execution, records full IDs/checksums,
   refuses drift or unknown history, and supports verification-only status.
   Migration 023 renames legacy memory tables into explicit archives rather than

@@ -66,6 +66,17 @@ The Helm deployment has a different boundary from the systemd appliance:
   verified email alone does not auto-link or grant a privileged role.
 - Bridge private routes verify signed issuer/audience/expiry/tenant/role/scope
   claims and apply route-specific scope and tenant checks.
+- Vault secret **values** are write-only from every human surface. `GET
+  /api/vault/get` serves a verified service token only — an owner/admin browser
+  session is refused and audited, and the dashboard's bridge proxy
+  (`app/src/app/api/bridge/[...path]`) will not forward the path at all. Humans
+  set and rotate secrets with `robothor vault` on the appliance.
+  `/api/vault/list` stays open to operators because it returns key names only.
+- Bridge mutations under `/api/` either call `require_operator(request)` or are
+  scope-gated by the middleware; `crm/bridge/tests/test_mutations_are_gated.py`
+  enumerates the assembled app and fails on any route that is neither, so a new
+  ungated mutation cannot ship unnoticed. Appliance-global acts (marketplace
+  agent install/update/remove) are operator-gated and write an audit row.
 - Engine non-probe HTTP routes and the IDE WebSocket independently verify
   signed, tenant-bound Engine scopes. Channel webhooks use their own
   route-specific HMAC. Empty roles do not imply privileged execution.
@@ -503,7 +514,7 @@ The system has **one goal per agent**, persistent across runs, editable at runti
 }
 ```
 
-Migrations: `065_session_goal_meta.sql` (column), `066_session_goal_meta_v2.sql` (v2 shape doc). `brain/GOAL.md` is a denormalized read-cache regenerated on every mutation; hand-edits are advisory only.
+Migrations: `065_session_goal_meta.sql` (column), `066_session_goal_meta_v2.sql` (v2 shape doc). The instance's `brain/GOAL.md` is a denormalized read-cache regenerated on every mutation; hand-edits are advisory only.
 
 **Manifest goals are SEED, not source of truth.** `docs/agents/<agent>.yaml` `goals:` blocks supply the initial `metric_targets` when an agent's goal task is first created (via `scripts/seed_agent_goals.py` or lazily on first read). After seeding, the unified task is canonical and edits go through the CLI/Telegram/tools — manifest changes are advisory.
 
@@ -589,7 +600,7 @@ The nightly review (`run_nightly_auto_review`) opens every feedback body with `M
 
 ### Review — `robothor/engine/buddy_critic.py`
 
-The `buddy` agent (`docs/agents/buddy.yaml`, cron `0 6-22 * * *`) runs two passes:
+The `buddy` agent (an instance manifest, `docs/agents/buddy.yaml`, cron `0 6-22 * * *`) runs two passes:
 
 - **Hourly review pass** — for each agent with goals, sample up to 2 recent top-level runs biased toward failures / error steps / long durations and not already reviewed. Build a structured `Evidence` dict from `agent_runs` + `agent_run_steps`. Sonnet 4.6 phrases a rating (1-5) + dimension + `specific_issue` (≤ 80 chars referencing concrete evidence) + `suggested_action` (≤ 120 chars). Persist to `agent_reviews` with `reviewer_type='buddy'`.
 - **6-hourly aggregation pass** — run `detect_goal_breach` per agent. For breaches with `priority_score ≥ 3.0` *and* a non-null current metric value, build a `Finding`: 3 representative reviews, corrective-action template from `docs/agents/corrective-actions.yaml`, live baseline metric. Create one `crm_tasks` row per finding tagged `nightwatch+self-improve+<agent>+<metric>` assigned to `auto-agent`. Dedups against open tasks for the same (agent, metric). The task body embeds a machine-readable `<!-- buddy-baseline: {...} -->` marker the grader parses later.
@@ -600,7 +611,7 @@ post-change metrics remain the authority.
 
 ### Verify — `robothor/engine/buddy_grader.py`
 
-The `buddy-grader` agent (`docs/agents/buddy-grader.yaml`, cron `7 * * * *`) closes the loop:
+The `buddy-grader` agent (an instance manifest, `docs/agents/buddy-grader.yaml`, cron `7 * * * *`) closes the loop:
 
 1. For every DONE self-improve task older than 48 hours with no verification tag yet, parse the baseline marker and re-run `compute_goal_metrics` for that metric.
 2. Metric satisfies target → tag `verified_resolved` + resolution note.
@@ -611,9 +622,9 @@ Env flag `ROBOTHOR_BUDDY_GRADER_DRYRUN=1` computes verdicts without writing, for
 
 ### Guardrail — `robothor/engine/buddy_auditor.py`
 
-The `buddy-auditor` agent (`docs/agents/buddy-auditor.yaml`, cron `0 7 * * 1`) is the falsifiability clause. Weekly, it reads the `held_7d=true|false` tag distribution over the last 14 days. If **under 30%** of fixes held for 7 days (min 5 samples), it pauses Buddy's cron by editing `docs/agents/buddy.yaml` and sends a critical alert to `main`. Re-enabling is a deliberate human decision.
+The `buddy-auditor` agent (an instance manifest, `docs/agents/buddy-auditor.yaml`, cron `0 7 * * 1`) is the falsifiability clause. Weekly, it reads the `held_7d=true|false` tag distribution over the last 14 days. If **under 30%** of fixes held for 7 days (min 5 samples), it pauses Buddy's cron by editing `docs/agents/buddy.yaml` and sends a critical alert to `main`. Re-enabling is a deliberate human decision.
 
-Piggybacked on the same weekly run: the review-quality sentinel (`brain/scripts/buddy_review_quality_sentinel.py`) flags filler output if ≥ 20% of recent Buddy reviews fail a concrete-evidence heuristic.
+Piggybacked on the same weekly run: the instance's review-quality sentinel (`brain/scripts/buddy_review_quality_sentinel.py`) flags filler output if ≥ 20% of recent Buddy reviews fail a concrete-evidence heuristic.
 
 ### Observability
 
@@ -621,11 +632,11 @@ Piggybacked on the same weekly run: the review-quality sentinel (`brain/scripts/
 - `GET /api/buddy/reviews` — recent Buddy reviews, paginated.
 - `GET /api/buddy/findings` — open/in-progress/verifying/resolved/persistent/requires_human buckets.
 - `GET /api/buddy/verifications` — verified tasks with baseline → current → held_7d for the auditor.
-- `brain/journals/buddy/YYYY-MM-DD.jsonl` — append-only audit trail of every review, finding, verification, hold-check, and audit.
+- `brain/journals/buddy/YYYY-MM-DD.jsonl` (instance state) — append-only audit trail of every review, finding, verification, hold-check, and audit.
 
 ### What was deleted
 
-`buddy_watch.py` (parallel LLM cron), `_maybe_append_buddy_reflection` in `delivery.py` (heartbeat appendix), `_buddy_status_context` warmup hook, `flag_underperformers` + escalation mechanics in `buddy.py`, XP/level/streak gamification (constants, LevelInfo, DailyStats dataclasses), `improvement-analyst` agent + workflow (subsumed by `buddy`'s aggregation pass). Legacy `docs/workflows/nightwatch.yaml` is retired.
+`buddy_watch.py` (parallel LLM cron), `_maybe_append_buddy_reflection` in `delivery.py` (heartbeat appendix), `_buddy_status_context` warmup hook, `flag_underperformers` + escalation mechanics in `buddy.py`, XP/level/streak gamification (constants, LevelInfo, DailyStats dataclasses), `improvement-analyst` agent + workflow (subsumed by `buddy`'s aggregation pass). The legacy `nightwatch` workflow is retired and its definition removed.
 
 ### Run claim verification — `robothor/engine/run_verification.py`
 
@@ -992,9 +1003,9 @@ LUKS2-encrypted SanDisk SSD (1.8 TB) mounted at `/mnt/robothor-backup`.
 
 | Category | Contents |
 |----------|----------|
-| Project directories | `brain/`, `robothor/` (including `robothor/engine/`, `robothor/health/`) |
+| Project directories | the instance's `brain/`, plus `robothor/` (including `robothor/engine/`, `robothor/health/`) |
 | Config directories | `.config/robothor/`, `.cloudflared/` |
-| Credentials | `.bashrc`, `crm/.env` |
+| Credentials | `.bashrc`, the CRM stack's `.env` |
 | Databases | `pg_dump`: robothor\_memory |
 | Docker volumes | uptime-kuma-data |
 | System state | crontab export, Ollama model list, systemd service files |
@@ -1007,7 +1018,6 @@ LUKS2-encrypted SanDisk SSD (1.8 TB) mounted at `/mnt/robothor-backup`.
 ```
 robothor/                                 Project root (git repo)
 ├── CLAUDE.md                             Master project guide
-├── INFRASTRUCTURE.md                     Hardware, networking, database
 ├── SERVICES.md                           Systemd services reference
 ├── pytest.ini                            Test configuration
 ├── run_tests.sh                          Layered test runner
