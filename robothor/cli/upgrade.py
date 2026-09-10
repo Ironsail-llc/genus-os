@@ -109,9 +109,7 @@ def _run_migrations(dry_run: bool) -> tuple[int, set[str] | None]:
             # Coverage = what the ledger already held plus what this run just
             # applied. Derived from the one status() call rather than a second
             # one, which would take the advisory lock again.
-            filename_by_id = {
-                str(row["migration_id"]): str(row["filename"]) for row in rows
-            }
+            filename_by_id = {str(row["migration_id"]): str(row["filename"]) for row in rows}
             covered = {str(row["filename"]) for row in rows if row["status"] == "applied"}
             covered.update(
                 filename_by_id[migration_id]

@@ -611,9 +611,7 @@ def status(
     with _connection(connection) as conn, _advisory_lock(conn):
         unmanaged = _prepare_history(conn, migrations)
         applied = _applied(conn)
-        pending_exists = any(
-            migration.migration_id not in applied for migration in migrations
-        )
+        pending_exists = any(migration.migration_id not in applied for migration in migrations)
         baseline_unadopted = (
             pending_exists and _ledger_is_unverified(applied) and _baseline_schema_present(conn)
         )
