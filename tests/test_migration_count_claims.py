@@ -31,9 +31,7 @@ def manifest_migration_count() -> int:
     """Non-comment, non-blank lines in the canonical migration manifest."""
     text = MANIFEST_PATH.read_text(encoding="utf-8")
     return sum(
-        1
-        for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
+        1 for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")
     )
 
 
@@ -57,9 +55,7 @@ def test_documented_migration_counts_match_the_manifest() -> None:
 
     for path in documents():
         rel = path.relative_to(REPO_ROOT)
-        for lineno, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1
-        ):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             for pattern in COUNT_PATTERNS:
                 for match in pattern.finditer(line):
                     claimed = int(match.group(1))
