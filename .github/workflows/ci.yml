@@ -233,6 +233,11 @@ jobs:
           /tmp/wheel-smoke-venv/bin/pip install dist/*.whl
       - name: Smoke the installed console scripts and package import
         run: |
+          # `genus` is the documented verb; `genusos` and `robothor` are the
+          # aliases we still ship. All three must exist in the wheel, so all
+          # three are exercised here.
+          /tmp/wheel-smoke-venv/bin/genus version
+          /tmp/wheel-smoke-venv/bin/genus --help
           /tmp/wheel-smoke-venv/bin/genusos version
           /tmp/wheel-smoke-venv/bin/robothor --help
           /tmp/wheel-smoke-venv/bin/python -c "import robothor"

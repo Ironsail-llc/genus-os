@@ -27,6 +27,7 @@ import contextlib
 import logging
 import re
 import sys
+from pathlib import Path
 from typing import Any, cast
 
 # Re-export public API for backward compatibility.
@@ -112,6 +113,27 @@ def _register_plugin_commands(parser: argparse.ArgumentParser) -> dict[str, dict
     return commands
 
 
+def _invoked_name() -> str:
+    """Return the console-script name the user actually typed.
+
+    The wheel ships three entry points (``genus``, ``genusos``,
+    ``robothor``) that all land here, and this name is what ``--help`` and
+    the hand-written ``usage:`` lines in the subcommand modules print.
+
+    ``genus`` is the documented verb, so it is also the fallback whenever
+    ``sys.argv[0]`` is not a program name: an empty argv, an empty string,
+    a bare directory path, or a leading dash. That last case is the common
+    one — ``python -c`` leaves ``"-c"`` in ``argv[0]`` and ``python -``
+    leaves ``"-"``, and printing ``usage: -c ...`` helps nobody.
+    """
+    argv = getattr(sys, "argv", None) or []
+    candidate = argv[0] if argv else ""
+    name = Path(candidate).name if candidate else ""
+    if not name or name.startswith("-"):
+        return "genus"
+    return name
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the CLI parser.
 
@@ -121,7 +143,7 @@ def _build_parser() -> argparse.ArgumentParser:
     this project has been bitten three times by exactly that.
     """
     parser = argparse.ArgumentParser(
-        prog="robothor",
+        prog=_invoked_name(),
         description="Genus OS — An AI brain with persistent memory, vision, and self-healing.",
     )
     parser.add_argument("--version", action="store_true", help="Show version and exit")
