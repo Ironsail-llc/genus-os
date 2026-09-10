@@ -346,10 +346,14 @@ class TestToolClassificationParity:
         self._adapter(tmp_path, "tools_allowed: [x_get]\nread_only: [x_get, read_file]\n")
         assert adapters.load_adapters(tmp_path) == []
 
-    def test_a_non_list_read_only_refuses_the_adapter(self, tmp_path) -> None:
+    @pytest.mark.parametrize("value", ["x_get", "false", "0", "{a: 1}"])
+    def test_a_non_list_read_only_refuses_the_adapter(self, tmp_path, value: str) -> None:
+        """Including the falsy scalars. ``or []`` would have read
+        ``read_only: false`` as "declared nothing" and loaded the adapter
+        anyway — the fail-open shape command_sha256 was already bitten by."""
         from robothor.engine import adapters
 
-        self._adapter(tmp_path, "tools_allowed: [x_get]\nread_only: x_get\n")
+        self._adapter(tmp_path, f"tools_allowed: [x_get]\nread_only: {value}\n")
         assert adapters.load_adapters(tmp_path) == []
 
     def test_read_only_beside_a_legacy_allow_all_is_refused(self, tmp_path) -> None:

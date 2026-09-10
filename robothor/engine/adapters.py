@@ -125,7 +125,11 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
     # declaration REFUSES the adapter, the same shape as an unknown transport.
     # A classification that is merely ignored is worse than absent: the
     # operator believes a boundary exists that nothing enforces.
-    read_only = data.get("read_only", []) or []
+    # Only None coalesces to "absent". `or []` would swallow `read_only: false`
+    # and every other falsy scalar as "declared nothing" — the same fail-open
+    # shape the command_sha256 comment below was written about.
+    raw_read_only = data.get("read_only")
+    read_only = [] if raw_read_only is None else raw_read_only
     if not isinstance(read_only, list | tuple) or not all(isinstance(x, str) for x in read_only):
         logger.warning(
             "Adapter '%s' has a non-list read_only — refused. It must be a list "
