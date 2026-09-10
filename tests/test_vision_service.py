@@ -860,7 +860,7 @@ class TestLazyCv2Import:
             return real_import(name, *args, **kwargs)
 
         with patch.object(builtins, "__import__", side_effect=mock_import):
-            with pytest.raises(ImportError, match="pip install robothor\\[vision\\]"):
+            with pytest.raises(ImportError, match="pip install genusos\\[vision\\]"):
                 _get_cv2()
 
 
