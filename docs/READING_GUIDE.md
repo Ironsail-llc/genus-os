@@ -1,7 +1,7 @@
 # Reading Guide
 
-`brain/`, tunnel configuration, systemd units, and host paths are
-deployment-specific instance data and may be absent from a clean checkout. Use
+The instance workspace `brain/`, tunnel configuration, systemd units, and host
+paths are deployment-specific data and may be absent from a clean checkout. Use
 the in-repository platform references below when an instance document is not
 present; do not treat an instance path as a shipped security control.
 
@@ -25,31 +25,31 @@ present; do not treat an instance path as a shipped security control.
 |------|-----------|
 | Working on vision | `robothor/vision/` + `docs/SYSTEM_ARCHITECTURE.md` (reference-appliance section) |
 | Viewing the webcam | `https://cam.${INSTANCE_DOMAIN}/webcam/` (Cloudflare Access) |
-| Changing cron behavior | `docs/CRON_MAP.md` + the deployment's agent manifests/scheduler configuration |
-| Understanding memory/RAG | `brain/memory_system/MEMORY_SYSTEM.md` |
-| Sending emails or calendar | `brain/TOOLS.md` (gws native tools + gog CLI fallback) |
-| Voice calling | `brain/TOOLS.md` (voice section) + `brain/voice-server/` |
-| Cloudflare tunnel routes | `brain/TOOLS.md` (Cloudflare section) |
-| Adding new tunnel subdomain | `brain/TOOLS.md` (Cloudflare section — 4-step workflow) |
+| Changing cron behavior | `docs/CRON_MAP.md` (instance-local, not shipped) + the deployment's agent manifests/scheduler configuration |
+| Understanding memory/RAG | `docs/memory-system.md` + `robothor/memory/` |
+| Sending emails or calendar | `robothor/engine/tools/handlers/gws.py` (gws native tools + gog CLI fallback) |
+| Voice calling | instance-local, not shipped — no unit template or package ships for it |
+| Cloudflare tunnel routes | `infra/tunnel/README.md` + `robothor/tunnel.py` |
+| Adding new tunnel subdomain | `infra/tunnel/cloudflare.yml.template` + `robothor tunnel gen-config` |
 | Python Agent Engine | `robothor/engine/` package — runner, tools, session, config, Telegram, scheduler |
 | Engine CLI | `robothor engine {run,start,stop,status,list,history,workflow}` |
-| Using deep reasoning | `brain/TOOLS.md` (Deep Reasoning + /deep sections) |
+| Using deep reasoning | `robothor/engine/rlm_tool.py` |
 | Engine API endpoints | `SERVICES.md` (Engine API Endpoints section) |
 | Engine HTTP/WebSocket authorization | `robothor/engine/auth.py` + `robothor/engine/tests/test_engine_auth.py` |
 | Agent scaffold | `robothor agent scaffold <id> [--description "..."]` |
-| Computer use / desktop control | `brain/agents/COMPUTER_USE.md` + `brain/TOOLS.md` (Desktop Control section) |
-| Robothor's identity | `brain/SOUL.md` |
-| Model selection | `brain/TOOLS.md` (Model Selection Guide) |
-| Session startup (as Robothor) | `brain/AGENTS.md` |
-| Health data | `robothor/health/` + `brain/memory/garmin-health.md` |
-| CRM / contacts / conversations | `crm/` directory + `INFRASTRUCTURE.md` (CRM Stack section) |
+| Computer use / desktop control | instance-local, not shipped — the virtual-display units are `infra/systemd/robothor-xvfb.service` and `infra/systemd/robothor-vnc.service` |
+| Instance identity / persona | instance-local, not shipped — `docs/PLATFORM_INSTANCE.md` says where it lives |
+| Model selection | `docs/agents/*.yaml` `model:` blocks (instance-local, not shipped) + `robothor/engine/models.py` |
+| Agent session startup | `docs/agents/INSTRUCTION_CONTRACT.md` + `robothor/engine/session.py` |
+| Health data | `robothor/health/` |
+| CRM / contacts / conversations | `crm/` directory + `docs/SYSTEM_ARCHITECTURE.md` (CRM stack section) |
 | Bridge service / webhooks | `crm/bridge/bridge_service.py` |
-| Contact resolution | `crm/bridge/contact_resolver.py` |
-| Memory blocks | `brain/AGENTS.md` (Memory Blocks section) |
+| Contact resolution | `robothor/identity/resolvers.py` + `robothor/crm/dal.py` |
+| Memory blocks | `robothor/memory/blocks.py` + `docs/memory-system.md` |
 | Services & ports | `SERVICES.md` |
 | Connecting an external API/MCP | `docs/CONNECTORS.md` (generic REST→MCP bridge for Claude Code + engine) |
 | Hardware & infrastructure | `docs/SYSTEM_ARCHITECTURE.md` (reference appliance) + `docs/PLATFORM_INSTANCE.md` |
-| Writing or running tests | `docs/TESTING.md` + `brain/memory_system/conftest.py` |
+| Writing or running tests | `docs/TESTING.md` + `conftest.py` |
 | Production go-live / hardening | `docs/PRODUCTION_HARDENING_TODO.md` |
 | Security control scope and limitations | `docs/compliance/SECURITY_CONTROLS.md` |
 | Dashboard OIDC/session boundary | `app/src/lib/auth.ts` + `app/src/proxy.ts` + `crm/bridge/routers/auth.py` |
@@ -67,7 +67,7 @@ present; do not treat an instance path as a shipped security control.
 | Rolling back an agent | Reviewed Git history for its manifest/instructions + `python scripts/validate_agents.py --agent <id>` |
 | Agent validation | `python scripts/validate_agents.py` |
 | Workflow engine | `docs/AGENT_BUILDER.md` (section 3) + `docs/workflows/*.yaml` + `robothor/engine/workflow.py` |
-| Vault / credential storage | `robothor/vault/` + `brain/TOOLS.md` (Vault section) |
+| Vault / credential storage | `robothor/vault/` + `robothor vault --help` |
 | Federation / multi-instance | `docs/FEDERATION.md` + `robothor/federation/` package |
 | Federation CLI | `robothor federation {init,invite,connect,status,list,export,suspend,remove}` |
 | NATS server (federation transport) | `docs/FEDERATION.md` + the deployment's NATS config/service definition |

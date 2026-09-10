@@ -189,7 +189,7 @@ Created by `001_init.sql` (fresh install) or `025_federation.sql` (upgrade):
 | `robothor/federation/connections.py` | Connection state machine, DB persistence |
 | `robothor/federation/sync.py` | Event journal, HLC, conflict resolution |
 | `robothor/federation/nats.py` | NATS/JetStream transport layer |
-| `robothor/federation/commands.py` | Cross-instance command dispatch |
+| `robothor/federation/transport.py` | Per-direction transport: dial a parent and listen for children on one instance |
 | `robothor/engine/tools/handlers/federation.py` | Agent-usable federation tools |
 | `crm/migrations/025_federation.sql` | Upgrade migration for existing instances |
 | `/etc/nats/nats-server.conf` | NATS server configuration |

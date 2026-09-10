@@ -65,6 +65,23 @@ jobs:
       # No standing advisory exceptions: a newly reported dependency issue
       # must fail the gate and receive an explicit, reviewed remediation.
       - run: pip-audit
+      # Documentation gates, siblings of the instance-data gate above. Two
+      # things fix their position in this job. They need the package
+      # importable -- check_doc_commands parses each quoted command with the
+      # REAL `robothor.cli` parser -- which rules out sitting next to the leak
+      # check, run on bare python3 before the install. And they go AFTER
+      # pip-audit, so a typo in a doc cannot stop this run from reporting a
+      # dependency advisory: the cheaper signal must never mask the graver one.
+      #
+      # The published Getting Started opened with `pip install robothor` (a
+      # package that does not exist; the distribution is `genusos`) and the
+      # Reading Guide sent readers into the gitignored `brain/` tree. Nothing
+      # failed, because no gate had ever parsed a command or resolved a path
+      # printed in the docs.
+      - name: Check every command quoted in the docs parses
+        run: python scripts/check_doc_commands.py
+      - name: Check every path referenced in the docs exists
+        run: python scripts/check_doc_links.py
 
   lint:
     runs-on: ubuntu-latest

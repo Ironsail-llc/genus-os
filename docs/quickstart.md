@@ -12,7 +12,7 @@ From zero to a working Genus OS instance in 10 minutes.
 ## Option A: Docker (recommended)
 
 ```bash
-pip install robothor
+pip install genusos
 robothor init --docker   # Generates docker-compose, starts containers, runs migrations, pulls models
 robothor status
 robothor serve
@@ -25,7 +25,7 @@ The wizard creates a `~/robothor` workspace with a `docker-compose.yml` (Postgre
 Install PostgreSQL with pgvector, Redis, and Ollama on your system, then:
 
 ```bash
-pip install robothor
+pip install genusos
 robothor init            # Interactive: prompts for DB config, runs migrations, pulls models
 robothor status
 robothor serve
@@ -128,7 +128,7 @@ asyncio.run(main())
 ## Start the API Server
 
 ```bash
-pip install robothor[api]
+pip install "genusos[api]"
 robothor serve --host 0.0.0.0 --port 9099
 ```
 

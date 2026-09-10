@@ -16,7 +16,7 @@ Before speaking, check these signals:
 | Vault has secrets | `robothor vault list` | API keys stored |
 | OpenRouter key | vault contains `openrouter/api_key` | LLM access |
 | Telegram tokens | vault has `telegram/bot_token` + `chat_id` | Messaging ready |
-| Identity set | `brain/IDENTITY.md` non-placeholder | AI named |
+| Identity set | the instance's `brain/IDENTITY.md` is non-placeholder | AI named |
 | Agents installed | `docs/agents/*.yaml` count | Fleet configured |
 | Engine reachable | `curl -s localhost:18800/health` | System running |
 
@@ -130,14 +130,14 @@ sudo tailscale up
 
 ## Phase 4: Identity & Agents
 
-**Trigger:** `brain/IDENTITY.md` is still a template placeholder.
+**Trigger:** the instance's `brain/IDENTITY.md` is still a template placeholder.
 
 ### Identity
 
-- Read `brain/BOOTSTRAP.md` — follow its conversational flow
+- Read the instance's `brain/BOOTSTRAP.md` — follow its conversational flow
 - Help them discover their AI's name, nature, vibe, emoji
-- Update `brain/IDENTITY.md`, `brain/USER.md`, `brain/SOUL.md`
-- Delete `brain/BOOTSTRAP.md` when done
+- Update the instance files `brain/IDENTITY.md`, `brain/USER.md`, `brain/SOUL.md`
+- Delete the instance's `brain/BOOTSTRAP.md` when done
 
 ### Agents
 

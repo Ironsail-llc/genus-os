@@ -137,11 +137,11 @@ robothor tui             # Terminal dashboard for monitoring
 ## Production status
 
 The version 1.10 release-candidate change set contains a hardening foundation:
-an ordered manifest of 83 checksum-verified migrations with upgrade archives,
-separate liveness/readiness, persistent production workspaces, fail-closed
-dashboard/Bridge/Engine authentication, constrained Kubernetes workloads,
-release gates, encrypted snapshot/restore, and the first policy-bound Entity
-Kernel treasury contracts.
+an ordered, checksum-verified migration manifest with upgrade archives
+(`robothor migrate --check` prints the count), separate liveness/readiness,
+persistent production workspaces, fail-closed dashboard/Bridge/Engine
+authentication, constrained Kubernetes workloads, release gates, encrypted
+snapshot/restore, and the first policy-bound Entity Kernel treasury contracts.
 
 That does not make an unconfigured checkout production-ready. Before go-live,
 operators must provision Vault and OIDC, seed the agent workspace, validate
@@ -170,13 +170,13 @@ PCI scope, and this boundary is not a PCI certification or live payment adapter.
 
 ## Build Your Agents
 
-Every agent is defined by a YAML manifest and an optional instruction file. Scaffold one, or drop a manifest in `docs/agents/` yourself.
+Every agent is defined by a YAML manifest and an optional instruction file. Scaffold one, or drop a manifest in your instance's `docs/agents/` yourself.
 
 ```bash
 robothor agent scaffold support-triage --description "Classify incoming support tickets"
 ```
 
-This creates `docs/agents/support-triage.yaml` (manifest) and `brain/SUPPORT_TRIAGE.md` (instruction file) from templates. For a guided experience, use the Agent Builder wizard (`robothor agent build`) — it captures your intent, generates the manifest and instructions, and scaffolds an eval framework. Edit the result to fit your needs:
+This creates `docs/agents/support-triage.yaml` (manifest) and `brain/SUPPORT_TRIAGE.md` (instruction file) from templates. Both are instance data — gitignored, yours alone, and they survive platform upgrades. `docs/AGENT_BUILDER.md` walks through filling them in, including the eval suite. Edit the result to fit your needs:
 
 ```yaml
 # docs/agents/support-triage.yaml
@@ -814,6 +814,7 @@ We follow **[Git Flow](https://nvie.com/posts/a-successful-git-branching-model/)
 
 **Branch naming** — branch from `main`, name by type:
 
+<!-- doc-check: skip -->
 | Prefix | When to use | Example |
 |---|---|---|
 | `feature/<topic>` | New capability or non-trivial enhancement | `feature/containerize-app-services` |

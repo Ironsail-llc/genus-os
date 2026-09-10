@@ -174,7 +174,8 @@ older integrations.
 
 ## Database migration prerequisites
 
-The migration Job uses the sole packaged 83-entry manifest. It takes an
+The migration Job uses the sole packaged, checksummed migration manifest
+(`robothor migrate --check` prints how many migrations it holds). It takes an
 advisory lock, records full IDs and checksums, and refuses drift or unknown
 history. Upgrade safeguards preserve legacy memory tables as archives and
 require a 30-day replacement-data gate plus a full-row archive before removing
