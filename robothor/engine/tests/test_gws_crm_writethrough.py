@@ -22,6 +22,8 @@ from unittest.mock import patch
 
 import pytest
 
+from robothor.constants import DEFAULT_TENANT
+
 pytestmark = pytest.mark.integration
 
 
@@ -62,6 +64,7 @@ class TestGmailSendWriteThrough:
                     "subject": "Hello",
                     "body": "Hi Eve, welcome aboard.",
                 },
+                tenant_id=DEFAULT_TENANT,
             )
 
         assert "error" not in result
@@ -115,10 +118,12 @@ class TestGmailSendWriteThrough:
             gws._handle_gws_tool(
                 "gws_gmail_send",
                 {"to": "eve@example.com", "subject": "Dup", "body": "x"},
+                tenant_id=DEFAULT_TENANT,
             )
             gws._handle_gws_tool(
                 "gws_gmail_send",
                 {"to": "eve@example.com", "subject": "Dup", "body": "x"},
+                tenant_id=DEFAULT_TENANT,
             )
         db_cursor.execute(
             "SELECT COUNT(*) AS c FROM message WHERE external_message_id = 'gmail-dup-1'"
@@ -162,6 +167,7 @@ class TestCalendarCreateWriteThrough:
                     "end": "2026-05-01T15:30:00Z",
                     "attendees": ["operator@example.com", "eve@example.com"],
                 },
+                tenant_id=DEFAULT_TENANT,
             )
         assert "error" not in result
 
