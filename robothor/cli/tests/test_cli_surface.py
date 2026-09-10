@@ -107,7 +107,7 @@ def test_prog_reflects_invoked_name(argv0: str, expected: str, monkeypatch) -> N
     assert _build_parser().prog == expected
 
 
-@pytest.mark.parametrize("argv", [[], [""]])
+@pytest.mark.parametrize("argv", [[], [""], ["-c"], ["-"]])
 def test_prog_falls_back_to_genus(argv: list[str], monkeypatch) -> None:
     """An empty or unusable ``sys.argv`` still yields the documented verb."""
     monkeypatch.setattr(sys, "argv", argv)
@@ -124,3 +124,25 @@ def test_console_scripts_declared() -> None:
     assert scripts["genus"] == "robothor.cli:main"
     assert scripts["genusos"] == "robothor.cli:main"
     assert scripts["robothor"] == "robothor.cli:main"
+
+
+def test_user_usage_line_reflects_invoked_name(monkeypatch, capsys) -> None:
+    """``genus user`` with no subcommand must not tell the reader to type ``robothor``."""
+    from argparse import Namespace
+
+    from robothor.cli.user import cmd_user
+
+    monkeypatch.setattr(sys, "argv", ["/x/genus"])
+    assert cmd_user(Namespace(user_command=None)) == 1
+    assert capsys.readouterr().out.startswith("usage: genus user ")
+
+
+def test_auth_usage_line_reflects_invoked_name(monkeypatch, capsys) -> None:
+    """``genus auth`` with no subcommand must not tell the reader to type ``robothor``."""
+    from argparse import Namespace
+
+    from robothor.cli.auth import cmd_auth
+
+    monkeypatch.setattr(sys, "argv", ["/x/genus"])
+    assert cmd_auth(Namespace(auth_command=None)) == 1
+    assert capsys.readouterr().out.startswith("usage: genus auth ")

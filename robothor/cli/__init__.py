@@ -117,16 +117,21 @@ def _invoked_name() -> str:
     """Return the console-script name the user actually typed.
 
     The wheel ships three entry points (``genus``, ``genusos``,
-    ``robothor``) that all land here. A hardcoded ``prog`` made ``--help``
-    and every usage line advertise a verb the reader may never have typed.
-    ``genus`` is the documented verb, so it is also the fallback when
-    ``sys.argv`` is empty or carries something unusable (embedded
-    interpreters, ``python -c``, a bare directory path).
+    ``robothor``) that all land here, and this name is what ``--help`` and
+    the hand-written ``usage:`` lines in the subcommand modules print.
+
+    ``genus`` is the documented verb, so it is also the fallback whenever
+    ``sys.argv[0]`` is not a program name: an empty argv, an empty string,
+    a bare directory path, or a leading dash. That last case is the common
+    one — ``python -c`` leaves ``"-c"`` in ``argv[0]`` and ``python -``
+    leaves ``"-"``, and printing ``usage: -c ...`` helps nobody.
     """
     argv = getattr(sys, "argv", None) or []
     candidate = argv[0] if argv else ""
     name = Path(candidate).name if candidate else ""
-    return name or "genus"
+    if not name or name.startswith("-"):
+        return "genus"
+    return name
 
 
 def _build_parser() -> argparse.ArgumentParser:

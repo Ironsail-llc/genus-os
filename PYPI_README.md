@@ -31,6 +31,7 @@ identically.
 | `vision` | Image understanding and face recognition |
 | `federation` | Peer-to-peer instance networking |
 | `mcp` | Model Context Protocol server |
+| `rlm` | Deep Reason — heavy-context reasoning over memory |
 | `tui` | Terminal chat interface |
 | `all` | Everything above, plus the dev toolchain |
 

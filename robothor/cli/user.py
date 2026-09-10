@@ -22,6 +22,8 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
+from robothor.cli import _invoked_name
+
 if TYPE_CHECKING:
     from argparse import Namespace
 
@@ -42,7 +44,7 @@ def cmd_user(args: Namespace) -> int:
         return _cmd_link(args)
     if command == "link-face":
         return _cmd_link_face(args)
-    print("usage: robothor user {list,add,link,link-face}")
+    print(f"usage: {_invoked_name()} user {{list,add,link,link-face}}")
     return 1
 
 

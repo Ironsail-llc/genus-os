@@ -14,6 +14,8 @@ import json
 import sys
 from typing import TYPE_CHECKING
 
+from robothor.cli import _invoked_name
+
 if TYPE_CHECKING:
     from argparse import Namespace
 
@@ -46,7 +48,9 @@ def cmd_auth(args: Namespace) -> int:
         return _cmd_grants(args)
     if command == "revoke-binding":
         return _cmd_revoke_binding(args)
-    print("usage: robothor auth {bootstrap,grant-binding,grants,revoke-binding} [--json]")
+    print(
+        f"usage: {_invoked_name()} auth {{bootstrap,grant-binding,grants,revoke-binding}} [--json]"
+    )
     return 1
 
 

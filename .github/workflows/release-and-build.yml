@@ -14,17 +14,6 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, labeled, unlabeled, closed]
   workflow_dispatch:
-    inputs:
-      pypi_repository:
-        description: >-
-          Index the publish-pypi job uploads to. `testpypi` is the rehearsal
-          target; anything else, including the push-triggered default, goes
-          to the real PyPI.
-        type: choice
-        options:
-          - pypi
-          - testpypi
-        default: pypi
 
 # One release pipeline at a time; one staging-build per labeled PR at a time.
 concurrency:
@@ -334,17 +323,9 @@ jobs:
           name: python-dist-v${{ needs.release.outputs.new_release_version }}
           path: dist/
       # Third-party action SHA-pinned + tag-commented.
-      #
-      # `inputs` is empty on a push-triggered release, so the expression
-      # falls through to the real PyPI — the same index the action would
-      # have chosen by default. Only a workflow_dispatch that explicitly
-      # picks `testpypi` redirects the upload. Both branches name a URL
-      # rather than leaning on an empty string, so the target is never
-      # implicit. The PYPI_PUBLISH_ENABLED job gate above is unchanged.
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist/
-          repository-url: ${{ inputs.pypi_repository == 'testpypi' && 'https://test.pypi.org/legacy/' || 'https://upload.pypi.org/legacy/' }}
 
   build:
     name: Build & Push (${{ matrix.image.name }})
