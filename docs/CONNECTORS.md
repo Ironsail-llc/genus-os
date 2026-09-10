@@ -127,7 +127,29 @@ env:
 agents: ["main"]            # least-privilege; widen deliberately
 timeout_seconds: 30
 description: "Example API (read-only) via generic REST→MCP bridge"
+tools_allowed:              # the ONLY tools this adapter may expose
+  - example_search
+  - example_delete
+read_only:                  # optional; which of those have no side effects
+  - example_search
 ```
+
+### `read_only:` — safety classification for adapter tools
+
+`tools_allowed:` is a **reach** list: it bounds what the server may expose, and
+says nothing about whether `example_delete` writes. `read_only:` is the safety
+classification, and it is the only way an adapter tool is ever treated as a
+pure read — by the benchmark harness's read-only allow-list, for instance,
+which otherwise sees nothing but literal core tool names and could never know
+`example_delete` is dangerous. It is **optional and additive**: an adapter that
+declares nothing contributes nothing, because absent means WRITE (the same rule
+plugins follow — see `robothor/plugins/loader.py`). Every entry must appear in
+`tools_allowed:`; classifying a tool the adapter does not serve is privilege
+escalation, so a `read_only:` that is not a list of strings, or that names
+anything outside `tools_allowed:` (including beside an empty, legacy allow-all
+`tools_allowed:`), **refuses the whole adapter at load** with the reason in the
+engine log. A dropped classification would leave you believing a boundary
+exists that nothing enforces.
 
 ```bash
 # add the secrets the adapter's ${...} placeholders resolve from

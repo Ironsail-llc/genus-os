@@ -72,6 +72,19 @@ class AdapterConfig:
     # protection the field's plugin marketplaces lack: a compromised or
     # silently-updated server cannot sprout new capabilities into the fleet.
     tools_allowed: list[str] = field(default_factory=list)
+    # read_only: which of THIS adapter's tools have no side effects. Optional
+    # and additive — an adapter that declares nothing declares nothing, and
+    # absent means WRITE. Mirrors the plugin seam's `read_only` in
+    # robothor/plugins/loader.py: safety classification used to be core's
+    # hardcoded table, so an integration leaving core left a fact about one
+    # instance behind in core. Every core deny-set (DESKTOP_TOOLS,
+    # BENCHMARK_TOOLS, EXTERNAL_SIDE_EFFECT_TOOLS) is a list of literal core
+    # tool names and can say nothing about `acme_delete_patient`, so a
+    # benchmark harness must never infer "read-only" from mere membership in
+    # tools_allowed. Must be a SUBSET of tools_allowed: classifying a tool
+    # this adapter does not serve is privilege escalation, not extension, and
+    # refuses the adapter at load.
+    read_only: list[str] = field(default_factory=list)
     # command_sha256: pins the stdio executable (command[0]). A binary swap
     # under the same path refuses the adapter outright — fail-closed.
     command_sha256: str = ""
@@ -105,6 +118,33 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
         logger.warning("Adapter '%s' has unknown transport '%s', skipping", name, transport)
         return None
 
+    tools_allowed = list(data.get("tools_allowed", []) or [])
+
+    # ── read_only: optional, additive, fail-closed ──
+    # Validated here rather than at use so a malformed or over-reaching
+    # declaration REFUSES the adapter, the same shape as an unknown transport.
+    # A classification that is merely ignored is worse than absent: the
+    # operator believes a boundary exists that nothing enforces.
+    read_only = data.get("read_only", []) or []
+    if not isinstance(read_only, list | tuple) or not all(isinstance(x, str) for x in read_only):
+        logger.warning(
+            "Adapter '%s' has a non-list read_only — refused. It must be a list "
+            "of tool names drawn from tools_allowed.",
+            name,
+        )
+        return None
+    foreign = sorted(set(read_only) - set(tools_allowed))
+    if foreign:
+        # Empty tools_allowed is legacy allow-all, so it grounds no claim at
+        # all — a read_only beside it is refused too, deliberately.
+        logger.warning(
+            "Adapter '%s' declares read_only %s not present in tools_allowed — refused. "
+            "An adapter may only classify tools it actually serves.",
+            name,
+            foreign,
+        )
+        return None
+
     return AdapterConfig(
         name=name,
         transport=transport,
@@ -118,7 +158,8 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
         version=data.get("version", ""),
         author=data.get("author", ""),
         description=data.get("description", ""),
-        tools_allowed=list(data.get("tools_allowed", []) or []),
+        tools_allowed=tools_allowed,
+        read_only=list(read_only),
         # str() BEFORE the falsiness check: YAML parses an unquoted all-zeros
         # (or all-digits) hash as an INTEGER, and `int(0) or ""` silently
         # became "no pin declared" — a fail-open path for exactly the value an

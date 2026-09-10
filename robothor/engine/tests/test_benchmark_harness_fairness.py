@@ -272,45 +272,98 @@ class TestToolClassificationParity:
         missing = sorted(READONLY_TOOLS - _BENCHMARK_WITHHELD_READS - benchmark_readonly_tools())
         assert not missing, f"read-only tools missing from the benchmark allow-list: {missing}"
 
-    def test_adapter_tools_are_read_from_the_loaded_adapter(
+    # ── Adapter tools: `read_only:` is the only way in ────────────────
+    #
+    # Adapter tools are registered from an MCP server's tools/list, so they
+    # have no static schema and never reach
+    # ``test_every_registered_tool_is_classified``. Core's three deny-sets are
+    # all literal core tool names, so none of them can see
+    # ``acme_delete_patient``. If mere presence in ``tools_allowed`` were
+    # enough, that tool would reach a graded sub-agent the moment the
+    # benchmarked agent's manifest granted it — the 2026-05-28 boundary again.
+
+    @staticmethod
+    def _adapter(tmp_path, body: str, name: str = "acme") -> None:
+        (tmp_path / f"{name}.yaml").write_text(
+            f"name: {name}\ntransport: http\nurl: https://api.example.com/_mcp\n"
+            f"agents: ['*']\n{body}"
+        )
+
+    def test_only_declared_read_only_adapter_tools_enter_the_allow_list(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A business adapter's declared tools join the benchmark allow-list.
+        """``read_only`` classifies; ``tools_allowed`` only bounds reach.
 
         Until 2026-09-10 four of one operator's adapter tool names were typed
         into the allow-list by hand, so core shipped a stranger's vendor and
         every OTHER instance's adapters were silently denied in benchmarks.
-        The names now come from the adapter bundle's ``tools_allowed``, which
-        is the same declaration the registry enforces at tool-registration
-        time — so the behaviour for an instance that HAS such an adapter
-        loaded is unchanged, and an instance without one carries no vendor.
+        Deriving the replacement from ``tools_allowed`` would have been worse
+        than the hardcoding: a write tool nobody classified, handed to the
+        agent being graded.
         """
         from robothor.engine import adapters
         from robothor.engine.tools.handlers.benchmark import benchmark_readonly_tools
 
-        (tmp_path / "acme.yaml").write_text(
-            "name: acme-erp\n"
-            "transport: http\n"
-            "url: https://api.example.com/_mcp\n"
-            "agents: ['*']\n"
-            "tools_allowed:\n"
-            "  - acme_list_resources\n"
-            "  - acme_search\n"
+        # Empty the cache FIRST: a dev box with real adapters installed must
+        # not change what this test measures.
+        monkeypatch.setattr(adapters, "_loaded_adapters", [])
+        before = benchmark_readonly_tools()
+
+        self._adapter(
+            tmp_path,
+            "tools_allowed: [x_get, x_delete]\nread_only: [x_get]\n",
+        )
+        monkeypatch.setattr(adapters, "_loaded_adapters", adapters.load_adapters(tmp_path))
+
+        assert benchmark_readonly_tools() - before == {"x_get"}, (
+            "an undeclared adapter tool must never be treated as read-only"
         )
 
+    def test_an_adapter_that_declares_nothing_contributes_nothing(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Absent means WRITE — the plugin seam's rule, not a lenient default."""
+        from robothor.engine import adapters
+        from robothor.engine.tools.handlers.benchmark import benchmark_readonly_tools
+
+        monkeypatch.setattr(adapters, "_loaded_adapters", [])
         before = benchmark_readonly_tools()
-        assert "acme_search" not in before
 
+        self._adapter(tmp_path, "tools_allowed: [x_get, x_delete]\n")
         monkeypatch.setattr(adapters, "_loaded_adapters", adapters.load_adapters(tmp_path))
-        after = benchmark_readonly_tools()
 
-        assert {"acme_list_resources", "acme_search"} <= after
-        assert after - before == {"acme_list_resources", "acme_search"}
+        assert benchmark_readonly_tools() == before
+
+    def test_read_only_outside_tools_allowed_refuses_the_adapter(self, tmp_path) -> None:
+        """Classifying a tool it does not serve is escalation, not extension.
+
+        Refused at LOAD, not ignored at use: a classification that is silently
+        dropped leaves the operator believing a boundary exists that nothing
+        enforces.
+        """
+        from robothor.engine import adapters
+
+        self._adapter(tmp_path, "tools_allowed: [x_get]\nread_only: [x_get, read_file]\n")
+        assert adapters.load_adapters(tmp_path) == []
+
+    def test_a_non_list_read_only_refuses_the_adapter(self, tmp_path) -> None:
+        from robothor.engine import adapters
+
+        self._adapter(tmp_path, "tools_allowed: [x_get]\nread_only: x_get\n")
+        assert adapters.load_adapters(tmp_path) == []
+
+    def test_read_only_beside_a_legacy_allow_all_is_refused(self, tmp_path) -> None:
+        """Empty ``tools_allowed`` is legacy allow-all, so it grounds no claim:
+        there is nothing for the subset check to check against."""
+        from robothor.engine import adapters
+
+        self._adapter(tmp_path, "read_only: [x_get]\n")
+        assert adapters.load_adapters(tmp_path) == []
 
     def test_an_adapter_cannot_reopen_a_withheld_tool(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``tools_allowed`` is operator-declared, so it must not be trusted to
+        """``read_only`` is operator-declared, so it must not be trusted to
         widen the harness's own withheld set. Withholding is subtracted last."""
         from robothor.engine import adapters
         from robothor.engine.tools.handlers.benchmark import (
@@ -319,13 +372,11 @@ class TestToolClassificationParity:
         )
 
         withheld = sorted(_BENCHMARK_WITHHELD_READS)[0]
-        (tmp_path / "greedy.yaml").write_text(
-            "name: greedy\n"
-            "transport: http\n"
-            "url: https://api.example.com/_mcp\n"
-            f"tools_allowed: ['{withheld}']\n"
+        self._adapter(
+            tmp_path,
+            f"tools_allowed: ['{withheld}']\nread_only: ['{withheld}']\n",
+            name="greedy",
         )
-
         monkeypatch.setattr(adapters, "_loaded_adapters", adapters.load_adapters(tmp_path))
         assert withheld not in benchmark_readonly_tools()
 

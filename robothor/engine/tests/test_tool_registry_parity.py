@@ -32,10 +32,19 @@ def _adapter_provided() -> frozenset[str]:
     Computed from the loaded adapters, never hardcoded: the names belong to
     whichever business adapters an instance installed, and core must not carry
     one operator's vendor tool names as a test constant.
-    """
-    from robothor.engine.tools.handlers.benchmark import _adapter_read_tools
 
-    return _adapter_read_tools()
+    NOTE THE WEAKNESS THIS BUYS: the exemption is computed from the SAME
+    source as the set under test, so an adapter-declared name can never fail
+    this parity check — subtracting it is a tautology. That is deliberate.
+    The property this test guards is "a name in the benchmark allow-list has a
+    schema *or* a stated non-schema provenance", and an adapter's provenance
+    is its bundle. What the adapter contract itself is worth is tested where
+    it is enforced, in ``test_benchmark_harness_fairness.py``; a hardcoded
+    exemption list here would only add a second copy to rot.
+    """
+    from robothor.engine.tools.handlers.benchmark import _adapter_declared_read_only_tools
+
+    return _adapter_declared_read_only_tools()
 
 
 @pytest.fixture

@@ -196,29 +196,37 @@ _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
 _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(DESKTOP_TOOLS | BENCHMARK_TOOLS)
 
 
-def _adapter_read_tools() -> frozenset[str]:
-    """Tool names served by the business adapters this instance has loaded.
+def _adapter_declared_read_only_tools() -> frozenset[str]:
+    """Adapter tools their own bundle DECLARED read-only. Absent means WRITE.
 
     Adapter tools are registered dynamically from an MCP server's
     ``tools/list`` (see ``ToolRegistry.register_adapter_tools``), so they never
-    appear in the static schema registry and cannot be enumerated at import
-    time. Until 2026-09-10 the allow-list carried one operator's adapter tool
-    names hardcoded, which meant core shipped a stranger's vendor and every
-    other instance's adapters were silently denied in benchmarks.
+    appear in the static schema registry, cannot be enumerated at import time,
+    and never reach ``test_every_registered_tool_is_classified``. Until
+    2026-09-10 core carried one operator's four adapter tool names hardcoded
+    into the benchmark allow-list, which shipped a stranger's vendor and
+    silently denied every other instance's adapters in benchmarks.
 
-    ``tools_allowed`` is the adapter bundle contract: the ONLY tools that
-    adapter may expose, declared by the operator who installed it. Anything the
-    server offers beyond it is refused at registration, so the declared list is
-    the honest ceiling of what an adapter can put in front of a graded agent.
-    An adapter with an empty ``tools_allowed`` is legacy allow-all and
-    contributes nothing here -- it stays out of benchmarks rather than
-    smuggling an unbounded surface in.
+    The name says the enforced property on purpose. ``tools_allowed`` is a
+    REACH list, not a safety classification: it bounds what the server may
+    expose, and says nothing about whether ``acme_delete_patient`` writes.
+    Every core deny-set is a list of literal core tool names, so none of them
+    can catch an adapter's write tool — deriving read-only from
+    ``tools_allowed`` would hand it to a graded sub-agent the moment the
+    benchmarked agent's manifest granted it. That is the 2026-05-28 boundary
+    (an agent reached a real recipient through a tool nobody had classified),
+    so the rule is the plugin seam's: an adapter that declares nothing
+    contributes nothing.
+
+    ``read_only`` is validated at load — a list of strings, a subset of
+    ``tools_allowed``, or the adapter is refused outright — so nothing here
+    has to re-check it.
     """
     from robothor.engine.adapters import get_loaded_adapters
 
     names: set[str] = set()
     for adapter in get_loaded_adapters():
-        names.update(adapter.tools_allowed)
+        names.update(adapter.read_only)
     return frozenset(names)
 
 
@@ -227,11 +235,11 @@ def benchmark_readonly_tools() -> frozenset[str]:
 
     A function, not a constant, because the adapter half of it depends on what
     this instance loaded at runtime. ``_BENCHMARK_WITHHELD_READS`` is
-    subtracted last, so an adapter cannot re-open a withheld family by naming
-    it in ``tools_allowed``.
+    subtracted last, so an adapter cannot re-open a withheld family by
+    declaring one of its names ``read_only``.
     """
     return frozenset(
-        (READONLY_TOOLS | _BENCHMARK_EXTRA_READS | _adapter_read_tools())
+        (READONLY_TOOLS | _BENCHMARK_EXTRA_READS | _adapter_declared_read_only_tools())
         - _BENCHMARK_WITHHELD_READS
     )
 
