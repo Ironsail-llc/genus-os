@@ -150,31 +150,36 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
         )
         return None
 
-    # ── An adapter may not name a CORE tool, in either list ──
+    # ── An adapter may not name a CORE or PLUGIN tool, in either list ──
     # The subset check above only proves read_only ⊆ tools_allowed. Both could
     # still name `delete_person` — a tool the adapter does not serve and cannot
     # speak for. Left open, an adapter YAML became a way to reclassify core's
     # own write tools as read-only, which is the whole boundary in one line.
     # The registry is the authority on what core owns; the plugin seam refuses
     # a name it does not provide for exactly this reason.
+    #
+    # This never bites a real adapter: `rest_mcp_bridge` namespaces every tool
+    # it serves with CONNECTOR_TOOL_PREFIX, so an adapter's names cannot
+    # collide with core's by accident. A collision is a claim.
     claimed = set(tools_allowed) | set(read_only)
     if claimed:
         try:
             core_names = _core_tool_names()
         except Exception:
             logger.exception(
-                "Adapter '%s' refused: could not read the core tool registry to "
-                "check its declared tool names. Refusing rather than loading "
-                "unchecked.",
+                "Adapter '%s' refused: could not read the core/plugin tool "
+                "registry to check its declared tool names. Refusing rather "
+                "than loading unchecked.",
                 name,
             )
             return None
         stolen = sorted(claimed & core_names)
         if stolen:
             logger.warning(
-                "Adapter '%s' declares core tool name(s) %s — refused. Those "
-                "belong to core; an adapter may only name the tools its own "
-                "server serves.",
+                "Adapter '%s' declares tool name(s) %s already owned by core or "
+                "an installed plugin — refused. An adapter may only name the "
+                "tools its own server serves; namespace them with "
+                "CONNECTOR_TOOL_PREFIX.",
                 name,
                 stolen,
             )
@@ -204,15 +209,30 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
 
 
 def _core_tool_names() -> frozenset[str]:
-    """Every tool name CORE registers, from the registry itself.
+    """Every tool name an adapter may NOT claim: core's registry, plus the
+    tools installed plugins contribute.
 
-    Same source ``test_every_registered_tool_is_classified`` reads, so the two
-    can never disagree; a second hardcoded list here would rot the day someone
-    adds a tool. Imported lazily because ``robothor.api.mcp`` and the engine
-    schemas sit above this module.
+    Two sources, both read from the authority rather than copied:
 
-    Fail-closed on purpose: if the registry cannot be read, ``_parse_adapter``
-    refuses the adapters it was about to check rather than loading them
+    * Core — ``get_tool_definitions()`` plus ``get_engine_schemas()``, the same
+      pair ``test_every_registered_tool_is_classified`` reads, so the two can
+      never disagree. A second hardcoded list here would rot the day someone
+      adds a tool.
+    * Plugins — ``load_plugins(...).tools | .schemas``, the same expression
+      ``ToolRegistry._register_plugin_schemas`` and
+      ``test_tool_registry_parity._plugin_provided`` use. BOTH keys matter: a
+      plugin that ships only a handler still gets a synthesized schema and is
+      advertised to the model, so leaving ``tools`` out would rebuild the same
+      hole one layer down. A plugin's tools are no more an adapter's to
+      classify than core's are, and a plugin already declares its own
+      ``read_only`` through its own seam.
+
+    Imported lazily: ``robothor.api.mcp``, the engine schemas and the plugin
+    loader all sit above this module.
+
+    Fail-closed on purpose, and NOT swallowed here: whatever this cannot read
+    it must not silently omit, so an exception propagates to
+    ``_parse_adapter``, which refuses the adapter rather than loading it
     unchecked. "Could not check" must never degrade to "allowed" — the same
     rule :func:`verify_adapter_integrity` follows for a pin it cannot verify.
 
@@ -223,8 +243,11 @@ def _core_tool_names() -> frozenset[str]:
     """
     from robothor.api.mcp import get_tool_definitions
     from robothor.engine.tools.schemas import get_engine_schemas
+    from robothor.plugins import load_plugins
 
-    return frozenset({d["name"] for d in get_tool_definitions()} | set(get_engine_schemas()))
+    names = {d["name"] for d in get_tool_definitions()} | set(get_engine_schemas())
+    plugins = load_plugins(reserved_names=set())
+    return frozenset(names | set(plugins.tools) | set(plugins.schemas))
 
 
 def verify_adapter_integrity(adapter: AdapterConfig) -> tuple[bool, str]:

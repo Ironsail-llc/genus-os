@@ -151,6 +151,23 @@ anything outside `tools_allowed:` (including beside an empty, legacy allow-all
 engine log. A dropped classification would leave you believing a boundary
 exists that nothing enforces.
 
+Two more load-time refusals you may hit, both with the reason in the engine log:
+
+- **A core or plugin tool name in `tools_allowed:` or `read_only:`** refuses the
+  adapter. An adapter classifies only the tools it actually serves; claiming
+  `delete_person` would let an adapter YAML — plain instance config, no code
+  review — reclassify one of core's write tools as read-only. This is a separate
+  check because the subset rule above cannot catch it: `read_only: [delete_person]`
+  ⊆ `tools_allowed: [delete_person]` holds perfectly. It will not bite a real
+  adapter — `rest_mcp_bridge` namespaces every tool it serves with
+  `CONNECTOR_TOOL_PREFIX`, so its names cannot collide with core's or a plugin's
+  by accident, and a collision is therefore a claim. If you hit it, choose a
+  distinct prefix.
+- **`read_only: false`** refuses, rather than reading as "nothing is read-only".
+  Write `read_only: []` or omit the key. Only `null`/absent means absent; every
+  other non-list value is a malformed declaration, and treating a falsy one as
+  "declared nothing" is exactly how a fail-open default gets in.
+
 ```bash
 # add the secrets the adapter's ${...} placeholders resolve from
 sops /etc/robothor/secrets.enc.json      # add EXAMPLE_API_URL, EXAMPLE_API_TOKEN

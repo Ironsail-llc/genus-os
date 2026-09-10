@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -378,21 +379,40 @@ class TestToolClassificationParity:
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """``read_only`` is operator-declared, so it must not be trusted to
-        widen the harness's own withheld set. Withholding is subtracted last."""
+        widen the harness's own withheld set. Withholding is subtracted last.
+
+        BELT 1 IS DISABLED HERE ON PURPOSE. Every name in
+        ``_BENCHMARK_WITHHELD_READS`` is a core-registry name, so belt 1 would
+        refuse this fixture at load and the test would pass without the
+        adapter ever reaching the allow-list — certifying core's own
+        subtraction while its name promised something about operator-declared
+        ``read_only``. Stubbing ``_core_tool_names`` empty puts the greedy
+        adapter into the loaded set, which is what belt 2 has to survive.
+        """
         from robothor.engine import adapters
+        from robothor.engine.benchmark_sandbox import benchmark_allowed_tools
         from robothor.engine.tools.handlers.benchmark import (
             _BENCHMARK_WITHHELD_READS,
             benchmark_readonly_tools,
         )
 
+        monkeypatch.setattr(adapters, "_core_tool_names", lambda: frozenset())
         withheld = sorted(_BENCHMARK_WITHHELD_READS)[0]
         self._adapter(
             tmp_path,
             f"tools_allowed: ['{withheld}']\nread_only: ['{withheld}']\n",
             name="greedy",
         )
-        monkeypatch.setattr(adapters, "_loaded_adapters", adapters.load_adapters(tmp_path))
+        loaded = adapters.load_adapters(tmp_path)
+        assert loaded, "belt 1 must be off for this test to test belt 2"
+        assert withheld in loaded[0].read_only
+
+        monkeypatch.setattr(adapters, "_loaded_adapters", loaded)
         assert withheld not in benchmark_readonly_tools()
+        for sandbox in (False, True):
+            assert withheld not in benchmark_allowed_tools(sandbox=sandbox), (
+                f"an adapter re-opened a withheld tool (sandbox={sandbox})"
+            )
 
     # ── Two belts, each tested with the other off ─────────────────────
     #
@@ -417,6 +437,65 @@ class TestToolClassificationParity:
         claim = self.CORE_NAMES_AN_ADAPTER_MIGHT_CLAIM
         self._adapter(tmp_path, f"tools_allowed: {claim}\nread_only: {claim}\n", name="thief")
         assert adapters.load_adapters(tmp_path) == []
+
+    @pytest.mark.parametrize("declared_via", ["tools", "schemas"])
+    def test_a_plugin_contributed_name_is_refused_too(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch, declared_via: str
+    ) -> None:
+        """BELT 1 covers plugins, not just core.
+
+        A plugin's tools are no more an adapter's to classify than core's are,
+        and a plugin already declares its own ``read_only`` through its own
+        seam. Both keys of the loader result count: a plugin shipping only a
+        handler still gets a synthesized schema and is advertised to the model
+        (``ToolRegistry._register_plugin_schemas``), so checking ``schemas``
+        alone would leave the same hole one layer down.
+        """
+        import robothor.plugins as plugins_mod
+        from robothor.engine import adapters
+
+        fake = SimpleNamespace(tools={}, schemas={}, read_only=set(), failures=[], loaded=[])
+        setattr(fake, declared_via, {"plugin_write_thing": object()})
+        monkeypatch.setattr(plugins_mod, "load_plugins", lambda *_a, **_k: fake)
+
+        self._adapter(
+            tmp_path,
+            "tools_allowed: [plugin_write_thing]\nread_only: [plugin_write_thing]\n",
+            name="thief",
+        )
+        assert adapters.load_adapters(tmp_path) == [], (
+            f"an adapter claimed a plugin tool declared via {declared_via}"
+        )
+
+    def test_an_unreadable_name_source_refuses_the_adapter(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fail-closed. "Could not check" must never degrade to "allowed" —
+        the rule verify_adapter_integrity already follows for an unverifiable
+        pin. A broken plugin package is the realistic way this happens.
+        """
+        from robothor.engine import adapters
+
+        def _boom() -> frozenset[str]:
+            raise RuntimeError("plugin entry point exploded")
+
+        monkeypatch.setattr(adapters, "_core_tool_names", _boom)
+        self._adapter(tmp_path, "tools_allowed: [x_get]\nread_only: [x_get]\n")
+        assert adapters.load_adapters(tmp_path) == []
+
+    def test_an_unreadable_name_source_does_not_refuse_a_declarationless_adapter(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The check is skipped when there is nothing to check, so a legacy
+        allow-all adapter is not collateral damage of a broken plugin."""
+        from robothor.engine import adapters
+
+        def _boom() -> frozenset[str]:
+            raise RuntimeError("plugin entry point exploded")
+
+        monkeypatch.setattr(adapters, "_core_tool_names", _boom)
+        self._adapter(tmp_path, "description: legacy allow-all\n")
+        assert len(adapters.load_adapters(tmp_path)) == 1
 
     def test_core_write_tools_stay_out_even_with_the_load_check_disabled(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
