@@ -104,8 +104,14 @@ Agent manifests and instructions are instance data — they stay in `docs/agents
 ## Upgrade Path
 
 ```bash
-robothor upgrade          # Pull latest platform + run new migrations
-robothor upgrade --dry-run  # Preview what would change
+pip install -U genusos     # Get the new platform code (wheel installs)
+robothor upgrade           # Run new migrations + check templates
+robothor upgrade --pull    # Git checkouts: also 'git pull --ff-only' first
+robothor upgrade --dry-run # Preview what would change
 ```
+
+`robothor upgrade` runs the same canonical migrator as `robothor migrate`:
+the manifest, the `schema_migrations_v2` ledger, checksums, advisory lock.
+`git pull` is opt-in behind `--pull` because a pip install has no checkout.
 
 Upgrades touch platform code only. Your instance's `brain/`, agent configs, and `.env` are untouched. If a template has been updated (e.g., a new field in `templates/SOUL.md`), the upgrade shows a diff and lets you decide whether to adopt it.

@@ -21,11 +21,12 @@ COMPOSE_PATH = REPO_ROOT / "infra" / "docker-compose.yml"
 def test_no_infra_service_mounts_migrations_into_initdb():
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
 
-    offenders = []
-    for name, service in compose.get("services", {}).items():
-        for volume in service.get("volumes", []) or []:
-            if isinstance(volume, str) and "docker-entrypoint-initdb.d" in volume:
-                offenders.append((name, volume))
+    offenders = [
+        (name, volume)
+        for name, service in compose.get("services", {}).items()
+        for volume in service.get("volumes", []) or []
+        if isinstance(volume, str) and "docker-entrypoint-initdb.d" in volume
+    ]
 
     assert not offenders, (
         "migrations are mounted into docker-entrypoint-initdb.d, which applies "

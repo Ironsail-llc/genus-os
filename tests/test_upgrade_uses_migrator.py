@@ -89,6 +89,23 @@ def test_upgrade_never_reads_a_sql_file_itself(
     assert [path for path in read_paths if path.endswith(".sql")] == []
 
 
+def test_dry_run_preview_survives_an_unreachable_database(workspace: Path, capsys: Any) -> None:
+    """`upgrade --dry-run` reads no schema and changes nothing.
+
+    Before the collapse onto one migrator it never opened a connection at all,
+    so a preview worked with PostgreSQL down. It must stay a preview: report
+    the unreachable database, don't fail the run.
+    """
+    with (
+        patch("robothor.db.migrate.status", side_effect=OSError("connection refused")),
+        patch("robothor.cli.upgrade._snapshot_template_hashes", return_value={}),
+    ):
+        rc = upgrade.cmd_upgrade(_args(dry_run=True))
+
+    assert rc == 0
+    assert "connection refused" in capsys.readouterr().out
+
+
 def test_upgrade_does_not_run_git_without_the_pull_flag(workspace: Path, capsys: Any) -> None:
     (workspace / ".git").mkdir()
 

@@ -75,8 +75,11 @@ def _run_migrations(dry_run: bool) -> int:
     """Bring the schema current through the canonical migrator.
 
     Mirrors the error handling of ``robothor migrate`` (``cli/admin.py``) so
-    both entry points fail the same way.
+    both entry points fail the same way — except under ``--dry-run``, which is
+    a preview and must not turn an unreachable database into a failed upgrade.
     """
+
+    failure_code = 0 if dry_run else 1
 
     try:
         import psycopg2
@@ -110,14 +113,14 @@ def _run_migrations(dry_run: bool) -> int:
 
     except ImportError:
         print("  Error: psycopg2 is required. Install with: pip install genusos")
-        return 1
+        return failure_code
     except MigrationError as e:
         print(f"  Error: Migration safety check failed: {e}")
-        return 1
+        return failure_code
     except Exception as e:
         print(f"  Error: Migration failed: {e}")
         print("  Check ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.")
-        return 1
+        return failure_code
 
 
 # Template source name → instance destination (relative to brain/)

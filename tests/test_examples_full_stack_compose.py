@@ -63,11 +63,12 @@ def test_no_service_seeds_the_schema_through_docker_entrypoint_initdb():
     it must replay 001_init.sql over live data.
     """
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
-    mounts = []
-    for name, service in compose.get("services", {}).items():
-        for volume in service.get("volumes", []) or []:
-            if isinstance(volume, str) and "docker-entrypoint-initdb.d" in volume:
-                mounts.append((name, volume))
+    mounts = [
+        (name, volume)
+        for name, service in compose.get("services", {}).items()
+        for volume in service.get("volumes", []) or []
+        if isinstance(volume, str) and "docker-entrypoint-initdb.d" in volume
+    ]
     assert not mounts, f"initdb schema snapshot is still mounted: {mounts}"
 
     assert not (COMPOSE_PATH.parent / "init-db.sql").exists(), (
