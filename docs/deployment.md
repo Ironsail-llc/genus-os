@@ -70,7 +70,7 @@ sudo mkdir -p /opt/robothor /var/log/robothor
 sudo chown robothor:robothor /opt/robothor /var/log/robothor
 
 # Install the package
-sudo -u robothor pip install robothor[all]
+sudo -u robothor pip install "genusos[all]"
 
 # Enable and start
 sudo systemctl daemon-reload

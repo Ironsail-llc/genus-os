@@ -113,7 +113,10 @@ auth row): `tenant_users` + optional `user_accounts` invite + `crm_people`
 row + `contact_identifiers` for every provided channel handle, so the
 relationship graph and data scoping work for a new user from day one.
 
-```
+Usage synopsis, not copy-paste shell: `[…]` marks an optional argument and
+`(a | b)` a required choice between two.
+
+```text
 robothor user list [--tenant TENANT]
 
 robothor user add --name NAME --role ROLE
