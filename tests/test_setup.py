@@ -268,6 +268,37 @@ class TestRunMigration:
         ):
             assert run_migration(DatabaseConfig()) == -1
 
+    def test_run_init_adds_no_connection_advice_to_a_safety_refusal(self, tmp_path, capsys):
+        """The distinct return code has to actually change what the wizard prints.
+
+        Otherwise the operator reads "check connection settings / Host / Database
+        / User" under a message that already told them to run --adopt-through,
+        and goes looking for a network fault that does not exist.
+        """
+        from robothor.setup import MIGRATION_SAFETY_FAILURE
+
+        args = SimpleNamespace(
+            yes=True,
+            docker=False,
+            skip_models=True,
+            skip_db=False,
+            workspace=str(tmp_path / "workspace"),
+        )
+        with (
+            patch("robothor.setup.check_prerequisites", return_value=[]),
+            patch(
+                "robothor.setup.run_migration", return_value=MIGRATION_SAFETY_FAILURE
+            ) as mock_run,
+        ):
+            rc = run_init(args)
+
+        assert rc == 1
+        mock_run.assert_called_once()
+        out = capsys.readouterr().out
+        assert "Check connection settings" not in out
+        assert "Host:" not in out
+        assert "refused" in out
+
 
 class TestPullModels:
     def test_connection_error_handled(self, capsys, monkeypatch):

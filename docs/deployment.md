@@ -154,16 +154,29 @@ refuses a second time: adopting only `001_init` and then running everything afte
 it would be the same replay. Say how far the schema actually got instead:
 
 ```bash
-robothor migrate --status                        # find the last migration you hold
+robothor migrate --status  # spell the id exactly; do not trust the applied/pending
+                           # split here — reconciled rows are hearsay
 robothor migrate --adopt-through 040_memory_episodes
 ```
 
 `--adopt-through <migration_id>` adopts every migration up to and including that
 id without executing any of them, then applies the rest normally. It implies
-`--adopt-baseline`, so it can be used on its own. Pick the id by checking which
-tables and columns the database already has — erring *later* than the truth skips
-migrations that never ran, so when unsure, name the earliest id you are certain of
-and let the rest apply.
+`--adopt-baseline`, so it can be used on its own.
+
+**Pick the id from the schema, not from the status output.** On a database in
+this state the ledger's "applied" rows were copied from the legacy
+`schema_migrations` table, which `018_migration_tracking.sql` backfills as far
+as 018 regardless of what actually ran — so `--status` will happily suggest an
+id that is nowhere near where the schema really is. Check which tables and
+columns exist instead.
+
+Adoption is effectively irreversible: undoing it means hand-editing
+`schema_migrations_v2`. And a migration skipped by too late an id is recorded as
+applied with a valid checksum, so it will never be reported as missing or as
+drift — it becomes a permanent, silent gap in the schema. Err early: name the
+last id you are *certain* of and let the remaining migrations apply, since
+re-applying a migration whose objects already exist is the case those files are
+written to tolerate.
 
 ### Redis
 

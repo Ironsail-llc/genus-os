@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -736,6 +737,85 @@ def test_adopt_through_rejects_a_migration_id_that_is_not_in_the_manifest(
         migrate.apply(migrations_dir=tmp_path, connection=connection, adopt_through="099_nope")
 
     assert connection.executed_sql == []
+
+
+def _verified_ledger_connection(tmp_path: Path) -> _FakeConnection:
+    """A database already under the ledger, so the adoption guard is inert."""
+    _write_chain(tmp_path, 2)
+    first = tmp_path / "001_init.sql"
+    return _FakeConnection(
+        history={
+            "001_init": _ledger_row(
+                "001_init", "001", first.name, tmp_path.name, migrate._sha256(first)
+            )
+        },
+        schema_present=True,
+    )
+
+
+def test_an_unneeded_adoption_flag_says_so_instead_of_passing_silently(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A flag that did nothing must not look like a flag that worked.
+
+    Silence here is how a typo'd `--adopt-through` reads as success on a
+    database that never needed adopting.
+    """
+    connection = _verified_ledger_connection(tmp_path)
+
+    applied = migrate.apply(migrations_dir=tmp_path, connection=connection, adopt_baseline=True)
+
+    assert applied == ["002_step"]
+    assert "ignored" in capsys.readouterr().out
+
+
+def test_adopt_through_is_validated_even_when_the_guard_is_inert(tmp_path: Path) -> None:
+    """A misspelled id must never be silently ignored just because it was moot."""
+    connection = _verified_ledger_connection(tmp_path)
+
+    with pytest.raises(migrate.MigrationSelectionError, match="099_nope"):
+        migrate.apply(migrations_dir=tmp_path, connection=connection, adopt_through="099_nope")
+
+    assert connection.executed_sql == []
+
+
+def test_module_cli_parses_adopt_through_in_both_spellings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--adopt-through ID` and `--adopt-through=ID` must reach `apply` alike.
+
+    The hand-rolled argv loop is the only parser here — argparse is not
+    involved — so the space-separated form consuming its value, and a selector
+    surviving alongside the flag, are both worth pinning.
+    """
+    captured: list[dict[str, Any]] = []
+
+    def fake_apply(**kwargs: Any) -> list[str]:
+        captured.append(kwargs)
+        return []
+
+    monkeypatch.setattr(migrate, "apply", fake_apply)
+
+    for argv in (
+        ["migrate", "apply", "--adopt-through", "040_memory_episodes"],
+        ["migrate", "apply", "--adopt-through=040_memory_episodes"],
+        ["migrate", "apply", "071_user_accounts", "--adopt-through", "040_memory_episodes"],
+    ):
+        monkeypatch.setattr(sys, "argv", argv)
+        migrate.main()
+
+    assert [call["adopt_through"] for call in captured] == ["040_memory_episodes"] * 3
+    # The flag's value is never mistaken for the migration selector.
+    assert [call["version"] for call in captured] == [None, None, "071_user_accounts"]
+
+
+def test_module_cli_rejects_adopt_through_without_a_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["migrate", "apply", "--adopt-through"])
+
+    with pytest.raises(SystemExit):
+        migrate.main()
 
 
 def test_an_adopted_ledger_is_not_refused_on_the_next_run(tmp_path: Path) -> None:

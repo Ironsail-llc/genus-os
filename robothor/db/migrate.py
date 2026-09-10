@@ -315,11 +315,30 @@ def _legacy_yaml_filenames() -> set[str]:
     }
 
 
+def _resolve_adopt_through(migrations: list[Migration], adopt_through: str | None) -> set[str]:
+    """Ids up to and including ``adopt_through``, validating the id itself.
+
+    Called before any adoption decision so a misspelled id refuses even when
+    the guard turns out to be inert — an ignored typo is how an operator comes
+    to believe they adopted a range they did not.
+    """
+
+    if adopt_through is None:
+        return set()
+    by_id = {migration.migration_id: index for index, migration in enumerate(migrations)}
+    if adopt_through not in by_id:
+        raise MigrationSelectionError(
+            f"Unknown migration id for --adopt-through: {adopt_through!r}. "
+            "Use the full immutable id exactly as `robothor migrate --status` prints it."
+        )
+    return {migration.migration_id for migration in migrations[: by_id[adopt_through] + 1]}
+
+
 def _adopt_without_executing(
     conn: Any,
     migrations: list[Migration],
     applied: dict[str, AppliedMigration],
-    adopt_through: str | None = None,
+    through_ids: set[str],
 ) -> list[tuple[str, str]]:
     """Record history the operator vouches for, running none of its SQL.
 
@@ -340,19 +359,7 @@ def _adopt_without_executing(
     baseline_id = migrations[0].migration_id
     yaml_filenames = _legacy_yaml_filenames()
 
-    through_ids: set[str] = set()
-    if adopt_through is not None:
-        by_id = {migration.migration_id: index for index, migration in enumerate(migrations)}
-        if adopt_through not in by_id:
-            raise MigrationSelectionError(
-                f"Unknown migration id for --adopt-through: {adopt_through!r}. "
-                "Use the full immutable id exactly as `robothor migrate --status` prints it."
-            )
-        through_ids = {
-            migration.migration_id for migration in migrations[: by_id[adopt_through] + 1]
-        }
-
-    if adopt_through is None and not yaml_filenames:
+    if not through_ids and not yaml_filenames:
         hearsay_beyond_baseline = sorted(
             record.migration_id
             for record in applied.values()
@@ -772,6 +779,9 @@ def apply(
 
     migrations = _discover(migrations_dir)
     selected = _select_migrations(migrations, version)
+    # Validate before touching the database: an unknown id is a mistake whether
+    # or not the adoption path ends up being reached.
+    through_ids = _resolve_adopt_through(migrations, adopt_through)
 
     if dry_run:
         for migration in selected:
@@ -790,11 +800,12 @@ def apply(
 
         # Only a replay can hurt, so the guard is skipped when nothing is
         # pending — an unverified but complete ledger has nothing to re-run.
+        adoption_requested = adopt_baseline or adopt_through is not None
         if to_apply and _ledger_is_unverified(applied) and _baseline_schema_present(conn):
-            if not adopt_baseline and adopt_through is None:
+            if not adoption_requested:
                 raise MigrationHistoryError(BASELINE_UNADOPTED_MESSAGE)
             for migration_id, adoption_source in _adopt_without_executing(
-                conn, migrations, applied, adopt_through
+                conn, migrations, applied, through_ids
             ):
                 print(f"Adopted {migration_id} into the ledger from {adoption_source}.")
             applied = _applied(conn)
@@ -802,6 +813,16 @@ def apply(
             to_apply = [
                 migration for migration in selected if migration.migration_id not in applied
             ]
+        elif adoption_requested:
+            # Say so rather than no-op quietly: a flag that did nothing must not
+            # be indistinguishable from a flag that worked.
+            flags = ["--adopt-baseline"] if adopt_baseline else []
+            if adopt_through is not None:
+                flags.append(f"--adopt-through {adopt_through}")
+            print(
+                f"{' and '.join(flags)} ignored: this database needs no adoption "
+                "(its ledger already has history this runner wrote or you adopted)."
+            )
 
         if not to_apply:
             print("Nothing to apply.")
