@@ -71,15 +71,21 @@ def _pull_latest(dry_run: bool) -> bool:
     return True
 
 
-def _run_migrations(dry_run: bool) -> int:
+def _run_migrations(dry_run: bool) -> tuple[int, set[str] | None]:
     """Bring the schema current through the canonical migrator.
 
-    Mirrors the error handling of ``robothor migrate`` (``cli/admin.py``) so
-    both entry points fail the same way — except under ``--dry-run``, which is
-    a preview and must not turn an unreachable database into a failed upgrade.
-    """
+    Returns ``(exit_code, applied_filenames)``.  ``applied_filenames`` is the
+    set of migration filenames the v2 ledger now records as applied, or
+    ``None`` when this run learned nothing about the ledger (a dry run, or a
+    failure) — the caller must not conclude anything about coverage from it.
 
-    failure_code = 0 if dry_run else 1
+    Mirrors the error handling of ``robothor migrate`` (``cli/admin.py``) so
+    both entry points fail the same way, with one exception: a ``--dry-run``
+    preview must not turn an unreachable database into a failed upgrade.  That
+    exemption is for connection-class failures only.  A ``MigrationError`` is a
+    real finding about the schema, so the preview reports it as blocked and the
+    command still fails.
+    """
 
     try:
         import psycopg2
@@ -89,38 +95,58 @@ def _run_migrations(dry_run: bool) -> int:
 
         if dry_run:
             rows = status()
-            pending = [row for row in rows if row["status"] != "applied"]
-            print(f"  {len(pending)} of {len(rows)} canonical migration(s) not applied.")
-            for row in pending:
-                print(f"    - {row['migration_id']}: {row['status']}")
-                message = row.get("message")
-                if message:
-                    print(f"      {message}")
-            return 0
+            _print_pending(rows)
+            return 0, None
 
         cfg = get_config().db
         print(f"  Connecting to {cfg.host}:{cfg.port}/{cfg.name}...")
         conn = psycopg2.connect(**cfg.dict, connect_timeout=5)
         try:
             rows = status(connection=conn)
-            pending = [row for row in rows if row["status"] != "applied"]
-            print(f"  {len(pending)} of {len(rows)} canonical migration(s) not applied.")
+            _print_pending(rows)
             applied = apply(connection=conn)
             print(f"  Migration completed successfully ({len(applied)} applied).")
-            return 0
+            # Coverage = what the ledger already held plus what this run just
+            # applied. Derived from the one status() call rather than a second
+            # one, which would take the advisory lock again.
+            filename_by_id = {
+                str(row["migration_id"]): str(row["filename"]) for row in rows
+            }
+            covered = {str(row["filename"]) for row in rows if row["status"] == "applied"}
+            covered.update(
+                filename_by_id[migration_id]
+                for migration_id in applied
+                if migration_id in filename_by_id
+            )
+            return 0, covered
         finally:
             conn.close()
 
     except ImportError:
         print("  Error: psycopg2 is required. Install with: pip install genusos")
-        return failure_code
+        # A missing driver is a connection-class failure: a preview can still
+        # be a preview without one.
+        return (0 if dry_run else 1), None
     except MigrationError as e:
-        print(f"  Error: Migration safety check failed: {e}")
-        return failure_code
+        if dry_run:
+            print(f"  PREVIEW BLOCKED: {e}")
+        else:
+            print(f"  Error: Migration safety check failed: {e}")
+        return 1, None
     except Exception as e:
         print(f"  Error: Migration failed: {e}")
         print("  Check ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.")
-        return failure_code
+        return (0 if dry_run else 1), None
+
+
+def _print_pending(rows: list[dict[str, Any]]) -> None:
+    pending = [row for row in rows if row["status"] != "applied"]
+    print(f"  {len(pending)} of {len(rows)} canonical migration(s) not applied.")
+    for row in pending:
+        print(f"    - {row['migration_id']}: {row['status']}")
+        message = row.get("message")
+        if message:
+            print(f"      {message}")
 
 
 # Template source name → instance destination (relative to brain/)
@@ -146,16 +172,45 @@ def _load_state() -> dict[str, Any]:
 
 
 def _save_state(data: dict[str, Any]) -> None:
-    """Write full upgrade state, dropping the retired ``migrations`` ledger.
-
-    The YAML side-ledger was a second source of truth for applied migrations.
-    ``schema_migrations_v2`` is the only one now, so any surviving key is
-    stripped on the next write rather than left to mislead a future reader.
-    """
-    data.pop("migrations", None)
+    """Write full upgrade state."""
     state = _state_file()
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text(yaml.dump(data, default_flow_style=False))
+
+
+def _retire_legacy_ledger_if_covered(
+    state: dict[str, Any], applied_filenames: set[str] | None
+) -> None:
+    """Drop the retired ``migrations:`` list only once v2 covers every entry.
+
+    That list is the sole record of what the old glob path applied, and
+    ``robothor migrate --adopt-baseline`` reads it to decide which migrations
+    to adopt instead of replaying over live data.  Deleting it early destroys
+    the evidence; keeping it after ``schema_migrations_v2`` records the same
+    files costs nothing but a few lines of YAML.
+    """
+
+    entries = state.get("migrations")
+    if entries is None:
+        return
+    named = {
+        str(entry["file"]) for entry in entries if isinstance(entry, dict) and entry.get("file")
+    }
+    if not named:
+        state.pop("migrations", None)
+        return
+    if applied_filenames is None:
+        print("  Legacy migration ledger kept (this run did not read schema_migrations_v2).")
+        return
+    uncovered = sorted(named - applied_filenames)
+    if uncovered:
+        print(
+            f"  Legacy migration ledger kept: {len(uncovered)} entr(ies) not yet in "
+            f"schema_migrations_v2 (first: {uncovered[0]})."
+        )
+        return
+    state.pop("migrations", None)
+    print("  Legacy migration ledger retired — schema_migrations_v2 covers every entry.")
 
 
 def _snapshot_template_hashes() -> dict[str, str]:
@@ -215,10 +270,12 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     print()
 
     # 2. Migrations — canonical migrator only
+    applied_filenames: set[str] | None = None
     if not skip_migrations:
         print("Checking migrations...")
-        if _run_migrations(dry_run) != 0:
-            return 1
+        migration_code, applied_filenames = _run_migrations(dry_run)
+        if migration_code != 0:
+            return migration_code
     else:
         print("Skipping migrations (--skip-migrations)")
     print()
@@ -239,6 +296,7 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     if not dry_run:
         state_data = _load_state()
         state_data["template_hashes"] = _snapshot_template_hashes()
+        _retire_legacy_ledger_if_covered(state_data, applied_filenames)
         _save_state(state_data)
 
     # 5. Summary
