@@ -66,6 +66,17 @@ The Helm deployment has a different boundary from the systemd appliance:
   verified email alone does not auto-link or grant a privileged role.
 - Bridge private routes verify signed issuer/audience/expiry/tenant/role/scope
   claims and apply route-specific scope and tenant checks.
+- Vault secret **values** are write-only from every human surface. `GET
+  /api/vault/get` serves a verified service token only — an owner/admin browser
+  session is refused and audited, and the dashboard's bridge proxy
+  (`app/src/app/api/bridge/[...path]`) will not forward the path at all. Humans
+  set and rotate secrets with `robothor vault` on the appliance.
+  `/api/vault/list` stays open to operators because it returns key names only.
+- Bridge mutations under `/api/` either call `require_operator(request)` or are
+  scope-gated by the middleware; `crm/bridge/tests/test_mutations_are_gated.py`
+  enumerates the assembled app and fails on any route that is neither, so a new
+  ungated mutation cannot ship unnoticed. Appliance-global acts (marketplace
+  agent install/update/remove) are operator-gated and write an audit row.
 - Engine non-probe HTTP routes and the IDE WebSocket independently verify
   signed, tenant-bound Engine scopes. Channel webhooks use their own
   route-specific HMAC. Empty roles do not imply privileged execution.
