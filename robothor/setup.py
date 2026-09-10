@@ -681,11 +681,17 @@ def _print_next_steps(install_mode: str) -> None:
 
 
 def run_migration(db_config: DatabaseConfig) -> int:
-    """Run the canonical migration chain. Return table count or ``-1``."""
+    """Run the canonical migration chain. Return table count or ``-1``.
+
+    A ``MigrationError`` is a deliberate refusal that names its own remedy (for
+    example ``--adopt-baseline``). Flattening it into ``-1`` sends the operator
+    to the caller's "check your connection settings" advice for a problem that
+    has nothing to do with the connection, so the message is printed here.
+    """
     try:
         import psycopg2
 
-        from robothor.db.migrate import apply
+        from robothor.db.migrate import MigrationError, apply
 
         conn = psycopg2.connect(**db_config.dict, connect_timeout=5)
         try:
@@ -697,6 +703,10 @@ def run_migration(db_config: DatabaseConfig) -> int:
                 row = cur.fetchone()
                 count: int = row[0] if row else 0
             return count
+        except MigrationError as e:
+            print()
+            print(f"  Migration safety check failed: {e}")
+            return -1
         finally:
             conn.close()
     except Exception:

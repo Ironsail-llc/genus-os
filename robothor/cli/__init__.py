@@ -185,8 +185,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--adopt-baseline",
         action="store_true",
         help=(
-            "Record the baseline migration as applied without executing it "
-            "(for databases created by the retired initdb snapshot)"
+            "Adopt history this runner never wrote: record the baseline, plus every "
+            "migration the legacy .robothor/migrations_applied.yaml names, as applied "
+            "without executing them. For databases created by the retired initdb "
+            "snapshot or the retired 'robothor upgrade' glob."
         ),
     )
 

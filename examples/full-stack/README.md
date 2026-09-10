@@ -63,9 +63,9 @@ docker compose run --rm migrate
 docker compose run --rm migrate python -m robothor.cli migrate --status
 ```
 
-Upgrading a database that was created by an older version of this example (its
-schema exists but the ledger is empty) needs a one-time adoption of the
-baseline, which records it as applied without re-executing it:
+Upgrading a database created by an older version of this example (its schema
+exists but nothing in the ledger was written by the migrator) needs a one-time
+adoption, which records that history as applied without re-executing it:
 
 ```bash
 docker compose run --rm migrate python -m robothor.cli migrate --adopt-baseline

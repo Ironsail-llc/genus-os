@@ -121,9 +121,11 @@ echo
 
 MISSING=0
 
+# psql is no longer on the database path — `robothor migrate` talks to
+# PostgreSQL through psycopg2 — but it stays useful for hand inspection.
 if ! check_tool psql; then
-    err "psql is required for database setup. Install: apt install postgresql-client"
-    MISSING=1
+    warn "psql not found. Install: apt install postgresql-client"
+    warn "Not required: migrations run via 'robothor migrate'."
 fi
 
 if ! check_tool redis-cli; then
@@ -286,6 +288,15 @@ if [[ "$SKIP_DB" == false ]]; then
         err "No Python interpreter found; cannot run 'robothor migrate'"
         exit 1
     fi
+
+    # Fail here with a useful message rather than at `-m robothor.cli` with a
+    # ModuleNotFoundError traceback.
+    if ! "$PYTHON" -c "import robothor" &>/dev/null; then
+        err "The 'genusos' package is not importable by $PYTHON"
+        err "Install it first:  $PYTHON -m pip install -e ."
+        exit 1
+    fi
+    ok "Using $PYTHON"
 
     export ROBOTHOR_DB_HOST="$DB_HOST"
     export ROBOTHOR_DB_PORT="$DB_PORT"

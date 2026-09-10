@@ -67,7 +67,10 @@ BASELINE_EVIDENCE_TABLE = "memory_facts"
 
 BASELINE_UNADOPTED_STATUS = "baseline-unadopted"
 BASELINE_UNADOPTED_MESSAGE = (
-    "ledger empty but schema present — run `robothor migrate --adopt-baseline`"
+    "ledger empty but schema present — run `robothor migrate --adopt-baseline`. "
+    "(Also reported when the ledger holds only rows reconciled from the legacy "
+    "schema_migrations table: nothing in it was written by this runner, so the "
+    "pending migrations may already have run against this database.)"
 )
 
 # Where the retired ``robothor upgrade`` glob recorded what it applied.  It is

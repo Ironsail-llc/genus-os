@@ -232,6 +232,30 @@ class TestRunMigration:
         assert count == -1
         mock_conn.close.assert_called_once()
 
+    def test_migration_safety_finding_is_surfaced_not_flattened(self, capsys):
+        """A safety refusal must not read as "check your connection settings".
+
+        The caller prints host/port/user advice for a -1, which sends the
+        operator hunting a network problem when the migrator actually refused
+        on purpose and named the remedy.
+        """
+        from robothor.db.migrate import BASELINE_UNADOPTED_MESSAGE, MigrationHistoryError
+
+        mock_conn = MagicMock()
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch(
+                "robothor.db.migrate.apply",
+                side_effect=MigrationHistoryError(BASELINE_UNADOPTED_MESSAGE),
+            ),
+        ):
+            count = run_migration(DatabaseConfig())
+
+        assert count == -1
+        out = capsys.readouterr().out
+        assert "ledger empty but schema present" in out
+        assert "--adopt-baseline" in out
+
 
 class TestPullModels:
     def test_connection_error_handled(self, capsys, monkeypatch):

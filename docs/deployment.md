@@ -13,15 +13,23 @@ cd genus-os
 cp infra/robothor.env.example .env
 # Edit .env -- set at minimum: ROBOTHOR_DB_PASSWORD
 
+# Install the CLI (this is what runs the migrations)
+pip install -e .
+
 # Start infrastructure
 docker compose -f infra/docker-compose.yml up -d
 
-# Create the schema
-robothor migrate
+# Wait for PostgreSQL to pass its healthcheck before migrating
+until [ "$(docker inspect -f '{{.State.Health.Status}}' robothor-postgres)" = healthy ]; do
+  sleep 2
+done
 
-# Verify
-docker compose -f infra/docker-compose.yml ps
+# Create the schema, then confirm it
+robothor migrate
 robothor migrate --status
+
+# Verify the containers
+docker compose -f infra/docker-compose.yml ps
 ```
 
 The Compose file includes health checks for all services. It does **not** seed
@@ -122,14 +130,24 @@ sudo -u postgres psql -d robothor_memory -c "GRANT ALL ON ALL SEQUENCES IN SCHEM
 `robothor migrate` reads `ROBOTHOR_DB_HOST`, `ROBOTHOR_DB_PORT`,
 `ROBOTHOR_DB_NAME`, `ROBOTHOR_DB_USER` and `ROBOTHOR_DB_PASSWORD`.
 
-If you are upgrading a database whose schema was created before the ledger
-existed (or by an SQL file mounted into `docker-entrypoint-initdb.d`), the
-migrator refuses to replay the baseline over your data. Adopt it once — this
-records the baseline as applied without executing it — then migrate normally:
+If you are upgrading a database whose schema this migrator did not create — one
+seeded by an SQL file mounted into `docker-entrypoint-initdb.d`, or migrated by
+the retired `robothor upgrade` glob — it refuses to run rather than replay
+migrations over your data. Replaying is not harmless: `019_unified_session.sql`
+deletes chat sessions, `035_drop_legacy_buddy_columns.sql` aborts mid-chain.
+
+Adopt the history once. This records the baseline, plus every migration named in
+the legacy `.robothor/migrations_applied.yaml` side-ledger, as applied *without
+executing them*, then applies whatever genuinely remains:
 
 ```bash
 robothor migrate --adopt-baseline
 ```
+
+Keep `.robothor/migrations_applied.yaml` until this has run — its `migrations:`
+list is the only record of what the old path applied. `robothor upgrade` retires
+that list on its own, once `schema_migrations_v2` covers every entry it names.
+`robothor migrate --status` shows the provenance of each row.
 
 ### Redis
 
