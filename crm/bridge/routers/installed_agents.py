@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 from deps import get_tenant_id
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from robothor.engine.sanitize import sanitize_log
@@ -21,6 +21,8 @@ from robothor.templates.safety import (
     trusted_directory,
     validate_identifier,
 )
+from routers._audit import audited
+from routers._operator import require_operator
 
 logger = logging.getLogger(__name__)
 
@@ -142,8 +144,15 @@ def list_installed_agents() -> dict[str, object]:
 
 
 @router.post("/install")
-def install_agent(req: InstallRequest) -> dict[str, object]:
-    """Install an agent from the Programmatic Resources hub."""
+def install_agent(req: InstallRequest, request: Request) -> dict[str, object]:
+    """Install an agent from the Programmatic Resources hub.
+
+    Operator-only and audited: this writes an agent manifest and runs the
+    template installer against the appliance, which is not a member act.
+    ``req.variables`` routinely carries credentials, so only the slug is
+    recorded — never the variables.
+    """
+    require_operator(request)
     try:
         from robothor.templates.hub_client import HubClient, trusted_bundle_sha256
         from robothor.templates.installer import install
@@ -163,21 +172,25 @@ def install_agent(req: InstallRequest) -> dict[str, object]:
             source_ref=req.slug,
             source_sha256=expected_sha256,
         )
+        agent_id = str(result.get("agent_id", req.slug))
+        audited(request, "helm.agent.install", action=req.slug, agent_id=agent_id)
         return {
             "status": "installed",
-            "agent_id": result.get("agent_id", req.slug),
+            "agent_id": agent_id,
             "files_created": result.get("files_created", []),
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.error("Install failed for %s: %s", sanitize_log(req.slug), sanitize_log(e))
+        audited(request, "helm.agent.install", action=req.slug, status="error")
         raise HTTPException(status_code=500, detail="internal error") from e
 
 
 @router.post("/{agent_id}/update")
-def update_agent(agent_id: str) -> dict[str, object]:
-    """Update an installed agent to the latest version."""
+def update_agent(agent_id: str, request: Request) -> dict[str, object]:
+    """Update an installed agent to the latest version. Operator-only, audited."""
+    require_operator(request)
     try:
         from robothor.templates.hub_client import HubClient, trusted_bundle_sha256
         from robothor.templates.installer import update
@@ -199,28 +212,34 @@ def update_agent(agent_id: str) -> dict[str, object]:
         )
         if result is None:
             raise HTTPException(status_code=404, detail=f"Agent not installed: {agent_id}")
+        new_version = str(result.get("version", ""))
+        audited(request, "helm.agent.update", action=agent_id, new_version=new_version)
         return {
             "status": "updated",
             "agent_id": agent_id,
-            "new_version": result.get("version", ""),
+            "new_version": new_version,
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.error("Update failed for %s: %s", sanitize_log(agent_id), sanitize_log(e))
+        audited(request, "helm.agent.update", action=agent_id, status="error")
         raise HTTPException(status_code=500, detail="internal error") from e
 
 
 @router.delete("/{agent_id}")
-def remove_agent(agent_id: str) -> dict[str, object]:
-    """Remove an installed agent."""
+def remove_agent(agent_id: str, request: Request) -> dict[str, object]:
+    """Remove an installed agent. Operator-only, audited."""
+    require_operator(request)
     try:
         from robothor.templates.installer import remove
 
         remove(agent_id)
+        audited(request, "helm.agent.remove", action=agent_id)
         return {"status": "removed", "agent_id": agent_id}
     except Exception as e:
         logger.error("Remove failed for %s: %s", sanitize_log(agent_id), sanitize_log(e))
+        audited(request, "helm.agent.remove", action=agent_id, status="error")
         raise HTTPException(status_code=500, detail="internal error") from e
 
 
