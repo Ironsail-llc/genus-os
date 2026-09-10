@@ -12,9 +12,12 @@ Two shapes are resolved against `git ls-files`:
   * relative markdown links -- `[Deployment](deployment.md)`
   * backticked repo paths  -- `` `robothor/engine/` ``
 
-A `brain/` reference is legitimate only when the line says so: an instance
-path is not a shipped file, and a reader must be told which is which. The
-rule is mechanical -- the surrounding line has to contain "instance".
+A reference into one of the gitignored instance trees of CLAUDE.md rule #11
+(`brain/`, `docs/agents/`, `docs/CRON_MAP.md`, …) is legitimate only when the
+line says so: an instance path is not a shipped file, and a reader must be
+told which is which. The rule is mechanical -- the surrounding line has to
+contain "instance". A tracked path always wins over the prefix, so
+`docs/agents/schema.yaml` resolves normally.
 
 Exit code 0 = every documented path resolves, 1 = at least one does not.
 """
@@ -250,8 +253,8 @@ def main(argv: list[str] | None = None) -> int:
         for finding in findings:
             print(f"  {finding}")
         print(
-            f"\n{len(findings)} issue(s). Point at a tracked file, or label the line "
-            f"as instance-local if the path really does live in `brain/`."
+            f"\n{len(findings)} issue(s). Point at a tracked file, or -- if the path really is "
+            f"instance data -- say so on the line."
         )
         return 1
 
