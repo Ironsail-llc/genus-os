@@ -469,7 +469,9 @@ def _build_parser() -> argparse.ArgumentParser:
     catalog_parser.add_argument("--department", "-d", default=None, help="Filter by department")
 
     install_parser = agent_sub.add_parser("install", help="Install agent from template")
-    install_parser.add_argument("source", help="Template path or agent ID")
+    install_parser.add_argument(
+        "source", nargs="?", default=None, help="Template path or agent ID (omit with --preset)"
+    )
     install_parser.add_argument("--preset", default=None, help="Install a preset group")
     install_parser.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
     install_parser.add_argument(

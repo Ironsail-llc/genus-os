@@ -87,7 +87,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
             conn.close()
 
     except ImportError:
-        print("Error: psycopg2 is required. Install with: pip install robothor")
+        print("Error: psycopg2 is required. Install with: pip install genusos")
         return 1
     except MigrationError as e:
         print(f"Error: Migration safety check failed: {e}")
@@ -150,7 +150,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     try:
         import uvicorn
     except ImportError:
-        print("Error: uvicorn is required. Install with: pip install robothor[api]")
+        print("Error: uvicorn is required. Install with: pip install genusos[api]")
         return 1
 
     print(f"Starting Genus OS RAG Orchestrator on {args.host}:{args.port}...")
@@ -555,7 +555,7 @@ def cmd_tui(args: argparse.Namespace) -> int:
 
         if not check_textual():
             print("Error: Textual is required for the TUI.")
-            print("Install with: pip install robothor[tui]")
+            print("Install with: pip install genusos[tui]")
             return 1
 
         from robothor.tui.app import RobothorApp
@@ -574,7 +574,7 @@ def cmd_tui(args: argparse.Namespace) -> int:
 
     except ImportError:
         print("Error: Textual is required for the TUI.")
-        print("Install with: pip install robothor[tui]")
+        print("Install with: pip install genusos[tui]")
         return 1
 
 

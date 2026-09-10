@@ -668,11 +668,11 @@ def _print_next_steps(install_mode: str) -> None:
     else:
         steps.append(
             "robothor serve            # start the RAG orchestrator "
-            "(needs: pip install robothor[api])"
+            "(needs: pip install genusos[api])"
         )
         steps.append("robothor engine start     # start the agent engine (in-process)")
         steps.append(
-            "robothor status / robothor tui   # check status (tui needs: pip install robothor[tui])"
+            "robothor status / robothor tui   # check status (tui needs: pip install genusos[tui])"
         )
     for i, step in enumerate(steps, start=1):
         print(f"    {i}. {step}")
