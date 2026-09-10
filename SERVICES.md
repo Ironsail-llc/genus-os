@@ -30,11 +30,12 @@ Logs: `journalctl -u <unit> -f`
 
 ## Instance-only services (not shipped with the platform)
 
-These units run on this deployment but **no unit template ships in
-`infra/systemd/`**, and the code they start lives in the instance's `brain/`
-workspace rather than in the platform tree. A clean checkout has neither the
-unit nor the program. They are listed so the information is not lost, not as
-something a new instance can enable.
+These units run on this deployment, but **no unit template ships in
+`infra/systemd/`** for any of them, so a clean checkout cannot enable one.
+Where the program itself lives varies: some is instance code under `brain/`,
+`robothor-crm` wraps the Compose stack in `crm/`, and `mediamtx-webcam` runs
+third-party software. They are listed so the information is not lost, not as
+something a new instance can turn on.
 
 | Unit | Port | Working Dir | Description |
 |------|------|-------------|-------------|

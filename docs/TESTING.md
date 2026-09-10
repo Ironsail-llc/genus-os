@@ -260,18 +260,17 @@ Instance venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./ru
 
 ### Phase 1 (Week 1-2): Core Service Smoke + Unit Tests — DONE
 
-<!-- doc-check: skip -->
 | Component | Test File | Tests | What They Assert | Status |
 |-----------|-----------|-------|------------------|--------|
 | Bridge API | `crm/bridge/tests/test_bridge_api.py` | ~15 | Health endpoint, resolve-contact validation, webhook ingestion, CRM proxy endpoints, log-interaction | Done |
-| Contact Resolver | `crm/bridge/tests/test_contact_resolver.py` | ~8 | Existing mapping lookup, gap-filling, new contact creation, upsert COALESCE logic, timeline | Done |
-| Contact Matching | `brain/memory_system/test_contact_matching.py` | 28 | Name normalization, similarity scoring (exact, prefix, nickname, reversed, three-part), threshold, tiebreaking | Done |
-| Contact Reconciliation | `brain/memory_system/test_contact_reconciliation.py` | 4 | Phase 4 entity↔identifier linking, skip already-linked, skip low-mention, score consistency | Done |
-| Intelligence Pipeline | `brain/memory_system/test_intelligence.py` | 32 | Continuous ingest (18), periodic analysis (6), intelligence pipeline (8) — dedup, watermarks, phases | Done |
-| Orchestrator (unit) | `brain/memory_system/tests/test_orchestrator_unit.py` | ~8 | classify_query categories, format_merged_context truncation + ordering, RAG_PROFILES schema | TODO |
+| Person merge | `crm/bridge/tests/test_merge.py` | ~14 | Person merge, identifier reassignment, conflict handling | Done |
+| Contact Matching | `brain/memory_system/test_contact_matching.py` (instance-local) | 28 | Name normalization, similarity scoring (exact, prefix, nickname, reversed, three-part), threshold, tiebreaking | Done |
+| Contact Reconciliation | `brain/memory_system/test_contact_reconciliation.py` (instance-local) | 4 | Phase 4 entity↔identifier linking, skip already-linked, skip low-mention, score consistency | Done |
+| Intelligence Pipeline | `brain/memory_system/test_intelligence.py` (instance-local) | 32 | Continuous ingest (18), periodic analysis (6), intelligence pipeline (8) — dedup, watermarks, phases | Done |
+| Orchestrator (unit) | `brain/memory_system/tests/test_orchestrator_unit.py` (instance-local) | ~8 | classify_query categories, format_merged_context truncation + ordering, RAG_PROFILES schema | TODO |
 
 **Fixtures needed:** `test_client` (ASGI), `mock_http_client`, `test_prefix`, `db_conn`, `cleanup_test_data`
-**Mocks:** `bridge_service.http_client`, `contact_resolver.get_db`, `crm_dal.*`
+**Mocks:** `bridge_service.http_client`, `crm_dal.*`
 
 ### Phase 2 (Week 3-4): Communication Layer
 
@@ -321,11 +320,15 @@ Instance venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./ru
 
 ### Phase 6 (Week 11-12): End-to-End Flows
 
-| Component | Test File | Tests | What They Assert |
-|-----------|-----------|-------|------------------|
-| Email→notification | `tests/e2e/test_email_to_notification.py` | ~3 | email_sync → triage → Telegram delivery (mock Telegram API) |
-| Voice→memory | `tests/e2e/test_voice_to_memory.py` | ~3 | Twilio webhook → transcription → memory ingestion → fact search |
-| Conversation flow | `tests/e2e/test_conversation_flow.py` | ~3 | Incoming message → Bridge → contact resolution → memory → response |
+No end-to-end test exists for any of these flows, and no file is reserved for
+one — the three test-file paths this section used to name were never created.
+The flows themselves are still the gap:
+
+| Flow | What an end-to-end test would have to assert |
+|------|----------------------------------------------|
+| Email → notification | email_sync → triage → Telegram delivery (mock Telegram API) |
+| Voice → memory | Twilio webhook → transcription → memory ingestion → fact search |
+| Conversation flow | Incoming message → Bridge → contact resolution → memory → response |
 
 **Fixtures needed:** Full service mocks or real services, test data builders
 **Mocks:** External APIs (Telegram, Twilio), or use real services with test accounts

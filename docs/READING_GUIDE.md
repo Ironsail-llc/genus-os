@@ -1,7 +1,7 @@
 # Reading Guide
 
-`brain/`, tunnel configuration, systemd units, and host paths are
-deployment-specific instance data and may be absent from a clean checkout. Use
+The instance workspace `brain/`, tunnel configuration, systemd units, and host
+paths are deployment-specific data and may be absent from a clean checkout. Use
 the in-repository platform references below when an instance document is not
 present; do not treat an instance path as a shipped security control.
 

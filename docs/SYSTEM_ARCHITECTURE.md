@@ -992,7 +992,7 @@ LUKS2-encrypted SanDisk SSD (1.8 TB) mounted at `/mnt/robothor-backup`.
 
 | Category | Contents |
 |----------|----------|
-| Project directories | `brain/`, `robothor/` (including `robothor/engine/`, `robothor/health/`) |
+| Project directories | the instance's `brain/`, plus `robothor/` (including `robothor/engine/`, `robothor/health/`) |
 | Config directories | `.config/robothor/`, `.cloudflared/` |
 | Credentials | `.bashrc`, the CRM stack's `.env` |
 | Databases | `pg_dump`: robothor\_memory |

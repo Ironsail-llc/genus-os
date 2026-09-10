@@ -99,6 +99,33 @@ def test_instance_labelled_brain_reference_passes(checker, known) -> None:
     assert checker.check_markdown(text, "docs/READING_GUIDE.md", known) == []
 
 
+def test_a_bare_brain_reference_still_needs_the_label(checker, known) -> None:
+    """`brain/README.md` is tracked, so `brain/` resolves as a directory.
+
+    Testing existence first let a bare `brain/` through unlabelled -- and
+    `brain/` is the one path in the tree most likely to be absent for the
+    reader. The instance rule has to be decided before existence, not after.
+    """
+    findings = checker.check_markdown(
+        "| Project directories | `brain/`, `robothor/` |\n", "docs/SYSTEM_ARCHITECTURE.md", known
+    )
+    assert len(findings) == 1
+    assert findings[0].target == "brain/"
+
+
+def test_a_labelled_bare_brain_reference_passes(checker, known) -> None:
+    text = "| Project directories | the instance's `brain/`, `robothor/` |\n"
+    assert checker.check_markdown(text, "docs/SYSTEM_ARCHITECTURE.md", known) == []
+
+
+def test_a_missing_path_under_tests_is_reported(checker, known) -> None:
+    """`tests/` holds the platform suite and the docs cite files in it."""
+    text = "See `tests/test_check_doc_links.py` and `tests/e2e/test_nothing.py`.\n"
+    findings = checker.check_markdown(text, "docs/TESTING.md", known)
+    assert len(findings) == 1
+    assert findings[0].target == "tests/e2e/test_nothing.py"
+
+
 def test_instance_labelled_brain_markdown_link_passes(checker, known) -> None:
     text = "See [the soul file](../brain/SOUL.md) -- instance-local, not shipped.\n"
     assert checker.check_markdown(text, "docs/READING_GUIDE.md", known) == []

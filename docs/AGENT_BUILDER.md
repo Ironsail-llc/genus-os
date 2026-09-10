@@ -362,7 +362,7 @@ Add conditional sections when the manifest enables them:
 **Anti-patterns to avoid:**
 - No localhost URLs (engine's `web_fetch` blocks loopback)
 - No hardcoded chat IDs (use delivery config)
-- No file paths outside workspace (use `brain/` relative paths)
+- No file paths outside workspace (use instance-relative `brain/` paths)
 
 ### Step 4: Validate and Deploy
 

@@ -108,4 +108,4 @@ robothor upgrade          # Pull latest platform + run new migrations
 robothor upgrade --dry-run  # Preview what would change
 ```
 
-Upgrades touch platform code only. Your `brain/`, agent configs, and `.env` are untouched. If a template has been updated (e.g., a new field in `templates/SOUL.md`), the upgrade shows a diff and lets you decide whether to adopt it.
+Upgrades touch platform code only. Your instance's `brain/`, agent configs, and `.env` are untouched. If a template has been updated (e.g., a new field in `templates/SOUL.md`), the upgrade shows a diff and lets you decide whether to adopt it.

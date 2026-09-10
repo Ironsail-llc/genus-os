@@ -47,8 +47,11 @@ def test_valid_command_with_flags_and_prompt_passes(checker) -> None:
 
 
 def test_placeholders_are_substituted_before_parsing(checker) -> None:
-    text = "```bash\nrobothor agent scaffold <agent-id> --workspace ${ROBOTHOR_WORKSPACE}\n```\n"
-    assert checker.check_markdown(text, "doc.md") == []
+    angle = '```bash\nrobothor agent scaffold <agent-id> --description "does a thing"\n```\n'
+    braced = "```bash\nrobothor init --workspace ${ROBOTHOR_WORKSPACE}\n```\n"
+    bare = "```bash\nrobothor init --workspace $ROBOTHOR_WORKSPACE\n```\n"
+    for text in (angle, braced, bare):
+        assert checker.check_markdown(text, "doc.md") == [], text
 
 
 def test_unknown_subcommand_fails(checker) -> None:
@@ -58,6 +61,35 @@ def test_unknown_subcommand_fails(checker) -> None:
     assert findings[0].line == 2
     assert "teleport" in findings[0].command
     assert "does not parse" in findings[0].reason
+
+
+def test_unknown_flag_on_a_valid_subcommand_fails(checker) -> None:
+    """`parse_known_args` ACCEPTS unknown flags -- it returns them as extras.
+
+    Discarding that return made the checker blind to exactly the class of
+    error this gate exists for: `robothor migrate --status` (a flag that has
+    never existed) parsed clean.
+    """
+    text = "```bash\nrobothor status --totally-bogus-flag\n```\n"
+    findings = checker.check_markdown(text, "doc.md")
+    assert len(findings) == 1
+    assert "does not parse" in findings[0].reason
+
+
+def test_a_flag_that_does_not_exist_on_migrate_fails(checker) -> None:
+    assert len(checker.check_markdown("```bash\nrobothor migrate --status\n```\n", "doc.md")) == 1
+    assert checker.check_markdown("```bash\nrobothor migrate --check\n```\n", "doc.md") == []
+
+
+def test_help_is_not_a_failure(checker) -> None:
+    """argparse exits 0 for --help and 2 for a parse error.
+
+    Treating every SystemExit as failure reported a documented `--help` as
+    broken, which would have pushed authors toward the skip marker.
+    """
+    assert checker.check_markdown("```bash\nrobothor --help\n```\n", "doc.md") == []
+    assert checker.check_markdown("```bash\nrobothor snapshot --help\n```\n", "doc.md") == []
+    assert len(checker.check_markdown("```bash\nrobothor nonesuch\n```\n", "doc.md")) == 1
 
 
 def test_untagged_block_starting_with_a_cli_command_is_checked(checker) -> None:

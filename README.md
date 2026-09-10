@@ -138,10 +138,10 @@ robothor tui             # Terminal dashboard for monitoring
 
 The version 1.10 release-candidate change set contains a hardening foundation:
 an ordered, checksum-verified migration manifest with upgrade archives
-(`robothor migrate --check` prints the count), separate liveness/readiness, persistent production workspaces, fail-closed
-dashboard/Bridge/Engine authentication, constrained Kubernetes workloads,
-release gates, encrypted snapshot/restore, and the first policy-bound Entity
-Kernel treasury contracts.
+(`robothor migrate --check` prints the count), separate liveness/readiness,
+persistent production workspaces, fail-closed dashboard/Bridge/Engine
+authentication, constrained Kubernetes workloads, release gates, encrypted
+snapshot/restore, and the first policy-bound Entity Kernel treasury contracts.
 
 That does not make an unconfigured checkout production-ready. Before go-live,
 operators must provision Vault and OIDC, seed the agent workspace, validate
@@ -170,7 +170,7 @@ PCI scope, and this boundary is not a PCI certification or live payment adapter.
 
 ## Build Your Agents
 
-Every agent is defined by a YAML manifest and an optional instruction file. Scaffold one, or drop a manifest in `docs/agents/` yourself.
+Every agent is defined by a YAML manifest and an optional instruction file. Scaffold one, or drop a manifest in your instance's `docs/agents/` yourself.
 
 ```bash
 robothor agent scaffold support-triage --description "Classify incoming support tickets"

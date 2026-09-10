@@ -55,10 +55,13 @@ SHELL_OPERATORS = frozenset({"|", "||", "&&", ";", "&", ">", ">>", "<", "<<", "2
 # documents a reader meets first.
 TOP_LEVEL_DOCS = ("README.md", "SERVICES.md", "CONTRIBUTING.md")
 
-# Dated session artifacts: a plan written on one day, never edited again, and
-# not part of the shipped documentation. `scripts/check_instance_leak.py`
-# already exempts this tree for the same reason -- rewriting a historical
+# Dated session artifacts: a plan or spec written on one day, never edited
+# again, and not part of the shipped documentation. Rewriting a historical
 # record to satisfy a gate makes the record less true, not more.
+# Broader than `scripts/check_instance_leak.py`, which exempts only
+# `docs/superpowers/plans/`: the sibling `specs/` are design documents that
+# name components as they were proposed, including files never built, so a
+# path gate has even less business editing them than a leak gate does.
 ARCHIVED_DOC_DIRS = ("docs/superpowers/",)
 
 
@@ -213,14 +216,32 @@ def _disable_exit(parser: argparse.ArgumentParser) -> None:
 
 
 def _parses(parser: argparse.ArgumentParser, argv: list[str]) -> bool:
-    """True when the CLI parser accepts this command line."""
+    """True when the CLI parser accepts this command line.
+
+    Two things this has to get right, and the first version got both wrong.
+
+    `parse_known_args` does not reject an unknown flag -- it hands it back in
+    the second element of the tuple. Discarding that return made the checker
+    blind to the exact defect it exists to catch: `robothor migrate --status`,
+    a flag that has never existed, parsed clean. Unrecognised *positionals*
+    stay tolerated (the docs write `[--tenant TENANT]`-style notation and
+    bracket-optional arguments), but a leftover starting with `-` is a flag
+    the CLI does not have.
+
+    And argparse raises SystemExit for `--help` with code 0, for a parse
+    error with code 2. Treating every SystemExit as failure reported a
+    documented `--help` as broken, which pushes authors toward the skip
+    marker instead of toward a fix.
+    """
     noise = io.StringIO()
     try:
         with contextlib.redirect_stderr(noise), contextlib.redirect_stdout(noise):
-            parser.parse_known_args(argv[1:])
-    except (SystemExit, argparse.ArgumentError, ValueError):
+            _, extra = parser.parse_known_args(argv[1:])
+    except SystemExit as exc:
+        return exc.code in (0, None)
+    except (argparse.ArgumentError, ValueError):
         return False
-    return True
+    return not any(token.startswith("-") for token in extra)
 
 
 def check_markdown(

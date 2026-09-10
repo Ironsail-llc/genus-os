@@ -16,8 +16,10 @@ A reference into one of the gitignored instance trees of CLAUDE.md rule #11
 (`brain/`, `docs/agents/`, `docs/CRON_MAP.md`, …) is legitimate only when the
 line says so: an instance path is not a shipped file, and a reader must be
 told which is which. The rule is mechanical -- the surrounding line has to
-contain "instance". A tracked path always wins over the prefix, so
-`docs/agents/schema.yaml` resolves normally.
+contain "instance". A tracked FILE under such a tree still resolves normally
+(`docs/agents/schema.yaml` is platform config); a tracked DIRECTORY does not,
+because one tracked `brain/README.md` would otherwise vouch for the whole
+gitignored tree behind it.
 
 Exit code 0 = every documented path resolves, 1 = at least one does not.
 """
@@ -34,10 +36,23 @@ from pathlib import Path
 # Top-level trees a backticked reference may name. `brain/` is included on
 # purpose: it is the one that must carry the instance label, and a checker
 # that could not see it would enforce nothing.
-PATH_ROOTS = ("docs", "robothor", "crm", "infra", "scripts", "templates", "helm", "app", "brain")
+PATH_ROOTS = (
+    "docs",
+    "robothor",
+    "crm",
+    "infra",
+    "scripts",
+    "templates",
+    "helm",
+    "app",
+    "tests",
+    "brain",
+)
 
 BACKTICK_RE = re.compile(r"`([^`\n]+)`")
-PATH_REFERENCE_RE = re.compile(rf"^(?:{'|'.join(PATH_ROOTS)})/[\w./-]+$")
+# `*`, not `+`: a bare root directory (`` `brain/` ``) is a path reference too,
+# and it is the shape most worth checking -- `brain/` names a gitignored tree.
+PATH_REFERENCE_RE = re.compile(rf"^(?:{'|'.join(PATH_ROOTS)})/[\w./-]*$")
 
 # [text](target) -- target captured up to the closing paren.
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
@@ -48,8 +63,8 @@ EXTERNAL_PREFIXES = ("http://", "https://", "mailto:", "tel:", "#", "//", "/")
 # The gitignored trees of CLAUDE.md rule #11 -- instance data, absent from a
 # clean checkout by design. A path here is not "missing"; it is somebody
 # else's. The line has to say so, or a reader is sent to a file they will
-# never have. (`docs/agents/schema.yaml` and its siblings ARE tracked and are
-# resolved normally: tracked always wins over the prefix.)
+# never have. (`docs/agents/schema.yaml` and its siblings ARE tracked files and
+# resolve normally -- see `_is_tracked_file` for why only files count.)
 INSTANCE_PATH_PREFIXES = (
     "brain/",
     "docs/agents/",
@@ -68,10 +83,13 @@ SKIP_MARKER = "<!-- doc-check: skip -->"
 
 TOP_LEVEL_DOCS = ("README.md", "SERVICES.md", "CONTRIBUTING.md")
 
-# Dated session artifacts: a plan written on one day, never edited again, and
-# not part of the shipped documentation. `scripts/check_instance_leak.py`
-# already exempts this tree for the same reason -- rewriting a historical
+# Dated session artifacts: a plan or spec written on one day, never edited
+# again, and not part of the shipped documentation. Rewriting a historical
 # record to satisfy a gate makes the record less true, not more.
+# Broader than `scripts/check_instance_leak.py`, which exempts only
+# `docs/superpowers/plans/`: the sibling `specs/` are design documents that
+# name components as they were proposed, including files never built, so a
+# path gate has even less business editing them than a leak gate does.
 ARCHIVED_DOC_DIRS = ("docs/superpowers/",)
 
 
@@ -89,7 +107,14 @@ class Finding:
 
 
 def known_paths(repo_root: Path) -> frozenset[str]:
-    """Every tracked file, plus every directory containing one."""
+    """Every tracked file, plus every directory containing one.
+
+    Directories are stored with a trailing slash and files without, so the
+    two can be told apart later: a tracked FILE under an instance tree is a
+    real platform file (`docs/agents/schema.yaml`), while a tracked
+    *directory* there proves nothing -- `brain/README.md` is tracked, which
+    makes `brain/` resolve even though the tree behind it is gitignored.
+    """
     result = subprocess.run(
         ["git", "ls-files"],
         cwd=repo_root,
@@ -103,7 +128,7 @@ def known_paths(repo_root: Path) -> frozenset[str]:
         if not tracked:
             continue
         paths.add(tracked)
-        paths.update(_ancestor_directories(tracked))
+        paths.update(f"{parent}/" for parent in _ancestor_directories(tracked))
     return frozenset(paths)
 
 
@@ -158,7 +183,14 @@ def _resolve(target: str, doc_path: str) -> str | None:
 
 
 def _exists(candidate: str, known: frozenset[str]) -> bool:
-    return candidate.rstrip("/") in known
+    """True for a tracked file or a directory that holds one."""
+    bare = candidate.rstrip("/")
+    return bare in known or f"{bare}/" in known
+
+
+def _is_tracked_file(candidate: str, known: frozenset[str]) -> bool:
+    """True only for a tracked FILE -- directories carry a trailing slash."""
+    return not candidate.endswith("/") and candidate in known
 
 
 def _skipped_lines(lines: list[str]) -> set[int]:
@@ -206,9 +238,12 @@ def check_markdown(text: str, path: str, known: frozenset[str]) -> list[Finding]
                 targets.append(reference)
 
         for target in targets:
-            if _exists(target, known):
-                continue
-            if target.startswith(INSTANCE_PATH_PREFIXES):
+            # Instance BEFORE existence. Only a tracked FILE exempts a path
+            # under an instance tree; a tracked directory proves nothing,
+            # because `brain/README.md` makes the whole gitignored `brain/`
+            # resolve -- and `brain/` is the path in this tree most likely to
+            # be absent for the reader.
+            if target.startswith(INSTANCE_PATH_PREFIXES) and not _is_tracked_file(target, known):
                 if not labelled_instance:
                     findings.append(
                         Finding(
@@ -222,7 +257,10 @@ def check_markdown(text: str, path: str, known: frozenset[str]) -> list[Finding]
                         )
                     )
                 continue
-            findings.append(Finding(path=path, line=lineno, target=target, reason="missing path"))
+            if not _exists(target, known):
+                findings.append(
+                    Finding(path=path, line=lineno, target=target, reason="missing path")
+                )
     return findings
 
 
