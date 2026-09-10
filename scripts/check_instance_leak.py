@@ -92,8 +92,18 @@ RETIRED_VENDOR_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 # Platform roots the vendor patterns apply to. Mirrors PLATFORM_ROOTS in
-# tests/test_core_instance_boundary.py — keep the two in step.
-VENDOR_SCANNED_ROOTS = ("robothor/", "crm/", "app/src/", "infra/", "helm/", "templates/")
+# tests/test_core_instance_boundary.py — keep the two in step;
+# test_the_roots_match_the_boundary_test asserts it. `agents/skills/` is in
+# scope because a skill is executable instruction, not documentation.
+VENDOR_SCANNED_ROOTS = (
+    "robothor/",
+    "crm/",
+    "app/src/",
+    "infra/",
+    "helm/",
+    "templates/",
+    "agents/skills/",
+)
 
 # systemd-tmpfiles.d(5) / sysusers.d(5) row: TYPE PATH MODE USER GROUP AGE ARG.
 # The account columns are POSITIONAL — no `User=` prefix — so neither the
@@ -164,6 +174,17 @@ def _check_file(path: str, content: str, allowlist: set[str]) -> list[str]:
         # below: a dead comment header naming a retired vendor is precisely
         # the residue this catches, and "# Apollo.io — see the example" would
         # otherwise walk straight through.
+        #
+        # THE TWO HALVES OF THIS GATE ARE NOT EQUIVALENT, and vendor names are
+        # where they diverge most. The pre-commit half loads
+        # instance_leak_allowlist.yaml, which carries a bare vendor domain
+        # token for the operational scripts that legitimately mail it — any
+        # line containing that substring is skipped here, vendor patterns
+        # included. `--ci` also loads the allowlist, but
+        # tests/test_instance_leak_check.py calls this with an EMPTY one, so a
+        # line the hook waves through can still fail a test. That is the
+        # intended direction (the stricter check is the one that gates), but
+        # do not read a green pre-commit run as proof the tree is clean.
         if scan_vendors and not any(allow in line for allow in allowlist):
             for pattern, message in RETIRED_VENDOR_PATTERNS:
                 if pattern.search(line):

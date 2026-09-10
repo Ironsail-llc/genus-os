@@ -92,7 +92,7 @@ If ALL persistence paths are unavailable, report the outcome in your final messa
 
 When enriching a contact and not all fields are found:
 1. **Create the note with available data.** Even a partial bio is valuable — it captures RAG-sourced context that took effort to gather.
-2. **Document missing fields in the note body** — e.g., "## Gaps\n- Email: not found (Apollo 403, web search empty)\n- Phone: not found"
+2. **Document missing fields in the note body** — e.g., "## Gaps\n- Email: not found (directory lookup returned 403, web search empty)\n- Phone: not found"
 3. **Mark the task with what was accomplished**, not what failed. Resolution should say "Bio note created; email/phone/LinkedIn unfilled" not "Enrichment failed."
 
 ### 4. Retrieve from fallbacks

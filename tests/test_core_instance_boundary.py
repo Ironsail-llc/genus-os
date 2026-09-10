@@ -88,7 +88,12 @@ def test_the_grandfather_list_does_not_go_stale():
 #: may name one operator's vendors. ``docs/`` and ``scripts/`` are out of
 #: scope on purpose: they carry dated incident write-ups and probe records
 #: that are historical fact, not shipped behaviour.
-PLATFORM_ROOTS = ("robothor", "crm", "app/src", "infra", "helm", "templates")
+#:
+#: ``agents/skills`` is in scope because a skill is EXECUTABLE instruction,
+#: not documentation. ``crm-lookup`` told every agent to call
+#: ``apollo_search_people`` for months after that tool left core -- prose that
+#: reads as a plan and dead-ends at a tool nobody has.
+PLATFORM_ROOTS = ("robothor", "crm", "app/src", "infra", "helm", "templates", "agents/skills")
 
 #: Directories never worth reading -- build output and vendored dependencies.
 SKIP_DIRS = frozenset(
