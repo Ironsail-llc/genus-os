@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from deps import get_tenant_id
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from models import (  # noqa: TC002 — used at runtime by FastAPI
     LogInteractionRequest,
@@ -14,6 +14,7 @@ from models import (  # noqa: TC002 — used at runtime by FastAPI
 
 from robothor.audit.logger import log_event
 from robothor.events.bus import publish
+from routers._audit import audited
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,22 @@ def log_interaction(
 
 
 # ─── Vault (PostgreSQL-backed) ────────────────────────────────────────────
+#
+# Secrets are WRITE-ONLY from any human surface.  ``/api/vault/get`` used to
+# return the decrypted value to any owner/admin session, and the Helm's BFF
+# proxy (``app/src/app/api/bridge/[...path]/route.ts``) forwards every bridge
+# path — so a signed-in browser, an XSS on the dashboard, or a stolen session
+# cookie was a credential dump.  Only a verified *service* token may retrieve
+# a value; humans administer secrets with ``robothor vault`` on the appliance.
+#
+# ``/api/vault/list`` stays reachable to operators because ``robothor.vault.list``
+# returns key NAMES only (``list[str]``) — no value ever crosses it.
+
+_WRITE_ONLY_ERROR = (
+    "vault values are write-only from the UI: a human session cannot read a secret "
+    "value. Set or rotate secrets with `robothor vault set` on the appliance; only "
+    "a service token may retrieve one."
+)
 
 
 @router.get("/api/vault/list")
@@ -158,9 +175,16 @@ def api_vault_list(
 
 @router.get("/api/vault/get")
 def api_vault_get(
+    request: Request,
     key: str = Query(..., description="Secret key"),
     tenant_id: str = Depends(get_tenant_id),
 ):
+    auth = getattr(request.state, "auth", None)
+    if auth is None or not getattr(auth, "is_service", False):
+        # Refuse BEFORE the vault is consulted: no decrypt, no plaintext in
+        # this process, nothing to leak through a log or an exception.
+        audited(request, "vault.read.denied", action=key, status="denied")
+        return JSONResponse({"error": _WRITE_ONLY_ERROR}, status_code=403)
     try:
         from robothor.vault import get as vault_get
 
