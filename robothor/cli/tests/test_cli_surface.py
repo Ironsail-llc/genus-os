@@ -7,11 +7,14 @@ argparse tree, leaving the advertised commands unreachable.
 
 from __future__ import annotations
 
+import sys
+import tomllib
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from robothor.cli import main
+from robothor.cli import _build_parser, main
 
 
 @pytest.mark.parametrize(
@@ -88,3 +91,36 @@ def test_tenant_status_requires_tenant_id() -> None:
     with patch("robothor.cli.tenant.cmd_tenant", return_value=0) as cmd:
         assert main(["tenant", "status", "acme"]) == 0
     assert cmd.call_args.args[0].tenant_id == "acme"
+
+
+@pytest.mark.parametrize(
+    ("argv0", "expected"),
+    [
+        ("/x/genus", "genus"),
+        ("/x/robothor", "robothor"),
+        ("/usr/local/bin/genusos", "genusos"),
+    ],
+)
+def test_prog_reflects_invoked_name(argv0: str, expected: str, monkeypatch) -> None:
+    """``--help`` must name the verb the user actually typed, not a hardcoded one."""
+    monkeypatch.setattr(sys, "argv", [argv0])
+    assert _build_parser().prog == expected
+
+
+@pytest.mark.parametrize("argv", [[], [""]])
+def test_prog_falls_back_to_genus(argv: list[str], monkeypatch) -> None:
+    """An empty or unusable ``sys.argv`` still yields the documented verb."""
+    monkeypatch.setattr(sys, "argv", argv)
+    assert _build_parser().prog == "genus"
+
+
+def test_console_scripts_declared() -> None:
+    """The wheel must expose ``genus`` alongside the two legacy verbs."""
+    pyproject = Path(__file__).resolve().parents[3] / "pyproject.toml"
+    if not pyproject.exists():  # pragma: no cover - installed wheel, no source tree
+        pytest.skip("pyproject.toml is not part of an installed distribution")
+    with pyproject.open("rb") as handle:
+        scripts = tomllib.load(handle)["project"]["scripts"]
+    assert scripts["genus"] == "robothor.cli:main"
+    assert scripts["genusos"] == "robothor.cli:main"
+    assert scripts["robothor"] == "robothor.cli:main"

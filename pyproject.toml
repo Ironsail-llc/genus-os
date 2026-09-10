@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "genusos"
 version = "1.66.0"
 description = "Self-hosted AI agent operating system: deterministic engine, plugin-style skills and connectors, multi-tenant CRM and memory. Everything is a plugin."
-readme = "README.md"
+readme = "PYPI_README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
@@ -103,6 +103,14 @@ rlm = [
 tui = [
     "textual>=1.0",
 ]
+channels = [
+    # slack_bolt is imported lazily by robothor/engine/slack.py and was
+    # declared nowhere, so a `pip install genusos` build could never start
+    # its Slack channel — the import failed and the channel logged an
+    # error instead. Floor is the 1.18 line (current major, async Socket
+    # Mode adapter); no ceiling, slack-bolt has held its 1.x API.
+    "slack-bolt>=1.18",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -114,10 +122,13 @@ dev = [
     "types-PyYAML>=6.0",
 ]
 all = [
-    "genusos[api,vision,rlm,tui,federation,mcp,dev]",
+    "genusos[api,vision,rlm,tui,channels,federation,mcp,dev]",
 ]
 
 [project.scripts]
+# `genus` is the documented verb. `genusos` and `robothor` stay as
+# aliases: existing systemd units, cron entries, and docs invoke them.
+genus = "robothor.cli:main"
 genusos = "robothor.cli:main"
 robothor = "robothor.cli:main"
 
