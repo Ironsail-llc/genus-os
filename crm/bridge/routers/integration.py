@@ -13,6 +13,7 @@ from models import (  # noqa: TC002 — used at runtime by FastAPI
 )
 
 from robothor.audit.logger import log_event
+from robothor.engine.sanitize import sanitize_log
 from robothor.events.bus import publish
 from routers._audit import audited
 
@@ -173,17 +174,28 @@ def api_vault_list(
         return JSONResponse({"error": "Internal server error"}, status_code=500)
 
 
-@router.get("/api/vault/get")
+# ``response_model=None``: the return annotation is a union with JSONResponse,
+# which FastAPI would otherwise try to turn into a Pydantic response field.
+@router.get("/api/vault/get", response_model=None)
 def api_vault_get(
     request: Request,
     key: str = Query(..., description="Secret key"),
     tenant_id: str = Depends(get_tenant_id),
-):
+) -> dict[str, str] | JSONResponse:
     auth = getattr(request.state, "auth", None)
     if auth is None or not getattr(auth, "is_service", False):
         # Refuse BEFORE the vault is consulted: no decrypt, no plaintext in
         # this process, nothing to leak through a log or an exception.
-        audited(request, "vault.read.denied", action=key, status="denied")
+        #
+        # The key is caller-controlled and lands in an audit row an operator
+        # reads back, so it is escaped and bounded before it is recorded —
+        # an unbounded raw value is a log-injection vector, not an identifier.
+        audited(
+            request,
+            "vault.read.denied",
+            action=sanitize_log(key)[:200],
+            status="denied",
+        )
         return JSONResponse({"error": _WRITE_ONLY_ERROR}, status_code=403)
     try:
         from robothor.vault import get as vault_get

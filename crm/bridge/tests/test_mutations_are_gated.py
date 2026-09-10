@@ -2,7 +2,7 @@
 
 A per-router test only proves the routers someone remembered to test.  This
 test walks the *assembled* FastAPI app instead, so a new POST/PUT/PATCH/DELETE
-under ``/api/`` fails the suite the moment it is added unless it either
+fails the suite the moment it is added unless it either
 
   * calls ``require_operator(request)`` in its handler body, or
   * appears in ``JUSTIFIED_WITHOUT_OPERATOR_GATE`` below with a reason.
@@ -12,6 +12,12 @@ check that already constrains the route (``crm/bridge/middleware.py``,
 ``_authorization_denial``).  "It has always been open" is not a reason; if a
 route mutates appliance-global state or reads/writes credentials it belongs
 behind the operator gate, not on this list.
+
+Every mutation route is enumerated, not just the ones under ``/api/``: the
+legacy integration webhooks (``POST /resolve-contact``, ``POST
+/log-interaction``) are mounted at the root and would have walked straight
+through an ``/api/``-only filter, as would the next route someone mounts
+beside them.
 """
 
 from __future__ import annotations
@@ -64,16 +70,37 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
         "(approve|reject|answer) are separately scope-gated by _authorization_denial() "
         "behind the narrow task:approve capability."
     ),
+    # More specific first: _justification() returns the first prefix that
+    # matches, and /api/memory would otherwise swallow /api/memory/search and
+    # lend it a justification that does not apply to it.
+    "/api/memory/search": (
+        "A read (a POST only because the query goes in the body) that "
+        "_memory_admin_scope() does NOT cover — it falls back to plain bridge:write, "
+        "and is tenant-pinned by TenantMiddleware like any other tenant-data read."
+    ),
     "/api/memory": (
         "Scope-gated by _memory_admin_scope() in _authorization_denial() — memory:write "
         "for store, memory:admin for stats/pipeline, memory:read|write for blocks — and "
-        "store/pipeline additionally fail closed for any non-primary tenant."
+        "store/pipeline additionally fail closed for any non-primary tenant. Does NOT "
+        "cover /api/memory/search, which has its own entry above."
     ),
     "/api/tenants": (
         "Tenant administration is already role-gated by _authorization_denial(): a "
         "service caller needs the tenant:admin scope and a human must be owner/admin. "
         "It must stay reachable to another tenant's own owner, which require_operator "
         "(platform-tenant only) would forbid."
+    ),
+    # Root-mounted legacy integration webhooks — the reason this guard does not
+    # filter on "/api/".
+    "/resolve-contact": (
+        "Legacy root-mounted integration webhook, scope-gated by _integration_scope() "
+        "in _authorization_denial() behind the narrow integration:write capability; "
+        "the resolved contact is written under the verified token's tenant."
+    ),
+    "/log-interaction": (
+        "Legacy root-mounted integration webhook, scope-gated by _integration_scope() "
+        "in _authorization_denial() behind the narrow integration:write capability; "
+        "every DAL call it makes takes the verified tenant_id."
     ),
 }
 
@@ -98,13 +125,13 @@ def _all_routes() -> list[Any]:
     return list(iter_route_contexts(app.routes))
 
 
-def _api_mutation_routes() -> list[Any]:
+def _mutation_routes() -> list[Any]:
+    """Every mutating route on the app — no path filter, deliberately."""
     routes = []
     for route in _all_routes():
         methods = getattr(route, "methods", None) or set()
-        path = getattr(route, "path", "") or ""
         endpoint = getattr(route, "endpoint", None)
-        if endpoint is None or not (methods & MUTATION_METHODS) or not path.startswith("/api/"):
+        if endpoint is None or not (methods & MUTATION_METHODS):
             continue
         routes.append(route)
     return routes
@@ -127,16 +154,35 @@ def _describe(route: Any) -> str:
     return f"{methods} {route.path} -> {endpoint.__module__}.{endpoint.__name__}"
 
 
+# Routers that demonstrably contribute mutation routes today. A *partial*
+# enumeration collapse — one include_router shape this walk cannot follow —
+# would keep the count respectable while quietly dropping a whole router, so
+# the floor alone is not enough: name them.
+EXPECTED_ROUTER_MODULES = frozenset(
+    {
+        "routers.installed_agents",
+        "routers.controls",
+        "routers.notes_tasks",
+        "routers.routines",
+        "routers.integration",
+    }
+)
+
+
 def test_the_app_actually_exposes_mutation_routes() -> None:
-    """Guard the guard: an empty enumeration would make every assertion vacuous."""
-    routes = _api_mutation_routes()
-    assert len(routes) > 20, f"route enumeration collapsed — only found {len(routes)}"
+    """Guard the guard: a partial enumeration would make every assertion vacuous."""
+    routes = _mutation_routes()
+    assert len(routes) >= 35, f"route enumeration collapsed — only found {len(routes)}"
+
+    seen = {route.endpoint.__module__ for route in routes}
+    missing = EXPECTED_ROUTER_MODULES - seen
+    assert not missing, f"no mutation routes enumerated from {sorted(missing)}"
 
 
-def test_every_api_mutation_route_is_operator_gated_or_justified() -> None:
+def test_every_mutation_route_is_operator_gated_or_justified() -> None:
     ungated = [
         _describe(route)
-        for route in _api_mutation_routes()
+        for route in _mutation_routes()
         if "require_operator(" not in inspect.getsource(route.endpoint)
         and _justification(route.path) is None
     ]
@@ -158,7 +204,7 @@ def test_credential_and_install_routes_are_never_allowlisted() -> None:
 def test_install_state_mutations_are_gated_in_the_handler() -> None:
     """The specific regression this guard was written for."""
     install_routes = [
-        route for route in _api_mutation_routes() if route.path.startswith("/api/installed-agents")
+        route for route in _mutation_routes() if route.path.startswith("/api/installed-agents")
     ]
     assert len(install_routes) == 3, f"expected install/update/remove, got {install_routes}"
     for route in install_routes:
@@ -167,7 +213,7 @@ def test_install_state_mutations_are_gated_in_the_handler() -> None:
 
 def test_every_allowlist_entry_still_matches_a_live_route() -> None:
     """A stale exemption is a hole nobody is looking at."""
-    paths = [route.path for route in _api_mutation_routes()]
+    paths = [route.path for route in _mutation_routes()]
     dead = [
         prefix
         for prefix in JUSTIFIED_WITHOUT_OPERATOR_GATE

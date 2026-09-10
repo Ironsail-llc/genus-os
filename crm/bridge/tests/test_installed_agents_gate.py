@@ -66,6 +66,17 @@ def installer():
         yield MagicMock(install=install, update=update, remove=remove, log_event=log_event)
 
 
+# WHICH LOCK EACH TEST PROVES — read this before deleting one as redundant.
+#
+# The four non-operator human roles below were ALREADY 403'd before this PR, by
+# the middleware's /api/installed-agents clause (agent:admin scope or an
+# owner/admin role). These tests pin that behavior so a middleware edit cannot
+# quietly open it; they are NOT what proves the new handler gate.
+#
+# ``test_a_service_token_cannot_install`` is the one that proves it: it carries
+# the agent:admin scope the middleware asks for and is still refused, which can
+# only come from require_operator's auth.is_service check inside the handler.
+# Delete it and the gate this PR added becomes untested.
 @pytest.mark.parametrize("role", ["member", "user", "viewer", "auditor"])
 def test_non_operator_human_cannot_install(installer, role):
     response = _client(role).post(
