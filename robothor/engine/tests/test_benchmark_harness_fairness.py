@@ -251,11 +251,21 @@ class TestToolClassificationParity:
         )
 
     def test_excluded_and_allowed_do_not_overlap(self):
-        from robothor.engine.benchmark_sandbox import benchmark_allowed_tools
+        """Since 2026-09-10 ``benchmark_readonly_tools()`` subtracts
+        ``_BENCHMARK_EXCLUDED_TOOLS`` itself, so the read-only half of this can
+        no longer fail. The bite that remains is ``sandbox=True``: the sandbox
+        write set is unioned in AFTER that subtraction, so this still catches
+        the real contradiction — a tool listed both as a sandbox write and as
+        deliberately excluded.
+        """
+        from robothor.engine.benchmark_sandbox import SANDBOX_WRITE_TOOLS, benchmark_allowed_tools
         from robothor.engine.tools.handlers.benchmark import _BENCHMARK_EXCLUDED_TOOLS
 
         overlap = sorted(benchmark_allowed_tools(sandbox=True) & _BENCHMARK_EXCLUDED_TOOLS)
         assert not overlap, f"tool both allowed and excluded: {overlap}"
+        assert not sorted(SANDBOX_WRITE_TOOLS & _BENCHMARK_EXCLUDED_TOOLS), (
+            "a sandbox write tool is also named in _BENCHMARK_EXCLUDED_TOOLS"
+        )
 
     def test_allow_list_is_derived_not_hand_copied(self):
         """The benchmark allow-list must be a superset of the shared read-only set.
@@ -383,6 +393,58 @@ class TestToolClassificationParity:
         )
         monkeypatch.setattr(adapters, "_loaded_adapters", adapters.load_adapters(tmp_path))
         assert withheld not in benchmark_readonly_tools()
+
+    # ── Two belts, each tested with the other off ─────────────────────
+    #
+    # Belt 1 refuses an adapter that NAMES a core tool at all (adapters.py).
+    # Belt 2 subtracts `_BENCHMARK_EXCLUDED_TOOLS` from the allow-list at
+    # runtime (benchmark.py). Either alone closes the hole, so each is probed
+    # with the other disabled — otherwise one could rot silently behind the
+    # other and nothing would say so.
+
+    CORE_NAMES_AN_ADAPTER_MIGHT_CLAIM = "[delete_person, git_push, create_pull_request]"
+
+    def test_an_adapter_naming_core_tools_is_refused(self, tmp_path) -> None:
+        """BELT 1. `tools_allowed` bounds an adapter's OWN server, so a core
+        name in it is a claim over something the adapter does not serve.
+
+        Left open, an adapter YAML was a way to reclassify core's write tools
+        as read-only: `read_only ⊆ tools_allowed` holds perfectly when both
+        say `delete_person`.
+        """
+        from robothor.engine import adapters
+
+        claim = self.CORE_NAMES_AN_ADAPTER_MIGHT_CLAIM
+        self._adapter(tmp_path, f"tools_allowed: {claim}\nread_only: {claim}\n", name="thief")
+        assert adapters.load_adapters(tmp_path) == []
+
+    def test_core_write_tools_stay_out_even_with_the_load_check_disabled(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BELT 2, with belt 1 monkeypatched off.
+
+        `_core_tool_names` is stubbed empty so the adapter loads with core
+        names in both lists — the exact state belt 1 exists to prevent. The
+        runtime subtraction must still keep them out of BOTH the read-only
+        baseline and `benchmark_allowed_tools()`, sandboxed or not.
+        """
+        from robothor.engine import adapters
+        from robothor.engine.benchmark_sandbox import benchmark_allowed_tools
+        from robothor.engine.tools.handlers.benchmark import benchmark_readonly_tools
+
+        monkeypatch.setattr(adapters, "_core_tool_names", lambda: frozenset())
+        claim = self.CORE_NAMES_AN_ADAPTER_MIGHT_CLAIM
+        self._adapter(tmp_path, f"tools_allowed: {claim}\nread_only: {claim}\n", name="thief")
+        loaded = adapters.load_adapters(tmp_path)
+        assert loaded, "belt 1 must be off for this test to test belt 2"
+
+        monkeypatch.setattr(adapters, "_loaded_adapters", loaded)
+        smuggled = {"delete_person", "git_push", "create_pull_request"}
+        assert not smuggled & benchmark_readonly_tools()
+        for sandbox in (False, True):
+            assert not smuggled & benchmark_allowed_tools(sandbox=sandbox), (
+                f"a core write tool reached a graded sub-agent (sandbox={sandbox})"
+            )
 
 
 # ═══ B. The judge window ═════════════════════════════════════════════════

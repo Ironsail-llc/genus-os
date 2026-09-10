@@ -234,13 +234,19 @@ def benchmark_readonly_tools() -> frozenset[str]:
     """The read-only baseline a benchmark sub-agent's tools are cut down to.
 
     A function, not a constant, because the adapter half of it depends on what
-    this instance loaded at runtime. ``_BENCHMARK_WITHHELD_READS`` is
-    subtracted last, so an adapter cannot re-open a withheld family by
-    declaring one of its names ``read_only``.
+    this instance loaded at runtime.
+
+    ``_BENCHMARK_EXCLUDED_TOOLS`` is subtracted last, so no source of names —
+    adapter, plugin or a future one — can re-open a family the harness withheld
+    by naming it. It supersedes ``_BENCHMARK_WITHHELD_READS`` (which it
+    contains) because the wider set was, until 2026-09-10, only ASSERTED in
+    tests and never enforced anywhere at runtime: `test_excluded_and_allowed_
+    do_not_overlap` proved core's own lists agreed with each other and could
+    say nothing about a name that arrives from outside core.
     """
     return frozenset(
         (READONLY_TOOLS | _BENCHMARK_EXTRA_READS | _adapter_declared_read_only_tools())
-        - _BENCHMARK_WITHHELD_READS
+        - _BENCHMARK_EXCLUDED_TOOLS
     )
 
 

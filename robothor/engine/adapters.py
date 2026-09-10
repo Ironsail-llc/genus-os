@@ -133,7 +133,8 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
     if not isinstance(read_only, list | tuple) or not all(isinstance(x, str) for x in read_only):
         logger.warning(
             "Adapter '%s' has a non-list read_only — refused. It must be a list "
-            "of tool names drawn from tools_allowed.",
+            "of tool names drawn from tools_allowed; use `read_only: []` (or "
+            "omit the key) to declare nothing read-only.",
             name,
         )
         return None
@@ -148,6 +149,36 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
             foreign,
         )
         return None
+
+    # ── An adapter may not name a CORE tool, in either list ──
+    # The subset check above only proves read_only ⊆ tools_allowed. Both could
+    # still name `delete_person` — a tool the adapter does not serve and cannot
+    # speak for. Left open, an adapter YAML became a way to reclassify core's
+    # own write tools as read-only, which is the whole boundary in one line.
+    # The registry is the authority on what core owns; the plugin seam refuses
+    # a name it does not provide for exactly this reason.
+    claimed = set(tools_allowed) | set(read_only)
+    if claimed:
+        try:
+            core_names = _core_tool_names()
+        except Exception:
+            logger.exception(
+                "Adapter '%s' refused: could not read the core tool registry to "
+                "check its declared tool names. Refusing rather than loading "
+                "unchecked.",
+                name,
+            )
+            return None
+        stolen = sorted(claimed & core_names)
+        if stolen:
+            logger.warning(
+                "Adapter '%s' declares core tool name(s) %s — refused. Those "
+                "belong to core; an adapter may only name the tools its own "
+                "server serves.",
+                name,
+                stolen,
+            )
+            return None
 
     return AdapterConfig(
         name=name,
@@ -170,6 +201,30 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
         # attacker would love. None stays "", every other scalar is stringified.
         command_sha256=("" if data.get("command_sha256") is None else str(data["command_sha256"])),
     )
+
+
+def _core_tool_names() -> frozenset[str]:
+    """Every tool name CORE registers, from the registry itself.
+
+    Same source ``test_every_registered_tool_is_classified`` reads, so the two
+    can never disagree; a second hardcoded list here would rot the day someone
+    adds a tool. Imported lazily because ``robothor.api.mcp`` and the engine
+    schemas sit above this module.
+
+    Fail-closed on purpose: if the registry cannot be read, ``_parse_adapter``
+    refuses the adapters it was about to check rather than loading them
+    unchecked. "Could not check" must never degrade to "allowed" — the same
+    rule :func:`verify_adapter_integrity` follows for a pin it cannot verify.
+
+    One residual limit, stated so nobody mistakes it for coverage: the engine
+    schema set is flag-gated, so a core tool behind an OFF rip flag is not in
+    here. That is also exactly the surface an adapter could collide with in
+    this process, and the flag flipping ON is a restart, which re-runs this.
+    """
+    from robothor.api.mcp import get_tool_definitions
+    from robothor.engine.tools.schemas import get_engine_schemas
+
+    return frozenset({d["name"] for d in get_tool_definitions()} | set(get_engine_schemas()))
 
 
 def verify_adapter_integrity(adapter: AdapterConfig) -> tuple[bool, str]:
