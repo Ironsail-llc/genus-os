@@ -137,8 +137,8 @@ robothor tui             # Terminal dashboard for monitoring
 ## Production status
 
 The version 1.10 release-candidate change set contains a hardening foundation:
-an ordered manifest of 83 checksum-verified migrations with upgrade archives,
-separate liveness/readiness, persistent production workspaces, fail-closed
+an ordered, checksum-verified migration manifest with upgrade archives
+(`robothor migrate --check` prints the count), separate liveness/readiness, persistent production workspaces, fail-closed
 dashboard/Bridge/Engine authentication, constrained Kubernetes workloads,
 release gates, encrypted snapshot/restore, and the first policy-bound Entity
 Kernel treasury contracts.

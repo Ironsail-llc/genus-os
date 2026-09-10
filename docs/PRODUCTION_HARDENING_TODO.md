@@ -36,7 +36,8 @@ that require measured deployment evidence. They are not current service claims.
 
 - [x] Replace partial/ambiguous database setup with one canonical,
   checksum-verified, advisory-locked migration chain.
-  - Acceptance evidence: a fresh database applies all 83 migrations; rerun is
+  - Acceptance evidence: a fresh database applies every migration in the
+    canonical manifest; rerun is
     a no-op; unknown or drifted history fails closed; the packaged wheel contains
     the same chain used by CLI and application startup.
 - [x] Preserve upgrade data at the two destructive legacy cutovers.
@@ -173,9 +174,9 @@ open and block a production go-live.
   - Integrated-workspace result: 235 passed, 2 skipped.
 - [x] Apply/check the canonical migration chain and run all integration tests
   against a clean real PostgreSQL + pgvector database.
-  - Integrated-workspace result: all 83 migrations applied without drift, all
-    19 required tables present, and 11 integration tests passed. A built wheel
-    contains the canonical 83 SQL files plus its manifest.
+  - Integrated-workspace result: every manifest migration applied without
+    drift, all 19 required tables present, and 11 integration tests passed. A
+    built wheel contains the canonical SQL files plus its manifest.
 - [x] Run the legacy-to-current migration fixture and verify the migration 023
   and 035 archive tables and refusal conditions against real PostgreSQL.
   - Covered by the real-PostgreSQL upgrade-safety integration lane above.
@@ -207,8 +208,8 @@ open and block a production go-live.
   workspace.
   - Clean-branch result: 4,496 Python tests passed, 27 skipped, 184 deselected,
     with 64.30% coverage; 235 Bridge tests passed and 2 skipped; all 11 real
-    PostgreSQL integration tests passed; 83 migrations and 19 required tables
-    checked without drift; Ruff, mypy (604 files), and the zero-exception
+    PostgreSQL integration tests passed; the whole migration manifest and 19
+    required tables checked without drift; Ruff, mypy (604 files), and the zero-exception
     dependency audit passed; 408 Vitest and 23 isolated standalone Playwright
     tests passed; the production frontend build passed; all 100 Helm assertions,
     114 strict schema validations, and kube-linter passed; the encrypted
