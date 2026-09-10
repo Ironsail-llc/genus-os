@@ -221,18 +221,34 @@ async def test_default_member_cannot_list_or_retrieve_vault_secrets(test_client,
 
 
 @pytest.mark.asyncio
-async def test_admin_vault_access_is_bound_to_verified_tenant(test_client, monkeypatch):
+async def test_vault_access_is_bound_to_verified_tenant(test_client, monkeypatch):
+    """Reading a secret *value* is service-only — an admin browser session is
+    refused (see ``test_vault_write_only.py``). The tenant binding this test was
+    written for still has to hold for the one caller that may still read."""
     _secure_mode(monkeypatch)
-    token = tokens.issue_access_token("admin-1", "tenant-a", "admin")
+    monkeypatch.setattr("middleware.check_endpoint_access", lambda *a, **k: True)
+    admin_token = tokens.issue_access_token("admin-1", "tenant-a", "admin")
+    service_token = tokens.issue_service_token(
+        "email-classifier",
+        "tenant-a",
+        agent_id="email-classifier",
+        scopes=("bridge:read", "vault:read"),
+    )
 
     with patch("robothor.vault.get", return_value="opaque-secret") as vault_get:
-        response = await test_client.get(
+        as_admin = await test_client.get(
             "/api/vault/get?key=payments/provider-token",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        as_service = await test_client.get(
+            "/api/vault/get?key=payments/provider-token",
+            headers={"Authorization": f"Bearer {service_token}"},
         )
 
-    assert response.status_code == 200
-    assert response.json() == {
+    assert as_admin.status_code == 403
+    assert "opaque-secret" not in as_admin.text
+    assert as_service.status_code == 200
+    assert as_service.json() == {
         "key": "payments/provider-token",
         "value": "opaque-secret",
     }

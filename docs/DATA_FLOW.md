@@ -2,7 +2,7 @@
 
 End-to-end flow from external APIs to the owner.
 
-Canonical reference: `brain/ARCHITECTURE.md`
+Canonical reference: `docs/SYSTEM_ARCHITECTURE.md`
 
 ```
 ┌──────────────────────────────────────────────────────────────┐

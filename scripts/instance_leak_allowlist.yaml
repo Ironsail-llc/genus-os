@@ -48,3 +48,8 @@ robothor-alert@
 # The fictional example number in infra/systemd/robothor.env.example's
 # ROBOTHOR_AI_PHONE comment (555 is the reserved not-in-service block).
 +1 (555) 123-4567
+
+# Homebrew formula version syntax in docs/ONBOARDING.md's macOS prerequisites
+# (`brew install python@3.11`). The email regex reads "name@host" in it.
+# Same class as the pnpm@ entry above: a package spec, not an address.
+python@3.11

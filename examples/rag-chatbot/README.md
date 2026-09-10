@@ -14,7 +14,7 @@ Build a conversational chatbot powered by Retrieval-Augmented Generation (RAG). 
 ## Install
 
 ```bash
-pip install robothor
+pip install genusos
 ```
 
 ## Configure

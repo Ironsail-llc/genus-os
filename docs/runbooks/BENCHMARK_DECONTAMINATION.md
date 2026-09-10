@@ -63,10 +63,10 @@ refuses every task-mutating tool when `ctx.is_benchmark`, but the runner's
 
 One rung per 24h, per `GUARDRAIL_FLIPS.md`.
 
-1. **observe** — confirm the measurement is real before changing any number:
+1. **observe** — confirm the measurement is real before changing any number.
+   Run this in `psql` against the live database:
 
-   ```sh
-   robothor engine ... # or in psql, on the live DB:
+   ```sql
    SELECT agent_id,
           COUNT(*) FILTER (WHERE parent_run_id IS NULL) AS counted_as_production,
           COUNT(*) FILTER (WHERE parent_run_id IS NULL

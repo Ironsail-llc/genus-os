@@ -11,7 +11,7 @@ Use Genus OS's vision system as an intelligent security camera. Detects motion, 
    ```
 3. **Python dependencies**:
    ```bash
-   pip install robothor[vision]
+   pip install "genusos[vision]"
    ```
 
 This installs YOLO (ultralytics), InsightFace, and ONNX Runtime. Models are downloaded automatically on first use (~6MB for YOLOv8-nano, ~300MB for InsightFace buffalo_l).

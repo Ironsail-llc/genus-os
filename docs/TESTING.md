@@ -154,7 +154,7 @@ def test_pipeline_with_mock_llm(mock_llm):
 
 ## Shared Fixtures Pattern
 
-Every test module directory gets a `conftest.py`. Follow the pattern from `brain/memory_system/conftest.py`:
+Every test module directory gets a `conftest.py`. Follow the pattern in the repository root `conftest.py`:
 
 ```python
 import uuid
@@ -215,9 +215,10 @@ def mock_crm_dal():
 
 Tests that are written and running today.
 
-### Memory System (`brain/memory_system/`)
+### Memory System — instance-local, not shipped
 
-Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.sh`
+This suite lives in the instance workspace under `brain/memory_system/`, not in the platform tree, so a clean checkout will not have it.
+Instance venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.sh`
 
 | Test File | Tests | Level | What It Covers |
 |-----------|-------|-------|----------------|
@@ -240,8 +241,8 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 | Test File | Tests | Level | What It Covers |
 |-----------|-------|-------|----------------|
 | `crm/bridge/tests/test_bridge_api.py` | ~15 | Unit | Health endpoint, resolve-contact, webhook ingestion, CRM proxy endpoints |
-| `crm/bridge/tests/test_contact_resolver.py` | ~8 | Unit | Mapping lookup, gap-filling, new contact creation, upsert logic |
-| `crm/tests/test_phase3_memory_blocks.py` | 18 | Integration | Memory block CRUD, size limits, timestamps (uses memory venv) |
+| `crm/bridge/tests/test_merge.py` | ~14 | Unit | Person merge, identifier reassignment, conflict handling |
+| `robothor/crm/tests/` | — | Unit + Integration | CRM data-access layer: tasks, data scoping, do-not-contact, session goals |
 
 ### CRM Shell Tests (`crm/tests/`)
 
@@ -262,17 +263,18 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 | Component | Test File | Tests | What They Assert | Status |
 |-----------|-----------|-------|------------------|--------|
 | Bridge API | `crm/bridge/tests/test_bridge_api.py` | ~15 | Health endpoint, resolve-contact validation, webhook ingestion, CRM proxy endpoints, log-interaction | Done |
-| Contact Resolver | `crm/bridge/tests/test_contact_resolver.py` | ~8 | Existing mapping lookup, gap-filling, new contact creation, upsert COALESCE logic, timeline | Done |
-| Contact Matching | `brain/memory_system/test_contact_matching.py` | 28 | Name normalization, similarity scoring (exact, prefix, nickname, reversed, three-part), threshold, tiebreaking | Done |
-| Contact Reconciliation | `brain/memory_system/test_contact_reconciliation.py` | 4 | Phase 4 entity↔identifier linking, skip already-linked, skip low-mention, score consistency | Done |
-| Intelligence Pipeline | `brain/memory_system/test_intelligence.py` | 32 | Continuous ingest (18), periodic analysis (6), intelligence pipeline (8) — dedup, watermarks, phases | Done |
-| Orchestrator (unit) | `brain/memory_system/tests/test_orchestrator_unit.py` | ~8 | classify_query categories, format_merged_context truncation + ordering, RAG_PROFILES schema | TODO |
+| Person merge | `crm/bridge/tests/test_merge.py` | ~14 | Person merge, identifier reassignment, conflict handling | Done |
+| Contact Matching | `brain/memory_system/test_contact_matching.py` (instance-local) | 28 | Name normalization, similarity scoring (exact, prefix, nickname, reversed, three-part), threshold, tiebreaking | Done |
+| Contact Reconciliation | `brain/memory_system/test_contact_reconciliation.py` (instance-local) | 4 | Phase 4 entity↔identifier linking, skip already-linked, skip low-mention, score consistency | Done |
+| Intelligence Pipeline | `brain/memory_system/test_intelligence.py` (instance-local) | 32 | Continuous ingest (18), periodic analysis (6), intelligence pipeline (8) — dedup, watermarks, phases | Done |
+| Orchestrator (unit) | `brain/memory_system/tests/test_orchestrator_unit.py` (instance-local) | ~8 | classify_query categories, format_merged_context truncation + ordering, RAG_PROFILES schema | TODO |
 
 **Fixtures needed:** `test_client` (ASGI), `mock_http_client`, `test_prefix`, `db_conn`, `cleanup_test_data`
-**Mocks:** `bridge_service.http_client`, `contact_resolver.get_db`, `crm_dal.*`
+**Mocks:** `bridge_service.http_client`, `crm_dal.*`
 
 ### Phase 2 (Week 3-4): Communication Layer
 
+<!-- doc-check: skip -->
 | Component | Test File | Tests | What They Assert |
 |-----------|-----------|-------|------------------|
 | Voice webhooks | `brain/voice-server/tests/test_voice_webhooks.py` | ~8 | Twilio signature validation, TwiML response format, ConversationRelay events |
@@ -284,6 +286,7 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 
 ### Phase 3 (Week 5-6): MCP + Plugin Tools
 
+<!-- doc-check: skip -->
 | Component | Test File | Tests | What They Assert |
 |-----------|-----------|-------|------------------|
 | CRM MCP tools | `brain/memory_system/test_phase3_mcp_server.py` | ~10 | Tool schema validation, argument mapping, CRM CRUD via crm_dal |
@@ -293,6 +296,7 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 
 ### Phase 4 (Week 7-8): AI Quality
 
+<!-- doc-check: skip -->
 | Component | Test File | Tests | What They Assert |
 |-----------|-----------|-------|------------------|
 | Triage worker | `brain/tests/test_triage_golden.py` | ~8 | Golden dataset: known inputs → correct categorization (>=80%) |
@@ -304,6 +308,7 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 
 ### Phase 5 (Week 9-10): Cron + Maintenance
 
+<!-- doc-check: skip -->
 | Component | Test File | Tests | What They Assert |
 |-----------|-----------|-------|------------------|
 | Calendar sync | `brain/scripts/tests/test_calendar_edge_cases.py` | ~6 | Timezone handling, all-day events, recurring events, deleted events |
@@ -315,11 +320,15 @@ Venv: `brain/memory_system/venv` | Run: `cd brain/memory_system && ./run_tests.s
 
 ### Phase 6 (Week 11-12): End-to-End Flows
 
-| Component | Test File | Tests | What They Assert |
-|-----------|-----------|-------|------------------|
-| Email→notification | `tests/e2e/test_email_to_notification.py` | ~3 | email_sync → triage → Telegram delivery (mock Telegram API) |
-| Voice→memory | `tests/e2e/test_voice_to_memory.py` | ~3 | Twilio webhook → transcription → memory ingestion → fact search |
-| Conversation flow | `tests/e2e/test_conversation_flow.py` | ~3 | Incoming message → Bridge → contact resolution → memory → response |
+No end-to-end test exists for any of these flows, and no file is reserved for
+one — the three test-file paths this section used to name were never created.
+The flows themselves are still the gap:
+
+| Flow | What an end-to-end test would have to assert |
+|------|----------------------------------------------|
+| Email → notification | email_sync → triage → Telegram delivery (mock Telegram API) |
+| Voice → memory | Twilio webhook → transcription → memory ingestion → fact search |
+| Conversation flow | Incoming message → Bridge → contact resolution → memory → response |
 
 **Fixtures needed:** Full service mocks or real services, test data builders
 **Mocks:** External APIs (Telegram, Twilio), or use real services with test accounts

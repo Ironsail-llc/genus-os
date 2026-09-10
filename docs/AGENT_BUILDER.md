@@ -64,7 +64,7 @@ DO NOT offer options that contradict the objective.
 ```
 The child must treat that block as the goal — not whatever the surface message says. If the inbound email offers a meeting but the objective says "without scheduling a meeting", the child refuses the meeting and redirects.
 
-**See** `brain/agents/EMAIL_RESPONDER.md` Section 2a ("Before replying: honor the parent objective") for the canonical example. Every new worker should have an equivalent section when its action space could diverge from the parent objective.
+**See** this instance's `brain/agents/EMAIL_RESPONDER.md` Section 2a ("Before replying: honor the parent objective") for the canonical example. Every new worker should have an equivalent section when its action space could diverge from the parent objective.
 
 **2. Plan with `todo_write` if the run has ≥3 steps.**
 Call `todo_write` early in the run with the concrete steps. Mark `in_progress`/`completed` as you go. The list drives the runner's reminder injection every ~10 turns and surfaces to Telegram for human-facing runs.
@@ -267,7 +267,7 @@ schedule:
 > only cap — and it exists to stop infinite loops, not to rush work.
 > Add `stall_timeout_seconds` only if this agent talks to a known-flaky
 > provider and you want a hang detector; default is off. See
-> `docs/agents/_defaults.yaml`.
+> `docs/agents/_defaults.yaml` (instance-local, not shipped).
 
 Delivery — units are silent:
 
@@ -362,7 +362,7 @@ Add conditional sections when the manifest enables them:
 **Anti-patterns to avoid:**
 - No localhost URLs (engine's `web_fetch` blocks loopback)
 - No hardcoded chat IDs (use delivery config)
-- No file paths outside workspace (use `brain/` relative paths)
+- No file paths outside workspace (use instance-relative `brain/` paths)
 
 ### Step 4: Validate and Deploy
 
@@ -576,9 +576,12 @@ Monitors the email inbox and classifies incoming messages...
 
 ```bash
 robothor agent install email-classifier              # from catalog
-robothor agent install --preset standard              # install a preset group
 robothor agent install ./path/to/bundle/              # from local directory
+robothor agent install standard --preset standard     # install a preset group
 ```
+
+Preset mode installs every agent in the preset. The positional argument is
+still required by the parser and is ignored when `--preset` is given.
 
 ---
 
@@ -588,7 +591,7 @@ A 3-unit pipeline: **classifier** → **analyst** → **responder**, connected v
 
 ### Unit 1: Email Classifier
 
-**Manifest** (`docs/agents/email-classifier.yaml`):
+**Manifest** (`docs/agents/email-classifier.yaml` — an instance manifest, not shipped):
 
 ```yaml
 id: email-classifier
@@ -653,7 +656,7 @@ v2:
   error_feedback: true
 ```
 
-**Instruction** (`brain/EMAIL_CLASSIFIER.md`) — excerpt:
+**Instruction** (`brain/EMAIL_CLASSIFIER.md`, instance-local) — excerpt:
 
 ```markdown
 # Email Classifier
@@ -667,7 +670,7 @@ via CRM tasks. You do NOT reply to emails — you create tasks for downstream un
 
 ## Tasks
 
-1. Read `brain/memory/triage-inbox.json` for unprocessed emails.
+1. Read `brain/memory/triage-inbox.json` (instance state) for unprocessed emails.
 2. For each email, classify: reply-needed, analytical, escalation, or noise.
 3. Create a CRM task for the appropriate handler:
    - `reply-needed` → assignedToAgent="email-responder"
@@ -678,7 +681,7 @@ via CRM tasks. You do NOT reply to emails — you create tasks for downstream un
 
 ### Unit 2: Email Analyst
 
-**Manifest** (`docs/agents/email-analyst.yaml`):
+**Manifest** (`docs/agents/email-analyst.yaml` — an instance manifest, not shipped):
 
 ```yaml
 id: email-analyst
@@ -730,7 +733,7 @@ v2:
 
 ### Unit 3: Email Responder
 
-**Manifest** (`docs/agents/email-responder.yaml`):
+**Manifest** (`docs/agents/email-responder.yaml` — an instance manifest, not shipped):
 
 ```yaml
 id: email-responder
@@ -811,7 +814,7 @@ Before deploying any unit agent:
 - [ ] `tools_allowed` includes `exec`, `read_file`, `write_file` if agent does file I/O
 - [ ] `delivery.mode` is `none` for all unit agents
 - [ ] Instruction file exists at the path specified in the manifest
-- [ ] Status file path is under `brain/memory/`
+- [ ] Status file path is under the instance's `brain/memory/`
 - [ ] If `task_protocol: true`, instruction file mentions `list_my_tasks`, `IN_PROGRESS`, `resolve_task`
 - [ ] Model tier matches the unit's complexity (don't use T2 for classification)
 - [ ] Version date is today's date

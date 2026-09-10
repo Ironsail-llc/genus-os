@@ -13,7 +13,7 @@ A minimal example showing how to use Genus OS's memory system: store facts, sear
 ## Install
 
 ```bash
-pip install robothor
+pip install genusos
 ```
 
 ## Configure

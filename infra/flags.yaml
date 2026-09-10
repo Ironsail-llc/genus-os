@@ -279,7 +279,7 @@ flags:
   - name: ROBOTHOR_RUN_VERIFICATION_MODE
     owner: ops
     mode: observe
-    planned_promotion: "2026-09-05"
+    planned_promotion: "2026-09-24"
     soak: >
       NEW 2026-08-21. Checks a run's final claims against its own tool trace —
       the control that would have caught run 6cb7e492 ("✅ Payment confirmed —
@@ -317,6 +317,20 @@ flags:
       item is the record_update class firing on narration — "I noted it in the
       output", "Documented that …" mean SAID, not STORED, and were 2 of the 3
       production catches in the replay. Triage those before enforce.
+      STATUS 2026-09-10: the verdict has run every day since 2026-08-21. In the
+      7 days to 2026-09-10 the store holds 2,001 verdicts (1,947 no_claims, 24
+      verified, 22 unverified_claims, 7 failed_verification); production runs
+      (trigger_detail not benchmark) account for 488 of them with 3
+      unverified_claims. No operator override row exists, so the live rung is
+      still observe.
+      BLOCKER: the ALERT rung needs the operator spot-check the evidence bar
+      names — read the week's production unverified_claims catches (3 in the
+      7 days to 2026-09-10) and confirm the false-positive rate is under 10%,
+      and triage the record_update-on-narration class. Both are human review
+      steps; neither has been done, and no automated signal substitutes for
+      them. Date moved to 2026-09-24 so the review lands inside the
+      productization campaign's Phase 1, when the Helm gains the audit view
+      that makes the spot-check a five-minute task instead of a psql session.
 
   - name: ROBOTHOR_TOOL_VERIFY_MODE
     owner: ops
