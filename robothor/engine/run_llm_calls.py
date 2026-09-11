@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
 import contextlib
 import logging
-import re
 import time
 from typing import Any
 
@@ -31,6 +30,10 @@ from typing import Any
 # instance of it; the historical method surface is preserved via thin
 # delegators/aliases below so existing call sites keep working unchanged.
 from robothor.engine.llm_client import LLMClient  # noqa: E402
+from robothor.engine.reasoning_replay import (  # noqa: E402
+    PRODUCER_MODEL_KEY,
+    capture_reasoning_fields,
+)
 
 # ── Log-injection sanitizer ──
 # CodeQL py/log-injection: user-controlled values (model names, error
@@ -149,21 +152,6 @@ def _resolve_tool_timeout(tool_name: str, configured: int) -> int:
     return configured
 
 
-def _normalize_model_id(model: str) -> str:
-    """Collapse a model id to a provider/format-agnostic core for comparison.
-
-    litellm reports `response.model` without the `openrouter/` prefix and often
-    with a trailing date or dashes-for-dots, so an exact string compare against
-    the manifest's `model_primary` would false-positive on a *healthy* run. We
-    take the last path segment, drop a trailing date, and strip separators so
-    `openrouter/anthropic/claude-opus-4.7` and `claude-opus-4-7-20260416`
-    compare equal while still distinguishing genuinely different models.
-    """
-    core = (model or "").strip().lower().rsplit("/", 1)[-1]
-    core = re.sub(r"[-_]?\d{6,}$", "", core)  # trailing date/build stamp
-    return re.sub(r"[.\-_\s]", "", core)
-
-
 # Announce-mode runs that end with fewer characters than this are flagged
 # as "partial" — almost always a meta-confirmation ("briefing delivered")
 # rather than the real content the agent was supposed to broadcast.
@@ -274,6 +262,14 @@ class LLMCallMixin:
         else:
             if raw_content:
                 msg_dict["content"] = raw_content
+        # Thinking-mode providers require their own reasoning back on the next
+        # turn (see reasoning_replay). Kept verbatim, tagged with the model that
+        # produced it so the fallback chain never ships one provider's reasoning
+        # to another. The tag is stripped from every outbound payload.
+        reasoning = capture_reasoning_fields(assistant_msg)
+        if reasoning:
+            msg_dict.update(reasoning)
+            msg_dict[PRODUCER_MODEL_KEY] = model_used
         if assistant_msg.tool_calls:
             msg_dict["tool_calls"] = [
                 {

@@ -1565,6 +1565,19 @@ class TestPrimaryModelReached:
         assert "DEGRADED model" not in caplog.text
         assert run.outcome_notes is None
 
+    def test_an_openrouter_variant_suffix_is_not_degradation(self, caplog):
+        """``:free``/``:nitro`` are routing hints, not a different model."""
+        import logging
+
+        from robothor.engine.runner import AgentRunner
+
+        run = self._make_run(model_used="deepseek/deepseek-v4-flash")
+        cfg = self._config("openrouter/deepseek/deepseek-v4-flash:free")
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.runner"):
+            AgentRunner._check_primary_model_reached(run, cfg)
+        assert "DEGRADED model" not in caplog.text
+        assert run.outcome_notes is None
+
 
 class TestPublishRunTelemetry:
     """_publish_run_telemetry — PR 4 run-level cache-hit-rate metrics.

@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from robothor.engine.session import AgentSession
 
 import logging
-import re
 from typing import Any
 
 # LLM dispatch/cost/streaming + the request-timeout constants now live in
@@ -155,21 +154,6 @@ def _resolve_tool_timeout(tool_name: str, configured: int) -> int:
     if tool_name in _LONG_RUNNING_TOOLS:
         return max(configured, 600)
     return configured
-
-
-def _normalize_model_id(model: str) -> str:
-    """Collapse a model id to a provider/format-agnostic core for comparison.
-
-    litellm reports `response.model` without the `openrouter/` prefix and often
-    with a trailing date or dashes-for-dots, so an exact string compare against
-    the manifest's `model_primary` would false-positive on a *healthy* run. We
-    take the last path segment, drop a trailing date, and strip separators so
-    `openrouter/anthropic/claude-opus-4.7` and `claude-opus-4-7-20260416`
-    compare equal while still distinguishing genuinely different models.
-    """
-    core = (model or "").strip().lower().rsplit("/", 1)[-1]
-    core = re.sub(r"[-_]?\d{6,}$", "", core)  # trailing date/build stamp
-    return re.sub(r"[.\-_\s]", "", core)
 
 
 # Announce-mode runs that end with fewer characters than this are flagged

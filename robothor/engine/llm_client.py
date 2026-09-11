@@ -44,6 +44,12 @@ from robothor.engine.codex_provider import acompletion as codex_acompletion
 from robothor.engine.key_pool import KeyPool, Retirement, env_var_for_model, keys_from_env
 from robothor.engine.metrics import LLM_CALL_DURATION, LLM_CALLS_TOTAL, LLM_TOKENS_TOTAL
 from robothor.engine.model_breaker import _current_run_id_var, get_model_breaker
+from robothor.engine.reasoning_replay import (
+    is_reasoning_replay_error,
+    merge_streamed_reasoning_details,
+    redacted_history_digest,
+    strip_reasoning_for_model,
+)
 from robothor.engine.retry import retry_async
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.stall_watchdog import _active_watchdog_var
@@ -526,6 +532,77 @@ _RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
 )
 
 
+async def _emit_tool_call_events(
+    tool_calls: list[Any],
+    seen_tool_ids: set[str],
+    emit: Callable[[dict[str, Any]], Awaitable[None]],
+) -> None:
+    """Emit ``tool_use_start`` once per call id, then its argument deltas.
+
+    A streamed tool call arrives as one id-bearing chunk followed by argument
+    fragments, so the start event must fire exactly once per id — ``seen_tool_ids``
+    is the caller's set and is updated here.
+    """
+    for tc in tool_calls:
+        tc_id = getattr(tc, "id", None)
+        tc_fn = getattr(tc, "function", None)
+        if tc_id and tc_id not in seen_tool_ids:
+            seen_tool_ids.add(tc_id)
+            await emit(
+                {
+                    "type": "tool_use_start",
+                    "tool_name": getattr(tc_fn, "name", "") if tc_fn else "",
+                    "call_id": tc_id,
+                }
+            )
+        if tc_fn and getattr(tc_fn, "arguments", None):
+            await emit(
+                {
+                    "type": "tool_use_delta",
+                    "delta": tc_fn.arguments,
+                    "call_id": tc_id or "",
+                }
+            )
+
+
+def _log_reasoning_replay_rejection(
+    model: str,
+    e: BaseException,
+    messages: list[dict[str, Any]] | None = None,
+) -> None:
+    """Name a thinking-mode replay rejection, or say nothing.
+
+    A history replayed without the provider's own reasoning arrives as a
+    generic 400 "Provider returned error", indistinguishable in the journal
+    from a dozen other bad requests — on 2026-09-11 that cost the fleet a day
+    on the local tier with nothing pointing at the cause. Every path that
+    swallows a model error calls this.
+
+    ``messages`` adds a redacted digest of the rejected history. Replaying the
+    obvious variants against the live provider returned 200 every time, so the
+    shape that actually 400s is still unidentified and only the rejected
+    conversation can name it — shapes and sizes only, never message text.
+    """
+    if not is_reasoning_replay_error(e):
+        return
+    logger.error(
+        "Model %s rejected the conversation because the assistant turn's "
+        "reasoning was not echoed back (thinking mode requires it) — "
+        "reasoning_replay_rejected=True: %s",
+        _sanitize(model),
+        _sanitize(e),
+    )
+    if messages is None:
+        return
+    # The digest is diagnosis, not control flow: a run must not die, and the
+    # rejection above must not go unlogged, because a history had a shape this
+    # sketch could not walk.
+    try:
+        logger.error("reasoning_replay_history %s", redacted_history_digest(messages, model))
+    except Exception as digest_error:  # noqa: BLE001 — never lose the real error
+        logger.warning("reasoning-replay history digest failed: %s", _sanitize(digest_error))
+
+
 async def llm_call(
     messages: list[dict[str, Any]],
     *,
@@ -597,6 +674,10 @@ async def llm_call(
     last: Exception | None = None
     for candidate in chain:
         kwargs["model"] = candidate
+        # Callers here pass their own message lists, but a caller replaying an
+        # agent's history would carry engine bookkeeping and another provider's
+        # reasoning into this payload. No-op for everything else.
+        kwargs["messages"] = strip_reasoning_for_model(messages, candidate)
         try:
             return await retry_async(
                 _attempt,
@@ -606,6 +687,10 @@ async def llm_call(
             )
         except Exception as exc:  # noqa: BLE001 - the next model is the point
             last = exc
+            # Judge, buddy review and the background legs never touch
+            # _handle_model_error, so without this the same rejection is
+            # silent on every path outside the agent loop.
+            _log_reasoning_replay_rejection(candidate, exc, kwargs["messages"])
             if candidate != chain[-1]:
                 logger.warning(
                     "llm_call: %s failed (%s); trying the next model in the chain",
@@ -1127,6 +1212,13 @@ class LLMClient:
         limits = get_model_limits(model)
         actual_model = model
 
+        # Reasoning belongs to the model that produced it: echoed back to the
+        # same model (thinking mode rejects a history without it), stripped for
+        # any other. Runs first so every later step sees the payload shape the
+        # provider will. No-op (same list object) for a history with no
+        # reasoning on it. See reasoning_replay.
+        messages = strip_reasoning_for_model(messages, model)
+
         # For models that support Anthropic-style prompt caching, enable it on
         # the system message by converting it to content-block format with
         # cache_control. This is now a catalog-driven capability lookup (see
@@ -1258,8 +1350,17 @@ class LLMClient:
         broken_models: set[str] | None,
         *,
         streaming: bool = False,
+        messages: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Handle model failure: mark broken or log warning."""
+        """Handle model failure: mark broken or log warning.
+
+        ``messages`` is the history the call carried, used only to describe the
+        shape of a rejected conversation (redacted) when the failure is a
+        thinking-mode replay rejection.
+        """
+        # Named before anything else classifies it — a 400 tells the operator
+        # nothing on its own.
+        _log_reasoning_replay_rejection(model, e, messages)
         status = getattr(e, "status_code", None)
         is_timeout = isinstance(e, (asyncio.TimeoutError, TimeoutError))
         # Provider-availability failures (e.g. the Codex CLI missing from the
@@ -1663,7 +1764,7 @@ class LLMClient:
                         # would blind the fleet's only offline tier for the
                         # cooldown, during the outage it exists to cover.
                         breaker.record_failure(model, reason=str(e)[:120])
-                    self._handle_model_error(e, model, broken_models)
+                    self._handle_model_error(e, model, broken_models, messages=messages)
                     if self._active_watchdog:
                         self._active_watchdog.touch(f"model_fallback:{model}")
                     break  # advance to the next model in the chain
@@ -1793,6 +1894,11 @@ class LLMClient:
                     has_tool_calls = False
                     ttft_logged = False
                     seen_tool_ids: set[str] = set()
+                    # stream_chunk_builder combines reasoning_content and drops
+                    # the rest, so this one is accumulated here or it is lost —
+                    # and the interactive path would replay fewer fields than a
+                    # cron run of the same agent. See reasoning_replay.
+                    streamed_reasoning_details: list[Any] = []
 
                     # Consume stream with per-chunk timeout so stalled streams
                     # fall back to the next model instead of hanging the run.
@@ -1836,6 +1942,9 @@ class LLMClient:
                                 )
                             continue
                         delta = chunk.choices[0].delta
+                        delta_details = getattr(delta, "reasoning_details", None)
+                        if isinstance(delta_details, list):
+                            streamed_reasoning_details.extend(delta_details)
                         if getattr(delta, "content", None):
                             if not ttft_logged:
                                 ttft_ms = int((time.monotonic() - stream_start) * 1000)
@@ -1858,28 +1967,7 @@ class LLMClient:
                             has_tool_calls = True
                             if self._active_watchdog:
                                 self._active_watchdog.touch(f"stream_tool_call:{model}")
-                            for tc in delta.tool_calls:
-                                tc_id = getattr(tc, "id", None)
-                                tc_fn = getattr(tc, "function", None)
-                                if tc_id and tc_id not in seen_tool_ids:
-                                    seen_tool_ids.add(tc_id)
-                                    await _emit(
-                                        {
-                                            "type": "tool_use_start",
-                                            "tool_name": getattr(tc_fn, "name", "")
-                                            if tc_fn
-                                            else "",
-                                            "call_id": tc_id,
-                                        }
-                                    )
-                                if tc_fn and getattr(tc_fn, "arguments", None):
-                                    await _emit(
-                                        {
-                                            "type": "tool_use_delta",
-                                            "delta": tc_fn.arguments,
-                                            "call_id": tc_id or "",
-                                        }
-                                    )
+                            await _emit_tool_call_events(delta.tool_calls, seen_tool_ids, _emit)
 
                     await _emit({"type": "message_stop"})
                     # Final progress tick — we have a complete response to return.
@@ -1890,14 +1978,11 @@ class LLMClient:
                     # reach the breaker, so it can open and never clear.
                     get_model_breaker().record_success(model)
                     _record_execution_mode(model)
-                    return litellm.stream_chunk_builder(chunks)
+                    rebuilt = litellm.stream_chunk_builder(chunks)
+                    merge_streamed_reasoning_details(rebuilt, streamed_reasoning_details)
+                    return rebuilt
                 except TimeoutError as te:
-                    self._handle_model_error(
-                        te,
-                        model,
-                        broken_models,
-                        streaming=True,
-                    )
+                    self._handle_model_error(te, model, broken_models, streaming=True)
                     last_error = te
                     # Model rotation is activity — don't let watchdog kill us mid-fallback
                     if self._active_watchdog:
@@ -1933,7 +2018,9 @@ class LLMClient:
                         )
                         last_error = e
                         break
-                    self._handle_model_error(e, model, broken_models, streaming=True)
+                    self._handle_model_error(
+                        e, model, broken_models, streaming=True, messages=messages
+                    )
                     last_error = e
                     if self._active_watchdog:
                         self._active_watchdog.touch(f"stream_error_fallback:{model}")

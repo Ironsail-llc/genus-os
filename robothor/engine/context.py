@@ -11,6 +11,8 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.reasoning_replay import REASONING_FIELDS
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -112,6 +114,13 @@ def estimate_tokens(messages: list[dict[str, Any]], model: str | None = None) ->
         content = msg.get("content")
         if content:
             total_chars += _content_chars(content)
+        # Reasoning replayed to a thinking-mode provider is prompt like any
+        # other (see reasoning_replay). Uncounted, a multi-turn run's estimate
+        # drifts below what is actually sent and the window overruns silently.
+        for field in REASONING_FIELDS:
+            reasoning = msg.get(field)
+            if reasoning:
+                total_chars += _content_chars(reasoning)
         tool_calls = msg.get("tool_calls")
         if tool_calls:
             tool_call_count += len(tool_calls)
