@@ -3,6 +3,7 @@
  * Server-side only — called from the welcome API route.
  */
 
+import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { getServiceUrl } from "@/lib/services/registry";
 import { OWNER_NAME } from "@/lib/config";
 const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
@@ -43,11 +44,17 @@ export async function fetchWelcomeContext(): Promise<WelcomeContext> {
   else if (hour >= 17 && hour < 22) greeting = "Good evening";
   else greeting = "Hey";
 
+  // These run inside a route handler on behalf of the signed-in operator:
+  // resolve that caller's bridge credential once and send it with every
+  // backend call. Without it the bridge answers 401 and the welcome dashboard
+  // is generated from nothing.
+  const authHeaders = await bridgeAuthHeaders();
+
   // Fetch context in parallel — all are optional
   const [health, inbox, calendar, eventBus] = await Promise.all([
-    fetchHealth(),
-    fetchInbox(),
-    fetchCalendar(),
+    fetchHealth(authHeaders),
+    fetchInbox(authHeaders),
+    fetchCalendar(authHeaders),
     fetchEventBusStats(),
   ]);
 
@@ -63,12 +70,12 @@ export async function fetchWelcomeContext(): Promise<WelcomeContext> {
   };
 }
 
-async function fetchHealth() {
+async function fetchHealth(authHeaders: Record<string, string>) {
   try {
     const checks = await Promise.allSettled([
-      fetchJson(`${BRIDGE_URL}/health`),
-      fetchJson(`${ORCHESTRATOR_URL}/health`),
-      fetchJson(`${getServiceUrl("vision") || "http://localhost:8600"}/health`),
+      fetchJson(authHeaders, `${BRIDGE_URL}/health`),
+      fetchJson(authHeaders, `${ORCHESTRATOR_URL}/health`),
+      fetchJson(authHeaders, `${getServiceUrl("vision") || "http://localhost:8600"}/health`),
     ]);
     const names = ["bridge", "orchestrator", "vision"];
     const services = checks.map((c, i) => ({
@@ -86,9 +93,10 @@ async function fetchHealth() {
   }
 }
 
-async function fetchInbox() {
+async function fetchInbox(authHeaders: Record<string, string>) {
   try {
     const data = await fetchJson(
+      authHeaders,
       `${BRIDGE_URL}/api/conversations?status=open`
     );
     const conversations = data?.data?.payload ?? [];
@@ -106,9 +114,10 @@ async function fetchInbox() {
   }
 }
 
-async function fetchCalendar() {
+async function fetchCalendar(authHeaders: Record<string, string>) {
   try {
     const data = await fetchJson(
+      authHeaders,
       `${ORCHESTRATOR_URL}/query`,
       {
         method: "POST",
@@ -136,7 +145,12 @@ async function fetchEventBusStats() {
   }
 }
 
-async function fetchJson(url: string, options?: RequestInit, timeoutMs = 5000) {
+async function fetchJson(
+  authHeaders: Record<string, string>,
+  url: string,
+  options?: RequestInit,
+  timeoutMs = 5000,
+) {
   // Resolve the request against its own configured backend origin and assert
   // the resolved origin is unchanged — this breaks SSRF taint flows where a
   // path segment could escape the intended backend.
@@ -150,7 +164,7 @@ async function fetchJson(url: string, options?: RequestInit, timeoutMs = 5000) {
   }
   const res = await fetch(target.toString(), {
     ...options,
-    headers: { "Content-Type": "application/json", ...options?.headers },
+    headers: { "Content-Type": "application/json", ...authHeaders, ...options?.headers },
     signal: AbortSignal.timeout(timeoutMs),
   });
   return res.json();
