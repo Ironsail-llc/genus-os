@@ -31,18 +31,23 @@ authority via the `/api/auth/sso` exchange:
 **`AUTH_URL` must be the public origin** — the scheme+host a browser actually
 uses (`https://helm.example.com`), alongside `CF_ACCESS_TEAM_DOMAIN` /
 `CF_ACCESS_AUD` and `AUTH_SECRET`. Next's standalone server binds
-`process.env.HOSTNAME || '0.0.0.0'`, so inside a route handler `request.url`
-reports the *bind* address, not the address the browser used.
-`/signin/cloudflare` builds every redirect from `AUTH_URL` for that reason,
-falling back to `request.nextUrl.origin` only when it is unset. With it unset
-behind a proxy, a successful edge sign-in ends on "0.0.0.0 refused to connect"
-(2026-09-11).
+`process.env.HOSTNAME || '0.0.0.0'` and attaches it to every request, so inside
+a route handler **both** `request.url` and `request.nextUrl` report the *bind*
+address rather than the address the browser used (unless
+`experimental.trustHostHeader` is set, which this app does not set).
+`/signin/cloudflare` therefore resolves its origin as **`AUTH_URL` → the
+proxy's `x-forwarded-proto`/`x-forwarded-host` headers → `request.nextUrl.origin`**.
+
+That last fallback is **not a safe default** — it is the bind address, i.e. the
+incident. It exists so `next dev` works locally. Behind a proxy with `AUTH_URL`
+unset and no forwarded headers, a successful edge sign-in still ends on
+"0.0.0.0 refused to connect" (2026-09-11). Set `AUTH_URL`.
 
 Where it comes from, per install shape:
 
 | Install | Source |
 |---|---|
-| systemd | `AUTH_URL=` in `/etc/robothor/robothor.env` (see `infra/robothor.env.example`) |
+| systemd | `AUTH_URL=` in **either** `/etc/robothor/robothor.env` (see `infra/robothor.env.example`) or the SOPS-encrypted secrets decrypted to `/run/robothor/secrets.env`. If you put it in the latter, the app only sees it because `robothor-app.service` is ordered after `robothor-secrets.service` — see `infra/systemd/README.md`. |
 | Helm | `dashboard.env.AUTH_URL` in values — set it to `https://<dashboard.ingress.host>` |
 
 Existing accounts (including the bootstrapped owner) bind to an IdP identity
