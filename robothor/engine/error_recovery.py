@@ -72,6 +72,22 @@ _PERMISSION_PATTERNS = [
     re.compile(r"Operation not permitted", re.IGNORECASE),
 ]
 
+#: One of OUR guards refused the call. `agent_tool_events.error_type` has to
+#: separate these from an upstream failure: a 24h window where web_fetch failed
+#: 35 of 57 calls mixed SSRF refusals, CDN 403s and certificate failures under
+#: one label, so the degradation detector could not say which was breaking.
+_BLOCKED_PATTERNS = [
+    re.compile(r"agents cannot access", re.IGNORECASE),
+    re.compile(r"private/loopback", re.IGNORECASE),
+    re.compile(r"refusing to connect to unvetted host", re.IGNORECASE),
+]
+
+_TLS_PATTERNS = [
+    re.compile(r"CERTIFICATE_VERIFY_FAILED", re.IGNORECASE),
+    re.compile(r"SSLCertVerificationError", re.IGNORECASE),
+    re.compile(r"certificate.{0,40}(untrusted|verify failed|not trusted)", re.IGNORECASE),
+]
+
 _API_DEPRECATED_PATTERNS = [
     re.compile(r"deprecated", re.IGNORECASE),
     re.compile(r"removed.{0,20}api", re.IGNORECASE),
@@ -82,6 +98,10 @@ _API_DEPRECATED_PATTERNS = [
 # Ordered by specificity — dependency before not_found (ModuleNotFoundError
 # matches both, but dependency is the more specific classification)
 _PATTERN_MAP: list[tuple[list[re.Pattern[str]], ErrorType]] = [
+    # Blocked and TLS come first: both would otherwise be swallowed by the
+    # broader auth/permission patterns and lose their identity.
+    (_BLOCKED_PATTERNS, ErrorType.BLOCKED),
+    (_TLS_PATTERNS, ErrorType.TLS),
     (_DEPENDENCY_PATTERNS, ErrorType.DEPENDENCY),
     (_AUTH_PATTERNS, ErrorType.AUTH),
     (_RATE_LIMIT_PATTERNS, ErrorType.RATE_LIMIT),

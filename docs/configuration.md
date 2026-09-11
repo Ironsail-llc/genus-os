@@ -152,6 +152,20 @@ convention, which would print real key material.
 | `ROBOTHOR_TELEGRAM_BOT_TOKEN` | *(empty)* | Telegram bot token for alerts |
 | `ROBOTHOR_TELEGRAM_CHAT_ID` | *(empty)* | Telegram chat ID for notifications |
 
+## Web fetch
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ROBOTHOR_WEB_FETCH_USER_AGENT` | `GenusOS-web-fetch/1.0 (+https://github.com/Ironsail-llc/genus-os)` | Identity `web_fetch` sends. Sites that block HTTP-library defaults answer 403 to `python-httpx/*`, so the tool names itself; set this to add your own contact address |
+
+`web_fetch` resolves a host, refuses any private/loopback/link-local address,
+and then connects to the exact address it vetted — pinned at the socket, so the
+request keeps its hostname and Host, TLS SNI and certificate verification all
+see the real name. Certificate verification is never disabled; an untrusted
+certificate is reported as such. Redirects are followed one hop at a time and
+re-vetted at every hop, up to 5 real hops (the canonical `http→https` and
+`apex↔www` bounces do not count against that).
+
 ## Failure-mode detectors
 
 See [Observability](OBSERVABILITY.md#failure-mode-detectors) for what each

@@ -28,6 +28,10 @@ dependencies = [
     "psycopg2-binary~=2.9",
     "redis~=5.0",
     "httpx~=0.27",
+    # Imported directly by web_fetch's pinned network backend (httpx exposes no
+    # public hook for one), so it is declared rather than relied on as httpx's
+    # transitive dependency.
+    "httpcore~=1.0",
     "pydantic~=2.0",
     # ONNX 1.22+ requires ml-dtypes, whose Python 3.13+ wheels require NumPy
     # 2.x. Keep the stable 1.26 ABI on 3.11/3.12 while allowing the supported

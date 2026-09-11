@@ -132,9 +132,11 @@ class TestWebFetchRedirects:
         """The fetch must connect to the IP vetted at check time, not re-resolve.
 
         A DNS-rebinding attacker returns a public IP on the first (validation)
-        lookup, then a private IP on the second (connection) lookup. Because we
-        pin the vetted IP onto the request, a second resolution never happens and
-        the private target is never reached.
+        lookup, then a private IP on the second (connection) lookup. The name is
+        resolved exactly once, and the vetted address is pinned at the SOCKET —
+        the request itself keeps the hostname, so Host, SNI and certificate
+        verification see the real name. ``test_web_fetch_pinning.py`` proves the
+        socket half against a real server; this proves the URL half.
         """
         calls = {"n": 0}
 
@@ -152,7 +154,7 @@ class TestWebFetchRedirects:
         assert "error" not in result
         assert len(fake.calls) == 1
         call = fake.calls[0]
-        # Connected to the pinned public IP, carrying the real Host + SNI.
-        assert "93.184.216.34" in call["url"]
-        assert call["headers"]["Host"] == "example.com"
-        assert call["extensions"]["sni_hostname"] == "example.com"
+        # The request is addressed to the hostname — never rewritten to the IP.
+        assert call["url"] == "http://example.com/"
+        # Resolved once, at vetting time. The rebind answer is never asked for.
+        assert calls["n"] == 1
