@@ -16,18 +16,23 @@ Usage::
     python -m robothor.db.migrate apply
     python -m robothor.db.migrate apply 071_memory_vault
     python -m robothor.db.migrate apply --dry-run
+    python -m robothor.db.migrate apply --adopt-baseline
+    python -m robothor.db.migrate apply --adopt-through 040_memory_episodes
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import yaml
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -51,6 +56,28 @@ MIGRATIONS_DIR = (
 )
 
 _HISTORY_TABLE = "schema_migrations_v2"
+
+# Evidence that schema was created outside this runner.  Older deployments
+# booted PostgreSQL with ``001_init.sql`` mounted into
+# ``docker-entrypoint-initdb.d``, or migrated with the retired ``robothor
+# upgrade`` glob, so the schema exists while nothing in the ledger was written
+# by the v2 runner.  Replaying those files is destructive — 019 DELETEs live
+# ``chat_sessions``, 035 raises mid-chain — so ``apply()`` refuses until the
+# operator adopts the history explicitly.
+BASELINE_EVIDENCE_TABLE = "memory_facts"
+
+BASELINE_UNADOPTED_STATUS = "baseline-unadopted"
+BASELINE_UNADOPTED_MESSAGE = (
+    "ledger empty but schema present — run `robothor migrate --adopt-baseline`. "
+    "(Also reported when the ledger holds only rows reconciled from the legacy "
+    "schema_migrations table: nothing in it was written by this runner, so the "
+    "pending migrations may already have run against this database.)"
+)
+
+# Where the retired ``robothor upgrade`` glob recorded what it applied.  It is
+# the only surviving record of that path, so adoption reads it rather than
+# assuming only the baseline ran.
+_LEGACY_YAML_LEDGER = Path(".robothor") / "migrations_applied.yaml"
 _LOCK_KEY = int.from_bytes(
     hashlib.sha256(b"genusos:canonical-schema-migrations:v2").digest()[:8],
     byteorder="big",
@@ -106,6 +133,7 @@ class AppliedMigration:
     applied_at: Any
     checksum: str
     reconciled_from_legacy: bool
+    adopted_from: str | None = None
 
 
 def _sha256(path: Path) -> str:
@@ -209,6 +237,170 @@ def _discover(migrations_dir: Path | None = None) -> list[Migration]:
     return migrations
 
 
+def manifest_count() -> int:
+    """Number of migrations listed in the canonical manifest."""
+
+    return len(_manifest_paths())
+
+
+def _baseline_schema_present(conn: Any) -> bool:
+    """True when schema exists that this runner did not necessarily create."""
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT to_regclass(%s)", (f"public.{BASELINE_EVIDENCE_TABLE}",))
+    row = cursor.fetchone()
+    return bool(row and row[0] is not None)
+
+
+def _ledger_is_unverified(applied: dict[str, AppliedMigration]) -> bool:
+    """True when nothing in the ledger was written or vouched for by this runner.
+
+    Emptiness is *not* the test.  An instance migrated by the retired
+    ``robothor upgrade`` glob carries the legacy ``schema_migrations`` table
+    that ``018_migration_tracking.sql`` backfills with 18 rows; reconciliation
+    copies those into the v2 ledger, so the ledger is non-empty while every row
+    in it is still hearsay about a file this runner never ran.  A row written
+    by ``apply()`` — or explicitly adopted by the operator — is the only thing
+    that makes the ledger trustworthy.
+
+    Deliberately *not* ``len(applied) < manifest_count()``: a partially applied
+    ledger is the ordinary state of every instance between releases.
+    """
+
+    return not any(
+        (not record.reconciled_from_legacy) or record.adopted_from is not None
+        for record in applied.values()
+    )
+
+
+def _legacy_yaml_ledger_path() -> Path:
+    workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
+    return workspace / _LEGACY_YAML_LEDGER
+
+
+def _legacy_yaml_filenames() -> set[str]:
+    """Migration filenames the retired ``robothor upgrade`` glob recorded.
+
+    An absent file means no evidence and returns an empty set.  A file that
+    exists but cannot be parsed is *not* the same thing: it is evidence that
+    cannot be read, and degrading it to "no evidence" would silently narrow
+    the adoption to the baseline alone.  That raises.
+    """
+
+    path = _legacy_yaml_ledger_path()
+    if not path.is_file():
+        return set()
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as error:
+        raise MigrationHistoryError(
+            f"Legacy migration ledger {path} exists but could not be read: {error}. "
+            "It is the record of what the retired upgrade path applied — repair or "
+            "remove it rather than migrating past it."
+        ) from error
+    if data is None:
+        data = {}
+    entries = data.get("migrations") if isinstance(data, dict) else None
+    if entries is None:
+        entries = []
+    if not isinstance(entries, list):
+        raise MigrationHistoryError(
+            f"Legacy migration ledger {path} exists but could not be read: its "
+            f"'migrations' key is {type(entries).__name__}, expected a list."
+        )
+    return {
+        Path(str(entry["file"])).name
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("file")
+    }
+
+
+def _resolve_adopt_through(migrations: list[Migration], adopt_through: str | None) -> set[str]:
+    """Ids up to and including ``adopt_through``, validating the id itself.
+
+    Called before any adoption decision so a misspelled id refuses even when
+    the guard turns out to be inert — an ignored typo is how an operator comes
+    to believe they adopted a range they did not.
+    """
+
+    if adopt_through is None:
+        return set()
+    by_id = {migration.migration_id: index for index, migration in enumerate(migrations)}
+    if adopt_through not in by_id:
+        raise MigrationSelectionError(
+            f"Unknown migration id for --adopt-through: {adopt_through!r}. "
+            "Use the full immutable id exactly as `robothor migrate --status` prints it."
+        )
+    return {migration.migration_id for migration in migrations[: by_id[adopt_through] + 1]}
+
+
+def _adopt_without_executing(
+    conn: Any,
+    migrations: list[Migration],
+    applied: dict[str, AppliedMigration],
+    through_ids: set[str],
+) -> list[tuple[str, str]]:
+    """Record history the operator vouches for, running none of its SQL.
+
+    Adopts the manifest's first entry (the baseline every install has run),
+    everything up to and including ``adopt_through`` when given, and every
+    entry the legacy YAML side-ledger names.  Anything unnamed stays pending
+    and is applied normally, so this narrows the replay to files with no
+    evidence of having run.
+
+    Refuses outright in the one case where the adoption set would be a lie: the
+    legacy ``schema_migrations`` table vouches for migrations past the baseline
+    — so the schema is further along than 001 — while nothing says how much
+    further.  Adopting the baseline alone there and executing the remainder is
+    the very replay this guard exists to prevent, so the operator has to say
+    where the schema actually is.
+    """
+
+    baseline_id = migrations[0].migration_id
+    yaml_filenames = _legacy_yaml_filenames()
+
+    if not through_ids and not yaml_filenames:
+        hearsay_beyond_baseline = sorted(
+            record.migration_id
+            for record in applied.values()
+            if record.reconciled_from_legacy and record.migration_id != baseline_id
+        )
+        if hearsay_beyond_baseline:
+            pending = [
+                migration.migration_id
+                for migration in migrations
+                if migration.migration_id not in applied
+            ]
+            next_pending = pending[0] if pending else "the remaining migrations"
+            raise MigrationHistoryError(
+                f"The ledger vouches for {len(hearsay_beyond_baseline)} migration(s) past "
+                f"the baseline (through {hearsay_beyond_baseline[-1]}) from the legacy "
+                "schema_migrations table alone, and no side-ledger was found at "
+                f"{_legacy_yaml_ledger_path()} to say how far the schema really got. "
+                f"Adopting only the baseline would then execute {next_pending} onward "
+                "over live data. Re-run with `--adopt-through <migration_id>` naming the "
+                "last migration this database already holds; `robothor migrate --status` "
+                "lists the ids."
+            )
+
+    adopted: list[tuple[str, str]] = []
+    for migration in migrations:
+        if migration.migration_id in applied:
+            continue
+        if migration.migration_id == baseline_id:
+            source = "baseline"
+        elif migration.migration_id in through_ids:
+            source = "operator"
+        elif migration.filename in yaml_filenames:
+            source = "yaml_ledger"
+        else:
+            continue
+        _insert_history(conn, migration, adopted_from=source)
+        adopted.append((migration.migration_id, source))
+    conn.commit()
+    return adopted
+
+
 def _strip_outer_transaction(sql: str) -> str:
     """Remove a file's outer BEGIN/COMMIT so the runner owns atomicity.
 
@@ -285,6 +477,10 @@ def _ensure_history_table(conn: Any) -> None:
             reconciled_from_legacy  BOOLEAN NOT NULL DEFAULT FALSE
         )
     """)
+    # Provenance for rows adopted by --adopt-baseline: 'baseline' for the
+    # manifest's first entry, 'yaml_ledger' for entries the retired side-ledger
+    # named.  NULL means this runner executed the file itself.
+    cursor.execute(f"ALTER TABLE {_HISTORY_TABLE} ADD COLUMN IF NOT EXISTS adopted_from TEXT")
 
 
 def _insert_history(
@@ -293,15 +489,16 @@ def _insert_history(
     *,
     applied_at: Any = None,
     reconciled_from_legacy: bool = False,
+    adopted_from: str | None = None,
 ) -> None:
     cursor = conn.cursor()
     cursor.execute(
         f"""
         INSERT INTO {_HISTORY_TABLE} (
             migration_id, version, filename, source, applied_at,
-            checksum, reconciled_from_legacy
+            checksum, reconciled_from_legacy, adopted_from
         )
-        VALUES (%s, %s, %s, %s, COALESCE(%s, NOW()), %s, %s)
+        VALUES (%s, %s, %s, %s, COALESCE(%s, NOW()), %s, %s, %s)
         ON CONFLICT (migration_id) DO NOTHING
         """,
         (
@@ -312,6 +509,7 @@ def _insert_history(
             applied_at,
             migration.checksum,
             reconciled_from_legacy,
+            adopted_from,
         ),
     )
 
@@ -410,7 +608,7 @@ def _applied(conn: Any) -> dict[str, AppliedMigration]:
     cursor.execute(
         f"""
         SELECT migration_id, version, filename, source, applied_at, checksum,
-               reconciled_from_legacy
+               reconciled_from_legacy, adopted_from
         FROM {_HISTORY_TABLE}
         ORDER BY applied_at, migration_id
         """
@@ -424,6 +622,7 @@ def _applied(conn: Any) -> dict[str, AppliedMigration]:
             applied_at=row[4],
             checksum=row[5],
             reconciled_from_legacy=bool(row[6]),
+            adopted_from=row[7],
         )
         for row in cursor.fetchall()
     }
@@ -486,9 +685,14 @@ def status(
     with _connection(connection) as conn, _advisory_lock(conn):
         unmanaged = _prepare_history(conn, migrations)
         applied = _applied(conn)
+        pending_exists = any(migration.migration_id not in applied for migration in migrations)
+        baseline_unadopted = (
+            pending_exists and _ledger_is_unverified(applied) and _baseline_schema_present(conn)
+        )
 
     rows: list[dict[str, Any]] = []
     discovered_ids = {migration.migration_id for migration in migrations}
+    baseline_id = migrations[0].migration_id
     for migration in migrations:
         record = applied.get(migration.migration_id)
         row_status = "pending"
@@ -503,16 +707,20 @@ def status(
                 or record.checksum != migration.checksum
             ):
                 row_status = "DRIFT"
-        rows.append(
-            {
-                "migration_id": migration.migration_id,
-                "version": migration.version,
-                "filename": migration.filename,
-                "source": migration.source,
-                "status": row_status,
-                "applied_at": applied_at,
-            }
-        )
+        row: dict[str, Any] = {
+            "migration_id": migration.migration_id,
+            "version": migration.version,
+            "filename": migration.filename,
+            "source": migration.source,
+            "status": row_status,
+            "applied_at": applied_at,
+        }
+        # The baseline's own row carries the warning: one row per manifest
+        # entry, so a caller counting rows still counts migrations.
+        if baseline_unadopted and migration.migration_id == baseline_id:
+            row["status"] = BASELINE_UNADOPTED_STATUS
+            row["message"] = BASELINE_UNADOPTED_MESSAGE
+        rows.append(row)
 
     for migration_id, record in applied.items():
         if migration_id not in discovered_ids:
@@ -547,15 +755,33 @@ def apply(
     migrations_dir: Path | None = None,
     *,
     connection: Any | None = None,
+    adopt_baseline: bool = False,
+    adopt_through: str | None = None,
 ) -> list[str]:
     """Apply selected pending migrations and return their immutable IDs.
 
     ``version`` is retained for API compatibility, but accepts the preferred
     full migration ID or filename.  A numeric prefix works only when unique.
+
+    ``adopt_baseline`` covers databases whose schema was created by the retired
+    ``docker-entrypoint-initdb.d`` mount: the ledger is empty but the baseline
+    already ran.  The flag records the manifest's first migration as applied
+    *without executing it*, then continues with the rest of the chain.  Without
+    the flag such a database is refused outright — replaying the baseline over
+    live data is exactly the accident this guard prevents.
+
+    ``adopt_through`` names the last migration the schema already holds and
+    adopts everything up to and including it, again without executing.  It
+    implies ``adopt_baseline`` and is the answer when the ledger's only
+    evidence is the legacy table and no side-ledger survives to bound the
+    adoption.
     """
 
     migrations = _discover(migrations_dir)
     selected = _select_migrations(migrations, version)
+    # Validate before touching the database: an unknown id is a mistake whether
+    # or not the adoption path ends up being reached.
+    through_ids = _resolve_adopt_through(migrations, adopt_through)
 
     if dry_run:
         for migration in selected:
@@ -571,6 +797,33 @@ def apply(
         applied = _applied(conn)
         _validate_history(migrations, applied)
         to_apply = [migration for migration in selected if migration.migration_id not in applied]
+
+        # Only a replay can hurt, so the guard is skipped when nothing is
+        # pending — an unverified but complete ledger has nothing to re-run.
+        adoption_requested = adopt_baseline or adopt_through is not None
+        if to_apply and _ledger_is_unverified(applied) and _baseline_schema_present(conn):
+            if not adoption_requested:
+                raise MigrationHistoryError(BASELINE_UNADOPTED_MESSAGE)
+            for migration_id, adoption_source in _adopt_without_executing(
+                conn, migrations, applied, through_ids
+            ):
+                print(f"Adopted {migration_id} into the ledger from {adoption_source}.")
+            applied = _applied(conn)
+            _validate_history(migrations, applied)
+            to_apply = [
+                migration for migration in selected if migration.migration_id not in applied
+            ]
+        elif adoption_requested:
+            # Say so rather than no-op quietly: a flag that did nothing must not
+            # be indistinguishable from a flag that worked.
+            flags = ["--adopt-baseline"] if adopt_baseline else []
+            if adopt_through is not None:
+                flags.append(f"--adopt-through {adopt_through}")
+            print(
+                f"{' and '.join(flags)} ignored: this database needs no adoption "
+                "(its ledger already has history this runner wrote or you adopted)."
+            )
+
         if not to_apply:
             print("Nothing to apply.")
             return []
@@ -599,19 +852,47 @@ def main() -> None:
     try:
         if not args or args[0] == "status":
             rows = status()
-            print(f"{'Migration ID':<38} {'Source':<8} {'Status':<10} {'Applied At'}")
+            print(f"{'Migration ID':<38} {'Source':<8} {'Status':<18} {'Applied At'}")
             print("-" * 90)
             for row in rows:
                 applied_at = str(row["applied_at"])[:19] if row["applied_at"] else ""
                 print(
-                    f"{row['migration_id']:<38} {row['source']:<8} {row['status']:<10} {applied_at}"
+                    f"{row['migration_id']:<38} {row['source']:<8} {row['status']:<18} {applied_at}"
                 )
+                message = row.get("message")
+                if message:
+                    print(f"  {message}")
+            print()
+            print(f"Manifest: {manifest_count()} migration(s).")
         elif args[0] == "apply":
-            selector = next((arg for arg in args[1:] if arg != "--dry-run"), None)
-            apply(version=selector, dry_run="--dry-run" in args)
+            selector: str | None = None
+            adopt_through: str | None = None
+            rest = list(args[1:])
+            while rest:
+                argument = rest.pop(0)
+                if argument == "--adopt-through":
+                    if not rest:
+                        print("--adopt-through requires a migration id", file=sys.stderr)
+                        raise SystemExit(1)
+                    adopt_through = rest.pop(0)
+                elif argument.startswith("--adopt-through="):
+                    adopt_through = argument.split("=", 1)[1]
+                elif argument in {"--dry-run", "--adopt-baseline"}:
+                    continue
+                elif selector is None:
+                    selector = argument
+            apply(
+                version=selector,
+                dry_run="--dry-run" in args,
+                adopt_baseline="--adopt-baseline" in args,
+                adopt_through=adopt_through,
+            )
         else:
             print(f"Unknown command: {args[0]}", file=sys.stderr)
-            print("Usage: python -m robothor.db.migrate [status|apply [ID] [--dry-run]]")
+            print(
+                "Usage: python -m robothor.db.migrate [status|apply [ID] [--dry-run] "
+                "[--adopt-baseline] [--adopt-through MIGRATION_ID]]"
+            )
             raise SystemExit(1)
     except MigrationError as error:
         print(f"Migration error: {error}", file=sys.stderr)

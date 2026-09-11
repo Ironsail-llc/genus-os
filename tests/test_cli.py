@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 from robothor import __version__
-from robothor.cli import REQUIRED_TABLES, _find_migration_sql, main
+from robothor.cli import REQUIRED_TABLES, main
 
 
 class TestCli:
@@ -77,12 +77,59 @@ class TestCli:
 
 
 class TestMigrate:
-    def test_find_migration_sql(self):
-        """Migration SQL should be findable (at least in dev layout)."""
-        sql = _find_migration_sql()
-        assert sql is not None
-        assert "CREATE TABLE" in sql
-        assert "memory_facts" in sql
+    def test_status_reports_the_manifest_size(self, capsys):
+        """`migrate --status` must say how many migrations the manifest holds."""
+        rows = [
+            {
+                "migration_id": "001_init",
+                "version": "001",
+                "filename": "001_init.sql",
+                "source": "infra",
+                "status": "applied",
+                "applied_at": None,
+            }
+        ]
+        with (
+            patch("psycopg2.connect", return_value=MagicMock()),
+            patch("robothor.db.migrate.status", return_value=rows),
+            patch("robothor.db.migrate.manifest_count", return_value=113),
+        ):
+            rc = main(["migrate", "--status"])
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "113" in out
+        assert "001_init" in out
+
+    def test_adopt_baseline_flag_reaches_the_migrator(self):
+        """The flag that skips re-running 001_init must be forwarded, not swallowed."""
+        mock_conn = MagicMock()
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch("robothor.db.migrate.apply", return_value=[]) as mock_apply,
+            patch("robothor.cli.admin.cmd_migrate_check", return_value=0),
+        ):
+            rc = main(["migrate", "--adopt-baseline"])
+
+        assert rc == 0
+        mock_apply.assert_called_once_with(
+            connection=mock_conn, adopt_baseline=True, adopt_through=None
+        )
+
+    def test_adopt_through_flag_reaches_the_migrator(self):
+        """The bound on how far adoption goes must survive the CLI boundary."""
+        mock_conn = MagicMock()
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch("robothor.db.migrate.apply", return_value=[]) as mock_apply,
+            patch("robothor.cli.admin.cmd_migrate_check", return_value=0),
+        ):
+            rc = main(["migrate", "--adopt-through", "040_memory_episodes"])
+
+        assert rc == 0
+        mock_apply.assert_called_once_with(
+            connection=mock_conn, adopt_baseline=False, adopt_through="040_memory_episodes"
+        )
 
     def test_dry_run_prints_sql(self, capsys):
         rc = main(["migrate", "--dry-run"])

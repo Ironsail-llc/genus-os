@@ -13,14 +13,31 @@ cd genus-os
 cp infra/robothor.env.example .env
 # Edit .env -- set at minimum: ROBOTHOR_DB_PASSWORD
 
+# Install the CLI (this is what runs the migrations)
+pip install -e .
+
 # Start infrastructure
 docker compose -f infra/docker-compose.yml up -d
 
-# Verify
+# Wait for PostgreSQL to pass its healthcheck before migrating
+until [ "$(docker inspect -f '{{.State.Health.Status}}' robothor-postgres)" = healthy ]; do
+  sleep 2
+done
+
+# Create the schema, then confirm it
+robothor migrate
+robothor migrate --status
+
+# Verify the containers
 docker compose -f infra/docker-compose.yml ps
 ```
 
-The Compose file includes health checks for all services. PostgreSQL auto-runs migrations from `infra/migrations/` on first start.
+The Compose file includes health checks for all services. It does **not** seed
+the schema: `robothor migrate` is the only thing that creates or changes it, so
+every applied file is recorded in the `schema_migrations_v2` ledger with its
+SHA-256 checksum. A schema created any other way (an SQL file mounted into
+`docker-entrypoint-initdb.d`, `psql -f`) leaves that ledger empty and later
+upgrades cannot tell it apart from an empty database.
 
 ### Ollama Model Setup
 
@@ -98,15 +115,68 @@ sudo -u postgres createdb robothor_memory
 sudo -u postgres psql -d robothor_memory -c "CREATE EXTENSION vector"
 sudo -u postgres psql -d robothor_memory -c "CREATE EXTENSION \"uuid-ossp\""
 
-# Run schema migration
-sudo -u postgres psql -d robothor_memory -f infra/migrations/001_init.sql
-
 # Create application user
 sudo -u postgres psql -c "CREATE USER robothor WITH PASSWORD 'your-password'"
 sudo -u postgres psql -c "GRANT ALL ON DATABASE robothor_memory TO robothor"
+
+# Run schema migrations (the whole manifest, recorded in schema_migrations_v2)
+robothor migrate
+robothor migrate --status
+
 sudo -u postgres psql -d robothor_memory -c "GRANT ALL ON ALL TABLES IN SCHEMA public TO robothor"
 sudo -u postgres psql -d robothor_memory -c "GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO robothor"
 ```
+
+`robothor migrate` reads `ROBOTHOR_DB_HOST`, `ROBOTHOR_DB_PORT`,
+`ROBOTHOR_DB_NAME`, `ROBOTHOR_DB_USER` and `ROBOTHOR_DB_PASSWORD`.
+
+If you are upgrading a database whose schema this migrator did not create — one
+seeded by an SQL file mounted into `docker-entrypoint-initdb.d`, or migrated by
+the retired `robothor upgrade` glob — it refuses to run rather than replay
+migrations over your data. Replaying is not harmless: `019_unified_session.sql`
+deletes chat sessions, `035_drop_legacy_buddy_columns.sql` aborts mid-chain.
+
+Adopt the history once. This records the baseline, plus every migration named in
+the legacy `.robothor/migrations_applied.yaml` side-ledger, as applied *without
+executing them*, then applies whatever genuinely remains:
+
+```bash
+robothor migrate --adopt-baseline
+```
+
+Keep `.robothor/migrations_applied.yaml` until this has run — its `migrations:`
+list is the only record of what the old path applied. `robothor upgrade` retires
+that list on its own, once `schema_migrations_v2` covers every entry it names.
+`robothor migrate --status` shows the provenance of each row.
+
+If that side-ledger is gone and the schema is past the baseline, `--adopt-baseline`
+refuses a second time: adopting only `001_init` and then running everything after
+it would be the same replay. Say how far the schema actually got instead:
+
+```bash
+robothor migrate --status  # spell the id exactly; do not trust the applied/pending
+                           # split here — reconciled rows are hearsay
+robothor migrate --adopt-through 040_memory_episodes
+```
+
+`--adopt-through <migration_id>` adopts every migration up to and including that
+id without executing any of them, then applies the rest normally. It implies
+`--adopt-baseline`, so it can be used on its own.
+
+**Pick the id from the schema, not from the status output.** On a database in
+this state the ledger's "applied" rows were copied from the legacy
+`schema_migrations` table, which `018_migration_tracking.sql` backfills as far
+as 018 regardless of what actually ran — so `--status` will happily suggest an
+id that is nowhere near where the schema really is. Check which tables and
+columns exist instead.
+
+Adoption is effectively irreversible: undoing it means hand-editing
+`schema_migrations_v2`. And a migration skipped by too late an id is recorded as
+applied with a valid checksum, so it will never be reported as missing or as
+drift — it becomes a permanent, silent gap in the schema. Err early: name the
+last id you are *certain* of and let the remaining migrations apply, since
+re-applying a migration whose objects already exist is the case those files are
+written to tolerate.
 
 ### Redis
 

@@ -215,10 +215,7 @@ class TestRunMigration:
 
     def test_connection_failure_returns_negative(self):
         """If DB is unreachable, should return -1."""
-        with (
-            patch("psycopg2.connect", side_effect=Exception("Connection refused")),
-            patch("robothor.cli._find_migration_sql", return_value="CREATE TABLE t (id int);"),
-        ):
+        with patch("psycopg2.connect", side_effect=Exception("Connection refused")):
             db = DatabaseConfig(host="nonexistent")
             count = run_migration(db)
         assert count == -1
@@ -234,6 +231,73 @@ class TestRunMigration:
             count = run_migration(db)
         assert count == -1
         mock_conn.close.assert_called_once()
+
+    def test_migration_safety_finding_is_surfaced_not_flattened(self, capsys):
+        """A safety refusal must not read as "check your connection settings".
+
+        The caller prints host/port/user advice for a -1, which sends the
+        operator hunting a network problem when the migrator actually refused
+        on purpose and named the remedy.
+        """
+        from robothor.db.migrate import BASELINE_UNADOPTED_MESSAGE, MigrationHistoryError
+
+        mock_conn = MagicMock()
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch(
+                "robothor.db.migrate.apply",
+                side_effect=MigrationHistoryError(BASELINE_UNADOPTED_MESSAGE),
+            ),
+        ):
+            count = run_migration(DatabaseConfig())
+
+        from robothor.setup import MIGRATION_SAFETY_FAILURE
+
+        assert count == MIGRATION_SAFETY_FAILURE
+        assert count < 0  # still a failure to the caller's `>= 0` check
+        out = capsys.readouterr().out
+        assert "ledger empty but schema present" in out
+        assert "--adopt-baseline" in out
+
+    def test_a_plain_failure_is_still_the_generic_negative(self):
+        """Only a safety refusal gets the distinct code; everything else is -1."""
+        mock_conn = MagicMock()
+        with (
+            patch("psycopg2.connect", return_value=mock_conn),
+            patch("robothor.db.migrate.apply", side_effect=RuntimeError("boom")),
+        ):
+            assert run_migration(DatabaseConfig()) == -1
+
+    def test_run_init_adds_no_connection_advice_to_a_safety_refusal(self, tmp_path, capsys):
+        """The distinct return code has to actually change what the wizard prints.
+
+        Otherwise the operator reads "check connection settings / Host / Database
+        / User" under a message that already told them to run --adopt-through,
+        and goes looking for a network fault that does not exist.
+        """
+        from robothor.setup import MIGRATION_SAFETY_FAILURE
+
+        args = SimpleNamespace(
+            yes=True,
+            docker=False,
+            skip_models=True,
+            skip_db=False,
+            workspace=str(tmp_path / "workspace"),
+        )
+        with (
+            patch("robothor.setup.check_prerequisites", return_value=[]),
+            patch(
+                "robothor.setup.run_migration", return_value=MIGRATION_SAFETY_FAILURE
+            ) as mock_run,
+        ):
+            rc = run_init(args)
+
+        assert rc == 1
+        mock_run.assert_called_once()
+        out = capsys.readouterr().out
+        assert "Check connection settings" not in out
+        assert "Host:" not in out
+        assert "refused" in out
 
 
 class TestPullModels:

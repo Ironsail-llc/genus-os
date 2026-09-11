@@ -37,24 +37,6 @@ REQUIRED_TABLES = [
 ]
 
 
-def _find_migration_sql() -> str | None:
-    """Find the legacy baseline SQL (backward-compatible helper)."""
-    from pathlib import Path
-
-    # Bundled in wheel via force-include
-    bundled = Path(__file__).parent.parent / "migrations" / "infra" / "001_init.sql"
-    if bundled.exists():
-        return bundled.read_text(encoding="utf-8")
-
-    # Development: look in infra/migrations relative to repo root
-    repo_root = Path(__file__).parent.parent.parent
-    dev_path = repo_root / "infra" / "migrations" / "001_init.sql"
-    if dev_path.exists():
-        return dev_path.read_text(encoding="utf-8")
-
-    return None
-
-
 def cmd_init(args: argparse.Namespace) -> int:
     from robothor.setup import run_init
 
@@ -77,10 +59,16 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         print(f"Connecting to {cfg.host}:{cfg.port}/{cfg.name}...")
         conn = psycopg2.connect(**cfg.dict, connect_timeout=5)
         try:
+            if getattr(args, "status", False):
+                return cmd_migrate_status(connection=conn)
             if args.check:
                 return cmd_migrate_check(connection=conn)
 
-            applied = apply(connection=conn)
+            applied = apply(
+                connection=conn,
+                adopt_baseline=getattr(args, "adopt_baseline", False),
+                adopt_through=getattr(args, "adopt_through", None),
+            )
             print(f"Migration completed successfully ({len(applied)} applied).")
             return cmd_migrate_check(connection=conn)
         finally:
@@ -96,6 +84,44 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         print(f"Error: Migration failed: {e}")
         print("Check ROBOTHOR_DB_* environment variables and ensure PostgreSQL is running.")
         return 1
+
+
+def cmd_migrate_status(*, connection: Any | None = None) -> int:
+    """Print the canonical migration ledger and the manifest size."""
+
+    conn = connection
+    owns_connection = connection is None
+    try:
+        import psycopg2
+
+        from robothor.config import get_config
+        from robothor.db.migrate import manifest_count, status
+
+        if conn is None:
+            cfg = get_config().db
+            conn = psycopg2.connect(**cfg.dict, connect_timeout=5)
+
+        rows = status(connection=conn)
+        print(f"{'Migration ID':<38} {'Source':<8} {'Status':<18} {'Applied At'}")
+        print("-" * 90)
+        for row in rows:
+            applied_at = str(row["applied_at"])[:19] if row["applied_at"] else ""
+            print(f"{row['migration_id']:<38} {row['source']:<8} {row['status']:<18} {applied_at}")
+            message = row.get("message")
+            if message:
+                print(f"  {message}")
+
+        applied = [row for row in rows if row["status"] == "applied"]
+        print()
+        print(f"Manifest: {manifest_count()} migration(s); {len(applied)} applied.")
+        return 0
+
+    except Exception as e:
+        print(f"Error: Cannot read migration status: {e}")
+        return 1
+    finally:
+        if owns_connection and conn is not None:
+            conn.close()
 
 
 def cmd_migrate_check(*, connection: Any | None = None) -> int:
@@ -119,6 +145,9 @@ def cmd_migrate_check(*, connection: Any | None = None) -> int:
             print(f"Schema is not current ({len(incomplete)} migration issue(s)):")
             for row in incomplete:
                 print(f"  - {row['migration_id']}: {row['status']}")
+                message = row.get("message")
+                if message:
+                    print(f"    {message}")
             return 1
 
         with conn.cursor() as cur:

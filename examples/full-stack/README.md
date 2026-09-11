@@ -18,6 +18,8 @@ cp .env.example .env
 #    At minimum, set a database password.
 
 # 3. Start the stack
+#    The one-shot `migrate` service runs the schema migrations to completion
+#    before the API container starts.
 docker compose up -d
 
 # 4. Wait for Ollama to pull models (first run only, may take a few minutes)
@@ -37,9 +39,37 @@ curl http://localhost:9099/health
 | Service | Port | Description |
 |---------|------|-------------|
 | `postgres` | 5432 | PostgreSQL 16 + pgvector 0.8 |
+| `migrate` | — | One-shot schema migration (`robothor migrate`), exits when done |
 | `redis` | 6379 | Redis 7 (caching, session store) |
 | `ollama` | 11434 | Ollama LLM server (embeddings, generation) |
 | `robothor` | 9099 | Genus OS API (memory, RAG, ingestion) |
+
+## Schema Migrations
+
+The schema is owned by one migrator: `robothor migrate`, which reads the
+canonical manifest, records every applied file in the `schema_migrations_v2`
+ledger, and verifies SHA-256 checksums under an advisory lock.
+
+The `migrate` service runs it once per `docker compose up` and exits; the API
+container waits for it via `service_completed_successfully`. There is no SQL
+file mounted into `docker-entrypoint-initdb.d` — a schema seeded that way is
+invisible to the ledger, so later upgrades cannot tell a migrated database from
+an empty one.
+
+Run it by hand at any time:
+
+```bash
+docker compose run --rm migrate
+docker compose run --rm migrate python -m robothor.cli migrate --status
+```
+
+Upgrading a database created by an older version of this example (its schema
+exists but nothing in the ledger was written by the migrator) needs a one-time
+adoption, which records that history as applied without re-executing it:
+
+```bash
+docker compose run --rm migrate python -m robothor.cli migrate --adopt-baseline
+```
 
 ## Usage
 
