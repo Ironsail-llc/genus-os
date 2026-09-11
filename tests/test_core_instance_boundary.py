@@ -18,6 +18,7 @@ test failure; removing one means deleting its line here.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 HANDLERS = Path(__file__).resolve().parents[1] / "robothor" / "engine" / "tools" / "handlers"
@@ -71,4 +72,119 @@ def test_the_grandfather_list_does_not_go_stale():
     assert not gone, (
         f"these left core -- delete them from GRANDFATHERED so the ratchet "
         f"keeps its tension: {sorted(gone)}"
+    )
+
+
+# ── The grep gate ────────────────────────────────────────────────────────
+#
+# The handler-file checks above only see the tool surface. A retired vendor
+# also leaves prose: dead schema headers, fixture tool names, example URLs,
+# flag-manifest soak notes. That residue is how a vendor walks back in --
+# someone greps for the name, finds it still in core, and concludes the
+# integration is supported. This gate reads every file under the platform
+# roots and fails on the name itself.
+
+#: Platform roots. Everything here ships to every instance, so nothing here
+#: may name one operator's vendors. ``docs/`` and ``scripts/`` are out of
+#: scope on purpose: they carry dated incident write-ups and probe records
+#: that are historical fact, not shipped behaviour.
+#:
+#: ``agents/skills`` is in scope because a skill is EXECUTABLE instruction,
+#: not documentation. ``crm-lookup`` told every agent to call
+#: ``apollo_search_people`` for months after that tool left core -- prose that
+#: reads as a plan and dead-ends at a tool nobody has.
+PLATFORM_ROOTS = ("robothor", "crm", "app/src", "infra", "helm", "templates", "agents/skills")
+
+#: Directories never worth reading -- build output and vendored dependencies.
+SKIP_DIRS = frozenset(
+    {
+        "__pycache__",
+        ".next",
+        ".venv",
+        "build",
+        "dist",
+        "node_modules",
+        "test-results",
+    }
+)
+
+#: The vendor names, as case-insensitive regexes.
+#:
+#: ``apollo`` and ``impetus`` are bare substrings -- neither is a fragment of
+#: any English word this codebase uses, so no narrowing is needed. ``freya``
+#: carries a word boundary because the given name alone is short enough to
+#: collide with an identifier; the two-word form is listed separately so the
+#: full product name is caught either way.
+BANNED_TERMS: tuple[tuple[str, str], ...] = (
+    (r"apollo", "Apollo.io -- retired by operator decision 2026-08-21"),
+    (r"princess\s+freya", "Princess Freya -- extracted to a plugin 2026-08-27"),
+    (r"\bfreya\b", "Princess Freya -- extracted to a plugin 2026-08-27"),
+    (r"impetus", "Impetus One -- an instance-land MCP adapter, not core"),
+)
+
+#: Files exempted from the grep gate. It is EMPTY and must stay empty: an
+#: exemption here is a vendor back in core with paperwork. A legitimate hit
+#: means the pattern is too broad -- narrow the pattern, do not list the file.
+GATE_ALLOWLIST: frozenset[str] = frozenset()
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _platform_files() -> list[Path]:
+    files: list[Path] = []
+    for root in PLATFORM_ROOTS:
+        base = _REPO_ROOT / root
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            if SKIP_DIRS & set(path.relative_to(_REPO_ROOT).parts):
+                continue
+            files.append(path)
+    return files
+
+
+def _vendor_hits() -> list[str]:
+    patterns = [(re.compile(term, re.IGNORECASE), why) for term, why in BANNED_TERMS]
+    hits: list[str] = []
+    for path in _platform_files():
+        rel = str(path.relative_to(_REPO_ROOT))
+        if rel in GATE_ALLOWLIST:
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue  # binary asset -- no prose to leak
+        for line_num, line in enumerate(content.splitlines(), 1):
+            for pattern, why in patterns:
+                if pattern.search(line):
+                    hits.append(f"{rel}:{line_num} -- {why}\n      {line.strip()[:120]}")
+                    break
+    return hits
+
+
+def test_no_instance_vendor_names_in_platform_code():
+    """No platform root may name a retired or instance-only vendor.
+
+    Not cosmetic. Each of these names left a different kind of residue: a
+    dead comment header still describing a tool group that no longer exists,
+    a benchmark allow-list hardcoding one adapter's tool names, an example
+    URL pointing at one operator's SaaS tenant, fixture data naming a private
+    repo. A fresh instance greps for the name, finds it in core, and
+    reasonably concludes core supports the vendor.
+    """
+    hits = _vendor_hits()
+    assert not hits, (
+        "instance vendor names found in platform code -- core ships only what "
+        "every instance needs (CLAUDE.md rule #1):\n  " + "\n  ".join(hits)
+    )
+
+
+def test_the_gate_allowlist_stays_empty():
+    """An exemption is a vendor back in core with paperwork."""
+    assert frozenset() == GATE_ALLOWLIST, (
+        "GATE_ALLOWLIST must stay empty. A legitimate hit means the pattern "
+        "is too broad -- narrow the pattern in BANNED_TERMS and say why in "
+        "its comment, rather than exempting a file."
     )

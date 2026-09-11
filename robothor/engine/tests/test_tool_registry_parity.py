@@ -24,16 +24,27 @@ import pytest
 # for a new handler is "must have a schema".
 INTERNAL_ONLY: frozenset[str] = frozenset()
 
-# Whitelist entries served by dynamic MCP adapters at runtime (registered via
-# ``ToolRegistry.register_adapter_tools``), so they have no static schema.
-ADAPTER_PROVIDED: frozenset[str] = frozenset(
-    {
-        "impetus_list_resources",
-        "impetus_list",
-        "impetus_get",
-        "impetus_search",
-    }
-)
+
+def _adapter_provided() -> frozenset[str]:
+    """Tool names served by dynamic MCP adapters at runtime (registered via
+    ``ToolRegistry.register_adapter_tools``), so they have no static schema.
+
+    Computed from the loaded adapters, never hardcoded: the names belong to
+    whichever business adapters an instance installed, and core must not carry
+    one operator's vendor tool names as a test constant.
+
+    NOTE THE WEAKNESS THIS BUYS: the exemption is computed from the SAME
+    source as the set under test, so an adapter-declared name can never fail
+    this parity check — subtracting it is a tautology. That is deliberate.
+    The property this test guards is "a name in the benchmark allow-list has a
+    schema *or* a stated non-schema provenance", and an adapter's provenance
+    is its bundle. What the adapter contract itself is worth is tested where
+    it is enforced, in ``test_benchmark_harness_fairness.py``; a hardcoded
+    exemption list here would only add a second copy to rot.
+    """
+    from robothor.engine.tools.handlers.benchmark import _adapter_declared_read_only_tools
+
+    return _adapter_declared_read_only_tools()
 
 
 @pytest.fixture
@@ -132,10 +143,10 @@ def test_benchmark_readonly_names_are_registered(schema_names: set[str]) -> None
     """The benchmark read-only set is intersected with each agent's tools, so
     unknown names are not a runtime denial — but they still rot silently.
     Adapter-served tools are exempt (no static schema by design)."""
-    from robothor.engine.tools.handlers.benchmark import _BENCHMARK_READONLY_TOOLS
+    from robothor.engine.tools.handlers.benchmark import benchmark_readonly_tools
 
-    missing = _BENCHMARK_READONLY_TOOLS - schema_names - ADAPTER_PROVIDED - _plugin_provided()
+    missing = benchmark_readonly_tools() - schema_names - _adapter_provided() - _plugin_provided()
     assert not missing, (
-        f"_BENCHMARK_READONLY_TOOLS names with no registered schema and no "
-        f"ADAPTER_PROVIDED exemption: {sorted(missing)}"
+        f"benchmark_readonly_tools() names with no registered schema and no "
+        f"adapter or plugin exemption: {sorted(missing)}"
     )

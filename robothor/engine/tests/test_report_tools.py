@@ -156,7 +156,7 @@ class TestRenderDevopsReport:
                     "channel": "github",
                     "identifier": "newhire-dev",
                     "occurrences": 4,
-                    "sources": ["impetus-one/pr_stats_current_week/authors"],
+                    "sources": ["acme-erp/pr_stats_current_week/authors"],
                 }
             ],
             "missing_from_roster": [],

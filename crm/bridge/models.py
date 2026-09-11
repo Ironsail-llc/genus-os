@@ -273,9 +273,6 @@ class VaultCreateVirtualCardReferenceRequest(BaseModel):
     )
 
 
-# ─── Impetus ─────────────────────────────────────────────────────────────
-
-
 # ─── Tasks (Review Workflow) ────────────────────────────────────────────
 
 
@@ -342,11 +339,3 @@ class UpdateTenantRequest(BaseModel):
 class MemoryBlockAppendRequest(BaseModel):
     entry: str
     maxEntries: int = Field(default=20, ge=1, le=100)
-
-
-# ─── Impetus ─────────────────────────────────────────────────────────
-
-
-class ImpetusTransmitRequest(BaseModel):
-    actingAsProviderId: str | None = None
-    confirmationId: str | None = None

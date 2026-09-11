@@ -401,7 +401,7 @@ class AgentConfig:
     lifecycle_hooks: list[dict[str, Any]] = field(default_factory=list)
     sandbox: str = "local"  # "local" (policy default) | "docker" (force) | "host" (opt out)
     # When True, runtime guards refuse every tool outside
-    # _BENCHMARK_READONLY_TOOLS (see robothor/engine/tools/handlers/benchmark.py).
+    # benchmark_readonly_tools() (see robothor/engine/tools/handlers/benchmark.py).
     # Set by _benchmark_run on the child_config it passes to runner.execute().
     is_benchmark: bool = False
     eager_tool_compression: bool = False  # disabled: infinite loop bug when read_file re-offloads

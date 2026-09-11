@@ -274,7 +274,7 @@ robothor engine history        # Recent runs with status and duration
 python scripts/validate_agents.py --agent <id>  # Validate manifest
 ```
 
-The engine provides **110+ tools** — CRM operations, memory search, file I/O, shell execution, web fetch, task coordination, git operations, voice calling, desktop automation, browser control, inter-agent messaging, Apollo.io enrichment, MCP client calls, experiment/benchmark tracking, and more. Each agent sees only the tools in its `tools_allowed` list.
+The engine provides **110+ tools** — CRM operations, memory search, file I/O, shell execution, web fetch, task coordination, git operations, voice calling, desktop automation, browser control, inter-agent messaging, MCP client calls, experiment/benchmark tracking, and more. Each agent sees only the tools in its `tools_allowed` list.
 
 ### Agent Engine v2
 
@@ -496,19 +496,6 @@ Full computer-use capability — agents can operate GUI applications on a headle
 **Infrastructure:** Xvfb provides a virtual framebuffer (no physical display required). VNC exposes the display for remote monitoring. The `computer-use` agent manifest pre-configures all 13 desktop tools.
 
 **Browser automation** is available via the `browser` tool for web-based interactions.
-
-## Apollo.io Integration
-
-Contact enrichment and company research via Apollo.io's API:
-
-| Tool | Purpose |
-|------|---------|
-| `apollo_search_people` | Search contacts by name, title, company |
-| `apollo_enrich_person` | Full profile enrichment (email, phone, social, role) |
-| `apollo_search_companies` | Company discovery by industry, size, tech stack |
-| `apollo_enrich_company` | Full company profile (funding, employee count, tech) |
-
-Results feed directly into the CRM via the `crm-enrichment` agent.
 
 ## AutoResearch
 

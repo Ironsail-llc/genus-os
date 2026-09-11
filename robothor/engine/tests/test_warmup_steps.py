@@ -117,10 +117,10 @@ def test_a_section_name_is_carried_through_verbatim():
     arrive intact rather than being normalised into something unrecognisable."""
     session = _session()
 
-    _record(session, section_timings={"plugin:apollo_enrich": 1.2})
+    _record(session, section_timings={"plugin:acme_enrich": 1.2})
 
-    step = _named(session)["warmup_section:plugin:apollo_enrich"]
-    assert step.tool_output["section"] == "plugin:apollo_enrich"
+    step = _named(session)["warmup_section:plugin:acme_enrich"]
+    assert step.tool_output["section"] == "plugin:acme_enrich"
 
 
 def test_recording_never_raises():

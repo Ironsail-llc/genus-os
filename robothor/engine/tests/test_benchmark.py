@@ -1002,10 +1002,10 @@ class TestBenchmarkSandbox:
 
     @pytest.mark.asyncio
     async def test_dangerous_tools_denied_even_if_agent_allows_them(self):
-        """Any tool outside _BENCHMARK_READONLY_TOOLS must end up in tools_denied."""
+        """Any tool outside benchmark_readonly_tools() must end up in tools_denied."""
         from robothor.engine.tools.handlers.benchmark import (
-            _BENCHMARK_READONLY_TOOLS,
             _benchmark_run,
+            benchmark_readonly_tools,
         )
 
         store, read_fn, write_fn = _mock_blocks()
@@ -1114,16 +1114,16 @@ class TestBenchmarkSandbox:
         wrongly_denied = safe_used & denied
         assert not wrongly_denied, f"benchmark sandbox over-denies: {sorted(wrongly_denied)}"
 
-        # And the allow-list constant must be a frozenset of strings.
-        assert isinstance(_BENCHMARK_READONLY_TOOLS, frozenset)
-        assert all(isinstance(t, str) for t in _BENCHMARK_READONLY_TOOLS)
+        # And the allow-list must be a frozenset of strings.
+        assert isinstance(benchmark_readonly_tools(), frozenset)
+        assert all(isinstance(t, str) for t in benchmark_readonly_tools())
         # Sanity: it covers the basics.
-        assert "read_file" in _BENCHMARK_READONLY_TOOLS
-        assert "search_memory" in _BENCHMARK_READONLY_TOOLS
-        assert "gws_gmail_search" in _BENCHMARK_READONLY_TOOLS
-        assert "exec" not in _BENCHMARK_READONLY_TOOLS
-        assert "invoke_skill" not in _BENCHMARK_READONLY_TOOLS
-        assert "create_task" not in _BENCHMARK_READONLY_TOOLS
+        assert "read_file" in benchmark_readonly_tools()
+        assert "search_memory" in benchmark_readonly_tools()
+        assert "gws_gmail_search" in benchmark_readonly_tools()
+        assert "exec" not in benchmark_readonly_tools()
+        assert "invoke_skill" not in benchmark_readonly_tools()
+        assert "create_task" not in benchmark_readonly_tools()
 
     @pytest.mark.asyncio
     async def test_is_benchmark_flag_propagates_to_child_config(self):

@@ -18,10 +18,6 @@ except ImportError:
 # Service URLs
 MEMORY_URL = os.getenv("MEMORY_URL", "http://localhost:9099")
 
-# Impetus One
-IMPETUS_ONE_URL = os.getenv("IMPETUS_ONE_BASE_URL", "http://localhost:8000")
-IMPETUS_ONE_TOKEN = os.getenv("IMPETUS_ONE_API_TOKEN", "")
-
 # Database (used by crm_dal.py for backward compat — new code uses
 # robothor.db.connection). Reuse the canonical builder so port, password, and
 # TLS policy are not silently dropped in container deployments.

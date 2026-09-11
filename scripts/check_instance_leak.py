@@ -65,6 +65,46 @@ LEAK_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ),
 ]
 
+# Vendors that belong to one operator's instance, not to the platform. Each
+# was removed from core by decision (Apollo, 2026-08-21) or extracted to a
+# plugin (Princess Freya, Impetus One, 2026-08-27), and each left prose behind
+# — dead schema headers, hardcoded adapter tool names, an example URL pointing
+# at one operator's SaaS tenant — that made core look like it still supported
+# the vendor. tests/test_core_instance_boundary.py is the same gate at CI
+# scope; this is the pre-commit half, so a name is caught before it lands.
+#
+# Scoped to VENDOR_SCANNED_ROOTS below rather than the whole tree: docs/ and
+# scripts/ carry dated incident write-ups and probe records naming these
+# vendors as historical fact, and rewriting history is not the goal.
+RETIRED_VENDOR_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (
+        re.compile(r"apollo", re.IGNORECASE),
+        "retired vendor 'Apollo' — core ships only what every instance needs",
+    ),
+    (
+        re.compile(r"princess\s+freya|\bfreya\b", re.IGNORECASE),
+        "instance integration 'Princess Freya' — belongs in a plugin, not core",
+    ),
+    (
+        re.compile(r"impetus", re.IGNORECASE),
+        "instance integration 'Impetus One' — belongs in an adapter, not core",
+    ),
+]
+
+# Platform roots the vendor patterns apply to. Mirrors PLATFORM_ROOTS in
+# tests/test_core_instance_boundary.py — keep the two in step;
+# test_the_roots_match_the_boundary_test asserts it. `agents/skills/` is in
+# scope because a skill is executable instruction, not documentation.
+VENDOR_SCANNED_ROOTS = (
+    "robothor/",
+    "crm/",
+    "app/src/",
+    "infra/",
+    "helm/",
+    "templates/",
+    "agents/skills/",
+)
+
 # systemd-tmpfiles.d(5) / sysusers.d(5) row: TYPE PATH MODE USER GROUP AGE ARG.
 # The account columns are POSITIONAL — no `User=` prefix — so neither the
 # unit-file convention nor the /home/<user>/ pattern can see an instance
@@ -127,8 +167,30 @@ def _is_instance_path(path: str) -> bool:
 def _check_file(path: str, content: str, allowlist: set[str]) -> list[str]:
     """Check a file's content for instance data leaks. Returns list of warnings."""
     warnings = []
+    scan_vendors = path.startswith(VENDOR_SCANNED_ROOTS)
 
     for line_num, line in enumerate(content.splitlines(), 1):
+        # Vendor names are checked BEFORE the documentation-comment skip
+        # below: a dead comment header naming a retired vendor is precisely
+        # the residue this catches, and "# Apollo.io — see the example" would
+        # otherwise walk straight through.
+        #
+        # THE TWO HALVES OF THIS GATE ARE NOT EQUIVALENT, and vendor names are
+        # where they diverge most. The pre-commit half loads
+        # instance_leak_allowlist.yaml, which carries a bare vendor domain
+        # token for the operational scripts that legitimately mail it — any
+        # line containing that substring is skipped here, vendor patterns
+        # included. `--ci` also loads the allowlist, but
+        # tests/test_instance_leak_check.py calls this with an EMPTY one, so a
+        # line the hook waves through can still fail a test. That is the
+        # intended direction (the stricter check is the one that gates), but
+        # do not read a green pre-commit run as proof the tree is clean.
+        if scan_vendors and not any(allow in line for allow in allowlist):
+            for pattern, message in RETIRED_VENDOR_PATTERNS:
+                if pattern.search(line):
+                    warnings.append(f"  {path}:{line_num} — {message}")
+                    break
+
         # Skip comments that are clearly documentation references
         stripped = line.strip()
         if stripped.startswith("#") and "example" in stripped.lower():
@@ -168,7 +230,12 @@ def _check_file(path: str, content: str, allowlist: set[str]) -> list[str]:
         for email_match in EMAIL_RE.finditer(line):
             email = email_match.group(0).lower()
             domain = email.split("@", 1)[1] if "@" in email else ""
-            if domain in SAFE_EMAIL_DOMAINS:
+            # RFC 2606 reserves the whole `.example` TLD for documentation and
+            # test data, with the same guarantee example.com carries: it can
+            # never be registered, so it can never be a real person.
+            # `alice@spam-domain.example` is a fixture, and flagging it made
+            # the gate red on any PR that merely touched the file holding it.
+            if domain in SAFE_EMAIL_DOMAINS or domain.endswith(".example"):
                 continue
             if any(allow in email for allow in allowlist):
                 continue

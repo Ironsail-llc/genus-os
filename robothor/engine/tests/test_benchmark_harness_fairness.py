@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -195,12 +196,12 @@ class TestReadOnlyToolsReachTheAgent:
         """
         from robothor.engine.tools.constants import READONLY_TOOLS
         from robothor.engine.tools.handlers.benchmark import (
-            _BENCHMARK_READONLY_TOOLS,
             _benchmark_tools_denied,
+            benchmark_readonly_tools,
         )
 
         assert "receive_agent_messages" not in READONLY_TOOLS
-        assert "receive_agent_messages" not in _BENCHMARK_READONLY_TOOLS
+        assert "receive_agent_messages" not in benchmark_readonly_tools()
         assert "receive_agent_messages" in set(
             _benchmark_tools_denied(["receive_agent_messages", "read_file"])
         )
@@ -251,11 +252,21 @@ class TestToolClassificationParity:
         )
 
     def test_excluded_and_allowed_do_not_overlap(self):
-        from robothor.engine.benchmark_sandbox import benchmark_allowed_tools
+        """Since 2026-09-10 ``benchmark_readonly_tools()`` subtracts
+        ``_BENCHMARK_EXCLUDED_TOOLS`` itself, so the read-only half of this can
+        no longer fail. The bite that remains is ``sandbox=True``: the sandbox
+        write set is unioned in AFTER that subtraction, so this still catches
+        the real contradiction — a tool listed both as a sandbox write and as
+        deliberately excluded.
+        """
+        from robothor.engine.benchmark_sandbox import SANDBOX_WRITE_TOOLS, benchmark_allowed_tools
         from robothor.engine.tools.handlers.benchmark import _BENCHMARK_EXCLUDED_TOOLS
 
         overlap = sorted(benchmark_allowed_tools(sandbox=True) & _BENCHMARK_EXCLUDED_TOOLS)
         assert not overlap, f"tool both allowed and excluded: {overlap}"
+        assert not sorted(SANDBOX_WRITE_TOOLS & _BENCHMARK_EXCLUDED_TOOLS), (
+            "a sandbox write tool is also named in _BENCHMARK_EXCLUDED_TOOLS"
+        )
 
     def test_allow_list_is_derived_not_hand_copied(self):
         """The benchmark allow-list must be a superset of the shared read-only set.
@@ -265,12 +276,254 @@ class TestToolClassificationParity:
         """
         from robothor.engine.tools.constants import READONLY_TOOLS
         from robothor.engine.tools.handlers.benchmark import (
-            _BENCHMARK_READONLY_TOOLS,
             _BENCHMARK_WITHHELD_READS,
+            benchmark_readonly_tools,
         )
 
-        missing = sorted(READONLY_TOOLS - _BENCHMARK_WITHHELD_READS - _BENCHMARK_READONLY_TOOLS)
+        missing = sorted(READONLY_TOOLS - _BENCHMARK_WITHHELD_READS - benchmark_readonly_tools())
         assert not missing, f"read-only tools missing from the benchmark allow-list: {missing}"
+
+    # ── Adapter tools: `read_only:` is the only way in ────────────────
+    #
+    # Adapter tools are registered from an MCP server's tools/list, so they
+    # have no static schema and never reach
+    # ``test_every_registered_tool_is_classified``. Core's three deny-sets are
+    # all literal core tool names, so none of them can see
+    # ``acme_delete_patient``. If mere presence in ``tools_allowed`` were
+    # enough, that tool would reach a graded sub-agent the moment the
+    # benchmarked agent's manifest granted it — the 2026-05-28 boundary again.
+
+    @staticmethod
+    def _adapter(tmp_path, body: str, name: str = "acme") -> None:
+        (tmp_path / f"{name}.yaml").write_text(
+            f"name: {name}\ntransport: http\nurl: https://api.example.com/_mcp\n"
+            f"agents: ['*']\n{body}"
+        )
+
+    def test_only_declared_read_only_adapter_tools_enter_the_allow_list(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``read_only`` classifies; ``tools_allowed`` only bounds reach.
+
+        Until 2026-09-10 four of one operator's adapter tool names were typed
+        into the allow-list by hand, so core shipped a stranger's vendor and
+        every OTHER instance's adapters were silently denied in benchmarks.
+        Deriving the replacement from ``tools_allowed`` would have been worse
+        than the hardcoding: a write tool nobody classified, handed to the
+        agent being graded.
+        """
+        from robothor.engine import adapters
+        from robothor.engine.tools.handlers.benchmark import benchmark_readonly_tools
+
+        # Empty the cache FIRST: a dev box with real adapters installed must
+        # not change what this test measures.
+        monkeypatch.setattr(adapters, "_loaded_adapters", [])
+        before = benchmark_readonly_tools()
+
+        self._adapter(
+            tmp_path,
+            "tools_allowed: [x_get, x_delete]\nread_only: [x_get]\n",
+        )
+        monkeypatch.setattr(adapters, "_loaded_adapters", adapters.load_adapters(tmp_path))
+
+        assert benchmark_readonly_tools() - before == {"x_get"}, (
+            "an undeclared adapter tool must never be treated as read-only"
+        )
+
+    def test_an_adapter_that_declares_nothing_contributes_nothing(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Absent means WRITE — the plugin seam's rule, not a lenient default."""
+        from robothor.engine import adapters
+        from robothor.engine.tools.handlers.benchmark import benchmark_readonly_tools
+
+        monkeypatch.setattr(adapters, "_loaded_adapters", [])
+        before = benchmark_readonly_tools()
+
+        self._adapter(tmp_path, "tools_allowed: [x_get, x_delete]\n")
+        monkeypatch.setattr(adapters, "_loaded_adapters", adapters.load_adapters(tmp_path))
+
+        assert benchmark_readonly_tools() == before
+
+    def test_read_only_outside_tools_allowed_refuses_the_adapter(self, tmp_path) -> None:
+        """Classifying a tool it does not serve is escalation, not extension.
+
+        Refused at LOAD, not ignored at use: a classification that is silently
+        dropped leaves the operator believing a boundary exists that nothing
+        enforces.
+        """
+        from robothor.engine import adapters
+
+        self._adapter(tmp_path, "tools_allowed: [x_get]\nread_only: [x_get, read_file]\n")
+        assert adapters.load_adapters(tmp_path) == []
+
+    @pytest.mark.parametrize("value", ["x_get", "false", "0", "{a: 1}"])
+    def test_a_non_list_read_only_refuses_the_adapter(self, tmp_path, value: str) -> None:
+        """Including the falsy scalars. ``or []`` would have read
+        ``read_only: false`` as "declared nothing" and loaded the adapter
+        anyway — the fail-open shape command_sha256 was already bitten by."""
+        from robothor.engine import adapters
+
+        self._adapter(tmp_path, f"tools_allowed: [x_get]\nread_only: {value}\n")
+        assert adapters.load_adapters(tmp_path) == []
+
+    def test_read_only_beside_a_legacy_allow_all_is_refused(self, tmp_path) -> None:
+        """Empty ``tools_allowed`` is legacy allow-all, so it grounds no claim:
+        there is nothing for the subset check to check against."""
+        from robothor.engine import adapters
+
+        self._adapter(tmp_path, "read_only: [x_get]\n")
+        assert adapters.load_adapters(tmp_path) == []
+
+    def test_an_adapter_cannot_reopen_a_withheld_tool(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``read_only`` is operator-declared, so it must not be trusted to
+        widen the harness's own withheld set. Withholding is subtracted last.
+
+        BELT 1 IS DISABLED HERE ON PURPOSE. Every name in
+        ``_BENCHMARK_WITHHELD_READS`` is a core-registry name, so belt 1 would
+        refuse this fixture at load and the test would pass without the
+        adapter ever reaching the allow-list — certifying core's own
+        subtraction while its name promised something about operator-declared
+        ``read_only``. Stubbing ``_core_tool_names`` empty puts the greedy
+        adapter into the loaded set, which is what belt 2 has to survive.
+        """
+        from robothor.engine import adapters
+        from robothor.engine.benchmark_sandbox import benchmark_allowed_tools
+        from robothor.engine.tools.handlers.benchmark import (
+            _BENCHMARK_WITHHELD_READS,
+            benchmark_readonly_tools,
+        )
+
+        monkeypatch.setattr(adapters, "_core_tool_names", lambda: frozenset())
+        withheld = sorted(_BENCHMARK_WITHHELD_READS)[0]
+        self._adapter(
+            tmp_path,
+            f"tools_allowed: ['{withheld}']\nread_only: ['{withheld}']\n",
+            name="greedy",
+        )
+        loaded = adapters.load_adapters(tmp_path)
+        assert loaded, "belt 1 must be off for this test to test belt 2"
+        assert withheld in loaded[0].read_only
+
+        monkeypatch.setattr(adapters, "_loaded_adapters", loaded)
+        assert withheld not in benchmark_readonly_tools()
+        for sandbox in (False, True):
+            assert withheld not in benchmark_allowed_tools(sandbox=sandbox), (
+                f"an adapter re-opened a withheld tool (sandbox={sandbox})"
+            )
+
+    # ── Two belts, each tested with the other off ─────────────────────
+    #
+    # Belt 1 refuses an adapter that NAMES a core tool at all (adapters.py).
+    # Belt 2 subtracts `_BENCHMARK_EXCLUDED_TOOLS` from the allow-list at
+    # runtime (benchmark.py). Either alone closes the hole, so each is probed
+    # with the other disabled — otherwise one could rot silently behind the
+    # other and nothing would say so.
+
+    CORE_NAMES_AN_ADAPTER_MIGHT_CLAIM = "[delete_person, git_push, create_pull_request]"
+
+    def test_an_adapter_naming_core_tools_is_refused(self, tmp_path) -> None:
+        """BELT 1. `tools_allowed` bounds an adapter's OWN server, so a core
+        name in it is a claim over something the adapter does not serve.
+
+        Left open, an adapter YAML was a way to reclassify core's write tools
+        as read-only: `read_only ⊆ tools_allowed` holds perfectly when both
+        say `delete_person`.
+        """
+        from robothor.engine import adapters
+
+        claim = self.CORE_NAMES_AN_ADAPTER_MIGHT_CLAIM
+        self._adapter(tmp_path, f"tools_allowed: {claim}\nread_only: {claim}\n", name="thief")
+        assert adapters.load_adapters(tmp_path) == []
+
+    @pytest.mark.parametrize("declared_via", ["tools", "schemas"])
+    def test_a_plugin_contributed_name_is_refused_too(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch, declared_via: str
+    ) -> None:
+        """BELT 1 covers plugins, not just core.
+
+        A plugin's tools are no more an adapter's to classify than core's are,
+        and a plugin already declares its own ``read_only`` through its own
+        seam. Both keys of the loader result count: a plugin shipping only a
+        handler still gets a synthesized schema and is advertised to the model
+        (``ToolRegistry._register_plugin_schemas``), so checking ``schemas``
+        alone would leave the same hole one layer down.
+        """
+        import robothor.plugins as plugins_mod
+        from robothor.engine import adapters
+
+        fake = SimpleNamespace(tools={}, schemas={}, read_only=set(), failures=[], loaded=[])
+        setattr(fake, declared_via, {"plugin_write_thing": object()})
+        monkeypatch.setattr(plugins_mod, "load_plugins", lambda *_a, **_k: fake)
+
+        self._adapter(
+            tmp_path,
+            "tools_allowed: [plugin_write_thing]\nread_only: [plugin_write_thing]\n",
+            name="thief",
+        )
+        assert adapters.load_adapters(tmp_path) == [], (
+            f"an adapter claimed a plugin tool declared via {declared_via}"
+        )
+
+    def test_an_unreadable_name_source_refuses_the_adapter(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fail-closed. "Could not check" must never degrade to "allowed" —
+        the rule verify_adapter_integrity already follows for an unverifiable
+        pin. A broken plugin package is the realistic way this happens.
+        """
+        from robothor.engine import adapters
+
+        def _boom() -> frozenset[str]:
+            raise RuntimeError("plugin entry point exploded")
+
+        monkeypatch.setattr(adapters, "_core_tool_names", _boom)
+        self._adapter(tmp_path, "tools_allowed: [x_get]\nread_only: [x_get]\n")
+        assert adapters.load_adapters(tmp_path) == []
+
+    def test_an_unreadable_name_source_does_not_refuse_a_declarationless_adapter(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The check is skipped when there is nothing to check, so a legacy
+        allow-all adapter is not collateral damage of a broken plugin."""
+        from robothor.engine import adapters
+
+        def _boom() -> frozenset[str]:
+            raise RuntimeError("plugin entry point exploded")
+
+        monkeypatch.setattr(adapters, "_core_tool_names", _boom)
+        self._adapter(tmp_path, "description: legacy allow-all\n")
+        assert len(adapters.load_adapters(tmp_path)) == 1
+
+    def test_core_write_tools_stay_out_even_with_the_load_check_disabled(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BELT 2, with belt 1 monkeypatched off.
+
+        `_core_tool_names` is stubbed empty so the adapter loads with core
+        names in both lists — the exact state belt 1 exists to prevent. The
+        runtime subtraction must still keep them out of BOTH the read-only
+        baseline and `benchmark_allowed_tools()`, sandboxed or not.
+        """
+        from robothor.engine import adapters
+        from robothor.engine.benchmark_sandbox import benchmark_allowed_tools
+        from robothor.engine.tools.handlers.benchmark import benchmark_readonly_tools
+
+        monkeypatch.setattr(adapters, "_core_tool_names", lambda: frozenset())
+        claim = self.CORE_NAMES_AN_ADAPTER_MIGHT_CLAIM
+        self._adapter(tmp_path, f"tools_allowed: {claim}\nread_only: {claim}\n", name="thief")
+        loaded = adapters.load_adapters(tmp_path)
+        assert loaded, "belt 1 must be off for this test to test belt 2"
+
+        monkeypatch.setattr(adapters, "_loaded_adapters", loaded)
+        smuggled = {"delete_person", "git_push", "create_pull_request"}
+        assert not smuggled & benchmark_readonly_tools()
+        for sandbox in (False, True):
+            assert not smuggled & benchmark_allowed_tools(sandbox=sandbox), (
+                f"a core write tool reached a graded sub-agent (sandbox={sandbox})"
+            )
 
 
 # ═══ B. The judge window ═════════════════════════════════════════════════

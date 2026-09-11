@@ -179,17 +179,11 @@ def _resolve_task_timeout(task: dict[str, Any], suite: dict[str, Any]) -> float:
 # read-only tool is benchmark-safe the moment it is classified once.
 
 #: Benchmark-only additions: no side effects, but not part of plan mode's set.
-#: `apollo_enrich_*` spend an external API credit (fine to meter in a benchmark,
-#: not something plan mode should do silently); the `impetus_*` tools are
-#: adapter-registered and so never appear in the static schema registry.
+#: Read-only work a graded sub-agent needs and plan mode has no reason to do.
 _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
     {
         "find_procedure",
         "git_branch",
-        "impetus_list_resources",
-        "impetus_list",
-        "impetus_get",
-        "impetus_search",
         "todo_write",
     }
 )
@@ -201,9 +195,60 @@ _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
 #: read or drive the harness grading it.
 _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(DESKTOP_TOOLS | BENCHMARK_TOOLS)
 
-_BENCHMARK_READONLY_TOOLS: frozenset[str] = frozenset(
-    (READONLY_TOOLS | _BENCHMARK_EXTRA_READS) - _BENCHMARK_WITHHELD_READS
-)
+
+def _adapter_declared_read_only_tools() -> frozenset[str]:
+    """Adapter tools their own bundle DECLARED read-only. Absent means WRITE.
+
+    Adapter tools are registered dynamically from an MCP server's
+    ``tools/list`` (see ``ToolRegistry.register_adapter_tools``), so they never
+    appear in the static schema registry, cannot be enumerated at import time,
+    and never reach ``test_every_registered_tool_is_classified``. Until
+    2026-09-10 core carried one operator's four adapter tool names hardcoded
+    into the benchmark allow-list, which shipped a stranger's vendor and
+    silently denied every other instance's adapters in benchmarks.
+
+    The name says the enforced property on purpose. ``tools_allowed`` is a
+    REACH list, not a safety classification: it bounds what the server may
+    expose, and says nothing about whether ``acme_delete_patient`` writes.
+    Every core deny-set is a list of literal core tool names, so none of them
+    can catch an adapter's write tool — deriving read-only from
+    ``tools_allowed`` would hand it to a graded sub-agent the moment the
+    benchmarked agent's manifest granted it. That is the 2026-05-28 boundary
+    (an agent reached a real recipient through a tool nobody had classified),
+    so the rule is the plugin seam's: an adapter that declares nothing
+    contributes nothing.
+
+    ``read_only`` is validated at load — a list of strings, a subset of
+    ``tools_allowed``, or the adapter is refused outright — so nothing here
+    has to re-check it.
+    """
+    from robothor.engine.adapters import get_loaded_adapters
+
+    names: set[str] = set()
+    for adapter in get_loaded_adapters():
+        names.update(adapter.read_only)
+    return frozenset(names)
+
+
+def benchmark_readonly_tools() -> frozenset[str]:
+    """The read-only baseline a benchmark sub-agent's tools are cut down to.
+
+    A function, not a constant, because the adapter half of it depends on what
+    this instance loaded at runtime.
+
+    ``_BENCHMARK_EXCLUDED_TOOLS`` is subtracted last, so no source of names —
+    adapter, plugin or a future one — can re-open a family the harness withheld
+    by naming it. It supersedes ``_BENCHMARK_WITHHELD_READS`` (which it
+    contains) because the wider set was, until 2026-09-10, only ASSERTED in
+    tests and never enforced anywhere at runtime: `test_excluded_and_allowed_
+    do_not_overlap` proved core's own lists agreed with each other and could
+    say nothing about a name that arrives from outside core.
+    """
+    return frozenset(
+        (READONLY_TOOLS | _BENCHMARK_EXTRA_READS | _adapter_declared_read_only_tools())
+        - _BENCHMARK_EXCLUDED_TOOLS
+    )
+
 
 #: Registered tools deliberately kept out of the benchmark allow-list, beyond
 #: the two sandbox sets in ``robothor.engine.benchmark_sandbox``. Every one of

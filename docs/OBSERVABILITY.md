@@ -56,9 +56,9 @@ Disable all of them with `ROBOTHOR_DETECTORS_ENABLED=0`.
 
 `tool_degradation_detector` looks at one hour and needs ~5 failures in it, so it
 only sees *acute* breakage on a busy tool. A tool called twice a day can be 100%
-dead forever without ever putting 5 failures in the same hour — which is how
-`apollo_search_people` failed 32/32 (`error_type=auth`) across 14 days with
-nothing alerting. `tool_outage_detector` trades resolution for reach: a 7-day
+dead forever without ever putting 5 failures in the same hour — which is how a
+low-traffic external-search tool failed 32/32 (`error_type=auth`) across 14
+days with nothing alerting. `tool_outage_detector` trades resolution for reach: a 7-day
 window, a volume floor (≥8 calls) so it cannot fire on noise, and a failure
 ratio (≥95%) so firing means "this dependency is gone", not "this is flaky". An
 outage still dead ≥3 days escalates from `warning` to a `critical` page.

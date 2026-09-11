@@ -13,7 +13,7 @@ replies in kind, so the same process serves either.
 
 Configuration (all via env)::
 
-    CONNECTOR_BASE_URL          required, e.g. https://app.impetusone.com
+    CONNECTOR_BASE_URL          required, e.g. https://api.example.com
     CONNECTOR_TOKEN             API token (kept out of logs)
     CONNECTOR_AUTH_HEADER       default "Authorization"
     CONNECTOR_AUTH_SCHEME       default "Bearer" ("" => raw token in header)

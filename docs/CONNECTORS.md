@@ -127,7 +127,46 @@ env:
 agents: ["main"]            # least-privilege; widen deliberately
 timeout_seconds: 30
 description: "Example API (read-only) via generic REST→MCP bridge"
+tools_allowed:              # the ONLY tools this adapter may expose
+  - example_search
+  - example_delete
+read_only:                  # optional; which of those have no side effects
+  - example_search
 ```
+
+### `read_only:` — safety classification for adapter tools
+
+`tools_allowed:` is a **reach** list: it bounds what the server may expose, and
+says nothing about whether `example_delete` writes. `read_only:` is the safety
+classification, and it is the only way an adapter tool is ever treated as a
+pure read — by the benchmark harness's read-only allow-list, for instance,
+which otherwise sees nothing but literal core tool names and could never know
+`example_delete` is dangerous. It is **optional and additive**: an adapter that
+declares nothing contributes nothing, because absent means WRITE (the same rule
+plugins follow — see `robothor/plugins/loader.py`). Every entry must appear in
+`tools_allowed:`; classifying a tool the adapter does not serve is privilege
+escalation, so a `read_only:` that is not a list of strings, or that names
+anything outside `tools_allowed:` (including beside an empty, legacy allow-all
+`tools_allowed:`), **refuses the whole adapter at load** with the reason in the
+engine log. A dropped classification would leave you believing a boundary
+exists that nothing enforces.
+
+Two more load-time refusals you may hit, both with the reason in the engine log:
+
+- **A core or plugin tool name in `tools_allowed:` or `read_only:`** refuses the
+  adapter. An adapter classifies only the tools it actually serves; claiming
+  `delete_person` would let an adapter YAML — plain instance config, no code
+  review — reclassify one of core's write tools as read-only. This is a separate
+  check because the subset rule above cannot catch it: `read_only: [delete_person]`
+  ⊆ `tools_allowed: [delete_person]` holds perfectly. It will not bite a real
+  adapter — `rest_mcp_bridge` namespaces every tool it serves with
+  `CONNECTOR_TOOL_PREFIX`, so its names cannot collide with core's or a plugin's
+  by accident, and a collision is therefore a claim. If you hit it, choose a
+  distinct prefix.
+- **`read_only: false`** refuses, rather than reading as "nothing is read-only".
+  Write `read_only: []` or omit the key. Only `null`/absent means absent; every
+  other non-list value is a malformed declaration, and treating a falsy one as
+  "declared nothing" is exactly how a fail-open default gets in.
 
 ```bash
 # add the secrets the adapter's ${...} placeholders resolve from

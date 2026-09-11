@@ -12,9 +12,12 @@ look wrong.
 
 ## 1. The sub-agent tool allow-list is DERIVED — do not hand-edit it
 
-`_BENCHMARK_READONLY_TOOLS` is computed from `READONLY_TOOLS`
-(`robothor/engine/tools/constants.py`) plus `_BENCHMARK_EXTRA_READS`, minus
-`_BENCHMARK_WITHHELD_READS`. It used to be a second, hand-maintained copy of
+`benchmark_readonly_tools()` is computed from `READONLY_TOOLS`
+(`robothor/engine/tools/constants.py`) plus `_BENCHMARK_EXTRA_READS` plus
+whatever loaded adapters declared `read_only`, minus
+`_BENCHMARK_WITHHELD_READS`. (It is a function, not the old
+`_BENCHMARK_READONLY_TOOLS` constant, because the adapter half depends on what
+this instance loaded at runtime.) It used to be a second, hand-maintained copy of
 "tools with no side effects", and it had rotted:
 
 | Tool stripped | Whose procedure it broke |
@@ -35,6 +38,17 @@ sub-runs of agent-architect calling `update_goal`.
 effects, or to `_BENCHMARK_EXCLUDED_TOOLS` if it must stay out.
 `test_every_registered_tool_is_classified` fails the build until you do — that
 parity check is the thing that stops the list rotting again.
+
+**Adapter tools are the exception, and enter only one way.** A business
+adapter's tools are registered from its MCP server's `tools/list`, so they have
+no static schema and the parity check above never sees them. Core's deny-sets
+are all literal core tool names and can say nothing about `acme_delete_patient`.
+So an adapter tool reaches a benchmark sub-agent **only** if the adapter's own
+YAML names it in `read_only:` (a subset of `tools_allowed:`, or the adapter is
+refused at load — see [`../CONNECTORS.md`](../CONNECTORS.md)). `tools_allowed:`
+alone is a reach list, not a safety classification, and grants nothing here. An
+adapter that declares nothing contributes nothing: absent means WRITE, the same
+rule the plugin seam uses (`robothor/plugins/loader.py`).
 
 Auditing `READONLY_TOOLS` before deriving from it turned up one genuine
 misclassification: **`receive_agent_messages` is not a read.**
