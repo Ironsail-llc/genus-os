@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from psycopg2.extras import RealDictCursor
 
-from robothor.constants import DEFAULT_TENANT
+from robothor.constants import DEFAULT_TENANT, SANDBOX_DENIAL_PREFIX, SANDBOX_DENIED_ERROR_TYPE
 from robothor.db.connection import get_connection
 from robothor.engine.analytics import GENUINE_TIMEOUT_SQL, INTERRUPTED_SQL
 
@@ -616,15 +616,35 @@ def log_tool_event(
     ``error_type='unknown'`` with no recoverable cause anywhere, so the
     degradation detector paged about tools whose failure nobody could
     diagnose. Stored only on failure, and truncated.
+
+    Two more corrections made here, at the last point before the row is
+    written, rather than upstream in every caller:
+
+    * A message that starts with ``SANDBOX_DENIAL_PREFIX`` (the benchmark
+      sandbox's write-refusal, e.g. "benchmark sandbox: create_task writes
+      are disabled") is always classified ``error_type='sandbox_denied'``,
+      overriding whatever the caller passed. Measured 2026-09-11: this is
+      the benchmark harness being correctly refused, not a broken tool —
+      ``check_tool_degradation`` excludes the label so it stops paging
+      about it.
+    * A failed call with no ``error_message`` (e.g. a guardrail block that
+      never forwarded its refusal reason) falls back to ``error_type``,
+      then to a fixed placeholder — a row that says only THAT a call
+      failed, with a database column that could have said why left NULL,
+      is the same defect this function exists to fix.
     """
     # Accept an ErrorType enum, a bare string, or None. Callers should not
     # have to know this enum's shape to record an event about it.
     kind: str | None = getattr(error_type, "value", None)
     if kind is None and error_type is not None:
         kind = str(error_type)
+
     reason: str | None = None
-    if not success and error_message:
-        reason = str(error_message)[:MAX_TOOL_ERROR_CHARS]
+    if not success:
+        text = str(error_message).strip() if error_message else ""
+        if text.startswith(SANDBOX_DENIAL_PREFIX):
+            kind = SANDBOX_DENIED_ERROR_TYPE
+        reason = (text or kind or "failed without a message")[:MAX_TOOL_ERROR_CHARS]
     try:
         with get_connection() as conn:
             cur = conn.cursor()
@@ -695,10 +715,11 @@ def get_tool_stats(hours: int = 24) -> list[dict[str, Any]]:
                 PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) as p95_duration_ms
             FROM agent_tool_events
             WHERE created_at > NOW() - INTERVAL '%s hours'
+              AND (error_type IS NULL OR error_type <> %s)
             GROUP BY tool_name
             ORDER BY total_calls DESC
             """,
-            (hours,),
+            (hours, SANDBOX_DENIED_ERROR_TYPE),
         )
         return [dict(r) for r in cur.fetchall()]
 

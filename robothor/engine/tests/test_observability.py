@@ -273,6 +273,23 @@ class TestGetToolStats:
         assert results[0]["tool_name"] == "exec"
         assert results[0]["failures"] == 2
 
+    def test_excludes_sandbox_denied_from_the_failure_count(self, mock_db):
+        """A benchmark-sandbox refusal is not a real tool failure — same
+        false-alarm shape as check_tool_degradation/check_tool_outage, but
+        this reader feeds /costs-style tool stats rather than an alert."""
+        from robothor.engine.tracking import get_tool_stats
+
+        get_tool_stats(hours=24)
+
+        sql, params = mock_db["cursor"].execute.call_args[0]
+        assert "error_type" in sql and ("<>" in sql or "!=" in sql or "NOT IN" in sql.upper()), (
+            "the SQL must filter agent_tool_events on error_type, or a tool "
+            "correctly refused by the benchmark sandbox counts as a real failure"
+        )
+        assert "sandbox_denied" in params, (
+            "the excluded error_type must be sandbox_denied, bound as a parameter"
+        )
+
 
 # ─── Cron Health Check Tests ───────────────────────────────────────
 

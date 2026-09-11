@@ -336,6 +336,7 @@ class ToolAdmissionMixin:
                 duration_ms=0,
                 success=False,
                 error_type="guardrail_blocked",
+                error_message=gr.reason,
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("tool event could not be recorded: %s", _sanitize(exc))

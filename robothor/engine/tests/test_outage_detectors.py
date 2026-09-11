@@ -160,6 +160,72 @@ class TestCheckToolOutage:
         assert tool not in rows
 
 
+# ── Sandbox denials excluded, against a real database ────────────────────
+#
+# The mock-based tests in test_detectors.py assert on the SQL text and on a
+# hand-made row list — they prove the query was BUILT to exclude
+# sandbox_denied, not that Postgres actually applies the filter. These run
+# the real SQL: one row is a benchmark-sandbox refusal
+# (error_type='sandbox_denied'), one is a genuine failure with no classified
+# error_type at all (error_type IS NULL, the common shape before a cause is
+# ever attached) — the NULL row must still be counted, the sandbox row must
+# not.
+
+
+@pytest.mark.integration
+class TestSandboxDeniedExcludedFromRealFailureCounts:
+    def test_check_tool_degradation_excludes_the_sandbox_row_but_keeps_the_null_one(
+        self, db_cursor, mock_get_connection
+    ) -> None:
+        tool = f"t_{uuid.uuid4().hex[:8]}"
+        db_cursor.execute(
+            "INSERT INTO agent_tool_events (tool_name, success, error_type, created_at) "
+            "VALUES (%s, FALSE, 'sandbox_denied', NOW() - make_interval(mins => 5))",
+            (tool,),
+        )
+        db_cursor.execute(
+            "INSERT INTO agent_tool_events (tool_name, success, error_type, created_at) "
+            "VALUES (%s, FALSE, NULL, NOW() - make_interval(mins => 5))",
+            (tool,),
+        )
+
+        rows = {
+            r["tool_name"]: r
+            for r in detectors.check_tool_degradation(
+                min_failures=1, min_calls_for_rate=1, failure_rate=0.0
+            )
+        }
+
+        assert tool in rows, "a real failure with error_type IS NULL must still be counted"
+        assert rows[tool]["total"] == 1, "the sandbox_denied row inflated the total"
+        assert rows[tool]["failures"] == 1, "the sandbox_denied row inflated the failure count"
+
+    def test_check_tool_outage_excludes_the_sandbox_row_but_keeps_the_null_one(
+        self, db_cursor, mock_get_connection
+    ) -> None:
+        tool = f"t_{uuid.uuid4().hex[:8]}"
+        db_cursor.execute(
+            "INSERT INTO agent_tool_events (tool_name, success, error_type, created_at) "
+            "VALUES (%s, FALSE, 'sandbox_denied', NOW() - make_interval(mins => 5))",
+            (tool,),
+        )
+        db_cursor.execute(
+            "INSERT INTO agent_tool_events (tool_name, success, error_type, created_at) "
+            "VALUES (%s, FALSE, NULL, NOW() - make_interval(mins => 5))",
+            (tool,),
+        )
+
+        rows = {
+            r["tool_name"]: r for r in detectors.check_tool_outage(min_calls=1, failure_ratio=0.0)
+        }
+
+        assert tool in rows, (
+            "a real failure with error_type IS NULL must still count as an outage call"
+        )
+        assert rows[tool]["total"] == 1, "the sandbox_denied row inflated the total"
+        assert rows[tool]["failures"] == 1, "the sandbox_denied row inflated the failure count"
+
+
 # ── Tool outage: alerting, suppression, escalation ──────────────────────
 
 

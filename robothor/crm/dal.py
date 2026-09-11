@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from robothor.identity.scope import DataScope
 
 from robothor.constants import DEFAULT_TENANT as DEFAULT_TENANT
+from robothor.constants import SANDBOX_DENIAL_PREFIX
 from robothor.crm import hooks
 from robothor.crm.models import (
     company_to_dict,
@@ -1746,7 +1747,7 @@ def create_session_goal(
     — the goal tool handler converts it to a structured tool error.
     """
     if benchmark_sandbox_active():
-        raise ValueError("benchmark sandbox: create_session_goal writes are disabled")
+        raise ValueError(f"{SANDBOX_DENIAL_PREFIX} create_session_goal writes are disabled")
     tags = [SESSION_GOAL_TAG, "thread"]
     if agent_id:
         tags.append(_agent_scope_tag(agent_id))

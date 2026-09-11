@@ -21,6 +21,7 @@ import contextlib
 import logging
 from typing import Any
 
+from robothor.constants import SANDBOX_DENIAL_PREFIX, SANDBOX_DENIED_ERROR_TYPE
 from robothor.engine.session import ENGINE_CONTEXT_ROLE
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ def record_tool_outcome(
     convenience.
     """
     error_type = _classify(tool_name, error_msg)
-    _log(session, tool_name, elapsed_ms, error_msg, error_type)
+    _log(session, tool_name, elapsed_ms, error_msg, error_type, result)
     _record_on_scratchpad(scratchpad, tool_name, tool_args, result, error_msg)
     _count_failure(session, tool_name, error_msg, failures)
     return error_type
@@ -62,9 +63,31 @@ def _classify(tool_name: str, error_msg: str | None) -> Any:
 
 
 def _log(
-    session: Any, tool_name: str, elapsed_ms: int, error_msg: str | None, error_type: Any
+    session: Any,
+    tool_name: str,
+    elapsed_ms: int,
+    error_msg: str | None,
+    error_type: Any,
+    result: Any = None,
 ) -> None:
-    """Observability is not worth the work the agent has already done."""
+    """Observability is not worth the work the agent has already done.
+
+    ``result`` lets this override the classified ``error_type`` to
+    ``sandbox_denied`` on the structural marker every sandbox refusal sets
+    (``result["guard"] == "is_benchmark"`` — crm.py, memory.py, gws.py all
+    set it) rather than on message text alone: gws.py's refusal reads "Tool
+    '<name>' is disabled in benchmark mode.", not crm.py/memory.py's
+    "benchmark sandbox: <name> writes are disabled", so a message-only check
+    classified every gws sandbox denial as a real failure. The message
+    prefix stays as a fallback for a caller with no ``result`` to check
+    (``tracking.log_tool_event`` re-applies it independently for exactly
+    that case).
+    """
+    if error_msg:
+        guard_marker = isinstance(result, dict) and result.get("guard") == "is_benchmark"
+        prefix_marker = str(error_msg).startswith(SANDBOX_DENIAL_PREFIX)
+        if guard_marker or prefix_marker:
+            error_type = SANDBOX_DENIED_ERROR_TYPE
     with contextlib.suppress(Exception):
         from robothor.engine.tracking import log_tool_event
 
