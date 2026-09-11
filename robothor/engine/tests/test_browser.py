@@ -694,6 +694,8 @@ class _StubPage:
         self.goto_calls: list[str] = []
         self.evaluated: list[str] = []
         self.waited_for: list[str] = []
+        # Everything the tab was asked to do, in the order it was asked.
+        self.timeline: list[tuple[str, str]] = []
         self._evaluate_result = evaluate_result if evaluate_result is not None else []
         self._evaluate_error = evaluate_error
         self._wait_error = wait_error
@@ -704,12 +706,14 @@ class _StubPage:
 
     async def wait_for_selector(self, selector, timeout=None):
         self.waited_for.append(selector)
+        self.timeline.append(("wait_for_selector", selector))
         if self._wait_error is not None:
             raise self._wait_error
         return MagicMock()
 
     async def evaluate(self, js):
         self.evaluated.append(js)
+        self.timeline.append(("evaluate", js))
         if self._evaluate_error is not None:
             raise self._evaluate_error
         return self._evaluate_result
@@ -807,7 +811,8 @@ async def test_isolated_fetch_waits_for_the_rows_before_reading_them(stub_sessio
         wait_selector="a.result-link",
     )
 
-    assert tab.waited_for == ["a.result-link"]
+    # Waiting after the read would be no wait at all: prove the order.
+    assert tab.timeline == [("wait_for_selector", "a.result-link"), ("evaluate", "() => 1")]
     assert out["result"]
 
 
@@ -827,9 +832,12 @@ async def test_isolated_fetch_reads_a_page_whose_rows_never_appear(stub_session_
         wait_selector="a.result-link",
     )
 
-    assert tab.waited_for == ["a.result-link"]
+    assert tab.timeline == [
+        ("wait_for_selector", "a.result-link"),
+        ("evaluate", "() => 1"),
+        ("evaluate", "() => 'html'"),  # the page was still read
+    ]
     assert out["result"] == []
-    assert tab.evaluated == ["() => 1", "() => 'html'"]  # the page was still read
     assert "error" not in out
 
 

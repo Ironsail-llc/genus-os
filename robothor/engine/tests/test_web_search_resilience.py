@@ -156,6 +156,7 @@ class FakeBrowser:
         start_error: str = "",
         fetch_error: str = "",
         navigate_delay: float = 0.0,
+        delays: dict[str, float] | None = None,
     ) -> None:
         self.fetch_error = fetch_error
         self.running = running
@@ -164,6 +165,7 @@ class FakeBrowser:
         self.statuses = statuses or {}
         self.start_error = start_error
         self.navigate_delay = navigate_delay
+        self.delays = delays or {}
         # State the agent owns; a background fetch must not touch either.
         self.agent_page_url = self.AGENT_PAGE
         self.element_registry: dict[int, str] = {1: "textbox 'Name'"}
@@ -213,8 +215,12 @@ class FakeBrowser:
         self.open_tabs += 1
         self.max_open_tabs = max(self.max_open_tabs, self.open_tabs)
         try:
-            if self.navigate_delay:
-                await asyncio.sleep(self.navigate_delay)
+            delay = self.navigate_delay
+            for key, seconds in self.delays.items():
+                if key in url:
+                    delay = seconds
+            if delay:
+                await asyncio.sleep(delay)
             if self.fetch_error:
                 return {
                     "status": None,
@@ -1126,6 +1132,92 @@ async def test_startpage_is_given_time_to_clear_its_interstitial(ctx: ToolContex
     assert waits["www.bing.com"] == ""  # Bing answers straight away; do not pay for a wait
 
 
+async def test_a_place_the_operator_typed_in_lower_case_still_counts(ctx: ToolContext) -> None:
+    """Nobody capitalises a place in a search box. The rule must not need it."""
+    lowered = "coworking private office in jamaica queens"
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": GENERIC_COWORKING_ROWS},
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser(
+        pages={"bing.com": GEOLOCATED_BING_ROWS, "startpage.com": JAMAICA_BROWSER_ROWS}
+    )
+
+    out = await _search(http, browser, {"query": lowered, "limit": 8}, ctx)
+
+    assert (
+        web._rows_mention_place(
+            [web._row(r["title"], r["url"], r["content"]) for r in GENERIC_COWORKING_ROWS], lowered
+        )
+        is False
+    )
+    assert out["sources"] == ["bing", "startpage"]
+    assert out["place_source"] == "startpage"
+    assert [r["url"] for r in out["results"]][:2] == [r["url"] for r in JAMAICA_BROWSER_ROWS]
+
+
+async def test_a_source_that_hangs_is_still_named_in_the_trace(
+    ctx: ToolContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source that ate the whole budget is the most important one to name."""
+    monkeypatch.setattr(web, "_BROWSER_SEARCH_TIMEOUT", 0.15)
+    browser = FakeBrowser(
+        pages={"bing.com": ASYNCIO_BROWSER_ROWS[:1]}, delays={"startpage.com": 5.0}
+    )
+
+    out = await _search(FakeHttp({}), browser, {"query": REMOTE_QUERY, "provider": "browser"}, ctx)
+
+    assert out["sources"] == ["bing", "startpage:timeout"]
+    assert out["fallback_reason"] == "browser_timeout"
+    assert [r["url"] for r in out["results"]] == [r["url"] for r in ASYNCIO_BROWSER_ROWS[:1]]
+
+
+async def test_place_source_is_named_when_the_first_source_gave_nothing(
+    ctx: ToolContext,
+) -> None:
+    """Bing blocked, Startpage answers: the trace still says where the rows came from."""
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": GENERIC_COWORKING_ROWS},
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser(
+        pages={"startpage.com": JAMAICA_BING_ROWS},
+        html_pages={"bing.com": (FIXTURES / "ddg_challenge.html").read_text()},
+        statuses={"bing.com": 202},
+    )
+
+    out = await _search(http, browser, {"query": JAMAICA_QUERY, "limit": 8}, ctx)
+
+    assert out["sources"] == ["bing:blocked", "startpage"]
+    assert out["place_source"] == "startpage"
+
+
+async def test_a_thin_but_correct_first_page_keeps_its_order(ctx: ToolContext) -> None:
+    """Fetching more rows is not a reason to demote the rows that were right."""
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": GENERIC_COWORKING_ROWS},
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser(
+        pages={"bing.com": JAMAICA_BROWSER_ROWS, "startpage.com": JAMAICA_BING_ROWS}
+    )
+
+    out = await _search(http, browser, {"query": JAMAICA_QUERY, "limit": 8}, ctx)
+
+    assert out["sources"] == ["bing", "startpage"]  # two rows is thin; look further
+    assert [r["url"] for r in out["results"]][:2] == [r["url"] for r in JAMAICA_BROWSER_ROWS]
+    assert "place_source" not in out  # nothing was promoted over anything
+
+
 def test_startpage_html_fixture_parses_into_rows() -> None:
     rows = web._parse_startpage_html((FIXTURES / "startpage_results.html").read_text())
 
@@ -1163,9 +1255,24 @@ def test_startpage_parser_reads_either_result_class() -> None:
 def test_startpage_captcha_page_is_a_challenge_not_an_empty_page() -> None:
     challenge = (FIXTURES / "startpage_challenge.html").read_text()
     results = (FIXTURES / "startpage_results.html").read_text()
+    startpage = next(s for s in web._BROWSER_SOURCES if s.name == "startpage")
 
-    assert web._looks_like_challenge(challenge, web._STARTPAGE_RESULT_MARKERS) is True
-    assert web._looks_like_challenge(results, web._STARTPAGE_RESULT_MARKERS) is False
+    assert web._looks_like_challenge(challenge, startpage.markers, startpage.phrases) is True
+    assert web._looks_like_challenge(results, startpage.markers, startpage.phrases) is False
+
+
+def test_a_bing_page_that_merely_says_captcha_is_not_a_challenge() -> None:
+    """Phrases belong to the source that needs them.
+
+    Bing's block page is a form, not a word: reading "captcha" in a page whose
+    selectors have moved would report ``browser_blocked`` and hide the drift
+    that ``browser_parse_empty`` exists to shout about.
+    """
+    drifted = "<html><body><div id='b_results'>captcha guidance article</div></body></html>"
+    bing = next(s for s in web._BROWSER_SOURCES if s.name == "bing")
+
+    assert bing.phrases == ()
+    assert web._looks_like_challenge(drifted, bing.markers, bing.phrases) is False
 
 
 def test_the_grader_and_the_chain_ask_the_same_question() -> None:

@@ -748,8 +748,29 @@ def _grade_results(rows: list[dict[str, str]], query: str, limit: int = 0) -> st
     return ""
 
 
+def _place_terms(query: str) -> set[str]:
+    """Lowercased words of the place the query named — capitalised or not.
+
+    :func:`_place_text` reads "… in jamaica queens" as happily as "… in Jamaica
+    Queens", but :func:`_query_terms` only promotes *capitalised* words to
+    required ones. Nobody capitalises a place in a search box, and without this
+    every lowercase local query would pass the place check unexamined.
+    """
+    place = _place_text(query)
+    if not place:
+        return set()
+    return {
+        token.lower()
+        for token in _TOKEN_RE.findall(place)
+        if len(token) >= 2 and token.lower() not in _STOPWORDS
+    }
+
+
 def _missing_place_terms(rows: list[dict[str, str]], query: str, limit: int = 0) -> list[str]:
-    """Terms the query pinned the answer to (proper nouns, a ZIP) that no row names.
+    """Terms the query pinned the answer to that no row names.
+
+    Those are the proper nouns and numbers of :func:`_query_terms` plus the
+    words of the place itself, which is what makes a lower-case place count.
 
     The single implementation behind both the grader's ``missing_place_terms``
     verdict and the browser fallback's advance-to-the-next-source rule, so
@@ -762,7 +783,7 @@ def _missing_place_terms(rows: list[dict[str, str]], query: str, limit: int = 0)
     """
     if not rows:
         return []
-    _, required = _query_terms(query)
+    required = _query_terms(query)[1] | _place_terms(query)
     if not required:
         return []
     # A place term cannot appear in two results when only one was asked for.
@@ -1108,9 +1129,11 @@ _STARTPAGE_RESULT_MARKERS = ("w-gl", "result-link")
 _STARTPAGE_RESULT_SELECTOR = "a.result-link, a.w-gl__result-title"
 _DDG_RESULT_MARKERS = ("result__a", "result__snippet")
 
-# What an anti-bot page says out loud. Only consulted on a page that carries no
-# result markers at all, so a results page mentioning any of them stays a
-# results page.
+# What Startpage's anti-bot page says out loud. Carried per source, not applied
+# to all of them: a Bing page whose selectors have moved and which happens to
+# mention a captcha is selector drift, and must keep saying so. Only consulted
+# on a page with no result markers at all, so a results page that mentions one
+# of these stays a results page.
 _CHALLENGE_PHRASES = ("captcha", "unusual traffic", "verify you", "are you a robot")
 
 
@@ -1126,6 +1149,9 @@ class _BrowserSource:
     # Content to wait for before reading the page, for a source that serves an
     # interstitial first. Empty means "read it as soon as it parses".
     wait_selector: str = ""
+    # Wording that identifies *this* source's block page, for one whose block
+    # page is not shaped like a form.
+    phrases: tuple[str, ...] = ()
 
 
 # The order the browser fallback tries sources in. Bing answers this box at all
@@ -1142,6 +1168,7 @@ _BROWSER_SOURCES = (
         _parse_startpage_html,
         _STARTPAGE_RESULT_MARKERS,
         wait_selector=_STARTPAGE_RESULT_SELECTOR,
+        phrases=_CHALLENGE_PHRASES,
     ),
     _BrowserSource(
         "duckduckgo", DDG_HTML_URL, _DDG_EXTRACT_JS, _parse_ddg_html, _DDG_RESULT_MARKERS
@@ -1158,7 +1185,9 @@ class _PageOutcome:
     blocked: bool = False
 
 
-def _looks_like_challenge(html: str, markers: tuple[str, ...]) -> bool:
+def _looks_like_challenge(
+    html: str, markers: tuple[str, ...], phrases: tuple[str, ...] = ()
+) -> bool:
     """True for an anti-bot interstitial: a form, and no result markers.
 
     Measured: html.duckduckgo.com answers this box with HTTP 202 and a form of
@@ -1170,7 +1199,7 @@ def _looks_like_challenge(html: str, markers: tuple[str, ...]) -> bool:
         return False
     # Startpage's block page is a 200 with a CAPTCHA widget and no form at all,
     # so the form shape alone would read it as an empty web.
-    if any(phrase in lowered for phrase in _CHALLENGE_PHRASES):
+    if any(phrase in lowered for phrase in phrases):
         return True
     return "<form" in lowered and lowered.count("<input") >= 3
 
@@ -1182,6 +1211,7 @@ async def _browser_page_results(
     parse_html: Callable[[str], list[dict[str, str]]],
     markers: tuple[str, ...],
     wait_selector: str = "",
+    phrases: tuple[str, ...] = (),
 ) -> _PageOutcome:
     """Load one results page in a throwaway tab and extract its rows.
 
@@ -1207,7 +1237,9 @@ async def _browser_page_results(
 
     blocked = False
     if not rows:
-        challenge = isinstance(html, str) and bool(html) and _looks_like_challenge(html, markers)
+        challenge = (
+            isinstance(html, str) and bool(html) and _looks_like_challenge(html, markers, phrases)
+        )
         # 202 is what DuckDuckGo answers a suspected bot with; /sorry/ is
         # Google's interstitial, for whenever a Google source is added.
         blocked = status == 202 or "/sorry/" in final_url or challenge
@@ -1312,10 +1344,15 @@ async def _browser_search_locked(query: str, cap: int, ctx: ToolContext) -> dict
     # full of rows, so a count-only advance rule never looks any further.
     place = _place_text(query)
     timed_out = False
+    in_flight = False
     try:
         try:
             async with asyncio.timeout(_BROWSER_SEARCH_TIMEOUT):
-                for source in _BROWSER_SOURCES:
+                for index, source in enumerate(_BROWSER_SOURCES):
+                    # Named before the fetch, suffixed after: a source that ate
+                    # the whole budget is the one the trace most needs to name.
+                    sources.append(source.name)
+                    in_flight = True
                     page = await _browser_page_results(
                         ctx,
                         f"{source.url}?q={quote_plus(query)}",
@@ -1323,20 +1360,28 @@ async def _browser_search_locked(query: str, cap: int, ctx: ToolContext) -> dict
                         source.parse,
                         source.markers,
                         source.wait_selector,
+                        source.phrases,
                     )
-                    if page.rows:
-                        sources.append(source.name)
-                    else:
-                        sources.append(f"{source.name}:{'blocked' if page.blocked else 'empty'}")
-                    if page.rows and not rows:
+                    in_flight = False
+                    if not page.rows:
+                        sources[-1] = f"{source.name}:{'blocked' if page.blocked else 'empty'}"
+                    elif not rows:
                         rows = list(page.rows)
-                    elif page.rows and place and _rows_mention_place(page.rows, query, cap):
-                        # This source honoured the place the earlier one dropped:
-                        # its rows lead, and the earlier ones follow it.
+                        if index and place and _rows_mention_place(rows, query, cap):
+                            # Nothing before it in the chain answered at all.
+                            place_source = source.name
+                    elif (
+                        place
+                        and not _rows_mention_place(rows, query, cap)
+                        and _rows_mention_place(page.rows, query, cap)
+                    ):
+                        # This source honoured the place the earlier ones dropped:
+                        # its rows lead, and the earlier ones follow it. Rows that
+                        # already named the place are never reordered.
                         seen = {r["url"] for r in page.rows}
                         rows = list(page.rows) + [r for r in rows if r["url"] not in seen]
                         place_source = source.name
-                    elif page.rows:
+                    else:
                         seen = {r["url"] for r in rows}
                         rows.extend(r for r in page.rows if r["url"] not in seen)
                     enough = len(rows) >= _MIN_USEFUL_RESULTS
@@ -1344,6 +1389,8 @@ async def _browser_search_locked(query: str, cap: int, ctx: ToolContext) -> dict
                         break
         except TimeoutError:
             timed_out = True
+            if in_flight and sources:
+                sources[-1] = f"{sources[-1]}:timeout"
     except Exception as e:
         return {"error": f"Browser search failed: {e}", "fallback_reason": "browser_unavailable"}
     finally:
