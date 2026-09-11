@@ -550,7 +550,25 @@ def _check_optional_service(name: str, port: int, health_path: str | None) -> No
 def cmd_config(args: argparse.Namespace) -> int:
     if args.config_command == "validate":
         return _cmd_config_validate()
-    print("Usage: robothor config validate")
+    if args.config_command == "schema":
+        return _cmd_config_schema()
+    print("Usage: robothor config {validate|schema}")
+    return 0
+
+
+def _cmd_config_schema() -> int:
+    """Print the JSON Schema of every declared setting.
+
+    The schema carries each field's declared environment name, default,
+    description and the restart/secret/since/governed metadata, so tooling --
+    an editor, a form generator, a config linter -- can read what is
+    configurable without importing Python.
+    """
+    import json
+
+    from robothor.settings.model import GenusSettings
+
+    print(json.dumps(GenusSettings.model_json_schema(), indent=2, sort_keys=True))
     return 0
 
 

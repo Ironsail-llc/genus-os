@@ -295,6 +295,7 @@ def _build_parser() -> argparse.ArgumentParser:
     config_parser = subparsers.add_parser("config", help="Configuration management")
     config_sub = config_parser.add_subparsers(dest="config_command")
     config_sub.add_parser("validate", help="Validate system configuration and connectivity")
+    config_sub.add_parser("schema", help="Print the JSON Schema of every declared setting")
 
     # serve
     serve_parser = subparsers.add_parser("serve", help="Start the API server")
