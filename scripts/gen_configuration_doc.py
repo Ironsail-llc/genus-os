@@ -39,6 +39,11 @@ GROUP_BLURBS = {
     "services": "Side services the instance runs: ports, endpoints and their knobs.",
     "secrets": "Secret material that belongs to no single service.",
     "substrate": "Where and how the instance runs: host accounts, federation, backups.",
+    "ops": (
+        "Backups, restores, SLO probes, alert delivery and the volume guard — "
+        "read by shell, not by Python, which is why they were the last thing "
+        "anyone declared."
+    ),
 }
 
 HEADER = """<!--
@@ -51,7 +56,14 @@ generator output are compared in tests/test_configuration_doc_generated.py.
 
 # Configuration reference
 
-Every setting Genus OS reads, with the exact environment variable name.
+Every `ROBOTHOR_*` and `GENUS_*` setting Genus OS reads, with the exact
+environment variable name.
+
+Provider credentials that carry no Genus prefix — `OPENROUTER_API_KEY`,
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and their peers — are **not** in this
+table. They belong to the providers, not to this platform, so they are
+declared and documented with the provider integration that reads them rather
+than renamed into a Genus namespace.
 
 Settings resolve from four places, lowest priority first:
 

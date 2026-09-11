@@ -11,7 +11,8 @@ Structure
 ---------
 ``GenusSettings`` is a shallow tree of groups (``paths``, ``database``,
 ``redis``, ``ollama``, ``providers``, ``engine``, ``channels``, ``auth``,
-``flags``, ``services``, ``secrets``, ``substrate``). Groups are plain
+``flags``, ``services``, ``secrets``, ``substrate``, ``ops``). Groups are
+plain
 ``BaseModel``s, populated by the sources in :mod:`robothor.settings.sources`,
 which resolve each leaf by its declared environment name rather than by
 deriving one from the field name -- deriving is how ``ROBOTHOR_DB_SSLMODE``
@@ -328,6 +329,19 @@ class DatabaseSettings(SettingsGroup):
         "robothor_test",
         "ROBOTHOR_SOAK_TEMPLATE",
         "Template database the federation soak clones per instance.",
+    )
+    test_db_dsn: str = declare(
+        "",
+        "ROBOTHOR_TEST_DB_DSN",
+        "Full libpq DSN CI points the suites at. Carries a password, so it is "
+        "supplied by the workflow rather than committed anywhere.",
+        secret=True,
+    )
+    test_admin_dsn: str = declare(
+        "",
+        "ROBOTHOR_TEST_ADMIN_DSN",
+        "Full libpq DSN for the administrative role CI creates and drops test databases with.",
+        secret=True,
     )
 
 
@@ -699,7 +713,10 @@ class EngineSettings(SettingsGroup):
     alert_webhook_url: str = declare(
         "",
         "ROBOTHOR_ALERT_WEBHOOK_URL",
-        "Webhook alerts are POSTed to. Empty skips webhook delivery entirely.",
+        "Webhook alerts are POSTed to. Empty skips webhook delivery entirely. "
+        "Held as a secret: these URLs routinely carry the bearer token in the "
+        "path or the query string.",
+        secret=True,
     )
     alert_cooldown_seconds: int = declare(
         3600,
@@ -1188,7 +1205,9 @@ class ServiceSettings(SettingsGroup):
         "",
         "ROBOTHOR_SIEM_WEBHOOK_URL",
         "Audit events are POSTed here as JSON (Splunk HEC, Datadog, generic). "
-        "Empty disables webhook forwarding.",
+        "Empty disables webhook forwarding. Held as a secret: an HEC or "
+        "Datadog collector URL carries its ingest token.",
+        secret=True,
     )
     siem_syslog_host: str = declare(
         "",
@@ -1275,7 +1294,10 @@ class SubstrateSettings(SettingsGroup):
     nats_url: str = declare(
         "",
         "ROBOTHOR_NATS_URL",
-        "NATS broker URL. Empty leaves federation transport unconfigured.",
+        "NATS broker URL. Empty leaves federation transport unconfigured. "
+        "Held as a secret: the nats:// form accepts inline user:pass@ "
+        "credentials, and instances do set it that way.",
+        secret=True,
     )
     nats_user: str = declare("", "ROBOTHOR_NATS_USER", "NATS account user.")
     nats_password: str = declare(
@@ -1416,6 +1438,536 @@ class SubstrateSettings(SettingsGroup):
         "JSON blob of arguments the federation soak passes to its child "
         "processes. Set by the harness, not by an operator.",
     )
+    os_user: str = declare(
+        "robothor",
+        "ROBOTHOR_USER",
+        "Account infra/setup.sh chowns the workspace and log directory to "
+        "during provisioning. The same account the units later run as.",
+    )
+    dev_mode: bool = declare(
+        False,
+        "ROBOTHOR_DEV",
+        "Set inside the development container image. Marks a build that "
+        "carries dev tooling and must not be what production runs.",
+    )
+    deployed_at: str = declare(
+        "",
+        "GENUS_OS_DEPLOYED_AT",
+        "Timestamp the Helm chart stamps onto every pod, so a running "
+        "container can say when it was deployed rather than when it booted.",
+    )
+    deployed_from_pr: str = declare(
+        "",
+        "GENUS_OS_DEPLOYED_FROM_PR",
+        "PR number a staging deployment came from, stamped by the Helm "
+        "chart. Empty on a production release, which comes from a tag.",
+    )
+    image_tag: str = declare(
+        "",
+        "GENUS_OS_IMAGE_TAG",
+        "Container image tag the Helm chart stamped onto the pod. Production "
+        "pins an exact vX.Y.Z; staging pins pr-N-sha-<short>.",
+    )
+    deploy_url: str = declare(
+        "",
+        "GENUS_URL",
+        "Base URL the release workflow smoke-tests after a deploy, calling "
+        "/api/live and /api/ready on it.",
+    )
+    production_url: str = declare(
+        "",
+        "GENUS_PRODUCTION_URL",
+        "Repository variable supplying the production base URL the release "
+        "workflow smoke-tests. Empty falls back to the workflow's default.",
+    )
+    allow_deployment_lag: bool = declare(
+        False,
+        "GENUS_ALLOW_DEPLOYMENT_LAG",
+        "Let the version-consistency check pass while the deployed version "
+        "trails the released one. An escape hatch for a deliberate hold, not "
+        "a way to stop noticing that a promotion was lost.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# ops
+# ---------------------------------------------------------------------------
+
+
+class OpsSettings(SettingsGroup):
+    """Backups, restores, SLO probes, alert delivery and the volume guard.
+
+    These are read by shell, not by Python. That is why they were the last
+    thing anyone declared, and it is also why they matter: the controls that
+    decide whether a backup exists, whether a restore works and whether anyone
+    is paged all live in here. An operator configuring one has exactly the same
+    problem as an operator configuring the engine.
+
+    Most of the ``*_CMD`` entries are seams the test suites substitute so a
+    guardrail can be exercised off a real systemd host; they are documented
+    because an operator on an unusual host may legitimately need them.
+
+    Two programs watch the SLOs and their variables look alike. The
+    ``ROBOTHOR_SLO_*`` names here belong to ``scripts/slo_probe.sh``; the ones
+    in ``substrate`` (``ROBOTHOR_SLO_OS_USER``, ``..._HEARTBEAT_AGENT``,
+    ``..._JOURNALCTL_CMD``, ``..._KEY_POOL_CMD``) belong to the Python
+    ``scripts/guardrail_watch.py``. Each variable is declared exactly once, in
+    the group matching the reader that actually consumes it.
+    """
+
+    # --- PATH and interpreter plumbing ------------------------------------
+    extra_path: str = declare(
+        "",
+        "ROBOTHOR_EXTRA_PATH",
+        "Directory prepended to PATH before the guardrail scripts pin their "
+        "own. A test seam: the suites point it at stub binaries.",
+    )
+    fixed_path: str = declare(
+        "",
+        "ROBOTHOR_FIXED_PATH",
+        "PATH the cron wrapper captured at start and restores for the job it "
+        "runs, so a cron entry does not inherit cron's near-empty PATH.",
+    )
+    python: str = declare(
+        "",
+        "ROBOTHOR_PYTHON",
+        "Interpreter the restore drill runs its built-in notifier with. Empty "
+        "means the repository's own venv.",
+    )
+    systemctl: str = declare(
+        "",
+        "ROBOTHOR_SYSTEMCTL",
+        "systemctl the instance doctor interrogates for unit enabled/active "
+        "state. Empty means the doctor skips the systemd checks.",
+    )
+    secrets_file: str = declare(
+        "/run/robothor/secrets.env",
+        "ROBOTHOR_SECRETS_FILE",
+        "Decrypted secrets file the cron wrapper and the alert sender source. "
+        "It lives on tmpfs; a process that starts before it exists comes up "
+        "with no credentials at all and fails closed.",
+    )
+    instance_env: str = declare(
+        "/etc/robothor/robothor.env",
+        "ROBOTHOR_INSTANCE_ENV",
+        "EnvironmentFile the cron wrapper sources so a cron job sees the same "
+        "configuration the systemd units do.",
+    )
+    restart_request_dir: str = declare(
+        "/run/robothor/restart-requests",
+        "ROBOTHOR_RESTART_REQUEST_DIR",
+        "Directory the restart handler watches for per-unit restart requests.",
+    )
+    restart_legacy_request: str = declare(
+        "/run/robothor/restart-request",
+        "ROBOTHOR_RESTART_LEGACY_REQUEST",
+        "Single-file restart request the handler still honours, from before "
+        "requests became one file per unit.",
+    )
+
+    # --- alert delivery ---------------------------------------------------
+    alert_state_dir: str = declare(
+        "/run/robothor/alert-cooldown",
+        "ROBOTHOR_ALERT_STATE_DIR",
+        "Directory the alert sender keeps per-unit cooldown markers in, so a "
+        "flapping unit pages once rather than once per failure.",
+    )
+    alert_fallback_state_dir: str = declare(
+        "",
+        "ROBOTHOR_ALERT_FALLBACK_STATE_DIR",
+        "Cooldown directory used when the primary one is not writable -- a "
+        "read-only /run must not silently disable deduplication.",
+    )
+    alert_max_attempts: int = declare(
+        10,
+        "ROBOTHOR_ALERT_MAX_ATTEMPTS",
+        "Delivery attempts the alert sender makes before giving up.",
+    )
+    alert_retry_delay: int = declare(
+        30,
+        "ROBOTHOR_ALERT_RETRY_DELAY",
+        "Seconds between alert delivery attempts.",
+    )
+    cron_alert_max_attempts: int = declare(
+        2,
+        "ROBOTHOR_CRON_ALERT_MAX_ATTEMPTS",
+        "Delivery attempts for an alert raised by the cron wrapper. Lower "
+        "than the default: a cron job must not sit retrying a page.",
+    )
+    cron_alert_retry_delay: int = declare(
+        15,
+        "ROBOTHOR_CRON_ALERT_RETRY_DELAY",
+        "Seconds between cron-wrapper alert delivery attempts.",
+    )
+    alert_suppress: str = declare(
+        "",
+        "ROBOTHOR_ALERT_SUPPRESS",
+        "Any non-empty value makes the alert sender drop the alert and say so "
+        "on stderr. For a planned maintenance window only -- an instance left "
+        "with this set pages for nothing.",
+    )
+    alert_journal_cmd: str = declare(
+        "journalctl",
+        "ROBOTHOR_ALERT_JOURNAL_CMD",
+        "Command the alert sender reads a failing unit's recent log from, to "
+        "put context in the page.",
+    )
+    alert_journal_tail_bytes: int = declare(
+        500,
+        "ROBOTHOR_ALERT_JOURNAL_TAIL_BYTES",
+        "Bytes of journal tail included in an alert body.",
+    )
+    telegram_api_base: str = declare(
+        "https://api.telegram.org",
+        "ROBOTHOR_TELEGRAM_API_BASE",
+        "Telegram API base the shell alert sender posts to. Overridable so "
+        "the delivery path can be tested without sending a real message.",
+    )
+
+    # --- local backups ----------------------------------------------------
+    backup_mount: str = declare(
+        "/mnt/robothor-backup",
+        "ROBOTHOR_BACKUP_MOUNT",
+        "Mount point of the backup volume. Every backup job refuses to run "
+        "when this is not a real, separate mount.",
+    )
+    backup_log: str = declare(
+        "",
+        "ROBOTHOR_BACKUP_LOG",
+        "Log file the SSD backup writes to. Empty picks a default under the log directory.",
+    )
+    basebackup_dir: str = declare(
+        "/mnt/robothor-backup/robothor/basebackup",
+        "ROBOTHOR_BASEBACKUP_DIR",
+        "Directory pg_basebackup writes to and the WAL offsite job reads.",
+    )
+    basebackup_keep: int = declare(
+        3,
+        "ROBOTHOR_BASEBACKUP_KEEP",
+        "Base backup generations kept on the local volume.",
+    )
+    wal_keep_days: int = declare(
+        8,
+        "ROBOTHOR_WAL_KEEP_DAYS",
+        "Days of archived WAL kept before pruning. Must outlast the oldest "
+        "base backup or that backup cannot be replayed forward.",
+    )
+    wal_min_free_mb: int = declare(
+        5120,
+        "ROBOTHOR_WAL_MIN_FREE_MB",
+        "Free megabytes the WAL archiver requires before accepting a segment. "
+        "Below it the archive command fails, which is what stops PostgreSQL "
+        "filling the disk.",
+    )
+    volume_check: str = declare(
+        "",
+        "ROBOTHOR_VOLUME_CHECK",
+        "Volume probe the backup jobs run before writing. Empty means the "
+        "backup-volume-check.sh next to them.",
+    )
+    volume_probe_timeout: int = declare(
+        20,
+        "ROBOTHOR_VOLUME_PROBE_TIMEOUT",
+        "Seconds one volume-probe step may take. A wedged mount answers "
+        "nothing rather than answering 'no', so every step is bounded.",
+    )
+    volume_require_separate_mount: bool = declare(
+        True,
+        "ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT",
+        "Require the backup path to be its own mount. Off, a dropped drive "
+        "means backups quietly land on the root filesystem instead.",
+    )
+
+    # --- backup volume guard ----------------------------------------------
+    crypttab: str = declare(
+        "/etc/crypttab",
+        "ROBOTHOR_CRYPTTAB",
+        "crypttab the volume guard resolves the backup container's UUID from.",
+    )
+    volume_guard_mapper: str = declare(
+        "robothor-backup",
+        "ROBOTHOR_VOLUME_GUARD_MAPPER",
+        "crypttab name of the encrypted backup container the guard reopens.",
+    )
+    volume_guard_mapper_dir: str = declare(
+        "/dev/mapper",
+        "ROBOTHOR_VOLUME_GUARD_MAPPER_DIR",
+        "Device-mapper directory the guard looks for the container in.",
+    )
+    volume_guard_dev_dir: str = declare(
+        "/dev/disk/by-uuid",
+        "ROBOTHOR_VOLUME_GUARD_DEV_DIR",
+        "by-uuid directory the guard resolves the backing device through, so "
+        "a drive that came back on a different USB path is still found.",
+    )
+    volume_guard_state_dir: str = declare(
+        "/run/robothor/volume-guard",
+        "ROBOTHOR_VOLUME_GUARD_STATE_DIR",
+        "Directory the volume guard records what it has already paged about.",
+    )
+    volume_guard_heal: bool = declare(
+        True,
+        "ROBOTHOR_VOLUME_GUARD_HEAL",
+        "Let the guard reopen and remount a dropped backup volume. Off, it "
+        "pages and leaves the volume down.",
+    )
+    volume_guard_repage_seconds: int = declare(
+        86400,
+        "ROBOTHOR_VOLUME_GUARD_REPAGE_SECONDS",
+        "Quiet period before the guard pages again about a volume that is still down.",
+    )
+    volume_guard_check_cmd: str = declare(
+        "",
+        "ROBOTHOR_VOLUME_GUARD_CHECK_CMD",
+        "Volume probe the guard runs. Empty means backup-volume-check.sh.",
+    )
+    volume_guard_alert_cmd: str = declare(
+        "",
+        "ROBOTHOR_VOLUME_GUARD_ALERT_CMD",
+        "Pager the guard invokes. Empty means send_failure_alert.sh.",
+    )
+
+    # --- offsite ----------------------------------------------------------
+    offsite_source: str = declare(
+        "/mnt/robothor-backup/robothor/db",
+        "ROBOTHOR_OFFSITE_SOURCE",
+        "Local dump directory the offsite sync uploads from.",
+    )
+    offsite_volumes: str = declare(
+        "/mnt/robothor-backup/robothor/docker-volumes",
+        "ROBOTHOR_OFFSITE_VOLUMES",
+        "Local docker-volume dump directory the offsite sync uploads.",
+    )
+    offsite_dropin_dir: str = declare(
+        "",
+        "ROBOTHOR_OFFSITE_DROPIN_DIR",
+        "systemd drop-in directory the offsite job preserves alongside the "
+        "dumps, so a restore brings back the unit configuration too.",
+    )
+    offsite_log: str = declare(
+        "",
+        "ROBOTHOR_OFFSITE_LOG",
+        "Log file the offsite sync writes to. Empty picks a default under the log directory.",
+    )
+
+    # --- restore drill ----------------------------------------------------
+    restore_drill_db: str = declare(
+        "robothor_restore_drill",
+        "ROBOTHOR_RESTORE_DRILL_DB",
+        "Scratch database the restore drill restores into. Never the live "
+        "one: the drill drops it afterwards.",
+    )
+    restore_drill_local_dir: str = declare(
+        "/mnt/robothor-backup/robothor/db",
+        "ROBOTHOR_RESTORE_DRILL_LOCAL_DIR",
+        "Local dump directory the drill restores from when no offsite remote is configured.",
+    )
+    restore_drill_work_dir: str = declare(
+        "",
+        "ROBOTHOR_RESTORE_DRILL_WORK_DIR",
+        "Directory an offsite dump is fetched into for the drill. Empty uses "
+        "a temporary directory.",
+    )
+    restore_drill_drop_timeout: int = declare(
+        300,
+        "ROBOTHOR_RESTORE_DRILL_DROP_TIMEOUT",
+        "Seconds a dropdb of the scratch database may block before the drill "
+        "gives up, so a stuck connection cannot hang the drill forever.",
+    )
+    restore_drill_psql: str = declare(
+        "psql",
+        "ROBOTHOR_RESTORE_DRILL_PSQL",
+        "psql the drill restores with.",
+    )
+    restore_drill_createdb: str = declare(
+        "createdb",
+        "ROBOTHOR_RESTORE_DRILL_CREATEDB",
+        "createdb the drill makes the scratch database with.",
+    )
+    restore_drill_dropdb: str = declare(
+        "dropdb",
+        "ROBOTHOR_RESTORE_DRILL_DROPDB",
+        "dropdb the drill cleans the scratch database up with.",
+    )
+    restore_drill_rclone_cmd: str = declare(
+        "rclone",
+        "ROBOTHOR_RESTORE_DRILL_RCLONE_CMD",
+        "rclone the drill fetches an offsite dump with.",
+    )
+    restore_drill_notify_cmd: str = declare(
+        "",
+        "ROBOTHOR_RESTORE_DRILL_NOTIFY_CMD",
+        "Command that reports the drill's result. Empty uses the built-in notifier.",
+    )
+
+    # --- liveness probe (shell) -------------------------------------------
+    liveness_probe_cmd: str = declare(
+        "",
+        "ROBOTHOR_LIVENESS_PROBE_CMD",
+        "Command that decides whether the engine is alive. Empty uses the built-in curl probe.",
+    )
+    liveness_alert_cmd: str = declare(
+        "",
+        "ROBOTHOR_LIVENESS_ALERT_CMD",
+        "Pager the liveness probe invokes. Empty means send_failure_alert.sh.",
+    )
+    liveness_stuck_age_seconds: int = declare(
+        1800,
+        "ROBOTHOR_LIVENESS_STUCK_AGE_SECONDS",
+        "How long a .stuck marker may stand before the probe treats it as a "
+        "failure in its own right, so a wedged restart cannot look healthy.",
+    )
+
+    # --- boot guard -------------------------------------------------------
+    boot_history: str = declare(
+        "/var/lib/robothor/boot-history",
+        "ROBOTHOR_BOOT_HISTORY",
+        "File the boot guard records recent boots in to detect a boot loop.",
+    )
+    inhibit_flag: str = declare(
+        "/run/robothor/INHIBIT_INFERENCE",
+        "ROBOTHOR_INHIBIT_FLAG",
+        "Marker whose presence stops the box taking on inference work -- what "
+        "the boot guard and the thermal shedder drop to halt the fleet.",
+    )
+
+    # --- thermal ----------------------------------------------------------
+    thermal_throttle_pct: int = declare(
+        50,
+        "ROBOTHOR_THERMAL_THROTTLE_PCT",
+        "CPU frequency cap (percent) the thermal guard applies once the "
+        "throttle threshold is crossed.",
+    )
+
+    # --- SLO probe --------------------------------------------------------
+    slo_local_dump_dir: str = declare(
+        "/mnt/robothor-backup/robothor/db",
+        "ROBOTHOR_SLO_LOCAL_DUMP_DIR",
+        "Nightly dump directory the SLO probe checks the freshness of.",
+    )
+    slo_local_dump_max_hours: int = declare(
+        26,
+        "ROBOTHOR_SLO_LOCAL_DUMP_MAX_HOURS",
+        "Age budget for the nightly local dump before the SLO breaches.",
+    )
+    slo_offsite_max_hours: int = declare(
+        26,
+        "ROBOTHOR_SLO_OFFSITE_MAX_HOURS",
+        "Age budget for the offsite copy before the SLO breaches.",
+    )
+    slo_basebackup_dir: str = declare(
+        "",
+        "ROBOTHOR_SLO_BASEBACKUP_DIR",
+        "Base backup directory the SLO probe checks. Empty falls back to ROBOTHOR_BASEBACKUP_DIR.",
+    )
+    slo_basebackup_max_hours: int = declare(
+        192,
+        "ROBOTHOR_SLO_BASEBACKUP_MAX_HOURS",
+        "Age budget for the newest base backup (192h = 8 days).",
+    )
+    slo_liveness_max_hours: int = declare(
+        1,
+        "ROBOTHOR_SLO_LIVENESS_MAX_HOURS",
+        "How stale the liveness probe's last run may be before it counts as not running at all.",
+    )
+    slo_guardrail_watch_max_hours: int = declare(
+        26,
+        "ROBOTHOR_SLO_GUARDRAIL_WATCH_MAX_HOURS",
+        "How stale the guardrail watcher's last run may be before breaching.",
+    )
+    slo_backup_cooldown_seconds: int = declare(
+        43200,
+        "ROBOTHOR_SLO_BACKUP_COOLDOWN_SECONDS",
+        "Quiet period between repeat pages about the backup SLO. The probe "
+        "runs hourly, so without a cooldown one breach pages 24 times a day.",
+    )
+    slo_heartbeat_cooldown_seconds: int = declare(
+        43200,
+        "ROBOTHOR_SLO_HEARTBEAT_COOLDOWN_SECONDS",
+        "Quiet period between repeat pages about the heartbeat SLO.",
+    )
+    slo_llm_cooldown_seconds: int = declare(
+        21600,
+        "ROBOTHOR_SLO_LLM_COOLDOWN_SECONDS",
+        "Quiet period between repeat pages about LLM availability.",
+    )
+    slo_guardrail_cooldown_seconds: int = declare(
+        43200,
+        "ROBOTHOR_SLO_GUARDRAIL_COOLDOWN_SECONDS",
+        "Quiet period between repeat pages about the guardrail-watch SLO.",
+    )
+    slo_liveness_cooldown_seconds: int = declare(
+        43200,
+        "ROBOTHOR_SLO_LIVENESS_COOLDOWN_SECONDS",
+        "Quiet period between repeat pages about the liveness SLO.",
+    )
+    slo_db: str = declare(
+        "",
+        "ROBOTHOR_SLO_DB",
+        "Database the DB-backed SLOs query. Empty falls back to PGDATABASE, then ROBOTHOR_DB_NAME.",
+    )
+    slo_db_checks: bool = declare(
+        True,
+        "ROBOTHOR_SLO_DB_CHECKS",
+        "Run the DB-backed SLOs (heartbeat delivery and LLM availability). "
+        "Off leaves both UNMEASURED and is for tests only -- the probe says "
+        "so loudly on every run.",
+    )
+    slo_probe_timeout: int = declare(
+        20,
+        "ROBOTHOR_SLO_PROBE_TIMEOUT",
+        "Seconds one disk step of the probe may take. A dropped mount hangs "
+        "rather than erroring, so every step is bounded.",
+    )
+    slo_uptime_file: str = declare(
+        "/proc/uptime",
+        "ROBOTHOR_SLO_UPTIME_FILE",
+        "Where the probe reads host uptime from, so it does not breach an SLO "
+        "for a window the box spent powered off.",
+    )
+    slo_alert_cmd: str = declare(
+        "",
+        "ROBOTHOR_SLO_ALERT_CMD",
+        "Pager the SLO probe invokes. Empty means send_failure_alert.sh.",
+    )
+    slo_psql_cmd: str = declare(
+        "",
+        "ROBOTHOR_SLO_PSQL_CMD",
+        "psql the DB-backed SLOs run through. Empty uses the database hop.",
+    )
+    slo_rclone_cmd: str = declare(
+        "rclone",
+        "ROBOTHOR_SLO_RCLONE_CMD",
+        "rclone the probe lists the offsite copy with.",
+    )
+    slo_systemctl_cmd: str = declare(
+        "systemctl",
+        "ROBOTHOR_SLO_SYSTEMCTL_CMD",
+        "systemctl the probe reads unit timestamps from.",
+    )
+    slo_runuser_cmd: str = declare(
+        "runuser",
+        "ROBOTHOR_SLO_RUNUSER_CMD",
+        "Command the probe hops to the database account with.",
+    )
+    slo_getent_cmd: str = declare(
+        "getent",
+        "ROBOTHOR_SLO_GETENT_CMD",
+        "Command the probe proves the database account exists with, so a "
+        "missing account is reported rather than read as a passing check.",
+    )
+    slo_id_cmd: str = declare(
+        "id",
+        "ROBOTHOR_SLO_ID_CMD",
+        "Command the probe checks its own identity with, deciding whether it "
+        "needs the runuser hop at all.",
+    )
+    slo_volume_check_cmd: str = declare(
+        "",
+        "ROBOTHOR_SLO_VOLUME_CHECK_CMD",
+        "Volume probe the SLO check runs; the dump directory is appended to "
+        "it. Empty means backup-volume-check.sh --ro.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1450,6 +2002,7 @@ class GenusSettings(BaseSettings):
     services: ServiceSettings = Field(default_factory=ServiceSettings)
     secrets: SecretSettings = Field(default_factory=SecretSettings)
     substrate: SubstrateSettings = Field(default_factory=SubstrateSettings)
+    ops: OpsSettings = Field(default_factory=OpsSettings)
 
     @classmethod
     def settings_customise_sources(

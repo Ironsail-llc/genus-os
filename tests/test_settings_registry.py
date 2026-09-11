@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 import sys
+import tempfile
 import warnings
 from pathlib import Path
 
@@ -33,7 +34,13 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: This is a RATCHET: it may only ever be lowered. Lower it by moving readers
 #: behind ``robothor.settings.get_settings()`` and re-running that command --
 #: never by raising the number to accommodate a new ``os.environ`` call.
-ENV_READ_SITE_BASELINE = 493
+#:
+#: It went 493 -> 505 once, before any reader moved. That was not growth: the
+#: counter was blind to ``if "X" in os.environ``, a shape the discovery walk
+#: had counted all along, so it had been under-reporting by twelve sites. A
+#: ratchet that cannot see a construct cannot ratchet it, and a number that
+#: flatters the codebase is worse than no number.
+ENV_READ_SITE_BASELINE = 505
 
 
 def _discovery():
@@ -46,13 +53,32 @@ def _discovery():
 
 
 @pytest.fixture(autouse=True)
-def _fresh_settings():
-    """Every test sees a settings object built from its own environment."""
-    from robothor.settings import reset_settings
+def _fresh_settings(monkeypatch):
+    """Isolate every test from the machine's own configuration.
 
+    These tests resolve real settings, and the box a developer runs them on
+    has a real instance configured in its environment -- an owner email, a
+    tenant, a workspace. Left in place, a test either reads a value it never
+    set or trips a deprecation warning it did not cause, and the suite passes
+    or fails depending on whose laptop it is. Every ``ROBOTHOR_*``/``GENUS_*``
+    variable is therefore removed; each test sets exactly what it needs.
+    """
+    import os
+
+    from robothor.settings import reset_settings
+    from robothor.settings.aliases import DEPRECATED_ALIASES, reset_alias_warnings
+
+    for name in list(os.environ):
+        if name.startswith(("ROBOTHOR_", "GENUS_")) or name in DEPRECATED_ALIASES:
+            monkeypatch.delenv(name, raising=False)
+    # A workspace that exists and holds nothing: without it, resolution falls
+    # back to ~/robothor and may find the developer's own config.yaml.
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tempfile.mkdtemp(prefix="genus-settings-")))
+    reset_alias_warnings()
     reset_settings()
     yield
     reset_settings()
+    reset_alias_warnings()
 
 
 def test_every_env_read_is_declared() -> None:
@@ -225,6 +251,90 @@ def test_deprecated_primary_name_also_warns(tmp_path, monkeypatch) -> None:
     assert "owner.yaml" in owner[0]
 
 
+def test_new_name_wins_over_deprecated_alias_without_warning(tmp_path, monkeypatch) -> None:
+    """An instance mid-migration sets both names. The new one must win silently.
+
+    Warning while the operator is already on the new name is how a deprecation
+    notice becomes noise nobody reads.
+    """
+    from robothor.settings import get_settings
+
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("ROBOTHOR_TELEGRAM_CHAT_ID", "new-value")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "old-value")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        settings = get_settings()
+
+    assert settings.channels.telegram_chat_id == "new-value"
+    assert not [
+        str(w.message)
+        for w in caught
+        if issubclass(w.category, DeprecationWarning) and "TELEGRAM_CHAT_ID" in str(w.message)
+    ]
+
+
+def test_settings_block_that_is_not_a_mapping_is_rejected(tmp_path, monkeypatch) -> None:
+    from robothor.settings import get_settings, reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    for body in ("settings: 7\n", "settings:\n  - engine\n"):
+        _write_config(tmp_path, body)
+        reset_settings()
+        with pytest.raises(ValueError, match="must be a mapping"):
+            get_settings()
+
+
+def test_top_level_document_that_is_not_a_mapping_is_rejected(tmp_path, monkeypatch) -> None:
+    from robothor.settings import get_settings
+
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    _write_config(tmp_path, "- settings\n- more\n")
+    with pytest.raises(ValueError, match="mapping at the top level"):
+        get_settings()
+
+
+def test_config_yaml_without_a_settings_block_is_fine(tmp_path, monkeypatch) -> None:
+    """The file is shared: federation identity lives there too."""
+    from robothor.settings import get_settings
+
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    _write_config(tmp_path, "instance_id: alpha\nnats_url: nats://127.0.0.1:4222\n")
+    assert get_settings().engine.max_concurrent_agents == 3
+
+
+def test_malformed_config_yaml_names_the_file(tmp_path, monkeypatch) -> None:
+    from robothor.settings import get_settings
+
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    _write_config(tmp_path, "settings:\n  engine:\n   - [unclosed\n")
+    with pytest.raises(ValueError, match="not valid YAML"):
+        get_settings()
+
+
+def test_empty_env_value_is_unset_for_numbers_and_kept_for_strings(tmp_path, monkeypatch) -> None:
+    """``ROBOTHOR_X=`` in an env file is how an operator blanks a string.
+
+    Against an int or a bool the same line would be a crash on startup, so it
+    reads as "not set" there and the default stands. Against a string it is a
+    real value: the operator meant to clear it.
+    """
+    from robothor.settings import get_settings
+
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("ROBOTHOR_MAX_CONCURRENT_AGENTS", "")  # int
+    monkeypatch.setenv("ROBOTHOR_PLANNER_ENABLED", "")  # bool
+    monkeypatch.setenv("ROBOTHOR_HOURLY_COST_CAP_USD", "")  # float
+    monkeypatch.setenv("ROBOTHOR_TIMEZONE", "")  # str
+
+    settings = get_settings()
+    assert settings.engine.max_concurrent_agents == 3
+    assert settings.flags.planner_enabled is True
+    assert settings.providers.hourly_cost_cap_usd == 5.0
+    assert settings.engine.timezone == ""
+
+
 def test_deprecated_aliases_point_at_something_declared() -> None:
     from robothor.settings.aliases import DEPRECATED_ALIASES
     from robothor.settings.registry import declared_env_names
@@ -239,6 +349,19 @@ def test_deprecated_aliases_point_at_something_declared() -> None:
         )
 
 
+def _imports_pydantic_settings(module: str) -> bool:
+    """True if importing ``module`` in a fresh interpreter pulls pydantic-settings."""
+    code = f"import sys; import {module}; print('pydantic_settings' in sys.modules)"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    return result.stdout.strip() == "True"
+
+
 def test_cli_import_does_not_load_pydantic_settings() -> None:
     """``genus --help`` must not pay for the settings model.
 
@@ -246,29 +369,23 @@ def test_cli_import_does_not_load_pydantic_settings() -> None:
     CLI invocation is a startup cost no command that never reads settings
     should pay. ``get_settings()`` imports it lazily.
     """
-    code = "import sys; import robothor.cli; print('pydantic_settings' in sys.modules)"
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-        check=True,
-    )
-    assert result.stdout.strip() == "False", (
+    assert _imports_pydantic_settings("robothor.cli") is False, (
         "importing robothor.cli loaded pydantic_settings; keep the import inside get_settings()"
     )
 
 
 def test_settings_package_import_does_not_load_pydantic_settings() -> None:
-    code = "import sys; import robothor.settings; print('pydantic_settings' in sys.modules)"
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-        check=True,
-    )
-    assert result.stdout.strip() == "False"
+    assert _imports_pydantic_settings("robothor.settings") is False
+
+
+def test_constants_import_does_not_load_pydantic_settings() -> None:
+    """``robothor.constants`` is imported by almost everything.
+
+    It is the cheapest module in the tree and half the package pulls it in at
+    import time, so a transitive pydantic-settings import here would put the
+    cost on every process, not just the ones that read settings.
+    """
+    assert _imports_pydantic_settings("robothor.constants") is False
 
 
 def test_config_schema_command_prints_json(capsys) -> None:

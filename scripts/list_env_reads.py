@@ -62,12 +62,29 @@ _ENV_ACCESSORS = frozenset({"get", "setdefault", "pop"})
 PYTHON_ROOTS: tuple[str, ...] = ("robothor", "crm/bridge", "scripts")
 
 #: Non-Python globs scanned by the regex walker.
+#:
+#: Shell is in here deliberately. The guardrails that watch backups, restores,
+#: thermals and the SLOs are shell, not Python, and an operator configuring one
+#: has exactly the same problem as an operator configuring the engine. Leaving
+#: them out was leaving ~70 names undeclared.
+#:
+#: The Helm entry is ``**``-recursive and covers ``.tpl``: the chart's env
+#: names live in ``templates/_helpers.tpl``, and a
+#: ``templates/*.yaml`` glob matched five files carrying none of them --
+#: a scan that ran and found nothing, which reads exactly like a scan that
+#: found nothing to find.
 TEXT_GLOBS: tuple[str, ...] = (
     "infra/systemd/*.service",
     "infra/systemd/*.conf",
     "infra/systemd/*.env.example",
     "infra/*.env.example",
-    "helm/genus-os/templates/*.yaml",
+    "infra/**/*.sh",
+    "infra/bin/*",
+    "scripts/**/*.sh",
+    "helm/genus-os/**/*.yaml",
+    "helm/genus-os/**/*.tpl",
+    "Dockerfile*",
+    ".github/workflows/*.yml",
 )
 
 #: Dashboard sources: only server-side ``process.env`` reads count.
@@ -274,6 +291,14 @@ def count_env_read_sites(
                         total += 1
                 elif isinstance(node, ast.Subscript) and _is_env_mapping(node.value):
                     total += 1
+                elif isinstance(node, ast.Compare):
+                    # `"X" in os.environ` is a read like any other: a caller
+                    # branching on a variable's presence is a caller that has
+                    # to move behind get_settings() too. Counting the same
+                    # shapes the discovery counts keeps the two honest.
+                    for op, comparator in zip(node.ops, node.comparators, strict=True):
+                        if isinstance(op, (ast.In, ast.NotIn)) and _is_env_mapping(comparator):
+                            total += 1
     return total
 
 

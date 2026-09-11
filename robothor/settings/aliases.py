@@ -58,14 +58,27 @@ def warn_deprecated_alias(old: str) -> None:
 
     A name that is not deprecated, or one already warned about in this
     process, does nothing.
+
+    Stack level
+    -----------
+    ``stacklevel=1`` is deliberate, and it is the opposite of the usual advice.
+    The caller is a settings *source*, invoked from inside pydantic-settings'
+    own loop, so walking up the stack lands on
+    ``pydantic_settings/main.py`` -- a vendored file the operator did not
+    write, cannot grep for the variable name, and will reasonably read as a
+    bug in a third-party package. Level 1 points at this file instead, which
+    holds the whole deprecation table and explains itself. The message carries
+    the variable and its replacement, so the location is a footnote either
+    way.
     """
     replacement = DEPRECATED_ALIASES.get(old)
     if replacement is None or old in _warned:
         return
     _warned.add(old)
     warnings.warn(
-        f"{old} is deprecated; use {replacement} instead. The old name still "
-        "works, but it will stop being read after two minor releases.",
+        f"Configuration variable {old} is deprecated; use {replacement} "
+        "instead. The old name still works, but it will stop being read "
+        "after two minor releases. See robothor/settings/aliases.py.",
         DeprecationWarning,
-        stacklevel=3,
+        stacklevel=1,
     )

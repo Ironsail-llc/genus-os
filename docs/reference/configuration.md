@@ -8,7 +8,14 @@ generator output are compared in tests/test_configuration_doc_generated.py.
 
 # Configuration reference
 
-Every setting Genus OS reads, with the exact environment variable name.
+Every `ROBOTHOR_*` and `GENUS_*` setting Genus OS reads, with the exact
+environment variable name.
+
+Provider credentials that carry no Genus prefix — `OPENROUTER_API_KEY`,
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and their peers — are **not** in this
+table. They belong to the providers, not to this platform, so they are
+declared and documented with the provider integration that reads them rather
+than renamed into a Genus namespace.
 
 Settings resolve from four places, lowest priority first:
 
@@ -30,7 +37,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-225 settings in 12 groups.
+314 settings in 13 groups.
 
 ## paths
 
@@ -81,7 +88,9 @@ PostgreSQL connection, tenancy and row-level security.
 | `ROBOTHOR_RLS_ENABLED` | bool | `false` | yes | no | legacy | **governed.** Bind every connection to a tenant so PostgreSQL row-level security applies. Inert unless the DB user is a non-superuser; federation refuses to activate a link while it is off. |
 | `ROBOTHOR_SOAK_TEMPLATE` | str | `robothor_test` | yes | no | legacy | Template database the federation soak clones per instance. |
 | `ROBOTHOR_TENANT_ID` | str | _(empty)_ | yes | no | legacy | The tenant this process operates AS — what the RLS connection binds to. Must agree with ROBOTHOR_DEFAULT_TENANT or every default-tenant write is refused by the RLS WITH CHECK and the caller gets None. |
+| `ROBOTHOR_TEST_ADMIN_DSN` | str | _(unset)_ | yes | yes | legacy | Full libpq DSN for the administrative role CI creates and drops test databases with. |
 | `ROBOTHOR_TEST_DB_ALLOW` | str | _(empty)_ | yes | no | legacy | Exact database name allowed under pytest besides a *_test database. The release gate legitimately runs against one; nothing else should. |
+| `ROBOTHOR_TEST_DB_DSN` | str | _(unset)_ | yes | yes | legacy | Full libpq DSN CI points the suites at. Carries a password, so it is supplied by the workflow rather than committed anywhere. |
 
 ## redis
 
@@ -148,7 +157,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_ALERT_SPOOL_CAP` | int | `50` | yes | no | legacy | Most alerts held on the retry spool; beyond it the oldest are dropped. |
 | `ROBOTHOR_ALERT_SPOOL_MAX_AGE_SECONDS` | int | `86400` | yes | no | legacy | Age at which a spooled alert is discarded rather than delivered late. |
 | `ROBOTHOR_ALERT_SPOOL_MAX_ATTEMPTS` | int | `48` | yes | no | legacy | Delivery attempts for one spooled alert before it is given up on. |
-| `ROBOTHOR_ALERT_WEBHOOK_URL` | str | _(empty)_ | yes | no | legacy | Webhook alerts are POSTed to. Empty skips webhook delivery entirely. |
+| `ROBOTHOR_ALERT_WEBHOOK_URL` | str | _(unset)_ | yes | yes | legacy | Webhook alerts are POSTed to. Empty skips webhook delivery entirely. Held as a secret: these URLs routinely carry the bearer token in the path or the query string. |
 | `ROBOTHOR_ALLOW_EMPTY_FLEET` | bool | `true` | yes | no | legacy | Let the engine start with no agent manifests at all. True suits a fresh install; false makes an emptied manifest directory fatal. |
 | `ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB` | float | `24.0` | yes | no | legacy | Free VRAM (GiB) below which the autodream pass unloads local models rather than competing with live agent work. |
 | `ROBOTHOR_BUDDY_GRADER_DRYRUN` | bool | `false` | yes | no | legacy | Run the verification grader without writing its verdicts, for checking a grading change against live runs. |
@@ -277,7 +286,7 @@ Side services the instance runs: ports, endpoints and their knobs.
 | `ROBOTHOR_SEARXNG_URL` | str | _(empty)_ | yes | no | legacy | Full SearXNG base URL for web search. Empty derives one from the port. |
 | `ROBOTHOR_SIEM_SYSLOG_HOST` | str | _(empty)_ | yes | no | legacy | Host audit events are sent to as RFC5424 syslog over UDP. Empty disables syslog forwarding. |
 | `ROBOTHOR_SIEM_SYSLOG_PORT` | int | `514` | yes | no | legacy | UDP port for syslog audit forwarding. |
-| `ROBOTHOR_SIEM_WEBHOOK_URL` | str | _(empty)_ | yes | no | legacy | Audit events are POSTed here as JSON (Splunk HEC, Datadog, generic). Empty disables webhook forwarding. |
+| `ROBOTHOR_SIEM_WEBHOOK_URL` | str | _(unset)_ | yes | yes | legacy | Audit events are POSTed here as JSON (Splunk HEC, Datadog, generic). Empty disables webhook forwarding. Held as a secret: an HEC or Datadog collector URL carries its ingest token. |
 | `ROBOTHOR_TTS_PORT` | int | `8880` | yes | no | legacy | Local text-to-speech service port. |
 | `ROBOTHOR_TTS_VOICE` | str | `am_michael` | yes | no | legacy | Voice the local TTS service speaks with. |
 | `ROBOTHOR_TUNNEL_PROVIDER` | str | `none` | yes | no | legacy | Ingress provider for port-bearing services ('cloudflare' or 'none'). |
@@ -301,10 +310,17 @@ Where and how the instance runs: host accounts, federation, backups.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `GENUS_ALLOW_DEPLOYMENT_LAG` | bool | `false` | yes | no | legacy | Let the version-consistency check pass while the deployed version trails the released one. An escape hatch for a deliberate hold, not a way to stop noticing that a promotion was lost. |
+| `GENUS_OS_DEPLOYED_AT` | str | _(empty)_ | yes | no | legacy | Timestamp the Helm chart stamps onto every pod, so a running container can say when it was deployed rather than when it booted. |
+| `GENUS_OS_DEPLOYED_FROM_PR` | str | _(empty)_ | yes | no | legacy | PR number a staging deployment came from, stamped by the Helm chart. Empty on a production release, which comes from a tag. |
+| `GENUS_OS_IMAGE_TAG` | str | _(empty)_ | yes | no | legacy | Container image tag the Helm chart stamped onto the pod. Production pins an exact vX.Y.Z; staging pins pr-N-sha-<short>. |
+| `GENUS_PRODUCTION_URL` | str | _(empty)_ | yes | no | legacy | Repository variable supplying the production base URL the release workflow smoke-tests. Empty falls back to the workflow's default. |
 | `GENUS_SNAPSHOT_REPOSITORY` | str | _(empty)_ | yes | no | legacy | Default repository `genus snapshot` reads and writes when --repository is not given. |
+| `GENUS_URL` | str | _(empty)_ | yes | no | legacy | Base URL the release workflow smoke-tests after a deploy, calling /api/live and /api/ready on it. |
 | `ROBOTHOR_BACKUP_GROUP` | str | _(empty)_ | yes | no | legacy | Which backup group a templated base-backup unit instance handles. |
 | `ROBOTHOR_BOOT_LOOP_LIMIT` | int | `3` | yes | no | legacy | Restarts within the boot-loop window before the guard stops restarting and pages instead. |
 | `ROBOTHOR_BOOT_LOOP_WINDOW` | int | `900` | yes | no | legacy | Seconds the boot-loop counter spans. |
+| `ROBOTHOR_DEV` | bool | `false` | yes | no | legacy | Set inside the development container image. Marks a build that carries dev tooling and must not be what production runs. |
 | `ROBOTHOR_GPU_CLOCK_CAP_MHZ` | int | `0` | yes | no | legacy | Upper GPU clock cap applied by the thermal guard. 0 leaves it alone. |
 | `ROBOTHOR_GPU_CLOCK_MIN_MHZ` | int | `0` | yes | no | legacy | Lower GPU clock bound the guard will not throttle below. 0 leaves it alone. |
 | `ROBOTHOR_INSTANCE_ID` | str | _(empty)_ | yes | no | legacy | Stable id of this instance in a federation. Both sides must agree or a link mints two different connection ids and carries no messages. |
@@ -316,7 +332,7 @@ Where and how the instance runs: host accounts, federation, backups.
 | `ROBOTHOR_NATS_CONFIG` | str | `/etc/nats/nats-server.conf` | yes | no | legacy | Path to the NATS server config federation provisioning edits. Note that subjects containing a dash must be quoted there or the account silently fails to load. |
 | `ROBOTHOR_NATS_ENABLED` | bool | `false` | yes | no | legacy | Connect to the NATS broker that carries federation traffic. |
 | `ROBOTHOR_NATS_PASSWORD` | str | _(unset)_ | yes | yes | legacy | NATS account password. |
-| `ROBOTHOR_NATS_URL` | str | _(empty)_ | yes | no | legacy | NATS broker URL. Empty leaves federation transport unconfigured. |
+| `ROBOTHOR_NATS_URL` | str | _(unset)_ | yes | yes | legacy | NATS broker URL. Empty leaves federation transport unconfigured. Held as a secret: the nats:// form accepts inline user:pass@ credentials, and instances do set it that way. |
 | `ROBOTHOR_NATS_USER` | str | _(empty)_ | yes | no | legacy | NATS account user. |
 | `ROBOTHOR_OFFSITE_KEEP` | int | `7` | yes | no | legacy | Offsite backup generations kept. This is the recovery window: set it deliberately rather than inheriting the default. |
 | `ROBOTHOR_OFFSITE_REMOTE` | str | _(empty)_ | yes | no | legacy | rclone remote backups are synced to. Empty means no offsite copy. |
@@ -340,6 +356,93 @@ Where and how the instance runs: host accounts, federation, backups.
 | `ROBOTHOR_THERMAL_RESTORE_C` | int | `75` | yes | no | legacy | Temperature (C) normal operation resumes below. |
 | `ROBOTHOR_THERMAL_THROTTLE_C` | int | `85` | yes | no | legacy | Temperature (C) the guard starts throttling at. |
 | `ROBOTHOR_THERMAL_WARN_C` | int | `90` | yes | no | legacy | Temperature (C) the thermal guard warns at. |
+| `ROBOTHOR_USER` | str | `robothor` | yes | no | legacy | Account infra/setup.sh chowns the workspace and log directory to during provisioning. The same account the units later run as. |
+
+## ops
+
+Backups, restores, SLO probes, alert delivery and the volume guard — read by shell, not by Python, which is why they were the last thing anyone declared.
+
+| Variable | Type | Default | Restart | Secret | Since | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ROBOTHOR_ALERT_FALLBACK_STATE_DIR` | str | _(empty)_ | yes | no | legacy | Cooldown directory used when the primary one is not writable -- a read-only /run must not silently disable deduplication. |
+| `ROBOTHOR_ALERT_JOURNAL_CMD` | str | `journalctl` | yes | no | legacy | Command the alert sender reads a failing unit's recent log from, to put context in the page. |
+| `ROBOTHOR_ALERT_JOURNAL_TAIL_BYTES` | int | `500` | yes | no | legacy | Bytes of journal tail included in an alert body. |
+| `ROBOTHOR_ALERT_MAX_ATTEMPTS` | int | `10` | yes | no | legacy | Delivery attempts the alert sender makes before giving up. |
+| `ROBOTHOR_ALERT_RETRY_DELAY` | int | `30` | yes | no | legacy | Seconds between alert delivery attempts. |
+| `ROBOTHOR_ALERT_STATE_DIR` | str | `/run/robothor/alert-cooldown` | yes | no | legacy | Directory the alert sender keeps per-unit cooldown markers in, so a flapping unit pages once rather than once per failure. |
+| `ROBOTHOR_ALERT_SUPPRESS` | str | _(empty)_ | yes | no | legacy | Any non-empty value makes the alert sender drop the alert and say so on stderr. For a planned maintenance window only -- an instance left with this set pages for nothing. |
+| `ROBOTHOR_BACKUP_LOG` | str | _(empty)_ | yes | no | legacy | Log file the SSD backup writes to. Empty picks a default under the log directory. |
+| `ROBOTHOR_BACKUP_MOUNT` | str | `/mnt/robothor-backup` | yes | no | legacy | Mount point of the backup volume. Every backup job refuses to run when this is not a real, separate mount. |
+| `ROBOTHOR_BASEBACKUP_DIR` | str | `/mnt/robothor-backup/robothor/basebackup` | yes | no | legacy | Directory pg_basebackup writes to and the WAL offsite job reads. |
+| `ROBOTHOR_BASEBACKUP_KEEP` | int | `3` | yes | no | legacy | Base backup generations kept on the local volume. |
+| `ROBOTHOR_BOOT_HISTORY` | str | `/var/lib/robothor/boot-history` | yes | no | legacy | File the boot guard records recent boots in to detect a boot loop. |
+| `ROBOTHOR_CRON_ALERT_MAX_ATTEMPTS` | int | `2` | yes | no | legacy | Delivery attempts for an alert raised by the cron wrapper. Lower than the default: a cron job must not sit retrying a page. |
+| `ROBOTHOR_CRON_ALERT_RETRY_DELAY` | int | `15` | yes | no | legacy | Seconds between cron-wrapper alert delivery attempts. |
+| `ROBOTHOR_CRYPTTAB` | str | `/etc/crypttab` | yes | no | legacy | crypttab the volume guard resolves the backup container's UUID from. |
+| `ROBOTHOR_EXTRA_PATH` | str | _(empty)_ | yes | no | legacy | Directory prepended to PATH before the guardrail scripts pin their own. A test seam: the suites point it at stub binaries. |
+| `ROBOTHOR_FIXED_PATH` | str | _(empty)_ | yes | no | legacy | PATH the cron wrapper captured at start and restores for the job it runs, so a cron entry does not inherit cron's near-empty PATH. |
+| `ROBOTHOR_INHIBIT_FLAG` | str | `/run/robothor/INHIBIT_INFERENCE` | yes | no | legacy | Marker whose presence stops the box taking on inference work -- what the boot guard and the thermal shedder drop to halt the fleet. |
+| `ROBOTHOR_INSTANCE_ENV` | str | `/etc/robothor/robothor.env` | yes | no | legacy | EnvironmentFile the cron wrapper sources so a cron job sees the same configuration the systemd units do. |
+| `ROBOTHOR_LIVENESS_ALERT_CMD` | str | _(empty)_ | yes | no | legacy | Pager the liveness probe invokes. Empty means send_failure_alert.sh. |
+| `ROBOTHOR_LIVENESS_PROBE_CMD` | str | _(empty)_ | yes | no | legacy | Command that decides whether the engine is alive. Empty uses the built-in curl probe. |
+| `ROBOTHOR_LIVENESS_STUCK_AGE_SECONDS` | int | `1800` | yes | no | legacy | How long a .stuck marker may stand before the probe treats it as a failure in its own right, so a wedged restart cannot look healthy. |
+| `ROBOTHOR_OFFSITE_DROPIN_DIR` | str | _(empty)_ | yes | no | legacy | systemd drop-in directory the offsite job preserves alongside the dumps, so a restore brings back the unit configuration too. |
+| `ROBOTHOR_OFFSITE_LOG` | str | _(empty)_ | yes | no | legacy | Log file the offsite sync writes to. Empty picks a default under the log directory. |
+| `ROBOTHOR_OFFSITE_SOURCE` | str | `/mnt/robothor-backup/robothor/db` | yes | no | legacy | Local dump directory the offsite sync uploads from. |
+| `ROBOTHOR_OFFSITE_VOLUMES` | str | `/mnt/robothor-backup/robothor/docker-volumes` | yes | no | legacy | Local docker-volume dump directory the offsite sync uploads. |
+| `ROBOTHOR_PYTHON` | str | _(empty)_ | yes | no | legacy | Interpreter the restore drill runs its built-in notifier with. Empty means the repository's own venv. |
+| `ROBOTHOR_RESTART_LEGACY_REQUEST` | str | `/run/robothor/restart-request` | yes | no | legacy | Single-file restart request the handler still honours, from before requests became one file per unit. |
+| `ROBOTHOR_RESTART_REQUEST_DIR` | str | `/run/robothor/restart-requests` | yes | no | legacy | Directory the restart handler watches for per-unit restart requests. |
+| `ROBOTHOR_RESTORE_DRILL_CREATEDB` | str | `createdb` | yes | no | legacy | createdb the drill makes the scratch database with. |
+| `ROBOTHOR_RESTORE_DRILL_DB` | str | `robothor_restore_drill` | yes | no | legacy | Scratch database the restore drill restores into. Never the live one: the drill drops it afterwards. |
+| `ROBOTHOR_RESTORE_DRILL_DROPDB` | str | `dropdb` | yes | no | legacy | dropdb the drill cleans the scratch database up with. |
+| `ROBOTHOR_RESTORE_DRILL_DROP_TIMEOUT` | int | `300` | yes | no | legacy | Seconds a dropdb of the scratch database may block before the drill gives up, so a stuck connection cannot hang the drill forever. |
+| `ROBOTHOR_RESTORE_DRILL_LOCAL_DIR` | str | `/mnt/robothor-backup/robothor/db` | yes | no | legacy | Local dump directory the drill restores from when no offsite remote is configured. |
+| `ROBOTHOR_RESTORE_DRILL_NOTIFY_CMD` | str | _(empty)_ | yes | no | legacy | Command that reports the drill's result. Empty uses the built-in notifier. |
+| `ROBOTHOR_RESTORE_DRILL_PSQL` | str | `psql` | yes | no | legacy | psql the drill restores with. |
+| `ROBOTHOR_RESTORE_DRILL_RCLONE_CMD` | str | `rclone` | yes | no | legacy | rclone the drill fetches an offsite dump with. |
+| `ROBOTHOR_RESTORE_DRILL_WORK_DIR` | str | _(empty)_ | yes | no | legacy | Directory an offsite dump is fetched into for the drill. Empty uses a temporary directory. |
+| `ROBOTHOR_SECRETS_FILE` | str | `/run/robothor/secrets.env` | yes | no | legacy | Decrypted secrets file the cron wrapper and the alert sender source. It lives on tmpfs; a process that starts before it exists comes up with no credentials at all and fails closed. |
+| `ROBOTHOR_SLO_ALERT_CMD` | str | _(empty)_ | yes | no | legacy | Pager the SLO probe invokes. Empty means send_failure_alert.sh. |
+| `ROBOTHOR_SLO_BACKUP_COOLDOWN_SECONDS` | int | `43200` | yes | no | legacy | Quiet period between repeat pages about the backup SLO. The probe runs hourly, so without a cooldown one breach pages 24 times a day. |
+| `ROBOTHOR_SLO_BASEBACKUP_DIR` | str | _(empty)_ | yes | no | legacy | Base backup directory the SLO probe checks. Empty falls back to ROBOTHOR_BASEBACKUP_DIR. |
+| `ROBOTHOR_SLO_BASEBACKUP_MAX_HOURS` | int | `192` | yes | no | legacy | Age budget for the newest base backup (192h = 8 days). |
+| `ROBOTHOR_SLO_DB` | str | _(empty)_ | yes | no | legacy | Database the DB-backed SLOs query. Empty falls back to PGDATABASE, then ROBOTHOR_DB_NAME. |
+| `ROBOTHOR_SLO_DB_CHECKS` | bool | `true` | yes | no | legacy | Run the DB-backed SLOs (heartbeat delivery and LLM availability). Off leaves both UNMEASURED and is for tests only -- the probe says so loudly on every run. |
+| `ROBOTHOR_SLO_GETENT_CMD` | str | `getent` | yes | no | legacy | Command the probe proves the database account exists with, so a missing account is reported rather than read as a passing check. |
+| `ROBOTHOR_SLO_GUARDRAIL_COOLDOWN_SECONDS` | int | `43200` | yes | no | legacy | Quiet period between repeat pages about the guardrail-watch SLO. |
+| `ROBOTHOR_SLO_GUARDRAIL_WATCH_MAX_HOURS` | int | `26` | yes | no | legacy | How stale the guardrail watcher's last run may be before breaching. |
+| `ROBOTHOR_SLO_HEARTBEAT_COOLDOWN_SECONDS` | int | `43200` | yes | no | legacy | Quiet period between repeat pages about the heartbeat SLO. |
+| `ROBOTHOR_SLO_ID_CMD` | str | `id` | yes | no | legacy | Command the probe checks its own identity with, deciding whether it needs the runuser hop at all. |
+| `ROBOTHOR_SLO_LIVENESS_COOLDOWN_SECONDS` | int | `43200` | yes | no | legacy | Quiet period between repeat pages about the liveness SLO. |
+| `ROBOTHOR_SLO_LIVENESS_MAX_HOURS` | int | `1` | yes | no | legacy | How stale the liveness probe's last run may be before it counts as not running at all. |
+| `ROBOTHOR_SLO_LLM_COOLDOWN_SECONDS` | int | `21600` | yes | no | legacy | Quiet period between repeat pages about LLM availability. |
+| `ROBOTHOR_SLO_LOCAL_DUMP_DIR` | str | `/mnt/robothor-backup/robothor/db` | yes | no | legacy | Nightly dump directory the SLO probe checks the freshness of. |
+| `ROBOTHOR_SLO_LOCAL_DUMP_MAX_HOURS` | int | `26` | yes | no | legacy | Age budget for the nightly local dump before the SLO breaches. |
+| `ROBOTHOR_SLO_OFFSITE_MAX_HOURS` | int | `26` | yes | no | legacy | Age budget for the offsite copy before the SLO breaches. |
+| `ROBOTHOR_SLO_PROBE_TIMEOUT` | int | `20` | yes | no | legacy | Seconds one disk step of the probe may take. A dropped mount hangs rather than erroring, so every step is bounded. |
+| `ROBOTHOR_SLO_PSQL_CMD` | str | _(empty)_ | yes | no | legacy | psql the DB-backed SLOs run through. Empty uses the database hop. |
+| `ROBOTHOR_SLO_RCLONE_CMD` | str | `rclone` | yes | no | legacy | rclone the probe lists the offsite copy with. |
+| `ROBOTHOR_SLO_RUNUSER_CMD` | str | `runuser` | yes | no | legacy | Command the probe hops to the database account with. |
+| `ROBOTHOR_SLO_SYSTEMCTL_CMD` | str | `systemctl` | yes | no | legacy | systemctl the probe reads unit timestamps from. |
+| `ROBOTHOR_SLO_UPTIME_FILE` | str | `/proc/uptime` | yes | no | legacy | Where the probe reads host uptime from, so it does not breach an SLO for a window the box spent powered off. |
+| `ROBOTHOR_SLO_VOLUME_CHECK_CMD` | str | _(empty)_ | yes | no | legacy | Volume probe the SLO check runs; the dump directory is appended to it. Empty means backup-volume-check.sh --ro. |
+| `ROBOTHOR_SYSTEMCTL` | str | _(empty)_ | yes | no | legacy | systemctl the instance doctor interrogates for unit enabled/active state. Empty means the doctor skips the systemd checks. |
+| `ROBOTHOR_TELEGRAM_API_BASE` | str | `https://api.telegram.org` | yes | no | legacy | Telegram API base the shell alert sender posts to. Overridable so the delivery path can be tested without sending a real message. |
+| `ROBOTHOR_THERMAL_THROTTLE_PCT` | int | `50` | yes | no | legacy | CPU frequency cap (percent) the thermal guard applies once the throttle threshold is crossed. |
+| `ROBOTHOR_VOLUME_CHECK` | str | _(empty)_ | yes | no | legacy | Volume probe the backup jobs run before writing. Empty means the backup-volume-check.sh next to them. |
+| `ROBOTHOR_VOLUME_GUARD_ALERT_CMD` | str | _(empty)_ | yes | no | legacy | Pager the guard invokes. Empty means send_failure_alert.sh. |
+| `ROBOTHOR_VOLUME_GUARD_CHECK_CMD` | str | _(empty)_ | yes | no | legacy | Volume probe the guard runs. Empty means backup-volume-check.sh. |
+| `ROBOTHOR_VOLUME_GUARD_DEV_DIR` | str | `/dev/disk/by-uuid` | yes | no | legacy | by-uuid directory the guard resolves the backing device through, so a drive that came back on a different USB path is still found. |
+| `ROBOTHOR_VOLUME_GUARD_HEAL` | bool | `true` | yes | no | legacy | Let the guard reopen and remount a dropped backup volume. Off, it pages and leaves the volume down. |
+| `ROBOTHOR_VOLUME_GUARD_MAPPER` | str | `robothor-backup` | yes | no | legacy | crypttab name of the encrypted backup container the guard reopens. |
+| `ROBOTHOR_VOLUME_GUARD_MAPPER_DIR` | str | `/dev/mapper` | yes | no | legacy | Device-mapper directory the guard looks for the container in. |
+| `ROBOTHOR_VOLUME_GUARD_REPAGE_SECONDS` | int | `86400` | yes | no | legacy | Quiet period before the guard pages again about a volume that is still down. |
+| `ROBOTHOR_VOLUME_GUARD_STATE_DIR` | str | `/run/robothor/volume-guard` | yes | no | legacy | Directory the volume guard records what it has already paged about. |
+| `ROBOTHOR_VOLUME_PROBE_TIMEOUT` | int | `20` | yes | no | legacy | Seconds one volume-probe step may take. A wedged mount answers nothing rather than answering 'no', so every step is bounded. |
+| `ROBOTHOR_VOLUME_REQUIRE_SEPARATE_MOUNT` | bool | `true` | yes | no | legacy | Require the backup path to be its own mount. Off, a dropped drive means backups quietly land on the root filesystem instead. |
+| `ROBOTHOR_WAL_KEEP_DAYS` | int | `8` | yes | no | legacy | Days of archived WAL kept before pruning. Must outlast the oldest base backup or that backup cannot be replayed forward. |
+| `ROBOTHOR_WAL_MIN_FREE_MB` | int | `5120` | yes | no | legacy | Free megabytes the WAL archiver requires before accepting a segment. Below it the archive command fails, which is what stops PostgreSQL filling the disk. |
 
 ## Deprecated names
 
