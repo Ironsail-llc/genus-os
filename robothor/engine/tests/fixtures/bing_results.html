@@ -1,6 +1,8 @@
 <!doctype html>
 <!-- Minimal stand-in for a Bing results page: only the markup shape the
-     parser depends on (li.b_algo > h2 > a, .b_caption p). Generic content. -->
+     parser depends on (li.b_algo > h2 > a, .b_caption p), including the
+     /ck/a?...&u=a1<base64url> click-tracking wrapper real result links carry.
+     Generic content. -->
 <html>
   <body>
     <ol id="b_results">
@@ -24,6 +26,10 @@
       <li class="b_algo">
         <h2><a href="https://example.com/coworking-guide">A guide to choosing a coworking space</a></h2>
         <div class="b_caption"><p>What to look for in a shared workspace.</p></div>
+      </li>
+      <li class="b_algo">
+        <h2><a href="https://www.bing.com/ck/a?!&amp;&amp;p=abc123&amp;u=a1aHR0cHM6Ly9zcHJpbmdmaWVsZC1jb3dvcmsuZXhhbXBsZS5jb20vcHJpdmF0ZS1vZmZpY2Vz&amp;ntb=1">Private offices — Springfield Coworking</a></h2>
+        <div class="b_caption"><p>Month-to-month private offices for teams of two to ten.</p></div>
       </li>
     </ol>
   </body>

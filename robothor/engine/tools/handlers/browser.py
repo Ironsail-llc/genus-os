@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
 import os
 import re as re_mod
@@ -306,6 +307,86 @@ async def _cleanup_expired() -> None:
     expired = [k for k, v in _sessions.items() if v.expired]
     for key in expired:
         await _close_session(key)
+
+
+# ---------------------------------------------------------------------------
+# Background page access (for tools that need a page, not the agent's page)
+# ---------------------------------------------------------------------------
+#
+# A session holds ONE page, and the @N element registry is bound to whatever is
+# on it. So any background use of the browser — web_search's results-page
+# fallback, say — must not call the navigate action: that would move the page
+# the agent is working on and leave its refs pointing at a document that is no
+# longer loaded. These helpers give such callers their own throwaway tab in the
+# agent's context, and close it again.
+
+
+async def ensure_session(ctx: ToolContext) -> tuple[bool, str]:
+    """Make sure a session exists. Returns ``(started_here, error)``.
+
+    ``started_here`` is True only when this call launched the browser, so the
+    caller knows whether stopping it again is its business.
+    """
+    agent_id = ctx.agent_id or "default"
+    if await _get_session(agent_id) is not None:
+        return False, ""
+    result = await _action_start({}, ctx)
+    if result.get("error"):
+        return False, str(result["error"])
+    return True, ""
+
+
+async def close_session(ctx: ToolContext) -> None:
+    """Close the agent's session. Only for a caller that started it."""
+    await _close_session(ctx.agent_id or "default")
+
+
+async def isolated_fetch(
+    ctx: ToolContext,
+    url: str,
+    js: str,
+    html_js: str = "",
+    timeout_ms: int = 20000,
+) -> dict[str, Any]:
+    """Load ``url`` in a throwaway tab and evaluate ``js`` there.
+
+    Never touches ``session.page`` or ``element_registry``: the agent's own tab
+    keeps its document and its refs. The tab opened here is always closed,
+    including on navigation or evaluation failure.
+
+    Returns ``{status, url, result, html, error}``. ``html`` is populated only
+    when ``html_js`` is given and ``js`` returned nothing useful.
+    """
+    session = await _get_session(ctx.agent_id or "default")
+    if session is None:
+        return {"error": "Browser not started."}
+    try:
+        page = await session.context.new_page()
+    except Exception as e:
+        return {"error": f"Could not open an isolated page: {e}"}
+
+    out: dict[str, Any] = {"status": None, "url": url, "result": None, "html": None}
+    try:
+        try:
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            out["status"] = response.status if response else None
+            out["url"] = page.url
+        except Exception as e:
+            out["error"] = f"Navigation failed: {e}"
+            return out
+        try:
+            out["result"] = await page.evaluate(js)
+        except Exception as e:
+            out["error"] = f"JS evaluation failed: {e}"
+        if html_js and not out["result"]:
+            try:
+                out["html"] = await page.evaluate(html_js)
+            except Exception as e:
+                logger.warning("isolated_fetch could not read page HTML (%s): %s", url, e)
+        return out
+    finally:
+        with contextlib.suppress(Exception):
+            await page.close()
 
 
 # ---------------------------------------------------------------------------

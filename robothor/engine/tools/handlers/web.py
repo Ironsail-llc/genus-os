@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import contextlib
 import ipaddress
 import logging
 import os
 import re
 import socket
 import time
+from collections import defaultdict
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, quote_plus, urlparse, urlsplit
@@ -16,7 +20,7 @@ from urllib.parse import parse_qs, quote_plus, urlparse, urlsplit
 import httpx
 
 from robothor import __version__
-from robothor.engine.tools.dispatch import ToolContext, _cfg
+from robothor.engine.tools.dispatch import ToolContext, _audit_tool_call, _cfg
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -202,17 +206,90 @@ BING_SEARCH_URL = "https://www.bing.com/search"
 DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 # A browser page is expensive; take everything organic it gives us, capped.
 _MAX_BROWSER_RESULTS = 10
-# Below this many on-topic rows a SearXNG answer is treated as no answer.
+# Below this many rows the browser provider reaches for a second source.
 _MIN_USEFUL_RESULTS = 3
 _MAX_PLACES = 5
+_OVERPASS_RADIUS_M = 5000
+# Whole browser fallback, including launch: an agent waiting on a search must
+# not wait on a wedged Chromium.
+_BROWSER_SEARCH_TIMEOUT = 45.0
+# Implicit fallback only — an explicit provider="browser" always runs.
+_BROWSER_FALLBACK_ENV = "ROBOTHOR_WEB_SEARCH_BROWSER_FALLBACK"
 
-# Nominatim's usage policy: at most one request per second, identifying UA.
-_NOMINATIM_MIN_INTERVAL = 1.0
-_nominatim_lock = asyncio.Lock()
-_nominatim_last = 0.0
+# Nominatim and Overpass are free, courtesy-use APIs: ≤1 request/second, and
+# an identifying User-Agent.
+_PLACES_MIN_INTERVAL = 1.0
+_places_lock = asyncio.Lock()
+_places_last = 0.0
+
+# One browser fallback at a time per agent: two runs of the same agent share a
+# browser session, so an unserialised pair can stop the session the other is
+# still using.
+_browser_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+_PROVIDERS = ("auto", "searxng", "browser", "brave", "perplexity")
+
+# Capitalised words that follow "in" without naming a place. "how to mount a
+# share in Ubuntu" is not a request for somewhere to go.
+_NON_PLACE_PROPER_NOUNS = frozenset(
+    {
+        "android",
+        "aws",
+        "azure",
+        "bash",
+        "chrome",
+        "django",
+        "docker",
+        "excel",
+        "firefox",
+        "git",
+        "github",
+        "gitlab",
+        "go",
+        "grafana",
+        "java",
+        "javascript",
+        "kotlin",
+        "kubernetes",
+        "linux",
+        "macos",
+        "nginx",
+        "node",
+        "php",
+        "postgres",
+        "postgresql",
+        "powershell",
+        "python",
+        "react",
+        "redis",
+        "ruby",
+        "rust",
+        "sql",
+        "swift",
+        "terraform",
+        "typescript",
+        "ubuntu",
+        "vim",
+        "windows",
+        "word",
+    }
+)
+
+# Everyday category words mapped to the OSM tags that actually find the thing.
+# An unmapped category skips Overpass rather than guessing a tag.
+_PLACE_CATEGORIES: dict[str, tuple[tuple[str, str], ...]] = {
+    "coworking": (("office", "coworking"), ("amenity", "coworking_space")),
+    "coworking space": (("office", "coworking"), ("amenity", "coworking_space")),
+    "cafe": (("amenity", "cafe"),),
+    "café": (("amenity", "cafe"),),
+    "coffee": (("amenity", "cafe"),),
+    "coffee shop": (("amenity", "cafe"),),
+    "gym": (("leisure", "fitness_centre"),),
+}
 
 # Words that carry no topical signal, so they never count as "the result is
 # about what I asked". Only tokens longer than three characters are considered
@@ -277,19 +354,36 @@ _STOPWORDS = frozenset(
 # Organic-result extraction, run inside the page. Kept to one expression each
 # so the browser tool's `evaluate` action can take it verbatim. The Python
 # parsers below mirror these selectors for the pages we capture as HTML.
-_BING_EXTRACT_JS = """() => Array.from(document.querySelectorAll('li.b_algo'))
-  .slice(0, 10)
-  .map(li => {
-    const a = li.querySelector('h2 a');
-    const p = li.querySelector('.b_caption p') || li.querySelector('p');
-    if (!a || !a.href) return null;
-    return {
-      title: (a.innerText || '').trim(),
-      url: a.href,
-      snippet: p ? (p.innerText || '').trim() : ''
-    };
-  })
-  .filter(Boolean)"""
+_BING_EXTRACT_JS = """() => {
+  const unwrap = (href) => {
+    try {
+      const u = new URL(href, location.href);
+      if (!u.pathname.startsWith('/ck/a')) return href;
+      let p = u.searchParams.get('u') || '';
+      if (p.startsWith('a1')) p = p.slice(2);
+      if (!p) return href;
+      let b = p.replace(/-/g, '+').replace(/_/g, '/');
+      while (b.length % 4) b += '=';
+      const decoded = atob(b);
+      return decoded.startsWith('http') ? decoded : href;
+    } catch (e) {
+      return href;
+    }
+  };
+  return Array.from(document.querySelectorAll('li.b_algo'))
+    .slice(0, 10)
+    .map(li => {
+      const a = li.querySelector('h2 a');
+      const p = li.querySelector('.b_caption p') || li.querySelector('p');
+      if (!a || !a.href) return null;
+      return {
+        title: (a.innerText || '').trim(),
+        url: unwrap(a.href),
+        snippet: p ? (p.innerText || '').trim() : ''
+      };
+    })
+    .filter(Boolean);
+}"""
 
 _DDG_EXTRACT_JS = """() => Array.from(document.querySelectorAll('.result'))
   .filter(el => !el.className.includes('result--ad'))
@@ -330,34 +424,103 @@ def _row(title: str, url: str, snippet: str) -> dict[str, str]:
     }
 
 
-def _distinctive_terms(query: str) -> set[str]:
-    """The query's topical words — what a useful result should mention."""
-    return {
-        t for t in re.findall(r"[a-z0-9']+", query.lower()) if len(t) > 3 and t not in _STOPWORDS
-    }
+_TOKEN_RE = re.compile(r"[A-Za-z0-9'À-ɏ-]+")
+# Above this share of results a term is common to the whole answer, so its
+# presence says nothing about whether the answer is the one that was asked for.
+_SATURATION = 0.8
+# A place or number the operator named has to actually show up somewhere.
+_MIN_REQUIRED_HITS = 2
 
 
-def _useful_count(rows: list[dict[str, str]], terms: set[str]) -> int:
-    """How many rows mention at least one distinctive term of the query."""
-    if not terms:
-        return len(rows)
-    hits = 0
-    for r in rows:
-        haystack = f"{r.get('title', '')} {r.get('snippet') or r.get('content', '')}".lower()
-        if any(t in haystack for t in terms):
-            hits += 1
-    return hits
+def _proper_tokens(query: str) -> list[str]:
+    """Capitalised words after the first — place names, brands, proper nouns."""
+    tokens = _TOKEN_RE.findall(query)
+    return [t for i, t in enumerate(tokens) if i > 0 and t[:1].isupper()]
+
+
+def _query_terms(query: str) -> tuple[set[str], set[str]]:
+    """``(distinctive, required)`` terms, both lowercased.
+
+    Required terms — proper nouns the operator named and numbers like a ZIP —
+    are the ones whose absence means the answer is about something else
+    entirely. "coworking private office Jamaica Queens" must not be satisfied
+    by eight pages explaining what coworking is.
+    """
+    distinctive: set[str] = set()
+    required: set[str] = set()
+    for i, token in enumerate(_TOKEN_RE.findall(query)):
+        low = token.lower()
+        if low in _STOPWORDS:
+            continue
+        is_number = bool(re.fullmatch(r"\d{4,}(?:-\d+)?", token))
+        is_proper = i > 0 and token[:1].isupper()
+        if is_number or (is_proper and len(low) >= 2):
+            required.add(low)
+            distinctive.add(low)
+        elif len(low) > 3:
+            distinctive.add(low)
+    return distinctive, required
+
+
+def _haystack(row: dict[str, str]) -> str:
+    return f"{row.get('title', '')} {row.get('snippet') or row.get('content', '')}".lower()
+
+
+def _grade_results(rows: list[dict[str, str]], query: str) -> str:
+    """Grade an answer against the query. Empty string = good enough.
+
+    Scores by how *rare* each term is across the results rather than by how
+    many rows matched something: a term carried by nearly every row is what
+    the whole result set has in common, not evidence that the result set is an
+    answer. Measured failure this exists for: SearXNG returned eight "what is
+    coworking" pages for "coworking private office Jamaica Queens" and a
+    does-any-term-appear gate passed all eight.
+    """
+    if not rows:
+        return "low_relevance"
+    distinctive, required = _query_terms(query)
+    if not distinctive:
+        return ""
+
+    frequency = {term: sum(1 for r in rows if term in _haystack(r)) for term in distinctive}
+    saturation = _SATURATION * len(rows)
+
+    missing = sorted(t for t in required if frequency.get(t, 0) < _MIN_REQUIRED_HITS)
+    if missing:
+        logger.info(
+            "web_search: results never mention %s (query %r) — treating as no answer",
+            ", ".join(missing),
+            query,
+        )
+        return "missing_place_terms"
+
+    matched = [t for t in distinctive if frequency[t] > 0]
+    if len(matched) * 2 < len(distinctive):
+        return "low_relevance"
+    # Terms that discriminate between results: present, but not in nearly every
+    # row. When none of them do, the only thing the results have in common is
+    # the query's commonest word — fine if they matched everything asked for,
+    # a topic page if some terms are missing entirely.
+    discriminating = [t for t in distinctive if 0 < frequency[t] < saturation]
+    if not discriminating and len(matched) < len(distinctive):
+        return "low_relevance"
+    return ""
 
 
 def _looks_local(query: str) -> bool:
     """True when the query is asking about somewhere, not something."""
     lowered = query.lower()
-    if re.search(r"\bnear\b|\bnearby\b|\bnear\s+me\b", lowered):
+    if re.search(r"\bnear\b|\bnearby\b", lowered):
         return True
     if re.search(r"\b\d{5}(?:-\d{4})?\b", query):
         return True
-    # "... in Springfield" — a capitalised place after a bare "in".
-    return bool(re.search(r"\bin\s+[A-Z][\w'-]+", query))
+    # "... in Springfield" — a capitalised place after a bare "in", where the
+    # capitalised word is not a piece of software.
+    after_in = re.search(r"\bin\s+([A-Z][\w'-]+)", query)
+    if after_in and after_in.group(1).lower() not in _NON_PLACE_PROPER_NOUNS:
+        return True
+    # "coworking ... Jamaica Queens" — a place-shaped category plus a proper noun.
+    return bool(_place_category(query) and _proper_tokens(query))
 
 
 # ── HTML parsing (fallback for a page we already hold as text) ─────────
@@ -451,7 +614,7 @@ class _BingParser(_StackParser):
             return
         if tag == "li" and "b_algo" in classes:
             row, self._cur, self._mode = self._cur, None, None
-            url = str(row["url"])
+            url = _unwrap_bing_href(str(row["url"]))
             if url.startswith("http"):
                 snippet = " ".join(row["caption"]) or " ".join(row["para"])
                 self.rows.append(_row(" ".join(row["title"]), url, snippet))
@@ -518,6 +681,29 @@ class _DdgParser(_StackParser):
         self._flush()
 
 
+def _unwrap_bing_href(href: str) -> str:
+    """Bing wraps every organic link in /ck/a?…&u=a1<base64url of the real URL>.
+
+    Handing that to an agent hands it a click-tracker, not a source: it cannot
+    be deduped, cited, or fetched. Decode it, and keep the wrapper only when
+    decoding fails rather than inventing a URL.
+    """
+    if "/ck/a" not in href:
+        return href
+    try:
+        encoded = parse_qs(urlsplit(href).query).get("u", [""])[0]
+    except Exception:
+        return href
+    if not encoded:
+        return href
+    encoded = encoded.removeprefix("a1")
+    try:
+        decoded = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
+    except Exception:
+        return href
+    return decoded if decoded.startswith("http") else href
+
+
 def _unwrap_ddg_href(href: str) -> str:
     """DuckDuckGo's HTML endpoint wraps results in /l/?uddg=<encoded>."""
     if not href:
@@ -576,93 +762,228 @@ def _normalise_rows(raw: Any) -> list[dict[str, str]]:
     return rows
 
 
-_OUTER_HTML_JS = "() => document.documentElement.outerHTML"
+# Capped: a results page is a few hundred KB, and a hostile/broken page must
+# not stream megabytes of DOM back into the engine.
+_OUTER_HTML_JS = "() => document.documentElement.outerHTML.slice(0, 524288)"
+
+# Markers that say "this document really is a results page", used to tell an
+# empty results page apart from an anti-bot interstitial.
+_BING_RESULT_MARKERS = ("b_algo",)
+_DDG_RESULT_MARKERS = ("result__a", "result__snippet")
+
+
+@dataclass
+class _PageOutcome:
+    """What one results page gave us, and whether it was a challenge page."""
+
+    rows: list[dict[str, str]] = field(default_factory=list)
+    status: int | None = None
+    blocked: bool = False
+
+
+def _looks_like_challenge(html: str, markers: tuple[str, ...]) -> bool:
+    """True for an anti-bot interstitial: a form, and no result markers.
+
+    Measured: html.duckduckgo.com answers this box with HTTP 202 and a form of
+    thirteen hidden inputs. Counting that as "zero results" would quietly turn
+    a blocked source into an empty web.
+    """
+    lowered = html.lower()
+    if any(m in lowered for m in markers):
+        return False
+    return "<form" in lowered and lowered.count("<input") >= 3
 
 
 async def _browser_page_results(
-    browser_tool: Any,
     ctx: ToolContext,
     url: str,
     js: str,
     parse_html: Callable[[str], list[dict[str, str]]],
-) -> list[dict[str, str]]:
-    """Load one results page in the managed browser and extract its rows.
+    markers: tuple[str, ...],
+) -> _PageOutcome:
+    """Load one results page in a throwaway tab and extract its rows.
 
     In-page extraction first; if it comes back empty (CSP, a script error, a
-    selector that moved) the page's own HTML is pulled out and parsed here with
-    the same selectors, so an extraction failure cannot masquerade as a page
-    with no results on it.
+    selector that moved) the page's own HTML is parsed here with the same
+    selectors, so an extraction failure cannot masquerade as a page with no
+    results on it.
     """
-    nav = await browser_tool({"action": "navigate", "url": url}, ctx)
-    if nav.get("error"):
-        logger.warning("web_search browser navigation failed (%s): %s", url, nav["error"])
-        return []
-    out = await browser_tool({"action": "evaluate", "js": js}, ctx)
-    if out.get("error"):
-        logger.warning("web_search browser extraction failed (%s): %s", url, out["error"])
-    else:
-        rows = _normalise_rows(out.get("result"))
-        if rows:
-            return rows
+    from robothor.engine.tools.handlers import browser as browser_mod
 
-    raw = await browser_tool({"action": "evaluate", "js": _OUTER_HTML_JS}, ctx)
-    html = raw.get("result")
-    if isinstance(html, str) and html:
-        return parse_html(html)
-    return []
+    out = await browser_mod.isolated_fetch(ctx, url, js, html_js=_OUTER_HTML_JS)
+    if out.get("error") and not out.get("result"):
+        logger.warning("web_search browser fetch failed (%s): %s", url, out["error"])
+    status = out.get("status")
+    final_url = str(out.get("url") or url)
+
+    rows = _normalise_rows(out.get("result"))
+    html = out.get("html")
+    if not rows and isinstance(html, str) and html:
+        rows = parse_html(html)
+
+    blocked = False
+    if not rows:
+        challenge = isinstance(html, str) and bool(html) and _looks_like_challenge(html, markers)
+        # 202 is what DuckDuckGo answers a suspected bot with; /sorry/ is
+        # Google's interstitial, for whenever a Google source is added.
+        blocked = status == 202 or "/sorry/" in final_url or challenge
+    return _PageOutcome(
+        rows=rows, status=status if isinstance(status, int) else None, blocked=blocked
+    )
 
 
-async def _browser_search(query: str, ctx: ToolContext) -> dict[str, Any]:
-    """Search by driving the engine's own browser tool.
+async def _browser_permission_error(ctx: ToolContext) -> str:
+    """Empty when this caller may drive the browser, else why it may not.
 
-    Reuses the agent's browser session when one is already open — and then
-    leaves it open. A session this search started is always stopped again.
+    web_search reaches the browser handler directly, which means none of
+    dispatch's gates are in the path. Re-run them here rather than letting a
+    fallback hand browser access to a run whose toolset denies it.
     """
-    from robothor.engine.tools.handlers.browser import _browser as browser_tool
+    from robothor.engine.permissions import check_tool_permission
+    from robothor.engine.tools.dispatch import get_deferred_allowed, get_tool_whitelist
 
     try:
-        status = await browser_tool({"action": "status"}, ctx)
-        started_here = status.get("status") != "running"
-        if started_here:
-            start = await browser_tool({"action": "start"}, ctx)
-            if start.get("error"):
-                return {"error": f"Browser search could not start a browser: {start['error']}"}
-        try:
-            sources: list[str] = []
-            rows = await _browser_page_results(
-                browser_tool,
-                ctx,
-                f"{BING_SEARCH_URL}?q={quote_plus(query)}",
-                _BING_EXTRACT_JS,
-                _parse_bing_html,
-            )
-            if rows:
-                sources.append("bing")
-            if len(rows) < _MIN_USEFUL_RESULTS:
-                extra = await _browser_page_results(
-                    browser_tool,
-                    ctx,
-                    f"{DDG_HTML_URL}?q={quote_plus(query)}",
-                    _DDG_EXTRACT_JS,
-                    _parse_ddg_html,
-                )
-                if extra:
-                    sources.append("duckduckgo")
-                    seen = {r["url"] for r in rows}
-                    rows.extend(r for r in extra if r["url"] not in seen)
-        finally:
-            if started_here:
-                await browser_tool({"action": "stop"}, ctx)
-    except Exception as e:
-        return {"error": f"Browser search failed: {e}"}
+        denied = await asyncio.to_thread(
+            check_tool_permission, ctx.user_role, ctx.tenant_id, "browser", user_id=ctx.user_id
+        )
+    except Exception as e:  # a broken RBAC lookup must not open the gate
+        return f"browser permission check failed: {e}"
+    if denied:
+        return str(denied)
+    whitelist = get_tool_whitelist()
+    if whitelist is not None and "browser" not in whitelist:
+        return "Tool 'browser' denied by per-task whitelist"
+    deferred = get_deferred_allowed()
+    if deferred is not None and "browser" not in deferred:
+        return "Tool 'browser' is not in this run's allowed toolset"
+    return ""
 
-    capped = rows[:_MAX_BROWSER_RESULTS]
-    return {
+
+def _browser_fallback_enabled() -> bool:
+    """The implicit fallback is opt-out; an explicit provider always runs.
+
+    It drives a headed Chromium on the operator's X display, so an operator
+    who does not want a search moving windows around has a switch.
+    """
+    return os.environ.get(_BROWSER_FALLBACK_ENV, "on").strip().lower() not in (
+        "0",
+        "off",
+        "false",
+        "no",
+    )
+
+
+async def _browser_search(query: str, limit: int, ctx: ToolContext) -> dict[str, Any]:
+    """Search by driving the engine's own browser in a throwaway tab.
+
+    Reuses the agent's browser session when one is already open — and leaves it
+    open, on the page the agent left it on. A session this search started is
+    always stopped again.
+    """
+    denied = await _browser_permission_error(ctx)
+    if denied:
+        _audit_tool_call(
+            "browser",
+            ctx.agent_id,
+            ctx.tenant_id,
+            user_id=ctx.user_id,
+            status="denied",
+            error=denied,
+        )
+        return {"error": denied, "fallback_reason": "browser_denied"}
+
+    cap = min(_MAX_BROWSER_RESULTS, max(limit, _MIN_USEFUL_RESULTS))
+    async with _browser_locks[ctx.agent_id or "default"]:
+        result = await _browser_search_locked(query, cap, ctx)
+    status = "error" if result.get("error") else "ok"
+    _audit_tool_call(
+        "browser",
+        ctx.agent_id,
+        ctx.tenant_id,
+        user_id=ctx.user_id,
+        status=status,
+        error=result.get("error"),
+    )
+    return result
+
+
+async def _browser_search_locked(query: str, cap: int, ctx: ToolContext) -> dict[str, Any]:
+    try:
+        from robothor.engine.tools.handlers import browser as browser_mod
+
+        started_here, start_error = await browser_mod.ensure_session(ctx)
+        if start_error:
+            return {
+                "error": f"Browser search could not start a browser: {start_error}",
+                "fallback_reason": "browser_unavailable",
+            }
+    except Exception as e:
+        return {"error": f"Browser search failed: {e}", "fallback_reason": "browser_unavailable"}
+
+    rows: list[dict[str, str]] = []
+    sources: list[str] = []
+    timed_out = False
+    try:
+        try:
+            async with asyncio.timeout(_BROWSER_SEARCH_TIMEOUT):
+                bing = await _browser_page_results(
+                    ctx,
+                    f"{BING_SEARCH_URL}?q={quote_plus(query)}",
+                    _BING_EXTRACT_JS,
+                    _parse_bing_html,
+                    _BING_RESULT_MARKERS,
+                )
+                rows = list(bing.rows)
+                sources.append("bing:blocked" if bing.blocked else "bing" if rows else "bing:empty")
+                if len(rows) < _MIN_USEFUL_RESULTS:
+                    ddg = await _browser_page_results(
+                        ctx,
+                        f"{DDG_HTML_URL}?q={quote_plus(query)}",
+                        _DDG_EXTRACT_JS,
+                        _parse_ddg_html,
+                        _DDG_RESULT_MARKERS,
+                    )
+                    if ddg.rows:
+                        sources.append("duckduckgo")
+                        seen = {r["url"] for r in rows}
+                        rows.extend(r for r in ddg.rows if r["url"] not in seen)
+                    else:
+                        sources.append("duckduckgo:blocked" if ddg.blocked else "duckduckgo:empty")
+        except TimeoutError:
+            timed_out = True
+    except Exception as e:
+        return {"error": f"Browser search failed: {e}", "fallback_reason": "browser_unavailable"}
+    finally:
+        # Outside the timeout scope: a cancelled scope has been un-cancelled by
+        # the time we get here, so this await completes instead of re-raising.
+        if started_here:
+            with contextlib.suppress(Exception):
+                await browser_mod.close_session(ctx)
+
+    capped = rows[:cap]
+    out: dict[str, Any] = {
         "results": capped,
         "count": len(capped),
         "provider": "browser",
         "sources": sources,
     }
+    if timed_out:
+        out["fallback_reason"] = "browser_timeout"
+        logger.warning(
+            "web_search browser fallback timed out after %.0fs (sources: %s)",
+            _BROWSER_SEARCH_TIMEOUT,
+            sources,
+        )
+    elif not capped:
+        blocked_only = bool(sources) and all(s.endswith(":blocked") for s in sources)
+        out["fallback_reason"] = "browser_blocked" if blocked_only else "browser_parse_empty"
+        logger.warning(
+            "web_search browser parsed no results (%s) — sources: %s. If the page "
+            "loaded, the result selectors have moved.",
+            out["fallback_reason"],
+            sources,
+        )
+    return out
 
 
 async def _brave_search(query: str, limit: int) -> list[dict[str, str]] | None:
@@ -729,15 +1050,137 @@ async def _searxng_search(query: str, limit: int) -> dict[str, Any]:
     }
 
 
-async def _places_lookup(query: str) -> list[dict[str, str]]:
-    """Nominatim geocoding for a local-looking query, at ≤1 request/second."""
-    global _nominatim_last
+# ── Places: geocode, then ask OpenStreetMap for the actual category ────
+
+
+def _place_category(query: str) -> str | None:
+    """The everyday category word in the query, if we know its OSM tags."""
+    lowered = f" {query.lower()} "
+    # Longest first, so "coffee shop" beats "coffee".
+    for name in sorted(_PLACE_CATEGORIES, key=len, reverse=True):
+        if re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", lowered):
+            return name
+    return None
+
+
+def _place_text(query: str) -> str:
+    """The part of the query that names a place."""
+    match = re.search(r"\b(?:near|in|around)\s+(.+)$", query, re.IGNORECASE)
+    if match:
+        place = match.group(1).strip(" ?.!,")
+        if place.lower() in ("me", "here", "my location", "us"):
+            return ""
+        return place
+    proper = _proper_tokens(query)
+    return " ".join(proper) if proper else ""
+
+
+def _overpass_query(category: str, lat: float | str, lon: float | str) -> str:
+    """Overpass QL for every mapped tag of ``category`` within the radius."""
+    clauses = "".join(
+        f'node["{key}"="{value}"](around:{_OVERPASS_RADIUS_M},{lat},{lon});'
+        f'way["{key}"="{value}"](around:{_OVERPASS_RADIUS_M},{lat},{lon});'
+        for key, value in _PLACE_CATEGORIES[category]
+    )
+    return f"[out:json][timeout:15];({clauses});out center tags {_MAX_PLACES * 2};"
+
+
+async def _courtesy_wait() -> None:
+    """Hold the shared ≤1 req/s budget for the OSM APIs. Call under the lock."""
+    global _places_last
+    wait = _PLACES_MIN_INTERVAL - (time.monotonic() - _places_last)
+    if wait > 0:
+        await asyncio.sleep(wait)
+    _places_last = time.monotonic()
+
+
+def _short(text: str, limit: int = 40) -> str:
+    """Queries are operator data; logs get a truncated echo, not the lot."""
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+async def _geocode(place: str) -> tuple[str, str] | None:
+    """One Nominatim lookup for a place name → ``(lat, lon)`` as given."""
     try:
-        async with _nominatim_lock:
-            wait = _NOMINATIM_MIN_INTERVAL - (time.monotonic() - _nominatim_last)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            _nominatim_last = time.monotonic()
+        async with _places_lock:
+            await _courtesy_wait()
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    NOMINATIM_URL,
+                    params={"format": "jsonv2", "q": place, "limit": 1},
+                    headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+    except Exception as e:
+        logger.warning("Geocode failed for %r: %s", _short(place), e)
+        return None
+    if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+        return None
+    lat, lon = data[0].get("lat"), data[0].get("lon")
+    if lat is None or lon is None:
+        return None
+    return str(lat), str(lon)
+
+
+def _overpass_address(tags: dict[str, Any]) -> str:
+    parts: list[str] = []
+    street = tags.get("addr:street")
+    if street:
+        number = tags.get("addr:housenumber")
+        parts.append(f"{number} {street}".strip() if number else str(street))
+    parts.extend(
+        str(tags[key])
+        for key in ("addr:suburb", "addr:city", "addr:state", "addr:postcode")
+        if tags.get(key)
+    )
+    return ", ".join(parts)
+
+
+async def _overpass_places(category: str, lat: str, lon: str) -> list[dict[str, str]]:
+    """Ask OpenStreetMap for places of one category near a point."""
+    body = _overpass_query(category, lat, lon)
+    try:
+        async with _places_lock:
+            await _courtesy_wait()
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(
+                    OVERPASS_URL,
+                    content=body,
+                    headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+    except Exception as e:
+        logger.warning("Overpass lookup failed for category %r: %s", category, e)
+        return []
+    elements = data.get("elements", []) if isinstance(data, dict) else []
+    places: list[dict[str, str]] = []
+    for element in elements:
+        if not isinstance(element, dict):
+            continue
+        tags = element.get("tags") or {}
+        osm_type, osm_id = str(element.get("type", "")), str(element.get("id", ""))
+        if not osm_type or not osm_id:
+            continue
+        name = str(tags.get("name") or tags.get("operator") or category)
+        places.append(
+            _row(
+                name,
+                f"https://www.openstreetmap.org/{osm_type}/{osm_id}",
+                _overpass_address(tags) or category.replace("_", " "),
+            )
+        )
+        if len(places) >= _MAX_PLACES:
+            break
+    return places
+
+
+async def _nominatim_places(query: str) -> list[dict[str, str]]:
+    """Free-text Nominatim — the fallback when no category maps to OSM tags."""
+    try:
+        async with _places_lock:
+            await _courtesy_wait()
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
                     NOMINATIM_URL,
@@ -747,7 +1190,7 @@ async def _places_lookup(query: str) -> list[dict[str, str]]:
                 resp.raise_for_status()
                 data = resp.json()
     except Exception as e:
-        logger.warning("Nominatim lookup failed for %r: %s", query, e)
+        logger.warning("Nominatim lookup failed for %r: %s", _short(query), e)
         return []
     if not isinstance(data, list):
         return []
@@ -761,6 +1204,25 @@ async def _places_lookup(query: str) -> list[dict[str, str]]:
         kind = " / ".join(str(p) for p in (item.get("category"), item.get("type")) if p)
         places.append(_row(str(item.get("display_name", "")), url, kind))
     return places
+
+
+async def _places_lookup(query: str) -> list[dict[str, str]]:
+    """Places for a local-looking query.
+
+    Nominatim's free-text search answers "where is X", not "what X is near
+    here" — asking it for "coworking near Springfield" returns whatever it can
+    string-match. So for a category we have OSM tags for, geocode the place
+    once and then ask Overpass for the actual amenities around that point.
+    """
+    category = _place_category(query)
+    place = _place_text(query)
+    if category and place:
+        coords = await _geocode(place)
+        if coords:
+            rows = await _overpass_places(category, *coords)
+            if rows:
+                return rows
+    return await _nominatim_places(query)
 
 
 async def _search_with_fallback(
@@ -777,12 +1239,15 @@ async def _search_with_fallback(
             return {"error": f"Perplexity search failed: {e}"}
 
     if provider == "browser":
-        return await _browser_search(query, ctx)
+        return await _browser_search(query, limit, ctx)
 
-    # An API provider, when the operator configured one, beats scraping.
-    brave_rows = await _brave_search(query, limit)
-    if brave_rows:
-        return {"results": brave_rows, "count": len(brave_rows), "provider": "brave"}
+    # An API provider, when the operator configured one, beats scraping — but
+    # only when the caller left the choice open or asked for it. An explicit
+    # provider="searxng" means SearXNG, not "whatever we think is best".
+    if provider in ("auto", "brave"):
+        brave_rows = await _brave_search(query, limit)
+        if brave_rows:
+            return {"results": brave_rows, "count": len(brave_rows), "provider": "brave"}
 
     rows: list[dict[str, str]] = []
     unresponsive: list[str] = []
@@ -794,8 +1259,8 @@ async def _search_with_fallback(
         unresponsive = searxng["unresponsive_engines"]
         if searxng["all_engines_unresponsive"]:
             reason = "engines_unresponsive"
-        elif _useful_count(rows, _distinctive_terms(query)) < min(_MIN_USEFUL_RESULTS, limit):
-            reason = "low_relevance"
+        else:
+            reason = _grade_results(rows, query)
     except Exception as e:
         reason, detail = "error", str(e)
 
@@ -805,26 +1270,57 @@ async def _search_with_fallback(
             out["unresponsive_engines"] = unresponsive
         return out
 
-    fallback = await _browser_search(query, ctx)
+    if not _browser_fallback_enabled():
+        return _degraded(rows, reason, "browser_fallback_disabled", unresponsive, detail)
+
+    fallback = await _browser_search(query, limit, ctx)
     if fallback.get("error") or not fallback.get("results"):
-        if rows:
-            # Weak results still beat none — but say they are weak.
-            return {
-                "results": rows,
-                "count": len(rows),
-                "provider": "searxng",
-                "degraded": reason,
-                "unresponsive_engines": unresponsive,
-            }
-        return {
-            "error": f"Search failed ({reason}{': ' + detail if detail else ''}); "
-            f"browser fallback: {fallback.get('error') or 'no results'}",
-            "unresponsive_engines": unresponsive,
-        }
+        degraded = _degraded(
+            rows,
+            reason,
+            str(fallback.get("fallback_reason") or "browser_parse_empty"),
+            unresponsive,
+            detail,
+            browser_error=str(fallback.get("error") or ""),
+        )
+        if fallback.get("sources"):
+            degraded["sources"] = fallback["sources"]
+        return degraded
+
     fallback["fallback_from"] = "searxng"
     fallback["fallback_reason"] = reason
-    fallback["unresponsive_engines"] = unresponsive
+    # The browser answer gets graded too — otherwise "we fell back" reads as
+    # "we fixed it" when both sources missed the question.
+    browser_grade = _grade_results(fallback["results"], query)
+    if browser_grade:
+        fallback["degraded"] = reason
+        fallback["fallback_reason"] = "browser_low_relevance"
+    if unresponsive:
+        fallback["unresponsive_engines"] = unresponsive
     return fallback
+
+
+def _degraded(
+    rows: list[dict[str, str]],
+    searxng_reason: str,
+    browser_reason: str,
+    unresponsive: list[str],
+    detail: str,
+    browser_error: str = "",
+) -> dict[str, Any]:
+    """What to return when SearXNG was weak and the browser could not help."""
+    out: dict[str, Any] = {"fallback_reason": browser_reason}
+    if unresponsive:
+        out["unresponsive_engines"] = unresponsive
+    if rows:
+        # Weak results still beat none — but say they are weak.
+        out.update(
+            {"results": rows, "count": len(rows), "provider": "searxng", "degraded": searxng_reason}
+        )
+        return out
+    problem = f"{searxng_reason}{': ' + detail if detail else ''}"
+    out["error"] = f"Search failed ({problem}); browser fallback: {browser_error or browser_reason}"
+    return out
 
 
 @_handler("web_search")
@@ -836,7 +1332,12 @@ async def _web_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         limit = max(1, int(args.get("limit", 5)))
     except (TypeError, ValueError):
         limit = 5
-    provider = str(args.get("provider") or "searxng").strip().lower()
+    # No provider named = "pick the best one"; a named one is honoured exactly.
+    provider = str(args.get("provider") or "auto").strip().lower()
+    if provider not in _PROVIDERS:
+        return {
+            "error": f"Unknown search provider {provider!r}. Available: {', '.join(_PROVIDERS)}"
+        }
 
     result = await _search_with_fallback(query, limit, provider, ctx)
 

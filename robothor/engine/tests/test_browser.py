@@ -671,3 +671,115 @@ class TestShadowDomFallback:
         distilled, registry = _build_shadow_distilled([])
         assert registry == {}
         assert "shadow dom" in distilled.lower()
+
+
+# ─── Isolated background page (web_search's results-page fallback) ────
+#
+# A session holds ONE page and the @N registry is bound to whatever is on it.
+# Any background use of the browser must therefore get its own tab: navigating
+# session.page would move the agent's document out from under refs it is still
+# using, and leave it parked on a search engine.
+
+
+class _StubPage:
+    def __init__(self, *, evaluate_result=None, evaluate_error: Exception | None = None):
+        self.url = "https://results.example.com/search"
+        self.closed = False
+        self.goto_calls: list[str] = []
+        self.evaluated: list[str] = []
+        self._evaluate_result = evaluate_result if evaluate_result is not None else []
+        self._evaluate_error = evaluate_error
+
+    async def goto(self, url, wait_until=None, timeout=None):
+        self.goto_calls.append(url)
+        return MagicMock(status=200)
+
+    async def evaluate(self, js):
+        self.evaluated.append(js)
+        if self._evaluate_error is not None:
+            raise self._evaluate_error
+        return self._evaluate_result
+
+    async def close(self):
+        self.closed = True
+
+
+class _StubContext:
+    def __init__(self, page):
+        self._page = page
+        self.new_pages = 0
+
+    async def new_page(self):
+        self.new_pages += 1
+        return self._page
+
+
+def _install_stub_session(agent_id: str, new_page):
+    """Put a session holding stub objects in the module's session table."""
+    from robothor.engine.tools.handlers import browser as browser_mod
+
+    agent_page = _StubPage()
+    agent_page.url = "https://intranet.example.com/form"
+    session = browser_mod.BrowserSession(
+        browser=MagicMock(),
+        context=_StubContext(new_page),
+        page=agent_page,
+    )
+    session.element_registry = {1: browser_mod.ElementRef(1, "textbox", "Name", "")}
+    browser_mod._sessions[agent_id] = session
+    return session
+
+
+@pytest.fixture
+def stub_session_cleanup():
+    from robothor.engine.tools.handlers import browser as browser_mod
+
+    yield
+    browser_mod._sessions.pop("isolation-test", None)
+
+
+async def test_isolated_fetch_uses_a_new_tab_and_closes_it(stub_session_cleanup):
+    from robothor.engine.tools.dispatch import ToolContext
+    from robothor.engine.tools.handlers import browser as browser_mod
+
+    tab = _StubPage(evaluate_result=[{"title": "t", "url": "https://example.com/", "snippet": "s"}])
+    session = _install_stub_session("isolation-test", tab)
+
+    out = await browser_mod.isolated_fetch(
+        ToolContext(agent_id="isolation-test"), "https://www.bing.com/search?q=x", "() => 1"
+    )
+
+    assert out["result"] == [{"title": "t", "url": "https://example.com/", "snippet": "s"}]
+    assert session.context.new_pages == 1
+    assert tab.closed is True
+    # The agent's own page never moved, and its refs are intact.
+    assert session.page.goto_calls == []
+    assert session.page.url == "https://intranet.example.com/form"
+    assert 1 in session.element_registry
+
+
+async def test_isolated_fetch_closes_its_tab_when_evaluation_fails(stub_session_cleanup):
+    from robothor.engine.tools.dispatch import ToolContext
+    from robothor.engine.tools.handlers import browser as browser_mod
+
+    tab = _StubPage(evaluate_error=RuntimeError("CSP blocked eval"))
+    _install_stub_session("isolation-test", tab)
+
+    out = await browser_mod.isolated_fetch(
+        ToolContext(agent_id="isolation-test"), "https://www.bing.com/search?q=x", "() => 1"
+    )
+
+    assert "error" in out
+    assert tab.closed is True
+
+
+async def test_isolated_fetch_without_a_session_does_not_start_one():
+    from robothor.engine.tools.dispatch import ToolContext
+    from robothor.engine.tools.handlers import browser as browser_mod
+
+    out = await browser_mod.isolated_fetch(
+        ToolContext(agent_id="no-session-here"), "https://example.com/", "() => 1"
+    )
+
+    assert out["error"] == "Browser not started."
+    assert "no-session-here" not in browser_mod._sessions
