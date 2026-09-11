@@ -395,7 +395,7 @@ def test_config_schema_command_prints_json(capsys) -> None:
     import argparse
     import json
 
-    from robothor.cli.admin import cmd_config
+    from robothor.cli.config_cmd import cmd_config
 
     assert cmd_config(argparse.Namespace(config_command="schema")) == 0
     payload = json.loads(capsys.readouterr().out)

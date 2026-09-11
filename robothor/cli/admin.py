@@ -547,49 +547,6 @@ def _check_optional_service(name: str, port: int, health_path: str | None) -> No
             print(f"  {name + ':':<13} port {port:<10} — Not running")
 
 
-def cmd_config(args: argparse.Namespace) -> int:
-    if args.config_command == "validate":
-        return _cmd_config_validate()
-    if args.config_command == "schema":
-        return _cmd_config_schema()
-    print("Usage: robothor config {validate|schema}")
-    return 0
-
-
-def _cmd_config_schema() -> int:
-    """Print the JSON Schema of every declared setting.
-
-    The schema carries each field's declared environment name, default,
-    description and the restart/secret/since/governed metadata, so tooling --
-    an editor, a form generator, a config linter -- can read what is
-    configurable without importing Python.
-    """
-    import json
-
-    from robothor.settings.model import GenusSettings
-
-    print(json.dumps(GenusSettings.model_json_schema(), indent=2, sort_keys=True))
-    return 0
-
-
-def _cmd_config_validate() -> int:
-    """Run configuration validation checks."""
-    from robothor.config import validate
-
-    print("Running configuration validation...\n")
-    results = validate()
-
-    pass_count = sum(1 for _, ok, _ in results if ok)
-    fail_count = sum(1 for _, ok, _ in results if not ok)
-
-    for name, ok, detail in results:
-        icon = "\033[32m✓\033[0m" if ok else "\033[31m✗\033[0m"
-        print(f"  {icon} {name}: {detail}")
-
-    print(f"\n{pass_count} passed, {fail_count} failed")
-    return 0 if fail_count == 0 else 1
-
-
 def cmd_pipeline(args: argparse.Namespace) -> int:
     print(f"Pipeline tier {args.tier} not yet implemented. Coming in v0.2.")
     return 0
