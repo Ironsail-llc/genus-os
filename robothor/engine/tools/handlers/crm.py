@@ -6,6 +6,8 @@ import asyncio
 import uuid
 from typing import TYPE_CHECKING, Any, cast
 
+from robothor.constants import SANDBOX_DENIAL_PREFIX
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -85,7 +87,7 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
             ) -> dict[str, Any]:
                 if ctx.is_benchmark and not _sandbox_write_allowed(_name, ctx):
                     return {
-                        "error": f"benchmark sandbox: {_name} writes are disabled",
+                        "error": f"{SANDBOX_DENIAL_PREFIX} {_name} writes are disabled",
                         "guard": "is_benchmark",
                     }
                 return cast("dict[str, Any]", await _fn(args, ctx))

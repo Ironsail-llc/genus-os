@@ -34,7 +34,7 @@ from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
-from robothor.constants import DEFAULT_TENANT
+from robothor.constants import DEFAULT_TENANT, SANDBOX_DENIED_ERROR_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -227,10 +227,11 @@ def check_tool_degradation(
             FROM agent_tool_events
             WHERE created_at > NOW() - make_interval(hours := %s)
               AND tool_name IS NOT NULL
+              AND (error_type IS NULL OR error_type <> %s)
             GROUP BY tool_name
             HAVING COUNT(*) > 0
             """,
-            (hours,),
+            (hours, SANDBOX_DENIED_ERROR_TYPE),
         )
         rows = [dict(r) for r in cur.fetchall()]
 

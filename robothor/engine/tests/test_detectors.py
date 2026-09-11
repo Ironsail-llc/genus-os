@@ -294,3 +294,85 @@ class TestZombieRunnerDetector:
         body = mock_alert.await_args.args[2]
         assert "run-xyz" in body
         assert "buddy" in body
+
+
+class TestCheckToolDegradationExcludesSandboxDenials:
+    """Sandbox refusals are the benchmark harness working as designed, not a
+    broken tool: measured 2026-09-11 15:08, ``agent_tool_events`` in the last
+    75 minutes showed ``create_task`` 10 ok / 14 failed, every failure's
+    ``error_message`` = "benchmark sandbox: create_task writes are disabled"
+    (robothor/engine/tools/handlers/crm.py:88). ``check_tool_degradation``
+    counted every ``success = false`` row and paged "Tool degradation:
+    create_task" for a tool that was never broken.
+    """
+
+    class _Cur:
+        def __init__(self, rows, sink):
+            self._rows = rows
+            self._sink = sink
+
+        def execute(self, sql, params=None):
+            self._sink.append((sql, params))
+
+        def fetchall(self):
+            return self._rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class _Conn:
+        def __init__(self, rows, sink):
+            self._rows = rows
+            self._sink = sink
+
+        def cursor(self, *a, **k):
+            return TestCheckToolDegradationExcludesSandboxDenials._Cur(self._rows, self._sink)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def test_the_sql_excludes_sandbox_denied_rows(self) -> None:
+        sink: list = []
+        conn = self._Conn([], sink)
+        with patch("robothor.db.connection.get_connection", return_value=conn):
+            detectors.check_tool_degradation()
+
+        sql, params = sink[0]
+        assert "error_type" in sql and ("<>" in sql or "!=" in sql or "NOT IN" in sql.upper()), (
+            "the SQL must filter agent_tool_events on error_type, or a tool "
+            "correctly refused by the benchmark sandbox pages as broken"
+        )
+        assert "sandbox_denied" in params, (
+            "the excluded error_type must be sandbox_denied — bound as a "
+            "parameter, per this codebase's parameterized-query convention"
+        )
+
+    def test_a_tool_whose_only_failures_are_sandbox_denials_is_not_flagged(self) -> None:
+        """The row the (fixed) SQL returns for create_task once sandbox_denied
+        rows are excluded from both COUNT(*) and the failure SUM: 10 real
+        calls, all successful, 14 sandbox refusals nowhere in the aggregate."""
+        sink: list = []
+        rows = [{"tool_name": "create_task", "total": 10, "failures": 0}]
+        conn = self._Conn(rows, sink)
+        with patch("robothor.db.connection.get_connection", return_value=conn):
+            flagged = detectors.check_tool_degradation()
+
+        assert flagged == [], "a tool with zero real failures must never be flagged"
+
+    def test_a_tool_with_real_failures_alongside_sandbox_denials_still_flags(self) -> None:
+        """Excluding sandbox denials must not blind the detector to a tool
+        that is genuinely degraded in the same window."""
+        sink: list = []
+        rows = [{"tool_name": "write_file", "total": 10, "failures": 6}]
+        conn = self._Conn(rows, sink)
+        with patch("robothor.db.connection.get_connection", return_value=conn):
+            flagged = detectors.check_tool_degradation()
+
+        assert len(flagged) == 1
+        assert flagged[0]["tool_name"] == "write_file"

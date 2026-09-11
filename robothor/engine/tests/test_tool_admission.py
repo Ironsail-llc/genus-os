@@ -252,6 +252,40 @@ class TestGuardrailGate:
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("_mock_run_persistence")
+    async def test_a_block_logs_the_refusal_reason_on_the_tool_event(self, runner, agent_config):
+        """agent_tool_events must say WHY, not just THAT.
+
+        2026-09-11: write_file failures from this exact path (a guardrail
+        block) carried error_type='guardrail_blocked' and an empty
+        error_message — the guardrail's own ``reason`` (e.g. "write_file
+        path not allowed: <path>") was computed, used for the audit row and
+        the message shown to the model, but never passed to
+        log_tool_event, so the degradation alert could not say what failed.
+        """
+        from robothor.engine.guardrails import GuardrailResult
+
+        agent_config.guardrails = ["write_path_restrict"]
+        blocked = GuardrailResult(
+            allowed=False,
+            action="blocked",
+            reason="write_file path not allowed: /etc/passwd",
+            guardrail_name="write_path_restrict",
+        )
+        with (
+            patch(
+                "robothor.engine.guardrails.GuardrailEngine.check_pre_execution",
+                return_value=blocked,
+            ),
+            patch("robothor.engine.tracking.log_tool_event") as log_event,
+        ):
+            await _run_one_tool_call(runner, agent_config, tool_name="send_email")
+
+        assert log_event.called, "the guardrail block never logged a tool event"
+        kwargs = log_event.call_args.kwargs
+        assert kwargs.get("error_message") == "write_file path not allowed: /etc/passwd"
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_mock_run_persistence")
     async def test_an_observed_guardrail_allows_the_tool_and_still_records(
         self, runner, agent_config
     ):

@@ -52,6 +52,12 @@ deduped in-process (1h for fast signals, 24h for the sustained-outage ones).
 
 Disable all of them with `ROBOTHOR_DETECTORS_ENABLED=0`.
 
+`tool_degradation_detector` excludes rows the benchmark sandbox refused
+(`error_type='sandbox_denied'`, set at the point the row is logged when the
+message starts with `benchmark sandbox:`) from both its call count and its
+failure count — those are the nightly benchmark runner being correctly denied
+write access, not evidence the tool is broken.
+
 ### Why two tool detectors
 
 `tool_degradation_detector` looks at one hour and needs ~5 failures in it, so it

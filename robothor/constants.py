@@ -7,6 +7,21 @@ from pathlib import Path
 
 DEFAULT_TENANT = os.environ.get("ROBOTHOR_DEFAULT_TENANT", "default")
 
+#: Prefix every benchmark-sandbox write refusal starts with (crm.py,
+#: memory.py handler gates; robothor/crm/dal.py's create_session_goal guard).
+#: Lives here rather than in robothor.engine.benchmark_sandbox because
+#: robothor/crm/dal.py must stay importable without the engine (see the
+#: layering note above `_benchmark_sandbox` in that module) while the engine
+#: side (log_tool_event's sandbox-denial classification, detectors.py) also
+#: needs it — robothor.constants is the one module both layers already
+#: import from.
+SANDBOX_DENIAL_PREFIX = "benchmark sandbox:"
+
+#: agent_tool_events.error_type value for a failure whose message starts
+#: with SANDBOX_DENIAL_PREFIX. Shared between tracking.py (which sets it)
+#: and detectors.py (which excludes it) so the label can't drift between them.
+SANDBOX_DENIED_ERROR_TYPE = "sandbox_denied"
+
 
 def tenant_env_conflict() -> str | None:
     """Describe a disagreement between the two tenant env vars, or None.
