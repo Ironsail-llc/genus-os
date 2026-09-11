@@ -707,6 +707,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--tenant", default=None, help="Tenant ID (default: ROBOTHOR_DEFAULT_TENANT)"
     )
 
+    user_set_password = user_sub.add_parser(
+        "set-password", help="Set a user account's local sign-in password (argon2id)"
+    )
+    user_set_password.add_argument("email", help="Account email address")
+    user_set_password.add_argument(
+        "--tenant", default=None, help="Tenant ID (default: ROBOTHOR_DEFAULT_TENANT)"
+    )
+    user_set_password.add_argument(
+        "--password-stdin",
+        action="store_true",
+        dest="password_stdin",
+        help="Read the password from stdin instead of prompting (for automation)",
+    )
+
+    user_mfa_reset = user_sub.add_parser(
+        "mfa-reset", help="Clear a user account's two-factor enrollment (they re-enroll)"
+    )
+    user_mfa_reset.add_argument("email", help="Account email address")
+    user_mfa_reset.add_argument(
+        "--tenant", default=None, help="Tenant ID (default: ROBOTHOR_DEFAULT_TENANT)"
+    )
+
     # export — portable configuration bundle (agents, skills, opt-in memory)
     export_parser = subparsers.add_parser(
         "export", help="Export configuration as a portable bundle"

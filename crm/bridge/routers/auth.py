@@ -14,16 +14,20 @@ from __future__ import annotations
 import hmac
 import logging
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Annotated, Any
 
-from fastapi import APIRouter, Header, Request
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
-from robothor.auth import accounts, tokens
+from robothor.auth import accounts, local_login, tokens
 from robothor.auth.deps import get_current_user
-from robothor.auth.tokens import REFRESH_TTL_SECONDS
 from robothor.constants import DEFAULT_TENANT
+
+from ._audit import audited
 
 logger = logging.getLogger(__name__)
 
@@ -170,28 +174,14 @@ def _oidc_issuer_allowed(issuer: str) -> bool:
 def _issue_for_account(
     account: dict[str, Any], *, user_agent: str | None, ip: str | None
 ) -> dict[str, Any]:
-    if account.get("status") != "active":
-        raise accounts.AccountInactiveError("account is not active")
-    access = tokens.issue_access_token(str(account["id"]), account["tenant_id"], account["role"])
-    raw_refresh, refresh_hash = tokens.new_refresh_token()
-    accounts.create_session(
-        str(account["id"]),
-        refresh_hash,
-        ttl_seconds=REFRESH_TTL_SECONDS,
-        user_agent=user_agent,
-        ip=ip,
-    )
-    return {
-        "access_token": access,
-        "refresh_token": raw_refresh,
-        "user": {
-            "id": str(account["id"]),
-            "email": str(account["email"]),
-            "display_name": account["display_name"],
-            "role": account["role"],
-            "tenant_id": account["tenant_id"],
-        },
-    }
+    """Thin alias for the shared issuance point.
+
+    The body moved to ``robothor.auth.accounts.issue_for_account`` when local
+    email+password login arrived, so that both sign-in paths mint a session
+    through exactly one implementation. The name stays here because the SSO
+    routes below read as they always did.
+    """
+    return accounts.issue_for_account(account, user_agent=user_agent, ip=ip)
 
 
 @router.post("/sso", response_model=None)
@@ -258,10 +248,296 @@ def me(request: Request) -> dict[str, Any] | JSONResponse:
     account = accounts.get_account_by_id(ctx.user_id)
     if not account or account.get("status") != "active":
         return JSONResponse({"error": "account not found"}, status_code=404)
+    # Field-by-field, never `**account`: the row also carries password_hash and
+    # mfa_secret_enc, and a spread would serve both to the browser.
     return {
         "id": ctx.user_id,
         "tenant_id": ctx.tenant_id,
         "role": ctx.role,
         "email": str(account["email"]),
         "display_name": account["display_name"],
+        "mfa_enabled": bool(account.get("mfa_enabled")),
+        "mfa_setup_required": local_login.mfa_setup_required_for(account),
     }
+
+
+# ── Local email + password sign-in ───────────────────────────────────
+#
+# Off unless GENUS_LOCAL_LOGIN=true, in which case /methods reports it and
+# /login is a PUBLIC route (see AuthMiddleware._PUBLIC_PATHS). Everything
+# these handlers are allowed to say about a failure is decided in
+# robothor/auth/local_login.py — this layer only maps a LoginResult onto a
+# status code, and must never add a detail of its own.
+
+
+_MAX_CODE_LENGTH = 16
+_MAX_EMAIL_LENGTH = 320
+
+_NOT_FOUND = JSONResponse({"error": "Not found"}, status_code=404)
+_UNAUTHORIZED = JSONResponse({"error": local_login.GENERIC_FAILURE}, status_code=401)
+_THROTTLED = JSONResponse({"error": "too many attempts"}, status_code=429)
+_BAD_REQUEST = JSONResponse({"error": "invalid request"}, status_code=422)
+# Names the policy, never the submitted value.
+_WEAK_PASSWORD = JSONResponse(
+    {"error": f"password must be at least {local_login.MIN_PASSWORD_LENGTH} characters"},
+    status_code=422,
+)
+
+
+def credential_body(
+    required: tuple[str, ...], optional: tuple[str, ...] = ()
+) -> Callable[[Request], Awaitable[dict[str, str] | None]]:
+    """A dependency that parses a credential-bearing JSON body WITHOUT pydantic.
+
+    FastAPI serializes pydantic's ``input`` field into its 422 response, and
+    for a ``missing`` error that input is the ENTIRE request body. A
+    ``LoginRequest`` model answered ``{"password": "hunter2"}`` (email omitted)
+    with the password quoted back in the response — into the browser, the
+    access log, and every proxy between them. A ``max_length`` on the password
+    leaked it the same way, verbatim.
+
+    So the credential routes validate by hand and answer with a fixed string;
+    the only thing a rejection tells a caller is that the body was not
+    acceptable. It is a *dependency* rather than a call inside the handler so
+    the handlers can stay ``def``: FastAPI runs those in its worker threadpool,
+    which is where argon2 and psycopg2 belong — see
+    ``test_only_genuinely_async_routes_run_on_the_event_loop``.
+
+    Returns ``None`` for anything malformed; the caller turns that into its own
+    no-echo refusal.
+    """
+
+    allowed = set(required) | set(optional)
+
+    async def parse(request: Request) -> dict[str, str] | None:
+        try:
+            raw = await request.json()
+        except Exception:
+            return None
+        if not isinstance(raw, dict) or set(raw) - allowed:
+            return None  # extra="forbid", by hand
+        parsed: dict[str, str] = {}
+        for name in required:
+            value = raw.get(name)
+            if not isinstance(value, str) or not value:
+                return None
+            parsed[name] = value
+        for name in optional:
+            value = raw.get(name)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                return None
+            parsed[name] = value
+        return parsed
+
+    return parse
+
+
+def _credential_lengths_ok(parsed: dict[str, str]) -> bool:
+    """Bound every field before anything reaches argon2 or the database.
+
+    An unauthenticated caller must not be able to hand argon2 a megabyte to
+    hash; a login must still not reveal the *minimum* length, so only the
+    ceiling is enforced here and the floor belongs to the password-change
+    route and ``local_login.validate_password``.
+    """
+    for name, value in parsed.items():
+        if name == "email" and len(value) > _MAX_EMAIL_LENGTH:
+            return False
+        if name == "code" and len(value) > _MAX_CODE_LENGTH:
+            return False
+        if "password" in name and len(value) > local_login.MAX_PASSWORD_LENGTH:
+            return False
+    return True
+
+
+def _local_login_off() -> bool:
+    return not local_login.local_login_enabled()
+
+
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def _oidc_issuers() -> list[str]:
+    return [
+        item.strip() for item in os.environ.get("GENUS_OIDC_ISSUERS", "").split(",") if item.strip()
+    ]
+
+
+@router.get("/methods", response_model=None)
+def auth_methods() -> dict[str, Any]:
+    """Which sign-in methods this deployment offers.
+
+    Public and unauthenticated by necessity — the sign-in page asks it what to
+    render before anyone has a session. It answers with NAMES and booleans
+    only: issuer URLs are already public metadata, and no secret (the bridge
+    shared secret, the Cloudflare audience, a client secret) appears here.
+    """
+    return {
+        "local": local_login.local_login_enabled(),
+        "oidc": _oidc_issuers(),
+        "cloudflare_access": bool(
+            os.environ.get("CF_ACCESS_TEAM_DOMAIN", "").strip()
+            and os.environ.get("CF_ACCESS_AUD", "").strip()
+        ),
+    }
+
+
+_LoginBody = Annotated[
+    "dict[str, str] | None", Depends(credential_body(("email", "password"), ("code",)))
+]
+_PasswordBody = Annotated[
+    "dict[str, str] | None", Depends(credential_body(("current_password", "new_password")))
+]
+_MfaCodeBody = Annotated["dict[str, str] | None", Depends(credential_body(("code",)))]
+_MfaDisableBody = Annotated["dict[str, str] | None", Depends(credential_body(("password", "code")))]
+
+
+@router.post("/login", response_model=None)
+def local_login_route(body: _LoginBody, request: Request) -> dict[str, Any] | JSONResponse:
+    """Exchange an email + password (+ TOTP code) for bridge tokens."""
+    if _local_login_off():
+        return _NOT_FOUND
+    if body is None or not _credential_lengths_ok(body):
+        return _BAD_REQUEST
+    ip = _client_ip(request)
+    result = local_login.authenticate(
+        DEFAULT_TENANT,
+        body["email"],
+        body["password"],
+        body.get("code"),
+        ip=ip,
+        user_agent=request.headers.get("user-agent"),
+    )
+    if result.rate_limited:
+        audited(request, "auth.login", action="local", status="denied", reason="rate_limited")
+        return _THROTTLED
+    if result.mfa_required:
+        audited(request, "auth.login", action="local", status="denied", reason="mfa_required")
+        return JSONResponse({"error": local_login.MFA_REQUIRED}, status_code=401)
+    if not result.ok or not result.tokens:
+        # One message for every reason. The audit trail records that a local
+        # sign-in failed; it does not record which of the reasons it was,
+        # because the reason is derived from the submitted credential.
+        audited(request, "auth.login", action="local", status="denied")
+        return _UNAUTHORIZED
+    audited(
+        request,
+        "auth.login",
+        action="local",
+        user_id=result.tokens["user"]["id"],
+        mfa_setup_required=result.mfa_setup_required,
+    )
+    return {**result.tokens, "mfa_setup_required": result.mfa_setup_required}
+
+
+def _verified_caller(request: Request) -> Any | None:
+    try:
+        return get_current_user(request)
+    except Exception:
+        return None
+
+
+@router.post("/password", response_model=None)
+def change_password_route(body: _PasswordBody, request: Request) -> dict[str, Any] | JSONResponse:
+    """Change the caller's own password. Requires the current one."""
+    if _local_login_off():
+        return _NOT_FOUND
+    ctx = _verified_caller(request)
+    if ctx is None:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    if body is None or not _credential_lengths_ok(body):
+        return _BAD_REQUEST
+    if len(body["new_password"]) < local_login.MIN_PASSWORD_LENGTH:
+        # Checked here as well as in local_login.validate_password: this is the
+        # one route where the minimum is a thing the caller is entitled to be
+        # told, and a too-short password must never reach argon2 at all.
+        return _WEAK_PASSWORD
+    # Throttled on the identity, not the body: a stolen session must not get
+    # unlimited guesses at the current password either.
+    if local_login.throttled(f"password:{ctx.user_id}", _client_ip(request)):
+        return _THROTTLED
+    try:
+        changed = local_login.change_password(
+            ctx.user_id, body["current_password"], body["new_password"]
+        )
+    except local_login.WeakPasswordError:
+        return _WEAK_PASSWORD
+    audited(
+        request,
+        "auth.password_change",
+        action="local",
+        status="ok" if changed else "denied",
+        user_id=ctx.user_id,
+    )
+    return {"success": True} if changed else _UNAUTHORIZED
+
+
+@router.post("/mfa/enroll", response_model=None)
+def mfa_enroll_route(request: Request) -> dict[str, Any] | JSONResponse:
+    """Provision a pending TOTP secret for the caller.
+
+    This is the one and only response that ever contains the secret — it has
+    to, because an authenticator app must receive it. The factor stays off
+    until ``/mfa/confirm`` proves the app holds the same seed.
+    """
+    if _local_login_off():
+        return _NOT_FOUND
+    ctx = _verified_caller(request)
+    if ctx is None:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    account = accounts.get_account_by_id(ctx.user_id)
+    if not account or account.get("status") != "active":
+        return JSONResponse({"error": "account not found"}, status_code=404)
+    enrolled = local_login.begin_enrollment(ctx.user_id, str(account["email"]))
+    audited(request, "auth.mfa_enroll", action="local", user_id=ctx.user_id)
+    return enrolled
+
+
+@router.post("/mfa/confirm", response_model=None)
+def mfa_confirm_route(body: _MfaCodeBody, request: Request) -> dict[str, Any] | JSONResponse:
+    """Turn MFA on once the caller proves the pending secret arrived."""
+    if _local_login_off():
+        return _NOT_FOUND
+    ctx = _verified_caller(request)
+    if ctx is None:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    if body is None or not _credential_lengths_ok(body):
+        return _BAD_REQUEST
+    if local_login.throttled(f"mfa:{ctx.user_id}", _client_ip(request)):
+        return _THROTTLED
+    confirmed = local_login.confirm_enrollment(ctx.user_id, body["code"])
+    audited(
+        request,
+        "auth.mfa_confirm",
+        action="local",
+        status="ok" if confirmed else "denied",
+        user_id=ctx.user_id,
+    )
+    return {"success": True} if confirmed else _UNAUTHORIZED
+
+
+@router.post("/mfa/disable", response_model=None)
+def mfa_disable_route(body: _MfaDisableBody, request: Request) -> dict[str, Any] | JSONResponse:
+    """Turn MFA off. Needs the password AND a live code, so a hijacked session
+    on its own cannot strip the second factor."""
+    if _local_login_off():
+        return _NOT_FOUND
+    ctx = _verified_caller(request)
+    if ctx is None:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    if body is None or not _credential_lengths_ok(body):
+        return _BAD_REQUEST
+    if local_login.throttled(f"mfa:{ctx.user_id}", _client_ip(request)):
+        return _THROTTLED
+    disabled = local_login.disable_mfa(ctx.user_id, body["password"], body["code"])
+    audited(
+        request,
+        "auth.mfa_disable",
+        action="local",
+        status="ok" if disabled else "denied",
+        user_id=ctx.user_id,
+    )
+    return {"success": True} if disabled else _UNAUTHORIZED

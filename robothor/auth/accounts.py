@@ -387,6 +387,46 @@ def consume_active_session(refresh_token_hash: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def issue_for_account(
+    account: dict[str, Any], *, user_agent: str | None = None, ip: str | None = None
+) -> dict[str, Any]:
+    """Mint the access + refresh pair for an already-authenticated account.
+
+    The single issuance point for every sign-in path — SSO exchange, refresh
+    rotation, and local email+password. It lives here rather than in the
+    bridge router so that a second path cannot quietly grow a second set of
+    rules about what a session is: the active-status check, the refresh-token
+    hashing, and the exact user payload are all decided once.
+
+    Raises ``AccountInactiveError`` for anything but an active account; a
+    caller must translate that into its own generic failure, never echo it.
+    """
+    from robothor.auth import tokens
+
+    if account.get("status") != "active":
+        raise AccountInactiveError("account is not active")
+    access = tokens.issue_access_token(str(account["id"]), account["tenant_id"], account["role"])
+    raw_refresh, refresh_hash = tokens.new_refresh_token()
+    create_session(
+        str(account["id"]),
+        refresh_hash,
+        ttl_seconds=tokens.REFRESH_TTL_SECONDS,
+        user_agent=user_agent,
+        ip=ip,
+    )
+    return {
+        "access_token": access,
+        "refresh_token": raw_refresh,
+        "user": {
+            "id": str(account["id"]),
+            "email": str(account["email"]),
+            "display_name": account["display_name"],
+            "role": account["role"],
+            "tenant_id": account["tenant_id"],
+        },
+    }
+
+
 def revoke_session(refresh_token_hash: str) -> bool:
     with get_connection() as conn:
         cur = conn.cursor()
