@@ -294,6 +294,13 @@ def register(app: FastAPI) -> None:
     """
     from fastapi import APIRouter, HTTPException
 
+    from robothor.credential_errors import install_credential_safe_validation
+
+    # The test-connection body carries a key. FastAPI's default 422 would
+    # reflect it back, so a mistyped field name would bounce the operator's
+    # credential out of the appliance.
+    install_credential_safe_validation(app)
+
     router = APIRouter(prefix="/api/admin", tags=["admin"])
 
     @router.get("/providers")

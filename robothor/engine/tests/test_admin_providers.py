@@ -343,6 +343,30 @@ class TestConnection:
         _assert_no_secret(body, ENV_KEY, CANDIDATE_KEY)
         assert "[redacted]" in body["message"]
 
+    @pytest.mark.parametrize(
+        "body",
+        [
+            [CANDIDATE_KEY],
+            {"api_key": 12345, "note": CANDIDATE_KEY},
+            {"model": {"nested": CANDIDATE_KEY}},
+        ],
+    )
+    def test_a_malformed_body_is_rejected_without_echoing_it(self, client, body) -> None:
+        """FastAPI's default 422 reflects the request body back in ``input``.
+
+        On every other route that is a convenience. On this one the body IS a
+        credential, so a typo'd field name would bounce the operator's key
+        straight back out — and into anything that records 4xx bodies.
+        """
+        response = client.post("/api/admin/providers/openrouter/test", json=body)
+        assert response.status_code == 422
+        assert CANDIDATE_KEY not in response.text
+
+    def test_other_routes_keep_their_ordinary_validation_detail(self, client) -> None:
+        """The redaction is scoped. A generic 422 elsewhere stays useful."""
+        response = client.post("/api/admin/providers/openrouter/test", json=[CANDIDATE_KEY])
+        assert "detail" in response.json()
+
     def test_an_unknown_provider_is_404(self, client) -> None:
         assert client.post("/api/admin/providers/nope/test", json={}).status_code == 404
 
@@ -409,6 +433,30 @@ class TestSighup:
             MagicMock(side_effect=RuntimeError("vault on fire")),
         )
         assert daemon._handle_plugin_reload_signal() == 3
+
+
+class TestCredentialPathCoverage:
+    def test_every_admin_provider_route_is_treated_as_credential_bearing(self) -> None:
+        """The redaction is keyed on path prefixes, so a renamed route would
+        silently stop being protected. Checked against the app's own routes
+        rather than against a second list of the same strings."""
+        from robothor.credential_errors import carries_credentials
+
+        app = _make_app()
+        try:
+            # FastAPI >= 0.139 keeps included routers as lazy groups, so a
+            # naive walk of app.routes sees none of them.
+            from fastapi.routing import iter_route_contexts
+
+            routes = list(iter_route_contexts(app.routes))
+        except ImportError:  # pragma: no cover - FastAPI < 0.139
+            routes = list(app.routes)
+        paths = {
+            route.path for route in routes if getattr(route, "path", "").startswith("/api/admin")
+        }
+        assert paths, "route enumeration collapsed — the assertion below would be vacuous"
+        uncovered = [path for path in paths if not carries_credentials(path)]
+        assert not uncovered, f"unprotected credential routes: {sorted(uncovered)}"
 
 
 class TestScope:

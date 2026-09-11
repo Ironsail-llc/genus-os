@@ -57,6 +57,8 @@ from routers.system_health import router as system_health_router
 from routers.tenants import router as tenants_router
 from routers.workflows import router as workflows_router
 
+from robothor.credential_errors import install_credential_safe_validation
+
 # ─── Configuration ───────────────────────────────────────────────────────
 
 _bridge_config: dict = {
@@ -165,6 +167,10 @@ app.include_router(fleet_router)
 app.include_router(runs_router)
 app.include_router(system_health_router)
 app.include_router(workflows_router)
+
+# A 422 on the provider/vault routes must not reflect the request body:
+# on those routes the body is a credential.
+install_credential_safe_validation(app)
 
 
 if __name__ == "__main__":

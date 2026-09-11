@@ -348,6 +348,41 @@ class TestKeyWrites:
         assert fake_engine.reload_count == 1
         _assert_no_secret(response.json())
 
+    @pytest.mark.parametrize(
+        ("path", "body"),
+        [
+            ("/api/providers/openrouter/keys/1", {"nope": FAKE_KEY}),
+            ("/api/providers/openrouter/keys/1", [FAKE_KEY]),
+            ("/api/providers/openrouter/keys/1", {"api_key": 12345, "note": FAKE_KEY}),
+        ],
+    )
+    def test_a_malformed_body_is_rejected_without_echoing_it(
+        self, controls_client_as_operator, fake_engine, fake_vault, path, body
+    ) -> None:
+        """FastAPI's default 422 reflects the request body back in ``input``,
+        and on this route the body IS the credential. A mistyped field name
+        must not bounce the operator's key out of the appliance."""
+        response = controls_client_as_operator.put(path, json=body)
+        assert response.status_code == 422
+        assert FAKE_KEY not in response.text
+        assert not fake_vault.written
+
+    def test_a_malformed_test_connection_body_is_not_echoed(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        response = controls_client_as_operator.post(
+            "/api/providers/openrouter/test", json=[FAKE_KEY]
+        )
+        assert response.status_code == 422
+        assert FAKE_KEY not in response.text
+
+    def test_validation_detail_elsewhere_is_untouched(self, controls_client_as_operator) -> None:
+        """The redaction is scoped to the credential routes; a 422 on an
+        ordinary route keeps the ``input`` that makes it debuggable."""
+        response = controls_client_as_operator.post("/api/notes", json=["not-an-object"])
+        assert response.status_code == 422
+        assert "input" in response.text
+
     def test_the_key_never_reaches_a_log_line(
         self, controls_client_as_operator, fake_engine, fake_vault, caplog
     ) -> None:
