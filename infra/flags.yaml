@@ -192,6 +192,11 @@ flags:
       that stops a run from closing its task.
       Runbook: docs/runbooks/DELIVERABLE_CONTRACT.md
 
+      BLOCKER: exactly one observed row exists and the note says not to
+      promote on it. Needs the deliverable contract to produce verdicts on
+      real runs (know WHY the table is quiet first), then >= 7 days at
+      alert with the operator reading the banners.
+
   - name: ROBOTHOR_RIP_7_MODE
     owner: ops
     mode: enforce
@@ -323,6 +328,7 @@ flags:
       (trigger_detail not benchmark) account for 488 of them with 3
       unverified_claims. No operator override row exists, so the live rung is
       still observe.
+
       BLOCKER: the ALERT rung needs the operator spot-check the evidence bar
       names — read the week's production unverified_claims catches (3 in the
       7 days to 2026-09-10) and confirm the false-positive rate is under 10%,
@@ -349,6 +355,11 @@ flags:
       either a real claim-vs-reality gap or a checker bug, (3) verify_error
       count ~0, (4) tool-call latency unchanged. Promoting past observe changes
       what the model sees mid-run, so it is a behavior change, not bookkeeping.
+
+      BLOCKER: the evidence ledger must show real read-back verdicts
+      before anyone reads a quiet table as honest agents. The four
+      measurements the note names (verdict rows present, false-verdict
+      rate, unverifiable count ~0, latency unchanged) have not been taken.
 
   - name: ROBOTHOR_HONESTY_SUITE_MODE
     owner: ops
@@ -385,6 +396,11 @@ flags:
       aggregate delta at enforce computed in advance, since these cases are
       ~30% of the added weight on a small suite.
 
+      BLOCKER: the enforce gate needs at least one real fabrication
+      surfaced and triaged, zero capability_live verdicts standing
+      unexplained, and the aggregate score delta computed in advance. None
+      of the three has been done; the suite has only run in observe.
+
   - name: ROBOTHOR_BENCHMARK_SANDBOX_MODE
     owner: ops
     mode: observe
@@ -415,6 +431,12 @@ flags:
       counts in `benchmark-sandbox` back at zero after each run, proving
       teardown; (3) zero rows written to any other tenant by a benchmark run.
       Full ladder, evidence and rollback: docs/runbooks/BENCHMARK_SANDBOX.md.
+
+      BLOCKER: the three pieces of promotion evidence above have not been
+      collected — no fleet night with state_checks hand-compared against
+      transcripts, no teardown row-count check, no cross-tenant write
+      audit. Collect them per docs/runbooks/BENCHMARK_SANDBOX.md, then
+      flip.
 
   - name: ROBOTHOR_PLUGIN_MANIFEST_MODE
     owner: platform
