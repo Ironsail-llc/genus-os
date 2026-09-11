@@ -46,6 +46,27 @@ def _default_tenant() -> str:
 BOOTSTRAP_TOTAL_MAX_CHARS = 100_000
 
 
+def _telegram() -> Any:
+    """The channels group of the resolved settings.
+
+    Telegram carried two names for each of its two values, and this module read
+    `ROBOTHOR_TELEGRAM_CHAT_ID or TELEGRAM_CHAT_ID` in four separate places. An
+    operator who set the other name got silence from whichever copy they were
+    looking at. The fallback still works -- the old name is a declared alias --
+    but it lives in one place now, `robothor/settings/aliases.py`, and reading
+    it emits one deprecation warning naming the replacement instead of
+    resolving quietly to whichever was set first.
+    """
+    from robothor.settings import get_settings
+
+    return get_settings().channels
+
+
+def _default_chat_id() -> str:
+    """The chat every delivery falls back to when a manifest names none."""
+    return _telegram().telegram_chat_id
+
+
 @dataclass(frozen=True)
 class EngineConfig:
     """Top-level engine configuration from environment variables."""
@@ -101,10 +122,8 @@ class EngineConfig:
     def from_env(cls) -> EngineConfig:
         workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
         return cls(
-            bot_token=os.environ.get("ROBOTHOR_TELEGRAM_BOT_TOKEN", "")
-            or os.environ.get("TELEGRAM_BOT_TOKEN", ""),
-            default_chat_id=os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
-            or os.environ.get("TELEGRAM_CHAT_ID", ""),
+            bot_token=_telegram().telegram_bot_token,
+            default_chat_id=_default_chat_id(),
             port=int(os.environ.get("ROBOTHOR_ENGINE_PORT", "18800")),
             tenant_id=os.environ.get("ROBOTHOR_TENANT_ID", "") or _default_tenant(),
             workspace=workspace,
@@ -470,9 +489,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             early_stall_timeout_seconds=int(raw_heartbeat.get("early_stall_timeout_seconds", 0)),
             delivery_mode=hb_delivery_mode,
             delivery_channel=hb_delivery.get("channel", ""),
-            delivery_to=hb_delivery.get("to", "")
-            or os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
-            or os.environ.get("TELEGRAM_CHAT_ID", ""),
+            delivery_to=hb_delivery.get("to", "") or _default_chat_id(),
             warmup_context_files=raw_heartbeat.get("context_files", []),
             warmup_peer_agents=raw_heartbeat.get("peer_agents", []),
             warmup_memory_blocks=raw_heartbeat.get("memory_blocks", []),
@@ -506,9 +523,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             early_stall_timeout_seconds=int(raw_worker.get("early_stall_timeout_seconds", 0)),
             delivery_mode=w_delivery_mode,
             delivery_channel=w_delivery.get("channel", ""),
-            delivery_to=w_delivery.get("to", "")
-            or os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
-            or os.environ.get("TELEGRAM_CHAT_ID", ""),
+            delivery_to=w_delivery.get("to", "") or _default_chat_id(),
             warmup_context_files=raw_worker.get("context_files", []),
             warmup_peer_agents=raw_worker.get("peer_agents", []),
             warmup_memory_blocks=raw_worker.get("memory_blocks", []),
@@ -559,9 +574,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         stale_after_minutes=int(schedule.get("stale_after_minutes", 120)),
         delivery_mode=delivery_mode,
         delivery_channel=delivery.get("channel", ""),
-        delivery_to=delivery.get("to", "")
-        or os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
-        or os.environ.get("TELEGRAM_CHAT_ID", ""),
+        delivery_to=delivery.get("to", "") or _default_chat_id(),
         surface_to_channel=bool(delivery.get("surface_to_channel", True)),
         tools_allowed=manifest.get("tools_allowed", []),
         tools_denied=manifest.get("tools_denied", []),

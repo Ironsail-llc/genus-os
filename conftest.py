@@ -111,6 +111,31 @@ def _hermetic_env() -> object:
         os.environ.update(snapshot)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_settings():
+    """Drop the cached settings around every test.
+
+    ``robothor.settings.get_settings()`` caches for the process, which is right
+    in a daemon -- resolution reads a file and the whole environment, and the
+    engine asks constantly -- and wrong in a suite, where the next test sets a
+    different environment and would be served the previous test's answer. The
+    cost is one ``lru_cache.cache_clear()``; the alternative is a reader that
+    passes its own test and fails when it runs after another one.
+
+    The alias warnings are reset with it, for the same reason: they are
+    once-per-process by design, so a test asserting that a deprecated name
+    warns must not depend on whether an earlier test used it first.
+    """
+    from robothor.settings import reset_settings
+    from robothor.settings.aliases import reset_alias_warnings
+
+    reset_settings()
+    reset_alias_warnings()
+    yield
+    reset_settings()
+    reset_alias_warnings()
+
+
 #: The two variables that turn any Python sender reading ``os.environ`` into a
 #: live line to the operator's phone.
 LIVE_TELEGRAM_ENV = ("ROBOTHOR_TELEGRAM_BOT_TOKEN", "ROBOTHOR_TELEGRAM_CHAT_ID")

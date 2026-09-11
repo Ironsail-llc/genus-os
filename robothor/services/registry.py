@@ -25,16 +25,23 @@ from robothor.config import get_config
 
 logger = logging.getLogger(__name__)
 
-# Environment variable overrides: SERVICE_NAME_URL -> full URL override
-_ENV_OVERRIDES = {
-    "bridge": "BRIDGE_URL",
-    "orchestrator": "ORCHESTRATOR_URL",
-    "vision": "VISION_URL",
-    "ollama": "OLLAMA_URL",
-    "redis": "REDIS_URL",
-    "searxng": "SEARXNG_URL",
-    "helm": "HELM_URL",
-    "mediamtx": "RTSP_URL",
+# Environment variable overrides: service name -> the names that override its
+# manifest entry, in precedence order. Ollama has two: `ROBOTHOR_OLLAMA_URL` is
+# the platform's declared name (robothor/settings/model.py) and the one
+# docs/configuration.md tells an operator to set, while the bare `OLLAMA_URL`
+# is Ollama's own variable and belongs to everything else on the box that talks
+# to it. This module read only the bare one, so an operator who followed the
+# documentation got the manifest default and nothing to explain why. The bare
+# name still works and is deprecated; see robothor/settings/aliases.py.
+_ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "bridge": ("BRIDGE_URL",),
+    "orchestrator": ("ORCHESTRATOR_URL",),
+    "vision": ("VISION_URL",),
+    "ollama": ("ROBOTHOR_OLLAMA_URL", "OLLAMA_URL"),
+    "redis": ("REDIS_URL",),
+    "searxng": ("SEARXNG_URL",),
+    "helm": ("HELM_URL",),
+    "mediamtx": ("RTSP_URL",),
 }
 
 # Cache
@@ -112,10 +119,12 @@ def get_service_url(name: str, path: str = "") -> str | None:
     Environment variable overrides take precedence over manifest values.
     Returns None if service is unknown.
     """
-    env_key = _ENV_OVERRIDES.get(name)
-    if env_key:
+    for env_key in _ENV_OVERRIDES.get(name, ()):
         env_val = os.environ.get(env_key)
         if env_val:
+            from robothor.settings.aliases import warn_deprecated_alias
+
+            warn_deprecated_alias(env_key)  # no-op unless the name is deprecated
             base = env_val.rstrip("/")
             return f"{base}{path}" if path else base
 

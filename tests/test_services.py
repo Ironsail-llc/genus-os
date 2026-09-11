@@ -143,3 +143,34 @@ class TestNoManifest:
         monkeypatch.chdir(tmp_path)  # Prevent cwd fallback finding real manifest
         services = list_services()
         assert services == {}
+
+
+class TestOllamaUrlOverrideName:
+    """`ROBOTHOR_OLLAMA_URL` is the platform's name for the Ollama endpoint.
+
+    The service registry read a bare `OLLAMA_URL`, which is Ollama's own
+    variable and belongs to whatever else on the box speaks to it -- so an
+    operator who set the documented `ROBOTHOR_OLLAMA_URL` got the manifest
+    default and no indication why.
+    """
+
+    def test_canonical_name_overrides_the_manifest(self, monkeypatch):
+        from robothor.services import registry
+
+        monkeypatch.delenv("OLLAMA_URL", raising=False)
+        monkeypatch.setenv("ROBOTHOR_OLLAMA_URL", "http://gpu-box:11434")
+        assert registry.get_service_url("ollama") == "http://gpu-box:11434"
+
+    def test_deprecated_name_still_works(self, monkeypatch):
+        from robothor.services import registry
+
+        monkeypatch.delenv("ROBOTHOR_OLLAMA_URL", raising=False)
+        monkeypatch.setenv("OLLAMA_URL", "http://old-box:11434")
+        assert registry.get_service_url("ollama") == "http://old-box:11434"
+
+    def test_canonical_name_wins_when_both_are_set(self, monkeypatch):
+        from robothor.services import registry
+
+        monkeypatch.setenv("ROBOTHOR_OLLAMA_URL", "http://gpu-box:11434")
+        monkeypatch.setenv("OLLAMA_URL", "http://old-box:11434")
+        assert registry.get_service_url("ollama") == "http://gpu-box:11434"

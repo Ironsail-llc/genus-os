@@ -293,7 +293,17 @@ def run_init(args: Any) -> int:
     else:
         print("  Generating vault master key ... skipped (exists)")
 
-    # 11. Write env file
+    # 11. Operator identity — the file the platform reads, not an env var
+    from robothor.constants import owner_config_path
+    from robothor.owner_config import write_owner_config
+
+    owner_path = owner_config_path()
+    if write_owner_config(owner_name, owner_email, path=owner_path):
+        print(f"  Writing operator identity to {owner_path} ... done")
+    elif owner_path.exists():
+        print(f"  Writing operator identity to {owner_path} ... skipped (exists)")
+
+    # 12. Write env file
     if init_state.get("env_file") != "completed":
         env_path = workspace / ".env"
         wrote = write_env_file(
@@ -316,7 +326,7 @@ def run_init(args: Any) -> int:
         env_path = workspace / ".env"
         print(f"  Saving config to {env_path} ... skipped (exists)")
 
-    # 12. Resolve template variables in CLAUDE.md and brain/ files
+    # 13. Resolve template variables in CLAUDE.md and brain/ files
     template_files = [
         workspace / "CLAUDE.md",
         workspace / "AGENT_BUILDER.md",
@@ -335,7 +345,7 @@ def run_init(args: Any) -> int:
                 content = content.replace("{{owner_email}}", owner_email)
                 md_path.write_text(content)
 
-    # 13. Agent template setup (if templates exist)
+    # 14. Agent template setup (if templates exist)
     if not yes:
         _offer_agent_setup(workspace)
 
@@ -781,10 +791,13 @@ def write_env_file(
     db_port = str(db.port)
     db_name = str(db.name)
     db_user = str(db.user)
+    # Operator identity is NOT written here: ROBOTHOR_OWNER_NAME and
+    # ROBOTHOR_OWNER_EMAIL are deprecated in favour of ~/.robothor/owner.yaml,
+    # which run_init writes through robothor.owner_config.write_owner_config.
+    # Two files claiming the same identity is how an instance ends up
+    # answering to one name and filing CRM rows under another.
     lines = [
-        f"ROBOTHOR_OWNER_NAME={owner_name}",
         f"ROBOTHOR_AI_NAME={ai_name}",
-        f"ROBOTHOR_OWNER_EMAIL={owner_email}",
         f"ROBOTHOR_AI_EMAIL={ai_email}",
         f"ROBOTHOR_TIMEZONE={timezone}",
         f"ROBOTHOR_DB_HOST={db_host}",

@@ -770,3 +770,55 @@ class TestManifestScan:
         good = tmp_path / "good.yaml"
         good.write_text("id: good\nname: Good\n")
         assert load_manifest(good)["id"] == "good"
+
+
+class TestTelegramNamesAreCollapsed:
+    """One canonical name per value, read through the settings registry.
+
+    engine/config.py used to carry the fallback chain itself, in four separate
+    places: `ROBOTHOR_TELEGRAM_CHAT_ID or TELEGRAM_CHAT_ID`, copy-pasted. The
+    old name still works -- it is a declared alias -- but it is deprecated, and
+    reading it says so once instead of silently resolving to whichever was set.
+    """
+
+    def test_engine_config_reads_the_canonical_name(self, monkeypatch):
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.setenv("ROBOTHOR_TELEGRAM_BOT_TOKEN", "canonical-token")
+        monkeypatch.setenv("ROBOTHOR_TELEGRAM_CHAT_ID", "111")
+        config = EngineConfig.from_env()
+        assert config.bot_token == "canonical-token"
+        assert config.default_chat_id == "111"
+
+    def test_the_deprecated_alias_still_works_and_warns_once(self, monkeypatch):
+        import warnings
+
+        from robothor.settings.aliases import reset_alias_warnings
+
+        monkeypatch.delenv("ROBOTHOR_TELEGRAM_CHAT_ID", raising=False)
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "222")
+        reset_alias_warnings()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            first = EngineConfig.from_env()
+            manifest_to_agent_config({"id": "test", "delivery": {"mode": "announce"}})
+
+        assert first.default_chat_id == "222"
+        messages = [
+            str(w.message)
+            for w in caught
+            if issubclass(w.category, DeprecationWarning) and "TELEGRAM_CHAT_ID" in str(w.message)
+        ]
+        assert len(messages) == 1, messages
+        assert "ROBOTHOR_TELEGRAM_CHAT_ID" in messages[0]
+
+    def test_engine_config_reads_no_telegram_names_itself(self):
+        """The fallback chains are gone from the module, not just from one path."""
+        from pathlib import Path
+
+        import robothor.engine.config as module
+
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert 'os.environ.get("TELEGRAM_BOT_TOKEN"' not in source
+        assert 'os.environ.get("TELEGRAM_CHAT_ID"' not in source
+        assert 'os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID"' not in source

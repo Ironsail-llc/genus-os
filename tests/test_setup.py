@@ -137,7 +137,11 @@ class TestWriteEnvFile:
         assert wrote is True
 
         content = env_path.read_text()
-        assert "ROBOTHOR_OWNER_NAME=Alice" in content
+        # Operator identity lives in ~/.robothor/owner.yaml, never in .env:
+        # two files claiming the same identity is how an instance ends up
+        # answering to one name and filing CRM rows under another.
+        assert "ROBOTHOR_OWNER_NAME" not in content
+        assert "ROBOTHOR_OWNER_EMAIL" not in content
         assert "ROBOTHOR_AI_NAME=Jarvis" in content
         assert "ROBOTHOR_DB_HOST=myhost" in content
         assert "ROBOTHOR_DB_PORT=5433" in content
@@ -384,6 +388,9 @@ class TestIdentityEnvVars:
         workspace = tmp_path / "robothor"
         monkeypatch.setenv("ROBOTHOR_OWNER_NAME", "Alice")
         monkeypatch.setenv("ROBOTHOR_AI_NAME", "Jarvis")
+        # owner.yaml is written under the HOME of the account running init;
+        # pin it so a test can never touch the developer's own identity file.
+        monkeypatch.setenv("HOME", str(tmp_path))
 
         import robothor.setup as setup_mod
 
@@ -404,8 +411,16 @@ class TestIdentityEnvVars:
         assert rc == 0
 
         content = (workspace / ".env").read_text()
-        assert "ROBOTHOR_OWNER_NAME=Alice" in content
+        assert "ROBOTHOR_OWNER_NAME" not in content
         assert "ROBOTHOR_AI_NAME=Jarvis" in content
+
+        # ...and the identity it was given is in owner.yaml, which is what
+        # load_owner_config() reads.
+        from robothor.owner_config import load_owner_config
+
+        owner = load_owner_config(tmp_path / ".robothor" / "owner.yaml")
+        assert owner is not None
+        assert owner.first_name == "Alice"
 
 
 class TestDetectInstallMode:
@@ -579,3 +594,39 @@ class TestGenerationModelDefaultAgreement:
         text = (REPO_ROOT / "infra" / "setup.sh").read_text()
         assert '"${ROBOTHOR_GENERATION_MODEL:-' + self.CANONICAL + '}"' in text
         assert "Pull it now with" not in text
+
+
+class TestOwnerConfigFile:
+    """`genus init` writes the operator identity where the platform reads it."""
+
+    def test_writes_owner_yaml_that_load_owner_config_accepts(self, tmp_path):
+        from robothor.owner_config import load_owner_config, write_owner_config
+
+        path = tmp_path / ".robothor" / "owner.yaml"
+        assert write_owner_config("Alice Example", "alice@example.com", path=path) is True
+
+        owner = load_owner_config(path)
+        assert owner is not None
+        assert owner.first_name == "Alice"
+        assert owner.last_name == "Example"
+        assert owner.email == "alice@example.com"
+
+    def test_does_not_overwrite_an_existing_identity(self, tmp_path):
+        """A re-run of init must not rename the operator."""
+        from robothor.owner_config import load_owner_config, write_owner_config
+
+        path = tmp_path / ".robothor" / "owner.yaml"
+        write_owner_config("Alice Example", "alice@example.com", path=path)
+        assert write_owner_config("Bob Other", "bob@example.com", path=path) is False
+
+        owner = load_owner_config(path)
+        assert owner is not None and owner.email == "alice@example.com"
+
+    def test_incomplete_identity_writes_nothing(self, tmp_path):
+        """No name or no email is not half an identity; it is none."""
+        from robothor.owner_config import write_owner_config
+
+        path = tmp_path / ".robothor" / "owner.yaml"
+        assert write_owner_config("", "alice@example.com", path=path) is False
+        assert write_owner_config("Alice Example", "", path=path) is False
+        assert not path.exists()

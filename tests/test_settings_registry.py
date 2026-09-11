@@ -40,7 +40,12 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: had counted all along, so it had been under-reporting by twelve sites. A
 #: ratchet that cannot see a construct cannot ratchet it, and a number that
 #: flatters the codebase is worse than no number.
-ENV_READ_SITE_BASELINE = 505
+#:
+#: 505 -> 495 on 2026-09-11: the ten Telegram reads in ``engine/config.py``
+#: (``ROBOTHOR_TELEGRAM_CHAT_ID or TELEGRAM_CHAT_ID``, copy-pasted across four
+#: builders) now resolve through ``get_settings().channels``, where the old
+#: name is a declared alias that warns once instead of a silent fallback.
+ENV_READ_SITE_BASELINE = 495
 
 
 def _discovery():
