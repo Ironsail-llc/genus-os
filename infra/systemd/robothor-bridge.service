@@ -19,6 +19,16 @@ Documentation=https://github.com/robothor-ai/robothor
 After=network-online.target postgresql.service redis.service
 Wants=network-online.target
 Requires=postgresql.service
+# THE 2026-09-03 INCIDENT, in two lines. The box rebooted at 02:51; this unit
+# started at 02:51:12; /run/robothor/secrets.env did not exist yet because the
+# only thing that wrote it was the ENGINE's ExecStartPre, and the engine came
+# up hours later. The EnvironmentFile= below is optional (`-`), so the bridge
+# started with no GENUS_BRIDGE_SSO_SECRET and refused every SSO exchange with
+# 403 for eight days. Requires=, not Wants=: a bridge that cannot complete a
+# login should not be running. (An instance with no SOPS file skips the
+# oneshot on a Condition, which satisfies Requires=.)
+Requires=robothor-secrets.service
+After=robothor-secrets.service
 
 [Service]
 Type=exec

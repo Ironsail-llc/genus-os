@@ -18,6 +18,11 @@ describe("GET /signin/cloudflare", () => {
   beforeEach(() => {
     vi.stubEnv("CF_ACCESS_TEAM_DOMAIN", "https://team.example.com");
     vi.stubEnv("CF_ACCESS_AUD", "aud-tag-1");
+    // Pinned, not inherited. The operator's own shell exports the real
+    // AUTH_URL, so without this every "AUTH_URL is unset" case is green in CI
+    // and red on their box — and worse, silently asserts against a production
+    // hostname. Each test that cares sets its own value.
+    vi.stubEnv("AUTH_URL", "");
     signIn.mockReset();
   });
 
@@ -57,6 +62,136 @@ describe("GET /signin/cloudflare", () => {
     const location = new URL(response.headers.get("location")!);
     expect(location.searchParams.get("error")).toBe("CloudflareAccessUnavailable");
     expect(signIn).not.toHaveBeenCalled();
+  });
+
+  // Next standalone (`server.js`) binds `hostname = process.env.HOSTNAME || '0.0.0.0'`,
+  // so inside a route handler `request.url` is `https://0.0.0.0:3004/...` — the BIND
+  // address, not the address the browser used. Every redirect built from it sent the
+  // operator to "0.0.0.0 refused to connect" after a successful Cloudflare Access
+  // sign-in (2026-09-11). The public origin is AUTH_URL, which Auth.js already
+  // requires in production.
+  describe("public origin", () => {
+    it("builds redirects from AUTH_URL, never the bind address in request.url", async () => {
+      vi.stubEnv("AUTH_URL", "https://app.example.com");
+      const response = await GET(
+        new NextRequest("http://0.0.0.0:3004/signin/cloudflare?callbackUrl=%2F"),
+      );
+      const location = response.headers.get("location")!;
+      expect(location.startsWith("https://app.example.com/signin?error=")).toBe(true);
+    });
+
+    // With AUTH_URL unset the proxy headers are the only remaining witness to
+    // the address the browser used. They are the SAME source Auth.js already
+    // trusts here — app/src/lib/auth.ts sets `trustHost: true` — so this adds
+    // no trust the deployment has not already granted its proxy.
+    it("falls back to the forwarded headers when AUTH_URL is unset", async () => {
+      vi.stubEnv("AUTH_URL", "");
+      const response = await GET(
+        new NextRequest("http://0.0.0.0:3004/signin/cloudflare?callbackUrl=%2F", {
+          headers: { "x-forwarded-host": "app.example.com", "x-forwarded-proto": "https" },
+        }),
+      );
+      expect(response.headers.get("location")).toBe(
+        "https://app.example.com/signin?error=CloudflareAccessUnavailable",
+      );
+    });
+
+    it("prefers AUTH_URL over a conflicting forwarded host", async () => {
+      vi.stubEnv("AUTH_URL", "https://app.example.com");
+      const response = await GET(
+        new NextRequest("http://0.0.0.0:3004/signin/cloudflare", {
+          headers: { "x-forwarded-host": "evil.example", "x-forwarded-proto": "https" },
+        }),
+      );
+      expect(response.headers.get("location")).toBe(
+        "https://app.example.com/signin?error=CloudflareAccessUnavailable",
+      );
+    });
+
+    // A bare `Host` with no x-forwarded-proto is the LOCAL case: `next dev` on
+    // http://localhost:3000. Defaulting the scheme to the literal "https" here
+    // redirected to https://localhost:3000, where nothing is listening — so the
+    // scheme comes from the request when the proxy does not state one.
+    // Cloudflare always sets x-forwarded-proto, so this never downgrades prod.
+    it("keeps the request's scheme when no proxy states one", async () => {
+      vi.stubEnv("AUTH_URL", "");
+      const response = await GET(
+        new NextRequest("http://localhost:3000/signin/cloudflare", {
+          headers: { host: "localhost:3000" },
+        }),
+      );
+      expect(response.headers.get("location")).toBe(
+        "http://localhost:3000/signin?error=CloudflareAccessUnavailable",
+      );
+    });
+
+    it("uses the plain Host header when there is no forwarded host", async () => {
+      vi.stubEnv("AUTH_URL", "");
+      const response = await GET(
+        new NextRequest("https://0.0.0.0:3004/signin/cloudflare", {
+          headers: { host: "genus.example" },
+        }),
+      );
+      expect(response.headers.get("location")).toBe(
+        "https://genus.example/signin?error=CloudflareAccessUnavailable",
+      );
+    });
+
+    // Last resort, and effectively unreachable: every HTTP/1.1 request carries
+    // a Host. Kept so the function is total, asserted so it is not silently
+    // broken — NOT presented as a fallback that does real work.
+    it("falls back to the request origin only when there is no Host at all", async () => {
+      vi.stubEnv("AUTH_URL", "");
+      const noHost = new NextRequest("https://genus.example/signin/cloudflare");
+      expect(noHost.headers.get("host")).toBeNull();
+      const response = await GET(noHost);
+      expect(response.headers.get("location")).toBe(
+        "https://genus.example/signin?error=CloudflareAccessUnavailable",
+      );
+    });
+
+    it("ignores a non-absolute AUTH_URL", async () => {
+      vi.stubEnv("AUTH_URL", "/not-an-origin");
+      const response = await GET(request("/signin/cloudflare", false));
+      expect(response.headers.get("location")).toBe(
+        "https://genus.example/signin?error=CloudflareAccessUnavailable",
+      );
+    });
+
+    // `new URL("javascript:alert(1)")` PARSES — protocol "javascript:", origin
+    // the string "null" — so a bare try/catch is not a guard. Only http(s) may
+    // become an origin.
+    it.each(["javascript:alert(1)", "mailto:ops@example.com", "file:///etc/passwd"])(
+      "ignores a non-http AUTH_URL (%s)",
+      async (bogus) => {
+        vi.stubEnv("AUTH_URL", bogus);
+        const response = await GET(request("/signin/cloudflare", false));
+        expect(response.headers.get("location")).toBe(
+          "https://genus.example/signin?error=CloudflareAccessUnavailable",
+        );
+      },
+    );
+
+    // Auth.js `signIn(..., { redirect: false })` returns an ABSOLUTE URL, built
+    // from ITS base URL — which, with AUTH_URL unset, is derived the same way
+    // everything else here was, i.e. from the bind address. Rebasing its
+    // path onto the origin we already resolved makes this route's guarantee
+    // unconditional, and means an absolute target can never leave the origin.
+    it("rebases an absolute signIn target onto the public origin", async () => {
+      vi.stubEnv("AUTH_URL", "https://app.example.com");
+      signIn.mockResolvedValue("https://0.0.0.0:3004/fleet?tab=runs#top");
+      const response = await GET(request("/signin/cloudflare?callbackUrl=%2Ffleet"));
+      expect(response.headers.get("location")).toBe(
+        "https://app.example.com/fleet?tab=runs#top",
+      );
+    });
+
+    it("rebases a relative signIn target onto the public origin", async () => {
+      vi.stubEnv("AUTH_URL", "https://app.example.com");
+      signIn.mockResolvedValue("/fleet");
+      const response = await GET(request("/signin/cloudflare?callbackUrl=%2Ffleet"));
+      expect(response.headers.get("location")).toBe("https://app.example.com/fleet");
+    });
   });
 
   it.each([

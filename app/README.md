@@ -28,6 +28,31 @@ authority via the `/api/auth/sso` exchange:
 - **Generic OIDC** — set `AUTH_OIDC_ISSUER` + `AUTH_OIDC_CLIENT_ID` (+ secret,
   name) for a standard IdP redirect flow (Okta / Entra / Google / Keycloak…).
 
+**`AUTH_URL` must be the public origin** — the scheme+host a browser actually
+uses (`https://helm.example.com`), alongside `CF_ACCESS_TEAM_DOMAIN` /
+`CF_ACCESS_AUD` and `AUTH_SECRET`. Next's standalone server binds
+`process.env.HOSTNAME || '0.0.0.0'` and attaches it to every request, so inside
+a route handler **both** `request.url` and `request.nextUrl` report the *bind*
+address rather than the address the browser used (unless
+`experimental.trustHostHeader` is set, which this app does not set).
+`/signin/cloudflare` therefore resolves its origin as **`AUTH_URL` → the
+request's `x-forwarded-host` (else `Host`) with `x-forwarded-proto` (else the
+request's own scheme) → `request.nextUrl.origin`**.
+
+That third step is a last resort that in practice never runs: every HTTP/1.1
+request carries a `Host`, so the second step answers first. It is **not** a safe
+default either — it is the bind address, i.e. the incident. So with `AUTH_URL`
+unset the redirect is only ever as trustworthy as the `Host` header reaching the
+app, which is whatever a caller that bypasses the proxy chooses to send. **Set
+`AUTH_URL`** — it is the only step that is configuration rather than inference.
+
+Where it comes from, per install shape:
+
+| Install | Source |
+|---|---|
+| systemd | `AUTH_URL=` in **either** `/etc/robothor/robothor.env` (see `infra/robothor.env.example`) or the SOPS-encrypted secrets decrypted to `/run/robothor/secrets.env`. If you put it in the latter, the app only sees it because `robothor-app.service` is ordered after `robothor-secrets.service` — see `infra/systemd/README.md`. |
+| Helm | `dashboard.env.AUTH_URL` in values — set it to `https://<dashboard.ingress.host>` |
+
 Existing accounts (including the bootstrapped owner) bind to an IdP identity
 only through an operator-armed one-shot grant: `robothor auth grant-binding
 --email <email> [--issuer <idp-url>]`, then sign in once. Grants require an

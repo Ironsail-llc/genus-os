@@ -359,6 +359,11 @@ consequence_for() {
             echo "Vision capture is down — no camera events; presence and face recognition are blind" ;;
         *liveness*)
             echo "The liveness watchdog itself is down — nothing is checking whether the engine is alive" ;;
+        # The only arm whose consequence is four OTHER units. A oneshot has no
+        # Restart=, and its dependents sit in 'dependency failed', where their
+        # own Restart=always never fires — so nothing heals this but a person.
+        *robothor-secrets*)
+            echo "Secrets were NOT decrypted — engine, bridge, app and orchestrator are stuck in 'dependency failed' and will not retry; nobody can sign in until this is fixed and the unit started by hand" ;;
         # The watchdogs. A page from one of these says nothing is visibly
         # broken YET — what has been lost is the thing that would tell you.
         *backup-volume-guard*)
