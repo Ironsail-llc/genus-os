@@ -21,6 +21,30 @@ if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
 
+# `Request` has to be a MODULE global, and importing it must not require the
+# optional `api` extra.
+#
+# This file sets `from __future__ import annotations`, so every annotation in
+# it is a string, and FastAPI resolves a handler's annotations against its
+# module globals. `Request` was imported inside `create_health_app`, so the
+# string never resolved, and FastAPI's fallback for an unrecognised annotation
+# is "treat it as a query parameter" — which made `request` a REQUIRED query
+# field and rejected the call before the handler ran. Three POST routes
+# answered 422 to every caller: /api/agents/{id}/trigger (the in-engine "fire
+# now" the benchmark-runner flow was built for), /api/runs/{id}/resume and
+# /api/workflows/{id}/execute. Nothing noticed because the tests for them
+# called the handler functions directly, where annotations are never resolved.
+#
+# The try/except is not defensive noise: `fastapi` lives in the optional `api`
+# extra, and `daemon.py` imports this module unconditionally. A base install
+# must still be able to import health.py. It can never REACH a route with the
+# fallback bound, because `create_health_app` imports FastAPI itself and would
+# raise first.
+try:
+    from fastapi import Request
+except ImportError:  # pragma: no cover - only without the `api` extra
+    Request = Any  # type: ignore[assignment,misc]
+
 logger = logging.getLogger(__name__)
 
 
@@ -148,7 +172,7 @@ def create_health_app(
     config: EngineConfig, runner: AgentRunner | None = None, workflow_engine: Any = None
 ) -> Any:
     """Create a lightweight FastAPI health app."""
-    from fastapi import FastAPI, HTTPException, Request
+    from fastapi import FastAPI, HTTPException
     from fastapi.responses import JSONResponse
 
     app = FastAPI(title="Genus OS Agent Engine", docs_url=None, redoc_url=None)

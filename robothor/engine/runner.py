@@ -40,7 +40,7 @@ from robothor.engine.config import (
     EngineConfig,
     _prompt_cache,
     build_system_prompt,
-    load_agent_config_or_broken,
+    load_agent_config_or_reason,
 )
 
 # ── Log-injection sanitizer ──
@@ -554,14 +554,14 @@ class AgentRunner(
         # InsufficientPrivilege at INSERT time. See test_nested_run_tenant.py.
         resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
 
-        # Load if not provided. `_or_broken`: a raise here escapes execute().
+        reason = f"Agent config not found: {agent_id}"
         if agent_config is None:
-            agent_config = load_agent_config_or_broken(agent_id, self.config.manifest_dir, "run")
+            agent_config, reason = load_agent_config_or_reason(agent_id, self.config.manifest_dir)
         if agent_config is None:
-            logger.error("Agent config not found: %s", _sanitize(agent_id))
+            logger.error("Agent run refused: %s", _sanitize(reason))
             session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)
             session.start("", message, [])
-            return session.fail(f"Agent config not found: {agent_id}")
+            return session.fail(reason)
 
         # Resolve a concrete execution identity before creating the run.  An
         # empty role used to mean "system" and silently bypass every per-user

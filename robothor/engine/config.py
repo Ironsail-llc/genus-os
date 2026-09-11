@@ -1163,8 +1163,27 @@ def load_agent_config_or_broken(
     owe someone a message of their own (the CLI, the Telegram bot) catch
     :class:`ManifestSchemaError` themselves instead of using this.
     """
+    config, _reason = load_agent_config_or_reason(agent_id, manifest_dir, where, workspace)
+    return config
+
+
+def load_agent_config_or_reason(
+    agent_id: str,
+    manifest_dir: Path,
+    where: str = "",
+    workspace: Path | None = None,
+) -> tuple[AgentConfig | None, str]:
+    """``(config, reason)`` — ``reason`` is "" on success, else why there is none.
+
+    The reason is BUILT HERE, next to the two causes, because the callers that
+    need it are in functions pinned at their size ratchets and would otherwise
+    have to grow a branch each to say "rejected by schema" instead of "not
+    found". Those are different diagnoses: one sends the reader to a missing
+    file, the other to a file that is right there with a typo in it, and a run
+    row recorded a week ago is all they have.
+    """
     try:
-        return load_agent_config(agent_id, manifest_dir, workspace)
+        config = load_agent_config(agent_id, manifest_dir, workspace)
     except ManifestSchemaError as e:
         logger.error(
             "%s: agent %s is broken — manifest refused by the schema (SchemaError): %s",
@@ -1172,7 +1191,10 @@ def load_agent_config_or_broken(
             _sanitize(agent_id),
             e.summary(),
         )
-        return None
+        return None, f"Agent manifest rejected by schema: {agent_id}"
+    if config is None:
+        return None, f"Agent config not found: {agent_id}"
+    return config, ""
 
 
 SECURITY_PREAMBLE = (

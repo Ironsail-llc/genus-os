@@ -103,6 +103,33 @@ class TestRunner:
         assert run.status == RunStatus.FAILED
         assert any("SchemaError" in r.getMessage() for r in caplog.records)
 
+    @pytest.mark.asyncio
+    async def test_the_recorded_reason_says_rejected_by_schema(self, broken_fleet):
+        """The run row is what someone reads a week later.
+
+        "Agent config not found" sends them looking for a missing file; the
+        file is there, with a typo in it. The two causes need different fixes,
+        so the recorded reason has to tell them apart — not just the log line.
+        """
+        from robothor.engine.models import TriggerType
+        from robothor.engine.runner import AgentRunner
+
+        runner = AgentRunner(EngineConfig(manifest_dir=broken_fleet, workspace=broken_fleet.parent))
+        run = await runner.execute(agent_id="bob", message="hi", trigger_type=TriggerType.MANUAL)
+
+        assert "manifest rejected by schema" in (run.error_message or "").lower()
+        assert "bob" in (run.error_message or "")
+
+    @pytest.mark.asyncio
+    async def test_a_genuinely_absent_agent_still_says_not_found(self, broken_fleet):
+        from robothor.engine.models import TriggerType
+        from robothor.engine.runner import AgentRunner
+
+        runner = AgentRunner(EngineConfig(manifest_dir=broken_fleet, workspace=broken_fleet.parent))
+        run = await runner.execute(agent_id="nobody", message="hi", trigger_type=TriggerType.MANUAL)
+
+        assert "not found" in (run.error_message or "")
+
 
 class TestTelegram:
     def test_the_manifest_primary_falls_back_to_empty(self, tmp_path, monkeypatch):
