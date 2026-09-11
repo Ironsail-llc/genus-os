@@ -341,3 +341,57 @@ def test_revoke_session_true_then_false():
     conn2, cur2 = _mock_conn([], rowcount=0)
     with patch("robothor.auth.accounts.get_connection", return_value=conn2):
         assert accounts.revoke_session("hash-2") is False
+
+
+# ── fix round 1: canonical email storage and session revocation ──────
+
+
+def test_bootstrap_owner_account_stores_a_canonical_lower_case_email():
+    """Sign-in casefolds what the browser sent. An owner seeded from an
+    owner.yaml reading "Alice@Example.com" must not be stored in a form the
+    lookup could miss — and the owner row is the one account whose lockout has
+    no recovery path."""
+    owner = MagicMock(
+        email="Alice@Example.COM", tenant_id="default", first_name="Alice", last_name="Smith"
+    )
+    conn, cur = _mock_conn([{"id": "uid-1", "email": "alice@example.com"}])
+    with (
+        patch("robothor.owner_config.load_owner_config", return_value=owner),
+        patch("robothor.auth.accounts.get_connection", return_value=conn),
+        patch("robothor.crm.dal.get_owner_person", return_value=None),
+    ):
+        accounts.bootstrap_owner_account()
+    inserted = cur.execute.call_args[0][1]
+    assert inserted[1] == "alice@example.com"
+
+
+def test_get_account_by_email_canonicalises_what_it_is_asked_for():
+    """Both sides canonical keeps this an equality predicate, so it still uses
+    the (tenant_id, email) unique index. `lower(email) = lower(%s)` would work
+    too, but it is non-sargable — a sequential scan of every account on the
+    busiest unauthenticated route in the product."""
+    conn, cur = _mock_conn([None])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        accounts.get_account_by_email("default", "  Alice@EXAMPLE.com ")
+    sql, params = cur.execute.call_args[0]
+    assert params == ("default", "alice@example.com")
+    assert "lower(" not in sql.lower(), "the predicate must stay index-friendly"
+
+
+def test_revoke_user_sessions_can_spare_one_session():
+    conn, cur = _mock_conn([None], rowcount=3)
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        revoked = accounts.revoke_user_sessions("uid-1", except_refresh_hash="keep-me")
+    assert revoked == 3
+    sql, params = cur.execute.call_args[0]
+    assert "refresh_token_hash <> %s" in sql
+    assert params == ("uid-1", "keep-me")
+
+
+def test_revoke_user_sessions_without_an_exception_revokes_everything():
+    conn, cur = _mock_conn([None], rowcount=4)
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        accounts.revoke_user_sessions("uid-1")
+    sql, params = cur.execute.call_args[0]
+    assert "refresh_token_hash" not in sql
+    assert params == ("uid-1",)

@@ -27,6 +27,14 @@ ACCOUNT = {
 SECRET = "a-long-enough-passphrase"
 
 
+def _mock_conn(cursor: MagicMock) -> MagicMock:
+    """A ``get_connection()`` context manager around ``cursor``."""
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    conn.cursor.return_value = cursor
+    return conn
+
+
 def _args(**kw) -> Namespace:
     base = {"user_command": None, "tenant": None, "email": "alice@example.com"}
     base.update(kw)
@@ -150,3 +158,85 @@ def test_both_commands_are_registered_on_the_cli() -> None:
     assert args.user_command == "set-password" and args.email == "alice@example.com"
     args = parser.parse_args(["user", "mfa-reset", "alice@example.com"])
     assert args.user_command == "mfa-reset" and args.email == "alice@example.com"
+
+
+# ── fix round 1 ──────────────────────────────────────────────────────
+
+
+def test_password_stdin_strips_exactly_one_trailing_newline(monkeypatch) -> None:
+    """``rstrip("\n")`` ate EVERY trailing newline, so a generated password
+    that legitimately ends in one was stored as a different string and the
+    operator could then not sign in with the value they piped in."""
+    cases = {
+        "secret-password\n": "secret-password",
+        "secret-password\r\n": "secret-password",
+        "secret-password\n\n": "secret-password\n",
+        "secret-password": "secret-password",
+        "secret-password\n\n\n": "secret-password\n\n",
+    }
+    from robothor.auth.passwords import verify_password
+
+    for piped, expected in cases.items():
+        stdin = MagicMock()
+        stdin.read.return_value = piped
+        monkeypatch.setattr("sys.stdin", stdin)
+        with (
+            patch("robothor.auth.accounts.get_account_by_email", return_value=dict(ACCOUNT)),
+            patch("robothor.auth.accounts.revoke_user_sessions"),
+            patch("robothor.auth.local_login._store_password_hash") as store,
+        ):
+            rc = cmd_user(_args(user_command="set-password", password_stdin=True))
+        assert rc == 0, piped
+        assert verify_password(expected, store.call_args[0][1]), (
+            f"{piped!r} was not stored as {expected!r}"
+        )
+
+
+def test_user_add_stores_the_account_email_in_canonical_lower_case() -> None:
+    """Sign-in casefolds; a row written as "Alice@Example.com" must not be a
+    row only one of the two paths can find."""
+    cursor = MagicMock()
+    cursor.fetchone.side_effect = [(1, "stable-uid"), (99,), (98,), (97,)]
+    with (
+        patch("robothor.crm.dal.get_tenant", return_value={"id": "default"}),
+        patch("robothor.crm.dal.create_person", return_value="person-1"),
+        patch("robothor.db.connection.get_connection", return_value=_mock_conn(cursor)),
+        patch("robothor.cli.user._find_person_by_email", return_value=None),
+    ):
+        cmd_user(
+            Namespace(
+                user_command="add",
+                tenant="default",
+                name="Alice Smith",
+                role="member",
+                telegram_id=None,
+                email="Alice@Example.COM",
+                person_id=None,
+                create_person=True,
+            )
+        )
+    account_inserts = [
+        call for call in cursor.execute.call_args_list if "user_accounts" in str(call[0][0])
+    ]
+    assert account_inserts, "no user_accounts insert was issued"
+    assert account_inserts[0][0][1][1] == "alice@example.com"
+
+
+def test_set_password_finds_an_account_whatever_case_was_typed() -> None:
+    looked_up: list[str] = []
+
+    def _capture(tenant, email):
+        looked_up.append(email)
+        return dict(ACCOUNT)
+
+    with (
+        patch("robothor.auth.accounts.get_account_by_email", side_effect=_capture),
+        patch("robothor.auth.accounts.revoke_user_sessions"),
+        patch("robothor.auth.local_login._store_password_hash"),
+        patch("robothor.cli.user.getpass", side_effect=[SECRET, SECRET]),
+    ):
+        rc = cmd_user(
+            _args(user_command="set-password", email="Alice@EXAMPLE.com", password_stdin=False)
+        )
+    assert rc == 0
+    assert looked_up == ["alice@example.com"]

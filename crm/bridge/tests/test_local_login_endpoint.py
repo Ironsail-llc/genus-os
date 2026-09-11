@@ -60,7 +60,7 @@ def _bearer() -> dict[str, str]:
     [
         ("post", "/api/auth/login", {"email": "alice@example.com", "password": "x" * 12}),
         ("post", "/api/auth/password", {"current_password": "x" * 12, "new_password": "y" * 12}),
-        ("post", "/api/auth/mfa/enroll", {}),
+        ("post", "/api/auth/mfa/enroll", {"password": "x" * 12}),
         ("post", "/api/auth/mfa/confirm", {"code": "123456"}),
         ("post", "/api/auth/mfa/disable", {"password": "x" * 12, "code": "123456"}),
     ],
@@ -268,6 +268,220 @@ async def test_password_change_enforces_a_minimum_length(test_client):
     change.assert_not_called()
 
 
+# ── client IP: trusted proxy only ────────────────────────────────────
+#
+# The dashboard calls the bridge SERVER-side, so request.client.host is the
+# dashboard pod for every sign-in on the planet. Left like that the limiter's
+# IP dimension is inert — one bucket for the whole internet — which is both a
+# free denial-of-service on any account (five attempts locks everyone out of
+# that email) and no protection at all against a distributed spray.
+
+
+@pytest.mark.asyncio
+async def test_the_forwarded_client_ip_is_honoured_from_a_loopback_caller(test_client):
+    with patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth:
+        await test_client.post(
+            "/api/auth/login",
+            json={"email": "alice@example.com", "password": "x" * 12},
+            headers={"X-Client-IP": "203.0.113.7"},
+        )
+    assert auth.call_args.kwargs["ip"] == "203.0.113.7"
+
+
+@pytest.mark.asyncio
+async def test_the_forwarded_client_ip_is_ignored_from_an_untrusted_caller(
+    test_client, monkeypatch
+):
+    """Otherwise anyone who can reach the bridge picks their own limiter bucket
+    by sending a fresh header value on every attempt — an unlimited spray."""
+    monkeypatch.setenv("GENUS_TRUSTED_PROXIES", "10.9.9.9")
+    with (
+        patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth,
+        patch("routers.auth._peer_ip", return_value="198.51.100.4"),
+    ):
+        await test_client.post(
+            "/api/auth/login",
+            json={"email": "alice@example.com", "password": "x" * 12},
+            headers={"X-Client-IP": "203.0.113.7"},
+        )
+    assert auth.call_args.kwargs["ip"] == "198.51.100.4"
+
+
+@pytest.mark.asyncio
+async def test_a_listed_proxy_is_trusted(test_client, monkeypatch):
+    monkeypatch.setenv("GENUS_TRUSTED_PROXIES", "198.51.100.4, 10.9.9.9")
+    with (
+        patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth,
+        patch("routers.auth._peer_ip", return_value="198.51.100.4"),
+    ):
+        await test_client.post(
+            "/api/auth/login",
+            json={"email": "alice@example.com", "password": "x" * 12},
+            headers={"X-Client-IP": "203.0.113.7"},
+        )
+    assert auth.call_args.kwargs["ip"] == "203.0.113.7"
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_inside_a_trusted_cidr_range_is_trusted(test_client, monkeypatch):
+    """A Kubernetes pod CIDR is the realistic way to express "the dashboard",
+    because the pod's address changes on every restart. Documenting CIDR in
+    robothor.env.example while matching only exact strings would be a config
+    that silently does nothing."""
+    monkeypatch.setenv("GENUS_TRUSTED_PROXIES", "10.42.0.0/16")
+    with (
+        patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth,
+        patch("routers.auth._peer_ip", return_value="10.42.7.31"),
+    ):
+        await test_client.post(
+            "/api/auth/login",
+            json={"email": "alice@example.com", "password": "x" * 12},
+            headers={"X-Client-IP": "203.0.113.7"},
+        )
+    assert auth.call_args.kwargs["ip"] == "203.0.113.7"
+
+
+@pytest.mark.asyncio
+async def test_a_peer_outside_the_trusted_cidr_range_is_not(test_client, monkeypatch):
+    monkeypatch.setenv("GENUS_TRUSTED_PROXIES", "10.42.0.0/16")
+    with (
+        patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth,
+        patch("routers.auth._peer_ip", return_value="10.43.7.31"),
+    ):
+        await test_client.post(
+            "/api/auth/login",
+            json={"email": "alice@example.com", "password": "x" * 12},
+            headers={"X-Client-IP": "203.0.113.7"},
+        )
+    assert auth.call_args.kwargs["ip"] == "10.43.7.31"
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_trusted_proxies_entry_is_ignored_not_fatal(test_client, monkeypatch):
+    """A typo in an env var must not turn every sign-in into a 500."""
+    monkeypatch.setenv("GENUS_TRUSTED_PROXIES", "not-a-range, 10.42.0.0/16")
+    with (
+        patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth,
+        patch("routers.auth._peer_ip", return_value="10.42.7.31"),
+    ):
+        r = await test_client.post(
+            "/api/auth/login",
+            json={"email": "alice@example.com", "password": "x" * 12},
+            headers={"X-Client-IP": "203.0.113.7"},
+        )
+    assert r.status_code == 401
+    assert auth.call_args.kwargs["ip"] == "203.0.113.7"
+
+
+@pytest.mark.asyncio
+async def test_a_junk_forwarded_value_falls_back_to_the_peer(test_client):
+    with (
+        patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth,
+        patch("routers.auth._peer_ip", return_value="127.0.0.1"),
+    ):
+        await test_client.post(
+            "/api/auth/login",
+            json={"email": "alice@example.com", "password": "x" * 12},
+            headers={"X-Client-IP": "not-an-address"},
+        )
+    assert auth.call_args.kwargs["ip"] == "127.0.0.1"
+
+
+# ── email shape ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "email",
+    ["alice", "alice@", "@example.com", "alice@@example.com", "a@b@c.com", "alice@ "],
+)
+async def test_a_malformed_email_is_rejected_before_any_hashing(test_client, email):
+    with patch("routers.auth.local_login.authenticate") as auth:
+        r = await test_client.post("/api/auth/login", json={"email": email, "password": "x" * 12})
+    assert r.status_code == 422
+    auth.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_well_formed_email_still_gets_through(test_client):
+    with patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth:
+        r = await test_client.post(
+            "/api/auth/login", json={"email": "a.b+tag@sub.example.com", "password": "x" * 12}
+        )
+    assert r.status_code == 401
+    auth.assert_called_once()
+
+
+# ── failed-login audit carries a subject, never the address ──────────
+
+
+@pytest.mark.asyncio
+async def test_a_failed_login_is_audited_with_a_hashed_subject_and_the_ip(test_client):
+    with (
+        patch("routers.auth.local_login.authenticate", return_value=LoginResult()),
+        patch("routers.auth.audited") as audit,
+    ):
+        await test_client.post(
+            "/api/auth/login",
+            json={"email": "Alice@Example.com", "password": "x" * 12},
+            headers={"X-Client-IP": "203.0.113.7"},
+        )
+    kwargs = audit.call_args.kwargs
+    assert kwargs["ip"] == "203.0.113.7"
+    subject = kwargs["subject"]
+    assert subject and subject != "unavailable"
+    blob = str(audit.call_args)
+    assert "Alice@Example.com" not in blob
+    assert "alice@example.com" not in blob
+
+
+@pytest.mark.asyncio
+async def test_the_audit_subject_is_stable_across_case(test_client):
+    seen = []
+    for address in ("Alice@Example.com", "alice@example.com", "ALICE@EXAMPLE.COM"):
+        with (
+            patch("routers.auth.local_login.authenticate", return_value=LoginResult()),
+            patch("routers.auth.audited") as audit,
+        ):
+            await test_client.post("/api/auth/login", json={"email": address, "password": "x" * 12})
+        seen.append(audit.call_args.kwargs["subject"])
+    assert len(set(seen)) == 1, "a spray against one account must look like one account"
+
+
+@pytest.mark.asyncio
+async def test_password_change_spares_the_callers_own_session(test_client):
+    """Revoking every session would throw the operator out of the panel they
+    are standing in, which trains people not to change their password."""
+    with patch("routers.auth.local_login.change_password", return_value=True) as change:
+        r = await test_client.post(
+            "/api/auth/password",
+            json={
+                "current_password": "x" * 12,
+                "new_password": "y" * 14,
+                "keep_refresh_token": "raw-refresh-token",
+            },
+            headers=_bearer(),
+        )
+    assert r.status_code == 200
+
+    from robothor.auth import tokens
+
+    assert change.call_args.kwargs["keep_refresh_hash"] == tokens.hash_refresh_token(
+        "raw-refresh-token"
+    )
+
+
+@pytest.mark.asyncio
+async def test_password_change_without_a_kept_token_revokes_everything(test_client):
+    with patch("routers.auth.local_login.change_password", return_value=True) as change:
+        await test_client.post(
+            "/api/auth/password",
+            json={"current_password": "x" * 12, "new_password": "y" * 14},
+            headers=_bearer(),
+        )
+    assert change.call_args.kwargs["keep_refresh_hash"] is None
+
+
 @pytest.mark.asyncio
 async def test_password_change_succeeds(test_client):
     with patch("routers.auth.local_login.change_password", return_value=True) as change:
@@ -285,7 +499,7 @@ async def test_password_change_succeeds(test_client):
     ("path", "body"),
     [
         ("/api/auth/password", {"current_password": "x" * 12, "new_password": "y" * 14}),
-        ("/api/auth/mfa/enroll", {}),
+        ("/api/auth/mfa/enroll", {"password": "x" * 12}),
         ("/api/auth/mfa/confirm", {"code": "123456"}),
         ("/api/auth/mfa/disable", {"password": "x" * 12, "code": "123456"}),
     ],
@@ -312,7 +526,7 @@ async def test_a_service_token_cannot_touch_human_credentials(test_client, path,
     ("path", "body"),
     [
         ("/api/auth/password", {"current_password": "x" * 12, "new_password": "y" * 14}),
-        ("/api/auth/mfa/enroll", {}),
+        ("/api/auth/mfa/enroll", {"password": "x" * 12}),
         ("/api/auth/mfa/confirm", {"code": "123456"}),
         ("/api/auth/mfa/disable", {"password": "x" * 12, "code": "123456"}),
     ],
@@ -341,24 +555,66 @@ def test_the_handler_itself_refuses_a_service_token(path, body):
 @pytest.mark.asyncio
 async def test_enroll_returns_the_uri_and_secret_once(test_client):
     payload = {"secret": "JBSWY3DPEHPK3PXP", "otpauth_uri": "otpauth://totp/x"}
-    with (
-        patch("routers.auth.local_login.begin_enrollment", return_value=payload) as begin,
-        patch(
-            "routers.auth.accounts.get_account_by_id",
-            return_value={
-                "id": "uid-1",
-                "email": "alice@example.com",
-                "status": "active",
-                "display_name": "Alice",
-                "role": "owner",
-                "tenant_id": "default",
-            },
-        ),
-    ):
-        r = await test_client.post("/api/auth/mfa/enroll", json={}, headers=_bearer())
+    with patch("routers.auth.local_login.begin_enrollment", return_value=payload) as begin:
+        r = await test_client.post(
+            "/api/auth/mfa/enroll", json={"password": "x" * 12}, headers=_bearer()
+        )
     assert r.status_code == 200
     assert r.json() == payload
     assert begin.call_args[0][0] == "uid-1"
+
+
+@pytest.mark.asyncio
+async def test_enroll_requires_the_current_password(test_client):
+    """Binding a second factor is a change of authority. A stolen session
+    alone must not let an attacker enrol their own authenticator — after which
+    the real owner's password is no longer enough to get back in."""
+    with patch("routers.auth.local_login.begin_enrollment") as begin:
+        r = await test_client.post("/api/auth/mfa/enroll", json={}, headers=_bearer())
+    assert r.status_code == 422
+    begin.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_enroll_refuses_a_wrong_password(test_client):
+    from robothor.auth.local_login import EnrollmentDeniedError
+
+    with patch(
+        "routers.auth.local_login.begin_enrollment",
+        side_effect=EnrollmentDeniedError("nope"),
+    ):
+        r = await test_client.post(
+            "/api/auth/mfa/enroll", json={"password": "wrong-enough"}, headers=_bearer()
+        )
+    assert r.status_code == 401
+    assert r.json() == {"error": "invalid credentials"}
+
+
+@pytest.mark.asyncio
+async def test_enroll_never_echoes_the_password(test_client):
+    r = await test_client.post(
+        "/api/auth/mfa/enroll", json={"password": "hunter2-hunter2", "x": 1}, headers=_bearer()
+    )
+    assert "hunter2" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_enroll_is_throttled(test_client):
+    """It takes the account password, so unlimited attempts against it are an
+    unlimited password-guessing oracle behind one stolen cookie."""
+    from robothor.auth.local_login import EnrollmentDeniedError
+
+    statuses = []
+    with patch(
+        "routers.auth.local_login.begin_enrollment",
+        side_effect=EnrollmentDeniedError("nope"),
+    ):
+        for _ in range(7):
+            r = await test_client.post(
+                "/api/auth/mfa/enroll", json={"password": "x" * 12}, headers=_bearer()
+            )
+            statuses.append(r.status_code)
+    assert 429 in statuses
 
 
 @pytest.mark.asyncio
@@ -385,7 +641,9 @@ async def test_enroll_refuses_to_replace_a_live_factor(test_client):
             },
         ),
     ):
-        r = await test_client.post("/api/auth/mfa/enroll", json={}, headers=_bearer())
+        r = await test_client.post(
+            "/api/auth/mfa/enroll", json={"password": "x" * 12}, headers=_bearer()
+        )
     assert r.status_code == 409
     assert "secret" not in r.text
 
@@ -393,7 +651,7 @@ async def test_enroll_refuses_to_replace_a_live_factor(test_client):
 @pytest.mark.asyncio
 async def test_enroll_requires_authentication(test_client, monkeypatch):
     monkeypatch.setenv("GENUS_AUTH_ENFORCE", "true")
-    r = await test_client.post("/api/auth/mfa/enroll", json={})
+    r = await test_client.post("/api/auth/mfa/enroll", json={"password": "x" * 12})
     assert r.status_code == 401
 
 

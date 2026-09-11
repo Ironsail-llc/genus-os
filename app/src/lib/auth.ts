@@ -22,7 +22,7 @@ import type { JWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 
 import type { LocalLoginResult } from "@/lib/auth-local";
-import { bridgeLocalLogin, localLoginEnabled } from "@/lib/auth-local";
+import { bridgeLocalLogin, clientIpFromRequest, localLoginEnabled } from "@/lib/auth-local";
 import type { CfVerifiedClaims } from "@/lib/cf-access";
 import { CF_JWT_HEADER, cfAccessEnabled, verifyCfAccessJwt } from "@/lib/cf-access";
 import { getServiceUrl } from "@/lib/services/registry";
@@ -289,12 +289,19 @@ export async function bridgeSessionCallback({
     delete session.role;
     delete session.tenantId;
     delete session.mfaSetupRequired;
+    delete session.bridgeRefresh;
     session.authError = (token.bridgeAuthError as BridgeAuthError | undefined) ??
       "BridgeSessionInvalid";
     return session;
   }
 
   session.bridgeAccess = bridgeAccess;
+  // Server-only. `publicBridgeSessionCallback` deletes it before anything is
+  // serialized to a browser — same treatment as bridgeAccess. The account
+  // security route needs it so a password change can spare the caller's own
+  // session instead of logging them out mid-panel.
+  session.bridgeRefresh =
+    typeof token.bridgeRefresh === "string" ? token.bridgeRefresh : undefined;
   session.role = token.role as string | undefined;
   session.tenantId = token.tenantId as string | undefined;
   // Not a credential — a policy flag. /api/auth/me stays authoritative; this
@@ -322,6 +329,7 @@ export async function publicBridgeSessionCallback({
     internal.user && internal.bridgeAccess && !internal.authError,
   );
   delete internal.bridgeAccess;
+  delete internal.bridgeRefresh;
   return internal;
 }
 
@@ -354,13 +362,17 @@ if (localLoginEnabled()) {
         password: { label: "Password", type: "password" },
         code: { label: "One-time code", type: "text" },
       },
-      async authorize(credentials) {
+      async authorize(credentials, request) {
         const email = typeof credentials?.email === "string" ? credentials.email.trim() : "";
         const password = typeof credentials?.password === "string" ? credentials.password : "";
         const code = typeof credentials?.code === "string" ? credentials.code.trim() : "";
         if (!email || !password) return null;
 
-        const result = await bridgeLocalLogin(BRIDGE_URL(), { email, password, code });
+        const result = await bridgeLocalLogin(
+          BRIDGE_URL(),
+          { email, password, code },
+          clientIpFromRequest(request),
+        );
         // The bridge said the password was right and a code is owed. Throwing
         // is how Auth.js turns that into ?error=mfa_required rather than an
         // indistinguishable CredentialsSignin.

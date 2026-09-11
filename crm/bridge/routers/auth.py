@@ -346,7 +346,7 @@ def _credential_lengths_ok(parsed: dict[str, str]) -> bool:
     route and ``local_login.validate_password``.
     """
     for name, value in parsed.items():
-        if name == "email" and len(value) > _MAX_EMAIL_LENGTH:
+        if name == "email" and (len(value) > _MAX_EMAIL_LENGTH or not _email_shape_ok(value)):
             return False
         if name == "code" and len(value) > _MAX_CODE_LENGTH:
             return False
@@ -355,12 +355,104 @@ def _credential_lengths_ok(parsed: dict[str, str]) -> bool:
     return True
 
 
+def _email_shape_ok(value: str) -> bool:
+    """The cheapest check that a string could be an address at all.
+
+    Deliberately NOT a validating regex — RFC 5322 is not something to
+    re-implement at a login endpoint, and a stricter rule here would start
+    refusing addresses the IdP happily issues. This only rejects strings that
+    cannot be an address under any reading, so an argon2 hash is never spent
+    on ``"alice"`` or on a probe that is really a payload.
+    """
+    local_part, separator, domain = value.partition("@")
+    if not separator or "@" in domain:
+        return False
+    if not local_part.strip() or not domain.strip():
+        return False
+    return not any(ch.isspace() for ch in value)
+
+
 def _local_login_off() -> bool:
     return not local_login.local_login_enabled()
 
 
-def _client_ip(request: Request) -> str | None:
+_CLIENT_IP_HEADER = "X-Client-IP"
+
+
+def _peer_ip(request: Request) -> str | None:
+    """The address the TCP connection actually came from."""
     return request.client.host if request.client else None
+
+
+def _trusted_proxies() -> set[str]:
+    return {
+        item.strip()
+        for item in os.environ.get("GENUS_TRUSTED_PROXIES", "").split(",")
+        if item.strip()
+    }
+
+
+def _peer_is_trusted(peer: str | None) -> bool:
+    """Whether *peer* may speak for someone else's address.
+
+    Loopback always may — that is the dashboard and the bridge in the same pod
+    or on the same box, which is the whole shipped topology. Anything else has
+    to be named in ``GENUS_TRUSTED_PROXIES``, as an address or as a CIDR range
+    (a Kubernetes pod address changes on every restart, so a range is the only
+    usable way to say "the dashboard" there).
+
+    A malformed entry is skipped, not fatal: a typo in an environment variable
+    must not turn every sign-in into a 500.
+    """
+    if not peer:
+        return False
+    import ipaddress
+
+    from robothor.auth.runtime import is_loopback_host
+
+    if is_loopback_host(peer):
+        return True
+    try:
+        address = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    for entry in _trusted_proxies():
+        try:
+            if address in ipaddress.ip_network(entry, strict=False):
+                return True
+        except ValueError:
+            logger.warning("GENUS_TRUSTED_PROXIES contains an entry that is not an address or CIDR")
+    return False
+
+
+def _client_ip(request: Request) -> str | None:
+    """The END USER's address, for the rate limiter and the audit trail.
+
+    Without this the limiter's IP dimension was inert. The dashboard calls the
+    bridge SERVER-side, so ``request.client.host`` is the dashboard pod for
+    every sign-in on the planet: one bucket for the whole internet. That is
+    worse than no dimension at all — five attempts from anywhere lock every
+    user of that email out for a minute, and a distributed spray is not slowed
+    down by a shared bucket it can refill from any source.
+
+    ``X-Client-IP`` is honoured ONLY from a trusted peer. A header anyone can
+    set is a limiter anyone can bypass by varying it, so the untrusted case
+    falls back to the real peer address, and so does a value that is not a
+    parseable IP.
+    """
+    peer = _peer_ip(request)
+    if not _peer_is_trusted(peer):
+        return peer
+    forwarded = (request.headers.get(_CLIENT_IP_HEADER) or "").strip()
+    if not forwarded:
+        return peer
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(forwarded)
+    except ValueError:
+        return peer
+    return forwarded
 
 
 def _oidc_issuers() -> list[str]:
@@ -399,10 +491,14 @@ _LoginBody = Annotated[
     "dict[str, str] | None", Depends(credential_body(("email", "password"), ("code",)))
 ]
 _PasswordBody = Annotated[
-    "dict[str, str] | None", Depends(credential_body(("current_password", "new_password")))
+    "dict[str, str] | None",
+    Depends(
+        credential_body(("current_password", "new_password"), ("keep_refresh_token",)),
+    ),
 ]
 _MfaCodeBody = Annotated["dict[str, str] | None", Depends(credential_body(("code",)))]
 _MfaDisableBody = Annotated["dict[str, str] | None", Depends(credential_body(("password", "code")))]
+_MfaEnrollBody = Annotated["dict[str, str] | None", Depends(credential_body(("password",)))]
 
 
 @router.post("/login", response_model=None)
@@ -421,17 +517,40 @@ def local_login_route(body: _LoginBody, request: Request) -> dict[str, Any] | JS
         ip=ip,
         user_agent=request.headers.get("user-agent"),
     )
+    # A failed sign-in needs a SUBJECT or the audit trail cannot answer "which
+    # account was sprayed, from where" — the first question an incident asks.
+    # It is a keyed hash, not the address: this log is exported to a SIEM, and
+    # on a FAILURE the address may be an attacker's guess rather than a user of
+    # this instance. Equal addresses hash equally, so a spray is still one
+    # visible pattern. See local_login.audit_subject.
+    subject = local_login.audit_subject(body["email"])
     if result.rate_limited:
-        audited(request, "auth.login", action="local", status="denied", reason="rate_limited")
+        audited(
+            request,
+            "auth.login",
+            action="local",
+            status="denied",
+            reason="rate_limited",
+            subject=subject,
+            ip=ip,
+        )
         return _THROTTLED
     if result.mfa_required:
-        audited(request, "auth.login", action="local", status="denied", reason="mfa_required")
+        audited(
+            request,
+            "auth.login",
+            action="local",
+            status="denied",
+            reason="mfa_required",
+            subject=subject,
+            ip=ip,
+        )
         return JSONResponse({"error": local_login.MFA_REQUIRED}, status_code=401)
     if not result.ok or not result.tokens:
         # One message for every reason. The audit trail records that a local
         # sign-in failed; it does not record which of the reasons it was,
         # because the reason is derived from the submitted credential.
-        audited(request, "auth.login", action="local", status="denied")
+        audited(request, "auth.login", action="local", status="denied", subject=subject, ip=ip)
         return _UNAUTHORIZED
     audited(
         request,
@@ -439,6 +558,8 @@ def local_login_route(body: _LoginBody, request: Request) -> dict[str, Any] | JS
         action="local",
         user_id=result.tokens["user"]["id"],
         mfa_setup_required=result.mfa_setup_required,
+        subject=subject,
+        ip=ip,
     )
     return {**result.tokens, "mfa_setup_required": result.mfa_setup_required}
 
@@ -492,9 +613,18 @@ def change_password_route(body: _PasswordBody, request: Request) -> dict[str, An
     # unlimited guesses at the current password either.
     if local_login.throttled(f"password:{ctx.user_id}", _client_ip(request)):
         return _THROTTLED
+    # The caller's own session is spared so the operator is not thrown out of
+    # the panel mid-change. The dashboard's server-only route supplies the raw
+    # refresh token; only its hash is ever compared, and neither value leaves
+    # this function.
+    raw_keep = body.get("keep_refresh_token")
+    keep_hash = tokens.hash_refresh_token(raw_keep) if raw_keep else None
     try:
         changed = local_login.change_password(
-            ctx.user_id, body["current_password"], body["new_password"]
+            ctx.user_id,
+            body["current_password"],
+            body["new_password"],
+            keep_refresh_hash=keep_hash,
         )
     except local_login.WeakPasswordError:
         return _WEAK_PASSWORD
@@ -509,8 +639,15 @@ def change_password_route(body: _PasswordBody, request: Request) -> dict[str, An
 
 
 @router.post("/mfa/enroll", response_model=None)
-def mfa_enroll_route(request: Request) -> dict[str, Any] | JSONResponse:
+def mfa_enroll_route(body: _MfaEnrollBody, request: Request) -> dict[str, Any] | JSONResponse:
     """Provision a pending TOTP secret for the caller.
+
+    Takes the account's CURRENT PASSWORD, and is throttled like the other
+    code-bearing routes. Binding a second factor is a change of authority: a
+    stolen session alone must not be enough to enrol the attacker's own
+    authenticator, after which the real owner's password no longer gets them
+    back in. Taking a password also makes this a guessing oracle, which is why
+    it is rate limited rather than merely authenticated.
 
     This is the one and only response that ever contains the secret — it has
     to, because an authenticator app must receive it. The factor stays off
@@ -523,16 +660,20 @@ def mfa_enroll_route(request: Request) -> dict[str, Any] | JSONResponse:
     ctx = _verified_caller(request)
     if ctx is None:
         return JSONResponse({"error": "authentication required"}, status_code=401)
-    account = accounts.get_account_by_id(ctx.user_id)
-    if not account or account.get("status") != "active":
-        return JSONResponse({"error": "account not found"}, status_code=404)
+    if body is None or not _credential_lengths_ok(body):
+        return _BAD_REQUEST
+    if local_login.throttled(f"mfa:{ctx.user_id}", _client_ip(request)):
+        return _THROTTLED
     try:
-        enrolled = local_login.begin_enrollment(ctx.user_id, str(account["email"]))
+        enrolled = local_login.begin_enrollment(ctx.user_id, body["password"])
     except local_login.MfaAlreadyEnabledError:
         audited(request, "auth.mfa_enroll", action="local", status="denied", user_id=ctx.user_id)
         return JSONResponse(
             {"error": "two-factor is already enabled; disable it first"}, status_code=409
         )
+    except local_login.EnrollmentDeniedError:
+        audited(request, "auth.mfa_enroll", action="local", status="denied", user_id=ctx.user_id)
+        return _UNAUTHORIZED
     audited(request, "auth.mfa_enroll", action="local", user_id=ctx.user_id)
     return enrolled
 

@@ -19,6 +19,21 @@ global:
   environment: development
   authEnforce: true
 
+  # Local email+password sign-in, an alternative to OIDC for deployments with
+  # no identity provider. OFF by default: a password endpoint must be opted
+  # into, never appear on an upgrade. Reaches BOTH the bridge (which serves
+  # /api/auth/login) and the dashboard (which registers the provider that
+  # calls it) — set in only one and the sign-in page has no form, or its form
+  # 404s. When this is the only configured method, owner MFA is mandatory.
+  localLogin: false
+
+  # Peers allowed to speak for someone else's client address via X-Client-IP.
+  # Comma-separated; loopback is always trusted. The dashboard calls the
+  # bridge server-side, so without this the bridge's per-IP sign-in limiter
+  # sees one address for the whole internet. Leave empty when the two run in
+  # the same pod or on the same host.
+  trustedProxies: ""
+
   # Image registry. Single GHCR org, two image names beneath it.
   registry: ghcr.io/ironsail-llc/genus-os
   imagePullPolicy: IfNotPresent

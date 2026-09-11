@@ -241,7 +241,11 @@ def _cmd_add(args: Namespace) -> int:
                     ON CONFLICT (tenant_id, email) DO NOTHING
                     RETURNING id
                     """,
-                    (tenant, email, name, role, resolved_person_id),
+                    # Canonical, lower-case storage — `robothor auth` and the
+                    # sign-in path both casefold what they look up, and a row
+                    # written as "Alice@Example.com" must not be a row only
+                    # one of them can find. (See migration 114.)
+                    (tenant, email.casefold(), name, role, resolved_person_id),
                 )
                 account_created = bool(cur.fetchone())
     except psycopg2.errors.UniqueViolation as exc:
@@ -481,9 +485,19 @@ def _resolve_account(args: Namespace) -> dict | None:
 
 
 def _read_new_password(args: Namespace) -> str | None:
-    """Read the new password from stdin (automation) or two silent prompts."""
+    """Read the new password from stdin (automation) or two silent prompts.
+
+    Exactly ONE trailing newline is stripped, and CRLF counts as one. The
+    first version used ``rstrip("\\n")``, which eats every trailing newline —
+    so a password deliberately ending in one (generated, base64-ish, pasted
+    from a file) was silently stored as a different string, and the operator
+    would then be unable to sign in with the value they piped in.
+    """
     if getattr(args, "password_stdin", False):
-        return sys.stdin.read().rstrip("\n")
+        raw = sys.stdin.read()
+        if raw.endswith("\r\n"):
+            return raw.removesuffix("\r\n")
+        return raw.removesuffix("\n")
     first = getpass("New password: ")
     second = getpass("Repeat new password: ")
     if first != second:

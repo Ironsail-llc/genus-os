@@ -27,6 +27,33 @@ export function localLoginEnabled(): boolean {
   return process.env.GENUS_LOCAL_LOGIN === "true";
 }
 
+/**
+ * IPv4 dotted quad, or anything shaped like IPv6. Deliberately loose — the
+ * bridge re-validates with a real parser before trusting the value; this only
+ * has to stop junk and header-injection attempts from being forwarded at all.
+ */
+export function looksLikeIpAddress(value: string): boolean {
+  if (!value || /\s/.test(value)) return false;
+  if (value.includes(":")) return /^[0-9a-fA-F:.]+$/.test(value);
+  const parts = value.split(".");
+  return parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
+}
+
+/**
+ * The end user's address, from the headers the edge set on THIS request.
+ *
+ * `x-forwarded-for` is a list and its left-most entry is the original client.
+ * Returns null unless the value parses, so a header full of junk is forwarded
+ * as nothing rather than as a limiter key of the sender's choosing.
+ */
+export function clientIpFromRequest(request: Request | undefined): string | null {
+  const headers = request?.headers;
+  if (!headers) return null;
+  const forwarded = headers.get("x-forwarded-for") || "";
+  const candidate = (forwarded.split(",")[0] || headers.get("x-real-ip") || "").trim();
+  return looksLikeIpAddress(candidate) ? candidate : null;
+}
+
 export function isLocalLoginResult(value: unknown): value is LocalLoginResult {
   if (!value || typeof value !== "object") return false;
   const result = value as Partial<LocalLoginResult>;
@@ -58,6 +85,7 @@ export function isLocalLoginResult(value: unknown): value is LocalLoginResult {
 export async function bridgeLocalLogin(
   bridgeUrl: string,
   credentials: { email: string; password: string; code?: string },
+  clientIp?: string | null,
 ): Promise<LocalLoginResult | "mfa_required" | null> {
   const body: Record<string, string> = {
     email: credentials.email,
@@ -67,11 +95,20 @@ export async function bridgeLocalLogin(
   // on a user who simply has not been asked for it yet.
   if (credentials.code) body.code = credentials.code;
 
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  // The bridge's per-IP limiter is otherwise inert: this call is made
+  // SERVER-side, so request.client.host there is the dashboard pod for every
+  // sign-in on the planet — one global bucket, in which five attempts from
+  // anywhere lock every user of an address out, and a distributed spray is
+  // not slowed at all. The bridge honours this header ONLY from a loopback
+  // peer or one named in GENUS_TRUSTED_PROXIES.
+  if (clientIp) headers["X-Client-IP"] = clientIp;
+
   let res: Response;
   try {
     res = await fetch(`${bridgeUrl}/api/auth/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(body),
     });
   } catch {

@@ -32,11 +32,17 @@ async function localProvider() {
         options?: {
           id?: string;
           name?: string;
-          authorize?: (credentials: Record<string, unknown>) => Promise<unknown>;
+          authorize?: (
+            credentials: Record<string, unknown>,
+            request?: Request,
+          ) => Promise<unknown>;
         };
         id?: string;
         name?: string;
-        authorize?: (credentials: Record<string, unknown>) => Promise<unknown>;
+        authorize?: (
+          credentials: Record<string, unknown>,
+          request?: Request,
+        ) => Promise<unknown>;
       }
     | undefined;
 }
@@ -241,5 +247,99 @@ describe("local branch of the session callbacks", () => {
     expect(session.bridgeAccess).toBeUndefined();
     expect(JSON.stringify(session)).not.toContain("bridge-refresh-token");
     expect(session.mfaSetupRequired).toBe(true);
+  });
+});
+
+describe("forwarding the browser's address to the bridge", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubEnv("GENUS_LOCAL_LOGIN", "true");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  function requestWith(headers: Record<string, string>) {
+    return { headers: new Headers(headers) } as unknown as Request;
+  }
+
+  it("sends the client address the edge saw, not the dashboard pod's", async () => {
+    // authorize() runs SERVER-side, so without this the bridge sees the
+    // dashboard for every sign-in on the planet and its per-IP limiter is one
+    // global bucket - five attempts from anywhere lock everyone out.
+    const fetchMock = vi.fn(async () => response(200, loginResult));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = await localProvider();
+    await authorizeOf(provider)(
+      { email: "alice@example.com", password: "x".repeat(12) },
+      requestWith({ "x-forwarded-for": "203.0.113.7, 70.41.3.18" }),
+    );
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["X-Client-IP"]).toBe("203.0.113.7");
+  });
+
+  it("falls back to x-real-ip, and sends nothing when neither is present", async () => {
+    const fetchMock = vi.fn(async () => response(200, loginResult));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = await localProvider();
+
+    await authorizeOf(provider)(
+      { email: "alice@example.com", password: "x".repeat(12) },
+      requestWith({ "x-real-ip": "198.51.100.9" }),
+    );
+    let [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["X-Client-IP"]).toBe("198.51.100.9");
+
+    await authorizeOf(provider)(
+      { email: "alice@example.com", password: "x".repeat(12) },
+      requestWith({}),
+    );
+    [, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["X-Client-IP"]).toBeUndefined();
+  });
+
+  it("never forwards a header value that is not an address", async () => {
+    const fetchMock = vi.fn(async () => response(200, loginResult));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = await localProvider();
+    await authorizeOf(provider)(
+      { email: "alice@example.com", password: "x".repeat(12) },
+      requestWith({ "x-forwarded-for": "not an address" }),
+    );
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["X-Client-IP"]).toBeUndefined();
+  });
+});
+
+describe("the server-only session facade", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it("exposes the refresh token to server callers but never to the browser", async () => {
+    const { bridgeSessionCallback, publicBridgeSessionCallback } = await import("@/lib/auth");
+    const token = {
+      bridgeAccess: "bridge-access-token",
+      bridgeRefresh: "bridge-refresh-token",
+      role: "owner",
+      tenantId: "default",
+    } as JWT;
+
+    const server = await bridgeSessionCallback({
+      session: { user: { email: "alice@example.com" }, expires: "" } as never,
+      token,
+    });
+    expect(server.bridgeRefresh).toBe("bridge-refresh-token");
+
+    const browser = await publicBridgeSessionCallback({
+      session: { user: { email: "alice@example.com" }, expires: "" } as never,
+      token,
+    });
+    expect(browser.bridgeRefresh).toBeUndefined();
+    expect(JSON.stringify(browser)).not.toContain("bridge-refresh-token");
   });
 });

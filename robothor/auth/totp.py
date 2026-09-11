@@ -59,6 +59,48 @@ def generate(
     return _hotp(_decode_secret(secret), int(moment) // period, digits)
 
 
+def matching_step(
+    secret: str,
+    code: str | None,
+    *,
+    window: int = 1,
+    timestamp: float | None = None,
+    digits: int = DIGITS,
+    period: int = PERIOD,
+) -> int | None:
+    """The time step *code* matches for *secret*, or ``None``.
+
+    Callers need the step, not just a yes: RFC 6238 §5.2 requires that a code
+    be accepted at most once, and the only way to enforce that is to remember
+    which step was spent. ``robothor.auth.local_login`` stores it in
+    ``user_accounts.mfa_last_used_step`` and refuses anything at or below it.
+
+    Never raises: an unusable secret, a malformed code and a wrong code are
+    all one answer, because the caller must not be able to tell them apart.
+    Every comparison goes through ``hmac.compare_digest`` so a network-visible
+    timing difference cannot leak how many leading digits were right.
+    """
+    candidate = (code or "").strip()
+    if len(candidate) != digits or not candidate.isdigit():
+        return None
+    try:
+        key = _decode_secret(secret)
+    except (ValueError, TypeError):
+        return None
+    moment = time.time() if timestamp is None else timestamp
+    counter = int(moment) // period
+    found: int | None = None
+    for drift in range(-window, window + 1):
+        step = counter + drift
+        if step < 0:
+            continue
+        # No early return: every step is compared on every call, so the loop
+        # costs the same whether the match is the first candidate or the last.
+        if hmac.compare_digest(_hotp(key, step, digits), candidate):
+            found = step
+    return found
+
+
 def verify(
     secret: str,
     code: str | None,
@@ -70,29 +112,15 @@ def verify(
 ) -> bool:
     """Whether *code* is valid for *secret* within ±*window* steps.
 
-    Never raises: an unusable secret, a malformed code and a wrong code are
-    all one answer, because the caller must not be able to tell them apart.
-    Every comparison goes through ``hmac.compare_digest`` so a network-visible
-    timing difference cannot leak how many leading digits were right.
+    The boolean face of ``matching_step``. Anything enforcing single-use must
+    call that instead — this cannot tell a fresh code from a replayed one.
     """
-    candidate = (code or "").strip()
-    if len(candidate) != digits or not candidate.isdigit():
-        return False
-    try:
-        key = _decode_secret(secret)
-    except (ValueError, TypeError):
-        return False
-    moment = time.time() if timestamp is None else timestamp
-    counter = int(moment) // period
-    ok = False
-    for drift in range(-window, window + 1):
-        step = counter + drift
-        if step < 0:
-            continue
-        # No early return: every step is compared on every call, so the loop
-        # costs the same whether the match is the first candidate or the last.
-        ok |= hmac.compare_digest(_hotp(key, step, digits), candidate)
-    return ok
+    return (
+        matching_step(
+            secret, code, window=window, timestamp=timestamp, digits=digits, period=period
+        )
+        is not None
+    )
 
 
 def provisioning_uri(secret: str, *, email: str, issuer: str = ISSUER) -> str:

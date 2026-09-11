@@ -41,6 +41,7 @@ async function postJson(path: string, body: unknown): Promise<Response | null> {
 export function AccountSecurityPanel() {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
+  const [enrollPassword, setEnrollPassword] = useState("");
   const [code, setCode] = useState("");
   const [mfaError, setMfaError] = useState<string | null>(null);
   const [mfaDone, setMfaDone] = useState(false);
@@ -79,12 +80,26 @@ export function AccountSecurityPanel() {
 
   async function enroll() {
     setMfaError(null);
-    const res = await postJson("/api/bridge/api/auth/mfa/enroll", {});
+    // The bridge requires the account password here: binding a second factor
+    // is a change of authority, and a stolen session alone must not be able to
+    // perform it. Checked locally first only so an empty box does not spend
+    // one of that route's five attempts per minute.
+    if (!enrollPassword) {
+      setMfaError("Enter your current password to enable two-factor.");
+      return;
+    }
+    const res = await postJson("/api/bridge/api/auth/mfa/enroll", { password: enrollPassword });
     if (!res?.ok) {
-      setMfaError("Could not start enrollment. Try again.");
+      setMfaError(
+        res?.status === 401
+          ? "That password is not correct."
+          : "Could not start enrollment. Try again.",
+      );
       return;
     }
     setEnrollment((await res.json()) as Enrollment);
+    // It has done its job; do not leave it sitting in the React tree.
+    setEnrollPassword("");
   }
 
   async function confirm() {
@@ -111,7 +126,10 @@ export function AccountSecurityPanel() {
       setPasswordError(`New password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
-    const res = await postJson("/api/bridge/api/auth/password", {
+    // A server-only route, not the generic bridge proxy: it holds this
+    // session's refresh token, which is what lets the bridge revoke every
+    // OTHER session without ejecting the operator from this very panel.
+    const res = await postJson("/api/account/password", {
       current_password: currentPassword,
       new_password: newPassword,
     });
@@ -186,9 +204,27 @@ export function AccountSecurityPanel() {
             </button>
           </div>
         ) : (
-          <button type="button" className={`${button} self-start`} onClick={enroll}>
-            Enable two-factor
-          </button>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="enroll-password"
+                className="text-xs font-medium text-muted-foreground"
+              >
+                Confirm your password
+              </label>
+              <input
+                id="enroll-password"
+                type="password"
+                autoComplete="current-password"
+                className={field}
+                value={enrollPassword}
+                onChange={(e) => setEnrollPassword(e.target.value)}
+              />
+            </div>
+            <button type="button" className={`${button} self-start`} onClick={enroll}>
+              Enable two-factor
+            </button>
+          </div>
         )}
 
         {mfaError && (

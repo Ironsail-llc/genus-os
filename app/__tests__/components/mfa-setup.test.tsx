@@ -68,7 +68,10 @@ describe("AccountSecurityPanel", () => {
       .mockResolvedValueOnce(jsonResponse({ success: true }));
 
     render(<AccountSecurityPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: /enable two-factor/i }));
+    fireEvent.change(await screen.findByLabelText(/confirm your password/i), {
+      target: { value: "correct horse battery" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /enable two-factor/i }));
 
     // The base32 secret AND the otpauth:// URI are both shown as selectable
     // text — there is no QR dependency in this bundle, and every authenticator
@@ -99,7 +102,10 @@ describe("AccountSecurityPanel", () => {
       .mockResolvedValueOnce(jsonResponse({ error: "invalid credentials" }, 401));
 
     render(<AccountSecurityPanel />);
-    fireEvent.click(await screen.findByRole("button", { name: /enable two-factor/i }));
+    fireEvent.change(await screen.findByLabelText(/confirm your password/i), {
+      target: { value: "correct horse battery" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /enable two-factor/i }));
     fireEvent.change(await screen.findByLabelText(/one-time code/i), {
       target: { value: "000000" },
     });
@@ -126,7 +132,7 @@ describe("AccountSecurityPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /change password/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(fetchMock.mock.calls[1][0]).toBe("/api/bridge/api/auth/password");
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/account/password");
     expect(await screen.findByText(/password changed/i)).toBeInTheDocument();
     expect(container.textContent).not.toContain("hunter2");
     expect(container.textContent).not.toContain("a-much-longer-password");
@@ -146,5 +152,69 @@ describe("AccountSecurityPanel", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/12/);
     expect(fetchMock).toHaveBeenCalledTimes(1); // the /me load only
+  });
+
+  it("sends the current password with the enrolment request", async () => {
+    const fetchMock = vi
+      .spyOn(global, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({ role: "owner", mfa_enabled: false, mfa_setup_required: true }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ secret: "S", otpauth_uri: "otpauth://totp/x" }));
+
+    render(<AccountSecurityPanel />);
+    fireEvent.change(await screen.findByLabelText(/confirm your password/i), {
+      target: { value: "correct horse battery" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /enable two-factor/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const body = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+    expect(body).toEqual({ password: "correct horse battery" });
+  });
+
+  it("will not start an enrolment with no password typed", async () => {
+    const fetchMock = vi
+      .spyOn(global, "fetch")
+      .mockResolvedValue(
+        jsonResponse({ role: "owner", mfa_enabled: false, mfa_setup_required: true }),
+      );
+    render(<AccountSecurityPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: /enable two-factor/i }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("reports a refused enrolment password without revealing anything else", async () => {
+    vi.spyOn(global, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({ role: "owner", mfa_enabled: false, mfa_setup_required: true }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ error: "invalid credentials" }, 401));
+
+    render(<AccountSecurityPanel />);
+    fireEvent.change(await screen.findByLabelText(/confirm your password/i), {
+      target: { value: "hunter2-hunter2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /enable two-factor/i }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/password/i);
+    expect(alert.textContent).not.toContain("hunter2");
+    expect(screen.queryByLabelText(/one-time code/i)).toBeNull();
+  });
+
+  it("never renders the enrolment password back into the page", async () => {
+    vi.spyOn(global, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse({ role: "owner", mfa_enabled: false, mfa_setup_required: true }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ secret: "S", otpauth_uri: "otpauth://totp/x" }));
+
+    const { container } = render(<AccountSecurityPanel />);
+    fireEvent.change(await screen.findByLabelText(/confirm your password/i), {
+      target: { value: "hunter2-hunter2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /enable two-factor/i }));
+    await screen.findByLabelText(/one-time code/i);
+    expect(container.textContent).not.toContain("hunter2");
   });
 });

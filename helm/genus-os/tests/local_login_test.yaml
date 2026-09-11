@@ -1,0 +1,75 @@
+suite: local login configuration reaches the pods
+release:
+  name: gos
+  namespace: genus
+tests:
+  # The chart README claims local email+password is a supported alternative to
+  # OIDC. That sentence is only true if the flag actually reaches BOTH
+  # processes: the bridge serves /api/auth/login, and the dashboard registers
+  # the provider that calls it. Set in one and not the other, the sign-in page
+  # shows no form or the form 404s.
+  - it: the bridge is told whether local login is on
+    template: bridge/workload.yaml
+    set:
+      global.localLogin: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_LOCAL_LOGIN
+            value: "true"
+        documentIndex: 0
+
+  - it: the dashboard is told the same thing
+    template: dashboard/deployment.yaml
+    set:
+      global.localLogin: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_LOCAL_LOGIN
+            value: "true"
+
+  - it: local login is OFF by default, on both
+    template: bridge/workload.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_LOCAL_LOGIN
+            value: "false"
+        documentIndex: 0
+
+  - it: the dashboard defaults to off too
+    template: dashboard/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_LOCAL_LOGIN
+            value: "false"
+
+  # Without this the bridge's per-IP rate limiter is inert behind the
+  # dashboard: every sign-in on the planet arrives from the dashboard pod.
+  - it: the bridge learns which peers may speak for a client address
+    template: bridge/workload.yaml
+    set:
+      global.trustedProxies: "10.42.0.0/16,10.43.1.7"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_TRUSTED_PROXIES
+            value: "10.42.0.0/16,10.43.1.7"
+        documentIndex: 0
+
+  - it: no proxy is trusted by default
+    template: bridge/workload.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_TRUSTED_PROXIES
+            value: ""
+        documentIndex: 0

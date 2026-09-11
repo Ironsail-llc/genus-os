@@ -7,6 +7,7 @@ testing anything more.
 
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,6 +16,7 @@ from robothor.auth import local_login, mfa_secrets, totp
 from robothor.auth.passwords import hash_password
 
 GOOD_PASSWORD = "correct horse battery staple"
+USER_ID = "11111111-1111-1111-1111-111111111111"
 SIGNING_KEY = "test-signing-key-at-least-32-bytes-long-xyz"
 
 
@@ -38,7 +40,7 @@ def _env(monkeypatch):
 
 def account(**overrides):
     row = {
-        "id": "uid-1",
+        "id": USER_ID,
         "tenant_id": "default",
         "email": "alice@example.com",
         "display_name": "Alice",
@@ -58,7 +60,7 @@ TOKENS = {
     "access_token": "a",
     "refresh_token": "r",
     "user": {
-        "id": "uid-1",
+        "id": USER_ID,
         "email": "alice@example.com",
         "display_name": "Alice",
         "role": "member",
@@ -75,6 +77,7 @@ def _authenticate(row, password=GOOD_PASSWORD, code=None, ip="10.0.0.1"):
     with (
         patch.object(local_login, "_load_account", return_value=row),
         patch.object(local_login, "_record_failure") as fail,
+        patch.object(local_login, "_record_noop"),
         patch.object(local_login, "_record_success") as ok,
         patch("robothor.auth.accounts.issue_for_account", return_value=dict(TOKENS)),
     ):
@@ -94,7 +97,10 @@ def test_wrong_password_is_a_generic_failure_and_counts() -> None:
 
 
 def test_unknown_email_gives_the_same_message_as_a_wrong_password() -> None:
-    with patch.object(local_login, "_load_account", return_value=None):
+    with (
+        patch.object(local_login, "_load_account", return_value=None),
+        patch.object(local_login, "_record_noop"),
+    ):
         unknown = local_login.authenticate("default", "nobody@example.com", "x", ip="10.0.0.1")
     wrong, _, _ = _authenticate(account(), password="wrong")
     assert unknown.ok is False
@@ -106,6 +112,7 @@ def test_unknown_email_still_performs_a_hash_comparison() -> None:
     """Otherwise the response time tells an attacker which emails exist."""
     with (
         patch.object(local_login, "_load_account", return_value=None),
+        patch.object(local_login, "_record_noop"),
         patch.object(local_login, "verify_password", return_value=False) as verify,
     ):
         local_login.authenticate("default", "nobody@example.com", "x", ip="10.0.0.1")
@@ -134,7 +141,7 @@ def test_tenth_consecutive_failure_locks_for_fifteen_minutes() -> None:
     conn.cursor.return_value = cur
     cur.fetchone.return_value = {"failed_login_count": 10, "locked_until": "later"}
     with patch("robothor.auth.local_login.get_connection", return_value=conn):
-        local_login._record_failure("uid-1")
+        local_login._record_failure(USER_ID)
     sql = " ".join(str(c[0][0]) for c in cur.execute.call_args_list)
     assert "failed_login_count" in sql and "locked_until" in sql
     params = cur.execute.call_args[0][1]
@@ -168,14 +175,18 @@ def test_an_expired_lock_no_longer_blocks() -> None:
 def test_success_resets_the_counter() -> None:
     result, _, ok = _authenticate(account(failed_login_count=4))
     assert result.ok is True
-    ok.assert_called_once_with("uid-1")
+    ok.assert_called_once_with(USER_ID, mfa_step=None)
 
 
 # ── MFA ──────────────────────────────────────────────────────────────
 
 
 def _mfa_account(secret: str, **overrides):
-    return account(mfa_enabled=True, mfa_secret_enc=mfa_secrets.encrypt_secret(secret), **overrides)
+    return account(
+        mfa_enabled=True,
+        mfa_secret_enc=mfa_secrets.encrypt_secret(secret, user_id=USER_ID),
+        **overrides,
+    )
 
 
 def test_mfa_required_only_after_a_correct_password() -> None:
@@ -213,7 +224,9 @@ def test_an_undecryptable_secret_refuses_rather_than_bypassing() -> None:
 def test_a_pending_unconfirmed_secret_never_satisfies_a_challenge() -> None:
     """mfa_enabled is False, so the stored secret is an unfinished enrollment."""
     secret = totp.new_secret()
-    row = account(mfa_enabled=False, mfa_secret_enc=mfa_secrets.encrypt_secret(secret))
+    row = account(
+        mfa_enabled=False, mfa_secret_enc=mfa_secrets.encrypt_secret(secret, user_id=USER_ID)
+    )
     result, _, ok = _authenticate(row, code=totp.generate(secret))
     assert result.ok is True  # password alone is enough; MFA is not yet on
     ok.assert_called_once()
@@ -269,6 +282,7 @@ def test_the_limiter_is_scoped_per_email_and_ip() -> None:
         _authenticate(account(), password="wrong", ip="10.0.0.1")
     with (
         patch.object(local_login, "_load_account", return_value=account()),
+        patch.object(local_login, "_record_noop"),
         patch.object(local_login, "_record_failure"),
     ):
         other_ip = local_login.authenticate("default", "alice@example.com", "wrong", ip="10.0.0.2")
@@ -306,7 +320,7 @@ def test_change_password_refuses_a_wrong_current_password() -> None:
         patch.object(local_login, "_load_account_by_id", return_value=row),
         patch.object(local_login, "_store_password_hash") as store,
     ):
-        assert local_login.change_password("uid-1", "nope", "a-new-long-password") is False
+        assert local_login.change_password(USER_ID, "nope", "a-new-long-password") is False
     store.assert_not_called()
 
 
@@ -317,7 +331,7 @@ def test_change_password_stores_an_argon2id_hash() -> None:
         patch.object(local_login, "_store_password_hash") as store,
         patch("robothor.auth.accounts.revoke_user_sessions"),
     ):
-        assert local_login.change_password("uid-1", GOOD_PASSWORD, "a-new-long-password") is True
+        assert local_login.change_password(USER_ID, GOOD_PASSWORD, "a-new-long-password") is True
     stored = store.call_args[0][1]
     assert stored.startswith("$argon2id$")
     assert "a-new-long-password" not in stored
@@ -331,25 +345,28 @@ def test_enrollment_stores_the_secret_encrypted_and_disabled() -> None:
         patch.object(local_login, "_load_account_by_id", return_value=account()),
         patch.object(local_login, "_store_mfa_secret") as store,
     ):
-        out = local_login.begin_enrollment("uid-1", "alice@example.com")
+        out = local_login.begin_enrollment(USER_ID, GOOD_PASSWORD)
     assert out["secret"] and out["otpauth_uri"].startswith("otpauth://totp/")
     stored = store.call_args[0][1]
     assert out["secret"] not in stored
-    assert mfa_secrets.decrypt_secret(stored) == out["secret"]
+    assert mfa_secrets.decrypt_secret(stored, user_id=USER_ID) == out["secret"]
     assert store.call_args.kwargs["enabled"] is False
 
 
 def test_confirm_enrollment_requires_the_right_code() -> None:
     secret = totp.new_secret()
-    row = account(mfa_enabled=False, mfa_secret_enc=mfa_secrets.encrypt_secret(secret))
+    row = account(
+        mfa_enabled=False, mfa_secret_enc=mfa_secrets.encrypt_secret(secret, user_id=USER_ID)
+    )
     with (
         patch.object(local_login, "_load_account_by_id", return_value=row),
         patch.object(local_login, "_set_mfa_enabled") as enable,
+        patch.object(local_login, "_record_mfa_step"),
     ):
-        assert local_login.confirm_enrollment("uid-1", "000000") is False
+        assert local_login.confirm_enrollment(USER_ID, "000000") is False
         enable.assert_not_called()
-        assert local_login.confirm_enrollment("uid-1", totp.generate(secret)) is True
-        enable.assert_called_once_with("uid-1", True)
+        assert local_login.confirm_enrollment(USER_ID, totp.generate(secret)) is True
+        enable.assert_called_once_with(USER_ID, True)
 
 
 def test_disable_mfa_requires_both_password_and_code() -> None:
@@ -358,12 +375,13 @@ def test_disable_mfa_requires_both_password_and_code() -> None:
     with (
         patch.object(local_login, "_load_account_by_id", return_value=row),
         patch.object(local_login, "_clear_mfa") as clear,
+        patch.object(local_login, "_record_mfa_step"),
     ):
-        assert local_login.disable_mfa("uid-1", "wrong", totp.generate(secret)) is False
-        assert local_login.disable_mfa("uid-1", GOOD_PASSWORD, "000000") is False
+        assert local_login.disable_mfa(USER_ID, "wrong", totp.generate(secret)) is False
+        assert local_login.disable_mfa(USER_ID, GOOD_PASSWORD, "000000") is False
         clear.assert_not_called()
-        assert local_login.disable_mfa("uid-1", GOOD_PASSWORD, totp.generate(secret)) is True
-        clear.assert_called_once_with("uid-1")
+        assert local_login.disable_mfa(USER_ID, GOOD_PASSWORD, totp.generate(secret)) is True
+        clear.assert_called_once_with(USER_ID)
 
 
 # ── feature gate ─────────────────────────────────────────────────────
@@ -398,7 +416,7 @@ def test_an_account_with_no_password_still_costs_a_hash_comparison() -> None:
         patch.object(local_login, "verify_password", return_value=False) as verify,
     ):
         local_login.authenticate("default", "alice@example.com", "x", ip="10.0.0.1")
-    assert verify.call_args[0][1] == local_login._DUMMY_HASH
+    assert verify.call_args[0][1] == local_login._dummy_hash()
 
 
 def test_enrollment_refuses_to_overwrite_a_confirmed_factor() -> None:
@@ -411,7 +429,7 @@ def test_enrollment_refuses_to_overwrite_a_confirmed_factor() -> None:
         patch.object(local_login, "_store_mfa_secret") as store,
     ):
         with pytest.raises(local_login.MfaAlreadyEnabledError):
-            local_login.begin_enrollment("uid-1", "alice@example.com")
+            local_login.begin_enrollment(USER_ID, GOOD_PASSWORD)
     store.assert_not_called()
 
 
@@ -423,8 +441,8 @@ def test_changing_a_password_revokes_every_refresh_session() -> None:
         patch.object(local_login, "_store_password_hash"),
         patch("robothor.auth.accounts.revoke_user_sessions") as revoke,
     ):
-        assert local_login.change_password("uid-1", GOOD_PASSWORD, "a-new-long-password") is True
-    revoke.assert_called_once_with("uid-1")
+        assert local_login.change_password(USER_ID, GOOD_PASSWORD, "a-new-long-password") is True
+    revoke.assert_called_once_with(USER_ID, except_refresh_hash=None)
 
 
 def test_set_password_revokes_every_refresh_session_too() -> None:
@@ -432,8 +450,8 @@ def test_set_password_revokes_every_refresh_session_too() -> None:
         patch.object(local_login, "_store_password_hash"),
         patch("robothor.auth.accounts.revoke_user_sessions") as revoke,
     ):
-        local_login.set_password("uid-1", "a-new-long-password")
-    revoke.assert_called_once_with("uid-1")
+        local_login.set_password(USER_ID, "a-new-long-password")
+    revoke.assert_called_once_with(USER_ID)
 
 
 def test_sign_in_attempts_cannot_consume_another_routes_quota() -> None:
@@ -445,7 +463,175 @@ def test_sign_in_attempts_cannot_consume_another_routes_quota() -> None:
     assert local_login.throttled("mfa:uid-1", "10.0.0.1") is True
     with (
         patch.object(local_login, "_load_account", return_value=None),
+        patch.object(local_login, "_record_noop"),
         patch.object(local_login, "_record_failure"),
     ):
         result = local_login.authenticate("default", "mfa:uid-1", "x", ip="10.0.0.1")
     assert result.rate_limited is False
+
+
+# ── fix round 1 ──────────────────────────────────────────────────────
+
+
+def test_a_totp_code_cannot_be_used_twice() -> None:
+    """RFC 6238 §5.2. The verifier has a ±1 step window, so without a
+    watermark the same six digits keep working for ninety seconds — long
+    enough for a code read over a shoulder, phished, or scraped from a log."""
+    secret = totp.new_secret()
+    code = totp.generate(secret)
+    first, _, ok = _authenticate(_mfa_account(secret), code=code)
+    assert first.ok is True
+    step = ok.call_args.kwargs["mfa_step"]
+    assert isinstance(step, int)
+
+    replayed = _mfa_account(secret, mfa_last_used_step=step)
+    second, fail, ok2 = _authenticate(replayed, code=code)
+    assert second.ok is False and second.mfa_required is True
+    ok2.assert_not_called()
+    fail.assert_called_once()
+
+
+def test_an_older_step_inside_the_window_is_also_refused() -> None:
+    secret = totp.new_secret()
+    now = int(time.time())
+    previous = totp.generate(secret, timestamp=now - 30)
+    row = _mfa_account(secret, mfa_last_used_step=now // 30)
+    result, _, ok = _authenticate(row, code=previous)
+    assert result.ok is False and result.mfa_required is True
+    ok.assert_not_called()
+
+
+def test_a_fresh_step_after_a_burned_one_still_works() -> None:
+    secret = totp.new_secret()
+    now = int(time.time())
+    row = _mfa_account(secret, mfa_last_used_step=(now // 30) - 5)
+    result, _, ok = _authenticate(row, code=totp.generate(secret))
+    assert result.ok is True
+    # >= rather than ==: the clock can cross a step boundary between
+    # generating the code and verifying it, and that is a pass, not a flake.
+    assert ok.call_args.kwargs["mfa_step"] >= now // 30
+
+
+def test_confirming_an_enrollment_burns_the_step_it_used() -> None:
+    secret = totp.new_secret()
+    row = account(
+        mfa_enabled=False, mfa_secret_enc=mfa_secrets.encrypt_secret(secret, user_id=USER_ID)
+    )
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=row),
+        patch.object(local_login, "_set_mfa_enabled"),
+        patch.object(local_login, "_record_mfa_step") as burn,
+    ):
+        assert local_login.confirm_enrollment(USER_ID, totp.generate(secret)) is True
+    assert burn.call_args[0][0] == USER_ID
+    assert isinstance(burn.call_args[0][1], int)
+
+
+def test_enrollment_requires_the_current_password() -> None:
+    """A stolen session alone must not bind an authenticator: after that, the
+    real owner's password is no longer enough to get back in."""
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=account()),
+        patch.object(local_login, "_store_mfa_secret") as store,
+    ):
+        with pytest.raises(local_login.EnrollmentDeniedError):
+            local_login.begin_enrollment(USER_ID, "not-the-password")
+    store.assert_not_called()
+
+
+def test_enrollment_uses_the_accounts_own_email_not_a_caller_supplied_one() -> None:
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=account()),
+        patch.object(local_login, "_store_mfa_secret"),
+    ):
+        out = local_login.begin_enrollment(USER_ID, GOOD_PASSWORD)
+    assert "alice@example.com" in out["otpauth_uri"]
+
+
+def test_enrollment_binds_the_secret_to_this_account_row() -> None:
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=account()),
+        patch.object(local_login, "_store_mfa_secret") as store,
+    ):
+        out = local_login.begin_enrollment(USER_ID, GOOD_PASSWORD)
+    stored = store.call_args[0][1]
+    other = "22222222-2222-2222-2222-222222222222"
+    assert mfa_secrets.decrypt_secret(stored, user_id=other) is None
+    assert mfa_secrets.decrypt_secret(stored, user_id=USER_ID) == out["secret"]
+
+
+def test_a_transplanted_secret_refuses_the_sign_in_rather_than_accepting_it() -> None:
+    secret = totp.new_secret()
+    stolen = mfa_secrets.encrypt_secret(secret, user_id="22222222-2222-2222-2222-222222222222")
+    row = account(mfa_enabled=True, mfa_secret_enc=stolen)
+    result, _, ok = _authenticate(row, code=totp.generate(secret))
+    assert result.ok is False and result.mfa_required is True
+    ok.assert_not_called()
+
+
+def test_changing_a_password_can_spare_the_callers_own_session() -> None:
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=account()),
+        patch.object(local_login, "_store_password_hash"),
+        patch("robothor.auth.accounts.revoke_user_sessions") as revoke,
+    ):
+        assert (
+            local_login.change_password(
+                USER_ID, GOOD_PASSWORD, "a-new-long-password", keep_refresh_hash="hash-of-mine"
+            )
+            is True
+        )
+    revoke.assert_called_once_with(USER_ID, except_refresh_hash="hash-of-mine")
+
+
+def test_every_failure_branch_performs_an_equal_cost_write() -> None:
+    """The wrong-password branch used to UPDATE and COMMIT while the
+    unknown-email, disabled and locked branches returned straight away — a
+    difference an attacker can time, which is the enumeration oracle the single
+    failure message exists to close."""
+    from datetime import UTC, datetime, timedelta
+
+    branches = {
+        "unknown email": None,
+        "disabled": account(status="disabled"),
+        "locked": account(locked_until=datetime.now(UTC) + timedelta(minutes=5)),
+    }
+    for label, row in branches.items():
+        with (
+            patch.object(local_login, "_load_account", return_value=row),
+            patch.object(local_login, "_record_noop") as noop,
+            patch.object(local_login, "_record_failure") as fail,
+        ):
+            local_login.reset_rate_limiter()
+            local_login.authenticate("default", "alice@example.com", GOOD_PASSWORD, ip="10.0.0.1")
+        assert noop.call_count == 1, f"{label} branch performed no write"
+        fail.assert_not_called()
+
+    with (
+        patch.object(local_login, "_load_account", return_value=account()),
+        patch.object(local_login, "_record_noop") as noop,
+        patch.object(local_login, "_record_failure") as fail,
+    ):
+        local_login.reset_rate_limiter()
+        local_login.authenticate("default", "alice@example.com", "wrong", ip="10.0.0.1")
+    assert fail.call_count == 1 and noop.call_count == 0
+
+
+def test_the_dummy_hash_is_not_computed_at_import() -> None:
+    """argon2 is deliberately expensive; paying for it on every `genus`
+    invocation for a value most of them never read is pure latency."""
+    import importlib
+
+    module = importlib.reload(local_login)
+    assert module._dummy_hash_cache is None
+    first = module._dummy_hash()
+    assert first.startswith("$argon2id$")
+    assert module._dummy_hash() is first
+
+
+def test_the_audit_subject_is_keyed_stable_and_not_the_address() -> None:
+    handle = local_login.audit_subject("Alice@Example.com")
+    assert handle == local_login.audit_subject("alice@example.com")
+    assert handle != local_login.audit_subject("bob@example.com")
+    assert "alice" not in handle.lower()
+    assert len(handle) == 32

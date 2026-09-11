@@ -172,6 +172,10 @@ here when the values are wrong would mask the Vault values silently.
   value: {{ .Values.global.environment | quote }}
 - name: GENUS_AUTH_ENFORCE
   value: {{ .Values.global.authEnforce | quote }}
+- name: GENUS_LOCAL_LOGIN
+  value: {{ .Values.global.localLogin | default false | quote }}
+- name: GENUS_TRUSTED_PROXIES
+  value: {{ .Values.global.trustedProxies | default "" | quote }}
 - name: GENUS_OS_DEPLOYED_FROM_PR
   value: {{ .Values.global.deployedFromPR | quote }}
 - name: GENUS_OS_DEPLOYED_AT

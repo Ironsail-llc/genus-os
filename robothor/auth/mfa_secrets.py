@@ -59,25 +59,44 @@ def _derived_key() -> bytes:
     return _cached_key
 
 
-def encrypt_secret(plaintext: str) -> str:
-    """Seal a base32 TOTP secret. Returns base64(nonce || ciphertext || tag)."""
+def _aad(user_id: str) -> bytes:
+    """Associated data binding a ciphertext to one account row.
+
+    Without it every row is sealed under the same key, so a blob copied from
+    the attacker's own row into the owner's row decrypts perfectly and the
+    attacker's authenticator now opens the owner's account. AES-GCM
+    authenticates associated data without encrypting it, so the bind costs
+    nothing and a transplanted blob fails the tag check — i.e. decrypts to
+    None, which every caller treats as "factor unusable, refuse".
+    """
+    return b"genus-mfa-user:" + (user_id or "").encode("utf-8")
+
+
+def encrypt_secret(plaintext: str, *, user_id: str) -> str:
+    """Seal a base32 TOTP secret for ONE account.
+
+    Returns base64(nonce || ciphertext || tag), bound to ``user_id``.
+    """
     if not plaintext:
         raise ValueError("refusing to encrypt an empty TOTP secret")
+    if not user_id:
+        raise ValueError("a TOTP secret must be bound to an account id")
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     nonce = secrets.token_bytes(_NONCE_BYTES)
-    sealed = AESGCM(_derived_key()).encrypt(nonce, plaintext.encode("utf-8"), None)
+    sealed = AESGCM(_derived_key()).encrypt(nonce, plaintext.encode("utf-8"), _aad(user_id))
     return base64.b64encode(nonce + sealed).decode("ascii")
 
 
-def decrypt_secret(blob: str | None) -> str | None:
-    """Open a sealed secret, or ``None`` if it cannot be opened.
+def decrypt_secret(blob: str | None, *, user_id: str) -> str | None:
+    """Open a sealed secret for ``user_id``, or ``None`` if it cannot be opened.
 
     Never raises and never logs the value: a caller that gets ``None`` must
     treat the factor as unusable and refuse the sign-in, which is what every
-    caller in ``local_login`` does.
+    caller in ``local_login`` does. A blob sealed for a DIFFERENT account is
+    one of the cases that returns ``None``.
     """
-    if not blob or not blob.strip():
+    if not blob or not blob.strip() or not user_id:
         return None
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -88,10 +107,13 @@ def decrypt_secret(blob: str | None) -> str | None:
     if len(raw) <= _NONCE_BYTES:
         return None
     try:
-        opened = AESGCM(_derived_key()).decrypt(raw[:_NONCE_BYTES], raw[_NONCE_BYTES:], None)
+        opened = AESGCM(_derived_key()).decrypt(
+            raw[:_NONCE_BYTES], raw[_NONCE_BYTES:], _aad(user_id)
+        )
     except Exception:
-        # Wrong key (signing-key rotation) or tampered ciphertext. Identifiers
-        # only — the blob itself never reaches a log record.
+        # Wrong key (signing-key rotation), tampered ciphertext, or a blob
+        # transplanted from another account. Identifiers only — the blob
+        # itself never reaches a log record.
         logger.warning("mfa_secrets: stored TOTP secret could not be decrypted")
         return None
     try:

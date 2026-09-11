@@ -314,7 +314,8 @@ alongside it.
 | `GENUS_AUTH_SIGNING_KEY` | *(vault)* | HS256 key the Bridge signs sessions with. At least 32 bytes; required in production. Also derives the key that encrypts stored TOTP secrets — rotating it invalidates every enrolled second factor (recover with `genus user mfa-reset`) |
 | `GENUS_BRIDGE_SSO_SECRET` | *(empty)* | Shared dashboard↔Bridge secret. Required in production for every method |
 | `GENUS_OIDC_ISSUERS` | *(empty)* | Comma-separated allowlist of OIDC issuers the Bridge will JIT-provision for |
-| `GENUS_LOCAL_LOGIN` | `false` | Exactly `true` enables local email+password sign-in. Off by default: a password endpoint must be opted into, never appear on upgrade |
+| `GENUS_LOCAL_LOGIN` | `false` | Exactly `true` enables local email+password sign-in. Off by default: a password endpoint must be opted into, never appear on upgrade. Set it on **both** the Bridge (serves `/api/auth/login`) and the dashboard (registers the provider that calls it) |
+| `GENUS_TRUSTED_PROXIES` | *(empty)* | Comma-separated peers allowed to set `X-Client-IP` on a Bridge request. Loopback is always trusted. Without it the sign-in rate limiter sees one address for the whole internet, because the dashboard calls the Bridge server-side |
 | `CF_ACCESS_TEAM_DOMAIN` / `CF_ACCESS_AUD` | *(empty)* | Sign in through a fronting Cloudflare Access policy |
 | `GENUS_INSECURE_DEV_MODE` | `false` | Loopback-only development escape hatch. Not a sign-in method; forbidden in production |
 
@@ -329,7 +330,14 @@ form (alongside the SSO button when both are configured) and the Bridge serves
   account — answers the same `invalid credentials`. The only distinguishable
   state is `mfa_required`, and only after a correct password.
 - Ten consecutive failures freeze the account for 15 minutes; five attempts per
-  (email, IP) per minute are allowed before a 429.
+  (email, IP) per minute are allowed before a 429. The dashboard forwards the
+  browser's address as `X-Client-IP`, which the Bridge honours only from
+  loopback or a peer named in `GENUS_TRUSTED_PROXIES` — otherwise every
+  sign-in would share one bucket.
+- TOTP codes are single-use: the accepted time step is recorded, so a code
+  cannot be replayed inside the verifier's ±1 step window (RFC 6238 §5.2).
+- Changing a password revokes every other refresh session, keeping only the
+  one that made the change.
 - **Owner MFA is mandatory when local login is the only configured method.**
   The owner still signs in, but the Helm shows a banner that cannot be
   dismissed until a factor is enrolled at `/account/security`.

@@ -14,6 +14,9 @@ import type { CfVerifiedClaims } from "@/lib/cf-access";
 declare module "next-auth" {
   interface Session {
     bridgeAccess?: string;
+    // Server-only, like bridgeAccess: the public session callback deletes it
+    // before anything reaches a browser.
+    bridgeRefresh?: string;
     backendAuthorized?: boolean;
     role?: string;
     tenantId?: string;

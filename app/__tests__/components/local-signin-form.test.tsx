@@ -98,6 +98,14 @@ describe("LocalSignInForm", () => {
     "http://evil.example.com",
     "javascript:alert(1)",
     "/\\evil.example.com",
+    // The WHATWG URL parser STRIPS tab, LF and CR before parsing, so each of
+    // these is "//evil.com" by the time a browser reads it — while a naive
+    // startsWith("//") check sees a harmless-looking path.
+    "/\t/evil.example.com",
+    "/\n/evil.example.com",
+    "/\r/evil.example.com",
+    "/\t\t//evil.example.com",
+    "/\u0000//evil.example.com",
   ])("never navigates off-origin after sign-in (%s)", async (hostile) => {
     // `callbackUrl` arrives from the query string, so /signin?callbackUrl=...
     // is attacker-controlled. A post-sign-in window.location.assign() of that

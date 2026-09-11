@@ -46,8 +46,10 @@ __all__ = [
     "GENERIC_FAILURE",
     "MFA_REQUIRED",
     "LoginResult",
+    "EnrollmentDeniedError",
     "MfaAlreadyEnabledError",
     "WeakPasswordError",
+    "audit_subject",
     "authenticate",
     "begin_enrollment",
     "change_password",
@@ -83,10 +85,23 @@ MIN_PASSWORD_LENGTH = 12
 # burn for an unauthenticated caller.
 MAX_PASSWORD_LENGTH = 1024
 
+_NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
 # A fixed argon2 hash no password will ever match. Verifying against it on the
 # unknown-email path costs the same as verifying a real one, so response time
 # does not answer "does this account exist?".
-_DUMMY_HASH = hash_password("local-login-timing-equalizer")
+#
+# Computed lazily and cached: argon2 is deliberately expensive, and paying for
+# it at IMPORT made every `genus` invocation, every CLI test collection and
+# every worker start carry ~50 ms for a value most of them never read.
+_dummy_hash_cache: str | None = None
+
+
+def _dummy_hash() -> str:
+    global _dummy_hash_cache
+    if _dummy_hash_cache is None:
+        _dummy_hash_cache = hash_password("local-login-timing-equalizer")
+    return _dummy_hash_cache
 
 
 class WeakPasswordError(ValueError):
@@ -95,6 +110,10 @@ class WeakPasswordError(ValueError):
 
 class MfaAlreadyEnabledError(RuntimeError):
     """Enrollment was attempted on an account that already has a live factor."""
+
+
+class EnrollmentDeniedError(RuntimeError):
+    """Enrollment was attempted without the account's current password."""
 
 
 @dataclass(frozen=True)
@@ -205,6 +224,54 @@ def _load_account_by_id(user_id: str) -> dict[str, Any] | None:
     return accounts.get_account_by_id(user_id)
 
 
+# The lockout statement, with the table name left as a format slot so the
+# concurrency test can run the REAL text against a throwaway table.
+#
+# Every arithmetic operand is a COLUMN REFERENCE, and that is the whole point.
+# The first version computed the next value in a CTE:
+#
+#     WITH next AS (SELECT failed_login_count + 1 AS n FROM user_accounts WHERE id = ...)
+#     UPDATE user_accounts SET failed_login_count = (SELECT n FROM next) ...
+#
+# A subquery is evaluated against the statement's snapshot. When the UPDATE
+# then blocks on a concurrent writer's row lock, PostgreSQL re-runs the scan
+# under EvalPlanQual against the newly committed row — but the CTE's already
+# materialised output is not recomputed. Eight overlapping failures therefore
+# all wrote 1, and a parallel password spray could hold the counter below the
+# threshold indefinitely while the lockout never fired. A bare column
+# reference IS re-evaluated under EPQ, so the increment survives. Proven both
+# ways in robothor/auth/tests/test_local_login_concurrency.py.
+#
+# Parameters, in order: LOCKOUT_THRESHOLD, LOCKOUT_SECONDS, user_id.
+FAILURE_UPDATE_SQL = """
+    UPDATE {table} SET
+        failed_login_count = CASE
+            WHEN locked_until IS NOT NULL AND locked_until <= NOW() THEN 1
+            ELSE failed_login_count + 1
+        END,
+        locked_until = CASE
+            WHEN (CASE
+                      WHEN locked_until IS NOT NULL AND locked_until <= NOW() THEN 1
+                      ELSE failed_login_count + 1
+                  END) >= %s
+            THEN NOW() + make_interval(secs => %s)
+            ELSE NULL
+        END,
+        updated_at = NOW()
+    WHERE id = %s
+    RETURNING failed_login_count, locked_until
+"""
+
+# A write of the same shape that changes nothing. Every failure branch issues
+# one so the response time does not say which branch it was — see
+# ``_equal_cost_failure``.
+NOOP_UPDATE_SQL = """
+    UPDATE user_accounts SET updated_at = updated_at
+    WHERE id = %s AND FALSE
+    RETURNING failed_login_count, locked_until
+"""
+
+
 def _record_failure(user_id: str) -> None:
     """Increment the consecutive-failure counter, locking at the threshold.
 
@@ -216,37 +283,64 @@ def _record_failure(user_id: str) -> None:
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            """
-            WITH next AS (
-                SELECT CASE
-                           WHEN locked_until IS NOT NULL AND locked_until <= NOW() THEN 1
-                           ELSE failed_login_count + 1
-                       END AS n
-                FROM user_accounts WHERE id = %s
-            )
-            UPDATE user_accounts SET
-                failed_login_count = (SELECT n FROM next),
-                locked_until = CASE
-                    WHEN (SELECT n FROM next) >= %s THEN NOW() + make_interval(secs => %s)
-                    ELSE NULL
-                END,
-                updated_at = NOW()
-            WHERE id = %s
-            RETURNING failed_login_count, locked_until
-            """,
-            (user_id, LOCKOUT_THRESHOLD, LOCKOUT_SECONDS, user_id),
+            FAILURE_UPDATE_SQL.format(table="user_accounts"),
+            (LOCKOUT_THRESHOLD, LOCKOUT_SECONDS, user_id),
         )
         cur.fetchone()
         conn.commit()
 
 
-def _record_success(user_id: str) -> None:
+def _record_noop(user_id: str | None) -> None:
+    """A write that matches no row, for failure branches with nothing to count.
+
+    Without it the wrong-password branch performs an UPDATE and a COMMIT that
+    the unknown-email, disabled and locked branches do not — a difference an
+    attacker can time, which is exactly the enumeration oracle the single
+    failure message exists to close.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(NOOP_UPDATE_SQL, (user_id or _NIL_UUID,))
+        cur.fetchone()
+        conn.commit()
+
+
+def _record_success(user_id: str, *, mfa_step: int | None = None) -> None:
+    """Clear the failure state, and burn the TOTP step that was just spent.
+
+    One statement: the step must not be recordable separately from the sign-in
+    it belongs to, or a crash between the two leaves the code replayable.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        if mfa_step is None:
+            cur.execute(
+                "UPDATE user_accounts SET failed_login_count = 0, locked_until = NULL, "
+                "last_login_at = NOW(), updated_at = NOW() WHERE id = %s",
+                (user_id,),
+            )
+        else:
+            cur.execute(
+                "UPDATE user_accounts SET failed_login_count = 0, locked_until = NULL, "
+                "last_login_at = NOW(), mfa_last_used_step = %s, updated_at = NOW() "
+                "WHERE id = %s",
+                (mfa_step, user_id),
+            )
+        conn.commit()
+
+
+def _record_mfa_step(user_id: str, step: int) -> None:
+    """Burn a TOTP step outside a sign-in (enrollment confirm, MFA disable).
+
+    ``GREATEST`` so a late-arriving older step cannot walk the watermark
+    backwards and re-open a window that was already spent.
+    """
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE user_accounts SET failed_login_count = 0, locked_until = NULL, "
-            "last_login_at = NOW(), updated_at = NOW() WHERE id = %s",
-            (user_id,),
+            "UPDATE user_accounts SET mfa_last_used_step = "
+            "GREATEST(COALESCE(mfa_last_used_step, 0), %s), updated_at = NOW() WHERE id = %s",
+            (step, user_id),
         )
         conn.commit()
 
@@ -315,7 +409,58 @@ def _current_secret(account_row: dict[str, Any]) -> str | None:
     """
     if not account_row.get("mfa_enabled"):
         return None
-    return mfa_secrets.decrypt_secret(account_row.get("mfa_secret_enc"))
+    return mfa_secrets.decrypt_secret(
+        account_row.get("mfa_secret_enc"), user_id=str(account_row.get("id") or "")
+    )
+
+
+def _fresh_step(account_row: dict[str, Any], secret: str | None, code: str | None) -> int | None:
+    """The step *code* matches, if that step has not already been spent.
+
+    RFC 6238 §5.2: a one-time password is accepted once. The verifier has a
+    ±1 step window, so without a watermark the same six digits keep working
+    for ninety seconds — a code read over a shoulder, captured from a phished
+    page or replayed from a log is not "one-time" at all.
+    """
+    if secret is None:
+        return None
+    step = totp.matching_step(secret, code)
+    if step is None:
+        return None
+    last_used = account_row.get("mfa_last_used_step")
+    if isinstance(last_used, int) and step <= last_used:
+        return None
+    return step
+
+
+def audit_subject(email: str) -> str:
+    """A stable, non-reversible handle for an email, for audit rows.
+
+    A failed sign-in must be attributable — "which account was sprayed, from
+    where" is the question an incident asks first — but the audit log is
+    exported to a SIEM and read by people who have no business learning that
+    ``ceo@acme.example`` has an account here, especially on a FAILED attempt
+    where the address may be an attacker's guess rather than a real user.
+
+    So: HKDF-SHA256 over the server-held signing key (info
+    ``b"genus-audit-email"``) keyed onto the casefolded address. Equal emails
+    give equal handles, so spray patterns are still visible; the handle does
+    not leave the instance's key, so a leaked audit export is not an address
+    book. Falls back to a fixed placeholder rather than raising if no key is
+    resolvable — an audit row must never be the reason a sign-in 500s.
+    """
+    try:
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+        from robothor.auth.tokens import signing_key
+
+        digest = HKDF(
+            algorithm=hashes.SHA256(), length=16, salt=None, info=b"genus-audit-email"
+        ).derive((email or "").strip().casefold().encode("utf-8") + signing_key().encode("utf-8"))
+        return digest.hex()
+    except Exception:  # pragma: no cover - never break a sign-in over an audit field
+        return "unavailable"
 
 
 def validate_password(password: str) -> None:
@@ -376,40 +521,51 @@ def authenticate(
     account_row = _load_account(tenant_id, normalized)
     if account_row is None:
         # Spend the same work an existing account would, so the clock does not
-        # answer a question the message refuses to.
-        verify_password(password, _DUMMY_HASH)
+        # answer a question the message refuses to: one argon2 verification and
+        # one UPDATE+COMMIT, exactly as the wrong-password branch below.
+        verify_password(password, _dummy_hash())
+        _record_noop(None)
         return LoginResult()
 
     if account_row.get("status") != "active":
-        verify_password(password, _DUMMY_HASH)
+        verify_password(password, _dummy_hash())
+        _record_noop(str(account_row["id"]))
         return LoginResult()
 
     if _is_locked(account_row):
-        # Deliberately no counter write: an attacker must not be able to keep
-        # a real user locked out by hammering a frozen account.
-        verify_password(password, _DUMMY_HASH)
+        # The write is a no-op ON PURPOSE. The cost must match the other
+        # branches, but an attacker must not be able to keep a real user
+        # locked out by hammering a frozen account, so nothing is counted.
+        verify_password(password, _dummy_hash())
+        _record_noop(str(account_row["id"]))
         return LoginResult()
 
     stored_hash = account_row.get("password_hash")
     # An SSO-only account has password_hash IS NULL, and verify_password
     # short-circuits on a falsy hash — which would answer instantly and tell an
     # attacker exactly which accounts have no local credential. Equalize.
-    if not verify_password(password, stored_hash or _DUMMY_HASH) or not stored_hash:
+    if not verify_password(password, stored_hash or _dummy_hash()) or not stored_hash:
         _record_failure(str(account_row["id"]))
         return LoginResult()
 
+    mfa_step: int | None = None
     if account_row.get("mfa_enabled"):
         secret = _current_secret(account_row)
         if code is None or not code.strip():
             # The first leg of a two-step sign-in, not an attack: no counter.
+            # Still a write, so the two-step path costs what the others do.
+            _record_noop(str(account_row["id"]))
             return LoginResult(mfa_required=True, error=MFA_REQUIRED)
-        # secret is None only when the stored ciphertext cannot be opened
-        # (signing-key rotation, tampering). Fail closed — never bypass.
-        if secret is None or not totp.verify(secret, code):
+        # A None secret means the stored ciphertext could not be opened
+        # (signing-key rotation, tampering, a blob transplanted from another
+        # row). A None step means a wrong code, or a REPLAY of one already
+        # spent. Fail closed on all of them — never bypass.
+        mfa_step = _fresh_step(account_row, secret, code)
+        if mfa_step is None:
             _record_failure(str(account_row["id"]))
             return LoginResult(mfa_required=True, error=MFA_REQUIRED)
 
-    _record_success(str(account_row["id"]))
+    _record_success(str(account_row["id"]), mfa_step=mfa_step)
     if isinstance(stored_hash, str) and needs_rehash(stored_hash):
         try:
             _store_password_hash(str(account_row["id"]), hash_password(password))
@@ -437,11 +593,21 @@ def set_password(user_id: str, new_password: str) -> None:
     _audit("password.set", user_id=user_id)
 
 
-def change_password(user_id: str, current_password: str, new_password: str) -> bool:
+def change_password(
+    user_id: str,
+    current_password: str,
+    new_password: str,
+    *,
+    keep_refresh_hash: str | None = None,
+) -> bool:
     """Self-service password change. False when ``current_password`` is wrong.
 
-    Every existing refresh session is revoked on success: a password change
-    that leaves a stolen refresh token working has not locked anyone out.
+    Every OTHER refresh session is revoked on success: a password change that
+    leaves a stolen refresh token working has not locked anyone out. The
+    caller's own session is spared when ``keep_refresh_hash`` names it, so the
+    operator is not thrown out of the page they are standing on — which would
+    train people to avoid changing their password, and is not a security gain
+    when they have just proven they hold the old one.
     """
     validate_password(new_password)
     account_row = _load_account_by_id(user_id)
@@ -451,16 +617,23 @@ def change_password(user_id: str, current_password: str, new_password: str) -> b
         _audit("password.change", status="denied", user_id=user_id)
         return False
     _store_password_hash(user_id, hash_password(new_password))
-    accounts.revoke_user_sessions(user_id)
-    _audit("password.change", user_id=user_id)
+    accounts.revoke_user_sessions(user_id, except_refresh_hash=keep_refresh_hash)
+    _audit("password.change", user_id=user_id, kept_current_session=bool(keep_refresh_hash))
     return True
 
 
-def begin_enrollment(user_id: str, email: str) -> dict[str, str]:
+def begin_enrollment(user_id: str, password: str) -> dict[str, str]:
     """Provision a PENDING TOTP secret and return what the app must display.
 
+    Requires the account's CURRENT PASSWORD. Binding a second factor is a
+    change of authority, and a session cookie alone must not be enough to
+    perform it: otherwise an attacker holding a stolen session enrols their
+    own authenticator, and from then on the real owner's password is not
+    sufficient to get back in.
+
     The secret is returned exactly once, here, because an authenticator has to
-    receive it. It is stored encrypted and ``mfa_enabled`` stays false until
+    receive it. It is stored encrypted (bound to this row — see
+    ``mfa_secrets``) and ``mfa_enabled`` stays false until
     ``confirm_enrollment`` proves the operator's app holds the same seed — so
     a half-finished enrollment can never lock anyone out.
 
@@ -470,25 +643,37 @@ def begin_enrollment(user_id: str, email: str) -> dict[str, str]:
     factor OFF, which is the one thing /mfa/disable deliberately demands both
     a password and a live code to do.
     """
-    existing = _load_account_by_id(user_id)
-    if existing and existing.get("mfa_enabled"):
+    account_row = _load_account_by_id(user_id)
+    if not account_row or account_row.get("status") != "active":
+        raise EnrollmentDeniedError("no active account")
+    if account_row.get("mfa_enabled"):
         raise MfaAlreadyEnabledError("this account already has a confirmed second factor")
+    if not verify_password(password, account_row.get("password_hash") or _dummy_hash()):
+        _audit("mfa.enroll.begin", status="denied", user_id=user_id)
+        raise EnrollmentDeniedError("current password required")
+    email = str(account_row.get("email") or "")
     secret = totp.new_secret()
-    _store_mfa_secret(user_id, mfa_secrets.encrypt_secret(secret), enabled=False)
+    _store_mfa_secret(user_id, mfa_secrets.encrypt_secret(secret, user_id=user_id), enabled=False)
     _audit("mfa.enroll.begin", user_id=user_id)
     return {"secret": secret, "otpauth_uri": totp.provisioning_uri(secret, email=email)}
 
 
 def confirm_enrollment(user_id: str, code: str) -> bool:
-    """Enable MFA once *code* proves the pending secret was received."""
+    """Enable MFA once *code* proves the pending secret was received.
+
+    The accepted step is burned along with the enable, so the code that armed
+    the factor cannot immediately be replayed at the sign-in page.
+    """
     account_row = _load_account_by_id(user_id)
     if not account_row:
         return False
-    secret = mfa_secrets.decrypt_secret(account_row.get("mfa_secret_enc"))
-    if secret is None or not totp.verify(secret, code):
+    secret = mfa_secrets.decrypt_secret(account_row.get("mfa_secret_enc"), user_id=user_id)
+    step = _fresh_step(account_row, secret, code)
+    if step is None:
         _audit("mfa.enroll.confirm", status="denied", user_id=user_id)
         return False
     _set_mfa_enabled(user_id, True)
+    _record_mfa_step(user_id, step)
     _audit("mfa.enroll.confirm", user_id=user_id)
     return True
 
@@ -502,10 +687,11 @@ def disable_mfa(user_id: str, password: str, code: str) -> bool:
     if not verify_password(password, account_row.get("password_hash")):
         _audit("mfa.disable", status="denied", user_id=user_id)
         return False
-    secret = _current_secret(account_row)
-    if secret is None or not totp.verify(secret, code):
+    step = _fresh_step(account_row, _current_secret(account_row), code)
+    if step is None:
         _audit("mfa.disable", status="denied", user_id=user_id)
         return False
+    _record_mfa_step(user_id, step)
     _clear_mfa(user_id)
     _audit("mfa.disable", user_id=user_id)
     return True

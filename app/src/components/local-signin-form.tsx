@@ -26,16 +26,32 @@ const GENERIC_FAILURE = "That email or password is not correct.";
  * `callbackUrl` reaches this component from the query string, so
  * `/signin?callbackUrl=https://evil.example.com` is attacker-controlled.
  * Navigating there after a successful sign-in would be an open redirect on the
- * one page where the victim has just typed their password — so only a
- * same-origin ABSOLUTE PATH is honoured: one leading slash, no second slash
- * (`//host` is protocol-relative), no backslash (browsers normalize `/\` to
- * `//`), and therefore never a scheme of any kind.
+ * one page where the victim has just typed their password.
+ *
+ * String prefix checks are not enough, and the first version proved it: the
+ * WHATWG URL parser STRIPS tab, LF and CR anywhere in a URL before parsing, so
+ * `/\t/evil.example.com` is `//evil.example.com` — a protocol-relative URL to
+ * another host — while `startsWith("//")` sees a harmless-looking path.
+ * Backslash is normalised to `/` for the same reason.
+ *
+ * So the value is resolved against a sentinel origin with the SAME parser the
+ * browser will use, and is accepted only if it stayed there. Control
+ * characters are rejected outright rather than reasoned about.
  */
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+const SENTINEL_ORIGIN = "https://x.invalid";
+
 export function safeCallbackUrl(candidate: string | undefined): string {
   const value = (candidate ?? "").trim();
   if (!value.startsWith("/")) return "/";
-  if (value.startsWith("//") || value.startsWith("/\\")) return "/";
-  return value;
+  if (value.includes("\\") || CONTROL_CHARACTERS.test(value)) return "/";
+  try {
+    const resolved = new URL(value, SENTINEL_ORIGIN);
+    if (resolved.origin !== SENTINEL_ORIGIN) return "/";
+    return `${resolved.pathname}${resolved.search}${resolved.hash}`;
+  } catch {
+    return "/";
+  }
 }
 
 export function LocalSignInForm({ callbackUrl }: { callbackUrl: string }) {
