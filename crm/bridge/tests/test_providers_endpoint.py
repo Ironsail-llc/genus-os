@@ -85,6 +85,10 @@ class FakeEngine:
             ("GET", "/api/admin/providers"): (200, ENGINE_PROVIDERS),
             ("GET", "/api/admin/models"): (200, ENGINE_MODELS),
             ("POST", "/api/admin/secrets/reload"): (200, {"reloaded": ["openrouter"], "slots": 1}),
+            ("POST", "/api/admin/defaults/reload"): (
+                200,
+                {"reloaded": True, "primary": None, "fallbacks": []},
+            ),
         }
 
     async def __call__(self, method, path, *, json=None, timeout=30):
@@ -99,9 +103,37 @@ class FakeEngine:
             }
         return self.responses[(method, path)]
 
+    def set_slots(self, positions: list[int]) -> None:
+        """Pretend the provider already holds keys in these storage slots."""
+        self.responses[("GET", "/api/admin/providers")] = (
+            200,
+            {
+                "providers": [
+                    {
+                        **ENGINE_PROVIDERS["providers"][0],
+                        "configured": bool(positions),
+                        "slots": [
+                            {
+                                "position": n,
+                                "source": "vault",
+                                "fingerprint": f"sha256:0000000{n}",
+                                "state": "active" if n == 1 else "spare",
+                                "updated_at": None,
+                            }
+                            for n in positions
+                        ],
+                    }
+                ]
+            },
+        )
+
     @property
     def reload_count(self) -> int:
         return sum(1 for m, p, _ in self.calls if p == "/api/admin/secrets/reload")
+
+    @property
+    def defaults_reload_count(self) -> int:
+        return sum(1 for m, p, _ in self.calls if p == "/api/admin/defaults/reload")
 
 
 class FakeVault:
@@ -281,6 +313,9 @@ class TestKeyWrites:
     def test_a_spare_slot_gets_the_numbered_key(
         self, controls_client_as_operator, fake_engine, fake_vault
     ) -> None:
+        # Slots 1 and 2 must already exist, or the gap guard refuses slot 3 —
+        # see TestNumberingGaps.
+        fake_engine.set_slots([1, 2])
         controls_client_as_operator.put(
             "/api/providers/openrouter/keys/3", json={"api_key": FAKE_KEY}
         )
@@ -537,3 +572,166 @@ class TestDefaults:
             json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
         )
         assert [p.name for p in agents_dir.iterdir()] == ["_defaults.yaml"]
+
+
+class TestRequestModelRedaction:
+    """The request model is a frame local, and frame locals get printed.
+
+    structlog's console renderer formats exceptions with ``show_locals=True``.
+    A plain ``str`` field would put the key the operator has just typed into
+    the journal the first time anything in the handler raised.
+    """
+
+    def test_repr_and_str_hide_the_key(self) -> None:
+        from routers.providers import KeyWrite
+
+        model = KeyWrite(api_key=FAKE_KEY)
+        assert FAKE_KEY not in repr(model)
+        assert FAKE_KEY not in str(model)
+        assert FAKE_KEY not in str(model.model_dump())
+
+    def test_the_value_is_still_reachable_for_the_write(self) -> None:
+        from routers.providers import KeyWrite
+
+        assert KeyWrite(api_key=FAKE_KEY).api_key.get_secret_value() == FAKE_KEY
+
+
+class TestNumberingGaps:
+    """A spare must extend the run, not start a second one past a hole.
+
+    The pool stops at the first empty slot, so a key written to slot 3 while
+    slot 2 is empty is stored, reported as saved, and never dialled — the
+    operator has a spare that does not exist and finds out when the primary
+    caps.
+    """
+
+    def test_writing_past_a_gap_is_refused(
+        self, controls_client_as_operator, fake_engine, fake_vault
+    ) -> None:
+        fake_engine.set_slots([1])
+        response = controls_client_as_operator.put(
+            "/api/providers/openrouter/keys/3", json={"api_key": FAKE_KEY}
+        )
+        assert response.status_code == 409
+        assert "slot 2" in response.json()["detail"]
+        assert not fake_vault.written
+        assert fake_engine.reload_count == 0
+
+    def test_the_message_names_the_first_missing_slot(
+        self, controls_client_as_operator, fake_engine, fake_vault
+    ) -> None:
+        fake_engine.set_slots([])
+        detail = controls_client_as_operator.put(
+            "/api/providers/openrouter/keys/4", json={"api_key": FAKE_KEY}
+        ).json()["detail"]
+        assert "slot 1" in detail
+
+    def test_extending_the_run_is_allowed(
+        self, controls_client_as_operator, fake_engine, fake_vault
+    ) -> None:
+        fake_engine.set_slots([1, 2])
+        response = controls_client_as_operator.put(
+            "/api/providers/openrouter/keys/3", json={"api_key": FAKE_KEY}
+        )
+        assert response.status_code == 200
+        assert "providers/openrouter/api_key_3" in fake_vault.written
+
+    def test_overwriting_an_occupied_slot_is_allowed(
+        self, controls_client_as_operator, fake_engine, fake_vault
+    ) -> None:
+        fake_engine.set_slots([1, 2])
+        response = controls_client_as_operator.put(
+            "/api/providers/openrouter/keys/2", json={"api_key": FAKE_KEY}
+        )
+        assert response.status_code == 200
+
+    def test_slot_one_never_needs_to_ask(
+        self, controls_client_as_operator, fake_engine, fake_vault
+    ) -> None:
+        """The first key on a fresh box must not depend on the engine being up."""
+        response = controls_client_as_operator.put(
+            "/api/providers/openrouter/keys/1", json={"api_key": FAKE_KEY}
+        )
+        assert response.status_code == 200
+        assert ("GET", "/api/admin/providers", None) not in fake_engine.calls
+
+    def test_the_storage_slot_is_what_delete_addresses(
+        self, controls_client_as_operator, fake_engine, fake_vault
+    ) -> None:
+        """The engine reports storage slots, so a delete of slot 3 must remove
+        ``api_key_3`` — not the third row in a list."""
+        fake_engine.set_slots([1, 3])
+        controls_client_as_operator.delete("/api/providers/openrouter/keys/3")
+        assert fake_vault.deleted == ["providers/openrouter/api_key_3"]
+
+
+class TestDefaultsReachTheEngine:
+    def test_the_write_is_followed_by_an_engine_reload(
+        self, controls_client_as_operator, fake_engine, agents_dir
+    ) -> None:
+        """Manifests are the source of truth, so writing the file is half the
+        act: until the engine is told, the fleet runs on the old model."""
+        response = controls_client_as_operator.patch(
+            "/api/providers/defaults",
+            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
+        )
+        assert response.status_code == 200
+        assert fake_engine.defaults_reload_count == 1
+        assert response.json()["applied"] is True
+
+    def test_the_reload_happens_after_the_file_is_written(
+        self, controls_client_as_operator, fake_engine, agents_dir
+    ) -> None:
+        seen: list[bool] = []
+        original = fake_engine.__call__
+
+        async def _watch(method, path, *, json=None, timeout=30):
+            if path == "/api/admin/defaults/reload":
+                seen.append((agents_dir / "_defaults.yaml").exists())
+            return await original(method, path, json=json, timeout=timeout)
+
+        with patch("routers.providers.engine_request", new=_watch):
+            controls_client_as_operator.patch(
+                "/api/providers/defaults",
+                json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
+            )
+        assert seen == [True], "the engine was told before there was anything to read"
+
+    def test_an_engine_that_refuses_is_reported_not_hidden(
+        self, controls_client_as_operator, fake_engine, agents_dir
+    ) -> None:
+        fake_engine.responses[("POST", "/api/admin/defaults/reload")] = (503, {"error": "down"})
+        body = controls_client_as_operator.patch(
+            "/api/providers/defaults",
+            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
+        ).json()
+        assert body["applied"] is False, "saved and in-use are different states — say which"
+
+
+class TestEngineBaseUrl:
+    @pytest.mark.parametrize(
+        "value",
+        ["file:///etc/passwd", "unix:///var/run/x.sock", "ftp://host", "not-a-url", "http://"],
+    )
+    def test_a_non_http_engine_url_is_refused(self, monkeypatch, value) -> None:
+        """Every proxied call, credential bodies included, goes to this URL."""
+        from routers import _engine_client
+
+        monkeypatch.setenv("ROBOTHOR_ENGINE_URL", value)
+        with pytest.raises(ValueError, match="ROBOTHOR_ENGINE_URL"):
+            _engine_client.engine_base_url()
+
+    @pytest.mark.parametrize("value", ["http://127.0.0.1:18800", "https://engine.internal/"])
+    def test_http_and_https_are_accepted(self, monkeypatch, value) -> None:
+        from routers import _engine_client
+
+        monkeypatch.setenv("ROBOTHOR_ENGINE_URL", value)
+        assert _engine_client.engine_base_url() == value.rstrip("/")
+
+    def test_the_default_is_loopback(self, monkeypatch) -> None:
+        from routers import _engine_client
+
+        monkeypatch.delenv("ROBOTHOR_ENGINE_URL", raising=False)
+        monkeypatch.delenv("ROBOTHOR_ENGINE_HOST", raising=False)
+        monkeypatch.delenv("ROBOTHOR_ENGINE_PORT", raising=False)
+        assert _engine_client.engine_base_url() == "http://127.0.0.1:18800"

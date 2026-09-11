@@ -882,16 +882,14 @@ def _install_plugin_reload_signal() -> bool:
     return False
 
 
-async def main() -> int:
-    """Start all engine subsystems. Returns the process exit code."""
-    # Reject unsafe production authentication before touching the database,
-    # loading agents, or starting any background subsystem. The Engine verifies
-    # Bridge-issued tokens but is not an SSO exchange authority, so it must not
-    # require the Bridge's IdP credentials.
-    validate_engine_auth_configuration()
+def _configure_structured_logging() -> None:
+    """Route stdlib logging through structlog for the whole process.
 
-    # Configure structured logging via structlog
-    # Wraps stdlib logging so existing logging.getLogger() calls get structured output
+    Extracted from ``main`` unchanged. It is pure setup with no ordering
+    relationship to anything around it, and leaving thirty lines of processor
+    list inline made the one thing ``main`` is actually for — the order
+    subsystems start in — the hardest thing to read in it.
+    """
     import structlog
 
     structlog.configure(
@@ -911,14 +909,52 @@ async def main() -> int:
         cache_logger_on_first_use=True,
     )
 
-    formatter = structlog.stdlib.ProcessorFormatter(processor=_select_log_renderer())
-
     handler = logging.StreamHandler()
-    handler.setFormatter(formatter)
+    handler.setFormatter(structlog.stdlib.ProcessorFormatter(processor=_select_log_renderer()))
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(logging.INFO)
+
+
+async def load_provider_secrets_at_startup() -> int:
+    """Pull vault-held provider keys into this process before anything runs.
+
+    Without this, a box whose only credential lives in the vault starts dark
+    for every consumer that reads ``os.environ`` directly — memory generation
+    asks for ``OPENROUTER_API_KEY``, finds nothing, logs one ERROR and stays
+    local — until somebody happens to send SIGHUP. "The key is configured and
+    half the fleet cannot see it" is the exact class of defect the providers
+    API exists to remove, so it must not be reintroduced at boot.
+
+    Runs in a thread (psycopg2 is synchronous) and never raises: a box with no
+    vault is a supported configuration, not a failed start.
+    """
+    try:
+        from robothor.engine.key_pool import reload_provider_keys
+
+        result = await asyncio.to_thread(reload_provider_keys)
+    except Exception as exc:  # noqa: BLE001 - an optional store never blocks boot
+        logger.warning("Provider secrets could not be loaded at startup: %s", exc)
+        return 0
+    if result.slots:
+        logger.info(
+            "Provider secrets: %d slot(s) across %s loaded from the vault",
+            result.slots,
+            ", ".join(result.reloaded),
+        )
+    return result.slots
+
+
+async def main() -> int:
+    """Start all engine subsystems. Returns the process exit code."""
+    # Reject unsafe production authentication before touching the database,
+    # loading agents, or starting any background subsystem. The Engine verifies
+    # Bridge-issued tokens but is not an SSO exchange authority, so it must not
+    # require the Bridge's IdP credentials.
+    validate_engine_auth_configuration()
+
+    _configure_structured_logging()
 
     logger.info("Starting Genus OS Agent Engine...")
     # State this process's guardrail posture before anything runs. The flags
@@ -957,6 +993,9 @@ async def main() -> int:
             )
     except Exception:
         logger.exception("bootstrap_owner_person_links failed (non-fatal)")
+
+    # Vault-held provider keys into os.environ before any subsystem reads one.
+    await load_provider_secrets_at_startup()
 
     # Load config
     config = EngineConfig.from_env()

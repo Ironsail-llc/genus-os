@@ -28,12 +28,15 @@ Three rules this module is built around:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import re
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from robothor.engine import key_pool
 
@@ -67,25 +70,57 @@ class TestConnectionRequest(BaseModel):
     """
 
     model: str | None = Field(default=None)
-    api_key: str | None = Field(default=None)
+    # SecretStr, not str: this model is a frame local of the handler, and
+    # structlog's console renderer prints every local through repr() when it
+    # formats an exception. A plain str would put an unstored credential into
+    # the journal the first time anything below this line raised.
+    api_key: SecretStr | None = Field(default=None)
 
 
-def _vault_updated_at(key: str) -> str | None:
-    """When a vault-held credential was last written, if the vault can say.
+def _timestamps_for_vault_slots() -> dict[str, str]:
+    """Refresh the vault snapshot and read every provider slot's write time.
 
-    Best-effort by construction: the listing is a read-only status page and
-    must render on a box whose vault is not initialised at all.
+    One function so the whole listing costs two database connections — one for
+    the values, one for the timestamps — regardless of how many providers and
+    slots exist. It blocks, so the route reaches it through a thread.
+
+    Best-effort on the timestamps alone: the listing is a status page and must
+    render on a box whose vault is not initialised at all. The values are not
+    best-effort; ``vault_snapshot`` already degrades to "nothing configured".
     """
+    from robothor.vault.naming import provider_key
+
+    key_pool.refresh_vault_snapshot()
+
+    wanted: list[str] = []
+    for spec in key_pool.PROVIDERS:
+        wanted.extend(
+            provider_key(spec.id, slot.position)
+            for slot in key_pool.provider_slots(spec.id)
+            if slot.source == "vault"
+        )
+    if not wanted:
+        return {}
     try:
-        from robothor.vault.dal import get_secret_updated_at
+        from psycopg2 import Error as PsycopgError
 
-        stamp = get_secret_updated_at(key)
-    except Exception:  # noqa: BLE001 - the vault is optional
-        return None
-    return stamp.isoformat() if stamp is not None else None
+        from robothor.vault.dal import get_secrets_updated_at
+
+        stamps = get_secrets_updated_at(wanted)
+    except (PsycopgError, OSError, FileNotFoundError) as exc:
+        # Narrow on purpose: a database that is down or a vault that was never
+        # initialised are expected states for a status page. Anything else is a
+        # bug and must not be swallowed into a blank column.
+        logger.warning(
+            "Vault timestamps unavailable (%s: %s); slots report updated_at=null",
+            type(exc).__name__,
+            exc,
+        )
+        return {}
+    return {key: stamp.isoformat() for key, stamp in stamps.items()}
 
 
-def _provider_payload(spec: key_pool.ProviderSpec) -> dict[str, Any]:
+def _provider_payload(spec: key_pool.ProviderSpec, timestamps: dict[str, str]) -> dict[str, Any]:
     from robothor.vault.naming import provider_key
 
     slots = key_pool.provider_slots(spec.id)
@@ -95,12 +130,15 @@ def _provider_payload(spec: key_pool.ProviderSpec) -> dict[str, Any]:
         "configured": bool(slots),
         "slots": [
             {
+                # The STORAGE slot, not a place in this list: it is what
+                # DELETE .../keys/{position} addresses and what updated_at was
+                # looked up by. A dense index silently named the wrong row.
                 "position": slot.position,
                 "source": slot.source,
                 "fingerprint": slot.fingerprint,
                 "state": slot.state,
                 "updated_at": (
-                    _vault_updated_at(provider_key(spec.id, slot.position))
+                    timestamps.get(provider_key(spec.id, slot.position))
                     if slot.source == "vault"
                     else None
                 ),
@@ -152,6 +190,64 @@ def _model_payload(model_id: str, limits: Any, source: str) -> dict[str, Any]:
         "supports_tools": _supports_tools(model_id),
         "source": source,
     }
+
+
+def _manifest_dir() -> Path:
+    """Where this instance's agent manifests live. Never a literal path."""
+    override = os.environ.get("ROBOTHOR_AGENTS_DIR")
+    if override:
+        return Path(override)
+    workspace = os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))
+    return Path(workspace) / "docs" / "agents"
+
+
+def known_models() -> list[dict[str, Any]]:
+    """Every model the engine can route to: curated registry plus plugins."""
+    from robothor.engine import model_registry
+
+    models = [
+        _model_payload(model_id, limits, "registry")
+        for model_id, limits in model_registry._MODEL_REGISTRY.items()
+    ]
+    known = {entry["id"] for entry in models}
+    try:
+        plugin_models = model_registry._plugin_model_limits()
+    except Exception:  # noqa: BLE001 - a plugin never breaks a model listing
+        logger.warning("Plugin model registry unavailable for the models listing")
+        plugin_models = {}
+    models.extend(
+        _model_payload(model_id, limits, "plugin")
+        for model_id, limits in plugin_models.items()
+        if model_id not in known
+    )
+    return models
+
+
+def _validate_test_model(spec: key_pool.ProviderSpec, model: str) -> None:
+    """Refuse a model this provider's key has no business dialling.
+
+    Two separate checks, because they stop two different things. The prefix
+    check stops one provider's credential being sent to another provider's
+    endpoint — the only part of this that is a security property. The catalog
+    check is the same validation ``PATCH /defaults`` applies, so a typo is a
+    422 naming the field rather than a 30-second wait for an upstream 404.
+
+    The catalog is the model registry plus the providers' own defaults: three
+    of the five defaults are not registry entries (nothing has pinned pricing
+    for them), and rejecting the button the wizard itself offers would be
+    worse than not validating at all.
+    """
+    from fastapi import HTTPException
+
+    if not model.startswith(spec.model_prefix):
+        raise HTTPException(
+            status_code=422,
+            detail=f"model {model!r} does not belong to provider {spec.id!r}",
+        )
+    catalog = {entry["id"] for entry in known_models()}
+    catalog.update(provider.default_model for provider in key_pool.PROVIDERS)
+    if model not in catalog:
+        raise HTTPException(status_code=422, detail=f"unknown model id: {model}")
 
 
 def _classify(exc: BaseException) -> str:
@@ -219,10 +315,8 @@ def _redact(message: str, secrets: set[str]) -> str:
 async def _run_test_connection(
     spec: key_pool.ProviderSpec, request: TestConnectionRequest
 ) -> dict[str, Any]:
-    from robothor.engine import llm_client
-
     configured = key_pool.resolve_keys(spec.id)
-    candidate = (request.api_key or "").strip()
+    candidate = request.api_key.get_secret_value().strip() if request.api_key is not None else ""
     api_key = candidate or (configured[0].key if configured else "")
     model = (request.model or "").strip() or spec.default_model
     # Every credential this provider could be dialling with, so an upstream
@@ -240,6 +334,12 @@ async def _run_test_connection(
 
     started = time.monotonic()
     try:
+        # Imported inside the try so an ImportError is classified and reported
+        # like any other failure. Above it, the same exception escapes as a 500
+        # whose traceback renders this frame's locals — and one of them is the
+        # request model holding the operator's key.
+        from robothor.engine import llm_client
+
         await llm_client.llm_call(
             [{"role": "user", "content": TEST_PROMPT}],
             model=model,
@@ -305,8 +405,14 @@ def register(app: FastAPI) -> None:
 
     @router.get("/providers")
     async def list_providers() -> dict[str, Any]:
-        """Which providers are configured, from where, and in what state."""
-        return {"providers": [_provider_payload(spec) for spec in key_pool.PROVIDERS]}
+        """Which providers are configured, from where, and in what state.
+
+        The vault read runs in a thread: psycopg2 is synchronous, and blocking
+        the engine's event loop on a status page stalls every agent turn and
+        every webhook in flight.
+        """
+        timestamps = await asyncio.to_thread(_timestamps_for_vault_slots)
+        return {"providers": [_provider_payload(spec, timestamps) for spec in key_pool.PROVIDERS]}
 
     @router.post("/providers/{provider_id}/test")
     async def test_provider(provider_id: str, body: TestConnectionRequest) -> dict[str, Any]:
@@ -314,34 +420,42 @@ def register(app: FastAPI) -> None:
         spec = key_pool.provider_by_id(provider_id)
         if spec is None:
             raise HTTPException(status_code=404, detail="unknown provider")
+        if body.model:
+            _validate_test_model(spec, body.model.strip())
         return await _run_test_connection(spec, body)
 
     @router.get("/models")
     async def list_models() -> dict[str, Any]:
         """Every model the engine knows about, curated registry plus plugins."""
-        from robothor.engine import model_registry
-
-        models = [
-            _model_payload(model_id, limits, "registry")
-            for model_id, limits in model_registry._MODEL_REGISTRY.items()
-        ]
-        known = {entry["id"] for entry in models}
-        try:
-            plugin_models = model_registry._plugin_model_limits()
-        except Exception:  # noqa: BLE001 - a plugin never breaks a model listing
-            logger.warning("Plugin model registry unavailable for the models listing")
-            plugin_models = {}
-        models.extend(
-            _model_payload(model_id, limits, "plugin")
-            for model_id, limits in plugin_models.items()
-            if model_id not in known
-        )
-        return {"models": models}
+        return {"models": known_models()}
 
     @router.post("/secrets/reload")
     async def reload_secrets() -> dict[str, Any]:
         """Pick up credentials written to the vault without an engine restart."""
-        result = key_pool.reload_provider_keys()
+        result = await asyncio.to_thread(key_pool.reload_provider_keys)
         return {"reloaded": result.reloaded, "slots": result.slots}
+
+    @router.post("/defaults/reload")
+    async def reload_defaults() -> dict[str, Any]:
+        """Re-read ``_defaults.yaml`` after the UI has rewritten it.
+
+        Manifests stay the source of truth (design decision D5), so a UI that
+        writes YAML has to tell the engine — otherwise the fleet keeps running
+        on the model block it parsed at boot. ``_load_defaults`` caches on
+        mtime, which usually notices a rename; this makes "usually" into
+        "always", and gives the writer something to await so the response can
+        honestly say the change is live.
+        """
+        from robothor.engine import config as engine_config
+
+        engine_config._defaults_cache = (0.0, {})
+        manifest_dir = _manifest_dir()
+        defaults = engine_config._load_defaults(manifest_dir)
+        model_block = defaults.get("model") or {}
+        return {
+            "reloaded": True,
+            "primary": model_block.get("primary"),
+            "fallbacks": list(model_block.get("fallbacks") or []),
+        }
 
     app.include_router(router)

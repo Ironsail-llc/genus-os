@@ -863,12 +863,16 @@ class LLMClient:
         # pool would mean reporting it "exhausted" and skipping every model on
         # it, when the correct behaviour is the one every deployment has
         # today — let litellm resolve the environment itself.
-        from robothor.engine.key_pool import shared_pool
+        from robothor.engine.key_pool import provider_for_var, resolve_keys, shared_pool
         from robothor.engine.provider_alerts import exhaustion_hook
 
-        return shared_pool(
-            var, on_exhausted=exhaustion_hook(var, pool_size=len(keys_from_env(var)))
-        )
+        # Counted the way the pool is BUILT, not the way it used to be: a
+        # vault-only provider has no numbered env siblings at all, so
+        # keys_from_env reported a pool of zero and the exhaustion page said
+        # "0 of 0 credentials" for an outage of four real keys.
+        spec = provider_for_var(var)
+        size = len(resolve_keys(spec.id)) if spec is not None else len(keys_from_env(var))
+        return shared_pool(var, on_exhausted=exhaustion_hook(var, pool_size=size))
 
     # ─── Cost ────────────────────────────────────────────────────────
 

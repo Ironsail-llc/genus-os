@@ -97,12 +97,24 @@ genus vault set providers/openrouter/api_key sk-or-v1-primary
 genus vault set providers/openrouter/api_key_2 sk-or-v1-spare
 ```
 
-A running engine picks up a vault write on `POST /api/admin/secrets/reload`
-(what the Settings page calls after a save) or on `SIGHUP`; neither cancels
-in-flight work, so no restart is needed. An instance whose vault has no master
-key resolves from the environment only and says so once at INFO — the
-credential store is optional, and an engine that could not make an LLM call
-because it is empty would be worse than no vault at all.
+**Spares must be contiguous.** The pool walks slots from 1 and stops at the
+first empty one, so a key in slot 3 with slot 2 empty would be stored and never
+dialled. `PUT /api/providers/{id}/keys/{n}` refuses that with a 409 naming the
+slot to fill first, and `GET /api/providers` reports any pre-existing stranded
+row as `state: "orphaned"`.
+
+**When the engine reads the vault.** Once at startup (before any subsystem
+runs, so direct-`os.environ` consumers like memory generation see the key on
+the first turn), and again on `POST /api/admin/secrets/reload` — what the
+Settings page calls after a save — or on `SIGHUP`. Neither cancels in-flight
+work, so no restart is needed. Between refreshes the values are served from an
+in-memory snapshot: credential resolution sits on the LLM hot path and must not
+open a database connection per call.
+
+An instance whose vault has no master key resolves from the environment only
+and says so once at INFO — the credential store is optional, and an engine that
+could not make an LLM call because it is empty would be worse than no vault at
+all.
 
 Secrets are write-only end to end. `GET /api/providers` reports
 `{configured, source, fingerprint, state, updated_at}` per slot and never a

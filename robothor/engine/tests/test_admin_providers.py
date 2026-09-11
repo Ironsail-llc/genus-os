@@ -27,7 +27,7 @@ import pytest
 from fastapi import APIRouter
 from starlette.testclient import TestClient
 
-from robothor.engine import key_pool
+from robothor.engine import admin_providers, key_pool
 
 ENV_KEY = "sk-env-000000000000000000000000"
 VAULT_KEY = "sk-vault-11111111111111111111"
@@ -61,12 +61,17 @@ def _clean_provider_state(monkeypatch):
             monkeypatch.delenv(
                 spec.env_var if index == 1 else f"{spec.env_var}_{index}", raising=False
             )
-    monkeypatch.setattr(key_pool, "_vault_read", lambda _key: None)
     monkeypatch.setattr(key_pool, "_vault_export", dict)
+    monkeypatch.setattr(admin_providers, "_timestamps_for_vault_slots", dict)
     key_pool.reset_vault_availability()
     yield
     key_pool.reset_shared_pools()
     key_pool._env_displaced.clear()
+
+
+#: The real vault-timestamp reader, captured before the autouse fixture stubs
+#: the module attribute, so a test can put it back by identity.
+_real_timestamps = admin_providers._timestamps_for_vault_slots
 
 
 @pytest.fixture
@@ -75,7 +80,11 @@ def client():
 
 
 def _vault(mapping: dict[str, str]):
-    return lambda key: mapping.get(key)
+    """A vault holding these keys, as ``export_env`` would render it."""
+    from robothor.vault.naming import env_name
+
+    exported = {env_name(k): v for k, v in mapping.items()}
+    return lambda: dict(exported)
 
 
 def _assert_no_secret(payload: object, *secrets: str) -> None:
@@ -117,7 +126,7 @@ class TestProviderListing:
 
     def test_vault_only(self, client, monkeypatch) -> None:
         monkeypatch.setattr(
-            key_pool, "_vault_read", _vault({"providers/anthropic/api_key": VAULT_KEY})
+            key_pool, "_vault_export", _vault({"providers/anthropic/api_key": VAULT_KEY})
         )
         body = client.get("/api/admin/providers").json()
         anthropic = next(p for p in body["providers"] if p["id"] == "anthropic")
@@ -128,7 +137,7 @@ class TestProviderListing:
     def test_mixed_slots(self, client, monkeypatch) -> None:
         monkeypatch.setenv("OPENROUTER_API_KEY", ENV_KEY)
         monkeypatch.setattr(
-            key_pool, "_vault_read", _vault({"providers/openrouter/api_key_2": VAULT_KEY})
+            key_pool, "_vault_export", _vault({"providers/openrouter/api_key_2": VAULT_KEY})
         )
         body = client.get("/api/admin/providers").json()
         openrouter = next(p for p in body["providers"] if p["id"] == "openrouter")
@@ -373,6 +382,10 @@ class TestConnection:
 
 class TestSecretsReload:
     def test_it_refreshes_the_environment_and_the_pool(self, client, monkeypatch) -> None:
+        # setenv, not delenv: monkeypatch has to have SEEN the variable to undo
+        # what reload_provider_keys writes to it directly, or the value leaks
+        # into every test that runs after this one.
+        monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder-overwritten-by-the-reload")
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         monkeypatch.setattr(
             key_pool,
@@ -380,7 +393,7 @@ class TestSecretsReload:
             lambda: {"PROVIDERS_OPENROUTER_API_KEY": VAULT_KEY},
         )
         monkeypatch.setattr(
-            key_pool, "_vault_read", _vault({"providers/openrouter/api_key": VAULT_KEY})
+            key_pool, "_vault_export", _vault({"providers/openrouter/api_key": VAULT_KEY})
         )
 
         body = client.post("/api/admin/secrets/reload").json()
@@ -472,3 +485,253 @@ class TestScope:
             ("POST", "/api/admin/secrets/reload"),
         ]:
             assert required_scope(method, path) == "engine:control", path
+
+
+class TestRequestModelRedaction:
+    """The request model is a frame local, and frame locals get printed.
+
+    structlog's console renderer formats exceptions with
+    ``show_locals=True``. A plain ``str`` field would put the key the operator
+    has just typed — and not yet stored anywhere — into the journal the first
+    time anything in the handler raised.
+    """
+
+    def test_repr_and_str_hide_the_key(self) -> None:
+        model = admin_providers.TestConnectionRequest(api_key=CANDIDATE_KEY, model="m")
+        assert CANDIDATE_KEY not in repr(model)
+        assert CANDIDATE_KEY not in str(model)
+        assert CANDIDATE_KEY not in repr(model.api_key)
+
+    def test_the_value_is_still_reachable_for_the_one_call(self) -> None:
+        model = admin_providers.TestConnectionRequest(api_key=CANDIDATE_KEY)
+        assert model.api_key is not None
+        assert model.api_key.get_secret_value() == CANDIDATE_KEY
+
+    def test_a_dumped_model_does_not_carry_the_key(self) -> None:
+        model = admin_providers.TestConnectionRequest(api_key=CANDIDATE_KEY)
+        assert CANDIDATE_KEY not in str(model.model_dump())
+
+
+class TestVaultIoIsOffTheEventLoop:
+    def test_the_listing_awaits_a_thread(self, client, monkeypatch) -> None:
+        """psycopg2 is synchronous. A status page that blocks the event loop
+        stalls every agent turn and every webhook in flight."""
+        threads: list[str] = []
+        real_to_thread = asyncio.to_thread
+
+        async def _record(func, /, *args, **kwargs):
+            threads.append(getattr(func, "__name__", repr(func)))
+            return await real_to_thread(func, *args, **kwargs)
+
+        # The autouse fixture stubs the vault read out; put the real one back
+        # so this test observes the call the route actually makes.
+        monkeypatch.setattr(
+            admin_providers,
+            "_timestamps_for_vault_slots",
+            _real_timestamps,
+        )
+        monkeypatch.setattr(admin_providers.asyncio, "to_thread", _record)
+        assert client.get("/api/admin/providers").status_code == 200
+        assert "_timestamps_for_vault_slots" in threads
+
+    def test_the_reload_awaits_a_thread(self, client, monkeypatch) -> None:
+        threads: list[str] = []
+        real_to_thread = asyncio.to_thread
+
+        async def _record(func, /, *args, **kwargs):
+            threads.append(getattr(func, "__name__", repr(func)))
+            return await real_to_thread(func, *args, **kwargs)
+
+        monkeypatch.setattr(admin_providers.asyncio, "to_thread", _record)
+        assert client.post("/api/admin/secrets/reload").status_code == 200
+        assert "reload_provider_keys" in threads
+
+    def test_the_listing_reads_the_vault_once_for_every_provider(self, client, monkeypatch) -> None:
+        calls: list[int] = []
+
+        def _export() -> dict[str, str]:
+            calls.append(1)
+            return {}
+
+        monkeypatch.setattr(key_pool, "_vault_export", _export)
+        monkeypatch.setattr(admin_providers, "_timestamps_for_vault_slots", _real_timestamps)
+        assert client.get("/api/admin/providers").status_code == 200
+        assert len(calls) == 1, f"{len(calls)} vault reads for one listing"
+
+
+class TestStorageIndexInTheListing:
+    def test_a_stranded_slot_keeps_its_real_number_and_says_it_is_orphaned(
+        self, client, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", ENV_KEY)
+        monkeypatch.setattr(
+            key_pool,
+            "_vault_export",
+            _vault(
+                {
+                    "providers/openrouter/api_key": VAULT_KEY,
+                    "providers/openrouter/api_key_3": "sk-vault-spare-3333333333",
+                }
+            ),
+        )
+        body = client.get("/api/admin/providers").json()
+        openrouter = next(p for p in body["providers"] if p["id"] == "openrouter")
+        assert [(s["position"], s["state"]) for s in openrouter["slots"]] == [
+            (1, "active"),
+            (3, "orphaned"),
+        ]
+        _assert_no_secret(body, ENV_KEY, VAULT_KEY, "sk-vault-spare-3333333333")
+
+
+class TestTestModelValidation:
+    def test_a_model_from_another_provider_is_refused(self, client, monkeypatch) -> None:
+        """The only genuinely security-shaped check here: one provider's key
+        must not be posted to another provider's endpoint."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", ENV_KEY)
+        called = []
+
+        async def _fake(messages, **kwargs):
+            called.append(1)
+
+        with patch("robothor.engine.llm_client.llm_call", new=_fake):
+            response = client.post(
+                "/api/admin/providers/openrouter/test", json={"model": "gemini/gemini-2.5-flash"}
+            )
+        assert response.status_code == 422
+        assert not called
+
+    def test_an_unknown_model_is_refused_before_the_provider_is_dialled(
+        self, client, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", ENV_KEY)
+        called = []
+
+        async def _fake(messages, **kwargs):
+            called.append(1)
+
+        with patch("robothor.engine.llm_client.llm_call", new=_fake):
+            response = client.post(
+                "/api/admin/providers/openrouter/test", json={"model": "openrouter/made/up"}
+            )
+        assert response.status_code == 422
+        assert not called
+
+    def test_the_provider_default_is_always_acceptable(self, client, monkeypatch) -> None:
+        """Three of five defaults are not registry entries. Rejecting the model
+        the wizard's own button sends would be worse than not validating."""
+        monkeypatch.setattr(
+            key_pool, "_vault_export", _vault({"providers/anthropic/api_key": VAULT_KEY})
+        )
+        spec = key_pool.provider_by_id("anthropic")
+        assert spec is not None
+
+        async def _fake(messages, **kwargs):
+            response = MagicMock()
+            response.choices = [MagicMock()]
+            return response
+
+        with patch("robothor.engine.llm_client.llm_call", new=_fake):
+            body = client.post(
+                "/api/admin/providers/anthropic/test", json={"model": spec.default_model}
+            ).json()
+        assert body["ok"] is True
+
+
+class TestDefaultsReload:
+    def test_it_reports_the_model_block_now_in_effect(self, client, tmp_path, monkeypatch) -> None:
+        """Manifests stay the source of truth, so a UI that rewrites the YAML
+        has to be able to tell the engine — and be told what took effect."""
+        import yaml
+
+        agents = tmp_path / "agents"
+        agents.mkdir()
+        (agents / "_defaults.yaml").write_text(
+            yaml.safe_dump({"model": {"primary": "openrouter/z-ai/glm-5", "fallbacks": ["x/y"]}})
+        )
+        monkeypatch.setattr(admin_providers, "_manifest_dir", lambda: agents)
+
+        body = client.post("/api/admin/defaults/reload").json()
+        assert body == {
+            "reloaded": True,
+            "primary": "openrouter/z-ai/glm-5",
+            "fallbacks": ["x/y"],
+        }
+
+    def test_it_drops_the_cache_so_a_rewrite_is_seen(self, client, tmp_path, monkeypatch) -> None:
+        import yaml
+
+        from robothor.engine import config as engine_config
+
+        agents = tmp_path / "agents"
+        agents.mkdir()
+        path = agents / "_defaults.yaml"
+        path.write_text(yaml.safe_dump({"model": {"primary": "first/model"}}))
+        monkeypatch.setattr(admin_providers, "_manifest_dir", lambda: agents)
+
+        client.post("/api/admin/defaults/reload")
+        # Same mtime, different content: without an explicit cache drop the
+        # engine would keep serving the block it parsed a moment ago.
+        stat = path.stat()
+        path.write_text(yaml.safe_dump({"model": {"primary": "second/model"}}))
+        os.utime(path, (stat.st_atime, stat.st_mtime))
+
+        body = client.post("/api/admin/defaults/reload").json()
+        assert body["primary"] == "second/model"
+        assert engine_config._load_defaults(agents)["model"]["primary"] == "second/model"
+
+    def test_a_missing_defaults_file_is_not_an_error(self, client, tmp_path, monkeypatch) -> None:
+        agents = tmp_path / "agents"
+        agents.mkdir()
+        monkeypatch.setattr(admin_providers, "_manifest_dir", lambda: agents)
+        body = client.post("/api/admin/defaults/reload").json()
+        assert body == {"reloaded": True, "primary": None, "fallbacks": []}
+
+
+class TestStartupSecretsLoad:
+    @pytest.mark.asyncio
+    async def test_the_daemon_loads_vault_keys_before_subsystems_run(self, monkeypatch) -> None:
+        """A vault-only box was dark for every direct-env consumer — memory
+        generation reads OPENROUTER_API_KEY itself — until someone sent SIGHUP."""
+        from robothor.engine import daemon
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder")
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.setattr(
+            key_pool, "_vault_export", _vault({"providers/openrouter/api_key": VAULT_KEY})
+        )
+
+        assert await daemon.load_provider_secrets_at_startup() == 1
+        assert os.environ["OPENROUTER_API_KEY"] == VAULT_KEY
+
+    @pytest.mark.asyncio
+    async def test_a_box_with_no_vault_still_starts(self, monkeypatch) -> None:
+        from robothor.engine import daemon
+
+        def _explode() -> dict[str, str]:
+            raise FileNotFoundError("Vault master key not found")
+
+        monkeypatch.setattr(key_pool, "_vault_export", _explode)
+        assert await daemon.load_provider_secrets_at_startup() == 0
+
+    @pytest.mark.asyncio
+    async def test_a_broken_key_pool_never_blocks_boot(self, monkeypatch) -> None:
+        from robothor.engine import daemon
+        from robothor.engine import key_pool as kp
+
+        monkeypatch.setattr(kp, "reload_provider_keys", MagicMock(side_effect=RuntimeError("boom")))
+        assert await daemon.load_provider_secrets_at_startup() == 0
+
+    @pytest.mark.asyncio
+    async def test_it_runs_off_the_event_loop(self, monkeypatch) -> None:
+        from robothor.engine import daemon
+
+        threads: list[str] = []
+        real_to_thread = asyncio.to_thread
+
+        async def _record(func, /, *args, **kwargs):
+            threads.append(getattr(func, "__name__", repr(func)))
+            return await real_to_thread(func, *args, **kwargs)
+
+        monkeypatch.setattr(daemon.asyncio, "to_thread", _record)
+        await daemon.load_provider_secrets_at_startup()
+        assert "reload_provider_keys" in threads

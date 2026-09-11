@@ -82,26 +82,32 @@ def get_secret(
         conn.close()
 
 
-def get_secret_updated_at(
-    key: str,
+def get_secrets_updated_at(
+    keys: list[str],
     *,
     tenant_id: str = DEFAULT_TENANT,
-) -> datetime | None:
-    """When a secret was last written, without decrypting it.
+) -> dict[str, datetime]:
+    """When each of these secrets was last written, without decrypting any.
 
-    Separate from ``get_secret`` on purpose: a status page wants to say "set
-    three days ago" and has no business holding the plaintext to do it, and no
-    master key is needed to answer.
+    Bulk rather than per key, and separate from ``get_secret``, for two
+    different reasons. Separate, because a status page wants to say "set three
+    days ago" and has no business holding the plaintext to do it — no master
+    key is needed to answer. Bulk, because the caller is a provider listing
+    with up to five providers times sixteen slots, and one connection per slot
+    is how a status page becomes a database incident.
+
+    Keys with no row are simply absent from the result.
     """
+    if not keys:
+        return {}
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT updated_at FROM vault_secrets WHERE tenant_id = %s AND key = %s",
-                (tenant_id, key),
+                "SELECT key, updated_at FROM vault_secrets WHERE tenant_id = %s AND key = ANY(%s)",
+                (tenant_id, list(keys)),
             )
-            row = cur.fetchone()
-            return row[0] if row else None
+            return {row[0]: row[1] for row in cur.fetchall() if row[1] is not None}
     finally:
         conn.close()
 

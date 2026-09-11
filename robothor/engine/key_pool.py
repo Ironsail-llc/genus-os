@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable  # noqa: TC003
 from dataclasses import dataclass
@@ -196,62 +197,111 @@ def key_fingerprint(key: str) -> str:
 # ── Vault-backed credentials ────────────────────────────────────────
 #
 # A credential written from the UI lands in the encrypted vault, not in the
-# process environment, so resolution has to read both. The vault is imported
-# lazily on purpose: it pulls in psycopg2 and the master key file, and this
-# module is imported long before either is guaranteed to exist.
+# process environment, so resolution has to read both.
+#
+# The vault is read into an in-memory snapshot rather than queried per lookup,
+# and that is not an optimisation. `api_key_for_model` sits on the LLM hot
+# path: every cache miss in `pooled_completion` resolves credentials, so a
+# per-slot `vault.get` would open a psycopg2 connection — synchronously, on the
+# engine's event loop — in the middle of a completion. The snapshot makes the
+# database cost one connection per *refresh* (start, reload, SIGHUP) instead of
+# one per credential per call.
+#
+# The import stays lazy for the original reason: it pulls in psycopg2 and the
+# master key file, and this module is imported long before either is
+# guaranteed to exist.
+
+#: Guards the snapshot and the displaced-environment record. The scheduler,
+#: the Telegram bot and the health app all resolve credentials from different
+#: threads, and two of them refreshing at once must not interleave a
+#: half-written environment.
+_vault_lock = threading.RLock()
+
+#: Every vault secret as ``{ENV_NAME: value}``, or None before the first read.
+#: Distinct from ``{}``: an empty vault is a fact, "not yet read" is not.
+_vault_snapshot: dict[str, str] | None = None
 
 #: Latched once the vault has been found unusable, so a box without a master
-#: key logs one INFO line instead of one per credential lookup per call.
+#: key logs one INFO line rather than one per credential lookup per call.
 _vault_unavailable = False
 
 
 def reset_vault_availability() -> None:
-    """Re-arm the vault probe. Called on a secrets reload and by tests."""
-    global _vault_unavailable  # noqa: PLW0603
-    _vault_unavailable = False
-
-
-def _vault_read(key: str) -> str | None:
-    """Read one secret from the vault. Raises if the vault is unusable."""
-    from robothor import vault
-
-    return vault.get(key)
+    """Drop the snapshot and re-arm the vault probe. For tests and reloads."""
+    global _vault_unavailable, _vault_snapshot  # noqa: PLW0603
+    with _vault_lock:
+        _vault_unavailable = False
+        _vault_snapshot = None
 
 
 def _vault_export() -> dict[str, str]:
-    """Every vault secret as ``{ENV_NAME: value}``. Raises if unusable."""
+    """Every vault secret as ``{ENV_NAME: value}``. Raises if unusable.
+
+    The single seam through which this module touches the database.
+    """
     from robothor import vault
 
     return vault.export_env()
 
 
-def _vault_lookup(key: str) -> str | None:
-    """Read one secret, degrading to "not configured" if the vault is not there.
+def vault_snapshot(*, refresh: bool = False) -> dict[str, str]:
+    """The vault's contents as this process last read them.
 
-    A fresh install has no master key, and an engine that refused to start —
-    or worse, refused to make an LLM call — because the optional credential
-    store is empty would be strictly worse than the environment-only
-    behaviour this replaces.
+    Blocking: it opens a database connection on a cold cache. Callers on an
+    async path must reach it through ``asyncio.to_thread``, and the engine
+    warms it at startup so the LLM path never pays for the first read.
+
+    A vault that cannot be read degrades to "nothing configured" with one INFO
+    line. An engine that refused to make an LLM call because an *optional*
+    credential store is empty would be strictly worse than the
+    environment-only behaviour this replaces.
     """
-    global _vault_unavailable  # noqa: PLW0603
-    if _vault_unavailable:
-        return None
-    try:
-        return _vault_read(key)
-    except Exception as exc:  # noqa: BLE001 - the vault is optional, by design
-        _vault_unavailable = True
-        logger.info(
-            "Vault unavailable (%s: %s); provider credentials resolve from the "
-            "environment only until a secrets reload.",
-            type(exc).__name__,
-            exc,
-        )
-        return None
+    global _vault_snapshot, _vault_unavailable  # noqa: PLW0603
+    with _vault_lock:
+        if refresh:
+            _vault_snapshot = None
+            _vault_unavailable = False
+        if _vault_snapshot is not None:
+            return _vault_snapshot
+        if _vault_unavailable:
+            return {}
+        try:
+            snapshot = _vault_export()
+        except Exception as exc:  # noqa: BLE001 - the vault is optional, by design
+            _vault_unavailable = True
+            logger.info(
+                "Vault unavailable (%s: %s); provider credentials resolve from the "
+                "environment only until a secrets reload.",
+                type(exc).__name__,
+                exc,
+            )
+            return {}
+        _vault_snapshot = snapshot
+        return snapshot
+
+
+def refresh_vault_snapshot() -> dict[str, str]:
+    """Re-read the vault. One connection, whatever the number of slots."""
+    return vault_snapshot(refresh=True)
+
+
+def _vault_lookup(key: str) -> str | None:
+    """One secret out of the snapshot. Never touches the database itself."""
+    from robothor.vault.naming import env_name
+
+    return vault_snapshot().get(env_name(key))
 
 
 @dataclass(frozen=True)
 class ResolvedKey:
-    """One credential and where it came from. Carries key material."""
+    """One credential and where it came from. Carries key material.
+
+    ``position`` is the STORAGE slot — the ``_3`` in ``api_key_3`` — not a
+    display index. They were the same number until a gap or a duplicate made
+    them differ, at which point a dense index silently addressed the wrong
+    vault row: the listing named a slot that did not exist and a delete of it
+    removed nothing.
+    """
 
     position: int
     key: str
@@ -265,17 +315,15 @@ class SlotStatus:
     position: int
     source: str  # "vault" | "env"
     fingerprint: str
-    state: str  # "active" | "spare" | "capped" | "revoked"
+    state: str  # "active" | "spare" | "capped" | "revoked" | "orphaned"
 
 
-def resolve_keys(provider_id: str) -> list[ResolvedKey]:
-    """Every credential configured for a provider, vault first, then env.
+def scan_slots(provider_id: str) -> list[ResolvedKey]:
+    """Every populated slot 1..MAX_KEY_SLOTS, whether or not it is reachable.
 
-    Slot by slot rather than store by store: an operator who typed slot 1 into
-    the UI and left slot 2 in the shell has both, and the UI value wins for
-    the slot it was written to. The walk stops at the first empty slot for the
-    same reason ``keys_from_env`` does — a hole is a typo, and skipping it
-    hides a key the operator believes is loaded.
+    Deliberately does NOT stop at the first gap: a key sitting past one is a
+    credential the operator believes is configured and nothing will ever dial,
+    and the only way to say so is to look.
     """
     from robothor.vault.naming import provider_key
 
@@ -283,8 +331,7 @@ def resolve_keys(provider_id: str) -> list[ResolvedKey]:
     if spec is None:
         return []
 
-    resolved: list[ResolvedKey] = []
-    seen: set[str] = set()
+    found: list[ResolvedKey] = []
     for index in range(1, _MAX_POOL_KEYS + 1):
         value = (_vault_lookup(provider_key(spec.id, index)) or "").strip()
         source = "vault"
@@ -292,49 +339,80 @@ def resolve_keys(provider_id: str) -> list[ResolvedKey]:
             name = spec.env_var if index == 1 else f"{spec.env_var}_{index}"
             value = os.environ.get(name, "").strip()
             source = "env"
-        if not value:
+        if value:
+            found.append(ResolvedKey(position=index, key=value, source=source))
+    return found
+
+
+def _contiguous_slots(scanned: list[ResolvedKey]) -> list[ResolvedKey]:
+    """The run from slot 1 with no hole in it — what the pool can reach."""
+    run: list[ResolvedKey] = []
+    for expected, item in enumerate(scanned, start=1):
+        if item.position != expected:
             break
-        if value in seen:
+        run.append(item)
+    return run
+
+
+def resolve_keys(provider_id: str) -> list[ResolvedKey]:
+    """The credentials a provider actually dials, in priority order.
+
+    Slot by slot rather than store by store: an operator who typed slot 1 into
+    the UI and left slot 2 in the shell has both, and the UI value wins for the
+    slot it was written to. The walk stops at the first empty slot for the same
+    reason ``keys_from_env`` does — a hole is a typo, and skipping it hides a
+    key the operator believes is loaded.
+
+    A duplicated value still OCCUPIES its slot (so it does not create a phantom
+    gap) but enters the pool once; rotating onto a copy of the key that just
+    failed buys nothing.
+    """
+    seen: set[str] = set()
+    dialled: list[ResolvedKey] = []
+    for item in _contiguous_slots(scan_slots(provider_id)):
+        if item.key in seen:
             continue
-        seen.add(value)
-        resolved.append(ResolvedKey(position=len(resolved) + 1, key=value, source=source))
-    return resolved
+        seen.add(item.key)
+        dialled.append(item)
+    return dialled
 
 
 def provider_slots(provider_id: str) -> list[SlotStatus]:
     """What is knowable about a provider's credentials without disclosing them.
 
-    ``state`` folds the pool's rotation state into the four words the UI shows:
-    the first credential still in rotation is ``active``, the rest of the live
-    ones are ``spare``, a credit/quota retirement is ``capped``, and a rejected
-    key is ``revoked``.
+    ``state`` folds the pool's rotation state into the words the UI shows: the
+    first credential still in rotation is ``active``, the rest of the live ones
+    are ``spare``, a credit/quota retirement is ``capped``, a rejected key is
+    ``revoked``, and a key stranded past a numbering gap is ``orphaned`` — the
+    one state that is not about the provider at all but about the operator
+    having a credential nothing can reach.
     """
-    resolved = resolve_keys(provider_id)
-    if not resolved:
+    scanned = scan_slots(provider_id)
+    if not scanned:
         return []
 
     spec = provider_by_id(provider_id)
-    assert spec is not None  # resolve_keys returned rows, so the id is known
+    assert spec is not None  # scan_slots returned rows, so the id is known
+    reachable = {item.position for item in _contiguous_slots(scanned)}
     pool = _SHARED.get(spec.env_var)
-    availability = {}
-    if pool is not None:
-        by_fingerprint = {status.fingerprint: status for status in pool.status()}
-        for item in resolved:
-            status = by_fingerprint.get(pool.fingerprint(item.key))
-            if status is not None:
-                availability[item.position] = status
+    by_fingerprint = (
+        {status.fingerprint: status for status in pool.status()} if pool is not None else {}
+    )
 
     slots: list[SlotStatus] = []
     active_taken = False
-    for item in resolved:
-        status = availability.get(item.position)
-        if status is not None and not status.available:
-            state = "revoked" if status.reason is Retirement.AUTH_FAILED else "capped"
-        elif active_taken:
-            state = "spare"
+    for item in scanned:
+        if item.position not in reachable:
+            state = "orphaned"
         else:
-            state = "active"
-            active_taken = True
+            status = by_fingerprint.get(pool.fingerprint(item.key)) if pool is not None else None
+            if status is not None and not status.available:
+                state = "revoked" if status.reason is Retirement.AUTH_FAILED else "capped"
+            elif active_taken:
+                state = "spare"
+            else:
+                state = "active"
+                active_taken = True
         slots.append(
             SlotStatus(
                 position=item.position,
@@ -356,7 +434,10 @@ class ReloadResult:
 
 #: Environment values displaced by a vault-backed credential, so removing the
 #: vault row puts the box back where it was instead of leaving the engine with
-#: a credential the operator has just deleted.
+#: a credential the operator has just deleted. Read and written only under
+#: ``_vault_lock``: two concurrent reloads interleaving here would record one
+#: reload's substituted value as the other's "original", and the restore would
+#: then put a deleted credential back.
 _env_displaced: dict[str, str | None] = {}
 
 
@@ -368,39 +449,37 @@ def reload_provider_keys() -> ReloadResult:
     agent turns and fail for everything else. Exporting into the environment
     here is what lets a key written in the browser be used without a restart.
 
+    Blocking (it refreshes the snapshot); call it from a thread on async paths.
+
     Never raises: an unusable vault reloads nothing and leaves the environment
     exactly as it was.
     """
     from robothor.vault.naming import env_name, provider_key
 
-    reset_vault_availability()
-    try:
-        exported = _vault_export()
-    except Exception as exc:  # noqa: BLE001 - the vault is optional, by design
-        logger.info("Vault unavailable (%s: %s); nothing to reload.", type(exc).__name__, exc)
-        return ReloadResult(reloaded=[], slots=0)
+    exported = refresh_vault_snapshot()
 
     reloaded: list[str] = []
     slots = 0
-    for spec in PROVIDERS:
-        touched = 0
-        for index in range(1, _MAX_POOL_KEYS + 1):
-            var = spec.env_var if index == 1 else f"{spec.env_var}_{index}"
-            value = (exported.get(env_name(provider_key(spec.id, index))) or "").strip()
-            if value:
-                if var not in _env_displaced:
-                    _env_displaced[var] = os.environ.get(var)
-                os.environ[var] = value
-                touched += 1
-            elif var in _env_displaced:
-                previous = _env_displaced.pop(var)
-                if previous is None:
-                    os.environ.pop(var, None)
-                else:
-                    os.environ[var] = previous
-        if touched:
-            reloaded.append(spec.id)
-            slots += touched
+    with _vault_lock:
+        for spec in PROVIDERS:
+            touched = 0
+            for index in range(1, _MAX_POOL_KEYS + 1):
+                var = spec.env_var if index == 1 else f"{spec.env_var}_{index}"
+                value = (exported.get(env_name(provider_key(spec.id, index))) or "").strip()
+                if value:
+                    if var not in _env_displaced:
+                        _env_displaced[var] = os.environ.get(var)
+                    os.environ[var] = value
+                    touched += 1
+                elif var in _env_displaced:
+                    previous = _env_displaced.pop(var)
+                    if previous is None:
+                        os.environ.pop(var, None)
+                    else:
+                        os.environ[var] = previous
+            if touched:
+                reloaded.append(spec.id)
+                slots += touched
 
     # The pools cache their key list, so a reload that did not drop them would
     # keep dialling the credential the operator just replaced.

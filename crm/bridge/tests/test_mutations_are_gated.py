@@ -106,7 +106,12 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
 
 # Never allowlistable: these mutate credentials or appliance-global install
 # state and must carry the operator gate in the handler itself.
-MUST_BE_GATED_PREFIXES = ("/api/vault", "/api/installed-agents")
+#
+# ``/api/providers`` writes LLM credentials into the vault and rewrites the
+# fleet's default model. Either one is enough on its own; a future "it is
+# tenant data, bridge:write covers it" entry would hand every member session
+# the ability to point the whole fleet at a model of their choosing.
+MUST_BE_GATED_PREFIXES = ("/api/vault", "/api/installed-agents", "/api/providers")
 
 
 def _all_routes() -> list[Any]:

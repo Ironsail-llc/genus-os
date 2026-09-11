@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -37,10 +38,23 @@ SERVICE_ID = "genus-bridge"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
+#: The only schemes an engine may be reached over. ``ROBOTHOR_ENGINE_URL`` is
+#: an environment variable, so it is exactly as trustworthy as whatever wrote
+#: the unit file — and a ``file://`` or ``unix://`` value there would turn
+#: every proxied call, credential bodies included, into something httpx
+#: resolves somewhere nobody intended.
+_ALLOWED_SCHEMES = frozenset({"http", "https"})
+
+
 def engine_base_url() -> str:
     """Where the engine answers. Loopback unless deployment says otherwise."""
     explicit = os.environ.get("ROBOTHOR_ENGINE_URL", "").strip()
     if explicit:
+        parsed = urlsplit(explicit)
+        if parsed.scheme not in _ALLOWED_SCHEMES or not parsed.netloc:
+            raise ValueError(
+                f"ROBOTHOR_ENGINE_URL must be an http(s) URL with a host, got {explicit!r}"
+            )
         return explicit.rstrip("/")
     host = os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
     port = os.environ.get("ROBOTHOR_ENGINE_PORT", "18800")

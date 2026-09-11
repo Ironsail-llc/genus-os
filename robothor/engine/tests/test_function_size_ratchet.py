@@ -48,7 +48,11 @@ KNOWN_LARGE: dict[str, int] = {
     # Five irreducible lines (normalise the list, call, branch, return) plus
     # three of comment; the guard itself is still in _dnc_refusal.
     "tools/handlers/gws.py::_handle_gws_tool": 473,
-    "daemon.py::main": 397,  # -14: fleet capacity init extracted to _init_fleet_capacity
+    # -14: fleet capacity init extracted to _init_fleet_capacity;
+    # -26: structlog wiring extracted to _configure_structured_logging, which
+    # is what made room for the startup provider-secrets load rather than
+    # raising this number for it.
+    "daemon.py::main": 371,
     "telegram.py::_run_interactive": 384,
     "tools/handlers/benchmark.py::_benchmark_run": 370,
     "analytics.py::get_agent_stats": 343,
