@@ -102,7 +102,7 @@ tasks:
       # KNOWN GAP, 2026-08-21. "store_memory" here is a prose check that grades
       # narration: across every recorded curiosity-engine benchmark sub-run the
       # tool was called ZERO times (it is in the agent's tools_allowed but in
-      # neither _BENCHMARK_READONLY_TOOLS nor SANDBOX_WRITE_TOOLS, so the
+      # neither benchmark_readonly_tools() nor SANDBOX_WRITE_TOOLS, so the
       # harness denies it), while 25 of 116 outputs typed the name. It cannot
       # move to `tools_used` until memory writes are sandbox-safe — the grader
       # rejects a tools_used entry no sub-agent can ever call, because a check

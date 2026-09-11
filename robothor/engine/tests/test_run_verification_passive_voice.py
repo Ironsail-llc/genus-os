@@ -50,8 +50,8 @@ def _kinds(text: str) -> set[str]:
         "The Auto Researcher is in a holding pattern pending a rebuild of its "
         "optimization framework. The last experiment was archived as "
         "`paused-2026-05-06.json`.",
-        "Apollo returns 403/422 on every search endpoint. This was flagged "
-        "previously but hasn't been resolved. I can't search Apollo at all.",
+        "Acme Directory returns 403/422 on every search endpoint. This was "
+        "flagged previously but hasn't been resolved. I can't search it at all.",
         "Both sub-agents completed successfully (run_id `5974cb78` and "
         "sub_agent run_id `8533addc` both marked DONE).",
         "The email-classifier buddy/self-improve CRM task is marked DONE, but "

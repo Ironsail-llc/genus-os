@@ -361,6 +361,16 @@ dashboard:
   env:
     NEXT_PUBLIC_OWNER_NAME: "there"
     NEXT_PUBLIC_AI_NAME: "Robothor"
+    # AUTH_URL is the dashboard's PUBLIC origin and its source is
+    # dashboard.ingress.host above — set it to "https://<that host>". It is
+    # left unset here because the host is layer 3's to provide.
+    #
+    # It is not decoration. The container sets HOSTNAME=0.0.0.0 (see
+    # templates/dashboard/deployment.yaml), so a Next standalone route
+    # handler's request.url reports the BIND address; sign-in redirects fall
+    # back to it when AUTH_URL is unset and the browser is sent to
+    # "0.0.0.0 refused to connect" after a successful login (2026-09-11).
+    # AUTH_URL: "https://helm.example.com"
   resources:
     requests:
       cpu: 100m

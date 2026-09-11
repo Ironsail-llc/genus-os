@@ -63,7 +63,7 @@ def _get_cv2() -> Any:
     except ImportError:
         raise ImportError(
             "opencv-python is required for vision features. "
-            "Install with: pip install robothor[vision]"
+            "Install with: pip install genusos[vision]"
         ) from None
 
 

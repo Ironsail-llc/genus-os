@@ -68,6 +68,111 @@ never substituted.
 `robothor.env.example` is the template for `/etc/robothor/robothor.env`,
 which every service sources via `EnvironmentFile=`.
 
+## `robothor-secrets.service` is the ordering point for decrypted secrets
+
+`/run/robothor/secrets.env` lives on tmpfs, so it has to be decrypted on every
+boot, and every consumer loads it as **`EnvironmentFile=-`** — optional. That
+optionality is deliberate (an instance may run with no SOPS secrets at all) and
+it is also a trap: a service that starts *before* the file exists starts
+without its credentials and reports itself healthy.
+
+Until this unit existed, the only thing that wrote that file at boot was the
+**engine's** `ExecStartPre`, and nothing ordered anyone else after the engine.
+On 2026-09-03 the box rebooted at 02:51, `robothor-bridge` started at 02:51:12
+with no secrets file on disk, and the engine came up hours later. The bridge
+therefore had no `GENUS_BRIDGE_SSO_SECRET`, `_sso_secret_ok` returned False,
+and every `POST /api/auth/sso` was answered 403 — for eight days, until someone
+tried to sign in through Cloudflare Access and was bounced back to `/signin`.
+
+So the decrypt is now a unit of its own:
+
+| | |
+|---|---|
+| `robothor-secrets.service` | `Type=oneshot`, `RemainAfterExit=yes`, `ExecStart=<workspace>/scripts/decrypt-secrets.sh` |
+| Consumers | `robothor-engine`, `robothor-bridge`, `robothor-app`, `robothor-orchestrator` declare `Requires=` **and** `After=robothor-secrets.service` |
+
+Four things about that are load-bearing:
+
+- **`Requires=`, not `Wants=`.** A bridge with no shared secret cannot complete
+  a single login. Failing to start is more honest than starting broken, and it
+  is what makes the dependency visible in `systemctl status`.
+- **`After=` as well as `Requires=`.** `Requires=` alone is a pull-in, not an
+  ordering: systemd would happily start both in parallel, which is the bug.
+- **`ConditionPathExists=/etc/robothor/secrets.enc.json`** on the oneshot. An
+  instance with no encrypted secrets file *skips* the unit, and systemd treats
+  a condition-skipped dependency as satisfied — so `Requires=` does not block
+  those instances. The `EnvironmentFile=-` optional semantics are untouched.
+- **The consumers keep their own `ExecStartPre` decrypt.** It is idempotent,
+  and `RemainAfterExit=yes` means the oneshot will not re-run on its own — so
+  removing the `ExecStartPre` would mean a `systemctl restart robothor-engine`
+  after a secret rotation silently kept the old values. Keeping it is also the
+  smaller diff and leaves existing restart behaviour unchanged.
+
+### What a failed decrypt now costs, and how to recover
+
+This is the flip side of `Requires=`, and it is not free. A oneshot has **no
+`Restart=`**, and a unit whose dependency failed sits in `dependency failed` —
+a state in which its *own* `Restart=always` never fires. So if
+`decrypt-secrets.sh` exits non-zero (missing `/etc/robothor/age.key`, an
+unreadable `secrets.enc.json`, or one of its `REQUIRED_KEYS` absent), **engine,
+bridge, app and orchestrator all stay down and nothing retries them.**
+
+That is why the unit carries `OnFailure=robothor-alert@%n.service`, with its own
+arm in `scripts/send_failure_alert.sh` naming the four services rather than the
+default "(no consequence mapped)". Nothing heals this but a person.
+
+Recovery:
+
+```bash
+systemctl status robothor-secrets.service     # why it exited non-zero
+journalctl -u robothor-secrets.service -n 50  # decrypt-secrets.sh says which key
+# …repair the secret (sops /etc/robothor/secrets.enc.json), then:
+systemctl start robothor-secrets.service      # dependents start via Requires=
+```
+
+### First start after `install-units.sh` must be manual
+
+Install the units, then **start the oneshot by hand and confirm it reaches
+`active (exited)` before restarting anything that depends on it**:
+
+```bash
+sudo scripts/install-units.sh && sudo systemctl daemon-reload
+sudo systemctl enable --now robothor-secrets.service
+systemctl is-active robothor-secrets.service   # must print: active
+```
+
+Only then restart the consumers. A `daemon-reload` plus a blind restart of all
+four is how a latent secrets problem — one that was previously *silent*,
+because `EnvironmentFile=-` swallowed it — becomes a four-service outage in one
+step. The sandboxing on the oneshot is deliberately a strict subset of what
+`robothor-engine.service` already applies to the same script, so the first start
+is not also a first test of new confinement. That is enforced, not just
+intended: `test_secrets_unit_applies_no_confinement_the_engine_does_not`
+allowlists the unit's own operational keys (`Type`, `ExecStart`,
+`RuntimeDirectory*`, …) and requires **every other** `[Service]` line to appear
+verbatim on the engine unit — so a directive nobody has thought of yet fails the
+suite too. Add confinement to the engine first, where the script demonstrably
+runs under it.
+
+### Still unordered
+
+`robothor-boot-guard.service` is the one **boot-time** consumer of
+`secrets.env` that is still not ordered after the decrypt — it runs at boot,
+like the four above, and has the same exposure. It is left out of this change
+only to keep the diff reviewable; it should get the same two lines.
+
+The rest (`robothor-backup-*`, `robothor-slo`, `robothor-wal-offsite`,
+`robothor-liveness`, `robothor-fleet-guard`, `robothor-thermal-*`,
+`robothor-guardrail-watch`, `robothor-benchmark-summary`,
+`robothor-bench-rotation`, `robothor-restore-drill`, `robothor-gpu-clock-cap`,
+`robothor-alert@`) are timer- or event-driven: they fire minutes to hours after
+boot and are ordered by their timers.
+
+`tests/test_install_units.py` asserts the unit exists, is installed by the core
+set, pages on failure, does not relax `/run/robothor`, applies no sandboxing
+the engine does not already apply to the same script, and that each of the four
+consumers carries both ordering directives.
+
 ## `EnvironmentFile=` carries a PATH, so every root script sets its own
 
 `/etc/robothor/robothor.env` is instance-land: this repo ships

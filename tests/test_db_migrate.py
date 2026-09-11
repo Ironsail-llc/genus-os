@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pytest
+import yaml
 
 from robothor.db import migrate
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 class _FakeCursor:
@@ -31,14 +30,33 @@ class _FakeCursor:
         elif "pg_advisory_lock" in normalized:
             self._one = (None,)
         elif "SELECT to_regclass" in normalized:
-            self._one = ("schema_migrations",) if self.connection.legacy else (None,)
+            target = str(params[0]) if params else ""
+            if target == "public.schema_migrations":
+                self._one = ("schema_migrations",) if self.connection.legacy else (None,)
+            elif target == f"public.{migrate.BASELINE_EVIDENCE_TABLE}":
+                self._one = (
+                    (migrate.BASELINE_EVIDENCE_TABLE,)
+                    if self.connection.schema_present
+                    else (None,)
+                )
+            else:
+                self._one = (None,)
         elif normalized.startswith("SELECT version, filename, applied_at, checksum"):
             self._rows = list(self.connection.legacy)
         elif normalized.startswith("SELECT migration_id, version, filename"):
             self._rows = list(self.connection.history.values())
         elif normalized.startswith("INSERT INTO schema_migrations_v2"):
             assert params is not None
-            migration_id, version, filename, source, applied_at, checksum, reconciled = params
+            (
+                migration_id,
+                version,
+                filename,
+                source,
+                applied_at,
+                checksum,
+                reconciled,
+                adopted_from,
+            ) = params
             self.connection.history.setdefault(
                 str(migration_id),
                 (
@@ -49,10 +67,13 @@ class _FakeCursor:
                     applied_at or "now",
                     checksum,
                     reconciled,
+                    adopted_from,
                 ),
             )
-        elif normalized.startswith("CREATE TABLE IF NOT EXISTS schema_migrations_v2"):
-            return
+        elif normalized.startswith(
+            ("CREATE TABLE IF NOT EXISTS schema_migrations_v2", "ALTER TABLE schema_migrations_v2")
+        ):
+            return  # ledger DDL, not migration SQL
         else:
             if "FAIL_ME" in sql:
                 raise RuntimeError("synthetic migration failure")
@@ -71,9 +92,11 @@ class _FakeConnection:
         *,
         history: dict[str, tuple[Any, ...]] | None = None,
         legacy: list[tuple[Any, ...]] | None = None,
+        schema_present: bool = False,
     ) -> None:
         self.history = history or {}
         self.legacy = legacy or []
+        self.schema_present = schema_present
         self.statements: list[tuple[str, tuple[Any, ...] | None]] = []
         self.executed_sql: list[str] = []
         self.commits = 0
@@ -87,6 +110,58 @@ class _FakeConnection:
 
     def rollback(self) -> None:
         self.rollbacks += 1
+
+
+@pytest.fixture(autouse=True)
+def _isolated_workspace(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
+    """Keep the legacy YAML side-ledger lookup off the operator's real workspace.
+
+    `_legacy_yaml_filenames` reads ``$ROBOTHOR_WORKSPACE/.robothor/
+    migrations_applied.yaml``. Without this, a test's adoption set would depend
+    on whatever the box happens to have there.
+    """
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path_factory.mktemp("workspace")))
+
+
+def _ledger_row(
+    migration_id: str,
+    version: str,
+    filename: str,
+    source: str,
+    checksum: str,
+    *,
+    applied_at: str = "then",
+    reconciled_from_legacy: bool = False,
+    adopted_from: str | None = None,
+) -> tuple[Any, ...]:
+    """One `schema_migrations_v2` row in the column order `_applied` selects."""
+    return (
+        migration_id,
+        version,
+        filename,
+        source,
+        applied_at,
+        checksum,
+        reconciled_from_legacy,
+        adopted_from,
+    )
+
+
+def _write_yaml_ledger(workspace: Path, filenames: list[str]) -> Path:
+    """Write the retired `.robothor/migrations_applied.yaml` side-ledger."""
+    path = workspace / ".robothor" / "migrations_applied.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.dump(
+            {
+                "migrations": [
+                    {"file": name, "applied_at": "2026-01-01T00:00:00Z"} for name in filenames
+                ],
+                "template_hashes": {"SOUL.md": "abc"},
+            }
+        )
+    )
+    return path
 
 
 def _write_migration(directory: Path, filename: str, body: str) -> Path:
@@ -196,15 +271,7 @@ def test_apply_rolls_back_failed_file_without_recording_it(tmp_path: Path) -> No
 def test_apply_refuses_checksum_drift_before_executing_sql(tmp_path: Path) -> None:
     path = _write_migration(tmp_path, "001_first.sql", "SELECT 1;")
     history = {
-        "001_first": (
-            "001_first",
-            "001",
-            path.name,
-            tmp_path.name,
-            "then",
-            "0" * 64,
-            False,
-        )
+        "001_first": _ledger_row("001_first", "001", path.name, tmp_path.name, "0" * 64),
     }
     connection = _FakeConnection(history=history)
 
@@ -223,7 +290,7 @@ def test_legacy_duplicate_version_adopts_exact_file_only(tmp_path: Path) -> None
 
     statuses = {row["migration_id"]: row["status"] for row in rows}
     assert statuses == {"071_alpha": "applied", "071_beta": "pending"}
-    assert connection.history["071_alpha"][-1] is True
+    assert connection.history["071_alpha"][6] is True  # reconciled_from_legacy
 
 
 def test_legacy_duplicate_version_without_identity_is_rejected(tmp_path: Path) -> None:
@@ -244,9 +311,7 @@ def test_legacy_instance_local_migration_is_left_unmanaged(
     all, so it is skipped rather than raising.
     """
     _write_migration(tmp_path, "001_first.sql", "SELECT 1;")
-    connection = _FakeConnection(
-        legacy=[("058", "058_delphi_proposals.sql", "then", "f" * 64)]
-    )
+    connection = _FakeConnection(legacy=[("058", "058_delphi_proposals.sql", "then", "f" * 64)])
 
     with caplog.at_level(logging.WARNING, logger="robothor.db.migrate"):
         rows = migrate.status(migrations_dir=tmp_path, connection=connection)
@@ -261,8 +326,7 @@ def test_legacy_instance_local_migration_is_left_unmanaged(
     # The canonical migration is still reported normally.
     assert any(row["migration_id"] == "001_first" for row in rows)
     assert any(
-        "058" in record.message and "instance-local" in record.message
-        for record in caplog.records
+        "058" in record.message and "instance-local" in record.message for record in caplog.records
     )
 
 
@@ -323,3 +387,452 @@ def test_do_not_contact_migration_is_manifested_after_federation_principals() ->
     assert "idx_crm_people_dnc" in sql
 
     assert "113_add_do_not_contact" in [m.migration_id for m in migrate._discover()]
+
+
+def _write_baseline_pair(directory: Path) -> None:
+    """The two-file chain used by the baseline-adoption tests.
+
+    ``001_init.sql`` stands in for the real baseline that
+    ``docker-entrypoint-initdb.d`` used to run outside the ledger.
+    """
+    _write_migration(directory, "001_init.sql", "CREATE TABLE memory_facts (id int);\n")
+    _write_migration(directory, "002_second.sql", "CREATE TABLE second_table (id int);\n")
+
+
+def test_manifest_count_matches_the_canonical_manifest() -> None:
+    entries = [
+        line.strip()
+        for line in migrate._MIGRATION_MANIFEST.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+    assert migrate.manifest_count() == len(entries)
+    assert migrate.manifest_count() == len(migrate._discover())
+
+
+def test_empty_ledger_on_a_virgin_database_applies_the_whole_chain(tmp_path: Path) -> None:
+    _write_baseline_pair(tmp_path)
+    connection = _FakeConnection(schema_present=False)
+
+    applied = migrate.apply(migrations_dir=tmp_path, connection=connection)
+
+    assert applied == ["001_init", "002_second"]
+    assert len(connection.executed_sql) == 2
+
+
+def test_apply_refuses_to_rerun_the_baseline_when_the_schema_already_exists(
+    tmp_path: Path,
+) -> None:
+    """The initdb path created the schema without writing a ledger row.
+
+    Re-running ``001_init.sql`` against a populated production database is the
+    exact accident this guard exists to prevent, so nothing may execute.
+    """
+    _write_baseline_pair(tmp_path)
+    connection = _FakeConnection(schema_present=True)
+
+    with pytest.raises(migrate.MigrationHistoryError, match="--adopt-baseline"):
+        migrate.apply(migrations_dir=tmp_path, connection=connection)
+
+    assert connection.executed_sql == []
+    assert connection.history == {}
+
+
+def test_adopt_baseline_records_the_first_migration_without_executing_it(
+    tmp_path: Path,
+) -> None:
+    _write_baseline_pair(tmp_path)
+    connection = _FakeConnection(schema_present=True)
+
+    applied = migrate.apply(migrations_dir=tmp_path, connection=connection, adopt_baseline=True)
+
+    # The baseline is adopted into the ledger; only the rest actually runs.
+    assert applied == ["002_second"]
+    assert set(connection.history) == {"001_init", "002_second"}
+    assert connection.executed_sql == ["CREATE TABLE second_table (id int);\n"]
+    assert connection.history["001_init"][5] == migrate._sha256(tmp_path / "001_init.sql")
+
+
+def test_adopt_baseline_is_inert_once_the_ledger_has_rows(tmp_path: Path) -> None:
+    """The flag must never skip a migration on a database already under the ledger."""
+    _write_baseline_pair(tmp_path)
+    path = tmp_path / "001_init.sql"
+    history = {
+        "001_init": _ledger_row("001_init", "001", path.name, tmp_path.name, migrate._sha256(path)),
+    }
+    connection = _FakeConnection(history=history, schema_present=True)
+
+    applied = migrate.apply(migrations_dir=tmp_path, connection=connection, adopt_baseline=True)
+
+    assert applied == ["002_second"]
+    assert connection.executed_sql == ["CREATE TABLE second_table (id int);\n"]
+
+
+def test_status_names_the_adopt_baseline_remedy_when_the_ledger_is_empty(
+    tmp_path: Path,
+) -> None:
+    _write_baseline_pair(tmp_path)
+    connection = _FakeConnection(schema_present=True)
+
+    rows = migrate.status(migrations_dir=tmp_path, connection=connection)
+
+    unadopted = [row for row in rows if row["status"] == "baseline-unadopted"]
+    assert len(unadopted) == 1
+    message = unadopted[0]["message"]
+    assert "ledger empty but schema present" in message
+    assert "robothor migrate --adopt-baseline" in message
+
+
+def test_status_is_quiet_about_the_baseline_on_a_virgin_database(tmp_path: Path) -> None:
+    _write_baseline_pair(tmp_path)
+    connection = _FakeConnection(schema_present=False)
+
+    rows = migrate.status(migrations_dir=tmp_path, connection=connection)
+
+    assert not [row for row in rows if row["status"] == "baseline-unadopted"]
+
+
+def test_status_replaces_the_baseline_row_instead_of_adding_a_row(tmp_path: Path) -> None:
+    """One row per manifest entry. An extra row makes the count lie."""
+    _write_baseline_pair(tmp_path)
+    connection = _FakeConnection(schema_present=True)
+
+    rows = migrate.status(migrations_dir=tmp_path, connection=connection)
+
+    assert len(rows) == 2
+    by_id = {row["migration_id"]: row["status"] for row in rows}
+    assert by_id == {"001_init": "baseline-unadopted", "002_second": "pending"}
+
+
+def test_apply_refuses_when_the_whole_ledger_came_from_the_legacy_table(
+    tmp_path: Path,
+) -> None:
+    """The dangerous state is not an *empty* ledger — it is an unverified one.
+
+    An instance migrated by the retired `robothor upgrade` glob carries the
+    legacy `schema_migrations` table that 018 backfills, so reconciliation
+    fills `schema_migrations_v2` and the ledger is no longer empty. Every row
+    is still hearsay: nothing proves the files after the backfill ran or did
+    not. Replaying them is destructive (019 DELETEs live chat_sessions), so
+    the refusal must key on provenance, not on emptiness.
+    """
+    first = _write_migration(tmp_path, "001_init.sql", "CREATE TABLE memory_facts (id int);\n")
+    _write_migration(tmp_path, "002_second.sql", "DELETE FROM chat_sessions;\n")
+    connection = _FakeConnection(
+        legacy=[("001", first.name, "then", migrate._sha256(first))],
+        schema_present=True,
+    )
+
+    with pytest.raises(migrate.MigrationHistoryError, match="--adopt-baseline"):
+        migrate.apply(migrations_dir=tmp_path, connection=connection)
+
+    assert connection.executed_sql == []
+
+
+def test_apply_proceeds_when_this_runner_wrote_a_ledger_row(tmp_path: Path) -> None:
+    """A normal upgrade must never be refused.
+
+    A partially-applied ledger is the ordinary state of every instance between
+    releases; only the absence of any row this runner wrote is evidence.
+    """
+    first = _write_migration(tmp_path, "001_init.sql", "CREATE TABLE memory_facts (id int);\n")
+    _write_migration(tmp_path, "002_second.sql", "CREATE TABLE second_table (id int);\n")
+    history = {
+        "001_init": _ledger_row(
+            "001_init", "001", first.name, tmp_path.name, migrate._sha256(first)
+        ),
+    }
+    connection = _FakeConnection(history=history, schema_present=True)
+
+    applied = migrate.apply(migrations_dir=tmp_path, connection=connection)
+
+    assert applied == ["002_second"]
+
+
+def test_apply_does_not_refuse_when_there_is_nothing_left_to_apply(tmp_path: Path) -> None:
+    """No pending work means no replay risk, so an unverified ledger is fine."""
+    first = _write_migration(tmp_path, "001_init.sql", "CREATE TABLE memory_facts (id int);\n")
+    connection = _FakeConnection(
+        legacy=[("001", first.name, "then", migrate._sha256(first))],
+        schema_present=True,
+    )
+
+    assert migrate.apply(migrations_dir=tmp_path, connection=connection) == []
+
+
+def test_adopt_baseline_adopts_every_entry_the_yaml_side_ledger_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The YAML side-ledger is the only record of what the glob path applied.
+
+    Adopting the baseline alone would replay 002..N over live data, so every
+    manifest entry the side-ledger names is adopted too — recorded, never
+    executed — and only what it does not name actually runs.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    _write_migration(migrations_dir, "001_init.sql", "CREATE TABLE memory_facts (id int);\n")
+    _write_migration(migrations_dir, "002_second.sql", "DELETE FROM chat_sessions;\n")
+    _write_migration(migrations_dir, "003_third.sql", "CREATE TABLE third_table (id int);\n")
+    _write_yaml_ledger(workspace, ["001_init.sql", "002_second.sql"])
+
+    connection = _FakeConnection(schema_present=True)
+
+    applied = migrate.apply(
+        migrations_dir=migrations_dir, connection=connection, adopt_baseline=True
+    )
+
+    assert applied == ["003_third"]
+    assert connection.executed_sql == ["CREATE TABLE third_table (id int);\n"]
+    assert set(connection.history) == {"001_init", "002_second", "003_third"}
+    # Provenance stays visible: adopted rows say where the claim came from.
+    assert connection.history["001_init"][7] == "baseline"
+    assert connection.history["002_second"][7] == "yaml_ledger"
+    assert connection.history["003_third"][7] is None
+
+
+def test_adopt_baseline_falls_back_to_the_first_entry_without_a_side_ledger(
+    tmp_path: Path,
+) -> None:
+    _write_baseline_pair(tmp_path)
+    connection = _FakeConnection(schema_present=True)
+
+    applied = migrate.apply(migrations_dir=tmp_path, connection=connection, adopt_baseline=True)
+
+    assert applied == ["002_second"]
+    assert connection.history["001_init"][7] == "baseline"
+
+
+def _write_chain(directory: Path, count: int) -> list[str]:
+    """A baseline plus ``count - 1`` follow-ons, each creating its own table."""
+    _write_migration(directory, "001_init.sql", "CREATE TABLE memory_facts (id int);\n")
+    names = ["001_init.sql"]
+    for index in range(2, count + 1):
+        name = f"{index:03d}_step.sql"
+        _write_migration(directory, name, f"CREATE TABLE step_{index} (id int);\n")
+        names.append(name)
+    return names
+
+
+def test_adopt_baseline_refuses_when_legacy_rows_outrun_a_missing_side_ledger(
+    tmp_path: Path,
+) -> None:
+    """Adopting only the baseline here would execute the rest over live data.
+
+    The legacy `schema_migrations` table vouches for migrations past the
+    baseline, so the schema is further along than 001 — but with no side-ledger
+    there is nothing saying *how* much further. Adopting 001 alone and then
+    running 003 onward turns the remedy into the hazard, so this must refuse
+    and tell the operator to say where the schema really is.
+    """
+    _write_chain(tmp_path, 3)
+    first = tmp_path / "001_init.sql"
+    second = tmp_path / "002_step.sql"
+    connection = _FakeConnection(
+        legacy=[
+            ("001", first.name, "then", migrate._sha256(first)),
+            ("002", second.name, "then", migrate._sha256(second)),
+        ],
+        schema_present=True,
+    )
+
+    with pytest.raises(migrate.MigrationHistoryError, match="--adopt-through"):
+        migrate.apply(migrations_dir=tmp_path, connection=connection, adopt_baseline=True)
+
+    assert connection.executed_sql == []
+    # Nothing was adopted on the way out: a half-done adoption is its own trap.
+    assert all(row[7] is None for row in connection.history.values())
+
+
+def test_adoption_names_the_side_ledger_path_it_looked_for(tmp_path: Path) -> None:
+    _write_chain(tmp_path, 3)
+    first = tmp_path / "001_init.sql"
+    second = tmp_path / "002_step.sql"
+    connection = _FakeConnection(
+        legacy=[
+            ("001", first.name, "then", migrate._sha256(first)),
+            ("002", second.name, "then", migrate._sha256(second)),
+        ],
+        schema_present=True,
+    )
+
+    with pytest.raises(migrate.MigrationHistoryError) as excinfo:
+        migrate.apply(migrations_dir=tmp_path, connection=connection, adopt_baseline=True)
+
+    assert str(migrate._legacy_yaml_ledger_path()) in str(excinfo.value)
+
+
+def test_an_unreadable_side_ledger_refuses_instead_of_reading_as_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Evidence that exists but cannot be parsed is not the same as no evidence.
+
+    Degrading a malformed file to an empty set silently narrows the adoption
+    to the baseline — the same destructive shape, with no warning at all.
+    """
+    workspace = tmp_path / "workspace"
+    (workspace / ".robothor").mkdir(parents=True)
+    (workspace / ".robothor" / "migrations_applied.yaml").write_text("migrations: {[\n")
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    _write_chain(migrations_dir, 2)
+    connection = _FakeConnection(schema_present=True)
+
+    with pytest.raises(migrate.MigrationHistoryError, match="could not be read"):
+        migrate.apply(migrations_dir=migrations_dir, connection=connection, adopt_baseline=True)
+
+    assert connection.executed_sql == []
+
+
+def test_adopt_through_adopts_the_named_range_and_executes_only_the_rest(
+    tmp_path: Path,
+) -> None:
+    _write_chain(tmp_path, 4)
+    connection = _FakeConnection(schema_present=True)
+
+    applied = migrate.apply(
+        migrations_dir=tmp_path, connection=connection, adopt_through="003_step"
+    )
+
+    assert applied == ["004_step"]
+    assert connection.executed_sql == ["CREATE TABLE step_4 (id int);\n"]
+    assert connection.history["001_init"][7] == "baseline"
+    assert connection.history["002_step"][7] == "operator"
+    assert connection.history["003_step"][7] == "operator"
+    assert connection.history["004_step"][7] is None
+
+
+def test_adopt_through_alone_satisfies_the_refusal(tmp_path: Path) -> None:
+    """It implies the baseline adoption — the operator need not pass both."""
+    _write_chain(tmp_path, 3)
+    first = tmp_path / "001_init.sql"
+    second = tmp_path / "002_step.sql"
+    connection = _FakeConnection(
+        legacy=[
+            ("001", first.name, "then", migrate._sha256(first)),
+            ("002", second.name, "then", migrate._sha256(second)),
+        ],
+        schema_present=True,
+    )
+
+    applied = migrate.apply(
+        migrations_dir=tmp_path, connection=connection, adopt_through="002_step"
+    )
+
+    assert applied == ["003_step"]
+    assert connection.executed_sql == ["CREATE TABLE step_3 (id int);\n"]
+
+
+def test_adopt_through_rejects_a_migration_id_that_is_not_in_the_manifest(
+    tmp_path: Path,
+) -> None:
+    _write_chain(tmp_path, 3)
+    connection = _FakeConnection(schema_present=True)
+
+    with pytest.raises(migrate.MigrationSelectionError, match="099_nope"):
+        migrate.apply(migrations_dir=tmp_path, connection=connection, adopt_through="099_nope")
+
+    assert connection.executed_sql == []
+
+
+def _verified_ledger_connection(tmp_path: Path) -> _FakeConnection:
+    """A database already under the ledger, so the adoption guard is inert."""
+    _write_chain(tmp_path, 2)
+    first = tmp_path / "001_init.sql"
+    return _FakeConnection(
+        history={
+            "001_init": _ledger_row(
+                "001_init", "001", first.name, tmp_path.name, migrate._sha256(first)
+            )
+        },
+        schema_present=True,
+    )
+
+
+def test_an_unneeded_adoption_flag_says_so_instead_of_passing_silently(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A flag that did nothing must not look like a flag that worked.
+
+    Silence here is how a typo'd `--adopt-through` reads as success on a
+    database that never needed adopting.
+    """
+    connection = _verified_ledger_connection(tmp_path)
+
+    applied = migrate.apply(migrations_dir=tmp_path, connection=connection, adopt_baseline=True)
+
+    assert applied == ["002_step"]
+    assert "ignored" in capsys.readouterr().out
+
+
+def test_adopt_through_is_validated_even_when_the_guard_is_inert(tmp_path: Path) -> None:
+    """A misspelled id must never be silently ignored just because it was moot."""
+    connection = _verified_ledger_connection(tmp_path)
+
+    with pytest.raises(migrate.MigrationSelectionError, match="099_nope"):
+        migrate.apply(migrations_dir=tmp_path, connection=connection, adopt_through="099_nope")
+
+    assert connection.executed_sql == []
+
+
+def test_module_cli_parses_adopt_through_in_both_spellings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--adopt-through ID` and `--adopt-through=ID` must reach `apply` alike.
+
+    The hand-rolled argv loop is the only parser here — argparse is not
+    involved — so the space-separated form consuming its value, and a selector
+    surviving alongside the flag, are both worth pinning.
+    """
+    captured: list[dict[str, Any]] = []
+
+    def fake_apply(**kwargs: Any) -> list[str]:
+        captured.append(kwargs)
+        return []
+
+    monkeypatch.setattr(migrate, "apply", fake_apply)
+
+    for argv in (
+        ["migrate", "apply", "--adopt-through", "040_memory_episodes"],
+        ["migrate", "apply", "--adopt-through=040_memory_episodes"],
+        ["migrate", "apply", "071_user_accounts", "--adopt-through", "040_memory_episodes"],
+    ):
+        monkeypatch.setattr(sys, "argv", argv)
+        migrate.main()
+
+    assert [call["adopt_through"] for call in captured] == ["040_memory_episodes"] * 3
+    # The flag's value is never mistaken for the migration selector.
+    assert [call["version"] for call in captured] == [None, None, "071_user_accounts"]
+
+
+def test_module_cli_rejects_adopt_through_without_a_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["migrate", "apply", "--adopt-through"])
+
+    with pytest.raises(SystemExit):
+        migrate.main()
+
+
+def test_an_adopted_ledger_is_not_refused_on_the_next_run(tmp_path: Path) -> None:
+    """Adoption is the operator vouching for the ledger; it must stick."""
+    first = _write_migration(tmp_path, "001_init.sql", "CREATE TABLE memory_facts (id int);\n")
+    _write_migration(tmp_path, "002_second.sql", "CREATE TABLE second_table (id int);\n")
+    history = {
+        "001_init": _ledger_row(
+            "001_init",
+            "001",
+            first.name,
+            tmp_path.name,
+            migrate._sha256(first),
+            reconciled_from_legacy=False,
+            adopted_from="baseline",
+        ),
+    }
+    connection = _FakeConnection(history=history, schema_present=True)
+
+    assert migrate.apply(migrations_dir=tmp_path, connection=connection) == ["002_second"]

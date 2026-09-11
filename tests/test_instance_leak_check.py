@@ -184,3 +184,61 @@ class TestPhonePatternPrecision:
     def test_parenthesized_phone_is_still_caught(self):
         number = "(" + "212" + ") " + "867" + "-" + "5309"
         assert check("robothor/notes.py", f"office: {number}\n")
+
+    def test_the_reserved_example_tld_is_fixture_data(self):
+        """RFC 2606 reserves the whole `.example` TLD, not just example.com.
+
+        `alice@spam-domain.example` in the benchmark sandbox fixtures made the
+        gate red on any PR that merely touched that file — the same
+        cry-wolf failure the UUID guard above exists to prevent."""
+        assert check("robothor/engine/tests/x.py", 'to = "alice@spam-domain.example"\n') == []
+
+    def test_a_real_looking_domain_is_still_caught(self):
+        # Assembled at runtime, like the phone fixtures above: the gate scans
+        # changed files, this one included, and a literal address here would
+        # make the file flag itself.
+        address = "alice" + "@" + "spam-domain" + "." + "io"
+        assert check("robothor/engine/tests/x.py", f'to = "{address}"\n'), (
+            "widening for the reserved .example TLD must not blind the gate"
+        )
+
+
+# ── Retired / instance-only vendors ─────────────────────────────────────────
+
+
+class TestRetiredVendorNames:
+    """A vendor removed from core leaves prose behind, and the prose is what
+    makes the next reader think the integration is still supported.
+    ``tests/test_core_instance_boundary.py`` is the same gate at whole-tree
+    scope; this is the pre-commit half, so the name never lands."""
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "    # ── Apollo.io contact enrichment & search ──\n",
+            "    # ── Princess Freya (PF) vessel tools ──\n",
+            'IMPETUS_ONE_URL = os.getenv("IMPETUS_ONE_BASE_URL", "")\n',
+            "    CONNECTOR_BASE_URL  required, e.g. https://app.impetusone.com\n",
+        ],
+    )
+    def test_a_vendor_name_in_core_is_a_leak(self, line: str):
+        assert check("robothor/engine/tools/schemas.py", line), line
+
+    def test_the_word_freya_is_bounded(self):
+        """``\\bfreya\\b`` must not fire inside an unrelated identifier."""
+        assert check("robothor/x.py", "freyable = 1\n") == []
+
+    @pytest.mark.parametrize(
+        "path",
+        ["docs/OBSERVABILITY.md", "scripts/claude_usage_report.py", "CHANGELOG.md"],
+    )
+    def test_history_outside_the_platform_roots_is_left_alone(self, path: str):
+        """Dated write-ups and probe records name these vendors as historical
+        fact. Rewriting history is not the goal — keeping core clean is."""
+        assert check(path, "the Apollo outage ran 14 days\n") == []
+
+    def test_the_roots_match_the_boundary_test(self):
+        """Two gates, one boundary. A root added to one must reach the other."""
+        import tests.test_core_instance_boundary as boundary
+
+        assert tuple(r.rstrip("/") for r in CIL.VENDOR_SCANNED_ROOTS) == boundary.PLATFORM_ROOTS

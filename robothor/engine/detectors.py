@@ -617,10 +617,10 @@ async def workflow_failure_streak_detector() -> int:
 # and needs ~5 failures in it, so it only ever sees an *acute* problem: a busy
 # tool that started erroring. A tool called twice a day can be 100% dead
 # forever without ever putting 5 failures in the same hour — which is exactly
-# how apollo_search_people failed 32/32 (error_type=auth) across 14 days with
-# nothing alerting. This detector trades resolution for reach: a long window,
-# a volume floor so it cannot fire on noise, and a failure ratio so high that
-# firing means "this dependency is gone", not "this dependency is flaky".
+# how a low-traffic external-search tool failed 32/32 (error_type=auth) across
+# 14 days with nothing alerting. This detector trades resolution for reach: a
+# long window, a volume floor so it cannot fire on noise, and a failure ratio
+# so high that firing means "this dependency is gone", not "this is flaky".
 
 _OUTAGE_WINDOW_HOURS = 168  # 7 days — long enough for a twice-a-day tool
 _OUTAGE_MIN_CALLS = 8  # below this the sample says nothing

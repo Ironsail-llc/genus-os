@@ -1,10 +1,10 @@
 """A plugin must be able to declare its own tools read-only.
 
-Extracting Princess Freya to a plugin on 2026-08-27 left one thing behind:
-``pf_system_status`` had to STAY in core's ``READONLY_TOOLS`` frozenset,
-because ``genus.tools`` carries handlers and ``genus.schemas`` carries
-schemas, and nothing carried safety classification. Core kept a hardcoded
-fact about one instance's boat.
+Extracting an instance's vessel-telemetry integration to a plugin on
+2026-08-27 left one thing behind: its ``*_system_status`` tool had to STAY in
+core's ``READONLY_TOOLS`` frozenset, because ``genus.tools`` carries handlers
+and ``genus.schemas`` carries schemas, and nothing carried safety
+classification. Core kept a hardcoded fact about one instance's hardware.
 
 That is not cosmetic. ``READONLY_TOOLS`` gates real behaviour:
 ``registry.readonly_names_for`` and the runner's read-only tool set decide

@@ -366,6 +366,7 @@ EXPECTED_DROPINS: dict[str, set[str]] = {
 EXPECTED_INSTALLED = [
     "robothor-engine.service",
     "robothor-bridge.service",
+    "robothor-secrets.service",
     "robothor-restart.path",
     "robothor-backup-local.timer",
     "robothor-alert@.service",
@@ -619,6 +620,181 @@ def test_execstart_never_relies_on_bare_env_lookup():
                 assert parts[0].startswith("/"), (
                     f"{unit.name}: {line!r} does not use an absolute path"
                 )
+
+
+# ── Secrets ordering ─────────────────────────────────────────────────────────
+# /run/robothor/secrets.env is decrypted by exactly one thing, and until
+# robothor-secrets.service existed that thing was the ENGINE's ExecStartPre.
+# Every other consumer loads the file as `EnvironmentFile=-` — optional — so a
+# service that started before the engine started WITHOUT its secrets and never
+# said so. On 2026-09-03 the box rebooted at 02:51, robothor-bridge started at
+# 02:51:12, the engine came up hours later, and the bridge spent eight days
+# refusing every SSO login with 403 because GENUS_BRIDGE_SSO_SECRET was simply
+# not in its environment.
+#
+# The fix is an ordering point, not a retry: a oneshot that decrypts, and the
+# long-running consumers requiring it. `Requires=` and not `Wants=` on purpose —
+# a bridge with no secrets cannot complete a login, so failing to start is more
+# honest than starting broken. An instance with no SOPS file is unaffected: the
+# oneshot's ConditionPathExists makes it a SKIP, and a skipped dependency
+# satisfies Requires=.
+
+SECRETS_UNIT = "robothor-secrets.service"
+
+# The long-running services that load secrets at boot. The timer-driven
+# oneshots also read secrets.env, but they fire minutes-to-hours after boot and
+# are ordered by their timers; they are deliberately out of scope here.
+SECRETS_CONSUMERS = [
+    "robothor-engine.service",
+    "robothor-bridge.service",
+    "robothor-app.service",
+    "robothor-orchestrator.service",
+]
+
+
+def test_secrets_unit_exists_and_runs_the_decrypt_script():
+    unit = UNIT_DIR / SECRETS_UNIT
+    assert unit.exists(), f"{SECRETS_UNIT} is the ordering point — it must exist"
+    text = directives(unit.read_text())
+    assert "Type=oneshot" in text
+    assert "RemainAfterExit=yes" in text, (
+        "without RemainAfterExit the unit is inactive the moment it finishes, "
+        "and Requires= on it would restart the decrypt for every consumer"
+    )
+    assert "ExecStart=/opt/robothor/scripts/decrypt-secrets.sh" in text, (
+        "the oneshot must run the SAME script the engine's ExecStartPre runs"
+    )
+    assert "ConditionPathExists=" in text, (
+        "an instance with no SOPS secrets file must SKIP this unit, not fail it "
+        "— a failed Requires= dependency would block every consumer from starting"
+    )
+    assert "OnFailure=robothor-alert@%n.service" in text, (
+        "a failed decrypt now leaves FOUR services in 'dependency failed' with "
+        "Restart=always never firing — nothing retries it, so it must page"
+    )
+
+
+# The oneshot's [Service] keys that are its own operational shape rather than
+# confinement. EVERYTHING else must be a directive the engine already applies to
+# the same script — see the parity check below. Allowlisting the operational
+# keys (rather than enumerating the sandbox ones) is the difference between a
+# ratchet and a snapshot: a closed list of today's fourteen sandbox directives
+# would wave through RestrictNamespaces=, SystemCallFilter=, PrivateNetwork=,
+# and every other one nobody has thought of yet.
+SECRETS_UNIT_OWN_KEYS = frozenset(
+    {
+        "Type",
+        "RemainAfterExit",
+        "User",
+        "Group",
+        "WorkingDirectory",
+        "EnvironmentFile",
+        "ExecStart",
+        "RuntimeDirectory",
+        "RuntimeDirectoryMode",
+        "RuntimeDirectoryPreserve",
+        "OnFailure",
+        "ConditionPathExists",
+    }
+)
+
+
+def service_section(text: str) -> list[str]:
+    """The directive lines of a unit's [Service] section, comments stripped."""
+    lines: list[str] = []
+    section = ""
+    for line in directives(text).splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped
+        elif section == "[Service]" and "=" in stripped:
+            lines.append(stripped)
+    return lines
+
+
+def unshared_service_directives(oneshot: str, engine: str) -> list[str]:
+    """[Service] lines of *oneshot*, outside the allowlist, absent from *engine*."""
+    engine_lines = set(service_section(engine))
+    return [
+        line
+        for line in service_section(oneshot)
+        if line.split("=", 1)[0] not in SECRETS_UNIT_OWN_KEYS and line not in engine_lines
+    ]
+
+
+def test_secrets_unit_applies_no_confinement_the_engine_does_not():
+    """No sandboxing the engine does not already apply to the same script.
+
+    scripts/decrypt-secrets.sh has run in production for months as
+    robothor-engine.service's ExecStartPre, and a unit's [Service] sandboxing
+    applies to ExecStartPre exactly as it does to ExecStart. So every directive
+    here that is not this unit's own operational shape must appear VERBATIM on
+    the engine unit — otherwise the first start of this oneshot is an untested
+    four-service gamble, which is the opposite of what it exists for.
+    """
+    strays = unshared_service_directives(
+        (UNIT_DIR / SECRETS_UNIT).read_text(),
+        (UNIT_DIR / "robothor-engine.service").read_text(),
+    )
+    assert not strays, (
+        f"{SECRETS_UNIT} applies confinement robothor-engine.service does not: {strays}. "
+        "Either add it to the engine unit first (where the script demonstrably "
+        "runs under it), or add the key to SECRETS_UNIT_OWN_KEYS if it is "
+        "operational rather than confinement."
+    )
+
+
+def test_the_parity_check_catches_confinement_nobody_has_thought_of_yet():
+    """Probe the gate, don't trust its silence.
+
+    The previous version of this check iterated a closed list of the fourteen
+    sandbox directives in use, so a NEW one would have sailed through green —
+    a control that passes because it is not looking. Fire a real violation at
+    it with a directive that appears in neither unit.
+    """
+    oneshot = "[Service]\nType=oneshot\nExecStart=/bin/true\nRestrictNamespaces=yes\n"
+    engine = "[Service]\nExecStart=/bin/true\n"
+    assert unshared_service_directives(oneshot, engine) == ["RestrictNamespaces=yes"]
+
+
+def test_the_parity_check_reads_only_the_service_section():
+    """[Unit] directives are ordering and conditions, not confinement, and the
+    two units legitimately differ there — a check that compared whole files
+    would fail on Description= and have to be loosened until it meant nothing."""
+    oneshot = "[Unit]\nDescription=Secrets\n\n[Service]\nType=oneshot\nProtectClock=yes\n"
+    engine = "[Unit]\nDescription=Engine\n\n[Service]\nProtectClock=yes\n"
+    assert unshared_service_directives(oneshot, engine) == []
+
+
+def test_secrets_unit_does_not_relax_the_runtime_directory():
+    """/run/robothor is 0750 on a live box and holds files that are not 0600
+    (model-breaker-alerts.json is 0644). 0755 here would quietly make every
+    one of them world-readable."""
+    text = directives((UNIT_DIR / SECRETS_UNIT).read_text())
+    for line in text.splitlines():
+        if line.startswith("RuntimeDirectoryMode="):
+            assert line == "RuntimeDirectoryMode=0750", line
+
+
+@pytest.mark.parametrize("name", SECRETS_CONSUMERS, ids=lambda n: n)
+def test_secrets_consumers_are_ordered_after_the_secrets_unit(name: str):
+    text = directives((UNIT_DIR / name).read_text())
+    assert f"Requires={SECRETS_UNIT}" in text, (
+        f"{name} loads /run/robothor/secrets.env but does not require the unit "
+        "that writes it — it can start before the file exists"
+    )
+    assert f"After={SECRETS_UNIT}" in text, (
+        f"{name}: Requires= without After= is not an ordering, only a pull-in — "
+        "systemd may still start them in parallel"
+    )
+
+
+@pytest.mark.parametrize("name", SECRETS_CONSUMERS, ids=lambda n: n)
+def test_secrets_environment_file_stays_optional(name: str):
+    """The ordering is the fix; `EnvironmentFile=-` keeps its optional
+    semantics so a skipped decrypt (no SOPS file) still starts the service."""
+    text = directives((UNIT_DIR / name).read_text())
+    assert "EnvironmentFile=-/run/robothor/secrets.env" in text
 
 
 # ── Repo tmpfiles templates ──────────────────────────────────────────────────

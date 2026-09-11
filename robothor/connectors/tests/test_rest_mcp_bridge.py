@@ -60,16 +60,16 @@ def make_connector(handler, **overrides):
 class TestConnectorConfig:
     def test_from_env_reads_values(self):
         env = {
-            "CONNECTOR_BASE_URL": "https://app.impetusone.com",
+            "CONNECTOR_BASE_URL": "https://api.example.com",
             "CONNECTOR_TOKEN": "secret",
-            "CONNECTOR_TOOL_PREFIX": "impetus",
+            "CONNECTOR_TOOL_PREFIX": "acme",
             "CONNECTOR_READONLY": "1",
             "CONNECTOR_ALLOWED_RESOURCES": "patients, providers",
         }
         cfg = ConnectorConfig.from_env(env)
-        assert cfg.base_url == "https://app.impetusone.com"
+        assert cfg.base_url == "https://api.example.com"
         assert cfg.token == "secret"
-        assert cfg.tool_prefix == "impetus"
+        assert cfg.tool_prefix == "acme"
         assert cfg.readonly is True
         assert cfg.allowed_resources == ("patients", "providers")
 

@@ -33,7 +33,6 @@ from typing import Any, cast
 # Re-export public API for backward compatibility.
 # These are imported by robothor.setup and tests.
 from robothor.cli.admin import REQUIRED_TABLES as REQUIRED_TABLES  # noqa: F401
-from robothor.cli.admin import _find_migration_sql as _find_migration_sql  # noqa: F401
 from robothor.cli.admin import cmd_tui as _cmd_tui
 from robothor.cli.agent import _cmd_agent_setup as _cmd_agent_setup_impl
 
@@ -162,7 +161,11 @@ def _build_parser() -> argparse.ArgumentParser:
     # upgrade
     upgrade_parser = subparsers.add_parser("upgrade", help="Upgrade platform to latest version")
     upgrade_parser.add_argument("--dry-run", action="store_true", help="Show what would change")
-    upgrade_parser.add_argument("--skip-pull", action="store_true", help="Skip git pull")
+    upgrade_parser.add_argument(
+        "--pull",
+        action="store_true",
+        help="Also run 'git pull --ff-only' (git checkouts only; wheels use pip)",
+    )
     upgrade_parser.add_argument(
         "--skip-migrations", action="store_true", help="Skip database migrations"
     )
@@ -174,6 +177,29 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     migrate_parser.add_argument(
         "--check", action="store_true", help="Check if required tables exist"
+    )
+    migrate_parser.add_argument(
+        "--status", action="store_true", help="Show the canonical migration ledger"
+    )
+    migrate_parser.add_argument(
+        "--adopt-baseline",
+        action="store_true",
+        help=(
+            "Adopt history this runner never wrote: record the baseline, plus every "
+            "migration the legacy .robothor/migrations_applied.yaml names, as applied "
+            "without executing them. For databases created by the retired initdb "
+            "snapshot or the retired 'robothor upgrade' glob."
+        ),
+    )
+    migrate_parser.add_argument(
+        "--adopt-through",
+        metavar="MIGRATION_ID",
+        help=(
+            "Adopt every migration up to and including MIGRATION_ID without executing "
+            "them — name the last migration this database already holds. Implies "
+            "--adopt-baseline. Use when the ledger's only evidence is the legacy "
+            "schema_migrations table and no side-ledger survives."
+        ),
     )
 
     # snapshot — versioned disaster recovery for PostgreSQL + workspace state
@@ -491,7 +517,9 @@ def _build_parser() -> argparse.ArgumentParser:
     catalog_parser.add_argument("--department", "-d", default=None, help="Filter by department")
 
     install_parser = agent_sub.add_parser("install", help="Install agent from template")
-    install_parser.add_argument("source", help="Template path or agent ID")
+    install_parser.add_argument(
+        "source", nargs="?", default=None, help="Template path or agent ID (omit with --preset)"
+    )
     install_parser.add_argument("--preset", default=None, help="Install a preset group")
     install_parser.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
     install_parser.add_argument(

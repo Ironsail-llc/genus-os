@@ -7,6 +7,14 @@
 Description=Robothor RAG Orchestrator
 After=network.target ollama.service postgresql.service docker.service
 Wants=ollama.service postgresql.service
+# /run/robothor/secrets.env is a tmpfs file that exists only once
+# robothor-secrets.service has decrypted it, and the EnvironmentFile= below is
+# optional (`-`) — so without this ordering the orchestrator starts with no
+# provider credentials and says nothing. See the 2026-09-03 boot-order
+# incident in robothor-bridge.service. (An instance with no SOPS file skips
+# the oneshot on a Condition, which satisfies Requires=.)
+Requires=robothor-secrets.service
+After=robothor-secrets.service
 
 # Loopback, not 0.0.0.0. On 2026-08-27 this bound the wildcard with no
 # authentication and was verified reachable from a tailnet address (HTTP

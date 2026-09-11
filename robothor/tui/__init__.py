@@ -2,7 +2,7 @@
 Genus OS TUI — terminal chat interface for the Agent Engine.
 
 Requires the optional `tui` dependency group:
-    pip install robothor[tui]
+    pip install genusos[tui]
 """
 
 from __future__ import annotations

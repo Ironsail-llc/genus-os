@@ -39,6 +39,7 @@ from middleware import AuthMiddleware, CorrelationMiddleware, RBACMiddleware, Te
 from routers.agents import router as agents_router
 from routers.audit import router as audit_router
 from routers.auth import router as auth_router
+from routers.auth import sso_secret_present
 from routers.controls import router as controls_router
 from routers.conversations import router as conversations_router
 from routers.fleet import router as fleet_router
@@ -110,6 +111,10 @@ async def lifespan(app: FastAPI):
     from robothor.auth.runtime import validate_auth_configuration
 
     validate_auth_configuration(bind_host=os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1"))
+    # Say at boot, once, whether this process can complete a sign-in at all.
+    # Outside production the missing secret is not fatal (dev/loopback modes do
+    # not use the SSO exchange), so this is a loud log line rather than a raise.
+    sso_secret_present()
     http_client = httpx.AsyncClient(timeout=30.0)
     trigger_task = asyncio.create_task(_routine_trigger_loop())
     yield

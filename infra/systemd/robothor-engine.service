@@ -2,6 +2,15 @@
 Description=Genus OS Agent Engine (Python)
 After=network-online.target postgresql.service redis.service
 Wants=network-online.target
+# /run/robothor/secrets.env is a tmpfs file that exists only once
+# robothor-secrets.service has decrypted it, and the EnvironmentFile= below is
+# optional (`-`) — so without this ordering a service starts happily with no
+# secrets at all and says nothing. That is exactly what the bridge did for
+# eight days after the 2026-09-03 reboot. Requires=, not Wants=: running
+# without credentials is worse than not running. (An instance with no SOPS
+# file skips the oneshot on a Condition, which satisfies Requires=.)
+Requires=robothor-secrets.service
+After=robothor-secrets.service
 
 [Service]
 # The daemon calls sd_notify READY=1 after startup and WATCHDOG=1 every 30s

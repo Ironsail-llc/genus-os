@@ -67,8 +67,10 @@ def test_unknown_flag_on_a_valid_subcommand_fails(checker) -> None:
     """`parse_known_args` ACCEPTS unknown flags -- it returns them as extras.
 
     Discarding that return made the checker blind to exactly the class of
-    error this gate exists for: `robothor migrate --status` (a flag that has
-    never existed) parsed clean.
+    error this gate exists for: `robothor migrate --status` parsed clean at a
+    time when no such flag existed. (It exists now — the one-migrator change
+    added it — which is why the negative cases below use a spelling nobody is
+    going to implement.)
     """
     text = "```bash\nrobothor status --totally-bogus-flag\n```\n"
     findings = checker.check_markdown(text, "doc.md")
@@ -77,8 +79,21 @@ def test_unknown_flag_on_a_valid_subcommand_fails(checker) -> None:
 
 
 def test_a_flag_that_does_not_exist_on_migrate_fails(checker) -> None:
-    assert len(checker.check_markdown("```bash\nrobothor migrate --status\n```\n", "doc.md")) == 1
-    assert checker.check_markdown("```bash\nrobothor migrate --check\n```\n", "doc.md") == []
+    """The example flag must be one `migrate` genuinely does not accept.
+
+    This used `--status`, which this branch then added to `migrate` — so the
+    test started asserting that a real flag fails, and went red for being
+    right. Pick a spelling nobody will implement; a gate whose negative case
+    can be satisfied by shipping a feature is not testing the gate.
+    """
+    assert (
+        len(checker.check_markdown("```bash\nrobothor migrate --no-such-flag\n```\n", "doc.md"))
+        == 1
+    )
+    # Positive controls, so the gate cannot go blind in the other direction by
+    # rejecting flags that do exist.
+    for flag in ("--check", "--status", "--adopt-baseline", "--adopt-through 001_init"):
+        assert checker.check_markdown(f"```bash\nrobothor migrate {flag}\n```\n", "doc.md") == []
 
 
 def test_help_is_not_a_failure(checker) -> None:

@@ -72,6 +72,19 @@ class AdapterConfig:
     # protection the field's plugin marketplaces lack: a compromised or
     # silently-updated server cannot sprout new capabilities into the fleet.
     tools_allowed: list[str] = field(default_factory=list)
+    # read_only: which of THIS adapter's tools have no side effects. Optional
+    # and additive — an adapter that declares nothing declares nothing, and
+    # absent means WRITE. Mirrors the plugin seam's `read_only` in
+    # robothor/plugins/loader.py: safety classification used to be core's
+    # hardcoded table, so an integration leaving core left a fact about one
+    # instance behind in core. Every core deny-set (DESKTOP_TOOLS,
+    # BENCHMARK_TOOLS, EXTERNAL_SIDE_EFFECT_TOOLS) is a list of literal core
+    # tool names and can say nothing about `acme_delete_patient`, so a
+    # benchmark harness must never infer "read-only" from mere membership in
+    # tools_allowed. Must be a SUBSET of tools_allowed: classifying a tool
+    # this adapter does not serve is privilege escalation, not extension, and
+    # refuses the adapter at load.
+    read_only: list[str] = field(default_factory=list)
     # command_sha256: pins the stdio executable (command[0]). A binary swap
     # under the same path refuses the adapter outright — fail-closed.
     command_sha256: str = ""
@@ -105,6 +118,73 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
         logger.warning("Adapter '%s' has unknown transport '%s', skipping", name, transport)
         return None
 
+    tools_allowed = list(data.get("tools_allowed", []) or [])
+
+    # ── read_only: optional, additive, fail-closed ──
+    # Validated here rather than at use so a malformed or over-reaching
+    # declaration REFUSES the adapter, the same shape as an unknown transport.
+    # A classification that is merely ignored is worse than absent: the
+    # operator believes a boundary exists that nothing enforces.
+    # Only None coalesces to "absent". `or []` would swallow `read_only: false`
+    # and every other falsy scalar as "declared nothing" — the same fail-open
+    # shape the command_sha256 comment below was written about.
+    raw_read_only = data.get("read_only")
+    read_only = [] if raw_read_only is None else raw_read_only
+    if not isinstance(read_only, list | tuple) or not all(isinstance(x, str) for x in read_only):
+        logger.warning(
+            "Adapter '%s' has a non-list read_only — refused. It must be a list "
+            "of tool names drawn from tools_allowed; use `read_only: []` (or "
+            "omit the key) to declare nothing read-only.",
+            name,
+        )
+        return None
+    foreign = sorted(set(read_only) - set(tools_allowed))
+    if foreign:
+        # Empty tools_allowed is legacy allow-all, so it grounds no claim at
+        # all — a read_only beside it is refused too, deliberately.
+        logger.warning(
+            "Adapter '%s' declares read_only %s not present in tools_allowed — refused. "
+            "An adapter may only classify tools it actually serves.",
+            name,
+            foreign,
+        )
+        return None
+
+    # ── An adapter may not name a CORE or PLUGIN tool, in either list ──
+    # The subset check above only proves read_only ⊆ tools_allowed. Both could
+    # still name `delete_person` — a tool the adapter does not serve and cannot
+    # speak for. Left open, an adapter YAML became a way to reclassify core's
+    # own write tools as read-only, which is the whole boundary in one line.
+    # The registry is the authority on what core owns; the plugin seam refuses
+    # a name it does not provide for exactly this reason.
+    #
+    # This never bites a real adapter: `rest_mcp_bridge` namespaces every tool
+    # it serves with CONNECTOR_TOOL_PREFIX, so an adapter's names cannot
+    # collide with core's by accident. A collision is a claim.
+    claimed = set(tools_allowed) | set(read_only)
+    if claimed:
+        try:
+            core_names = _core_tool_names()
+        except Exception:
+            logger.exception(
+                "Adapter '%s' refused: could not read the core/plugin tool "
+                "registry to check its declared tool names. Refusing rather "
+                "than loading unchecked.",
+                name,
+            )
+            return None
+        stolen = sorted(claimed & core_names)
+        if stolen:
+            logger.warning(
+                "Adapter '%s' declares tool name(s) %s already owned by core or "
+                "an installed plugin — refused. An adapter may only name the "
+                "tools its own server serves; namespace them with "
+                "CONNECTOR_TOOL_PREFIX.",
+                name,
+                stolen,
+            )
+            return None
+
     return AdapterConfig(
         name=name,
         transport=transport,
@@ -118,13 +198,56 @@ def _parse_adapter(data: dict[str, Any]) -> AdapterConfig | None:
         version=data.get("version", ""),
         author=data.get("author", ""),
         description=data.get("description", ""),
-        tools_allowed=list(data.get("tools_allowed", []) or []),
+        tools_allowed=tools_allowed,
+        read_only=list(read_only),
         # str() BEFORE the falsiness check: YAML parses an unquoted all-zeros
         # (or all-digits) hash as an INTEGER, and `int(0) or ""` silently
         # became "no pin declared" — a fail-open path for exactly the value an
         # attacker would love. None stays "", every other scalar is stringified.
         command_sha256=("" if data.get("command_sha256") is None else str(data["command_sha256"])),
     )
+
+
+def _core_tool_names() -> frozenset[str]:
+    """Every tool name an adapter may NOT claim: core's registry, plus the
+    tools installed plugins contribute.
+
+    Two sources, both read from the authority rather than copied:
+
+    * Core — ``get_tool_definitions()`` plus ``get_engine_schemas()``, the same
+      pair ``test_every_registered_tool_is_classified`` reads, so the two can
+      never disagree. A second hardcoded list here would rot the day someone
+      adds a tool.
+    * Plugins — ``load_plugins(...).tools | .schemas``, the same expression
+      ``ToolRegistry._register_plugin_schemas`` and
+      ``test_tool_registry_parity._plugin_provided`` use. BOTH keys matter: a
+      plugin that ships only a handler still gets a synthesized schema and is
+      advertised to the model, so leaving ``tools`` out would rebuild the same
+      hole one layer down. A plugin's tools are no more an adapter's to
+      classify than core's are, and a plugin already declares its own
+      ``read_only`` through its own seam.
+
+    Imported lazily: ``robothor.api.mcp``, the engine schemas and the plugin
+    loader all sit above this module.
+
+    Fail-closed on purpose, and NOT swallowed here: whatever this cannot read
+    it must not silently omit, so an exception propagates to
+    ``_parse_adapter``, which refuses the adapter rather than loading it
+    unchecked. "Could not check" must never degrade to "allowed" — the same
+    rule :func:`verify_adapter_integrity` follows for a pin it cannot verify.
+
+    One residual limit, stated so nobody mistakes it for coverage: the engine
+    schema set is flag-gated, so a core tool behind an OFF rip flag is not in
+    here. That is also exactly the surface an adapter could collide with in
+    this process, and the flag flipping ON is a restart, which re-runs this.
+    """
+    from robothor.api.mcp import get_tool_definitions
+    from robothor.engine.tools.schemas import get_engine_schemas
+    from robothor.plugins import load_plugins
+
+    names = {d["name"] for d in get_tool_definitions()} | set(get_engine_schemas())
+    plugins = load_plugins(reserved_names=set())
+    return frozenset(names | set(plugins.tools) | set(plugins.schemas))
 
 
 def verify_adapter_integrity(adapter: AdapterConfig) -> tuple[bool, str]:

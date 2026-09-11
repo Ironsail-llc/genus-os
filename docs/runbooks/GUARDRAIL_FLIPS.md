@@ -193,7 +193,7 @@ leave live and mirror disagreeing, and never leave a `.bak-` copy behind as
 `infra/flags.yaml` is the authority for every row here; this table is the
 index. Each pre-enforce flag past its date carries a `BLOCKER:` line in its
 `soak:` note saying what must happen first —
-`tests/test_flag_manifest.py::test_overdue_entries_name_what_is_blocking_them`
+`tests/test_flag_manifest.py::test_dated_entries_name_what_is_blocking_them`
 fails if one is re-dated without a reason.
 
 | Flag | Mode | Status |

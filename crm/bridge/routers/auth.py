@@ -12,6 +12,7 @@ its own JWT).
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 from typing import Any
 
@@ -24,7 +25,101 @@ from robothor.auth.deps import get_current_user
 from robothor.auth.tokens import REFRESH_TTL_SECONDS
 from robothor.constants import DEFAULT_TENANT
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# The NAME of the environment variable — never its value. It is deliberately
+# not interpolated into any log line or response body, and every message below
+# spells it out as a literal instead.
+#
+# CodeQL's py/clear-text-logging-sensitive-data classifies an identifier
+# containing "SECRET" as sensitive by NAME, and failed PR #483 at HIGH severity
+# for passing this constant to logger.error — even though what it holds is the
+# spelling of the variable, and the branch is reachable only when the value is
+# empty. Arguing a false positive with a scanner is a recurring cost; a logger
+# that can only ever be handed literals ends the argument permanently, and
+# test_the_alarm_message_is_a_literal_with_no_arguments keeps it that way.
+_SSO_SECRET_VAR = "GENUS_BRIDGE_SSO_SECRET"
+
+# Raised at most once per outage rather than once per request: a login storm
+# against a secretless bridge would otherwise bury the line that explains it.
+_sso_secret_alarm_raised = False
+
+
+def reset_sso_secret_alarm() -> None:
+    """Re-arm the once-only alarm. For tests; production never calls it."""
+    global _sso_secret_alarm_raised
+    _sso_secret_alarm_raised = False
+
+
+def _sso_secret_is_configured() -> bool:
+    """Whether the shared secret is set and non-empty — and nothing else.
+
+    The single place the value is read for a presence test. It returns a bool,
+    so the secret itself has no path out of this function: no caller, no
+    format string and no log record can reach it.
+    """
+    return bool(os.environ.get(_SSO_SECRET_VAR))
+
+
+def sso_secret_present() -> bool:
+    """Is the dashboard↔bridge shared secret configured?
+
+    Logs once, at ERROR, the first time it is found missing. The refusal in
+    ``_sso_secret_ok`` was already correct — fail-closed — but silent: on
+    2026-09-03 the bridge started twelve seconds after a reboot, before the
+    engine's ``ExecStartPre`` had decrypted ``/run/robothor/secrets.env``, and
+    its ``EnvironmentFile=-`` is optional. It then refused every SSO exchange
+    for eight days with nothing in the journal, /health or /ready to say why.
+    """
+    global _sso_secret_alarm_raised
+    if _sso_secret_is_configured():
+        # Re-arm, so a secret that is later lost is reported again.
+        _sso_secret_alarm_raised = False
+        return True
+    if not _sso_secret_alarm_raised:
+        _sso_secret_alarm_raised = True
+        # One literal, no arguments. See the note on _SSO_SECRET_VAR above.
+        logger.error(
+            "GENUS_BRIDGE_SSO_SECRET is not set: every SSO exchange will be refused "
+            "with 403 and no user can sign in. It is decrypted into "
+            "/run/robothor/secrets.env — check that robothor-secrets.service ran "
+            "before this process started."
+        )
+    return False
+
+
+def sso_secret_readiness_check(*, bind_host: str | None = None) -> str:
+    """Readiness contract string for the shared secret ("ok" / "error:...").
+
+    Gated on ``auth_required``: a loopback development bridge legitimately runs
+    with no shared secret and never performs an SSO exchange, and marking it
+    not-ready forever is not a warning but an outage — under Helm the readiness
+    probe removes the pod from its Service, so a check meant to expose a broken
+    login would take down a deployment that never had one. The contract has
+    only "ok" and "error:…", so "not applicable" has to read as ok; the log
+    line above still fires, and the 403 refusal is unchanged either way.
+
+    A raise from ``auth_required`` (an unsafe dev-mode combination) is treated
+    as auth being required — fail closed, and let the check say so.
+    """
+    if sso_secret_present():
+        return "ok"
+    from robothor.auth.runtime import auth_required
+
+    host = (
+        bind_host if bind_host is not None else os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1")
+    )
+    try:
+        required = auth_required(bind_host=host)
+    except Exception:
+        required = True
+    if not required:
+        return "ok"
+    # A literal for the same reason the log line is one — this string is also
+    # served in the /ready payload.
+    return "error:GENUS_BRIDGE_SSO_SECRET-not-set"
 
 
 class SsoExchangeRequest(BaseModel):
@@ -46,10 +141,14 @@ class LogoutRequest(BaseModel):
 
 
 def _sso_secret_ok(provided: str | None) -> bool:
-    secret = os.environ.get("GENUS_BRIDGE_SSO_SECRET")
-    if not secret or provided is None:
+    """Constant-time comparison. The only place the value is read at all, and
+    it goes straight into ``compare_digest`` — never into a message, a response
+    or a log record."""
+    if not sso_secret_present():
         return False
-    return hmac.compare_digest(provided, secret)
+    if provided is None:
+        return False
+    return hmac.compare_digest(provided, os.environ[_SSO_SECRET_VAR])
 
 
 def _oidc_issuer_allowed(issuer: str) -> bool:

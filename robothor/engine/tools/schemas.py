@@ -1263,7 +1263,6 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    # ── Princess Freya (PF) vessel tools ──
     # ── Federation tools ──
     schemas["federation_query"] = {
         "type": "function",
@@ -2325,8 +2324,6 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
-
-    # ── Apollo.io contact enrichment & search ──
 
     # ── Todo list (in-conversation progress tracking) ──
 

@@ -7,6 +7,15 @@
 [Unit]
 Description=Robothor Business Layer
 After=network.target robothor-bridge.service robothor-crm.service
+# /run/robothor/secrets.env is a tmpfs file that exists only once
+# robothor-secrets.service has decrypted it, and the EnvironmentFile= below is
+# optional (`-`) — so without this ordering the dashboard starts with no
+# AUTH_SECRET, no CF_ACCESS_* and no bridge credentials and says nothing. See
+# the 2026-09-03 boot-order incident in robothor-bridge.service. (An instance
+# with no SOPS file skips the oneshot on a Condition, which satisfies
+# Requires=.)
+Requires=robothor-secrets.service
+After=robothor-secrets.service
 
 [Service]
 Type=simple

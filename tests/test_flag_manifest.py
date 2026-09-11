@@ -80,26 +80,30 @@ def test_blocker_lines_reads_only_non_empty_markers():
     assert blocker_lines({}) == []
 
 
-def test_overdue_entries_name_what_is_blocking_them():
+def test_dated_entries_name_what_is_blocking_them():
     """Re-dating a missed promotion without writing down why is how a deadline
-    becomes wallpaper. Any entry still in observe/alert past its own
-    planned_promotion must say, in its soak note, what has to happen first."""
-    today = dt.datetime.now(tz=dt.UTC).date()
+    becomes wallpaper. Any entry in observe/alert that carries a
+    planned_promotion must say, in its soak note, what has to happen first.
+
+    This used to apply only to entries already past their date, which made the
+    test a calendar bomb: main turned red on 2026-09-10 and again on 2026-09-11
+    with no code change, once per flag as each date passed. The daily
+    ``guardrail_watch`` nag owns "overdue"; this test owns "stated". In a
+    folded ``>`` soak note the marker must start a paragraph (blank line
+    before it) or YAML folds it into the previous sentence."""
     data = yaml.safe_load(MANIFEST.read_text())
     silent = []
     for entry in data["flags"]:
         if entry.get("mode") not in ("observe", "alert"):
             continue
-        planned = entry.get("planned_promotion")
-        if not planned:
-            continue
-        if dt.date.fromisoformat(str(planned)) >= today:
+        if not entry.get("planned_promotion"):
             continue
         if not blocker_lines(entry):
             silent.append(entry["name"])
     assert not silent, (
-        f"overdue with no stated blocker: {silent}. Add a '{BLOCKER_MARKER} ...' "
-        "line to soak: naming what must happen before the flip."
+        f"dated promotion with no stated blocker: {silent}. Add a "
+        f"'{BLOCKER_MARKER} ...' paragraph to soak: naming what must happen "
+        "before the flip."
     )
 
 

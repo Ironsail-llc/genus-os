@@ -167,9 +167,9 @@ def benchmark_allowed_tools(*, sandbox: bool) -> frozenset[str]:
     is subtracted last, so a tool cannot become allowed by being added to the
     read-only list by mistake.
     """
-    from robothor.engine.tools.handlers.benchmark import _BENCHMARK_READONLY_TOOLS
+    from robothor.engine.tools.handlers.benchmark import benchmark_readonly_tools
 
-    allowed = set(_BENCHMARK_READONLY_TOOLS)
+    allowed = set(benchmark_readonly_tools())
     if sandbox:
         allowed |= SANDBOX_WRITE_TOOLS
     return frozenset(allowed - EXTERNAL_SIDE_EFFECT_TOOLS)

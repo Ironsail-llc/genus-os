@@ -48,7 +48,7 @@ def _kinds(text: str) -> set[str]:
         "If it turns out to be real and you'd like it tracked, I can create a "
         "CRM task with the verified details and a due-date reminder.",
         "If you'd like, I can run my standard scheduled job instead.",
-        'With no verified company and no Apollo results, any "best match" I '
+        'With no verified company and no directory results, any "best match" I '
         "added would be a fabricated person.",
     ],
     ids=["happy-to", "if-youd-like", "i-can-run", "would-be"],
