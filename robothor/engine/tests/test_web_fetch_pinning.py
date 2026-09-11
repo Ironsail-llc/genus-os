@@ -121,6 +121,9 @@ def local_server():
         if tls_hostname:
             cert_path, key_path = _self_signed(tls_hostname)
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            # A bare SSLContext still accepts TLS 1.0/1.1. Even a throwaway test
+            # server speaks the protocol floor the platform expects.
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             ctx.load_cert_chain(cert_path, key_path)
             ctx.sni_callback = lambda _sock, name, _ctx: httpd.sni_names.append(name)  # type: ignore[attr-defined]
             httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
