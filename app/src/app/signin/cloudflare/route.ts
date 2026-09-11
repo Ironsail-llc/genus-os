@@ -25,13 +25,35 @@ function sanitizeCallbackUrl(raw: string | null): string {
   return "/";
 }
 
+/**
+ * The origin the BROWSER used, which is not the one `request.url` reports.
+ *
+ * Next's standalone server (`.next/standalone/server.js`) binds
+ * `hostname = process.env.HOSTNAME || '0.0.0.0'`, and a route handler's
+ * `request.url` is built from that bind address — so every redirect derived
+ * from it pointed the operator at `https://0.0.0.0:3004/...` ("0.0.0.0 refused
+ * to connect") the moment the app ran behind Cloudflare Access, 2026-09-11.
+ * `AUTH_URL` is Auth.js's own canonical public origin and is already set in
+ * production; `request.nextUrl.origin` is the dev/test fallback.
+ */
+function publicOrigin(request: NextRequest): string {
+  const configured = process.env.AUTH_URL;
+  if (configured) {
+    try {
+      return new URL(configured).origin;
+    } catch {
+      // Not absolute — unusable as an origin; fall through.
+    }
+  }
+  return request.nextUrl.origin;
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const callbackUrl = sanitizeCallbackUrl(request.nextUrl.searchParams.get("callbackUrl"));
+  const origin = publicOrigin(request);
 
   if (!cfAccessEnabled() || !request.headers.get(CF_JWT_HEADER)) {
-    return NextResponse.redirect(
-      new URL("/signin?error=CloudflareAccessUnavailable", request.url),
-    );
+    return NextResponse.redirect(new URL("/signin?error=CloudflareAccessUnavailable", origin));
   }
 
   try {
@@ -39,8 +61,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       redirectTo: callbackUrl,
       redirect: false,
     });
-    return NextResponse.redirect(new URL(target || callbackUrl, request.url));
+    return NextResponse.redirect(new URL(target || callbackUrl, origin));
   } catch {
-    return NextResponse.redirect(new URL("/signin?error=CloudflareAccessFailed", request.url));
+    return NextResponse.redirect(new URL("/signin?error=CloudflareAccessFailed", origin));
   }
 }

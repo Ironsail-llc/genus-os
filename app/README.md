@@ -28,6 +28,14 @@ authority via the `/api/auth/sso` exchange:
 - **Generic OIDC** — set `AUTH_OIDC_ISSUER` + `AUTH_OIDC_CLIENT_ID` (+ secret,
   name) for a standard IdP redirect flow (Okta / Entra / Google / Keycloak…).
 
+**`AUTH_URL` must be the public origin** (`https://app.robothor.ai`). Next's
+standalone server binds `process.env.HOSTNAME || '0.0.0.0'`, so inside a route
+handler `request.url` reports the *bind* address, not the address the browser
+used. `/signin/cloudflare` builds every redirect from `AUTH_URL` for that
+reason, falling back to `request.nextUrl.origin` only when it is unset. With it
+unset behind a proxy, a successful edge sign-in ends on "0.0.0.0 refused to
+connect" (2026-09-11).
+
 Existing accounts (including the bootstrapped owner) bind to an IdP identity
 only through an operator-armed one-shot grant: `robothor auth grant-binding
 --email <email> [--issuer <idp-url>]`, then sign in once. Grants require an

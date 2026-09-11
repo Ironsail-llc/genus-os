@@ -59,6 +59,46 @@ describe("GET /signin/cloudflare", () => {
     expect(signIn).not.toHaveBeenCalled();
   });
 
+  // Next standalone (`server.js`) binds `hostname = process.env.HOSTNAME || '0.0.0.0'`,
+  // so inside a route handler `request.url` is `https://0.0.0.0:3004/...` — the BIND
+  // address, not the address the browser used. Every redirect built from it sent the
+  // operator to "0.0.0.0 refused to connect" after a successful Cloudflare Access
+  // sign-in (2026-09-11). The public origin is AUTH_URL, which Auth.js already
+  // requires in production.
+  describe("public origin", () => {
+    it("builds redirects from AUTH_URL, never the bind address in request.url", async () => {
+      vi.stubEnv("AUTH_URL", "https://app.example.com");
+      const response = await GET(
+        new NextRequest("http://0.0.0.0:3004/signin/cloudflare?callbackUrl=%2F"),
+      );
+      const location = response.headers.get("location")!;
+      expect(location.startsWith("https://app.example.com/signin?error=")).toBe(true);
+    });
+
+    it("falls back to the request origin when AUTH_URL is unset", async () => {
+      vi.stubEnv("AUTH_URL", "");
+      const response = await GET(request("/signin/cloudflare", false));
+      expect(response.headers.get("location")).toBe(
+        "https://genus.example/signin?error=CloudflareAccessUnavailable",
+      );
+    });
+
+    it("ignores a non-absolute AUTH_URL", async () => {
+      vi.stubEnv("AUTH_URL", "/not-an-origin");
+      const response = await GET(request("/signin/cloudflare", false));
+      expect(response.headers.get("location")).toBe(
+        "https://genus.example/signin?error=CloudflareAccessUnavailable",
+      );
+    });
+
+    it("rebases the signIn target onto the public origin", async () => {
+      vi.stubEnv("AUTH_URL", "https://app.example.com");
+      signIn.mockResolvedValue("/fleet");
+      const response = await GET(request("/signin/cloudflare?callbackUrl=%2Ffleet"));
+      expect(response.headers.get("location")).toBe("https://app.example.com/fleet");
+    });
+  });
+
   it.each([
     "https://evil.example/phish",
     "//evil.example/phish",
