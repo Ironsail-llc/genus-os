@@ -206,6 +206,58 @@ class TestHostnamePreserved:
         assert "127.0.0.1" not in result["url"]
 
 
+class TestBlockedRanges:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://[::]/",  # IPv6 unspecified — the v6 spelling of 0.0.0.0
+            "http://[fe80::1]/",  # IPv6 link-local — the v6 metadata neighbourhood
+            "http://100.64.0.1/",  # CGNAT shared space: carrier-internal, not public
+        ],
+    )
+    def test_additional_private_ranges_are_blocked(self, url: str) -> None:
+        assert web._is_blocked_host(url) is True
+
+
+class TestPinIsNotOptional:
+    async def test_a_response_that_never_dialled_the_pin_is_refused(self, monkeypatch, public_dns):
+        """If a transport answers without going through the pinned backend, the
+        vetted-IP guarantee is gone even though every check "passed". Fail
+        closed rather than trust a response whose socket we cannot account for.
+        """
+        fake = _FakeClient([_Resp()], dials=False)
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake.configure(**k))
+
+        result = await _web_fetch({"url": "http://site.test/"}, ctx=None)
+
+        assert "Blocked" in result["error"]
+        assert classify_error("web_fetch", result["error"]) is ErrorType.BLOCKED
+
+    async def test_pins_are_keyed_by_host_and_port(self, monkeypatch, public_dns):
+        """Two ports on one name are two targets. A host-only key lets a pin
+        vetted for :443 authorise a connection to any other port on that name.
+        """
+        backend = web._PinnedResolutionBackend(delegate=object())
+        backend.pin("site.test", 443, "93.184.216.34")
+
+        with pytest.raises(Exception, match="unvetted"):
+            await backend.connect_tcp("site.test", 8080)
+
+
+class TestMalformedRedirect:
+    async def test_3xx_without_location_is_an_error(self, local_server, fake_dns, allow_loopback):
+        """A 3xx with nowhere to go used to be served to the agent as an empty
+        page with status 302 — a silent, contentless success."""
+        httpd = local_server(lambda path, n, headers: (302, {}, ""))
+        port = httpd.server_address[1]
+        fake_dns.answers["pinned.test"] = ["127.0.0.1"]
+
+        result = await _web_fetch({"url": f"http://pinned.test:{port}/"}, ctx=None)
+
+        assert "Location" in result["error"]
+        assert "content" not in result
+
+
 class TestInternationalizedHost:
     async def test_idn_host_is_pinned_under_both_spellings(
         self, local_server, fake_dns, allow_loopback
@@ -266,14 +318,17 @@ class TestCookieWalledRedirect:
         forever and the agent reports "Too many redirects" — one of the four
         top production errors.
         """
-        www = local_server(
-            lambda path, n, headers: (
-                (200, {"Content-Type": "text/html"}, "<html><body>through</body></html>")
-                if "canary=1" in (headers.get("Cookie") or "")
-                else (302, {"Location": f"http://apex.test:{apex.server_address[1]}/"}, "")
-            ),
-            host="127.0.0.2",
-        )
+        try:
+            www = local_server(
+                lambda path, n, headers: (
+                    (200, {"Content-Type": "text/html"}, "<html><body>through</body></html>")
+                    if "canary=1" in (headers.get("Cookie") or "")
+                    else (302, {"Location": f"http://apex.test:{apex.server_address[1]}/"}, "")
+                ),
+                host="127.0.0.2",
+            )
+        except OSError as e:  # macOS does not alias the whole 127/8 by default
+            pytest.skip(f"second loopback address unavailable: {e}")
         apex = local_server(
             lambda path, n, headers: (
                 302,
@@ -380,9 +435,23 @@ class _Resp:
 
 
 class _FakeClient:
-    def __init__(self, responses):
+    """A client that answers from a script instead of a socket.
+
+    ``dials=True`` marks the transport's backend as having been dialled, which
+    is what a real connection does. A fake that skips it is a transport that
+    bypassed the pin, and web_fetch must refuse the response.
+    """
+
+    def __init__(self, responses, *, dials: bool = True, transport=None, **kwargs):
         self._responses = list(responses)
+        self._dials = dials
+        self._transport = transport
         self.urls: list[str] = []
+
+    def configure(self, **kwargs):
+        """Stand in for ``httpx.AsyncClient(**kwargs)`` — keep the transport."""
+        self._transport = kwargs.get("transport", self._transport)
+        return self
 
     async def __aenter__(self):
         return self
@@ -392,6 +461,8 @@ class _FakeClient:
 
     async def get(self, url, **kwargs):
         self.urls.append(str(url))
+        if self._dials and self._transport is not None:
+            self._transport._pool._network_backend.dialed = True
         if self._responses:
             return self._responses.pop(0)
         return _Resp()
@@ -417,7 +488,7 @@ class TestRedirectAccounting:
                 _Resp(),
             ]
         )
-        monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake)
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake.configure(**k))
 
         result = await _web_fetch({"url": "http://site.test/"}, ctx=None)
 
@@ -426,7 +497,7 @@ class TestRedirectAccounting:
 
     async def test_five_real_hops_are_allowed(self, monkeypatch, public_dns):
         fake = _FakeClient([_Resp(location=f"http://site.test/{i}") for i in range(1, 6)])
-        monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake)
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake.configure(**k))
 
         result = await _web_fetch({"url": "http://site.test/0"}, ctx=None)
 
@@ -434,7 +505,7 @@ class TestRedirectAccounting:
 
     async def test_six_real_hops_is_too_many(self, monkeypatch, public_dns):
         fake = _FakeClient([_Resp(location=f"http://site.test/{i}") for i in range(1, 8)])
-        monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake)
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake.configure(**k))
 
         result = await _web_fetch({"url": "http://site.test/0"}, ctx=None)
 
@@ -449,7 +520,7 @@ class TestRedirectAccounting:
                 _Resp(location="http://site.test/a"),
             ]
         )
-        monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake)
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake.configure(**k))
 
         result = await _web_fetch({"url": "http://site.test/a"}, ctx=None)
 

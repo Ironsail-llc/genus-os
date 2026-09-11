@@ -24,11 +24,14 @@ HANDLERS: dict[str, Any] = {}
 _BLOCKED_NETWORKS = [
     ipaddress.ip_network("0.0.0.0/8"),  # "this host" — 0.0.0.0 routes to localhost
     ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::/128"),  # the IPv6 spelling of 0.0.0.0
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT shared space — carrier-internal
     ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local, incl. the v6 metadata range
     ipaddress.ip_network("fc00::/7"),
 ]
 
@@ -122,11 +125,17 @@ class _PinnedResolutionBackend(httpcore.AsyncNetworkBackend):
     """
 
     def __init__(self, delegate: httpcore.AsyncNetworkBackend | None = None) -> None:
-        self._pins: dict[str, str] = {}
+        self._pins: dict[tuple[str, int], str] = {}
         self._delegate = delegate if delegate is not None else httpcore.AnyIOBackend()
+        #: Set once a connection has actually been made through this backend.
+        #: web_fetch refuses a response that never set it — a transport that
+        #: answered without dialling here is a transport that bypassed the pin.
+        self.dialed = False
 
-    def pin(self, host: str, ip: str) -> None:
-        self._pins[host.lower()] = ip
+    def pin(self, host: str, port: int, ip: str) -> None:
+        # Keyed by host AND port: two ports on one name are two targets, and a
+        # pin vetted for :443 must not authorise a connection to :8080.
+        self._pins[(host.lower(), port)] = ip
 
     async def connect_tcp(
         self,
@@ -136,9 +145,12 @@ class _PinnedResolutionBackend(httpcore.AsyncNetworkBackend):
         local_address: str | None = None,
         socket_options: Any = None,
     ) -> httpcore.AsyncNetworkStream:
-        ip = self._pins.get(str(host).lower())
+        ip = self._pins.get((str(host).lower(), port))
         if ip is None:
-            raise httpcore.ConnectError(f"refusing to connect to unvetted host {host!r}")
+            raise httpcore.ConnectError(
+                f"refusing to connect to unvetted host {host!r} port {port}"
+            )
+        self.dialed = True
         return await self._delegate.connect_tcp(
             ip,
             port,
@@ -289,10 +301,26 @@ async def _web_fetch(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                     # Both spellings are pinned: the guard vets the unicode host
                     # and the transport connects under the IDNA/punycode one.
                     parsed_url = httpx.URL(current)
-                    backend.pin(parsed_url.host, pinned_ip)
-                    backend.pin(parsed_url.raw_host.decode("ascii"), pinned_ip)
+                    port = parsed_url.port or (443 if parsed_url.scheme == "https" else 80)
+                    backend.pin(parsed_url.host, port, pinned_ip)
+                    backend.pin(parsed_url.raw_host.decode("ascii"), port, pinned_ip)
                 resp = await client.get(current)
+                if not backend.dialed:
+                    # A response arrived without a connection through the pin.
+                    # Every check "passed" and the guarantee is still gone, so
+                    # this fails closed rather than trusting an unaccountable
+                    # socket — an httpx that keeps `_network_backend` but stops
+                    # routing through it must not silently restore name
+                    # resolution.
+                    return {
+                        "error": (
+                            "Blocked: agents cannot access hosts the vetted-IP pin never "
+                            f"dialled — the transport bypassed the pin ({current})"
+                        )
+                    }
 
+                if resp.is_redirect and not resp.headers.get("location"):
+                    return {"error": f"Redirect without a Location header ({current})"}
                 location = resp.headers.get("location") if resp.is_redirect else None
                 if not location:
                     break

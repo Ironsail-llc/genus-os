@@ -158,8 +158,9 @@ convention, which would print real key material.
 |----------|---------|-------------|
 | `ROBOTHOR_WEB_FETCH_USER_AGENT` | `GenusOS-web-fetch/1.0 (+https://github.com/Ironsail-llc/genus-os)` | Identity `web_fetch` sends. Sites that block HTTP-library defaults answer 403 to `python-httpx/*`, so the tool names itself; set this to add your own contact address |
 
-`web_fetch` resolves a host, refuses any private/loopback/link-local address,
-and then connects to the exact address it vetted — pinned at the socket, so the
+`web_fetch` resolves a host, refuses any private, loopback, link-local or
+carrier-internal (CGNAT) address in either IP family, and then connects to the
+exact address it vetted — pinned at the socket, so the
 request keeps its hostname and Host, TLS SNI and certificate verification all
 see the real name. Certificate verification is never disabled; an untrusted
 certificate is reported as such. Redirects are followed one hop at a time and
