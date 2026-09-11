@@ -10,6 +10,26 @@ Genus OS's command center. Live dashboard and chat interface in a two-panel Dock
 - **Canvas**: HTML-first rendering via iframe srcdoc (Tailwind CSS), native components as fallback
 - **Dashboard generation**: Gemini 2.5 Flash-Lite (Sep) via OpenRouter (~1-3s)
 
+### Home is real data, generation is explicit
+
+The Dashboard tab renders `business/default-dashboard.tsx` — health, tasks,
+agents and quick actions read live from the BFF. Opening the app makes **no**
+model call. The generated canvas is one click away ("Generate a view with AI"),
+and the Canvas tab always says what it is and offers the action rather than
+presenting a blank iframe.
+
+**Behaviour change:** because `useDashboardAgent` lives with the AI canvas, a
+chat reply no longer regenerates a canvas unless that view is open. The
+"updating" flag is raised only while a mounted agent has a regeneration in
+flight, so the canvas never opens onto a spinner for work nobody is doing.
+
+Every section degrades honestly: a data call that fails names the endpoint and
+the status ("Conversations unavailable (401)") instead of rendering an empty
+card. Server-side data fetches for the generation prompt
+(`lib/dashboard/conversation-context.ts`, `welcome-context.ts`) carry the
+caller's bridge bearer token via `lib/bridge-auth.ts`; their TTL cache is
+partitioned per caller so one operator's rows never reach another's dashboard.
+
 ## Authentication
 
 Auth.js (next-auth v5) with two env-gated sign-in paths; each provider

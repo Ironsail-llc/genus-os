@@ -47,6 +47,9 @@ export function useTasks(options: UseTasksOptions = {}) {
   const { agentFilter, priorityFilter, live = false } = options;
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  // A refused fetch must be reportable: an empty board and an unreachable
+  // board look identical to the operator otherwise.
+  const [error, setError] = useState<{ endpoint: string; status: number } | null>(null);
   const lastVisibleRef = useRef(Date.now());
   const fetchIdRef = useRef(0);
 
@@ -68,11 +71,23 @@ export function useTasks(options: UseTasksOptions = {}) {
         }),
       });
 
-      if (!res.ok) return;
+      if (!res.ok) {
+        if (id === fetchIdRef.current) {
+          setError({ endpoint: "/api/actions/execute", status: res.status });
+        }
+        return;
+      }
       const json = await res.json();
       // Only apply if this is still the latest fetch
       if (id === fetchIdRef.current) {
+        setError(null);
         setTasks(json.data?.tasks || []);
+      }
+    } catch {
+      // The request never got an answer (offline, connection refused). Status
+      // 0 means "no response" — reported, not swallowed into an empty board.
+      if (id === fetchIdRef.current) {
+        setError({ endpoint: "/api/actions/execute", status: 0 });
       }
     } finally {
       if (id === fetchIdRef.current) {
@@ -283,6 +298,7 @@ export function useTasks(options: UseTasksOptions = {}) {
   return {
     tasks,
     isLoading,
+    error,
     refetch: fetchTasks,
     updateTaskStatus,
     approveTask,
