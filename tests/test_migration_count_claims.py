@@ -37,14 +37,32 @@ def manifest_migration_count() -> int:
     )
 
 
+# Dated session artifacts (design specs, plans) describe the repo as it WAS,
+# including the very drift this test exists to catch — "README says 83
+# migrations" is a true sentence about 2026-09-10. Rewriting history to satisfy
+# a gate would make the record less true, so they are exempt here exactly as
+# they are in scripts/check_doc_commands.py and scripts/check_doc_links.py.
+ARCHIVED_DOC_DIRS = ("docs/superpowers/",)
+
+
 def documents() -> list[Path]:
-    """README.md, the chart README, and every markdown page under docs/."""
+    """README.md, the chart README, and every live markdown page under docs/."""
     paths = [
         REPO_ROOT / "README.md",
         REPO_ROOT / "helm" / "genus-os" / "README.md",
     ]
-    paths.extend(sorted((REPO_ROOT / "docs").rglob("*.md")))
+    paths.extend(
+        path
+        for path in sorted((REPO_ROOT / "docs").rglob("*.md"))
+        if not str(path.relative_to(REPO_ROOT)).startswith(ARCHIVED_DOC_DIRS)
+    )
     return [path for path in paths if path.is_file()]
+
+
+def test_archived_design_docs_are_not_scanned() -> None:
+    """A dated spec may quote the stale number it was written to fix."""
+    scanned = {str(path.relative_to(REPO_ROOT)) for path in documents()}
+    assert not any(name.startswith("docs/superpowers/") for name in scanned)
 
 
 def test_manifest_is_readable_and_non_empty() -> None:
