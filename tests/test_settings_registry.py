@@ -175,9 +175,11 @@ def test_runtime_override_is_not_cached(tmp_path, monkeypatch) -> None:
 
 
 def test_unknown_key_is_rejected(tmp_path, monkeypatch) -> None:
+    """Under ``enforce``. What the other rungs do: test_config_strict_mode.py."""
     from robothor.settings import get_settings
 
     monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("ROBOTHOR_CONFIG_STRICT_MODE", "enforce")
     _write_config(tmp_path, "settings:\n  not_a_real_group: 1\n")
 
     with pytest.raises(Exception) as excinfo:
@@ -189,6 +191,7 @@ def test_unknown_key_inside_a_group_is_rejected(tmp_path, monkeypatch) -> None:
     from robothor.settings import get_settings
 
     monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("ROBOTHOR_CONFIG_STRICT_MODE", "enforce")
     _write_config(tmp_path, "settings:\n  engine:\n    not_a_real_field: 1\n")
 
     with pytest.raises(Exception) as excinfo:
