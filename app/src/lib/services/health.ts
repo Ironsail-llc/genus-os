@@ -1,11 +1,109 @@
+import { serviceEnvVar } from "./registry";
+
+export type ServiceStatus = "healthy" | "degraded" | "unhealthy" | "disabled";
+
 export interface ServiceHealth {
   name: string;
+  /** Operator-facing name; the internal service id means nothing on a dashboard. */
+  label: string;
   url: string;
-  status: "healthy" | "unhealthy";
+  status: ServiceStatus;
   responseTime: number;
+  /** Why the status is what it is: passing/failing checks, "switched off", the HTTP code. */
+  detail: string;
 }
 
-const PROBED_SERVICES = new Set(["engine", "bridge", "orchestrator", "vision"]);
+/** The services the Helm probes for the home screen and /api/health, in display order. */
+export const CORE_SERVICES = ["engine", "bridge", "orchestrator", "vision"] as const;
+
+const PROBED_SERVICES = new Set<string>(CORE_SERVICES);
+
+const SERVICE_LABELS: Record<string, string> = {
+  engine: "Agent engine",
+  bridge: "API bridge",
+  orchestrator: "Memory & retrieval",
+  vision: "Vision (camera)",
+};
+
+export function serviceLabel(name: string): string {
+  return SERVICE_LABELS[name] ?? name;
+}
+
+/** "ok" unless a service that is meant to be running is not healthy. */
+export function overallStatus(services: ReadonlyArray<Pick<ServiceHealth, "status">>): "ok" | "degraded" {
+  return services.every((s) => s.status === "healthy" || s.status === "disabled") ? "ok" : "degraded";
+}
+
+type ProbeBody = {
+  status?: unknown;
+  checks?: unknown;
+  services?: unknown;
+  components?: unknown;
+  mode?: unknown;
+  available?: unknown;
+  running?: unknown;
+};
+
+/** `{name: "ok" | "error:…"}` maps (engine/bridge `checks`, bridge `/health` `services`). */
+function stringChecks(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    ([, v]) => typeof v === "string",
+  ) as [string, string][];
+  return entries.length ? Object.fromEntries(entries) : null;
+}
+
+/** `{name: {available: boolean}}` maps (orchestrator `components`). */
+function availabilityChecks(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entries: [string, string][] = [];
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v && typeof v === "object" && "available" in v) {
+      entries.push([k, (v as { available?: unknown }).available === false ? "unavailable" : "ok"]);
+    }
+  }
+  return entries.length ? Object.fromEntries(entries) : null;
+}
+
+/**
+ * Read what the service SAID, not just whether the socket answered.
+ *
+ * - a body that reports itself switched off (`mode: "disabled"`, or
+ *   `running` without `available`) is "disabled": neither healthy nor down;
+ * - a failing dependency check is "degraded" and the check is named;
+ * - an authentication wall on the probe path is named as such — it is a
+ *   misconfigured probe, not an outage (2026-09-11: the bridge showed
+ *   "unhealthy" on the home screen because /health answered 401 while the
+ *   operator had just signed in through it).
+ */
+export function classifyProbe(
+  httpStatus: number,
+  body: unknown,
+): { status: ServiceStatus; detail: string } {
+  const b = (body && typeof body === "object" ? body : {}) as ProbeBody;
+  if (b.mode === "disabled" || (b.running === true && b.available === false)) {
+    const mode = typeof b.mode === "string" ? b.mode : "disabled";
+    return { status: "disabled", detail: `switched off (mode: ${mode})` };
+  }
+  if (httpStatus === 401 || httpStatus === 403) {
+    return { status: "unhealthy", detail: `HTTP ${httpStatus}: the probe path requires authentication` };
+  }
+  const checks = stringChecks(b.checks) ?? stringChecks(b.services) ?? availabilityChecks(b.components);
+  const failing = checks ? Object.entries(checks).filter(([, v]) => v !== "ok") : [];
+  if (failing.length > 0) {
+    return { status: "degraded", detail: `failing: ${failing.map(([k, v]) => `${k} ${v}`).join(", ")}` };
+  }
+  const ok = httpStatus >= 200 && httpStatus < 300;
+  if (b.status === "degraded") {
+    return { status: "degraded", detail: ok ? "service reports degraded" : `service reports degraded (HTTP ${httpStatus})` };
+  }
+  if (!ok) return { status: "unhealthy", detail: `HTTP ${httpStatus}` };
+  const passed = checks ? Object.keys(checks) : [];
+  return {
+    status: "healthy",
+    detail: passed.length ? `checks: ${passed.map((k) => `${k} ok`).join(", ")}` : "responding",
+  };
+}
 
 /** Validate an operator-owned service target before any network access. */
 function healthTarget(name: string, value: string): URL | null {
@@ -84,9 +182,15 @@ export function checkDashboardAuthConfig(): ServiceHealth {
 
   return {
     name: "authentication",
+    label: "Sign-in configuration",
     url: "local",
     status: configured ? "healthy" : "unhealthy",
     responseTime: 0,
+    detail: configured
+      ? insecureDevelopment
+        ? "insecure development mode"
+        : "shared secrets set and a sign-in provider configured"
+      : "AUTH_SECRET, GENUS_BRIDGE_SSO_SECRET and one sign-in provider (OIDC or Cloudflare Access) are required",
   };
 }
 
@@ -96,13 +200,34 @@ export async function checkService(
   url: string | null
 ): Promise<ServiceHealth> {
   const start = Date.now();
+  const label = serviceLabel(name);
   if (!url) {
-    return { name, url: "unconfigured", status: "unhealthy", responseTime: 0 };
+    const envVar = serviceEnvVar(name);
+    // A variable that is SET but unusable (wrong scheme, credentials, a
+    // fragment) is a broken deployment, not an absent service.
+    if (envVar && process.env[envVar]?.trim()) {
+      return {
+        name,
+        label,
+        url: "invalid",
+        status: "unhealthy",
+        responseTime: 0,
+        detail: `${envVar} is not a usable http(s) URL`,
+      };
+    }
+    return {
+      name,
+      label,
+      url: "unconfigured",
+      status: "disabled",
+      responseTime: 0,
+      detail: envVar ? `not configured (set ${envVar})` : "not configured",
+    };
   }
 
   const target = healthTarget(name, url);
   if (!target) {
-    return { name, url: "invalid", status: "unhealthy", responseTime: 0 };
+    return { name, label, url: "invalid", status: "unhealthy", responseTime: 0, detail: "invalid probe URL" };
   }
 
   try {
@@ -110,18 +235,32 @@ export async function checkService(
       redirect: "manual",
       signal: AbortSignal.timeout(5000),
     });
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+    // A Response always carries a numeric status; test doubles sometimes only say `ok`.
+    const httpStatus = typeof res.status === "number" ? res.status : res.ok ? 200 : 503;
+    const verdict = classifyProbe(httpStatus, body);
     return {
       name,
+      label,
       url: target.toString(),
-      status: res.ok ? "healthy" : "unhealthy",
+      status: verdict.status,
       responseTime: Date.now() - start,
+      detail: verdict.detail,
     };
-  } catch {
+  } catch (err) {
+    const reason = err instanceof Error ? err.name === "TimeoutError" ? "timed out after 5s" : err.message : String(err);
     return {
       name,
+      label,
       url: target.toString(),
       status: "unhealthy",
       responseTime: Date.now() - start,
+      detail: `unreachable: ${reason}`,
     };
   }
 }

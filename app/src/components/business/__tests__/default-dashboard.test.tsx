@@ -132,4 +132,44 @@ describe("DefaultDashboard", () => {
     );
     expect(screen.queryByTestId("section-error-health")).toBeNull();
   });
+
+  it("counts only services that are meant to run, and says how many are switched off", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        health: jsonResponse({
+          status: "ok",
+          services: [
+            { name: "engine", label: "Agent engine", status: "healthy" },
+            { name: "bridge", label: "API bridge", status: "healthy" },
+            { name: "vision", label: "Vision (camera)", status: "disabled" },
+          ],
+        }),
+      }),
+    );
+    renderDashboard();
+    const metric = await screen.findByTestId("metric-summary");
+    await waitFor(() => expect(metric.textContent).toContain("2/2"));
+    expect(metric.textContent).toContain("1 switched off");
+    expect(metric.textContent).not.toContain("Degraded");
+  });
+
+  it("names a degraded service in the health caption instead of a bare count", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        health: jsonResponse({
+          status: "degraded",
+          services: [
+            { name: "engine", label: "Agent engine", status: "healthy" },
+            { name: "bridge", label: "API bridge", status: "degraded", detail: "memory error:503" },
+          ],
+        }),
+      }),
+    );
+    renderDashboard();
+    const metric = await screen.findByTestId("metric-summary");
+    await waitFor(() => expect(metric.textContent).toContain("1/2"));
+    expect(metric.textContent).toContain("API bridge");
+  });
 });

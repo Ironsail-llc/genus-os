@@ -95,8 +95,13 @@ export function DefaultDashboard() {
   // "awaiting first probe" rather than throw out of render and take the whole
   // app (chat panel included) down with it.
   const services = Array.isArray(health?.services) ? health.services : [];
-  const healthyCount = services.filter((s) => s.status === "healthy").length;
-  const totalServices = services.length;
+  // A service the operator switched off is not counted: "2/2 · 1 switched off"
+  // is the truth, "2/3" reads as an outage.
+  const running = services.filter((s) => s.status !== "disabled");
+  const healthyCount = running.filter((s) => s.status === "healthy").length;
+  const totalServices = running.length;
+  const offCount = services.length - running.length;
+  const troubled = running.filter((s) => s.status !== "healthy");
 
   const quickActions = [
     {
@@ -198,10 +203,12 @@ export function DefaultDashboard() {
             />
           ) : (
             <p className="mt-1 text-xs text-muted-foreground">
-              {totalServices > 0 && healthyCount === totalServices
-                ? "All services nominal"
+              {totalServices > 0 && troubled.length === 0
+                ? `All services nominal${offCount > 0 ? ` · ${offCount} switched off` : ""}`
                 : totalServices > 0
-                  ? "Degraded — see service grid"
+                  ? `${troubled
+                      .map((s) => `${s.label ?? s.name} ${s.status === "unhealthy" ? "down" : s.status}`)
+                      .join(", ")} — see service grid`
                   : "Awaiting first probe"}
             </p>
           )}
