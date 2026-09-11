@@ -1,0 +1,145 @@
+"""Thinking-mode reasoning must round-trip back to the model that produced it.
+
+A reasoning model does not treat its own reasoning as decoration: DeepSeek's
+thinking mode rejects a conversation whose assistant turns come back without
+the ``reasoning_content`` it emitted —
+
+    The reasoning_content in the thinking mode must be passed back to the API.
+
+which OpenRouter surfaces as a bare 400 "Provider returned error". Single-turn
+calls are unaffected (there is no history to replay), so the failure looks like
+a provider outage and takes the whole fallback chain with it.
+
+Two rules, and they pull in opposite directions:
+
+1. Keep the field on the stored assistant message exactly as received, so the
+   next request to the SAME model carries it.
+2. Never send it anywhere else. The blob is provider-specific; an
+   Anthropic-shaped provider rejects it. So the producing model is recorded on
+   the stored message under ``_model`` and the reasoning is stripped whenever
+   the history is replayed to a different one.
+
+``_model`` is engine bookkeeping and is removed from every outbound payload.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any, Final
+
+#: Fields a reasoning provider puts on the assistant message. ``reasoning_content``
+#: is litellm's normalized name (``litellm.types.utils.Message``); ``reasoning`` and
+#: ``reasoning_details`` are what OpenRouter itself returns and documents as
+#: needing to be echoed back. litellm keeps unknown fields on the Message object,
+#: so all three are readable the same way.
+REASONING_FIELDS: Final[tuple[str, ...]] = (
+    "reasoning_content",
+    "reasoning",
+    "reasoning_details",
+)
+
+#: Where the stored assistant message records which model produced it. Leading
+#: underscore: this key never reaches a provider.
+PRODUCER_MODEL_KEY: Final = "_model"
+
+
+def _normalize_model_id(model: str) -> str:
+    """Collapse a model id to a provider/format-agnostic core for comparison.
+
+    litellm reports ``response.model`` without the ``openrouter/`` prefix and
+    often with a trailing date or dashes-for-dots, so an exact compare against
+    the id the engine dispatched on would never match and the reasoning would
+    be stripped on every turn — i.e. the bug this module exists to fix.
+    """
+    core = (model or "").strip().lower().rsplit("/", 1)[-1]
+    core = re.sub(r"[-_]?\d{6,}$", "", core)  # trailing date/build stamp
+    return re.sub(r"[.\-_\s]", "", core)
+
+
+def same_model(a: str, b: str) -> bool:
+    """True when two model ids name the same model across routing spellings."""
+    normalized = _normalize_model_id(a)
+    return bool(normalized) and normalized == _normalize_model_id(b)
+
+
+def capture_reasoning_fields(message: Any) -> dict[str, Any]:
+    """The reasoning fields a provider returned on one assistant message.
+
+    Values are taken verbatim — a reasoning blob is the provider's, and any
+    reshaping here is a 400 on the next turn. Only ``str``/``list`` values are
+    accepted so a stubbed or unusual response object cannot smuggle an
+    unserializable object into the conversation.
+
+    A value already captured under another name is not captured twice: litellm
+    normalizes OpenRouter's ``reasoning`` onto ``reasoning_content`` and leaves
+    the original in ``provider_specific_fields``, and shipping the same blob
+    under both names would pay for it twice on every turn of every run.
+    """
+    captured: dict[str, Any] = {}
+    provider_fields = getattr(message, "provider_specific_fields", None)
+    for field in REASONING_FIELDS:
+        value = getattr(message, field, None)
+        if value is None and isinstance(provider_fields, dict):
+            value = provider_fields.get(field)
+        if not value or not isinstance(value, (str, list)):
+            continue
+        if any(value == already for already in captured.values()):
+            continue
+        captured[field] = value
+    return captured
+
+
+def strip_reasoning_for_model(messages: list[dict[str, Any]], model: str) -> list[dict[str, Any]]:
+    """Messages safe to send to ``model``.
+
+    Drops the ``_model`` bookkeeping key from every message that carries it,
+    and with it the reasoning fields whenever that message was produced by a
+    different model. Returns the same list object when there is nothing to
+    change, so ordinary payloads stay byte-identical, and never mutates the
+    caller's messages — the history stays intact for the next leg of the
+    fallback chain.
+    """
+    if not any(isinstance(m, dict) and PRODUCER_MODEL_KEY in m for m in messages):
+        return messages
+
+    cleaned: list[dict[str, Any]] = []
+    for message in messages:
+        producer = message.get(PRODUCER_MODEL_KEY) if isinstance(message, dict) else None
+        if producer is None:
+            cleaned.append(message)
+            continue
+        keep_reasoning = same_model(str(producer), model)
+        cleaned.append(
+            {
+                key: value
+                for key, value in message.items()
+                if key != PRODUCER_MODEL_KEY and (keep_reasoning or key not in REASONING_FIELDS)
+            }
+        )
+    return cleaned
+
+
+#: The provider's own wording for a history replayed without its reasoning.
+#: Matched on the phrase rather than a status code: OpenRouter reports it as a
+#: generic 400 "Provider returned error" with the real message in the raw body.
+_REPLAY_REJECTION = re.compile(
+    r"reasoning(?:_content|_details)?.{0,120}?must be passed back",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def is_reasoning_replay_error(error: BaseException) -> bool:
+    """True when a provider rejected the request for missing reasoning.
+
+    Walks the exception chain: litellm wraps the provider's message, and the
+    phrase can arrive on a cause rather than the exception the caller sees.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        for text in (str(current), str(getattr(current, "message", "") or "")):
+            if _REPLAY_REJECTION.search(text):
+                return True
+        current = current.__cause__ or current.__context__
+    return False

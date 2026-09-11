@@ -44,6 +44,10 @@ from robothor.engine.codex_provider import acompletion as codex_acompletion
 from robothor.engine.key_pool import KeyPool, Retirement, env_var_for_model, keys_from_env
 from robothor.engine.metrics import LLM_CALL_DURATION, LLM_CALLS_TOTAL, LLM_TOKENS_TOTAL
 from robothor.engine.model_breaker import _current_run_id_var, get_model_breaker
+from robothor.engine.reasoning_replay import (
+    is_reasoning_replay_error,
+    strip_reasoning_for_model,
+)
 from robothor.engine.retry import retry_async
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.stall_watchdog import _active_watchdog_var
@@ -597,6 +601,10 @@ async def llm_call(
     last: Exception | None = None
     for candidate in chain:
         kwargs["model"] = candidate
+        # Callers here pass their own message lists, but a caller replaying an
+        # agent's history would carry engine bookkeeping and another provider's
+        # reasoning into this payload. No-op for everything else.
+        kwargs["messages"] = strip_reasoning_for_model(messages, candidate)
         try:
             return await retry_async(
                 _attempt,
@@ -1127,6 +1135,13 @@ class LLMClient:
         limits = get_model_limits(model)
         actual_model = model
 
+        # Reasoning belongs to the model that produced it: echoed back to the
+        # same model (thinking mode rejects a history without it), stripped for
+        # any other. Runs first so every later step sees the payload shape the
+        # provider will. No-op (same list object) for a history with no
+        # reasoning on it. See reasoning_replay.
+        messages = strip_reasoning_for_model(messages, model)
+
         # For models that support Anthropic-style prompt caching, enable it on
         # the system message by converting it to content-block format with
         # cache_control. This is now a catalog-driven capability lookup (see
@@ -1260,6 +1275,19 @@ class LLMClient:
         streaming: bool = False,
     ) -> None:
         """Handle model failure: mark broken or log warning."""
+        # Named before anything else classifies it. A history replayed without
+        # the provider's own reasoning arrives as a generic 400 "Provider
+        # returned error", which is indistinguishable from a dozen other bad
+        # requests in the log — and on 2026-09-11 that cost the fleet a day on
+        # the local tier with nothing in the journal pointing at the cause.
+        if is_reasoning_replay_error(e):
+            logger.error(
+                "Model %s rejected the conversation because the assistant turn's "
+                "reasoning was not echoed back (thinking mode requires it) — "
+                "reasoning_replay_rejected=True: %s",
+                _sanitize(model),
+                _sanitize(e),
+            )
         status = getattr(e, "status_code", None)
         is_timeout = isinstance(e, (asyncio.TimeoutError, TimeoutError))
         # Provider-availability failures (e.g. the Codex CLI missing from the

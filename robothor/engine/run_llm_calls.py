@@ -31,6 +31,10 @@ from typing import Any
 # instance of it; the historical method surface is preserved via thin
 # delegators/aliases below so existing call sites keep working unchanged.
 from robothor.engine.llm_client import LLMClient  # noqa: E402
+from robothor.engine.reasoning_replay import (  # noqa: E402
+    PRODUCER_MODEL_KEY,
+    capture_reasoning_fields,
+)
 
 # ── Log-injection sanitizer ──
 # CodeQL py/log-injection: user-controlled values (model names, error
@@ -274,6 +278,14 @@ class LLMCallMixin:
         else:
             if raw_content:
                 msg_dict["content"] = raw_content
+        # Thinking-mode providers require their own reasoning back on the next
+        # turn (see reasoning_replay). Kept verbatim, tagged with the model that
+        # produced it so the fallback chain never ships one provider's reasoning
+        # to another. The tag is stripped from every outbound payload.
+        reasoning = capture_reasoning_fields(assistant_msg)
+        if reasoning:
+            msg_dict.update(reasoning)
+            msg_dict[PRODUCER_MODEL_KEY] = model_used
         if assistant_msg.tool_calls:
             msg_dict["tool_calls"] = [
                 {
