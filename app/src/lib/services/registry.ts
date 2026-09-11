@@ -167,6 +167,27 @@ export function getConfiguredServiceUrl(name: string, urlPath = ""): string | nu
 /**
  * Get the health check URL for a service.
  */
+/** Name of the env var that overrides a service's URL, if one exists. */
+export function serviceEnvVar(name: string): string | null {
+  return ENV_OVERRIDES[name] ?? null;
+}
+
+/**
+ * The path a service publishes its health/readiness on, from the manifest.
+ * Engine and bridge keep `/health` behind their auth wall and publish an
+ * unauthenticated `/ready` with per-dependency checks, so that is the default
+ * for both when the manifest is absent.
+ */
+const DEFAULT_HEALTH_PATHS: Record<string, string> = {
+  engine: "/ready",
+  bridge: "/ready",
+};
+
+export function getServiceHealthPath(name: string): string {
+  const svc = loadManifest().services[name];
+  return svc?.health ?? DEFAULT_HEALTH_PATHS[name] ?? "/health";
+}
+
 export function getHealthUrl(name: string): string | null {
   const manifest = loadManifest();
   const svc = manifest.services[name];

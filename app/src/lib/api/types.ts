@@ -76,11 +76,17 @@ export interface MemoryEntity {
   }>;
 }
 
+export type ServiceStatus = "healthy" | "degraded" | "unhealthy" | "disabled";
+
 export interface ServiceHealth {
   name: string;
+  /** Operator-facing name; the internal service id means nothing on a dashboard. */
+  label?: string;
   url: string;
-  status: "healthy" | "unhealthy";
+  status: ServiceStatus;
   responseTime?: number;
+  /** Why the status is what it is: passing/failing checks, "switched off", the HTTP code. */
+  detail?: string;
 }
 
 export interface HealthResponse {

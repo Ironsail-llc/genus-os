@@ -18,7 +18,7 @@
       "name": "Bridge Service",
       "port": 9100,
       "host": "127.0.0.1",
-      "health": "/health",
+      "health": "/ready",
       "systemd_unit": "robothor-bridge.service",
       "tunnel_route": "bridge.${INSTANCE_DOMAIN}",
       "dependencies": [

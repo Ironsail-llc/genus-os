@@ -107,7 +107,7 @@ export const TEMPLATE_CATALOG: TemplateEntry[] = [
     name: "ServiceHealth",
     description: "Service health status grid with colored indicators",
     category: "data",
-    propsInterface: `{ services: Array<{ name: string; url: string; status: "healthy" | "unhealthy"; responseTime?: number }>; overallStatus: "ok" | "degraded" }`,
+    propsInterface: `{ services: Array<{ name: string; url: string; status: "healthy" | "degraded" | "unhealthy" | "disabled"; label?: string; detail?: string; responseTime?: number }>; overallStatus: "ok" | "degraded" }`,
     example: `<ServiceHealth services={services} overallStatus="ok" />`,
   },
   {
