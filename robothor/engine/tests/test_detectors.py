@@ -296,6 +296,47 @@ class TestZombieRunnerDetector:
         assert "buddy" in body
 
 
+# ── Shared scaffolding for the two SQL-exclusion test classes below ──────
+#
+# Both check_tool_degradation and check_tool_outage are exercised the same
+# way: patch get_connection to return a fake connection/cursor, capture the
+# executed (sql, params), and hand back a canned row set. One fake pair
+# covers both — nothing about it is specific to either query.
+
+
+class _FakeCur:
+    def __init__(self, rows, sink):
+        self._rows = rows
+        self._sink = sink
+
+    def execute(self, sql, params=None):
+        self._sink.append((sql, params))
+
+    def fetchall(self):
+        return self._rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _FakeConn:
+    def __init__(self, rows, sink):
+        self._rows = rows
+        self._sink = sink
+
+    def cursor(self, *a, **k):
+        return _FakeCur(self._rows, self._sink)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
 class TestCheckToolDegradationExcludesSandboxDenials:
     """Sandbox refusals are the benchmark harness working as designed, not a
     broken tool: measured 2026-09-11 15:08, ``agent_tool_events`` in the last
@@ -306,40 +347,9 @@ class TestCheckToolDegradationExcludesSandboxDenials:
     create_task" for a tool that was never broken.
     """
 
-    class _Cur:
-        def __init__(self, rows, sink):
-            self._rows = rows
-            self._sink = sink
-
-        def execute(self, sql, params=None):
-            self._sink.append((sql, params))
-
-        def fetchall(self):
-            return self._rows
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    class _Conn:
-        def __init__(self, rows, sink):
-            self._rows = rows
-            self._sink = sink
-
-        def cursor(self, *a, **k):
-            return TestCheckToolDegradationExcludesSandboxDenials._Cur(self._rows, self._sink)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
     def test_the_sql_excludes_sandbox_denied_rows(self) -> None:
         sink: list = []
-        conn = self._Conn([], sink)
+        conn = _FakeConn([], sink)
         with patch("robothor.db.connection.get_connection", return_value=conn):
             detectors.check_tool_degradation()
 
@@ -355,11 +365,14 @@ class TestCheckToolDegradationExcludesSandboxDenials:
 
     def test_a_tool_whose_only_failures_are_sandbox_denials_is_not_flagged(self) -> None:
         """The row the (fixed) SQL returns for create_task once sandbox_denied
-        rows are excluded from both COUNT(*) and the failure SUM: 10 real
-        calls, all successful, 14 sandbox refusals nowhere in the aggregate."""
+        rows are excluded from both COUNT(*) and the failure SUM: the 10
+        successful real calls still pass the WHERE clause and still produce
+        a row (COUNT(*) FILTER(...) > 0 via the successes alone), but with
+        zero failures — the 14 sandbox refusals are gone from the aggregate,
+        not merely zeroed out in Python afterward."""
         sink: list = []
         rows = [{"tool_name": "create_task", "total": 10, "failures": 0}]
-        conn = self._Conn(rows, sink)
+        conn = _FakeConn(rows, sink)
         with patch("robothor.db.connection.get_connection", return_value=conn):
             flagged = detectors.check_tool_degradation()
 
@@ -370,7 +383,7 @@ class TestCheckToolDegradationExcludesSandboxDenials:
         that is genuinely degraded in the same window."""
         sink: list = []
         rows = [{"tool_name": "write_file", "total": 10, "failures": 6}]
-        conn = self._Conn(rows, sink)
+        conn = _FakeConn(rows, sink)
         with patch("robothor.db.connection.get_connection", return_value=conn):
             flagged = detectors.check_tool_degradation()
 
@@ -386,40 +399,9 @@ class TestCheckToolOutageExcludesSandboxDenials:
     actually wrong with.
     """
 
-    class _Cur:
-        def __init__(self, rows, sink):
-            self._rows = rows
-            self._sink = sink
-
-        def execute(self, sql, params=None):
-            self._sink.append((sql, params))
-
-        def fetchall(self):
-            return self._rows
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    class _Conn:
-        def __init__(self, rows, sink):
-            self._rows = rows
-            self._sink = sink
-
-        def cursor(self, *a, **k):
-            return TestCheckToolOutageExcludesSandboxDenials._Cur(self._rows, self._sink)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
     def test_the_sql_excludes_sandbox_denied_rows(self) -> None:
         sink: list = []
-        conn = self._Conn([], sink)
+        conn = _FakeConn([], sink)
         with patch("robothor.db.connection.get_connection", return_value=conn):
             detectors.check_tool_outage()
 
@@ -433,21 +415,16 @@ class TestCheckToolOutageExcludesSandboxDenials:
         )
 
     def test_a_tool_whose_only_calls_are_sandbox_denials_is_not_an_outage(self) -> None:
-        """The row the (fixed) SQL returns once sandbox_denied rows are
-        excluded entirely: zero real calls in the window, so it never even
-        reaches the min_calls floor."""
+        """Unlike the degradation case above, this tool has NO real calls at
+        all in the window — every one of its rows is a sandbox refusal. Once
+        those are excluded from the WHERE clause, GROUP BY tool_name has
+        nothing left to group for this tool, so the (fixed) SQL returns no
+        row whatsoever — not a row with total=0. A canned ``{"total": 0,
+        ...}`` fixture would only prove check_tool_outage's own `total <= 0:
+        continue` guard, not that the SQL excludes anything; an empty row
+        set is what proves the exclusion."""
         sink: list = []
-        rows = [
-            {
-                "tool_name": "create_task",
-                "total": 0,
-                "failures": 0,
-                "error_type": None,
-                "last_success_at": None,
-                "outage_days": None,
-            }
-        ]
-        conn = self._Conn(rows, sink)
+        conn = _FakeConn([], sink)
         with patch("robothor.db.connection.get_connection", return_value=conn):
             out = detectors.check_tool_outage()
 
