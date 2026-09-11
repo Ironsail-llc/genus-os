@@ -825,6 +825,44 @@ def _select_log_renderer() -> Any:
 _ACTIVE_SCHEDULER: Any = None
 
 
+def _reload_provider_secrets_quietly() -> None:
+    """Re-read provider credentials, swallowing anything that goes wrong.
+
+    Separate from the scheduling so both the threaded and the loop-less path
+    share one definition of "never take the daemon down for this".
+    """
+    try:
+        from robothor.engine.key_pool import reload_provider_keys
+
+        reload_provider_keys()
+    except Exception as exc:  # noqa: BLE001 - a reload must never kill the daemon
+        logger.warning("Provider secrets could not be reloaded: %s", exc)
+
+
+def _schedule_provider_secrets_reload() -> bool:
+    """Start a provider-secrets reload without blocking the caller.
+
+    A signal handler installed with ``add_signal_handler`` runs ON the event
+    loop, and ``reload_provider_keys`` opens a psycopg2 connection and takes a
+    lock. Calling it inline froze every agent turn, webhook and chat stream for
+    the length of a database round trip — during a reload whose entire promise
+    is that it does not disturb work in flight.
+
+    Returns whether it was handed to a thread. Outside a running loop — the
+    CLI, a test — there is nothing to protect, so it simply runs.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _reload_provider_secrets_quietly()
+        return False
+    # run_in_executor rather than create_task(to_thread(...)): this is called
+    # from a signal handler, and it must not depend on a coroutine being
+    # awaited by anyone.
+    loop.run_in_executor(None, _reload_provider_secrets_quietly)
+    return True
+
+
 def _handle_plugin_reload_signal() -> int | None:
     """Re-discover plugins on SIGHUP, without dropping in-flight work.
 
@@ -848,12 +886,7 @@ def _handle_plugin_reload_signal() -> int | None:
     # on disk" this signal already means for plugins. Without this, an
     # operator who has just saved a provider key still has to restart the
     # engine, which cancels every running agent.
-    try:
-        from robothor.engine.key_pool import reload_provider_keys
-
-        reload_provider_keys()
-    except Exception as exc:  # noqa: BLE001 - a reload must never kill the daemon
-        logger.warning("Provider secrets could not be reloaded: %s", exc)
+    _schedule_provider_secrets_reload()
 
     # Tools, schemas, guardrails, hooks and models rebuild lazily on next
     # use. Scheduled jobs cannot — nothing reads them again until they fire —

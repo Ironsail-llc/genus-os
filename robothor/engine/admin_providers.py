@@ -30,10 +30,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field, SecretStr
@@ -41,6 +39,8 @@ from pydantic import BaseModel, Field, SecretStr
 from robothor.engine import key_pool
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from fastapi import FastAPI
 
 logger = logging.getLogger(__name__)
@@ -193,12 +193,18 @@ def _model_payload(model_id: str, limits: Any, source: str) -> dict[str, Any]:
 
 
 def _manifest_dir() -> Path:
-    """Where this instance's agent manifests live. Never a literal path."""
-    override = os.environ.get("ROBOTHOR_AGENTS_DIR")
-    if override:
-        return Path(override)
-    workspace = os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))
-    return Path(workspace) / "docs" / "agents"
+    """The directory the ENGINE loads manifests from.
+
+    Resolved through ``EngineConfig`` rather than re-derived here, because the
+    two are not the same place: ``ROBOTHOR_MANIFEST_DIR`` is what the engine
+    reads, while ``ROBOTHOR_AGENTS_DIR`` is the bridge's legacy fleet-listing
+    override. Reading the defaults file from the latter meant the reload route
+    parsed a file the engine never loads and answered "applied" while the fleet
+    went on running the model the operator had just replaced.
+    """
+    from robothor.engine.config import EngineConfig
+
+    return EngineConfig.from_env().manifest_dir
 
 
 def known_models() -> list[dict[str, Any]]:
@@ -448,7 +454,7 @@ def register(app: FastAPI) -> None:
         """
         from robothor.engine import config as engine_config
 
-        engine_config._defaults_cache = (0.0, {})
+        engine_config.reset_defaults_cache()
         manifest_dir = _manifest_dir()
         defaults = engine_config._load_defaults(manifest_dir)
         model_block = defaults.get("model") or {}

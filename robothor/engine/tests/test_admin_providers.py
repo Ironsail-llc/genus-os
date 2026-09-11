@@ -735,3 +735,167 @@ class TestStartupSecretsLoad:
         monkeypatch.setattr(daemon.asyncio, "to_thread", _record)
         await daemon.load_provider_secrets_at_startup()
         assert "reload_provider_keys" in threads
+
+
+class TestManifestDirIsTheEnginesOwn:
+    """``ROBOTHOR_AGENTS_DIR`` is the bridge's legacy fleet-listing override.
+
+    The engine loads manifests from ``EngineConfig.manifest_dir``
+    (``ROBOTHOR_MANIFEST_DIR``). Resolving the defaults file from the other
+    variable meant the reload route re-read a file the engine never loads: the
+    response said "applied" while the fleet kept running on the old model.
+    """
+
+    def test_it_follows_robothor_manifest_dir(self, tmp_path, monkeypatch) -> None:
+        engine_dir = tmp_path / "engine-manifests"
+        engine_dir.mkdir()
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(engine_dir))
+        monkeypatch.setenv("ROBOTHOR_AGENTS_DIR", str(tmp_path / "bridge-listing"))
+        assert admin_providers._manifest_dir() == engine_dir
+
+    def test_it_agrees_with_the_engine_config(self, tmp_path, monkeypatch) -> None:
+        from robothor.engine.config import EngineConfig
+
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(tmp_path / "m"))
+        assert admin_providers._manifest_dir() == EngineConfig.from_env().manifest_dir
+
+    def test_the_reload_route_reads_the_engines_directory(
+        self, client, tmp_path, monkeypatch
+    ) -> None:
+        import yaml
+
+        engine_dir = tmp_path / "engine-manifests"
+        engine_dir.mkdir()
+        (engine_dir / "_defaults.yaml").write_text(
+            yaml.safe_dump({"model": {"primary": "engine/model"}})
+        )
+        decoy = tmp_path / "bridge-listing"
+        decoy.mkdir()
+        (decoy / "_defaults.yaml").write_text(yaml.safe_dump({"model": {"primary": "decoy/model"}}))
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(engine_dir))
+        monkeypatch.setenv("ROBOTHOR_AGENTS_DIR", str(decoy))
+
+        assert client.post("/api/admin/defaults/reload").json()["primary"] == "engine/model"
+
+
+class TestDefaultsCacheIsPerDirectory:
+    def test_two_directories_with_the_same_mtime_do_not_share_a_block(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Keyed on mtime alone, the second directory read served the first
+        one's model block — and `os.replace` gives a fresh file whatever
+        timestamp its temp file had."""
+        import os as _os
+
+        import yaml
+
+        from robothor.engine import config as engine_config
+
+        first = tmp_path / "a"
+        second = tmp_path / "b"
+        for directory, primary in ((first, "first/model"), (second, "second/model")):
+            directory.mkdir()
+            (directory / "_defaults.yaml").write_text(
+                yaml.safe_dump({"model": {"primary": primary}})
+            )
+        stamp = (1_700_000_000, 1_700_000_000)
+        _os.utime(first / "_defaults.yaml", stamp)
+        _os.utime(second / "_defaults.yaml", stamp)
+
+        engine_config.reset_defaults_cache()
+        assert engine_config._load_defaults(first)["model"]["primary"] == "first/model"
+        assert engine_config._load_defaults(second)["model"]["primary"] == "second/model"
+
+    def test_a_reset_makes_the_next_read_hit_the_disk(self, tmp_path) -> None:
+        import os as _os
+
+        import yaml
+
+        from robothor.engine import config as engine_config
+
+        directory = tmp_path / "m"
+        directory.mkdir()
+        path = directory / "_defaults.yaml"
+        path.write_text(yaml.safe_dump({"model": {"primary": "before"}}))
+        engine_config.reset_defaults_cache()
+        assert engine_config._load_defaults(directory)["model"]["primary"] == "before"
+
+        stat = path.stat()
+        path.write_text(yaml.safe_dump({"model": {"primary": "after"}}))
+        _os.utime(path, (stat.st_atime, stat.st_mtime))
+
+        assert engine_config._load_defaults(directory)["model"]["primary"] == "before"
+        engine_config.reset_defaults_cache()
+        assert engine_config._load_defaults(directory)["model"]["primary"] == "after"
+
+
+class TestSighupDoesNotBlockTheLoop:
+    """SIGHUP handlers run ON the event loop.
+
+    ``reload_provider_keys`` opens a psycopg2 connection and takes a lock, so
+    calling it inline froze every agent turn, webhook and chat stream for the
+    duration of a database round trip — on a reload whose whole point is that
+    it does not disturb work in flight.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_handler_returns_before_the_reload_finishes(self, monkeypatch) -> None:
+        import time as _time
+
+        from robothor.engine import daemon
+
+        started = asyncio.Event()
+        done = []
+
+        def _slow_reload():
+            started.set()
+            _time.sleep(0.3)
+            done.append(1)
+            return key_pool.ReloadResult(reloaded=[], slots=0)
+
+        monkeypatch.setattr(key_pool, "reload_provider_keys", _slow_reload)
+        monkeypatch.setattr(daemon, "reload_plugins", lambda: 1)
+        monkeypatch.setattr(daemon, "_ACTIVE_SCHEDULER", None)
+
+        loop_started = _time.monotonic()
+        assert daemon._handle_plugin_reload_signal() == 1
+        handler_returned = _time.monotonic() - loop_started
+        assert handler_returned < 0.2, "the signal handler blocked on the reload"
+
+        # The loop is still responsive while the reload runs.
+        await asyncio.sleep(0.05)
+        assert not done, "the reload finished inline, so it was never off the loop"
+        for _ in range(100):
+            if done:
+                break
+            await asyncio.sleep(0.02)
+        assert done, "the reload was scheduled but never ran"
+
+    @pytest.mark.asyncio
+    async def test_a_failing_reload_never_kills_the_daemon(self, monkeypatch) -> None:
+        from robothor.engine import daemon
+
+        monkeypatch.setattr(
+            key_pool,
+            "reload_provider_keys",
+            MagicMock(side_effect=RuntimeError("vault on fire")),
+        )
+        monkeypatch.setattr(daemon, "reload_plugins", lambda: 2)
+        monkeypatch.setattr(daemon, "_ACTIVE_SCHEDULER", None)
+        assert daemon._handle_plugin_reload_signal() == 2
+        await asyncio.sleep(0.1)
+
+    def test_outside_a_loop_it_still_reloads(self, monkeypatch) -> None:
+        """`robothor engine reload` and the tests call this with no loop running."""
+        from robothor.engine import daemon
+
+        calls = []
+        monkeypatch.setattr(
+            key_pool,
+            "reload_provider_keys",
+            lambda: calls.append(1) or key_pool.ReloadResult(reloaded=[], slots=0),
+        )
+        monkeypatch.setattr(daemon, "reload_plugins", lambda: 3)
+        monkeypatch.setattr(daemon, "_ACTIVE_SCHEDULER", None)
+        assert daemon._handle_plugin_reload_signal() == 3
+        assert calls == [1]

@@ -58,22 +58,54 @@ class KeyWrite(BaseModel):
     api_key: SecretStr = Field(min_length=1)
 
 
+class TestConnectionProxy(BaseModel):
+    """The test-connection body, typed rather than forwarded as a raw dict.
+
+    ``SecretStr`` for the same reason :class:`KeyWrite` uses it — this value is
+    a frame local of the handler and structlog's console renderer prints every
+    local through ``repr()`` when it formats an exception. It matters *more*
+    here: the candidate key on this route has not been stored anywhere, so the
+    journal would be the only copy of a credential the operator was still
+    deciding about.
+
+    A raw ``dict[str, Any]`` also forwarded whatever else the caller put in the
+    body straight to the engine. Two named fields is the whole contract.
+    """
+
+    model: str | None = None
+    api_key: SecretStr | None = None
+
+    def engine_payload(self) -> dict[str, Any]:
+        """The body to send on, with the secret unwrapped exactly once.
+
+        ``exclude_unset`` matters: the engine reads an ABSENT ``api_key`` as
+        "use what is configured" and an explicit ``null`` as a different
+        request, so a field the operator did not send must not appear.
+        """
+        payload: dict[str, Any] = self.model_dump(exclude_unset=True)
+        if "api_key" in payload:
+            payload["api_key"] = self.api_key.get_secret_value() if self.api_key else None
+        return payload
+
+
 class DefaultsWrite(BaseModel):
     model: str = Field(min_length=1)
     fallbacks: list[str] = Field(default_factory=list)
 
 
 def _manifest_dir() -> Path:
-    """Where this instance's agent manifests live.
+    """The directory the ENGINE loads manifests from.
 
-    Same resolution the fleet router uses. Never a literal path: the manifest
-    directory is instance data and differs per deployment.
+    Resolved through ``EngineConfig`` — the same authority
+    ``admin_providers`` reads — because the bridge's own
+    ``ROBOTHOR_AGENTS_DIR`` is the legacy *fleet-listing* override and is not
+    necessarily where the engine looks. Writing ``_defaults.yaml`` to the
+    listing directory produced a save that reported success, survived a
+    reload, and changed nothing about which model the fleet actually ran.
     """
-    override = os.environ.get("ROBOTHOR_AGENTS_DIR")
-    if override:
-        return Path(override)
-    workspace = os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))
-    return Path(workspace) / "docs" / "agents"
+    from robothor.engine.config import EngineConfig
+
+    return EngineConfig.from_env().manifest_dir
 
 
 def _known_provider(provider_id: str) -> Any:
@@ -155,6 +187,31 @@ async def _refuse_a_numbering_gap(provider_id: str, slot: int) -> None:
         )
 
 
+async def _refuse_to_strand_a_spare(provider_id: str, slot: int) -> None:
+    """Removing a slot below an occupied one is the numbering gap, from the
+    other side.
+
+    The pool stops at the first empty slot, so deleting slot 2 while slot 3
+    holds a key turns that key into a credential nothing will ever dial — and
+    unlike a write past a gap, the operator gets no signal at all: the listing
+    keeps showing a spare, and it is not until the primary caps that anyone
+    finds out it was never reachable. 409 for the same reason the write path
+    uses it: the request is well-formed, the appliance's state is what makes
+    it wrong, and the message has to name the slot to remove first.
+    """
+    if slot >= MAX_KEY_SLOTS:
+        return
+    higher = sorted(n for n in await _occupied_slots(provider_id) if n > slot)
+    if higher:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"slot {higher[0]} still holds a key, so removing slot {slot} would "
+                f"strand it — remove slot {higher[0]} first"
+            ),
+        )
+
+
 async def _reload_engine_defaults() -> bool:
     """Ask the engine to re-read ``_defaults.yaml``. True if it confirmed."""
     status, body = await engine_request("POST", "/api/admin/defaults/reload")
@@ -218,6 +275,7 @@ async def delete_provider_key(provider_id: str, position: int, request: Request)
     actor = require_operator(request)
     spec = _known_provider(provider_id)
     slot = _validated_position(position)
+    await _refuse_to_strand_a_spare(spec.id, slot)
 
     removed = bool(await asyncio.to_thread(vault.delete, provider_key(spec.id, slot)))
     await _reload_engine_secrets()
@@ -235,19 +293,22 @@ async def delete_provider_key(provider_id: str, position: int, request: Request)
 
 
 @router.post("/api/providers/{provider_id}/test")
-async def test_provider(provider_id: str, body: dict[str, Any], request: Request) -> JSONResponse:
+async def test_provider(
+    provider_id: str, body: TestConnectionProxy, request: Request
+) -> JSONResponse:
     """Ask the engine to dial the provider once and report what happened.
 
-    The body is forwarded verbatim and never inspected, logged or audited: it
-    may carry a key that has not been stored anywhere yet, and this route is
-    the only place in the appliance where such a value exists.
+    The body is never inspected, logged or audited: it may carry a key that
+    has not been stored anywhere yet, and this route is the only place in the
+    appliance where such a value exists. It is *typed* rather than passed
+    through as a dict so the key spends its time here inside a ``SecretStr``.
     """
     require_operator(request)
     spec = _known_provider(provider_id)
     status, result = await engine_request(
         "POST",
         f"/api/admin/providers/{spec.id}/test",
-        json=body,
+        json=body.engine_payload(),
         timeout=_TEST_TIMEOUT_SECONDS,
     )
     audited(

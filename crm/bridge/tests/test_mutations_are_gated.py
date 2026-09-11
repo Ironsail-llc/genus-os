@@ -170,6 +170,11 @@ EXPECTED_ROUTER_MODULES = frozenset(
         "routers.notes_tasks",
         "routers.routines",
         "routers.integration",
+        # Credential mutations. Named here and not only counted: this router
+        # carries the only routes in the appliance that write a provider key,
+        # so a mount that silently stopped contributing routes would take the
+        # gate assertions on them with it and still leave the floor intact.
+        "routers.providers",
     }
 )
 

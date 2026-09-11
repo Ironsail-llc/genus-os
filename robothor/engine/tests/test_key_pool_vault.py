@@ -141,7 +141,7 @@ class TestUninitialisedVault:
         slots = key_pool.resolve_keys("openrouter")
         assert [(s.position, s.source, s.key) for s in slots] == [(1, "env", ENV_KEY)]
 
-    def test_it_says_so_once_at_info_and_not_again(self, monkeypatch, caplog) -> None:
+    def test_it_says_so_once_and_not_again(self, monkeypatch, caplog) -> None:
         def _explode() -> dict[str, str]:
             raise FileNotFoundError("Vault master key not found")
 
@@ -155,8 +155,11 @@ class TestUninitialisedVault:
                 key_pool.resolve_keys("anthropic")
 
         vault_lines = [r for r in caplog.records if "vault" in r.message.lower()]
-        assert len(vault_lines) == 1, f"expected one INFO line, got {vault_lines}"
-        assert vault_lines[0].levelno == logging.INFO
+        assert len(vault_lines) == 1, f"expected one line, got {vault_lines}"
+        # WARNING, not INFO: on a box that has a vault, an unreadable one is a
+        # real outage of the credential store and must not need the log level
+        # raised to be seen. The retry-after is what keeps it to one line.
+        assert vault_lines[0].levelno == logging.WARNING
 
     def test_the_module_does_not_import_the_vault_at_import_time(self) -> None:
         """A vault import at module scope drags psycopg2 + the master key into
@@ -397,3 +400,145 @@ class TestSnapshot:
         for spec in key_pool.PROVIDERS:
             key_pool.resolve_keys(spec.id)
         assert len(calls) == 1
+
+
+class TestSnapshotHoldsOnlyProviderKeys:
+    """The snapshot is process-lifetime memory, so it holds as little as it can.
+
+    ``export_env`` decrypts the WHOLE vault — Telegram tokens, SMTP passwords,
+    whatever a plugin stored. Caching that dict kept every one of them
+    plaintext in the engine for the life of the process, and handing the live
+    dict to callers let any of them rewrite what the LLM path resolves.
+    """
+
+    @pytest.fixture
+    def mixed_vault(self, monkeypatch):
+        from robothor.vault.naming import channel_field, env_name, provider_key
+
+        monkeypatch.setattr(
+            key_pool,
+            "_vault_export",
+            lambda: {
+                env_name(provider_key("openrouter")): VAULT_KEY,
+                env_name(channel_field("telegram", "bot_token")): "telegram-bot-token-secret",
+                "SMTP_PASSWORD": "smtp-password-secret",
+            },
+        )
+
+    def test_a_non_provider_secret_never_enters_the_snapshot(self, mixed_vault) -> None:
+        snapshot = key_pool.vault_snapshot()
+        rendered = repr(snapshot)
+        assert "telegram-bot-token-secret" not in rendered
+        assert "smtp-password-secret" not in rendered
+
+    def test_the_provider_key_is_still_there(self, mixed_vault) -> None:
+        assert key_pool.resolve_keys("openrouter")[0].key == VAULT_KEY
+
+    def test_the_caller_gets_a_copy(self, mixed_vault) -> None:
+        first = key_pool.vault_snapshot()
+        first["PROVIDERS_OPENROUTER_API_KEY"] = "tampered"
+        first["INJECTED"] = "nope"
+        assert key_pool.resolve_keys("openrouter")[0].key == VAULT_KEY
+        assert "INJECTED" not in key_pool.vault_snapshot()
+
+    def test_only_slots_the_pool_can_reach_are_kept(self, monkeypatch) -> None:
+        from robothor.vault.naming import env_name, provider_key
+
+        monkeypatch.setattr(
+            key_pool,
+            "_vault_export",
+            lambda: {
+                env_name(provider_key("openrouter")): VAULT_KEY,
+                f"PROVIDERS_OPENROUTER_API_KEY_{key_pool.MAX_KEY_SLOTS + 1}": "beyond-the-walk",
+            },
+        )
+        assert "beyond-the-walk" not in repr(key_pool.vault_snapshot())
+
+
+class TestUnavailableVaultHeals:
+    """Postgres is not always up before the engine is.
+
+    A permanent latch meant a boot-order race — engine first, database a second
+    later — left every provider credential unreadable for the life of the
+    process, and the only symptom was one log line at startup.
+    """
+
+    @pytest.fixture
+    def clock(self, monkeypatch):
+        now = {"t": 1000.0}
+        monkeypatch.setattr(key_pool, "_clock", lambda: now["t"])
+        return now
+
+    def test_it_retries_after_the_cooldown(self, monkeypatch, clock) -> None:
+        from robothor.vault.naming import env_name, provider_key
+
+        state = {"up": False}
+        calls: list[int] = []
+
+        def _export() -> dict[str, str]:
+            calls.append(1)
+            if not state["up"]:
+                raise ConnectionError("could not connect to server")
+            return {env_name(provider_key("openrouter")): VAULT_KEY}
+
+        monkeypatch.setattr(key_pool, "_vault_export", _export)
+        key_pool.reset_vault_availability()
+
+        assert key_pool.resolve_keys("openrouter") == []
+        assert len(calls) == 1
+
+        # Still inside the cooldown: no second connection attempt.
+        clock["t"] += key_pool.VAULT_RETRY_SECONDS - 1
+        assert key_pool.resolve_keys("openrouter") == []
+        assert len(calls) == 1
+
+        state["up"] = True
+        clock["t"] += 2
+        assert key_pool.resolve_keys("openrouter")[0].key == VAULT_KEY
+        assert len(calls) == 2
+
+    def test_the_first_failure_is_a_warning_and_the_recovery_an_info(
+        self, monkeypatch, clock, caplog
+    ) -> None:
+        from robothor.vault.naming import env_name, provider_key
+
+        state = {"up": False}
+
+        def _export() -> dict[str, str]:
+            if not state["up"]:
+                raise ConnectionError("could not connect to server")
+            return {env_name(provider_key("openrouter")): VAULT_KEY}
+
+        monkeypatch.setattr(key_pool, "_vault_export", _export)
+        key_pool.reset_vault_availability()
+
+        with caplog.at_level(logging.INFO, logger="robothor.engine.key_pool"):
+            key_pool.resolve_keys("openrouter")
+            for _ in range(3):
+                key_pool.resolve_keys("openrouter")
+            warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+            assert len(warnings) == 1, f"expected one WARNING, got {warnings}"
+
+            caplog.clear()
+            state["up"] = True
+            clock["t"] += key_pool.VAULT_RETRY_SECONDS + 1
+            key_pool.resolve_keys("openrouter")
+
+        recoveries = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert recoveries, "a vault that comes back must say so"
+        assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+    def test_a_reload_retries_immediately_without_waiting(self, monkeypatch, clock) -> None:
+        """An operator who has just fixed the database should not wait a minute."""
+        calls: list[int] = []
+
+        def _export() -> dict[str, str]:
+            calls.append(1)
+            raise ConnectionError("down")
+
+        monkeypatch.setattr(key_pool, "_vault_export", _export)
+        key_pool.reset_vault_availability()
+        key_pool.resolve_keys("openrouter")
+        assert len(calls) == 1
+        key_pool.reload_provider_keys()
+        assert len(calls) == 2

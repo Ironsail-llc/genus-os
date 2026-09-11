@@ -217,20 +217,32 @@ def key_fingerprint(key: str) -> str:
 #: half-written environment.
 _vault_lock = threading.RLock()
 
-#: Every vault secret as ``{ENV_NAME: value}``, or None before the first read.
-#: Distinct from ``{}``: an empty vault is a fact, "not yet read" is not.
+#: The provider credentials this process last read, as ``{ENV_NAME: value}``,
+#: or None before the first read. Distinct from ``{}``: an empty vault is a
+#: fact, "not yet read" is not.
 _vault_snapshot: dict[str, str] | None = None
 
-#: Latched once the vault has been found unusable, so a box without a master
-#: key logs one INFO line rather than one per credential lookup per call.
-_vault_unavailable = False
+#: Monotonic deadline before which the vault will not be probed again, or None
+#: when it is believed usable. A permanent latch was wrong: an engine that
+#: starts a second before Postgres does would have every provider credential
+#: unreadable for the life of the process, with one log line as the only
+#: symptom.
+_vault_retry_after: float | None = None
+
+#: How long an unreadable vault sits out. Long enough that a box with no vault
+#: at all is not reconnecting in a loop; short enough that a boot-order race
+#: heals before anyone notices.
+VAULT_RETRY_SECONDS = 60.0
+
+#: Injectable so a test can advance time without sleeping.
+_clock: Callable[[], float] = time.monotonic
 
 
 def reset_vault_availability() -> None:
     """Drop the snapshot and re-arm the vault probe. For tests and reloads."""
-    global _vault_unavailable, _vault_snapshot  # noqa: PLW0603
+    global _vault_retry_after, _vault_snapshot  # noqa: PLW0603
     with _vault_lock:
-        _vault_unavailable = False
+        _vault_retry_after = None
         _vault_snapshot = None
 
 
@@ -244,40 +256,68 @@ def _vault_export() -> dict[str, str]:
     return vault.export_env()
 
 
+def _provider_env_names() -> set[str]:
+    """The ``export_env`` names of every credential slot the pool can reach."""
+    from robothor.vault.naming import env_name, provider_key
+
+    return {
+        env_name(provider_key(spec.id, index))
+        for spec in PROVIDERS
+        for index in range(1, _MAX_POOL_KEYS + 1)
+    }
+
+
 def vault_snapshot(*, refresh: bool = False) -> dict[str, str]:
-    """The vault's contents as this process last read them.
+    """The provider credentials the vault held when we last read it.
 
     Blocking: it opens a database connection on a cold cache. Callers on an
     async path must reach it through ``asyncio.to_thread``, and the engine
     warms it at startup so the LLM path never pays for the first read.
 
-    A vault that cannot be read degrades to "nothing configured" with one INFO
-    line. An engine that refused to make an LLM call because an *optional*
-    credential store is empty would be strictly worse than the
-    environment-only behaviour this replaces.
+    Two deliberate narrowings, because this dict lives for the life of the
+    process. It is filtered to provider key names — ``export_env`` decrypts the
+    WHOLE vault, so caching it verbatim would keep every channel token and SMTP
+    password plaintext in the engine to answer a question about LLM
+    credentials. And it is handed out as a copy, so a caller cannot rewrite
+    what the LLM path resolves.
+
+    A vault that cannot be read degrades to "nothing configured". An engine
+    that refused to make an LLM call because an *optional* credential store is
+    unreachable would be strictly worse than the environment-only behaviour
+    this replaces.
     """
-    global _vault_snapshot, _vault_unavailable  # noqa: PLW0603
+    global _vault_snapshot, _vault_retry_after  # noqa: PLW0603
     with _vault_lock:
         if refresh:
             _vault_snapshot = None
-            _vault_unavailable = False
+            _vault_retry_after = None
         if _vault_snapshot is not None:
-            return _vault_snapshot
-        if _vault_unavailable:
+            return dict(_vault_snapshot)
+        if _vault_retry_after is not None and _clock() < _vault_retry_after:
             return {}
+        recovering = _vault_retry_after is not None
         try:
-            snapshot = _vault_export()
+            exported = _vault_export()
         except Exception as exc:  # noqa: BLE001 - the vault is optional, by design
-            _vault_unavailable = True
-            logger.info(
-                "Vault unavailable (%s: %s); provider credentials resolve from the "
-                "environment only until a secrets reload.",
-                type(exc).__name__,
-                exc,
-            )
+            if not recovering:
+                # WARNING, not INFO: on a box that HAS a vault this is a real
+                # outage of the credential store, and it must be visible
+                # without anyone raising the log level first.
+                logger.warning(
+                    "Vault unreadable (%s: %s); provider credentials resolve from the "
+                    "environment only. Retrying in %.0fs.",
+                    type(exc).__name__,
+                    exc,
+                    VAULT_RETRY_SECONDS,
+                )
+            _vault_retry_after = _clock() + VAULT_RETRY_SECONDS
             return {}
-        _vault_snapshot = snapshot
-        return snapshot
+        wanted = _provider_env_names()
+        _vault_snapshot = {name: value for name, value in exported.items() if name in wanted}
+        if recovering:
+            logger.info("Vault readable again; %d provider slot(s) found.", len(_vault_snapshot))
+        _vault_retry_after = None
+        return dict(_vault_snapshot)
 
 
 def refresh_vault_snapshot() -> dict[str, str]:

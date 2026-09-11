@@ -735,3 +735,122 @@ class TestEngineBaseUrl:
         monkeypatch.delenv("ROBOTHOR_ENGINE_HOST", raising=False)
         monkeypatch.delenv("ROBOTHOR_ENGINE_PORT", raising=False)
         assert _engine_client.engine_base_url() == "http://127.0.0.1:18800"
+
+
+class TestDeleteRefusesToStrandASpare:
+    """Deleting a slot below an occupied one is the same defect as writing
+    above an empty one, arrived at from the other side.
+
+    The pool stops at the first empty slot, so removing slot 2 while slot 3
+    holds a key silently turns that key into a credential nothing will ever
+    dial — and the operator's next outage is a spare that is not there.
+    """
+
+    def test_deleting_below_an_occupied_slot_is_refused(
+        self, controls_client_as_operator, fake_engine, fake_vault
+    ) -> None:
+        fake_engine.set_slots([1, 2, 3])
+        response = controls_client_as_operator.delete("/api/providers/openrouter/keys/2")
+        assert response.status_code == 409
+        assert "slot 3" in response.json()["detail"]
+        assert fake_vault.deleted == []
+        assert fake_engine.reload_count == 0
+
+    def test_deleting_the_highest_slot_is_allowed(
+        self, controls_client_as_operator, fake_engine, fake_vault
+    ) -> None:
+        fake_engine.set_slots([1, 2, 3])
+        response = controls_client_as_operator.delete("/api/providers/openrouter/keys/3")
+        assert response.status_code == 200
+        assert fake_vault.deleted == ["providers/openrouter/api_key_3"]
+
+    def test_deleting_the_only_slot_is_allowed(
+        self, controls_client_as_operator, fake_engine, fake_vault
+    ) -> None:
+        fake_engine.set_slots([1])
+        assert (
+            controls_client_as_operator.delete("/api/providers/openrouter/keys/1").status_code
+            == 200
+        )
+
+    def test_deleting_an_orphan_is_allowed(
+        self, controls_client_as_operator, fake_engine, fake_vault
+    ) -> None:
+        """Clearing up a stranded row must not itself be blocked."""
+        fake_engine.set_slots([1, 3])
+        assert (
+            controls_client_as_operator.delete("/api/providers/openrouter/keys/3").status_code
+            == 200
+        )
+
+
+class TestTestConnectionBodyIsTyped:
+    def test_the_request_model_hides_the_key(self) -> None:
+        from routers.providers import TestConnectionProxy
+
+        model = TestConnectionProxy(api_key=FAKE_KEY, model="openrouter/openai/gpt-5.4")
+        assert FAKE_KEY not in repr(model)
+        assert FAKE_KEY not in str(model)
+        assert FAKE_KEY not in str(model.model_dump())
+
+    def test_the_key_is_unwrapped_only_for_the_engine_payload(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        response = controls_client_as_operator.post(
+            "/api/providers/openrouter/test",
+            json={"model": "openrouter/openai/gpt-5.4", "api_key": FAKE_KEY},
+        )
+        assert response.status_code == 200
+        _, _, body = fake_engine.calls[-1]
+        assert body == {"model": "openrouter/openai/gpt-5.4", "api_key": FAKE_KEY}
+
+    def test_a_body_with_no_key_sends_no_key_field(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        """The engine reads "absent" as "use what is configured"; sending an
+        explicit null would be a different request."""
+        controls_client_as_operator.post(
+            "/api/providers/openrouter/test", json={"model": "openrouter/z-ai/glm-5"}
+        )
+        _, _, body = fake_engine.calls[-1]
+        assert body == {"model": "openrouter/z-ai/glm-5"}
+
+    def test_an_empty_body_proxies_an_empty_object(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        controls_client_as_operator.post("/api/providers/openrouter/test", json={})
+        _, _, body = fake_engine.calls[-1]
+        assert body == {}
+
+
+class TestTheBridgeWritesWhereTheEngineReads:
+    def test_the_defaults_file_lands_in_the_engines_manifest_dir(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """`ROBOTHOR_AGENTS_DIR` is the fleet LISTING override. Writing
+        `_defaults.yaml` there while the engine reads `ROBOTHOR_MANIFEST_DIR`
+        is a save that reports success and changes nothing."""
+        import routers.providers as providers_module
+
+        from robothor.engine.config import EngineConfig
+
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(tmp_path / "engine-manifests"))
+        monkeypatch.setenv("ROBOTHOR_AGENTS_DIR", str(tmp_path / "bridge-listing"))
+        assert providers_module._manifest_dir() == EngineConfig.from_env().manifest_dir
+
+    def test_it_writes_the_file_the_engine_would_reload(
+        self, controls_client_as_operator, fake_engine, tmp_path, monkeypatch
+    ) -> None:
+        from robothor.engine import admin_providers
+
+        engine_dir = tmp_path / "engine-manifests"
+        engine_dir.mkdir()
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(engine_dir))
+        monkeypatch.setenv("ROBOTHOR_AGENTS_DIR", str(tmp_path / "bridge-listing"))
+
+        response = controls_client_as_operator.patch(
+            "/api/providers/defaults",
+            json={"model": "openrouter/openai/gpt-5.4", "fallbacks": []},
+        )
+        assert response.status_code == 200
+        assert (admin_providers._manifest_dir() / "_defaults.yaml").exists()
