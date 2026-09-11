@@ -33,6 +33,11 @@ dependencies = [
     # transitive dependency.
     "httpcore~=1.0",
     "pydantic~=2.0",
+    # The settings registry (robothor/settings/) is the single declaration of
+    # every ROBOTHOR_*/GENUS_* variable, and a guard test fails the build if a
+    # reader exists for a name it does not declare. Core, not an extra: the
+    # doctor, `genus config` and the dashboard settings form all read it.
+    "pydantic-settings~=2.0",
     # ONNX 1.22+ requires ml-dtypes, whose Python 3.13+ wheels require NumPy
     # 2.x. Keep the stable 1.26 ABI on 3.11/3.12 while allowing the supported
     # NumPy 2 line on 3.13+.

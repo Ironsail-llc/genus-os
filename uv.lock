@@ -1162,14 +1162,17 @@ dependencies = [
     { name = "croniter" },
     { name = "cryptography" },
     { name = "html2text" },
+    { name = "httpcore" },
     { name = "httpx" },
     { name = "litellm" },
     { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
     { name = "orjson" },
+    { name = "pillow" },
     { name = "prometheus-client" },
     { name = "psycopg2-binary" },
     { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "redis" },
     { name = "requests" },
@@ -1195,6 +1198,7 @@ all = [
     { name = "pytest-timeout" },
     { name = "rlms" },
     { name = "ruff" },
+    { name = "slack-bolt" },
     { name = "textual" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
@@ -1206,6 +1210,9 @@ api = [
     { name = "fastapi" },
     { name = "pyjwt" },
     { name = "uvicorn", extra = ["standard"] },
+]
+channels = [
+    { name = "slack-bolt" },
 ]
 dev = [
     { name = "mypy" },
@@ -1247,8 +1254,9 @@ requires-dist = [
     { name = "croniter", specifier = "~=6.0" },
     { name = "cryptography", specifier = ">=50.0.0" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.139" },
-    { name = "genusos", extras = ["api", "vision", "rlm", "tui", "federation", "mcp", "dev"], marker = "extra == 'all'" },
+    { name = "genusos", extras = ["api", "vision", "rlm", "tui", "channels", "federation", "mcp", "dev"], marker = "extra == 'all'" },
     { name = "html2text", specifier = "~=2024.2" },
+    { name = "httpcore", specifier = "~=1.0" },
     { name = "httpx", specifier = "~=0.27" },
     { name = "insightface", marker = "extra == 'vision'", specifier = ">=0.7" },
     { name = "litellm", specifier = ">=1.84.0,<2.0" },
@@ -1261,9 +1269,11 @@ requires-dist = [
     { name = "onnxruntime", marker = "extra == 'vision'", specifier = ">=1.17" },
     { name = "opencv-python", marker = "extra == 'vision'", specifier = ">=4.8" },
     { name = "orjson", specifier = ">=3.10" },
+    { name = "pillow", specifier = ">=10.0" },
     { name = "prometheus-client", specifier = "~=0.21" },
     { name = "psycopg2-binary", specifier = "~=2.9" },
     { name = "pydantic", specifier = "~=2.0" },
+    { name = "pydantic-settings", specifier = "~=2.0" },
     { name = "pyjwt", marker = "extra == 'api'", specifier = ">=2.13.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
@@ -1274,6 +1284,7 @@ requires-dist = [
     { name = "requests", specifier = "~=2.31" },
     { name = "rlms", marker = "extra == 'rlm'", specifier = ">=0.1.1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.2" },
+    { name = "slack-bolt", marker = "extra == 'channels'", specifier = ">=1.18" },
     { name = "structlog", specifier = "~=24.0" },
     { name = "textual", marker = "extra == 'tui'", specifier = ">=1.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
@@ -1281,7 +1292,7 @@ requires-dist = [
     { name = "ultralytics", marker = "extra == 'vision'", specifier = ">=8.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'api'", specifier = ">=0.32" },
 ]
-provides-extras = ["api", "vision", "federation", "mcp", "rlm", "tui", "dev", "all"]
+provides-extras = ["api", "vision", "federation", "mcp", "rlm", "tui", "channels", "dev", "all"]
 
 [[package]]
 name = "google-auth"
@@ -4103,6 +4114,27 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "slack-bolt"
+version = "1.30.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "slack-sdk" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e3/4f/5ba15533d66da2e7174334cc0e2805142e5390c9f4c5f31633df78b17006/slack_bolt-1.30.0.tar.gz", hash = "sha256:af38258d41f801ad9c74503090e0f39accd66c49f667f7e55c97fcdb0e51b886", size = 131180, upload-time = "2026-07-15T20:47:33.679Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2f/ee/1a7a286cf98fa3f4eeffaabc090e82f58f058ab4812aa1d7421d92c2637a/slack_bolt-1.30.0-py2.py3-none-any.whl", hash = "sha256:81f5bc46e79516d23d5e2a31dded6304dd1b8b6b72c0083f2f31d5d801e262c4", size = 235341, upload-time = "2026-07-15T20:47:32.113Z" },
+]
+
+[[package]]
+name = "slack-sdk"
+version = "3.44.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6e/4e/371068dd7281139307e60cd18553b96b9c8c391a4c3040617192713a3cc4/slack_sdk-3.44.1.tar.gz", hash = "sha256:ca19505423789fa2a3189ff486f989f02e49289f008d0a5813df7255b3fb93ea", size = 256661, upload-time = "2026-09-03T14:21:13.879Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ab/fc/67352b742fc6fa520a550581b0284f5757e4e31a32327c2a00276747fd30/slack_sdk-3.44.1-py2.py3-none-any.whl", hash = "sha256:d6f20a0fbe3fecf9cac955c99d686301b48a645b7045472c3a0cdd186d7c42b2", size = 319865, upload-time = "2026-09-03T14:21:12.405Z" },
 ]
 
 [[package]]

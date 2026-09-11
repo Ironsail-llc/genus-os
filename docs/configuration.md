@@ -2,6 +2,14 @@
 
 All configuration is via environment variables with sensible defaults. No config files required for basic usage. See `infra/robothor.env.example` for a complete template.
 
+!!! tip "Complete list"
+    This page is a hand-written tour of the settings an operator touches most.
+    The **complete** list — every variable the platform reads, with its type,
+    default, restart and secret flags — is generated from the typed settings
+    model. It lives in the repository at `docs/reference/configuration.md`
+    (not published on this site), and `genus config schema` prints the same
+    information as JSON Schema.
+
 ## Loading
 
 ```python
