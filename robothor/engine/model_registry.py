@@ -47,6 +47,20 @@ class ModelLimits:
     # forces the answer regardless of the OpenRouter blanket-exclusion or
     # litellm's catalog, for cases we've specifically verified either way.
     supports_cache_control: bool | None = None
+    # Whether we still recommend this model.
+    #
+    #   current    — the pick. Offered first everywhere models are listed.
+    #   legacy     — still valid and still served; no longer the pick. Offered,
+    #                but after the current ones and labelled.
+    #   deprecated — do not choose this. Still RESOLVABLE on purpose: deleting
+    #                the entry would fall through to the 128K conservative
+    #                fallback and silently mis-size and mis-price every run a
+    #                stale manifest still makes. Never listed for a human.
+    #
+    # An entry marked deprecated must name `replaced_by`; a warning that only
+    # says "deprecated" leaves the operator with nowhere to go.
+    status: str = "current"
+    replaced_by: str = ""
 
 
 # ─── Registry ────────────────────────────────────────────────────────
@@ -71,6 +85,8 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         output_cost_per_token=0.0,
         supports_thinking=True,
         ttft_hint_ms=2500,
+        status="legacy",
+        replaced_by="codex/gpt-5.5",
     ),
     "codex/gpt-5.3-codex": ModelLimits(
         max_input_tokens=1_050_000,
@@ -80,6 +96,10 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         output_cost_per_token=0.0,
         supports_thinking=True,
         ttft_hint_ms=2500,
+        # Superseded by gpt-5.5 on the same subscription; the codex/* auth
+        # path itself has been dead since 2026-07-07 (account blocked).
+        status="deprecated",
+        replaced_by="codex/gpt-5.5",
     ),
     # Claude Sonnet 4.6 via OpenRouter
     "openrouter/anthropic/claude-sonnet-4.6": ModelLimits(
@@ -113,6 +133,12 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         output_cost_per_token=0.0,
         supports_thinking=False,
         ttft_hint_ms=1500,
+        # GONE from OpenRouter's catalog — verified 2026-09-11. The stealth
+        # preview ended. This is the "$0 hides real spend" hazard the comment
+        # above warned about, arriving as a disappearance instead of a price:
+        # every chain that still names it dead-ends here.
+        status="deprecated",
+        replaced_by="openrouter/deepseek/deepseek-v4.1-flash",
     ),
     # Local offline tier — Qwen 3.8 27B on the system Ollama (>= 0.32, upgraded
     # in place 2026-08-24; 0.17.7 could not read this model's manifest).
@@ -160,6 +186,10 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         output_cost_per_token=0.0,
         supports_thinking=False,
         ttft_hint_ms=4000,
+        # LEGACY: no live manifest names it; kept so an instance that pulled
+        # it is still sized correctly.
+        status="legacy",
+        replaced_by="ollama_chat/qwen3.8:27b",
     ),
     # GLM-5 via OpenRouter
     "openrouter/z-ai/glm-5": ModelLimits(
@@ -169,6 +199,10 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_000_8,  # $0.80/M
         output_cost_per_token=0.000_002_56,  # $2.56/M
         ttft_hint_ms=4000,  # Variable via OpenRouter
+        # Superseded by GLM 5.3 Flash: 5x the context, cheaper output, native
+        # thinking. Kept resolvable for manifests that still name it.
+        status="deprecated",
+        replaced_by="openrouter/z-ai/glm-5.3-flash",
     ),
     # MiMo-V2-Pro via OpenRouter (superseded by V2.5 — kept for fallback reference)
     "openrouter/xiaomi/mimo-v2-pro": ModelLimits(
@@ -178,15 +212,83 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_001,  # $1/M
         output_cost_per_token=0.000_003,  # $3/M
         ttft_hint_ms=3000,
+        # GONE from OpenRouter's catalog — verified against the live model
+        # list on 2026-09-11. A manifest naming it cannot be served at all,
+        # so the entry exists only to keep sizing and pricing honest while
+        # the warning points at the replacement.
+        status="deprecated",
+        replaced_by="openrouter/xiaomi/mimo-v2.5-pro",
     ),
     # MiMo-V2.5 via OpenRouter — fleet-wide primary (2026-07-07)
     "openrouter/xiaomi/mimo-v2.5": ModelLimits(
         max_input_tokens=1_048_576,
         max_output_tokens=65_536,
         default_output_tokens=8_192,
-        input_cost_per_token=0.000_000_105,  # $0.105/M
+        # $0.140/M — CORRECTED 2026-09-11 from $0.105/M, which was 25% under
+        # the rate OpenRouter actually bills. This is the fleet primary, so
+        # every cost number this instance computed about itself — per-run
+        # spend, the benchmark's cost-per-success, the model-tier ceilings —
+        # was understated by that much. Read from the live catalog, not
+        # estimated.
+        input_cost_per_token=0.000_000_14,
         output_cost_per_token=0.000_000_28,  # $0.28/M
         ttft_hint_ms=3000,
+    ),
+    # DeepSeek V4.1 Flash via OpenRouter — registered 2026-09-11.
+    # Limits and pricing read from OpenRouter's live model metadata that day
+    # (context 1,048,576; top_provider.max_completion_tokens 384,000;
+    # $0.150/$0.600 per 1M; input_cache_read $0.003/1M), not estimated.
+    # ttft_hint_ms is MEASURED: three single-turn calls through llm_call at
+    # max_tokens=256 returned in 3785 / 2724 / 1420 ms, median 2724.
+    "openrouter/deepseek/deepseek-v4.1-flash": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=384_000,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_000_15,  # $0.150/M
+        output_cost_per_token=0.000_000_6,  # $0.600/M
+        cache_read_cost_per_token=0.000_000_003,  # $0.003/M
+        supports_thinking=True,
+        ttft_hint_ms=2700,
+    ),
+    # GLM 5.3 Flash via OpenRouter — registered 2026-09-11.
+    # max_input_tokens is the TOP PROVIDER's 1,048,576, not the catalog's
+    # advertised 1,310,720: the engine sizes context from this number and the
+    # route that actually serves the request is the one that truncates.
+    # max_completion_tokens 131,072; $0.150/$0.500 per 1M; cache read $0.03/1M.
+    # ttft_hint_ms MEASURED: 874 / 937 / 921 ms, median 921 — the fastest
+    # model on this instance's chain by a wide margin.
+    "openrouter/z-ai/glm-5.3-flash": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=131_072,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_000_15,  # $0.150/M
+        output_cost_per_token=0.000_000_5,  # $0.500/M
+        cache_read_cost_per_token=0.000_000_03,  # $0.03/M
+        supports_thinking=True,
+        ttft_hint_ms=900,
+    ),
+    # DeepSeek V4 Flash "latest" floating alias via OpenRouter. The leading
+    # "~" is part of the id, not a typo — OpenRouter's convention for an alias
+    # that follows the newest release of a line. Registered only because it
+    # was verified end to end through the engine on 2026-09-11: litellm
+    # accepts the tilde in the model id, a two-round tool loop converged, and
+    # JSON mode parsed. Cheapest tool-capable route on the account
+    # ($0.050/$0.160), which is what makes it the budget-worker candidate.
+    #
+    # A floating alias is a deliberate risk: what it resolves to can change
+    # under us without a config edit. Do not make it a PRIMARY for an
+    # interactive agent; it is here for high-volume, low-stakes workers.
+    "openrouter/~deepseek/deepseek-v4-flash-latest": ModelLimits(
+        # top_provider context, not the catalog's 1,310,720 — same reason as
+        # GLM above.
+        max_input_tokens=1_048_576,
+        max_output_tokens=393_216,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_000_05,  # $0.050/M
+        output_cost_per_token=0.000_000_16,  # $0.160/M
+        cache_read_cost_per_token=0.000_000_013,  # $0.013/M
+        supports_thinking=True,
+        ttft_hint_ms=1400,  # measured 940 / 2445 / 1377 ms, median 1377
     ),
     # MiMo-V2.5-Pro via OpenRouter — fleet fallback (escalation from v2.5)
     "openrouter/xiaomi/mimo-v2.5-pro": ModelLimits(
@@ -227,6 +329,10 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_000_08,  # $0.080/M
         output_cost_per_token=0.000_000_159,  # $0.159/M
         ttft_hint_ms=900,
+        # LEGACY, not deprecated: still live and still a correct fallback.
+        # V4.1 Flash supersedes it for new configuration.
+        status="legacy",
+        replaced_by="openrouter/deepseek/deepseek-v4.1-flash",
     ),
     # Gemini 2.5 Flash
     "gemini/gemini-2.5-flash": ModelLimits(
@@ -236,6 +342,10 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_000_15,  # $0.15/M
         output_cost_per_token=0.000_000_6,  # $0.60/M
         ttft_hint_ms=1000,  # Google direct — fast
+        # Direct-Gemini path. Measured unreliable for tool use on this
+        # instance (model fleet notes, 2026-04-25) and two generations behind.
+        status="deprecated",
+        replaced_by="openrouter/z-ai/glm-5.3-flash",
     ),
     # MiniMax M2.5 via OpenRouter
     "openrouter/minimax/minimax-m2.5": ModelLimits(
@@ -245,6 +355,11 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_000_5,  # $0.50/M
         output_cost_per_token=0.000_002,  # $2/M
         ttft_hint_ms=3000,
+        # Never adopted by this fleet, 4x the output price of the current
+        # picks, and the registry's context number is the optimistic one
+        # (see test_model_registry_drift KNOWN_DRIFT).
+        status="deprecated",
+        replaced_by="openrouter/z-ai/glm-5.3-flash",
     ),
     # Claude Opus 4.7 via OpenRouter — released 2026-04-16
     "openrouter/anthropic/claude-opus-4.7": ModelLimits(
@@ -275,6 +390,8 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_002_5,  # $2.50/M
         output_cost_per_token=0.000_015,  # $15/M
         ttft_hint_ms=2000,
+        status="legacy",
+        replaced_by="openrouter/anthropic/claude-opus-4.7",
     ),
     # Gemini 2.5 Pro
     "gemini/gemini-2.5-pro": ModelLimits(
@@ -284,6 +401,9 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_001_25,  # $1.25/M
         output_cost_per_token=0.000_01,  # $10/M
         ttft_hint_ms=2500,  # Google direct — moderate
+        # Same direct-Gemini path, same generation gap.
+        status="deprecated",
+        replaced_by="openrouter/google/gemini-3.1-pro-preview",
     ),
 }
 
@@ -510,6 +630,72 @@ def get_model_limits(model_id: str) -> ModelLimits:
         _FALLBACK.max_input_tokens // 1000,
     )
     return _FALLBACK
+
+
+@dataclass(frozen=True)
+class ModelListing:
+    """One row of "which models may I choose?".
+
+    Separate from ``ModelLimits`` on purpose: limits answer "how big and how
+    expensive is this model", a listing answers "should a human be offered
+    it, and in what order". Every surface that shows a model list — today
+    that is the Telegram ``/model`` keyboard, tomorrow an admin API — must
+    build it from here rather than keeping its own hand-maintained copy.
+    A second hand-maintained name list beside an authoritative one is the
+    exact shape that produced #329/#330/#331.
+    """
+
+    model_id: str
+    status: str
+    limits: ModelLimits
+    label: str = ""
+
+
+#: Listing order. Deprecated never appears, so it has no rank here.
+_STATUS_RANK = {"current": 0, "legacy": 1}
+
+
+def list_models(*, include_deprecated: bool = False) -> list[ModelListing]:
+    """Models this instance offers, current first, deprecated withheld.
+
+    Args:
+        include_deprecated: Include entries marked ``deprecated``. Opt-in, and
+            only for diagnostics — never for a surface a human chooses from.
+            A deprecated id is still RESOLVABLE through ``get_model_limits``;
+            what it must not be is *offered*.
+
+    Returns:
+        ``ModelListing`` rows sorted by status (current, then legacy) and then
+        by model id, so the order is stable across runs.
+    """
+    rows: list[ModelListing] = []
+    for model_id, limits in _MODEL_REGISTRY.items():
+        if limits.status == "deprecated" and not include_deprecated:
+            continue
+        rows.append(
+            ModelListing(
+                model_id=model_id,
+                status=limits.status,
+                limits=limits,
+                label=model_id if limits.status == "current" else f"{model_id} ({limits.status})",
+            )
+        )
+    rows.sort(key=lambda r: (_STATUS_RANK.get(r.status, 2), r.model_id))
+    return rows
+
+
+def model_status(model_id: str) -> str:
+    """``current`` / ``legacy`` / ``deprecated`` for a model id.
+
+    An id we have never heard of is ``current``: the fallback path already
+    warns about it, and calling an unknown model "deprecated" would put a
+    misleading replacement in front of the operator.
+    """
+    for candidate in _registry_candidates(model_id):
+        limits = _MODEL_REGISTRY.get(candidate)
+        if limits:
+            return limits.status
+    return "current"
 
 
 def supports_cache_control(model_id: str) -> bool:

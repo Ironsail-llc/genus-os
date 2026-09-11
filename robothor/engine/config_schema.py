@@ -197,11 +197,21 @@ def _check_model_block(warnings: list[str], where: str, model: Any) -> None:
     for name in names:
         if not isinstance(name, str) or not name or "${" in name:
             continue
-        if name not in _MODEL_REGISTRY:
+        limits = _MODEL_REGISTRY.get(name)
+        if limits is None:
             warnings.append(
                 f"{where}: model {name!r} is not in the model registry — "
                 "it will be skipped or mis-limited at dispatch (add it to "
                 "robothor/engine/model_registry.py or fix the name)"
+            )
+            continue
+        # A deprecated id still VALIDATES — the manifest keeps working and the
+        # run is still sized and priced correctly. It must not pass silently,
+        # though, and a warning that only says "deprecated" leaves the operator
+        # with nowhere to go, so it names the replacement.
+        if limits.status == "deprecated":
+            warnings.append(
+                f"{where}: model {name!r} is deprecated — use {limits.replaced_by!r} instead"
             )
 
 
