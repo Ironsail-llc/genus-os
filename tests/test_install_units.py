@@ -366,6 +366,7 @@ EXPECTED_DROPINS: dict[str, set[str]] = {
 EXPECTED_INSTALLED = [
     "robothor-engine.service",
     "robothor-bridge.service",
+    "robothor-secrets.service",
     "robothor-restart.path",
     "robothor-backup-local.timer",
     "robothor-alert@.service",
@@ -619,6 +620,75 @@ def test_execstart_never_relies_on_bare_env_lookup():
                 assert parts[0].startswith("/"), (
                     f"{unit.name}: {line!r} does not use an absolute path"
                 )
+
+
+# ── Secrets ordering ─────────────────────────────────────────────────────────
+# /run/robothor/secrets.env is decrypted by exactly one thing, and until
+# robothor-secrets.service existed that thing was the ENGINE's ExecStartPre.
+# Every other consumer loads the file as `EnvironmentFile=-` — optional — so a
+# service that started before the engine started WITHOUT its secrets and never
+# said so. On 2026-09-03 the box rebooted at 02:51, robothor-bridge started at
+# 02:51:12, the engine came up hours later, and the bridge spent eight days
+# refusing every SSO login with 403 because GENUS_BRIDGE_SSO_SECRET was simply
+# not in its environment.
+#
+# The fix is an ordering point, not a retry: a oneshot that decrypts, and the
+# long-running consumers requiring it. `Requires=` and not `Wants=` on purpose —
+# a bridge with no secrets cannot complete a login, so failing to start is more
+# honest than starting broken. An instance with no SOPS file is unaffected: the
+# oneshot's ConditionPathExists makes it a SKIP, and a skipped dependency
+# satisfies Requires=.
+
+SECRETS_UNIT = "robothor-secrets.service"
+
+# The long-running services that load secrets at boot. The timer-driven
+# oneshots also read secrets.env, but they fire minutes-to-hours after boot and
+# are ordered by their timers; they are deliberately out of scope here.
+SECRETS_CONSUMERS = [
+    "robothor-engine.service",
+    "robothor-bridge.service",
+    "robothor-app.service",
+    "robothor-orchestrator.service",
+]
+
+
+def test_secrets_unit_exists_and_runs_the_decrypt_script():
+    unit = UNIT_DIR / SECRETS_UNIT
+    assert unit.exists(), f"{SECRETS_UNIT} is the ordering point — it must exist"
+    text = directives(unit.read_text())
+    assert "Type=oneshot" in text
+    assert "RemainAfterExit=yes" in text, (
+        "without RemainAfterExit the unit is inactive the moment it finishes, "
+        "and Requires= on it would restart the decrypt for every consumer"
+    )
+    assert "ExecStart=/opt/robothor/scripts/decrypt-secrets.sh" in text, (
+        "the oneshot must run the SAME script the engine's ExecStartPre runs"
+    )
+    assert "ConditionPathExists=" in text, (
+        "an instance with no SOPS secrets file must SKIP this unit, not fail it "
+        "— a failed Requires= dependency would block every consumer from starting"
+    )
+
+
+@pytest.mark.parametrize("name", SECRETS_CONSUMERS, ids=lambda n: n)
+def test_secrets_consumers_are_ordered_after_the_secrets_unit(name: str):
+    text = directives((UNIT_DIR / name).read_text())
+    assert f"Requires={SECRETS_UNIT}" in text, (
+        f"{name} loads /run/robothor/secrets.env but does not require the unit "
+        "that writes it — it can start before the file exists"
+    )
+    assert f"After={SECRETS_UNIT}" in text, (
+        f"{name}: Requires= without After= is not an ordering, only a pull-in — "
+        "systemd may still start them in parallel"
+    )
+
+
+@pytest.mark.parametrize("name", SECRETS_CONSUMERS, ids=lambda n: n)
+def test_secrets_environment_file_stays_optional(name: str):
+    """The ordering is the fix; `EnvironmentFile=-` keeps its optional
+    semantics so a skipped decrypt (no SOPS file) still starts the service."""
+    text = directives((UNIT_DIR / name).read_text())
+    assert "EnvironmentFile=-/run/robothor/secrets.env" in text
 
 
 # ── Repo tmpfiles templates ──────────────────────────────────────────────────

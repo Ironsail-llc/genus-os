@@ -68,6 +68,55 @@ never substituted.
 `robothor.env.example` is the template for `/etc/robothor/robothor.env`,
 which every service sources via `EnvironmentFile=`.
 
+## `robothor-secrets.service` is the ordering point for decrypted secrets
+
+`/run/robothor/secrets.env` lives on tmpfs, so it has to be decrypted on every
+boot, and every consumer loads it as **`EnvironmentFile=-`** — optional. That
+optionality is deliberate (an instance may run with no SOPS secrets at all) and
+it is also a trap: a service that starts *before* the file exists starts
+without its credentials and reports itself healthy.
+
+Until this unit existed, the only thing that wrote that file at boot was the
+**engine's** `ExecStartPre`, and nothing ordered anyone else after the engine.
+On 2026-09-03 the box rebooted at 02:51, `robothor-bridge` started at 02:51:12
+with no secrets file on disk, and the engine came up hours later. The bridge
+therefore had no `GENUS_BRIDGE_SSO_SECRET`, `_sso_secret_ok` returned False,
+and every `POST /api/auth/sso` was answered 403 — for eight days, until someone
+tried to sign in through Cloudflare Access and was bounced back to `/signin`.
+
+So the decrypt is now a unit of its own:
+
+| | |
+|---|---|
+| `robothor-secrets.service` | `Type=oneshot`, `RemainAfterExit=yes`, `ExecStart=<workspace>/scripts/decrypt-secrets.sh` |
+| Consumers | `robothor-engine`, `robothor-bridge`, `robothor-app`, `robothor-orchestrator` declare `Requires=` **and** `After=robothor-secrets.service` |
+
+Four things about that are load-bearing:
+
+- **`Requires=`, not `Wants=`.** A bridge with no shared secret cannot complete
+  a single login. Failing to start is more honest than starting broken, and it
+  is what makes the dependency visible in `systemctl status`.
+- **`After=` as well as `Requires=`.** `Requires=` alone is a pull-in, not an
+  ordering: systemd would happily start both in parallel, which is the bug.
+- **`ConditionPathExists=/etc/robothor/secrets.enc.json`** on the oneshot. An
+  instance with no encrypted secrets file *skips* the unit, and systemd treats
+  a condition-skipped dependency as satisfied — so `Requires=` does not block
+  those instances. The `EnvironmentFile=-` optional semantics are untouched.
+- **The consumers keep their own `ExecStartPre` decrypt.** It is idempotent,
+  and `RemainAfterExit=yes` means the oneshot will not re-run on its own — so
+  removing the `ExecStartPre` would mean a `systemctl restart robothor-engine`
+  after a secret rotation silently kept the old values. Keeping it is also the
+  smaller diff and leaves existing restart behaviour unchanged.
+
+The timer-driven oneshots (`robothor-backup-*`, `robothor-slo`, …) also read
+`secrets.env`. They are deliberately **not** in the list: they fire minutes to
+hours after boot and are ordered by their timers. Ordering them too would be
+correct but is a much larger diff; if one of them is ever seen starting inside
+the boot window, add the same two lines.
+
+`tests/test_install_units.py` asserts the unit exists, is installed by the core
+set, and that each of the four consumers carries both directives.
+
 ## `EnvironmentFile=` carries a PATH, so every root script sets its own
 
 `/etc/robothor/robothor.env` is instance-land: this repo ships
