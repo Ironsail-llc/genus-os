@@ -773,8 +773,18 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
     def _build_background_config(self) -> Any:
         """Build agent config with continuous-mode overrides for background plan execution."""
         from robothor.engine.config import load_agent_config
+        from robothor.engine.manifest_schema import ManifestSchemaError
 
-        config = load_agent_config(self.config.default_chat_agent, self.config.manifest_dir)
+        try:
+            config = load_agent_config(self.config.default_chat_agent, self.config.manifest_dir)
+        except ManifestSchemaError as e:
+            # The caller renders RuntimeError as a message in the chat. An
+            # unguarded ManifestSchemaError would reach the operator as a
+            # traceback instead, in the one channel they actually read.
+            raise RuntimeError(
+                f"Agent manifest refused by the schema (SchemaError): "
+                f"{self.config.default_chat_agent} — {e.summary()}"
+            ) from e
         if config is None:
             raise RuntimeError(f"Agent config not found: {self.config.default_chat_agent}")
 
@@ -1446,10 +1456,20 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
             logger.warning("Failed to load persisted chat history: %s", e)
 
     def _get_manifest_primary(self) -> str:
-        """Get the main agent's manifest primary model."""
-        from robothor.engine.config import load_agent_config
+        """Get the main agent's manifest primary model.
 
-        cfg = load_agent_config("main", self.config.manifest_dir)
+        "" already means "cannot tell" here and every caller handles it. A
+        manifest the schema refuses is one more way of not being able to tell —
+        it must not take down the command that was asked.
+        """
+        from robothor.engine.config import load_agent_config
+        from robothor.engine.manifest_schema import ManifestSchemaError
+
+        try:
+            cfg = load_agent_config("main", self.config.manifest_dir)
+        except ManifestSchemaError as e:
+            logger.error("main manifest refused by the schema: %s", e.summary())
+            return ""
         return cfg.model_primary if cfg else ""
 
     async def _handle_agents_command(self, message: Message) -> None:

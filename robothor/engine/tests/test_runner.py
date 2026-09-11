@@ -30,7 +30,10 @@ class TestAgentRunnerExecute:
     @pytest.mark.asyncio
     async def test_missing_agent_config(self, runner):
         """Agent run fails gracefully when config not found."""
-        with patch("robothor.engine.runner.load_agent_config", return_value=None):
+        # `load_agent_config_or_broken` since the schema ladder landed: it is
+        # the same loader with a ManifestSchemaError turned into None, so a
+        # refused manifest reaches this same graceful-failure path.
+        with patch("robothor.engine.runner.load_agent_config_or_broken", return_value=None):
             with patch("robothor.engine.runner.create_run"):
                 run = await runner.execute("nonexistent", "test message")
         assert run.status == RunStatus.FAILED

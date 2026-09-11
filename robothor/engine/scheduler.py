@@ -21,6 +21,7 @@ from croniter import croniter  # type: ignore[import-untyped,unused-ignore]
 from robothor.engine.admission import admit, complete, register
 from robothor.engine.config import (
     ManifestScan,
+    load_agent_config_or_broken,
     load_manifest_dir,
     manifest_to_agent_config,
 )
@@ -273,7 +274,7 @@ class CronScheduler:
         # the agent gets no job at all, rather than keeping a stale one. Same
         # dedup key as the watchdog path, so a restart during a known-broken
         # window does not double-page.
-        scan = load_manifest_dir(self.config.manifest_dir)
+        scan = load_manifest_dir(self.config.manifest_dir, self.config.workspace)
         await alert_manifest_scan(scan, context="scheduler start")
         manifests = list(scan.manifests)
         loaded = 0
@@ -895,9 +896,7 @@ class CronScheduler:
 
     async def _run_agent(self, agent_id: str) -> None:
         """Execute an agent as a scheduled cron job."""
-        from robothor.engine.config import load_agent_config
-
-        agent_config = load_agent_config(agent_id, self.config.manifest_dir)
+        agent_config = load_agent_config_or_broken(agent_id, self.config.manifest_dir, "cron job")
         if not agent_config:
             logger.error("Agent config not found for cron job: %s", agent_id)
             return
@@ -933,9 +932,7 @@ class CronScheduler:
 
     async def _run_heartbeat(self, agent_id: str) -> None:
         """Execute a heartbeat run for an agent."""
-        from robothor.engine.config import load_agent_config
-
-        agent_config = load_agent_config(agent_id, self.config.manifest_dir)
+        agent_config = load_agent_config_or_broken(agent_id, self.config.manifest_dir, "heartbeat")
         if not agent_config or not agent_config.heartbeat:
             logger.error("Agent config or heartbeat not found for: %s", agent_id)
             return
@@ -960,9 +957,7 @@ class CronScheduler:
         Uses `{agent_id}:worker` dedup key so it never collides with the
         heartbeat or an interactive session.
         """
-        from robothor.engine.config import load_agent_config
-
-        agent_config = load_agent_config(agent_id, self.config.manifest_dir)
+        agent_config = load_agent_config_or_broken(agent_id, self.config.manifest_dir, "worker")
         if not agent_config or not agent_config.worker:
             logger.debug("Agent config or worker not found for: %s", agent_id)
             return
@@ -993,9 +988,7 @@ class CronScheduler:
         key so it can't collide with main's heartbeat or a user-interactive
         turn that happens to be in flight.
         """
-        from robothor.engine.config import load_agent_config
-
-        agent_config = load_agent_config("main", self.config.manifest_dir)
+        agent_config = load_agent_config_or_broken("main", self.config.manifest_dir, "channel wake")
         if agent_config is None:
             logger.warning("trigger_channel_event: main config not found")
             return
@@ -1420,7 +1413,9 @@ class CronScheduler:
         It cannot page — see :meth:`reconcile` for the alerting wrapper the
         watchdog uses. Either way, a dirty scan prunes nothing.
         """
-        return self._reconcile_from_scan(load_manifest_dir(self.config.manifest_dir))
+        return self._reconcile_from_scan(
+            load_manifest_dir(self.config.manifest_dir, self.config.workspace)
+        )
 
     async def reconcile(self) -> list[str]:
         """Reconcile, and page the operator when a manifest cannot be read.
@@ -1430,7 +1425,9 @@ class CronScheduler:
         engine internals).
         """
         loop = asyncio.get_running_loop()
-        scan = await loop.run_in_executor(None, load_manifest_dir, self.config.manifest_dir)
+        scan = await loop.run_in_executor(
+            None, load_manifest_dir, self.config.manifest_dir, self.config.workspace
+        )
         # Unconditionally: the guard owns BOTH transitions. A clean scan is how
         # it clears its dedup key and sends the recovery notice. Gating this on
         # `not scan.clean` left the guard armed forever after a fix, so the next

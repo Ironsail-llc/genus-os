@@ -158,6 +158,74 @@ class TestUnknownKeys:
         assert not [w for w in validate_manifest(data) if "some_future_option" in w]
 
 
+class TestDeliveryModeHasOneSource:
+    """The schema enum is it.
+
+    `config_schema` carried a parallel `_KNOWN_DELIVERY_MODES` that still
+    accepted `summary` and `full` — modes `models.DeliveryMode` has not had for
+    a long time — while rejecting nothing the schema rejects. A second opinion
+    about an enum is the drift this whole change exists to end.
+    """
+
+    def test_log_is_a_real_mode_and_produces_nothing(self):
+        data = _valid()
+        data["delivery"] = {"mode": "log"}
+        assert not [i for i in validate(data, strict=True) if i.path == "delivery.mode"]
+        assert not [w for w in validate_manifest(data) if "delivery" in w]
+
+    def test_a_retired_mode_is_reported_exactly_once(self):
+        data = _valid()
+        data["delivery"] = {"mode": "summary"}
+        issues = [i for i in validate(data) if i.path == "delivery.mode"]
+        assert len(issues) == 1, issues
+        assert issues[0].code == "invalid_enum"
+        assert issues[0].severity == "error"
+
+
+class TestKnownV2KeysComeFromTheSchemaToo:
+    def test_schema_documented_v2_keys_are_never_called_typos(self):
+        """`token_budget` and `cost_budget_usd` are documented in the schema's
+        `v2:` block and deprecated rather than removed, so manifests still set
+        them — and every load said "possible typo?" because the known set was
+        derived from `config.py` alone."""
+        data = _valid()
+        data["v2"] = {"token_budget": 0, "cost_budget_usd": 0.0}
+        assert not [i for i in validate(data) if "typo" in i.message], validate(data)
+        assert not [w for w in validate_manifest(data) if "typo" in w]
+
+    def test_a_real_typo_is_still_a_typo(self):
+        data = _valid()
+        data["v2"] = {"planing_enabled": True}
+        assert any("possible typo" in i.message for i in validate(data))
+
+    def test_the_known_set_still_covers_every_key_config_reads(self):
+        """Union, not replacement — the config.py derivation is what stops a
+        key the engine honours from being called a typo."""
+        for key in ("rate_limit_per_minute", "tool_timeout_seconds", "human_approval_fail_open"):
+            assert key in manifest_schema._KNOWN_V2_KEYS
+
+
+class TestOneFindingPerDefect:
+    def test_a_numeric_typo_is_reported_once(self):
+        """A non-numeric where the schema says integer is both a structural
+        `wrong_type` error and, historically, a semantic `wrong_type` warning
+        with a different wording. Two lines about one character helps nobody."""
+        data = _valid()
+        data["schedule"]["max_iterations"] = "twenty"
+        issues = [i for i in validate(data) if i.path == "schedule.max_iterations"]
+        assert len(issues) == 1, issues
+        assert issues[0].severity == "error"
+        assert len([w for w in validate_manifest(data) if "max_iterations" in w]) == 1
+
+    def test_an_out_of_range_number_still_warns(self):
+        """Suppression is scoped to the type disagreement. A number that IS a
+        number but is out of range has no structural error to hide behind."""
+        data = _valid()
+        data["schedule"]["max_iterations"] = 99999
+        messages = [i.message for i in validate(data)]
+        assert "max_iterations=99999 is outside expected range [0, 10000]" in messages
+
+
 # ── Semantic rules reached through both entry points ────────────────
 
 

@@ -61,7 +61,6 @@ ISSUE_CODES = frozenset(
         "stall_budget_too_small",
         "out_of_range",
         "suspicious_cron",
-        "unknown_delivery_mode",
         "unknown_session_target",
         "unknown_v2_key",
         "unknown_guardrail",
@@ -373,7 +372,25 @@ def _v2_keys_read_by_config() -> frozenset[str]:
     return found or static
 
 
-_KNOWN_V2_KEYS = _v2_keys_read_by_config()
+def _v2_keys_in_schema() -> frozenset[str]:
+    """Every key the schema's ``v2:`` block documents.
+
+    The union with the config.py derivation is the point. Each source alone is
+    wrong in a different direction: config.py misses keys the schema documents
+    but nothing reads yet — `token_budget` and `cost_budget_usd` are DEPRECATED
+    rather than deleted, so live manifests still set them and every single load
+    said "possible typo?" about a field this repo's own schema describes. The
+    schema alone would miss keys the engine honours but nobody wrote down.
+    """
+    if _SCHEMA is None:
+        return frozenset()
+    v2 = _SCHEMA.fields.get("v2")
+    if v2 is None or not v2.children:
+        return frozenset()
+    return frozenset(v2.children)
+
+
+_KNOWN_V2_KEYS = _v2_keys_read_by_config() | _v2_keys_in_schema()
 
 # Derived, not duplicated. This used to be a hand-maintained copy of the
 # enforcement sets in guardrails.py, and the two drifted in BOTH directions:
@@ -399,7 +416,12 @@ _KNOWN_DIFFICULTY_CLASSES = frozenset({"", "simple", "moderate", "complex"})
 # docs/agents/schema.yaml. RBAC still gates their tool calls.
 _KNOWN_SANDBOX_MODES = frozenset({"local", "docker", "host"})
 
-_KNOWN_DELIVERY_MODES = frozenset({"none", "announce", "summary", "full"})
+# NOTE: there is no `_KNOWN_DELIVERY_MODES` here any more. It said
+# {none, announce, summary, full} while `models.DeliveryMode` said
+# {none, announce, log} — a second opinion about an enum the schema already
+# states. `delivery.mode` is now checked structurally, from the schema's own
+# `enum:`, and `log` stopped being reported as unknown while `summary` started
+# being reported as an error.
 
 _KNOWN_SESSION_TARGETS = frozenset({"isolated", "persistent"})
 
@@ -677,18 +699,6 @@ def _check_semantics(issues: list[ManifestIssue], data: dict[str, Any]) -> None:
                 issues, "schedule.cron", "suspicious_cron", f"Suspicious cron expression: {cron!r}"
             )
 
-    # Delivery mode
-    delivery = data.get("delivery", {})
-    if isinstance(delivery, dict):
-        mode = delivery.get("mode", "none")
-        if mode not in _KNOWN_DELIVERY_MODES:
-            _warn(
-                issues,
-                "delivery.mode",
-                "unknown_delivery_mode",
-                f"Unknown delivery mode: {mode!r} (expected one of {sorted(_KNOWN_DELIVERY_MODES)})",
-            )
-
     # Session target
     if isinstance(schedule, dict):
         target = schedule.get("session_target", "isolated")
@@ -783,10 +793,11 @@ def _check_semantics(issues: list[ManifestIssue], data: dict[str, Any]) -> None:
 def validate(data: dict[str, Any], *, strict: bool = False) -> list[ManifestIssue]:
     """Every problem this validator can see in one merged manifest.
 
-    ``strict`` promotes `unknown_key` from warning to error. It is what the
-    repo's own template test runs, and what a scaffold should run: a template
-    that ships an unrecognised key is a bug in the template, whereas a live
-    instance may legitimately carry a field a plugin reads.
+    ``strict`` promotes `unknown_key` from warning to error. The repo's own
+    template test is what runs it today (`test_manifest_schema_templates.py`):
+    a template that ships from this repo with an unrecognised key is a bug in
+    the template or a gap in the schema, whereas a live instance may
+    legitimately carry a field a plugin reads.
 
     Never raises — a broken schema file degrades to "no structural checks"
     plus one `schema_unreadable` warning. Use :func:`raise_if_invalid` when a
@@ -803,7 +814,19 @@ def validate(data: dict[str, Any], *, strict: bool = False) -> list[ManifestIssu
         ]
     issues: list[ManifestIssue] = []
     _check_structure(issues, data, strict)
-    _check_semantics(issues, data)
+    structural_error_paths = {i.path for i in issues if i.severity == "error"}
+    semantic: list[ManifestIssue] = []
+    _check_semantics(semantic, data)
+    # One defect, one finding. A non-numeric where the schema declares an
+    # integer is caught structurally AND by the range checks, which each word
+    # it differently ("should be integer" / "should be numeric") — two lines
+    # about one character, in a log this change is trying to keep readable.
+    # Scoped to the type disagreement on purpose: an out-of-range number, an
+    # unknown sandbox mode and a misplaced key all say something the structural
+    # error does not, even when they land on the same path.
+    issues.extend(
+        i for i in semantic if not (i.code == "wrong_type" and i.path in structural_error_paths)
+    )
     return issues
 
 
@@ -836,9 +859,10 @@ def raise_if_invalid(data: dict[str, Any], *, agent_id: str = "", strict: bool =
 #: Agents whose manifest ``enforce`` would have refused, keyed by agent id.
 #:
 #: A plain dict on purpose. The promotion decision needs "which agents, how
-#: often" answered from a running instance, and the doctor reads this
-#: directly; the Prometheus counter below is the same number for dashboards.
-#: Exported mutable so a test can assert on it without scraping /metrics.
+#: often" answered from a running instance. Today the number leaves the process
+#: as the Prometheus counter `robothor_manifest_schema_would_reject_total`; this
+#: dict is the in-process copy, exported mutable so a test can assert on it
+#: without scraping /metrics. A later PR adds the doctor, which will read it.
 manifest_schema_would_reject: dict[str, int] = {}
 
 

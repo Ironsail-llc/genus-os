@@ -156,11 +156,18 @@ class ManifestFailure:
 
     ``filename`` is a bare name, never a path: this ends up in an operator page,
     and platform code must not surface instance paths (rules 1 and 2).
+
+    ``agent_id`` is filled in only when the file parsed far enough to know it —
+    a schema refusal knows, a YAML syntax error cannot. Empty means "ask the
+    filename". An id is not a path, so it is safe here, and `/ready` needs it:
+    "bob is broken" is actionable where "bob.yaml is broken" makes the reader
+    guess whether the stem is the id.
     """
 
     filename: str
     error_type: str
     detail: str
+    agent_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -222,23 +229,47 @@ def _scrub_path(detail: object, path: Path) -> str:
     return text
 
 
-def _enforce_manifest_schema(data: dict[str, Any]) -> None:
+def _enforce_manifest_schema(
+    data: dict[str, Any],
+    *,
+    manifest_dir: Path,
+    defaults: dict[str, Any] | None = None,
+    workspace: Path | None = None,
+) -> None:
     """Under ``enforce`` only, refuse a manifest the schema rejects.
 
+    Validates the MERGED document — the same one :func:`load_agent_config`
+    will build — not the file on its own. That is the whole point: a typo in
+    ``_defaults.yaml`` or a project override breaks every agent that inherits
+    it, and validating each raw file would report a clean scan, a green
+    ``/ready`` and nothing pruned, while every run raised inside an APScheduler
+    job. Broken everywhere, visible nowhere.
+
     Deliberately a no-op on the other two rungs: ``observe`` reports from
-    :func:`_apply_schema_mode`, where the MERGED manifest is available, and
-    reporting the same defect twice per load would double every count.
+    :func:`_apply_schema_mode`, where the merged manifest is already in hand,
+    and reporting the same defect twice per load would double every count.
     """
     from robothor.engine.manifest_schema import MODE_ENFORCE, raise_if_invalid, schema_mode
 
-    if schema_mode() == MODE_ENFORCE:
-        raise_if_invalid(data, agent_id=str(data.get("id") or ""))
+    if schema_mode() != MODE_ENFORCE:
+        return
+    agent_id = str(data.get("id") or "")
+    merged = _merged_manifest(
+        data,
+        agent_id=agent_id,
+        defaults=defaults if defaults is not None else _load_defaults(manifest_dir),
+        workspace=workspace,
+        trigger_type=None,
+    )
+    raise_if_invalid(merged, agent_id=agent_id)
 
 
 def _load_manifest_classified(
     manifest_path: Path,
     *,
     validate_schema: bool = True,
+    defaults: dict[str, Any] | None = None,
+    workspace: Path | None = None,
 ) -> tuple[dict[str, Any] | None, ManifestFailure | None, bool]:
     """``(data, failure, was_skipped)`` for one manifest file.
 
@@ -251,6 +282,11 @@ def _load_manifest_classified(
     and wants the raise, with its issue list, to reach IT. Classifying here
     too would swallow that raise into a ``None`` return and the caller would
     only learn that the agent "was not found".
+
+    ``defaults`` and ``workspace`` are the other layers of the document this
+    manifest becomes at load. :func:`load_manifest_dir` passes them so the scan
+    validates what will actually run; pass nothing and the defaults are read
+    from the manifest's own directory.
     """
     path = Path(manifest_path)
     name = path.name
@@ -267,7 +303,12 @@ def _load_manifest_classified(
         if data and isinstance(data, dict) and "id" in data:
             resolved: dict[str, Any] = _resolve_env_vars(data)  # type: ignore[assignment]
             if validate_schema:
-                _enforce_manifest_schema(resolved)
+                _enforce_manifest_schema(
+                    resolved,
+                    manifest_dir=path.parent,
+                    defaults=defaults,
+                    workspace=workspace,
+                )
             return resolved, None, False
         # Valid YAML, just not an agent manifest (_defaults.yaml, schema.yaml).
         return None, None, True
@@ -279,7 +320,7 @@ def _load_manifest_classified(
         # codes only — it ends up on an operator page, and platform code must
         # not surface instance values (rules 1 and 2).
         logger.error("Manifest %s refused by the schema: %s", name, e.summary())
-        return None, ManifestFailure(name, "SchemaError", e.summary()), False
+        return None, ManifestFailure(name, "SchemaError", e.summary(), e.agent_id), False
     except Exception as e:
         sanitized_path = str(manifest_path).replace("\n", "\\n").replace("\r", "\\r")
         logger.error("Failed to load manifest %s: %s", sanitized_path, _sanitize(e))
@@ -308,23 +349,33 @@ def load_manifest(manifest_path: Path) -> dict | None:  # type: ignore[type-arg]
     return data
 
 
-def load_manifest_dir(manifest_dir: Path) -> ManifestScan:
+def load_manifest_dir(manifest_dir: Path, workspace: Path | None = None) -> ManifestScan:
     """Read a manifest directory and report what could NOT be read.
 
     This is the function to use anywhere a decision depends on the fleet being
     completely known — above all, before deleting a schedule.
+
+    ``_defaults.yaml`` is read ONCE and handed to every file, so that under
+    ``enforce`` each manifest is judged as the merged document it becomes
+    rather than as the fragment on disk. Pass ``workspace`` — callers have it
+    on ``EngineConfig`` — to include the project overrides layer; without it a
+    defect introduced by ``.robothor/config.yaml`` alone still escapes the
+    scan, and the manifests returned are unchanged either way.
     """
     if not manifest_dir.is_dir():
         logger.warning("Manifest directory not found: %s", manifest_dir)
         return ManifestScan(dir_readable=False)
 
+    defaults = _load_defaults(manifest_dir)
     manifests: list[dict[str, Any]] = []
     failures: list[ManifestFailure] = []
     skipped: list[str] = []
     scanned = 0
     for f in sorted(manifest_dir.glob("*.yaml")):
         scanned += 1
-        data, failure, was_skipped = _load_manifest_classified(f)
+        data, failure, was_skipped = _load_manifest_classified(
+            f, defaults=defaults, workspace=workspace
+        )
         if failure is not None:
             failures.append(failure)
         elif was_skipped:
@@ -919,6 +970,52 @@ def _merge_lifecycle_hooks(merged: dict[str, Any], defaults: dict[str, Any]) -> 
     v2["lifecycle_hooks"] = result
 
 
+def _merged_manifest(
+    manifest_data: dict[str, Any],
+    *,
+    agent_id: str,
+    defaults: dict[str, Any] | None,
+    workspace: Path | None,
+    trigger_type: str | None,
+) -> dict[str, Any]:
+    """The document an agent actually runs on: file + every override layer.
+
+    Extracted from ``load_agent_config`` so the manifest SCAN can judge the
+    same document the loader will build. While the two disagreed, a typo in
+    ``_defaults.yaml`` produced a clean scan and a raise on every run.
+    """
+    merged = _deep_merge(defaults, manifest_data) if defaults else dict(manifest_data)
+
+    # Project-level overrides (.robothor/config.yaml)
+    if workspace:
+        project = _load_project_config(workspace)
+        if project:
+            project_all = project.get("_all", {})
+            project_agent = project.get(agent_id, {})
+            if project_all:
+                merged = _deep_merge(merged, project_all)
+            if project_agent:
+                merged = _deep_merge(merged, project_agent)
+
+    # Environment variable overrides
+    env_overrides = _collect_env_overrides()
+    if env_overrides:
+        merged = _deep_merge(merged, env_overrides)
+
+    # Runtime overrides (highest precedence)
+    rt = _get_runtime_overrides()
+    if rt:
+        merged = _deep_merge(merged, rt)
+
+    # Conditional config (when: block)
+    if trigger_type:
+        merged = _apply_conditional_config(merged, trigger_type)
+
+    # Fleet-level lifecycle hooks (concatenate, not replace)
+    _merge_lifecycle_hooks(merged, defaults or {})
+    return merged
+
+
 #: Logged-once keys for the schema ladder, same shape and same reason as
 #: ``_logged_validation_warnings``: ``load_agent_config`` runs on every agent
 #: run, so an undeduplicated line here would repeat the same finding thousands
@@ -992,35 +1089,13 @@ def load_agent_config(
     defaults = _load_defaults(manifest_dir)
 
     def _build_config(manifest_data: dict[str, Any]) -> AgentConfig:
-        merged = _deep_merge(defaults, manifest_data) if defaults else dict(manifest_data)
-
-        # Project-level overrides (.robothor/config.yaml)
-        if workspace:
-            project = _load_project_config(workspace)
-            if project:
-                project_all = project.get("_all", {})
-                project_agent = project.get(agent_id, {})
-                if project_all:
-                    merged = _deep_merge(merged, project_all)
-                if project_agent:
-                    merged = _deep_merge(merged, project_agent)
-
-        # Environment variable overrides
-        env_overrides = _collect_env_overrides()
-        if env_overrides:
-            merged = _deep_merge(merged, env_overrides)
-
-        # Runtime overrides (highest precedence)
-        rt = _get_runtime_overrides()
-        if rt:
-            merged = _deep_merge(merged, rt)
-
-        # Conditional config (when: block)
-        if trigger_type:
-            merged = _apply_conditional_config(merged, trigger_type)
-
-        # Fleet-level lifecycle hooks (concatenate, not replace)
-        _merge_lifecycle_hooks(merged, defaults)
+        merged = _merged_manifest(
+            manifest_data,
+            agent_id=agent_id,
+            defaults=defaults,
+            workspace=workspace,
+            trigger_type=trigger_type,
+        )
 
         # Validate ONCE, on the MERGED manifest — the document the agent
         # actually runs on. A defaults file or a project override can
@@ -1067,6 +1142,37 @@ def load_agent_config(
         if m["id"] == agent_id:
             return _build_config(m)
     return None
+
+
+def load_agent_config_or_broken(
+    agent_id: str,
+    manifest_dir: Path,
+    where: str = "",
+    workspace: Path | None = None,
+) -> AgentConfig | None:
+    """``load_agent_config``, with a schema refusal reported instead of raised.
+
+    Every scheduled call site already has an answer for "this agent has no
+    config": log and return, leaving the job to do nothing. Under ``enforce``
+    a refused manifest has to reach that same answer — an exception out of an
+    APScheduler job is swallowed into an APScheduler log record, so the agent
+    would simply stop running with nothing an operator recognises as a cause.
+
+    Logged distinctly from "not found", because the two need different fixes:
+    one is a manifest to correct, the other an agent to re-create. Callers that
+    owe someone a message of their own (the CLI, the Telegram bot) catch
+    :class:`ManifestSchemaError` themselves instead of using this.
+    """
+    try:
+        return load_agent_config(agent_id, manifest_dir, workspace)
+    except ManifestSchemaError as e:
+        logger.error(
+            "%s: agent %s is broken — manifest refused by the schema (SchemaError): %s",
+            where or "load",
+            _sanitize(agent_id),
+            e.summary(),
+        )
+        return None
 
 
 SECURITY_PREAMBLE = (

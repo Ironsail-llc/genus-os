@@ -570,10 +570,14 @@ flags:
       fine today, which is how a ladder gets turned off and left off.
 
       Evidence, measured 2026-09-11 against this instance's 22 agent manifests
-      with the shipped validator:
+      with the shipped validator. Measured on the MERGED document — file plus
+      _defaults.yaml plus project and env overrides — because that is what the
+      ladder judges, and a defect that only appears after the merge breaks
+      every agent that inherits it:
 
-        enforce (non-strict errors):  0 errors, 22/22 manifests clean
-        strict (unknown_key = error): 4 errors across 4 manifests —
+        enforce:  load_manifest_dir() -> 22 live agents, 0 failures,
+                  scan.clean = True. The fleet _defaults.yaml is clean.
+        strict (unknown_key = error): 4 errors across 4 of the 22 —
           schedule.enabled x2, schedule.stagger_ms x1, can_spawn_agents x1
           (that last one belongs under v2: and has been doing nothing)
 

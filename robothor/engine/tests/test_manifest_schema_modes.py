@@ -208,6 +208,54 @@ class TestEnforce:
         assert {m["id"] for m in scan.manifests} == {"alice"}
 
 
+class TestTheScanValidatesTheMergedDocument:
+    """A defect in `_defaults.yaml` breaks EVERY agent, and must look like it.
+
+    The scan used to validate each raw file while `load_agent_config`
+    validated the merged one. A typo in the fleet defaults therefore produced a
+    CLEAN scan — green `/ready`, no `ManifestFailure`, nothing pruned and
+    nothing reported — while every single agent run raised `ManifestSchemaError`
+    out of an APScheduler job. Broken everywhere, visible nowhere: the exact
+    shape of the outage the ladder was built to prevent.
+    """
+
+    @pytest.fixture
+    def defaults_typo(self, tmp_path):
+        (tmp_path / "alice.yaml").write_text(GOOD)
+        (tmp_path / "carol.yaml").write_text(
+            GOOD.replace("alice", "carol").replace("Alice", "Carol")
+        )
+        # A quoted number, in the file every agent inherits from. `enforce`
+        # refuses it; `int("soon")` is what the loader would have done next.
+        (tmp_path / "_defaults.yaml").write_text('schedule:\n  timeout_seconds: "soon"\n')
+        return tmp_path
+
+    def test_a_defaults_typo_breaks_every_agent_in_the_scan(self, defaults_typo, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_SCHEMA_MODE", "enforce")
+        scan = load_manifest_dir(defaults_typo)
+        assert not scan.clean
+        assert sorted(f.filename for f in scan.failures) == ["alice.yaml", "carol.yaml"]
+        assert {f.error_type for f in scan.failures} == {"SchemaError"}
+        assert scan.manifests == ()
+
+    def test_the_same_typo_in_observe_leaves_the_scan_clean(self, defaults_typo, monkeypatch):
+        """observe reports; it never refuses. Otherwise the default rung would
+        be an enforcement rung wearing a different name."""
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_SCHEMA_MODE", "observe")
+        assert load_manifest_dir(defaults_typo).clean
+
+    def test_the_failure_names_the_agent_not_just_the_file(self, defaults_typo, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_SCHEMA_MODE", "enforce")
+        scan = load_manifest_dir(defaults_typo)
+        assert sorted(f.agent_id for f in scan.failures) == ["alice", "carol"]
+
+    def test_a_clean_defaults_file_breaks_nobody(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_SCHEMA_MODE", "enforce")
+        (tmp_path / "alice.yaml").write_text(GOOD)
+        (tmp_path / "_defaults.yaml").write_text("schedule:\n  timezone: UTC\n")
+        assert load_manifest_dir(tmp_path).clean
+
+
 class TestBrokenIsNotDeleted:
     """The 2026-08-23 contract, extended to schema failures.
 

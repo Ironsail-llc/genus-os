@@ -7,12 +7,34 @@ import sys
 from typing import Any
 
 
+def _load_agent_config_or_report(agent_id: str, manifest_dir: Any) -> Any:
+    """``load_agent_config``, with a schema refusal printed instead of raised.
+
+    A CLI command answers "no such agent" with a stderr line and exit 1. Under
+    `enforce` a refused manifest has to reach the same answer, naming the
+    SchemaError so the operator edits the file rather than hunting for a
+    missing one. Returns None when there is nothing to run.
+    """
+    from robothor.engine.config import load_agent_config
+    from robothor.engine.manifest_schema import ManifestSchemaError
+
+    try:
+        return load_agent_config(agent_id, manifest_dir)
+    except ManifestSchemaError as e:
+        print(
+            f"Error: Agent '{agent_id}' manifest was refused by the schema "
+            f"(SchemaError): {e.summary()}",
+            file=sys.stderr,
+        )
+        return None
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Non-interactive single-shot agent execution with pipe support."""
     import asyncio
     import json as json_mod
 
-    from robothor.engine.config import EngineConfig, load_agent_config
+    from robothor.engine.config import EngineConfig
     from robothor.engine.models import TriggerType
 
     config = EngineConfig.from_env()
@@ -33,7 +55,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("Error: Empty message.", file=sys.stderr)
         return 1
 
-    agent_config = load_agent_config(agent_id, config.manifest_dir)
+    agent_config = _load_agent_config_or_report(agent_id, config.manifest_dir)
     if not agent_config:
         print(f"Error: Agent '{agent_id}' not found in {config.manifest_dir}", file=sys.stderr)
         return 1
@@ -208,7 +230,7 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
     import asyncio
     from datetime import UTC, datetime
 
-    from robothor.engine.config import EngineConfig, load_agent_config
+    from robothor.engine.config import EngineConfig
     from robothor.engine.models import TriggerType
 
     config = EngineConfig.from_env()
@@ -219,7 +241,7 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
     if getattr(args, "deep", False):
         return _cmd_engine_run_deep(args, config)
 
-    agent_config = load_agent_config(agent_id, config.manifest_dir)
+    agent_config = _load_agent_config_or_report(agent_id, config.manifest_dir)
     if not agent_config:
         print(f"Error: Agent '{agent_id}' not found in {config.manifest_dir}")
         return 1

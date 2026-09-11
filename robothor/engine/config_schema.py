@@ -19,7 +19,6 @@ import logging
 from typing import Any
 
 from robothor.engine.manifest_schema import (
-    _KNOWN_DELIVERY_MODES,
     _KNOWN_DIFFICULTY_CLASSES,
     _KNOWN_GUARDRAILS,
     _KNOWN_SANDBOX_MODES,
@@ -36,7 +35,6 @@ logger = logging.getLogger(__name__)
 #: move is that there is now exactly ONE of each. An alias keeps those tests
 #: pointed at a real single source instead of quietly passing against a copy.
 __all__ = [
-    "_KNOWN_DELIVERY_MODES",
     "_KNOWN_DIFFICULTY_CLASSES",
     "_KNOWN_GUARDRAILS",
     "_KNOWN_SANDBOX_MODES",

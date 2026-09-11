@@ -37,11 +37,18 @@ async def readiness_response(
     service: str,
     version: str,
     checks: Mapping[str, Callable[[], Awaitable[str]]],
+    details: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Build a readiness response by running all dependency checks.
 
     Each check callable should return "ok" or "error:..." string.
     Returns (response_dict, status_code) — 200 if all ok, 503 if degraded.
+
+    ``details`` is read AFTER the checks run, so a caller may pass a mutable
+    dict that a check writes into. A check can only return a string, and some
+    answers need a list: "the fleet has 1 broken agent" is a status, "bob" is
+    something the operator can act on. Reserved keys are never overwritten — a
+    check must not be able to rewrite ``status``.
     """
 
     async def run_check(name: str, check_fn: Callable[[], Awaitable[str]]) -> tuple[str, str]:
@@ -59,13 +66,16 @@ async def readiness_response(
     all_ok = all(v == "ok" for v in results.values())
     status_code = 200 if all_ok else 503
 
-    return {
+    payload: dict[str, Any] = {
         "status": "ok" if all_ok else "degraded",
         "service": service,
         "version": version,
         "timestamp": datetime.now(UTC).isoformat(),
         "checks": results,
-    }, status_code
+    }
+    if details:
+        payload.update({k: v for k, v in details.items() if k not in payload})
+    return payload, status_code
 
 
 async def wait_for_ready(

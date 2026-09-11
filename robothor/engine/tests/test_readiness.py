@@ -42,7 +42,6 @@ def test_ready_rejects_empty_production_fleet(tmp_path):
     with (
         patch("robothor.db.connection.get_connection"),
         patch("robothor.engine.tracking.list_schedules", return_value=[]),
-        patch("robothor.engine.config.load_all_manifests", return_value=[]),
         patch("redis.asyncio.Redis", return_value=redis_client),
     ):
         response = _client(config).get("/ready")
@@ -52,6 +51,16 @@ def test_ready_rejects_empty_production_fleet(tmp_path):
 
 
 def test_ready_accepts_required_agent(tmp_path):
+    """Reads a real manifest instead of patching the loader.
+
+    The fleet check moved from `load_all_manifests` to `load_manifest_dir`, so
+    it can tell a broken manifest from an absent one. Patching the old function
+    would have left this test green against a check that no longer calls it.
+    """
+    (tmp_path / "main.yaml").write_text(
+        "id: main\nname: Main\ndescription: A generic fixture agent\n"
+        'version: "2026-09-11"\ndepartment: core\n'
+    )
     config = EngineConfig(
         workspace=tmp_path,
         manifest_dir=tmp_path,
@@ -65,7 +74,6 @@ def test_ready_accepts_required_agent(tmp_path):
     with (
         patch("robothor.db.connection.get_connection"),
         patch("robothor.engine.tracking.list_schedules", return_value=[]),
-        patch("robothor.engine.config.load_all_manifests", return_value=[{"id": "main"}]),
         patch("robothor.federation.connections.load_connections", return_value=[]),
         patch("redis.asyncio.Redis", return_value=redis_client),
     ):

@@ -40,7 +40,7 @@ from robothor.engine.config import (
     EngineConfig,
     _prompt_cache,
     build_system_prompt,
-    load_agent_config,
+    load_agent_config_or_broken,
 )
 
 # ── Log-injection sanitizer ──
@@ -554,9 +554,9 @@ class AgentRunner(
         # InsufficientPrivilege at INSERT time. See test_nested_run_tenant.py.
         resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
 
-        # Load agent config from manifest if not provided
+        # Load if not provided. `_or_broken`: a raise here escapes execute().
         if agent_config is None:
-            agent_config = load_agent_config(agent_id, self.config.manifest_dir)
+            agent_config = load_agent_config_or_broken(agent_id, self.config.manifest_dir, "run")
         if agent_config is None:
             logger.error("Agent config not found: %s", _sanitize(agent_id))
             session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)

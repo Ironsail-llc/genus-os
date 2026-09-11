@@ -3,8 +3,8 @@
 ``robothor/engine/schema/agent_manifest.yaml`` is CANONICAL: it is what
 ``robothor/engine/manifest_schema.py`` reads at import time and what ships in
 the wheel (``packages = ["robothor"]``). ``docs/agents/schema.yaml`` is the
-documentation mirror that ``validate_agents.py``, the scaffold and every
-onboarding agent point at.
+documentation mirror that ``scripts/validate_agents.py`` and the agent-
+building docs point at.
 
 Two copies of anything in this repo have historically drifted — the v2 key
 list, the guardrail list, the alert-name list. The difference here is that
@@ -18,6 +18,8 @@ from __future__ import annotations
 import subprocess
 import tomllib
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 CANONICAL = REPO / "robothor" / "engine" / "schema" / "agent_manifest.yaml"
@@ -55,6 +57,11 @@ class TestItShipsInTheWheel:
     an explicit force-include precisely because it is not), and it must be
     git-tracked (`.gitignore` swallowed docs/agents/*.yaml wholesale until a
     `!` negation rescued the schema).
+
+    Building a wheel here would be the direct proof and is too slow to run on
+    every commit, so these are the two config preconditions plus the one thing
+    a wheel actually has to satisfy at runtime: the file is reachable through
+    the package resource API, not through a repo-relative path.
     """
 
     def test_the_schema_is_inside_the_packaged_tree(self):
@@ -64,7 +71,20 @@ class TestItShipsInTheWheel:
         assert CANONICAL.relative_to(REPO).parts[0] == "robothor"
 
     def test_the_schema_is_git_tracked(self):
-        """Untracked means VCS-ignored means absent from the wheel — silently."""
+        """Untracked means VCS-ignored means absent from the wheel — silently.
+
+        Skipped, not failed, outside a git checkout: this suite also runs from
+        an unpacked sdist, where there is no index to ask and the question is
+        meaningless rather than answered "no".
+        """
+        inside = subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if inside.returncode != 0 or inside.stdout.strip() != "true":
+            pytest.skip("not a git checkout — nothing to ask about tracking")
         out = subprocess.run(
             ["git", "-C", str(REPO), "ls-files", "--error-unmatch", str(CANONICAL)],
             capture_output=True,
@@ -76,6 +96,20 @@ class TestItShipsInTheWheel:
             "so hatchling will omit it from the wheel and every installed "
             "instance will run with structural validation silently off"
         )
+
+    def test_it_is_readable_through_the_package_resource_api(self):
+        """The question a wheel install actually asks.
+
+        `importlib.resources` resolves through the installed package, not the
+        repo layout, so this fails for the same reason a wheel would: the data
+        file is not in the package. It also proves the directory is importable
+        as a package resource root.
+        """
+        from importlib.resources import files
+
+        resource = files("robothor.engine.schema").joinpath("agent_manifest.yaml")
+        assert resource.is_file()
+        assert resource.read_bytes() == CANONICAL.read_bytes()
 
     def test_the_installed_module_finds_it_by_package_path(self):
         """The loader resolves the schema relative to its own module file, so

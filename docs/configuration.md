@@ -198,9 +198,25 @@ model that is not in the registry, an unknown guardrail name, a key sitting in
 the wrong block — stay warnings on every rung, because each describes a
 manifest that loads and runs.
 
-Unknown keys are a warning at load and an error only under `strict`, which is
-what the repo's own template test and the scaffold run. A live instance may
-legitimately carry a field a plugin reads; a shipped template may not.
+Validation runs on the **merged** manifest: the file, plus `_defaults.yaml`,
+plus `.robothor/config.yaml`, plus env and runtime overrides. A typo in the
+fleet defaults therefore breaks every agent that inherits it, and is reported
+that way rather than passing a per-file check and failing at run time.
+
+Under `enforce`, `/ready` returns `503` with `checks.fleet: "error:broken:<n>"`
+and a `broken_agents` list of ids, and the scheduler refuses to prune any
+schedule while a manifest is broken. An agent reported **broken** needs its
+manifest fixed; an agent reported **missing** needs re-creating. The two are
+never collapsed.
+
+Unknown keys are a warning at load and an error only under `strict`. Nothing in
+the engine runs `strict`; the repo's own template test does, against every
+bundle under `templates/agents/`. A live instance may legitimately carry a field
+a plugin reads; a template shipped from this repo may not.
+
+`observe` counts every occurrence in `robothor_manifest_schema_would_reject_total`
+(labelled by agent) and logs each distinct agent/path/code once — `/metrics` is
+how the count leaves the process today.
 
 ## Event Bus
 
