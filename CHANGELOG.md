@@ -1,3 +1,37 @@
+## [1.67.0](https://github.com/Ironsail-llc/genus-os/compare/v1.66.0...v1.67.0) (2026-09-11)
+
+### Features
+
+* **cli:** add the genus console script and make the wheel PyPI-ready ([#476](https://github.com/Ironsail-llc/genus-os/issues/476)) ([4f85f6e](https://github.com/Ironsail-llc/genus-os/commit/4f85f6e7bfd55fd6eaf5c913ec577a8d335e4842))
+* **migrate:** one migrator; initdb snapshots retired ([#480](https://github.com/Ironsail-llc/genus-os/issues/480)) ([cf0cfa7](https://github.com/Ironsail-llc/genus-os/commit/cf0cfa78c284214bfc0b57c2106406c209dfa124))
+* **tools:** web_search grades results and falls back to the browser ([#489](https://github.com/Ironsail-llc/genus-os/issues/489)) ([fa8f069](https://github.com/Ironsail-llc/genus-os/commit/fa8f06969cbf8638f24cad94302a1f33a96cbab0)), closes [#488](https://github.com/Ironsail-llc/genus-os/issues/488)
+
+### Bug Fixes
+
+* **app:** remove the duplicated picomatch entry from the lockfile ([#486](https://github.com/Ironsail-llc/genus-os/issues/486)) ([e5044ad](https://github.com/Ironsail-llc/genus-os/commit/e5044ad94ed845c38e85119a8fd3ffafbfdd7a00)), closes [#475](https://github.com/Ironsail-llc/genus-os/issues/475) [#474](https://github.com/Ironsail-llc/genus-os/issues/474)
+* **auth:** sign-in uses the public origin; secrets load before services ([#483](https://github.com/Ironsail-llc/genus-os/issues/483)) ([678021a](https://github.com/Ironsail-llc/genus-os/commit/678021a45d171e87b11d513f4f3f66a6ed05e10d))
+* **bridge:** secrets write-only to humans; every mutation gated ([#477](https://github.com/Ironsail-llc/genus-os/issues/477)) ([ad9cc46](https://github.com/Ironsail-llc/genus-os/commit/ad9cc4696baf43ee0b9115548796f7b885bc4610))
+* **ci:** bump js-yaml to 4.3.2 in the release-tooling lockfile ([#472](https://github.com/Ironsail-llc/genus-os/issues/472)) ([9222df2](https://github.com/Ironsail-llc/genus-os/commit/9222df22bb510dd69813531e51b8f0326773236d))
+* **cli:** preset install needs no source; advice names genusos ([#478](https://github.com/Ironsail-llc/genus-os/issues/478)) ([0464d65](https://github.com/Ironsail-llc/genus-os/commit/0464d652d7910ca5bd75c1b54e96dfb627686111))
+* **engine:** pass reasoning_content back to thinking-mode providers ([#487](https://github.com/Ironsail-llc/genus-os/issues/487)) ([e964d82](https://github.com/Ironsail-llc/genus-os/commit/e964d82a3d515dd1f3c6cfca21a57792bc1287a7))
+* **helm:** health probes read readiness bodies; off is not down ([#490](https://github.com/Ironsail-llc/genus-os/issues/490)) ([61dcea9](https://github.com/Ironsail-llc/genus-os/commit/61dcea949da0387fdacee0a8f53664b4af0ecb89))
+* **helm:** the home shows real data; canvas states are visible ([#485](https://github.com/Ironsail-llc/genus-os/issues/485)) ([9773276](https://github.com/Ironsail-llc/genus-os/commit/9773276bf2dcd804d387f076b583d6ea4c1f227b))
+* **tools:** web_fetch pins the vetted IP without losing the hostname ([#488](https://github.com/Ironsail-llc/genus-os/issues/488)) ([beeb541](https://github.com/Ironsail-llc/genus-os/commit/beeb541b8bcf09d13e849fed85372b82288a1099))
+
+### Documentation
+
+* make the published docs true; check every quoted command in CI ([#481](https://github.com/Ironsail-llc/genus-os/issues/481)) ([c6fe52e](https://github.com/Ironsail-llc/genus-os/commit/c6fe52e3bc6e60c8613edecacbaef4886f285cb3))
+* **specs:** productization gap analysis vs OpenClaw v2 and Grok Bot ([#470](https://github.com/Ironsail-llc/genus-os/issues/470)) ([824ffcb](https://github.com/Ironsail-llc/genus-os/commit/824ffcbac4ff2582cc409482dc278b81840388c0))
+
+### Code Refactoring
+
+* **core:** remove vendor vestiges; gate the core-instance boundary ([#479](https://github.com/Ironsail-llc/genus-os/issues/479)) ([47da758](https://github.com/Ironsail-llc/genus-os/commit/47da7583188ebd6b43260438b9d878379c28a3a8))
+
+### Tests
+
+* **docs:** the migration-count gate skips archived design docs ([#482](https://github.com/Ironsail-llc/genus-os/issues/482)) ([5d0d2e6](https://github.com/Ironsail-llc/genus-os/commit/5d0d2e62c280a426300cc25ba587f7b09d3c09ac)), closes [#470](https://github.com/Ironsail-llc/genus-os/issues/470) [#481](https://github.com/Ironsail-llc/genus-os/issues/481)
+* **engine:** gws write-through tests carry a tenant ([#473](https://github.com/Ironsail-llc/genus-os/issues/473)) ([6b86173](https://github.com/Ironsail-llc/genus-os/commit/6b86173a45e62019955e84a19d852fb03a2def47)), closes [#468](https://github.com/Ironsail-llc/genus-os/issues/468)
+
 ## [1.66.0](https://github.com/Ironsail-llc/genus-os/compare/v1.65.0...v1.66.0) (2026-09-03)
 
 ### Features
