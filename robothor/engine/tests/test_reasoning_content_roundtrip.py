@@ -41,7 +41,7 @@ from litellm.types.utils import (
 
 from robothor.engine.llm_client import LLMClient
 from robothor.engine.models import RunStatus
-from robothor.engine.reasoning_replay import capture_reasoning_fields
+from robothor.engine.reasoning_replay import capture_reasoning_fields, same_model
 from robothor.engine.runner import AgentRunner
 
 DEEPSEEK = "openrouter/deepseek/deepseek-v4-flash"
@@ -252,10 +252,17 @@ class TestStreaming:
             return _S()
 
         turn1 = [
-            _chunk(content=None, reasoning_content="step 1: "),
+            _chunk(
+                content=None,
+                reasoning_content="step 1: ",
+                reasoning_details=[{"type": "reasoning.text", "text": "step 1: ", "index": 0}],
+            ),
             _chunk(
                 content=None,
                 reasoning_content="call list_tasks.",
+                reasoning_details=[
+                    {"type": "reasoning.text", "text": "call list_tasks.", "index": 1}
+                ],
                 tool_calls=[
                     ChatCompletionDeltaToolCall(
                         id="call_1",
@@ -298,6 +305,13 @@ class TestStreaming:
         assert len(calls) == 2, "expected a second streamed turn after the tool result"
         turn = _assistant_turn(calls[1]["messages"])
         assert turn.get("reasoning_content") == "step 1: call list_tasks."
+        # litellm's stream_chunk_builder combines reasoning_content only
+        # (probed on 1.97.0), so the interactive path would otherwise replay
+        # strictly fewer fields than a scheduled run of the same agent.
+        assert turn.get("reasoning_details") == [
+            {"type": "reasoning.text", "text": "step 1: ", "index": 0},
+            {"type": "reasoning.text", "text": "call list_tasks.", "index": 1},
+        ]
 
 
 class TestTheRejectionIsNamed:
@@ -322,6 +336,88 @@ class TestTheRejectionIsNamed:
             LLMClient._handle_model_error(error, DEEPSEEK, set())
 
         assert "reasoning_replay_rejected" not in caplog.text
+
+
+class TestTheRejectionIsNamedOnTheAuxiliaryPath:
+    """Judge, buddy review and background legs call ``llm_call`` directly."""
+
+    @pytest.mark.asyncio
+    async def test_llm_call_names_the_rejection_too(self, caplog) -> None:
+        from robothor.engine.llm_client import llm_call
+
+        error = Exception(DEEPSEEK_400)
+        error.status_code = 400  # type: ignore[attr-defined]
+
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.llm_client"):
+            with pytest.raises(Exception, match="passed back"):
+                await llm_call(
+                    [{"role": "user", "content": "hi"}],
+                    model=DEEPSEEK,
+                    max_retries=1,
+                    timeout=5,
+                )
+
+        assert "reasoning_replay_rejected=True" in caplog.text
+
+    @pytest.fixture(autouse=True)
+    def _failing_provider(self):
+        error = Exception(DEEPSEEK_400)
+        error.status_code = 400  # type: ignore[attr-defined]
+        with patch("litellm.acompletion", new=AsyncMock(side_effect=error)):
+            yield
+
+
+class TestPersistedTurnsStayUnderTheWriterCap:
+    """A reasoning blob is unbounded; the step writer is not."""
+
+    def test_a_10kb_reasoning_blob_does_not_blow_the_serialised_cap(self) -> None:
+        from robothor.engine.session import _ASSISTANT_TURN_MAX_SERIALISED, _capped_turn
+
+        turn = _capped_turn(
+            {
+                "role": "assistant",
+                "content": "short",
+                "tool_calls": [_tool_call()],
+                "reasoning_content": "x" * 10_000,
+                "reasoning_details": [{"type": "reasoning.text", "text": "x" * 10_000}],
+                "_model": DEEPSEEK_REPORTED,
+            }
+        )
+
+        assert len(json.dumps(turn, default=str)) <= _ASSISTANT_TURN_MAX_SERIALISED
+        assert turn["content"] == "short", "content was trimmed to make room for reasoning"
+        assert turn["tool_calls"], "the reasoning cost the turn its tool calls"
+
+    def test_the_stored_turn_carries_neither_reasoning_nor_bookkeeping(self) -> None:
+        """The turn exists to explain the run, not to be replayed from."""
+        from robothor.engine.session import _capped_turn
+
+        turn = _capped_turn(
+            {
+                "role": "assistant",
+                "content": "short",
+                "reasoning_content": "blob",
+                "reasoning": "blob",
+                "reasoning_details": [{"type": "reasoning.text"}],
+                "_model": DEEPSEEK_REPORTED,
+            }
+        )
+
+        assert set(turn) == {"role", "content"}
+
+
+class TestModelIdentityAcrossRoutingVariants:
+    def test_an_openrouter_variant_suffix_is_the_same_model(self) -> None:
+        assert same_model(f"{DEEPSEEK}:free", DEEPSEEK_REPORTED)
+        assert same_model("openrouter/xiaomi/mimo-v2.5:nitro", "xiaomi/mimo-v2.5")
+
+    def test_local_tags_are_not_variant_suffixes(self) -> None:
+        """``qwen3:8b`` and ``qwen3:32b`` are different models, not routing hints."""
+        assert not same_model("ollama_chat/qwen3:8b", "ollama_chat/qwen3:32b")
+        assert same_model("ollama_chat/qwen3:8b", "ollama_chat/qwen3:8b")
+
+    def test_different_models_stay_different(self) -> None:
+        assert not same_model(DEEPSEEK, ANTHROPIC)
 
 
 class TestCaptureMatchesLitellmsRealShape:

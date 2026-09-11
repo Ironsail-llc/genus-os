@@ -46,6 +46,7 @@ from robothor.engine.metrics import LLM_CALL_DURATION, LLM_CALLS_TOTAL, LLM_TOKE
 from robothor.engine.model_breaker import _current_run_id_var, get_model_breaker
 from robothor.engine.reasoning_replay import (
     is_reasoning_replay_error,
+    merge_streamed_reasoning_details,
     strip_reasoning_for_model,
 )
 from robothor.engine.retry import retry_async
@@ -530,6 +531,59 @@ _RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
 )
 
 
+async def _emit_tool_call_events(
+    tool_calls: list[Any],
+    seen_tool_ids: set[str],
+    emit: Callable[[dict[str, Any]], Awaitable[None]],
+) -> None:
+    """Emit ``tool_use_start`` once per call id, then its argument deltas.
+
+    A streamed tool call arrives as one id-bearing chunk followed by argument
+    fragments, so the start event must fire exactly once per id — ``seen_tool_ids``
+    is the caller's set and is updated here.
+    """
+    for tc in tool_calls:
+        tc_id = getattr(tc, "id", None)
+        tc_fn = getattr(tc, "function", None)
+        if tc_id and tc_id not in seen_tool_ids:
+            seen_tool_ids.add(tc_id)
+            await emit(
+                {
+                    "type": "tool_use_start",
+                    "tool_name": getattr(tc_fn, "name", "") if tc_fn else "",
+                    "call_id": tc_id,
+                }
+            )
+        if tc_fn and getattr(tc_fn, "arguments", None):
+            await emit(
+                {
+                    "type": "tool_use_delta",
+                    "delta": tc_fn.arguments,
+                    "call_id": tc_id or "",
+                }
+            )
+
+
+def _log_reasoning_replay_rejection(model: str, e: BaseException) -> None:
+    """Name a thinking-mode replay rejection, or say nothing.
+
+    A history replayed without the provider's own reasoning arrives as a
+    generic 400 "Provider returned error", indistinguishable in the journal
+    from a dozen other bad requests — on 2026-09-11 that cost the fleet a day
+    on the local tier with nothing pointing at the cause. Every path that
+    swallows a model error calls this.
+    """
+    if not is_reasoning_replay_error(e):
+        return
+    logger.error(
+        "Model %s rejected the conversation because the assistant turn's "
+        "reasoning was not echoed back (thinking mode requires it) — "
+        "reasoning_replay_rejected=True: %s",
+        _sanitize(model),
+        _sanitize(e),
+    )
+
+
 async def llm_call(
     messages: list[dict[str, Any]],
     *,
@@ -614,6 +668,10 @@ async def llm_call(
             )
         except Exception as exc:  # noqa: BLE001 - the next model is the point
             last = exc
+            # Judge, buddy review and the background legs never touch
+            # _handle_model_error, so without this the same rejection is
+            # silent on every path outside the agent loop.
+            _log_reasoning_replay_rejection(candidate, exc)
             if candidate != chain[-1]:
                 logger.warning(
                     "llm_call: %s failed (%s); trying the next model in the chain",
@@ -1275,19 +1333,9 @@ class LLMClient:
         streaming: bool = False,
     ) -> None:
         """Handle model failure: mark broken or log warning."""
-        # Named before anything else classifies it. A history replayed without
-        # the provider's own reasoning arrives as a generic 400 "Provider
-        # returned error", which is indistinguishable from a dozen other bad
-        # requests in the log — and on 2026-09-11 that cost the fleet a day on
-        # the local tier with nothing in the journal pointing at the cause.
-        if is_reasoning_replay_error(e):
-            logger.error(
-                "Model %s rejected the conversation because the assistant turn's "
-                "reasoning was not echoed back (thinking mode requires it) — "
-                "reasoning_replay_rejected=True: %s",
-                _sanitize(model),
-                _sanitize(e),
-            )
+        # Named before anything else classifies it — a 400 tells the operator
+        # nothing on its own.
+        _log_reasoning_replay_rejection(model, e)
         status = getattr(e, "status_code", None)
         is_timeout = isinstance(e, (asyncio.TimeoutError, TimeoutError))
         # Provider-availability failures (e.g. the Codex CLI missing from the
@@ -1821,6 +1869,11 @@ class LLMClient:
                     has_tool_calls = False
                     ttft_logged = False
                     seen_tool_ids: set[str] = set()
+                    # stream_chunk_builder combines reasoning_content and drops
+                    # the rest, so this one is accumulated here or it is lost —
+                    # and the interactive path would replay fewer fields than a
+                    # cron run of the same agent. See reasoning_replay.
+                    streamed_reasoning_details: list[Any] = []
 
                     # Consume stream with per-chunk timeout so stalled streams
                     # fall back to the next model instead of hanging the run.
@@ -1864,6 +1917,9 @@ class LLMClient:
                                 )
                             continue
                         delta = chunk.choices[0].delta
+                        delta_details = getattr(delta, "reasoning_details", None)
+                        if isinstance(delta_details, list):
+                            streamed_reasoning_details.extend(delta_details)
                         if getattr(delta, "content", None):
                             if not ttft_logged:
                                 ttft_ms = int((time.monotonic() - stream_start) * 1000)
@@ -1886,28 +1942,7 @@ class LLMClient:
                             has_tool_calls = True
                             if self._active_watchdog:
                                 self._active_watchdog.touch(f"stream_tool_call:{model}")
-                            for tc in delta.tool_calls:
-                                tc_id = getattr(tc, "id", None)
-                                tc_fn = getattr(tc, "function", None)
-                                if tc_id and tc_id not in seen_tool_ids:
-                                    seen_tool_ids.add(tc_id)
-                                    await _emit(
-                                        {
-                                            "type": "tool_use_start",
-                                            "tool_name": getattr(tc_fn, "name", "")
-                                            if tc_fn
-                                            else "",
-                                            "call_id": tc_id,
-                                        }
-                                    )
-                                if tc_fn and getattr(tc_fn, "arguments", None):
-                                    await _emit(
-                                        {
-                                            "type": "tool_use_delta",
-                                            "delta": tc_fn.arguments,
-                                            "call_id": tc_id or "",
-                                        }
-                                    )
+                            await _emit_tool_call_events(delta.tool_calls, seen_tool_ids, _emit)
 
                     await _emit({"type": "message_stop"})
                     # Final progress tick — we have a complete response to return.
@@ -1918,7 +1953,9 @@ class LLMClient:
                     # reach the breaker, so it can open and never clear.
                     get_model_breaker().record_success(model)
                     _record_execution_mode(model)
-                    return litellm.stream_chunk_builder(chunks)
+                    rebuilt = litellm.stream_chunk_builder(chunks)
+                    merge_streamed_reasoning_details(rebuilt, streamed_reasoning_details)
+                    return rebuilt
                 except TimeoutError as te:
                     self._handle_model_error(
                         te,

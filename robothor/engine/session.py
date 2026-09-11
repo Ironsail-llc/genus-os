@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.models import AgentRun, RunStatus, RunStep, StepType, TriggerType
+from robothor.engine.reasoning_replay import PRODUCER_MODEL_KEY, REASONING_FIELDS
 
 if TYPE_CHECKING:
     from robothor.engine.todolist import TodoList
@@ -44,6 +45,11 @@ ASSISTANT_TURN_MAX_CHARS = 2500
 #: Budget for the whole serialised turn, with headroom under the writer's cap
 #: for ``role``, ``tool_calls`` and JSON punctuation.
 _ASSISTANT_TURN_MAX_SERIALISED = 3500
+
+#: Keys the shrink loop in ``_capped_turn`` cannot trim, so they are dropped
+#: instead: an unbounded reasoning blob would otherwise spend the whole budget
+#: and evict the turn's tool calls. See robothor/engine/reasoning_replay.py.
+_NOT_PERSISTED_ON_A_TURN: frozenset[str] = frozenset({*REASONING_FIELDS, PRODUCER_MODEL_KEY})
 
 
 def _recording_assistant_turns() -> bool:
@@ -73,8 +79,18 @@ def _capped_turn(message: dict[str, Any]) -> dict[str, Any]:
     is exactly the wrong conclusion when diagnosing a run.
 
     Sized to survive the step writer intact: see ``ASSISTANT_TURN_MAX_CHARS``.
+
+    The provider's reasoning fields and the ``_model`` tag are dropped rather
+    than persisted: the shrink loop below can only trim ``content`` and tool
+    arguments, so an unbounded reasoning blob would push the whole turn past
+    the writer's cap and take the tool calls with it. The turn is stored to
+    explain the run, and the reasoning it explains is already in ``content``.
     """
-    turn: dict[str, Any] = {key: deepcopy(value) for key, value in message.items()}
+    turn: dict[str, Any] = {
+        key: deepcopy(value)
+        for key, value in message.items()
+        if key not in _NOT_PERSISTED_ON_A_TURN
+    }
 
     content = turn.get("content")
     if content is not None and not isinstance(content, str):

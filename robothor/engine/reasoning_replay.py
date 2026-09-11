@@ -43,6 +43,18 @@ REASONING_FIELDS: Final[tuple[str, ...]] = (
 PRODUCER_MODEL_KEY: Final = "_model"
 
 
+#: OpenRouter routing hints, not different models: ``…-v4-flash:free`` and
+#: ``…-v4-flash`` are one model reached two ways. Local Ollama tags use the same
+#: colon syntax for genuinely different weights (``qwen3:8b`` vs ``qwen3:32b``),
+#: so the suffix is only stripped for non-local ids.
+_VARIANT_SUFFIXES: Final[frozenset[str]] = frozenset(
+    {"free", "nitro", "floor", "extended", "online", "thinking"}
+)
+
+#: Model ids whose colon segment is a weight tag, never a routing variant.
+_LOCAL_PREFIXES: Final[tuple[str, ...]] = ("ollama_chat/", "ollama/")
+
+
 def _normalize_model_id(model: str) -> str:
     """Collapse a model id to a provider/format-agnostic core for comparison.
 
@@ -50,8 +62,21 @@ def _normalize_model_id(model: str) -> str:
     often with a trailing date or dashes-for-dots, so an exact compare against
     the id the engine dispatched on would never match and the reasoning would
     be stripped on every turn — i.e. the bug this module exists to fix.
+
+    The imprecision is deliberate and worth naming: this collapses the provider
+    prefix and any dated snapshot, so two models that differ ONLY by routing
+    prefix or release date compare equal (``bedrock/anthropic.claude-opus-4-7``
+    == ``claude-opus-4-7-20260416``). That is the right trade for both callers —
+    "did the primary answer?" and "may this reasoning go back?" — but it means
+    this is not an identity function: never use it to pick a model, price one,
+    or key a cache.
     """
-    core = (model or "").strip().lower().rsplit("/", 1)[-1]
+    raw = (model or "").strip().lower()
+    core = raw.rsplit("/", 1)[-1]
+    if not raw.startswith(_LOCAL_PREFIXES):
+        head, sep, tail = core.rpartition(":")
+        if sep and head and tail in _VARIANT_SUFFIXES:
+            core = head
     core = re.sub(r"[-_]?\d{6,}$", "", core)  # trailing date/build stamp
     return re.sub(r"[.\-_\s]", "", core)
 
@@ -60,6 +85,30 @@ def same_model(a: str, b: str) -> bool:
     """True when two model ids name the same model across routing spellings."""
     normalized = _normalize_model_id(a)
     return bool(normalized) and normalized == _normalize_model_id(b)
+
+
+def merge_streamed_reasoning_details(response: Any, details: list[Any]) -> None:
+    """Put streamed ``reasoning_details`` back on a rebuilt message, in place.
+
+    litellm's ``stream_chunk_builder`` combines ``reasoning_content`` and drops
+    every other reasoning field (probed on 1.97.0), so without this the
+    interactive path replays strictly fewer fields than a scheduled run of the
+    same agent against the same model.
+
+    Best-effort by design: a rebuilt response the engine cannot annotate is
+    still a complete answer, and losing the run over a bookkeeping field would
+    be worse than losing the field.
+    """
+    if not details:
+        return
+    try:
+        message = response.choices[0].message
+    except (AttributeError, IndexError, TypeError):
+        return
+    try:
+        message.reasoning_details = details
+    except (AttributeError, TypeError, ValueError):
+        return
 
 
 def capture_reasoning_fields(message: Any) -> dict[str, Any]:
