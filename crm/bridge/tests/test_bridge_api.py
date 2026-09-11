@@ -30,14 +30,18 @@ async def test_live_does_not_check_dependencies(test_client, mock_http_client):
 
 
 @pytest.mark.asyncio
-async def test_ready_checks_crm_and_orchestrator(test_client, mock_http_client):
+async def test_ready_checks_crm_and_orchestrator(test_client, mock_http_client, monkeypatch):
     mock_http_client.get = AsyncMock(return_value=MagicMock(spec=httpx.Response, status_code=200))
+    # Pinned, not inherited: the sso_secret check reads the process environment,
+    # which is set on the operator's box and unset in CI — the same red-here /
+    # green-there trap already documented in test_auth_endpoint.py.
+    monkeypatch.setenv("GENUS_BRIDGE_SSO_SECRET", "dashboard-shared-secret")
 
     with patch("robothor.crm.dal.check_health", return_value={"status": "ok"}):
         r = await test_client.get("/ready")
 
     assert r.status_code == 200
-    assert r.json()["checks"] == {"crm": "ok", "memory": "ok"}
+    assert r.json()["checks"] == {"crm": "ok", "memory": "ok", "sso_secret": "ok"}
     mock_http_client.get.assert_awaited_once_with("http://localhost:9099/ready")
 
 

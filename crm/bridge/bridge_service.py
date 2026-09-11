@@ -110,6 +110,12 @@ async def lifespan(app: FastAPI):
     from robothor.auth.runtime import validate_auth_configuration
 
     validate_auth_configuration(bind_host=os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1"))
+    # Say at boot, once, whether this process can complete a sign-in at all.
+    # Outside production the missing secret is not fatal (dev/loopback modes do
+    # not use the SSO exchange), so this is a loud log line rather than a raise.
+    from routers.auth import sso_secret_present
+
+    sso_secret_present()
     http_client = httpx.AsyncClient(timeout=30.0)
     trigger_task = asyncio.create_task(_routine_trigger_loop())
     yield

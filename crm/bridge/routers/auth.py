@@ -12,6 +12,7 @@ its own JWT).
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 from typing import Any
 
@@ -24,7 +25,54 @@ from robothor.auth.deps import get_current_user
 from robothor.auth.tokens import REFRESH_TTL_SECONDS
 from robothor.constants import DEFAULT_TENANT
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+SSO_SECRET_ENV = "GENUS_BRIDGE_SSO_SECRET"
+
+# Raised at most once per outage rather than once per request: a login storm
+# against a secretless bridge would otherwise bury the line that explains it.
+_sso_secret_alarm_raised = False
+
+
+def reset_sso_secret_alarm() -> None:
+    """Re-arm the once-only alarm. For tests; production never calls it."""
+    global _sso_secret_alarm_raised
+    _sso_secret_alarm_raised = False
+
+
+def sso_secret_present() -> bool:
+    """Is the dashboard↔bridge shared secret configured?
+
+    Logs once, at ERROR, the first time it is found missing. The refusal in
+    ``_sso_secret_ok`` was already correct — fail-closed — but silent: on
+    2026-09-03 the bridge started twelve seconds after a reboot, before the
+    engine's ``ExecStartPre`` had decrypted ``/run/robothor/secrets.env``, and
+    its ``EnvironmentFile=-`` is optional. It then refused every SSO exchange
+    for eight days with nothing in the journal, /health or /ready to say why.
+    """
+    global _sso_secret_alarm_raised
+    if os.environ.get(SSO_SECRET_ENV):
+        # Re-arm, so a secret that is later lost is reported again.
+        _sso_secret_alarm_raised = False
+        return True
+    if not _sso_secret_alarm_raised:
+        _sso_secret_alarm_raised = True
+        logger.error(
+            "%s is not set: every SSO exchange will be refused with 403 and no user "
+            "can sign in. It is decrypted into /run/robothor/secrets.env — check that "
+            "robothor-secrets.service ran before this process started.",
+            SSO_SECRET_ENV,
+        )
+    return False
+
+
+def sso_secret_readiness_check() -> str:
+    """Readiness contract string for the shared secret ("ok" / "error:...")."""
+    if sso_secret_present():
+        return "ok"
+    return f"error:{SSO_SECRET_ENV}-not-set"
 
 
 class SsoExchangeRequest(BaseModel):
@@ -46,8 +94,10 @@ class LogoutRequest(BaseModel):
 
 
 def _sso_secret_ok(provided: str | None) -> bool:
-    secret = os.environ.get("GENUS_BRIDGE_SSO_SECRET")
-    if not secret or provided is None:
+    if not sso_secret_present():
+        return False
+    secret = os.environ[SSO_SECRET_ENV]
+    if provided is None:
         return False
     return hmac.compare_digest(provided, secret)
 
