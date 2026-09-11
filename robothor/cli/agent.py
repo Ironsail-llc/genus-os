@@ -284,6 +284,11 @@ def _cmd_agent_install(args: argparse.Namespace) -> int:
 
     # Single agent mode
     source = args.source
+    if not source:
+        print(
+            "Nothing to install: give a source (template path or agent ID) or use --preset <group>."
+        )
+        return 1
     source_path = Path(source)
     hub_source: tuple[str, str] | None = None
 
