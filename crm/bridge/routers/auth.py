@@ -277,6 +277,9 @@ _NOT_FOUND = JSONResponse({"error": "Not found"}, status_code=404)
 _UNAUTHORIZED = JSONResponse({"error": local_login.GENERIC_FAILURE}, status_code=401)
 _THROTTLED = JSONResponse({"error": "too many attempts"}, status_code=429)
 _BAD_REQUEST = JSONResponse({"error": "invalid request"}, status_code=422)
+_SERVICE_REFUSED = JSONResponse(
+    {"error": "service credentials cannot manage human credentials"}, status_code=403
+)
 # Names the policy, never the submitted value.
 _WEAK_PASSWORD = JSONResponse(
     {"error": f"password must be at least {local_login.MIN_PASSWORD_LENGTH} characters"},
@@ -440,11 +443,32 @@ def local_login_route(body: _LoginBody, request: Request) -> dict[str, Any] | JS
     return {**result.tokens, "mfa_setup_required": result.mfa_setup_required}
 
 
-def _verified_caller(request: Request) -> Any | None:
+def _caller_is_service(request: Request) -> bool:
+    """Whether this request carries a verified SERVICE (agent) token."""
     try:
-        return get_current_user(request)
+        return bool(getattr(get_current_user(request), "is_service", False))
+    except Exception:
+        return False
+
+
+def _verified_caller(request: Request) -> Any | None:
+    """The verified human behind this request, or None.
+
+    A *service* token is treated as no caller at all on these routes. It has no
+    password and no authenticator, so there is nothing here it could legitimately
+    manage — and the middleware deliberately exempts ``/api/auth/*`` from its
+    scope checks, which leaves the agent-capability manifest as the only other
+    thing in the way. That manifest is instance-owned and its ``default_policy``
+    may be ``allow``, so an appliance could ship an agent able to POST
+    /api/auth/password. Refusing here does not depend on anyone's configuration.
+    """
+    try:
+        ctx = get_current_user(request)
     except Exception:
         return None
+    if getattr(ctx, "is_service", False):
+        return None
+    return ctx
 
 
 @router.post("/password", response_model=None)
@@ -452,6 +476,8 @@ def change_password_route(body: _PasswordBody, request: Request) -> dict[str, An
     """Change the caller's own password. Requires the current one."""
     if _local_login_off():
         return _NOT_FOUND
+    if _caller_is_service(request):
+        return _SERVICE_REFUSED
     ctx = _verified_caller(request)
     if ctx is None:
         return JSONResponse({"error": "authentication required"}, status_code=401)
@@ -492,6 +518,8 @@ def mfa_enroll_route(request: Request) -> dict[str, Any] | JSONResponse:
     """
     if _local_login_off():
         return _NOT_FOUND
+    if _caller_is_service(request):
+        return _SERVICE_REFUSED
     ctx = _verified_caller(request)
     if ctx is None:
         return JSONResponse({"error": "authentication required"}, status_code=401)
@@ -514,6 +542,8 @@ def mfa_confirm_route(body: _MfaCodeBody, request: Request) -> dict[str, Any] | 
     """Turn MFA on once the caller proves the pending secret arrived."""
     if _local_login_off():
         return _NOT_FOUND
+    if _caller_is_service(request):
+        return _SERVICE_REFUSED
     ctx = _verified_caller(request)
     if ctx is None:
         return JSONResponse({"error": "authentication required"}, status_code=401)
@@ -538,6 +568,8 @@ def mfa_disable_route(body: _MfaDisableBody, request: Request) -> dict[str, Any]
     on its own cannot strip the second factor."""
     if _local_login_off():
         return _NOT_FOUND
+    if _caller_is_service(request):
+        return _SERVICE_REFUSED
     ctx = _verified_caller(request)
     if ctx is None:
         return JSONResponse({"error": "authentication required"}, status_code=401)

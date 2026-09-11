@@ -280,6 +280,61 @@ async def test_password_change_succeeds(test_client):
     assert change.call_args[0][0] == "uid-1"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/auth/password", {"current_password": "x" * 12, "new_password": "y" * 14}),
+        ("/api/auth/mfa/enroll", {}),
+        ("/api/auth/mfa/confirm", {"code": "123456"}),
+        ("/api/auth/mfa/disable", {"password": "x" * 12, "code": "123456"}),
+    ],
+)
+async def test_a_service_token_cannot_touch_human_credentials(test_client, path, body):
+    """A service principal has no password and no authenticator to manage.
+
+    Two independent controls refuse it, which is the point: the capabilities
+    manifest (instance-owned, and its ``default_policy`` may be ``allow``), and
+    the handler's own check — pinned separately below, against the router
+    mounted WITHOUT the middleware, so that test cannot pass on the middleware's
+    refusal and certify a guard it never reached.
+    """
+    from robothor.auth import tokens
+
+    token = tokens.issue_service_token(
+        "email-classifier", "default", agent_id="email-classifier", scopes=["*"]
+    )
+    r = await test_client.post(path, json=body, headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/auth/password", {"current_password": "x" * 12, "new_password": "y" * 14}),
+        ("/api/auth/mfa/enroll", {}),
+        ("/api/auth/mfa/confirm", {"code": "123456"}),
+        ("/api/auth/mfa/disable", {"password": "x" * 12, "code": "123456"}),
+    ],
+)
+def test_the_handler_itself_refuses_a_service_token(path, body):
+    """The middleware is not in this app, so only the route's own guard can
+    produce this refusal."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers.auth import router
+
+    from robothor.auth import tokens
+
+    bare = FastAPI()
+    bare.include_router(router)
+    token = tokens.issue_service_token("svc-1", "default", agent_id="svc-1", scopes=["*"])
+    with TestClient(bare) as client:
+        r = client.post(path, json=body, headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 403
+    assert r.json() == {"error": "service credentials cannot manage human credentials"}
+
+
 # ── MFA enroll / confirm / disable ───────────────────────────────────
 
 
