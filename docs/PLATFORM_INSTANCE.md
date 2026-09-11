@@ -40,6 +40,9 @@ Is it personal data (name, email, phone, address)?
 
 Is it an API key, token, or password?
   → .env or vault (instance, never git)
+    vault keys are named by robothor/vault/naming.py, never by hand:
+      providers/<provider-id>/api_key[_<N>]   LLM credentials, N >= 2 for spares
+      channels/<channel>/<field>              channel tokens and secrets
 
 Is it an agent configuration (schedule, model, tools)?
   → docs/agents/<name>.yaml (instance)

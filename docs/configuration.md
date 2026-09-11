@@ -78,6 +78,37 @@ responses are retried up to 3 attempts with jittered exponential backoff
 timeouts and network errors get one retry; other errors fall back to local
 immediately.
 
+### Provider keys
+
+Five providers can hold credentials: `openrouter`, `anthropic`, `openai`,
+`gemini`, `deepseek`. Each resolves **vault-first, then environment**, slot by
+slot — a key written from the Settings page or the setup wizard wins the slot
+it was written to, while a spare left in the shell keeps working.
+
+| Slot | Vault key | Environment variable |
+|------|-----------|----------------------|
+| 1 (primary) | `providers/<id>/api_key` | `<PROVIDER>_API_KEY` |
+| 2+ (spare) | `providers/<id>/api_key_<N>` | `<PROVIDER>_API_KEY_<N>` |
+
+From a terminal:
+
+```
+genus vault set providers/openrouter/api_key sk-or-v1-primary
+genus vault set providers/openrouter/api_key_2 sk-or-v1-spare
+```
+
+A running engine picks up a vault write on `POST /api/admin/secrets/reload`
+(what the Settings page calls after a save) or on `SIGHUP`; neither cancels
+in-flight work, so no restart is needed. An instance whose vault has no master
+key resolves from the environment only and says so once at INFO — the
+credential store is optional, and an engine that could not make an LLM call
+because it is empty would be worse than no vault at all.
+
+Secrets are write-only end to end. `GET /api/providers` reports
+`{configured, source, fingerprint, state, updated_at}` per slot and never a
+value, and the test connection's error text is scrubbed of every credential
+the provider might have echoed back.
+
 ### Credential pools
 
 Every model in a fallback chain authenticates with the same provider key, so

@@ -247,7 +247,11 @@ async def _run_test_connection(
             temperature=0.0,
             timeout=TEST_TIMEOUT_SECONDS,
             max_retries=1,
-            api_key=api_key,
+            # SecretKey, not str: this value is bound into the kwargs dict that
+            # litellm raises through, and structlog's console renderer prints
+            # every frame local via repr(). That is the exact route by which an
+            # OpenRouter key reached a log on this instance.
+            api_key=key_pool.SecretKey(api_key),
         )
     except Exception as exc:  # noqa: BLE001 - every failure is a reportable result
         elapsed = int((time.monotonic() - started) * 1000)

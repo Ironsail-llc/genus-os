@@ -57,8 +57,11 @@ PERIODIC_QUOTA_COOLDOWN_SECONDS = float(
 )
 
 #: Numbered siblings are walked from _2 upward. The ceiling only stops a
-#: pathological environment from being scanned forever.
+#: pathological environment from being scanned forever. Exported as
+#: ``MAX_KEY_SLOTS`` so a writer can refuse a slot this walk would never reach
+#: rather than storing a credential nothing will ever dial.
 _MAX_POOL_KEYS = 16
+MAX_KEY_SLOTS = _MAX_POOL_KEYS
 
 
 class SecretKey(str):
