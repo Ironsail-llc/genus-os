@@ -684,12 +684,17 @@ def check_tool_outage(
             FROM agent_tool_events
             WHERE created_at > NOW() - make_interval(days => %(lookback_days)s)
               AND tool_name IS NOT NULL
+              AND (error_type IS NULL OR error_type <> %(sandbox_denied_type)s)
             GROUP BY tool_name
             HAVING COUNT(*) FILTER (
                 WHERE created_at > NOW() - make_interval(hours => %(hours)s)
             ) > 0
             """,
-            {"hours": window_hours, "lookback_days": lookback_days},
+            {
+                "hours": window_hours,
+                "lookback_days": lookback_days,
+                "sandbox_denied_type": SANDBOX_DENIED_ERROR_TYPE,
+            },
         )
         rows = [dict(r) for r in cur.fetchall()]
 

@@ -376,3 +376,79 @@ class TestCheckToolDegradationExcludesSandboxDenials:
 
         assert len(flagged) == 1
         assert flagged[0]["tool_name"] == "write_file"
+
+
+class TestCheckToolOutageExcludesSandboxDenials:
+    """Same false alarm as TestCheckToolDegradationExcludesSandboxDenials, but
+    over check_tool_outage's 7-day window: a low-traffic tool whose only
+    calls in the window are nightly benchmark-sandbox refusals would read as
+    ~totally dead and escalate to a critical page, for a tool nothing is
+    actually wrong with.
+    """
+
+    class _Cur:
+        def __init__(self, rows, sink):
+            self._rows = rows
+            self._sink = sink
+
+        def execute(self, sql, params=None):
+            self._sink.append((sql, params))
+
+        def fetchall(self):
+            return self._rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class _Conn:
+        def __init__(self, rows, sink):
+            self._rows = rows
+            self._sink = sink
+
+        def cursor(self, *a, **k):
+            return TestCheckToolOutageExcludesSandboxDenials._Cur(self._rows, self._sink)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def test_the_sql_excludes_sandbox_denied_rows(self) -> None:
+        sink: list = []
+        conn = self._Conn([], sink)
+        with patch("robothor.db.connection.get_connection", return_value=conn):
+            detectors.check_tool_outage()
+
+        sql, params = sink[0]
+        assert "error_type" in sql and ("<>" in sql or "!=" in sql or "NOT IN" in sql.upper()), (
+            "the SQL must filter agent_tool_events on error_type, or a tool "
+            "correctly refused by the benchmark sandbox pages as a dead dependency"
+        )
+        assert "sandbox_denied" in params.values(), (
+            "the excluded error_type must be sandbox_denied, bound as a named parameter"
+        )
+
+    def test_a_tool_whose_only_calls_are_sandbox_denials_is_not_an_outage(self) -> None:
+        """The row the (fixed) SQL returns once sandbox_denied rows are
+        excluded entirely: zero real calls in the window, so it never even
+        reaches the min_calls floor."""
+        sink: list = []
+        rows = [
+            {
+                "tool_name": "create_task",
+                "total": 0,
+                "failures": 0,
+                "error_type": None,
+                "last_success_at": None,
+                "outage_days": None,
+            }
+        ]
+        conn = self._Conn(rows, sink)
+        with patch("robothor.db.connection.get_connection", return_value=conn):
+            out = detectors.check_tool_outage()
+
+        assert out == [], "a tool with zero real calls must never read as an outage"

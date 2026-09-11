@@ -715,10 +715,11 @@ def get_tool_stats(hours: int = 24) -> list[dict[str, Any]]:
                 PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) as p95_duration_ms
             FROM agent_tool_events
             WHERE created_at > NOW() - INTERVAL '%s hours'
+              AND (error_type IS NULL OR error_type <> %s)
             GROUP BY tool_name
             ORDER BY total_calls DESC
             """,
-            (hours,),
+            (hours, SANDBOX_DENIED_ERROR_TYPE),
         )
         return [dict(r) for r in cur.fetchall()]
 
