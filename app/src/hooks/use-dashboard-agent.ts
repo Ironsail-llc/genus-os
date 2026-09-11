@@ -15,6 +15,12 @@ const DEBOUNCE_MS = 300;
  *
  * The current dashboard stays visible throughout — only a spinner
  * overlay indicates work in progress.
+ *
+ * Mounted only with the AI canvas, which the operator opens on request: a chat
+ * reply does not regenerate a canvas while that view is closed. This hook owns
+ * the "updating" flag from end to end — it raises it when a request actually
+ * goes out and clears it on every exit — so the flag can never outlive the
+ * work, or be left set with nobody mounted to clear it.
  */
 export function useDashboardAgent() {
   const {
@@ -33,6 +39,10 @@ export function useDashboardAgent() {
       abortRef.current?.abort();
       const abort = new AbortController();
       abortRef.current = abort;
+
+      // The spinner goes up here, next to the request it describes, and every
+      // path below puts it down again.
+      setIsUpdating(true);
 
       try {
         const body: Record<string, unknown> = { messages };

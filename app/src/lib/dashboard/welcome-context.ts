@@ -8,6 +8,14 @@ import { getServiceUrl } from "@/lib/services/registry";
 import { OWNER_NAME } from "@/lib/config";
 const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
 const ORCHESTRATOR_URL = getServiceUrl("orchestrator") || "http://localhost:9099";
+const VISION_URL = getServiceUrl("vision") || "http://localhost:8600";
+
+// The operator's credential goes only to backends that authenticate it —
+// the same gate `conversation-context.ts` applies, so a URL that resolves
+// anywhere else can never carry the token.
+const AUTHENTICATED_ORIGINS = new Set(
+  [BRIDGE_URL, ORCHESTRATOR_URL, VISION_URL].map((u) => new URL(u).origin)
+);
 
 interface WelcomeContext {
   timestamp: string;
@@ -75,7 +83,7 @@ async function fetchHealth(authHeaders: Record<string, string>) {
     const checks = await Promise.allSettled([
       fetchJson(authHeaders, `${BRIDGE_URL}/health`),
       fetchJson(authHeaders, `${ORCHESTRATOR_URL}/health`),
-      fetchJson(authHeaders, `${getServiceUrl("vision") || "http://localhost:8600"}/health`),
+      fetchJson(authHeaders, `${VISION_URL}/health`),
     ]);
     const names = ["bridge", "orchestrator", "vision"];
     const services = checks.map((c, i) => ({
@@ -162,9 +170,10 @@ async function fetchJson(
   if (target.origin !== base.origin) {
     throw new Error("Bad gateway path");
   }
+  const credentials = AUTHENTICATED_ORIGINS.has(target.origin) ? authHeaders : {};
   const res = await fetch(target.toString(), {
     ...options,
-    headers: { "Content-Type": "application/json", ...authHeaders, ...options?.headers },
+    headers: { "Content-Type": "application/json", ...credentials, ...options?.headers },
     signal: AbortSignal.timeout(timeoutMs),
   });
   return res.json();

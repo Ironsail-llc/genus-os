@@ -93,6 +93,25 @@ describe("DefaultDashboard", () => {
     expect(error.textContent).toContain("/api/bridge/api/conversations");
   });
 
+  it("reports a request that never got an answer, rather than showing a confident zero", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/actions/execute")) {
+          throw new TypeError("Failed to fetch");
+        }
+        return jsonResponse({ status: "ok", services: [] });
+      }),
+    );
+    renderDashboard();
+
+    const tasksError = await screen.findByTestId("section-error-tasks");
+    expect(tasksError.textContent).toMatch(/no response/i);
+    expect(tasksError.textContent).toContain("/api/actions/execute");
+    expect((await screen.findByTestId("section-error-agents")).textContent).toMatch(/no response/i);
+  });
+
   it("shows no section error while every call succeeds", async () => {
     renderDashboard();
     await waitFor(() => expect(screen.getByTestId("metric-summary")).toBeTruthy());

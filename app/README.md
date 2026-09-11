@@ -18,6 +18,11 @@ model call. The generated canvas is one click away ("Generate a view with AI"),
 and the Canvas tab always says what it is and offers the action rather than
 presenting a blank iframe.
 
+**Behaviour change:** because `useDashboardAgent` lives with the AI canvas, a
+chat reply no longer regenerates a canvas unless that view is open. The
+"updating" flag is raised only while a mounted agent has a regeneration in
+flight, so the canvas never opens onto a spinner for work nobody is doing.
+
 Every section degrades honestly: a data call that fails names the endpoint and
 the status ("Conversations unavailable (401)") instead of rendering an empty
 card. Server-side data fetches for the generation prompt

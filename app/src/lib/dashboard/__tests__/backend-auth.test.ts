@@ -88,6 +88,46 @@ describe("fetchDataForNeeds", () => {
   });
 });
 
+describe("the per-caller data cache", () => {
+  const asCaller = (n: number) =>
+    mockAuth.mockResolvedValue({ user: { id: `user-${n}` }, bridgeAccess: `token-${n}` });
+
+  it("serves a repeat need for the same caller without asking the bridge again", async () => {
+    const { fetchDataForNeeds, clearDataCache } = await import("../conversation-context");
+    clearDataCache();
+
+    asCaller(1);
+    await fetchDataForNeeds(["conversations"]);
+    const afterFirst = callsTo(fetchMock, "/api/conversations").length;
+    await fetchDataForNeeds(["conversations"]);
+
+    expect(callsTo(fetchMock, "/api/conversations").length).toBe(afterFirst);
+  });
+
+  it("evicts the oldest partition once the cap is reached, so it cannot grow without bound", async () => {
+    const { fetchDataForNeeds, clearDataCache } = await import("../conversation-context");
+    clearDataCache();
+
+    asCaller(0);
+    await fetchDataForNeeds(["conversations"]);
+    const afterFirstCaller = callsTo(fetchMock, "/api/conversations").length;
+
+    // Fill past the cap with distinct callers.
+    for (let i = 1; i <= 200; i++) {
+      asCaller(i);
+      await fetchDataForNeeds(["conversations"]);
+    }
+
+    // The first caller's entry is gone: asking again reaches the bridge.
+    asCaller(0);
+    await fetchDataForNeeds(["conversations"]);
+
+    const calls = callsTo(fetchMock, "/api/conversations");
+    expect(calls.length).toBe(afterFirstCaller + 201);
+    expect(headersOf(calls[calls.length - 1]).Authorization).toBe("Bearer token-0");
+  });
+});
+
 describe("fetchWelcomeContext", () => {
   it("sends the caller's bearer token to the bridge", async () => {
     const { fetchWelcomeContext } = await import("../welcome-context");

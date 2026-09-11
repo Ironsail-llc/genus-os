@@ -87,6 +87,12 @@ export function useAgents() {
         else if (a.status === "sleeping") s.sleeping++;
       }
       setSummary(s);
+    } catch {
+      // The request never got an answer (offline, connection refused). Status
+      // 0 means "no response" — reported, not shown as zero healthy agents.
+      if (id === fetchIdRef.current) {
+        setError({ endpoint: "/api/actions/execute", status: 0 });
+      }
     } finally {
       if (id === fetchIdRef.current) {
         setIsLoading(false);

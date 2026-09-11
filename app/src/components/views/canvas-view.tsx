@@ -158,7 +158,7 @@ export function CanvasView({ visible = true }: { visible?: boolean }) {
 
       {visible && !code && !generating && generationError && (
         <div
-          data-testid="canvas-error"
+          data-testid="canvas-generation-error"
           className="flex flex-col items-center gap-3 rounded-md border border-destructive/25 bg-destructive/10 px-4 py-8 text-center"
         >
           <AlertCircle aria-hidden className="size-6 text-destructive" strokeWidth={1.5} />

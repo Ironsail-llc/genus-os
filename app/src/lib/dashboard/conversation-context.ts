@@ -60,6 +60,11 @@ const CACHE_TTL: Record<string, number> = {
   overview:      30_000,
 };
 
+// The cache is keyed per caller, so its key space grows with the number of
+// operators the process has served — not with the fixed set of data needs.
+// Bound it: sweep what has expired on every write, then evict oldest-first.
+const CACHE_MAX_ENTRIES = 200;
+
 /** Clear all cached data — exposed for testing. */
 export function clearDataCache() { dataCache.clear(); }
 
@@ -78,7 +83,21 @@ function getCached(caller: BackendCaller, key: string): Record<string, unknown> 
 
 function setCache(caller: BackendCaller, key: string, data: Record<string, unknown>) {
   const ttl = CACHE_TTL[key] ?? 60_000;
-  dataCache.set(cacheKey(caller, key), { data, expiresAt: Date.now() + ttl });
+  const now = Date.now();
+
+  for (const [existing, entry] of dataCache) {
+    if (now > entry.expiresAt) dataCache.delete(existing);
+  }
+
+  // Re-insert so the entry moves to the back of the eviction order.
+  dataCache.delete(cacheKey(caller, key));
+  dataCache.set(cacheKey(caller, key), { data, expiresAt: now + ttl });
+
+  while (dataCache.size > CACHE_MAX_ENTRIES) {
+    const oldest = dataCache.keys().next();
+    if (oldest.done) break;
+    dataCache.delete(oldest.value);
+  }
 }
 
 export interface ConversationContext {

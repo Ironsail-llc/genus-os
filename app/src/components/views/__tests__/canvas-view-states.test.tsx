@@ -46,7 +46,9 @@ describe("CanvasView with nothing to render", () => {
     );
     render(<CanvasView visible />);
 
-    const error = await screen.findByTestId("canvas-error");
+    // Distinct from live-canvas's own `canvas-error`: these are two different
+    // panes and a shared id would make either assertion ambiguous.
+    const error = await screen.findByTestId("canvas-generation-error");
     expect(error.textContent).toContain("Dashboard service temporarily unavailable");
     expect(screen.getByRole("button", { name: /(generate|retry)/i })).toBeTruthy();
     expect(screen.queryByTestId("canvas-srcdoc-renderer")).toBeNull();

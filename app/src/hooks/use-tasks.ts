@@ -83,6 +83,12 @@ export function useTasks(options: UseTasksOptions = {}) {
         setError(null);
         setTasks(json.data?.tasks || []);
       }
+    } catch {
+      // The request never got an answer (offline, connection refused). Status
+      // 0 means "no response" — reported, not swallowed into an empty board.
+      if (id === fetchIdRef.current) {
+        setError({ endpoint: "/api/actions/execute", status: 0 });
+      }
     } finally {
       if (id === fetchIdRef.current) {
         setIsLoading(false);

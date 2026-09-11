@@ -1,12 +1,20 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { ArrowLeft, Sparkles } from "lucide-react";
-import { LiveCanvas } from "@/components/canvas/live-canvas";
 import { ComponentRenderer } from "@/components/component-renderer";
 import { DefaultDashboard } from "@/components/business/default-dashboard";
 import { Button } from "@/components/ui/button";
 import { useVisualState } from "@/hooks/use-visual-state";
+
+// The generated canvas and everything it drags in (the srcdoc renderer, the
+// dashboard agent, the code validator) stay out of the Home bundle: they load
+// when the operator asks for the AI view, which is the only time they run.
+const LiveCanvas = dynamic(
+  () => import("@/components/canvas/live-canvas").then((m) => m.LiveCanvas),
+  { ssr: false },
+);
 
 interface DashboardViewProps {
   visible: boolean;

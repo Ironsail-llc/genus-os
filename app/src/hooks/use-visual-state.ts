@@ -182,9 +182,19 @@ export function VisualStateProvider({
     setDashboardCodeType(null);
   }, []);
 
+  // Announces a conversation turn. It does NOT raise `isUpdating`: that flag
+  // drives the canvas spinner and is cleared only by `useDashboardAgent`, so
+  // only the agent may raise it, and only around a request it actually has in
+  // flight.
+  //
+  // Behaviour change (home is the real-data dashboard now): the AI canvas —
+  // and with it `useDashboardAgent` — mounts only when the operator asks for
+  // it, so a chat reply no longer regenerates a canvas while that view is
+  // closed. Raising the flag here regardless, as this used to, latched it on
+  // forever with nobody left to clear it: the canvas then opened onto a
+  // permanent "Updating" spinner for work nobody was doing.
   const notifyConversationUpdate = useCallback(
     (messages: Array<{ role: string; content: string }>, agentData?: Record<string, unknown>) => {
-      setIsUpdating(true);
       setPendingMessages(messages);
       setPendingAgentData(agentData && Object.keys(agentData).length > 0 ? agentData : null);
     },

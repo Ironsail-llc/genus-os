@@ -7,7 +7,7 @@ export interface SectionFailure {
   label: string;
   /** The endpoint that answered, e.g. "/api/health". */
   endpoint: string;
-  /** HTTP status, when the call reached the server. */
+  /** HTTP status. Absent or 0 means the request never got an answer. */
   status?: number;
 }
 
@@ -50,7 +50,7 @@ export function SectionError({
     >
       <AlertTriangle aria-hidden className="mt-px size-3.5 shrink-0" strokeWidth={1.75} />
       <span>
-        {failure.label} unavailable ({failure.status ?? "no response"}){" "}
+        {failure.label} unavailable ({failure.status || "no response"}){" "}
         <span className="font-mono text-destructive/80">{failure.endpoint}</span>
       </span>
     </div>
