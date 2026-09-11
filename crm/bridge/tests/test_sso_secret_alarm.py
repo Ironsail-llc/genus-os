@@ -50,6 +50,33 @@ def test_missing_secret_logs_one_error_naming_the_variable(monkeypatch, caplog):
     assert "refused" in message.lower()
 
 
+def test_the_alarm_message_is_a_literal_with_no_arguments(monkeypatch, caplog):
+    """Nothing derived from the secret may reach the logger — not even its
+    variable's NAME.
+
+    CodeQL's py/clear-text-logging-sensitive-data classifies an identifier
+    containing "SECRET" as sensitive by name, so passing a constant called
+    SSO_SECRET_ENV to logger.error failed PR #483 at HIGH severity — despite
+    the constant holding only the spelling of the variable, and the branch
+    being reachable only when the value is empty. Rather than argue the false
+    positive, the logger is only ever handed a literal: a log record with no
+    args cannot carry a value, and that is checkable.
+    """
+    import routers.auth as auth_router
+
+    monkeypatch.delenv(SSO_SECRET_ENV, raising=False)
+
+    with caplog.at_level(logging.ERROR, logger=auth_router.logger.name):
+        auth_router.sso_secret_present()
+
+    record = next(r for r in caplog.records if r.levelno >= logging.ERROR)
+    assert not record.args, (
+        f"the alarm interpolates {record.args!r} — the message must be a single "
+        "literal so no expression touching the secret can flow into the logger"
+    )
+    assert SSO_SECRET_ENV in record.msg
+
+
 def test_the_alarm_does_not_repeat_on_every_exchange(monkeypatch, caplog):
     import routers.auth as auth_router
 

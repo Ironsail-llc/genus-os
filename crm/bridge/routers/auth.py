@@ -29,7 +29,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-SSO_SECRET_ENV = "GENUS_BRIDGE_SSO_SECRET"
+# The NAME of the environment variable — never its value. It is deliberately
+# not interpolated into any log line or response body, and every message below
+# spells it out as a literal instead.
+#
+# CodeQL's py/clear-text-logging-sensitive-data classifies an identifier
+# containing "SECRET" as sensitive by NAME, and failed PR #483 at HIGH severity
+# for passing this constant to logger.error — even though what it holds is the
+# spelling of the variable, and the branch is reachable only when the value is
+# empty. Arguing a false positive with a scanner is a recurring cost; a logger
+# that can only ever be handed literals ends the argument permanently, and
+# test_the_alarm_message_is_a_literal_with_no_arguments keeps it that way.
+_SSO_SECRET_VAR = "GENUS_BRIDGE_SSO_SECRET"
 
 # Raised at most once per outage rather than once per request: a login storm
 # against a secretless bridge would otherwise bury the line that explains it.
@@ -40,6 +51,16 @@ def reset_sso_secret_alarm() -> None:
     """Re-arm the once-only alarm. For tests; production never calls it."""
     global _sso_secret_alarm_raised
     _sso_secret_alarm_raised = False
+
+
+def _sso_secret_is_configured() -> bool:
+    """Whether the shared secret is set and non-empty — and nothing else.
+
+    The single place the value is read for a presence test. It returns a bool,
+    so the secret itself has no path out of this function: no caller, no
+    format string and no log record can reach it.
+    """
+    return bool(os.environ.get(_SSO_SECRET_VAR))
 
 
 def sso_secret_present() -> bool:
@@ -53,17 +74,18 @@ def sso_secret_present() -> bool:
     for eight days with nothing in the journal, /health or /ready to say why.
     """
     global _sso_secret_alarm_raised
-    if os.environ.get(SSO_SECRET_ENV):
+    if _sso_secret_is_configured():
         # Re-arm, so a secret that is later lost is reported again.
         _sso_secret_alarm_raised = False
         return True
     if not _sso_secret_alarm_raised:
         _sso_secret_alarm_raised = True
+        # One literal, no arguments. See the note on _SSO_SECRET_VAR above.
         logger.error(
-            "%s is not set: every SSO exchange will be refused with 403 and no user "
-            "can sign in. It is decrypted into /run/robothor/secrets.env — check that "
-            "robothor-secrets.service ran before this process started.",
-            SSO_SECRET_ENV,
+            "GENUS_BRIDGE_SSO_SECRET is not set: every SSO exchange will be refused "
+            "with 403 and no user can sign in. It is decrypted into "
+            "/run/robothor/secrets.env — check that robothor-secrets.service ran "
+            "before this process started."
         )
     return False
 
@@ -95,7 +117,9 @@ def sso_secret_readiness_check(*, bind_host: str | None = None) -> str:
         required = True
     if not required:
         return "ok"
-    return f"error:{SSO_SECRET_ENV}-not-set"
+    # A literal for the same reason the log line is one — this string is also
+    # served in the /ready payload.
+    return "error:GENUS_BRIDGE_SSO_SECRET-not-set"
 
 
 class SsoExchangeRequest(BaseModel):
@@ -117,12 +141,14 @@ class LogoutRequest(BaseModel):
 
 
 def _sso_secret_ok(provided: str | None) -> bool:
+    """Constant-time comparison. The only place the value is read at all, and
+    it goes straight into ``compare_digest`` — never into a message, a response
+    or a log record."""
     if not sso_secret_present():
         return False
-    secret = os.environ[SSO_SECRET_ENV]
     if provided is None:
         return False
-    return hmac.compare_digest(provided, secret)
+    return hmac.compare_digest(provided, os.environ[_SSO_SECRET_VAR])
 
 
 def _oidc_issuer_allowed(issuer: str) -> bool:
