@@ -425,3 +425,33 @@ def test_explain_a_governed_flag_does_not_ask_for_a_restart(capsys) -> None:
     out = capsys.readouterr().out
     assert "governed: yes" in out
     assert "restart:  not required" in out
+
+
+def test_set_updates_a_key_written_under_its_env_name(tmp_path) -> None:
+    """Either spelling is legal in config.yaml; writing must not make both."""
+    _write_config(
+        tmp_path,
+        "settings:\n  engine:\n    ROBOTHOR_MAX_CONCURRENT_AGENTS: 7\n",
+    )
+    assert (
+        cmd_config(_args(config_command="set", name="ROBOTHOR_MAX_CONCURRENT_AGENTS", value="2"))
+        == 0
+    )
+    text = _config_path(tmp_path).read_text()
+    assert "ROBOTHOR_MAX_CONCURRENT_AGENTS: 2" in text
+    assert "max_concurrent_agents" not in text.replace("ROBOTHOR_MAX_CONCURRENT_AGENTS", "")
+
+    import yaml
+
+    document = yaml.safe_load(text)
+    assert list(document["settings"]["engine"]) == ["ROBOTHOR_MAX_CONCURRENT_AGENTS"]
+
+
+def test_set_does_not_mistake_a_hash_in_a_value_for_a_comment(tmp_path) -> None:
+    _write_config(tmp_path, 'settings:\n  channels:\n    ai_name: "Ada # the first"\n')
+    assert cmd_config(_args(config_command="set", name="ROBOTHOR_AI_NAME", value="Ada")) == 0
+
+    import yaml
+
+    document = yaml.safe_load(_config_path(tmp_path).read_text())
+    assert document["settings"]["channels"]["ai_name"] == "Ada"

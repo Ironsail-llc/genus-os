@@ -80,7 +80,7 @@ def env_name_in_use(record: dict[str, Any]) -> str | None:
     """
     for name in (record["env"], *record["aliases"]):
         if os.environ.get(name, "") != "":
-            return name
+            return str(name)
     return None
 
 

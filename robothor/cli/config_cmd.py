@@ -348,7 +348,21 @@ def _indent_of(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
 
-def _splice(text: str, group: str, field: str, rendered: str) -> str:
+def _inline_comment(stripped: str) -> str:
+    """Any trailing ``# ...`` on a key line, as text to re-append.
+
+    Empty when the line's value is quoted: a ``#`` inside a quoted string is
+    part of the value, and treating it as a comment would move half the old
+    value into a comment on the new line. Not worth a YAML parser -- worth not
+    guessing either.
+    """
+    _key, _, value = stripped.partition(":")
+    if "#" not in value or '"' in value or "'" in value:
+        return ""
+    return "  " + value[value.index("#") :].rstrip()
+
+
+def _splice(text: str, group: str, field: str, rendered: str, names: tuple[str, ...] = ()) -> str:
     """Set ``settings.<group>.<field>`` in ``text``, touching nothing else.
 
     A load-and-dump round trip through PyYAML (the only YAML library this
@@ -357,9 +371,17 @@ def _splice(text: str, group: str, field: str, rendered: str) -> str:
     delete every comment in it. config.yaml is a file operators hand-edit, so
     the edit is textual: find the line, replace the value, leave the rest of
     the bytes exactly as they were.
+
+    ``names`` is every other spelling the field answers to -- its declared
+    environment name and any deprecated alias, all legal keys here because the
+    groups are ``populate_by_name``. An existing key under one of those is
+    UPDATED IN PLACE, keeping the operator's spelling: writing the Python name
+    beside it would leave one field configured twice in one mapping, which is
+    a file whose meaning depends on which key pydantic reads last.
     """
     lines = text.splitlines()
     line = f"{field}: {rendered}"
+    spellings = (field, *names)
 
     # 1. the settings: block
     start = next(
@@ -414,14 +436,12 @@ def _splice(text: str, group: str, field: str, rendered: str) -> str:
     inner = [i for i in range(header + 1, group_end) if lines[i].strip()]
     field_indent = _indent_of(lines[inner[0]]) if inner else step * 2
 
-    # 3. the field within the group
+    # 3. the field within the group, under any spelling it answers to
     for i in inner:
         stripped = lines[i].strip()
-        if _indent_of(lines[i]) == field_indent and stripped.split(":", 1)[0] == field:
-            comment = ""
-            if "#" in stripped:
-                comment = "  " + stripped[stripped.index("#") :].rstrip()
-            lines[i] = f"{' ' * field_indent}{line}{comment}"
+        key = stripped.split(":", 1)[0]
+        if _indent_of(lines[i]) == field_indent and key in spellings:
+            lines[i] = f"{' ' * field_indent}{key}: {rendered}{_inline_comment(stripped)}"
             return "\n".join(lines) + "\n"
 
     insert = group_end
@@ -484,8 +504,9 @@ def _cmd_set(args: argparse.Namespace) -> int:
             [],
             [
                 f"{record['env']} holds a credential. `genus config set` never writes "
-                f"secrets -- they would land in a world-readable config file. Use "
-                f"`genus vault set {record['env'].lower()}` instead."
+                "secrets -- config.yaml is a plain file that gets copied into bug "
+                "reports. Store it with `genus vault set <key>` and give the service "
+                "the key; `genus vault list` shows the naming in use."
             ],
             as_json,
         )
@@ -535,8 +556,9 @@ def _cmd_set(args: argparse.Namespace) -> int:
         text = path.read_text(encoding="utf-8")
     except OSError:
         text = ""
+    spellings = (record["env"], *record["aliases"])
     try:
-        _write_atomically(path, _splice(text, group, field, _render(value)))
+        _write_atomically(path, _splice(text, group, field, _render(value), spellings))
     except OSError as exc:
         return _set_result(False, [], [f"{path}: {exc}"], as_json)
 
@@ -584,6 +606,10 @@ def _telegram_checks() -> list[tuple[str, str, str]]:
             )
         )
     else:
+        # The digits before the colon are the bot's public id -- they are in
+        # every getMe response and identify WHICH bot delivers, which is what
+        # an operator with two instances needs. The half after the colon is
+        # the credential and is never printed.
         checks.append(("telegram:token", "pass", f"bot {head}"))
 
     if not chat:
