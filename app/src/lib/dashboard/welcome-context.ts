@@ -142,10 +142,30 @@ async function fetchCalendar(authHeaders: Record<string, string>) {
   }
 }
 
+/**
+ * Resolve `work`, or give up after `timeoutMs`.
+ *
+ * Every HTTP source here is bounded by an AbortSignal; this bounds the one
+ * that is not. The timer is always cleared, so a fast answer does not leave a
+ * pending handle behind.
+ */
+function withTimeout<T>(work: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+  });
+  return Promise.race([work, expiry]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
+// The event bus is a Redis read, and an unreachable Redis does not fail — its
+// client retries with backoff. Unbounded, that held the welcome route open
+// behind its keepalive for a section the dashboard is happy to skip.
+const EVENT_BUS_TIMEOUT_MS = 2000;
+
 async function fetchEventBusStats() {
   try {
     const { streamLengths } = await import("@/lib/event-bus/redis-client");
-    const streams = await streamLengths();
+    const streams = await withTimeout(streamLengths(), EVENT_BUS_TIMEOUT_MS, "event bus");
     const total = Object.values(streams).reduce((sum, n) => sum + n, 0);
     return { streams, total };
   } catch {

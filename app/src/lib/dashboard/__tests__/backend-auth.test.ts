@@ -11,12 +11,46 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const mockAuth = vi.fn();
 vi.mock("@/lib/auth", () => ({ auth: mockAuth }));
 
+// The welcome context also reads Redis for event-bus counts. Left real, it
+// builds an ioredis client and retries against a server the runner does not
+// have — which is exactly how this file passed on a box with Redis running
+// and timed out in CI without one. No spec here is about Redis, so it is a
+// stub, and any dependency that escapes its stub must fail, not hang.
+const mockStreamLengths = vi.fn(async () => ({ agent: 1, email: 0 }));
+vi.mock("@/lib/event-bus/redis-client", () => ({ streamLengths: mockStreamLengths }));
+
 function jsonResponse(body: unknown, status = 200) {
   return {
     ok: status >= 200 && status < 300,
     status,
     json: async () => body,
   } as Response;
+}
+
+// Every backend path these helpers are allowed to touch. A fetch to anything
+// else is a dependency that escaped the test's control: it throws immediately
+// and is reported after the spec, instead of reaching a real network (or
+// hanging until the runner's timeout).
+const EXPECTED_PATHS = [
+  /\/health$/,
+  /\/api\/conversations/,
+  /\/api\/people/,
+  /\/api\/companies/,
+  /\/query$/,
+  /\/search\?/,
+];
+
+let unexpectedFetches: string[] = [];
+
+function guardedFetch(respond: (url: string) => Response) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!EXPECTED_PATHS.some((pattern) => pattern.test(url))) {
+      unexpectedFetches.push(url);
+      throw new Error(`unexpected fetch: ${url}`);
+    }
+    return respond(url);
+  });
 }
 
 function headersOf(call: unknown[]): Record<string, string> {
@@ -33,16 +67,20 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.clearAllMocks();
   vi.resetModules();
+  unexpectedFetches = [];
   mockAuth.mockResolvedValue({
     user: { id: "user-1" },
     bridgeAccess: "bridge-token-abc",
   });
-  fetchMock = vi.fn(async () => jsonResponse({ data: { payload: [] } }));
+  mockStreamLengths.mockResolvedValue({ agent: 1, email: 0 });
+  fetchMock = guardedFetch(() => jsonResponse({ data: { payload: [] } }));
   vi.stubGlobal("fetch", fetchMock);
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+  expect(unexpectedFetches).toEqual([]);
 });
 
 describe("fetchDataForNeeds", () => {
@@ -61,7 +99,8 @@ describe("fetchDataForNeeds", () => {
     const { fetchDataForNeeds, clearDataCache } = await import("../conversation-context");
     clearDataCache();
 
-    fetchMock.mockResolvedValue(jsonResponse({ results: [] }));
+    // Keep the guard: replace the response, not the interception.
+    fetchMock.mockImplementation(guardedFetch(() => jsonResponse({ results: [] })));
     await fetchDataForNeeds(["web:anything"]);
 
     const calls = callsTo(fetchMock, "/search");
@@ -137,5 +176,23 @@ describe("fetchWelcomeContext", () => {
     const calls = callsTo(fetchMock, "/api/conversations");
     expect(calls.length).toBeGreaterThan(0);
     expect(headersOf(calls[0]).Authorization).toBe("Bearer bridge-token-abc");
+  });
+
+  it("gives up on an event bus that never answers instead of holding the dashboard open", async () => {
+    // Every other source here is bounded — the HTTP calls carry an
+    // AbortSignal.timeout. The Redis read was not, so an unreachable Redis
+    // (its client retries with backoff) held the welcome route open behind a
+    // keepalive with nothing to show for it.
+    mockStreamLengths.mockImplementation(() => new Promise(() => {}));
+    vi.useFakeTimers();
+
+    const { fetchWelcomeContext } = await import("../welcome-context");
+    const pending = fetchWelcomeContext();
+    await vi.advanceTimersByTimeAsync(5_000);
+    const context = await pending;
+
+    expect(context.eventBus).toBeNull();
+    // The sources that did answer are still there.
+    expect(context.inbox).not.toBeNull();
   });
 });
