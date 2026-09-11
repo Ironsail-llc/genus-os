@@ -181,9 +181,13 @@ selectors have moved), `browser_blocked` (challenge/interstitial),
 
 A local-looking query ("… near X", "… in Springfield", a ZIP) also gets up to
 five OpenStreetMap rows under `places`: for a mapped category (coworking,
-cafe/coffee, gym) the place is geocoded once with Nominatim and the amenities
-around it come from Overpass; anything else falls back to a free-text Nominatim
-lookup. Both APIs share one ≤1 request/second courtesy budget.
+cafe/coffee, gym) the place is geocoded once with Nominatim — using exactly the
+words the query gave, never an inferred city or state — and the amenities around
+it come from Overpass; anything else falls back to a free-text Nominatim lookup.
+Both APIs share one ≤1 request/second courtesy budget. When the local path runs
+and finds nothing, the result says why in `places_reason`:
+`geocode_failed:<place>`, `overpass_empty`, `overpass_error`,
+`category_unmapped`, or `place_not_in_query`.
 
 An agent can force one provider with the tool's `provider` argument
 (`searxng`, `browser`, `brave`, `perplexity`); omitting it runs the automatic
