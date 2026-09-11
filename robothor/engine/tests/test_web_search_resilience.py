@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import httpx
 import pytest
@@ -532,7 +533,8 @@ async def test_browser_failures_do_not_log_the_whole_query(
         await _search(http, browser, {"query": LONG_LOCAL_QUERY}, ctx)
 
     logged = " ".join(r.getMessage() for r in caplog.records)
-    assert "bing.com" in logged  # which source failed is still legible
+    logged_hosts = {urlparse(u).hostname for u in re.findall(r"https?://[^\s'\"]+", logged)}
+    assert "www.bing.com" in logged_hosts  # which source failed is still legible
     assert quote_plus(LONG_LOCAL_QUERY) not in logged
     assert LONG_LOCAL_QUERY not in logged
 
