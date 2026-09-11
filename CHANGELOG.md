@@ -1,3 +1,14 @@
+## [1.68.0](https://github.com/Ironsail-llc/genus-os/compare/v1.67.0...v1.68.0) (2026-09-11)
+
+### Features
+
+* **settings:** typed settings model that declares every env var ([#492](https://github.com/Ironsail-llc/genus-os/issues/492)) ([eface8d](https://github.com/Ironsail-llc/genus-os/commit/eface8d8a1f099b038f18202cd59ed4c95d5b1fa))
+
+### Bug Fixes
+
+* **engine:** sandbox refusals are not tool degradation; failures carry a reason ([#493](https://github.com/Ironsail-llc/genus-os/issues/493)) ([93221aa](https://github.com/Ironsail-llc/genus-os/commit/93221aaa6f76973620a564f2a6949c6f267b2161))
+* **tools:** browser search tries Startpage when Bing drops the place ([#491](https://github.com/Ironsail-llc/genus-os/issues/491)) ([749b270](https://github.com/Ironsail-llc/genus-os/commit/749b270ef5ffac8722b441dbb013079fba4d6abf))
+
 ## [1.67.0](https://github.com/Ironsail-llc/genus-os/compare/v1.66.0...v1.67.0) (2026-09-11)
 
 ### Features
