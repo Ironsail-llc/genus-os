@@ -64,10 +64,17 @@ function httpOrigin(candidate: string | null | undefined): string | null {
  *     grants a spoofable header no trust that is not already granted — but it
  *     IS spoofable by anything that can reach the app without passing the
  *     proxy, which is why it ranks below configuration.
- *  3. `request.nextUrl.origin` — last, and NOT a safe default: on a fresh
- *     standalone install this is exactly the bind address that caused the
- *     incident. It is here so a local `next dev` works, not because it is
- *     correct in production.
+ *  3. `request.nextUrl.origin` — a last resort that is, in practice,
+ *     unreachable: every HTTP/1.1 request carries a `Host`, so (2) answers
+ *     first. It is here only so the function is total. It is NOT a safe
+ *     default — on a fresh standalone install it is the bind address, i.e. the
+ *     incident.
+ *
+ * The scheme, when the proxy does not state one, comes from the REQUEST and
+ * not from a literal "https". Hardcoding https broke the one case (2) is
+ * otherwise right about: `next dev` on http://localhost:3000 redirected to
+ * https://localhost:3000, where nothing listens. Cloudflare always sets
+ * `x-forwarded-proto`, so deriving it downgrades nothing in production.
  */
 function publicOrigin(request: NextRequest): string {
   const configured = httpOrigin(process.env.AUTH_URL);
@@ -79,7 +86,10 @@ function publicOrigin(request: NextRequest): string {
     value ? (value.split(",")[0]?.trim() || null) : null;
   const host = first(request.headers.get("x-forwarded-host")) ?? first(request.headers.get("host"));
   if (host) {
-    const proto = first(request.headers.get("x-forwarded-proto")) ?? "https";
+    // `nextUrl.protocol` carries its trailing colon ("https:").
+    const proto =
+      first(request.headers.get("x-forwarded-proto")) ??
+      request.nextUrl.protocol.replace(/:$/, "");
     const forwarded = httpOrigin(`${proto}://${host}`);
     if (forwarded) return forwarded;
   }

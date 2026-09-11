@@ -96,9 +96,55 @@ describe("GET /signin/cloudflare", () => {
       );
     });
 
-    it("falls back to the request origin only when nothing else says otherwise", async () => {
+    it("prefers AUTH_URL over a conflicting forwarded host", async () => {
+      vi.stubEnv("AUTH_URL", "https://app.example.com");
+      const response = await GET(
+        new NextRequest("http://0.0.0.0:3004/signin/cloudflare", {
+          headers: { "x-forwarded-host": "evil.example", "x-forwarded-proto": "https" },
+        }),
+      );
+      expect(response.headers.get("location")).toBe(
+        "https://app.example.com/signin?error=CloudflareAccessUnavailable",
+      );
+    });
+
+    // A bare `Host` with no x-forwarded-proto is the LOCAL case: `next dev` on
+    // http://localhost:3000. Defaulting the scheme to the literal "https" here
+    // redirected to https://localhost:3000, where nothing is listening — so the
+    // scheme comes from the request when the proxy does not state one.
+    // Cloudflare always sets x-forwarded-proto, so this never downgrades prod.
+    it("keeps the request's scheme when no proxy states one", async () => {
       vi.stubEnv("AUTH_URL", "");
-      const response = await GET(request("/signin/cloudflare", false));
+      const response = await GET(
+        new NextRequest("http://localhost:3000/signin/cloudflare", {
+          headers: { host: "localhost:3000" },
+        }),
+      );
+      expect(response.headers.get("location")).toBe(
+        "http://localhost:3000/signin?error=CloudflareAccessUnavailable",
+      );
+    });
+
+    it("uses the plain Host header when there is no forwarded host", async () => {
+      vi.stubEnv("AUTH_URL", "");
+      const response = await GET(
+        new NextRequest("https://0.0.0.0:3004/signin/cloudflare", {
+          headers: { host: "genus.example" },
+        }),
+      );
+      expect(response.headers.get("location")).toBe(
+        "https://genus.example/signin?error=CloudflareAccessUnavailable",
+      );
+    });
+
+    // Last resort, and effectively unreachable: every HTTP/1.1 request carries
+    // a Host. Kept so the function is total, asserted so it is not silently
+    // broken — NOT presented as a fallback that does real work.
+    it("falls back to the request origin only when there is no Host at all", async () => {
+      vi.stubEnv("AUTH_URL", "");
+      const noHost = new NextRequest("https://genus.example/signin/cloudflare");
+      expect(noHost.headers.get("host")).toBeNull();
+      const response = await GET(noHost);
       expect(response.headers.get("location")).toBe(
         "https://genus.example/signin?error=CloudflareAccessUnavailable",
       );

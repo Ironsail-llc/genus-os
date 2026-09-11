@@ -145,9 +145,14 @@ Only then restart the consumers. A `daemon-reload` plus a blind restart of all
 four is how a latent secrets problem — one that was previously *silent*,
 because `EnvironmentFile=-` swallowed it — becomes a four-service outage in one
 step. The sandboxing on the oneshot is deliberately a strict subset of what
-`robothor-engine.service` already applies to the same script (asserted by
-`test_secrets_unit_hardening_is_a_subset_of_what_already_runs_the_script`), so
-the first start is not also a first test of new confinement.
+`robothor-engine.service` already applies to the same script, so the first start
+is not also a first test of new confinement. That is enforced, not just
+intended: `test_secrets_unit_applies_no_confinement_the_engine_does_not`
+allowlists the unit's own operational keys (`Type`, `ExecStart`,
+`RuntimeDirectory*`, …) and requires **every other** `[Service]` line to appear
+verbatim on the engine unit — so a directive nobody has thought of yet fails the
+suite too. Add confinement to the engine first, where the script demonstrably
+runs under it.
 
 ### Still unordered
 

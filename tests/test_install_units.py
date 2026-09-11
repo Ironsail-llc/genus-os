@@ -674,39 +674,96 @@ def test_secrets_unit_exists_and_runs_the_decrypt_script():
     )
 
 
-def test_secrets_unit_hardening_is_a_subset_of_what_already_runs_the_script():
+# The oneshot's [Service] keys that are its own operational shape rather than
+# confinement. EVERYTHING else must be a directive the engine already applies to
+# the same script — see the parity check below. Allowlisting the operational
+# keys (rather than enumerating the sandbox ones) is the difference between a
+# ratchet and a snapshot: a closed list of today's fourteen sandbox directives
+# would wave through RestrictNamespaces=, SystemCallFilter=, PrivateNetwork=,
+# and every other one nobody has thought of yet.
+SECRETS_UNIT_OWN_KEYS = frozenset(
+    {
+        "Type",
+        "RemainAfterExit",
+        "User",
+        "Group",
+        "WorkingDirectory",
+        "EnvironmentFile",
+        "ExecStart",
+        "RuntimeDirectory",
+        "RuntimeDirectoryMode",
+        "RuntimeDirectoryPreserve",
+        "OnFailure",
+        "ConditionPathExists",
+    }
+)
+
+
+def service_section(text: str) -> list[str]:
+    """The directive lines of a unit's [Service] section, comments stripped."""
+    lines: list[str] = []
+    section = ""
+    for line in directives(text).splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped
+        elif section == "[Service]" and "=" in stripped:
+            lines.append(stripped)
+    return lines
+
+
+def unshared_service_directives(oneshot: str, engine: str) -> list[str]:
+    """[Service] lines of *oneshot*, outside the allowlist, absent from *engine*."""
+    engine_lines = set(service_section(engine))
+    return [
+        line
+        for line in service_section(oneshot)
+        if line.split("=", 1)[0] not in SECRETS_UNIT_OWN_KEYS and line not in engine_lines
+    ]
+
+
+def test_secrets_unit_applies_no_confinement_the_engine_does_not():
     """No sandboxing the engine does not already apply to the same script.
 
     scripts/decrypt-secrets.sh has run in production for months as
     robothor-engine.service's ExecStartPre, and a unit's [Service] sandboxing
-    applies to ExecStartPre exactly as it does to ExecStart. So every sandbox
-    directive here must already be on the engine unit with the same value —
-    otherwise the first start of this oneshot is an untested four-service
-    gamble, which is the opposite of what this branch is for.
+    applies to ExecStartPre exactly as it does to ExecStart. So every directive
+    here that is not this unit's own operational shape must appear VERBATIM on
+    the engine unit — otherwise the first start of this oneshot is an untested
+    four-service gamble, which is the opposite of what it exists for.
     """
-    sandbox_prefixes = (
-        "NoNewPrivileges=",
-        "RestrictSUIDSGID=",
-        "CapabilityBoundingSet=",
-        "AmbientCapabilities=",
-        "ProtectSystem=",
-        "ProtectHome=",
-        "PrivateTmp=",
-        "ProtectKernelTunables=",
-        "ProtectKernelModules=",
-        "ProtectKernelLogs=",
-        "ProtectControlGroups=",
-        "ProtectClock=",
-        "RestrictRealtime=",
-        "LockPersonality=",
+    strays = unshared_service_directives(
+        (UNIT_DIR / SECRETS_UNIT).read_text(),
+        (UNIT_DIR / "robothor-engine.service").read_text(),
     )
-    engine = set(directives((UNIT_DIR / "robothor-engine.service").read_text()).splitlines())
-    for line in directives((UNIT_DIR / SECRETS_UNIT).read_text()).splitlines():
-        if line.startswith(sandbox_prefixes):
-            assert line in engine, (
-                f"{SECRETS_UNIT}: {line!r} is not applied by robothor-engine.service, "
-                "which is the only place this script has ever actually run"
-            )
+    assert not strays, (
+        f"{SECRETS_UNIT} applies confinement robothor-engine.service does not: {strays}. "
+        "Either add it to the engine unit first (where the script demonstrably "
+        "runs under it), or add the key to SECRETS_UNIT_OWN_KEYS if it is "
+        "operational rather than confinement."
+    )
+
+
+def test_the_parity_check_catches_confinement_nobody_has_thought_of_yet():
+    """Probe the gate, don't trust its silence.
+
+    The previous version of this check iterated a closed list of the fourteen
+    sandbox directives in use, so a NEW one would have sailed through green —
+    a control that passes because it is not looking. Fire a real violation at
+    it with a directive that appears in neither unit.
+    """
+    oneshot = "[Service]\nType=oneshot\nExecStart=/bin/true\nRestrictNamespaces=yes\n"
+    engine = "[Service]\nExecStart=/bin/true\n"
+    assert unshared_service_directives(oneshot, engine) == ["RestrictNamespaces=yes"]
+
+
+def test_the_parity_check_reads_only_the_service_section():
+    """[Unit] directives are ordering and conditions, not confinement, and the
+    two units legitimately differ there — a check that compared whole files
+    would fail on Description= and have to be loosened until it meant nothing."""
+    oneshot = "[Unit]\nDescription=Secrets\n\n[Service]\nType=oneshot\nProtectClock=yes\n"
+    engine = "[Unit]\nDescription=Engine\n\n[Service]\nProtectClock=yes\n"
+    assert unshared_service_directives(oneshot, engine) == []
 
 
 def test_secrets_unit_does_not_relax_the_runtime_directory():

@@ -36,12 +36,15 @@ a route handler **both** `request.url` and `request.nextUrl` report the *bind*
 address rather than the address the browser used (unless
 `experimental.trustHostHeader` is set, which this app does not set).
 `/signin/cloudflare` therefore resolves its origin as **`AUTH_URL` → the
-proxy's `x-forwarded-proto`/`x-forwarded-host` headers → `request.nextUrl.origin`**.
+request's `x-forwarded-host` (else `Host`) with `x-forwarded-proto` (else the
+request's own scheme) → `request.nextUrl.origin`**.
 
-That last fallback is **not a safe default** — it is the bind address, i.e. the
-incident. It exists so `next dev` works locally. Behind a proxy with `AUTH_URL`
-unset and no forwarded headers, a successful edge sign-in still ends on
-"0.0.0.0 refused to connect" (2026-09-11). Set `AUTH_URL`.
+That third step is a last resort that in practice never runs: every HTTP/1.1
+request carries a `Host`, so the second step answers first. It is **not** a safe
+default either — it is the bind address, i.e. the incident. So with `AUTH_URL`
+unset the redirect is only ever as trustworthy as the `Host` header reaching the
+app, which is whatever a caller that bypasses the proxy chooses to send. **Set
+`AUTH_URL`** — it is the only step that is configuration rather than inference.
 
 Where it comes from, per install shape:
 
