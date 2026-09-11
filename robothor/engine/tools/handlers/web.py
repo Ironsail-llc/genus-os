@@ -550,6 +550,19 @@ _BING_EXTRACT_JS = """() => {
       return href;
     }
   };
+  const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+  // The anchor's own text node is empty in several of Bing's title shapes
+  // (nested spans, or the text sitting beside the anchor inside the h2), which
+  // is why every fallback row came back untitled. Read the heading instead.
+  const titleOf = (li, a) => {
+    const h2 = li.querySelector('h2');
+    return (
+      clean(h2 ? h2.textContent : '') ||
+      clean(a.getAttribute('aria-label')) ||
+      clean(a.getAttribute('title')) ||
+      clean(a.textContent)
+    );
+  };
   return Array.from(document.querySelectorAll('li.b_algo'))
     .slice(0, 10)
     .map(li => {
@@ -557,9 +570,9 @@ _BING_EXTRACT_JS = """() => {
       const p = li.querySelector('.b_caption p') || li.querySelector('p');
       if (!a || !a.href) return null;
       return {
-        title: (a.innerText || '').trim(),
+        title: titleOf(li, a),
         url: unwrap(a.href),
-        snippet: p ? (p.innerText || '').trim() : ''
+        snippet: p ? clean(p.innerText || p.textContent) : ''
       };
     })
     .filter(Boolean);
@@ -594,14 +607,41 @@ def _row(title: str, url: str, snippet: str) -> dict[str, str]:
     callers read; ``snippet`` is the name the browser/API providers use. Both
     carry the same text so neither an old caller nor a model reading the new
     providers' docs can miss it.
+
+    A row is never titleless: a result the agent cannot name is a result it
+    cannot cite or choose between, so an empty title falls back to the host.
     """
     text = " ".join((snippet or "").split())
+    clean_title = " ".join((title or "").split())
+    if not clean_title and url:
+        with contextlib.suppress(Exception):
+            clean_title = (urlsplit(url).hostname or "").removeprefix("www.")
     return {
-        "title": " ".join((title or "").split()),
+        "title": clean_title,
         "url": url or "",
         "content": text,
         "snippet": text,
     }
+
+
+def _short(text: str, limit: int = 40) -> str:
+    """Queries are operator data; logs get a truncated echo, not the lot."""
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _redact_query(url: str) -> str:
+    """A search URL with its query trimmed — which source, not what was asked.
+
+    ``https://www.bing.com/search?q=<everything the operator typed>`` in a log
+    line is the query in a log line.
+    """
+    try:
+        parts = urlsplit(url)
+        asked = parse_qs(parts.query).get("q", [""])[0]
+        base = f"{parts.scheme}://{parts.netloc}{parts.path}"
+        return f"{base}?q={_short(asked)}" if asked else base
+    except Exception:
+        return "(unparseable url)"
 
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9'À-ɏ-]+")
@@ -646,7 +686,7 @@ def _haystack(row: dict[str, str]) -> str:
     return f"{row.get('title', '')} {row.get('snippet') or row.get('content', '')}".lower()
 
 
-def _grade_results(rows: list[dict[str, str]], query: str) -> str:
+def _grade_results(rows: list[dict[str, str]], query: str, limit: int = 0) -> str:
     """Grade an answer against the query. Empty string = good enough.
 
     Scores by how *rare* each term is across the results rather than by how
@@ -665,12 +705,14 @@ def _grade_results(rows: list[dict[str, str]], query: str) -> str:
     frequency = {term: sum(1 for r in rows if term in _haystack(r)) for term in distinctive}
     saturation = _SATURATION * len(rows)
 
-    missing = sorted(t for t in required if frequency.get(t, 0) < _MIN_REQUIRED_HITS)
+    # A place term cannot appear in two results when only one was asked for.
+    needed = max(1, min(_MIN_REQUIRED_HITS, limit or len(rows), len(rows)))
+    missing = sorted(t for t in required if frequency.get(t, 0) < needed)
     if missing:
         logger.info(
             "web_search: results never mention %s (query %r) — treating as no answer",
             ", ".join(missing),
-            query,
+            _short(query),
         )
         return "missing_place_terms"
 
@@ -766,7 +808,13 @@ class _StackParser(HTMLParser):
 
 
 class _BingParser(_StackParser):
-    """Mirrors ``li.b_algo h2 a`` + ``.b_caption p`` on captured HTML."""
+    """Mirrors ``li.b_algo h2`` + ``.b_caption p`` on captured HTML.
+
+    The title is the whole heading's text, not the anchor's: Bing nests it in
+    ``<strong>``/``<span>`` and sometimes leaves it beside the anchor, which is
+    how every fallback row on the box came back untitled. An anchor's
+    ``aria-label``/``title`` is the next resort, the host the last (in ``_row``).
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -776,16 +824,18 @@ class _BingParser(_StackParser):
 
     def on_open(self, tag: str, attrs: dict[str, str], classes: set[str]) -> None:
         if tag == "li" and "b_algo" in classes:
-            self._cur = {"title": [], "url": "", "caption": [], "para": []}
+            self._cur = {"title": [], "url": "", "label": "", "caption": [], "para": []}
             self._mode = None
             return
         if self._cur is None:
             return
-        if tag == "a" and self.in_tag("h2") and not self._cur["url"]:
+        if tag == "h2":
+            self._mode = "title"
+        elif tag == "a" and self.in_tag("h2") and not self._cur["url"]:
             href = attrs.get("href", "")
             if href:
                 self._cur["url"] = href
-                self._mode = "title"
+                self._cur["label"] = attrs.get("aria-label") or attrs.get("title") or ""
         elif tag == "p":
             self._mode = "caption" if self.in_class("b_caption") else "para"
 
@@ -797,9 +847,10 @@ class _BingParser(_StackParser):
             url = _unwrap_bing_href(str(row["url"]))
             if url.startswith("http"):
                 snippet = " ".join(row["caption"]) or " ".join(row["para"])
-                self.rows.append(_row(" ".join(row["title"]), url, snippet))
+                title = " ".join(row["title"]) or str(row["label"])
+                self.rows.append(_row(title, url, snippet))
             return
-        if tag in ("a", "p"):
+        if tag in ("h2", "p"):
             self._mode = None
 
     def handle_data(self, data: str) -> None:
@@ -992,7 +1043,7 @@ async def _browser_page_results(
 
     out = await browser_mod.isolated_fetch(ctx, url, js, html_js=_OUTER_HTML_JS)
     if out.get("error") and not out.get("result"):
-        logger.warning("web_search browser fetch failed (%s): %s", url, out["error"])
+        logger.warning("web_search browser fetch failed (%s): %s", _redact_query(url), out["error"])
     status = out.get("status")
     final_url = str(out.get("url") or url)
 
@@ -1274,11 +1325,6 @@ async def _courtesy_wait() -> None:
     _places_last = time.monotonic()
 
 
-def _short(text: str, limit: int = 40) -> str:
-    """Queries are operator data; logs get a truncated echo, not the lot."""
-    return text[:limit] + ("…" if len(text) > limit else "")
-
-
 async def _geocode(place: str) -> tuple[str, str] | None:
     """One Nominatim lookup for a place name → ``(lat, lon)`` as given."""
     try:
@@ -1317,8 +1363,12 @@ def _overpass_address(tags: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
-async def _overpass_places(category: str, lat: str, lon: str) -> list[dict[str, str]]:
-    """Ask OpenStreetMap for places of one category near a point."""
+async def _overpass_places(category: str, lat: str, lon: str) -> tuple[list[dict[str, str]], bool]:
+    """Places of one category near a point. Returns ``(places, errored)``.
+
+    "Overpass said there are none" and "Overpass never answered" are different
+    facts about the world, and the caller reports which one to the agent.
+    """
     body = _overpass_query(category, lat, lon)
     try:
         async with _places_lock:
@@ -1333,7 +1383,7 @@ async def _overpass_places(category: str, lat: str, lon: str) -> list[dict[str, 
                 data = resp.json()
     except Exception as e:
         logger.warning("Overpass lookup failed for category %r: %s", category, e)
-        return []
+        return [], True
     elements = data.get("elements", []) if isinstance(data, dict) else []
     places: list[dict[str, str]] = []
     for element in elements:
@@ -1353,7 +1403,7 @@ async def _overpass_places(category: str, lat: str, lon: str) -> list[dict[str, 
         )
         if len(places) >= _MAX_PLACES:
             break
-    return places
+    return places, False
 
 
 async def _nominatim_places(query: str) -> list[dict[str, str]]:
@@ -1386,23 +1436,40 @@ async def _nominatim_places(query: str) -> list[dict[str, str]]:
     return places
 
 
-async def _places_lookup(query: str) -> list[dict[str, str]]:
-    """Places for a local-looking query.
+async def _places_lookup(query: str) -> tuple[list[dict[str, str]], str]:
+    """Places for a local-looking query, and why there are none if there are none.
 
     Nominatim's free-text search answers "where is X", not "what X is near
     here" — asking it for "coworking near Springfield" returns whatever it can
     string-match. So for a category we have OSM tags for, geocode the place
-    once and then ask Overpass for the actual amenities around that point.
+    once (exactly the words the operator used — no invented city or state) and
+    then ask Overpass for the actual amenities around that point.
+
+    Returns ``(places, reason)``; ``reason`` is set only when ``places`` is
+    empty, because "no places" with no explanation is indistinguishable from
+    "this search does not do places".
     """
     category = _place_category(query)
     place = _place_text(query)
-    if category and place:
-        coords = await _geocode(place)
-        if coords:
-            rows = await _overpass_places(category, *coords)
-            if rows:
-                return rows
-    return await _nominatim_places(query)
+    if not category:
+        rows = await _nominatim_places(query)
+        return rows, "" if rows else "category_unmapped"
+    if not place:
+        rows = await _nominatim_places(query)
+        return rows, "" if rows else "place_not_in_query"
+
+    coords = await _geocode(place)
+    if coords is None:
+        rows = await _nominatim_places(query)
+        return rows, "" if rows else f"geocode_failed:{place}"
+
+    rows, errored = await _overpass_places(category, *coords)
+    if rows:
+        return rows, ""
+    fallback = await _nominatim_places(query)
+    if fallback:
+        return fallback, ""
+    return [], "overpass_error" if errored else "overpass_empty"
 
 
 async def _search_with_fallback(
@@ -1440,7 +1507,7 @@ async def _search_with_fallback(
         if searxng["all_engines_unresponsive"]:
             reason = "engines_unresponsive"
         else:
-            reason = _grade_results(rows, query)
+            reason = _grade_results(rows, query, limit)
     except Exception as e:
         reason, detail = "error", str(e)
 
@@ -1471,7 +1538,7 @@ async def _search_with_fallback(
     fallback["fallback_reason"] = reason
     # The browser answer gets graded too — otherwise "we fell back" reads as
     # "we fixed it" when both sources missed the question.
-    browser_grade = _grade_results(fallback["results"], query)
+    browser_grade = _grade_results(fallback["results"], query, limit)
     if browser_grade:
         fallback["degraded"] = reason
         fallback["fallback_reason"] = "browser_low_relevance"
@@ -1522,7 +1589,9 @@ async def _web_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     result = await _search_with_fallback(query, limit, provider, ctx)
 
     if "error" not in result and _looks_local(query):
-        places = await _places_lookup(query)
+        places, places_reason = await _places_lookup(query)
         if places:
             result["places"] = places
+        elif places_reason:
+            result["places_reason"] = places_reason
     return result

@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- Title markup shapes a real Bing page uses, all of which produced an EMPTY
+     title on the box: text nested in <strong>/<span> inside the anchor, title
+     text sitting beside the anchor rather than inside it, an anchor carrying
+     only aria-label, and one carrying nothing at all. -->
+<html>
+  <body>
+    <ol id="b_results">
+      <li class="b_algo">
+        <div class="tptt">example.com</div>
+        <h2><a href="https://example.com/a"><strong>Coworking</strong> spaces in <span>Springfield</span></a></h2>
+        <div class="b_caption"><p>Nested markup inside the anchor.</p></div>
+      </li>
+      <li class="b_algo">
+        <h2><a href="https://example.org/b"></a>Private offices — Springfield</h2>
+        <div class="b_caption"><p>Title text beside the anchor, not inside it.</p></div>
+      </li>
+      <li class="b_algo">
+        <h2><a href="https://example.net/c" aria-label="Desks and suites of Springfield"><span class="b_imgcap"></span></a></h2>
+        <div class="b_caption"><p>Anchor labelled for screen readers only.</p></div>
+      </li>
+      <li class="b_algo">
+        <h2><a href="https://no-title.example.com/d"><span></span></a></h2>
+        <div class="b_caption"><p>No title text anywhere.</p></div>
+      </li>
+    </ol>
+  </body>
+</html>

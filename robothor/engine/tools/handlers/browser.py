@@ -321,6 +321,18 @@ async def _cleanup_expired() -> None:
 # agent's context, and close it again.
 
 
+def _loggable_url(url: str) -> str:
+    """A URL without its query string. A background fetch's URL carries the
+    operator's search terms, and a log line is not the place for them."""
+    try:
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(url)
+        return f"{parts.scheme}://{parts.netloc}{parts.path}"
+    except Exception:
+        return "(unparseable url)"
+
+
 async def ensure_session(ctx: ToolContext) -> tuple[bool, str]:
     """Make sure a session exists. Returns ``(started_here, error)``.
 
@@ -382,7 +394,9 @@ async def isolated_fetch(
             try:
                 out["html"] = await page.evaluate(html_js)
             except Exception as e:
-                logger.warning("isolated_fetch could not read page HTML (%s): %s", url, e)
+                logger.warning(
+                    "isolated_fetch could not read page HTML (%s): %s", _loggable_url(url), e
+                )
         return out
     finally:
         with contextlib.suppress(Exception):

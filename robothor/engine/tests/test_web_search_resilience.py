@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+from urllib.parse import quote_plus
 
 import httpx
 import pytest
@@ -54,8 +55,21 @@ class FakeResponse:
             )
 
 
+class ByParams:
+    """A route that answers the geocode (limit=1) and the free-text lookup differently."""
+
+    def __init__(self, *, geocode: Any, free_text: Any) -> None:
+        self.geocode = geocode
+        self.free_text = free_text
+
+    def pick(self, params: dict[str, Any]) -> Any:
+        return self.geocode if params.get("limit") == 1 else self.free_text
+
+
 class FakeHttp:
     """Routes GETs and POSTs by URL substring; records every call."""
+
+    by_params = ByParams
 
     def __init__(self, routes: dict[str, Any]) -> None:
         self.routes = routes
@@ -112,6 +126,8 @@ class FakeHttp:
                     raise value
                 if isinstance(value, FakeResponse):
                     return value
+                if isinstance(value, ByParams):
+                    return FakeResponse(value.pick(params or {}))
                 return FakeResponse(value)
         raise AssertionError(f"unexpected outbound request: {url}")
 
@@ -137,8 +153,10 @@ class FakeBrowser:
         html_pages: dict[str, str] | None = None,
         statuses: dict[str, int] | None = None,
         start_error: str = "",
+        fetch_error: str = "",
         navigate_delay: float = 0.0,
     ) -> None:
+        self.fetch_error = fetch_error
         self.running = running
         self.pages = pages or {}
         self.html_pages = html_pages or {}
@@ -193,6 +211,14 @@ class FakeBrowser:
         try:
             if self.navigate_delay:
                 await asyncio.sleep(self.navigate_delay)
+            if self.fetch_error:
+                return {
+                    "status": None,
+                    "url": url,
+                    "result": None,
+                    "html": None,
+                    "error": self.fetch_error,
+                }
             status = 200
             for key, code in self.statuses.items():
                 if key in url:
@@ -368,7 +394,10 @@ def _no_brave_key(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
-def _reset_places_throttle():
+def _reset_places_throttle(monkeypatch: pytest.MonkeyPatch):
+    """No courtesy sleeping in unit tests — the throttle has its own test,
+    which sets its own interval after this fixture has run."""
+    monkeypatch.setattr(web, "_PLACES_MIN_INTERVAL", 0.0)
     web._places_last = 0.0
     yield
     web._places_last = 0.0
@@ -449,6 +478,71 @@ def test_saturated_common_term_carries_no_signal() -> None:
 def test_results_that_mention_every_term_are_accepted() -> None:
     rows = [web._row(r["title"], r["url"], r["content"]) for r in _rows(4, relevant=True)]
     assert web._grade_results(rows, LOCAL_QUERY) == ""
+
+
+async def test_a_single_result_can_answer_a_limit_one_search(ctx: ToolContext) -> None:
+    """Demanding a place term in two rows is unmeetable when only one was asked for."""
+    http = FakeHttp(
+        {
+            "searxng.test": {
+                "results": [
+                    {
+                        "title": "Springfield coworking",
+                        "url": "https://example.com/springfield",
+                        "content": "Private office suites in Springfield.",
+                    }
+                ]
+            },
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser(pages={"bing.com": BROWSER_ROWS})
+
+    out = await _search(http, browser, {"query": LOCAL_QUERY, "limit": 1}, ctx)
+
+    assert out["provider"] == "searxng"
+    assert browser.actions == []  # no needless fallback
+
+
+LONG_LOCAL_QUERY = "coworking private office with meeting rooms and parking Jamaica Queens"
+
+
+def test_grading_does_not_log_the_whole_query(caplog: pytest.LogCaptureFixture) -> None:
+    """A query is operator data; the log gets a truncated echo, not the lot."""
+    rows = [web._row(r["title"], r["url"], r["content"]) for r in GENERIC_COWORKING_ROWS]
+
+    with caplog.at_level("INFO", logger="robothor.engine.tools.handlers.web"):
+        assert web._grade_results(rows, LONG_LOCAL_QUERY) == "missing_place_terms"
+
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert logged  # it does explain itself
+    assert LONG_LOCAL_QUERY not in logged
+    assert "…" in logged
+
+
+async def test_browser_failures_do_not_log_the_whole_query(
+    ctx: ToolContext, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The search URL carries the query — redact it before it reaches a log."""
+    http = FakeHttp({"searxng.test": httpx.ConnectError("down")})
+    browser = FakeBrowser(fetch_error="Navigation failed: net::ERR_ABORTED")
+
+    with caplog.at_level("WARNING", logger="robothor.engine.tools.handlers.web"):
+        await _search(http, browser, {"query": LONG_LOCAL_QUERY}, ctx)
+
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "bing.com" in logged  # which source failed is still legible
+    assert quote_plus(LONG_LOCAL_QUERY) not in logged
+    assert LONG_LOCAL_QUERY not in logged
+
+
+def test_redacted_url_keeps_the_target_and_trims_the_query() -> None:
+    redacted = web._redact_query(f"https://www.bing.com/search?q={quote_plus(LONG_LOCAL_QUERY)}")
+
+    assert redacted.startswith("https://www.bing.com/search?q=coworking private office")
+    assert redacted.endswith("…")
+    assert len(redacted) < len(LONG_LOCAL_QUERY) + 50
 
 
 def test_results_about_something_else_are_rejected() -> None:
@@ -785,6 +879,34 @@ def test_bing_href_unwrapping(href: str, expected: str) -> None:
     assert web._unwrap_bing_href(href) == expected
 
 
+def test_bing_titles_survive_nested_and_adjacent_markup() -> None:
+    """Measured on the box: every fallback row came back titled "-".
+
+    The anchor's own text node is empty in several of Bing's title shapes, so
+    the title has to come off the <h2>, then the anchor's label, and never be
+    blank — a row the agent cannot name is a row it cannot use.
+    """
+    rows = web._parse_bing_html((FIXTURES / "bing_nested_titles.html").read_text())
+
+    assert [r["title"] for r in rows] == [
+        "Coworking spaces in Springfield",
+        "Private offices — Springfield",
+        "Desks and suites of Springfield",
+        "no-title.example.com",  # last resort: the host, never blank
+    ]
+    assert all(r["title"] for r in rows)
+
+
+def test_a_row_is_never_titleless() -> None:
+    assert web._row("", "https://www.example.com/page", "s")["title"] == "example.com"
+    assert web._row("   ", "https://sub.example.org/x", "s")["title"] == "sub.example.org"
+
+
+def test_bing_extraction_js_reads_the_heading_not_just_the_anchor() -> None:
+    assert "textContent" in web._BING_EXTRACT_JS
+    assert "aria-label" in web._BING_EXTRACT_JS
+
+
 def test_bing_extraction_js_decodes_click_tracking() -> None:
     assert "ck/a" in web._BING_EXTRACT_JS
     assert "atob" in web._BING_EXTRACT_JS
@@ -997,6 +1119,123 @@ async def test_unknown_category_skips_overpass(ctx: ToolContext) -> None:
     assert len(out["places"]) == 2
     assert out["places"][0]["url"] == "https://www.openstreetmap.org/node/12345"
     assert "coworking_space" in out["places"][0]["snippet"]
+
+
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("coworking private office Jamaica Queens", "Jamaica Queens"),
+        ("coworking near Jamaica Queens NY", "Jamaica Queens NY"),
+        ("coworking near Springfield", "Springfield"),
+    ],
+)
+def test_place_text_is_taken_from_the_query_and_nothing_is_invented(
+    query: str, expected: str
+) -> None:
+    """ "Jamaica Queens", not "Queens" — and no state the operator never typed."""
+    assert web._place_text(query) == expected
+
+
+async def test_geocode_query_is_exactly_what_the_operator_named(ctx: ToolContext) -> None:
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": GENERIC_COWORKING_ROWS},
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser(pages={"bing.com": JAMAICA_BROWSER_ROWS})
+
+    await _search(http, browser, {"query": JAMAICA_QUERY, "limit": 8}, ctx)
+
+    assert http.hit("nominatim.openstreetmap.org")[0]["params"]["q"] == "Jamaica Queens"
+
+
+async def test_places_say_why_they_are_missing_when_geocoding_fails(
+    ctx: ToolContext,
+) -> None:
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": _rows(4, relevant=True)},
+            "nominatim.openstreetmap.org": [],  # geocode finds nothing, free text neither
+        }
+    )
+    browser = FakeBrowser()
+
+    out = await _search(http, browser, {"query": LOCAL_QUERY, "limit": 4}, ctx)
+
+    assert "places" not in out
+    assert out["places_reason"] == "geocode_failed:Springfield"
+
+
+async def test_places_say_why_they_are_missing_when_overpass_is_empty(
+    ctx: ToolContext,
+) -> None:
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": _rows(4, relevant=True)},
+            "nominatim.openstreetmap.org": FakeHttp.by_params(
+                geocode=GEOCODE_PAYLOAD, free_text=[]
+            ),
+            "overpass-api.de": {"elements": []},
+        }
+    )
+    browser = FakeBrowser()
+
+    out = await _search(http, browser, {"query": LOCAL_QUERY, "limit": 4}, ctx)
+
+    assert "places" not in out
+    assert out["places_reason"] == "overpass_empty"
+
+
+async def test_places_say_why_they_are_missing_when_overpass_errors(
+    ctx: ToolContext,
+) -> None:
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": _rows(4, relevant=True)},
+            "nominatim.openstreetmap.org": FakeHttp.by_params(
+                geocode=GEOCODE_PAYLOAD, free_text=[]
+            ),
+            "overpass-api.de": httpx.ConnectError("overpass unreachable"),
+        }
+    )
+    browser = FakeBrowser()
+
+    out = await _search(http, browser, {"query": LOCAL_QUERY, "limit": 4}, ctx)
+
+    assert out["places_reason"] == "overpass_error"
+
+
+async def test_places_say_when_the_category_is_not_mapped(ctx: ToolContext) -> None:
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": _rows(4, relevant=True)},
+            "nominatim.openstreetmap.org": [],
+        }
+    )
+    browser = FakeBrowser()
+
+    out = await _search(http, browser, {"query": "hardware store in Springfield", "limit": 4}, ctx)
+
+    assert http.hit("overpass-api.de") == []
+    assert out["places_reason"] == "category_unmapped"
+
+
+async def test_found_places_carry_no_reason(ctx: ToolContext) -> None:
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": _rows(4, relevant=True)},
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser()
+
+    out = await _search(http, browser, {"query": LOCAL_QUERY, "limit": 4}, ctx)
+
+    assert out["places"]
+    assert "places_reason" not in out
 
 
 async def test_non_local_query_never_touches_nominatim_or_overpass(ctx: ToolContext) -> None:
