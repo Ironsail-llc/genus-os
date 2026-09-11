@@ -60,6 +60,13 @@ class ErrorType(StrEnum):
     PERMISSION = "permission"
     API_DEPRECATED = "api_deprecated"
     LOGIC = "logic"
+    # A guard of OURS refused the call (e.g. web_fetch's SSRF block). Distinct
+    # from AUTH on purpose: nothing upstream is broken and no credential will
+    # fix it, so the degradation detector must not page about it as an outage.
+    BLOCKED = "blocked"
+    # The peer's certificate could not be verified. Also not AUTH: retrying,
+    # re-authenticating and backing off are all useless.
+    TLS = "tls"
     UNKNOWN = "unknown"
 
 

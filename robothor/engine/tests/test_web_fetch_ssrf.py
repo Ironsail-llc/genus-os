@@ -65,9 +65,18 @@ class _FakeResp:
 
 
 class _FakeClient:
-    def __init__(self, responses):
+    """Answers from a script. ``configure`` keeps the transport web_fetch built
+    so ``get`` can mark its pinned backend as dialled — a real connection does,
+    and web_fetch refuses a response whose socket it cannot account for."""
+
+    def __init__(self, responses, **kwargs):
         self._responses = list(responses)
+        self._transport = kwargs.get("transport")
         self.calls: list[dict] = []
+
+    def configure(self, **kwargs):
+        self._transport = kwargs.get("transport", self._transport)
+        return self
 
     async def __aenter__(self):
         return self
@@ -77,6 +86,8 @@ class _FakeClient:
 
     async def get(self, url, **kwargs):
         self.calls.append({"url": str(url), **kwargs})
+        if self._transport is not None:
+            self._transport._pool._network_backend.dialed = True
         return self._responses.pop(0)
 
 
@@ -107,7 +118,7 @@ class TestWebFetchRedirects:
             httpx,
             "AsyncClient",
             lambda **k: _FakeClient(
-                [_FakeResp(is_redirect=True, location="http://127.0.0.1:6379/")]
+                [_FakeResp(is_redirect=True, location="http://127.0.0.1:6379/")], **k
             ),
         )
         result = await _web_fetch({"url": "http://example.com/"}, ctx=None)
@@ -132,9 +143,11 @@ class TestWebFetchRedirects:
         """The fetch must connect to the IP vetted at check time, not re-resolve.
 
         A DNS-rebinding attacker returns a public IP on the first (validation)
-        lookup, then a private IP on the second (connection) lookup. Because we
-        pin the vetted IP onto the request, a second resolution never happens and
-        the private target is never reached.
+        lookup, then a private IP on the second (connection) lookup. The name is
+        resolved exactly once, and the vetted address is pinned at the SOCKET —
+        the request itself keeps the hostname, so Host, SNI and certificate
+        verification see the real name. ``test_web_fetch_pinning.py`` proves the
+        socket half against a real server; this proves the URL half.
         """
         calls = {"n": 0}
 
@@ -145,14 +158,14 @@ class TestWebFetchRedirects:
 
         monkeypatch.setattr(socket, "getaddrinfo", _flip)
         fake = _FakeClient([_FakeResp()])
-        monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake)
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **k: fake.configure(**k))
 
         result = await _web_fetch({"url": "http://example.com/"}, ctx=None)
 
         assert "error" not in result
         assert len(fake.calls) == 1
         call = fake.calls[0]
-        # Connected to the pinned public IP, carrying the real Host + SNI.
-        assert "93.184.216.34" in call["url"]
-        assert call["headers"]["Host"] == "example.com"
-        assert call["extensions"]["sni_hostname"] == "example.com"
+        # The request is addressed to the hostname — never rewritten to the IP.
+        assert call["url"] == "http://example.com/"
+        # Resolved once, at vetting time. The rebind answer is never asked for.
+        assert calls["n"] == 1
