@@ -4,6 +4,22 @@ from __future__ import annotations
 
 from typing import Any
 
+# Long descriptions live out here: get_engine_schemas is already one of the
+# engine's largest functions and the size ratchet only lets it shrink.
+_WEB_SEARCH_DESCRIPTION = (
+    "Search the web and return results. By default it uses the Brave API when a key "
+    "is configured, else SearXNG, and automatically falls back to the 'browser' "
+    "provider (a real Bing/DuckDuckGo results page driven through the browser tool) "
+    "when SearXNG errors or its engines are blocked — the result then carries "
+    "'fallback_from'. Local-looking queries also get a 'places' list from OpenStreetMap."
+)
+
+_WEB_SEARCH_PROVIDER_DESCRIPTION = (
+    "Search provider: 'searxng' (default, free/private, auto-falls back to the "
+    "browser), 'browser' (force a real results page via the browser tool), 'brave' "
+    "(API, needs BRAVE_SEARCH_API_KEY), or 'perplexity' (AI-powered, requires API key)"
+)
+
 
 def get_engine_schemas() -> dict[str, dict[str, Any]]:
     """Return all engine-specific tool schemas keyed by tool name."""
@@ -145,7 +161,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web via SearXNG and return results.",
+            "description": _WEB_SEARCH_DESCRIPTION,
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -160,8 +176,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     },
                     "provider": {
                         "type": "string",
-                        "description": "Search provider: 'searxng' (default, free/private) or 'perplexity' (AI-powered, requires API key)",
-                        "enum": ["searxng", "perplexity"],
+                        "description": _WEB_SEARCH_PROVIDER_DESCRIPTION,
+                        "enum": ["searxng", "browser", "brave", "perplexity"],
                         "default": "searxng",
                     },
                 },

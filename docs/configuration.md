@@ -167,6 +167,25 @@ certificate is reported as such. Redirects are followed one hop at a time and
 re-vetted at every hop, up to 5 real hops (the canonical `http→https` and
 `apex↔www` bounces do not count against that).
 
+## Web search (optional)
+
+The `web_search` tool grades the answer it gets back. When SearXNG errors,
+reports its general engines unresponsive (from many egress IPs they answer
+"access denied"/"CAPTCHA"/"too many requests"), or returns results that mention
+none of the query's distinctive terms, the search transparently re-runs through
+the `browser` provider — the engine's own Playwright browser loading a real
+Bing (then DuckDuckGo HTML) results page — and the result carries
+`"provider": "browser"`, `"fallback_from": "searxng"` and the unresponsive-engine
+list so the trace shows why. A local-looking query ("… near X", "… in
+Springfield", a ZIP) also gets up to five OpenStreetMap rows under `places`
+(Nominatim, rate-limited to one request per second). An agent can force one
+provider with the tool's `provider` argument (`searxng`, `browser`, `brave`,
+`perplexity`).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BRAVE_SEARCH_API_KEY` | *(empty)* | Brave Search API key. When set, `web_search` prefers the Brave API and falls back to the SearXNG → browser chain on any error. Unset means the provider is absent — no call, no error. |
+
 ## Failure-mode detectors
 
 See [Observability](OBSERVABILITY.md#failure-mode-detectors) for what each
