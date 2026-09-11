@@ -182,10 +182,15 @@ results have in common, not evidence they answer the question — and always
 requires a place or number the operator named (Jamaica, Queens, a ZIP) to
 appear. When SearXNG errors, reports its general engines unresponsive, or comes
 back failing that grade, the search re-runs through the `browser` provider: the
-engine's own browser loads a real Bing (then DuckDuckGo HTML) results page **in
-a background tab**, never moving the page an agent is working on. The result
-then carries `"provider": "browser"`, `"fallback_from": "searxng"`, a
-`fallback_reason`, and the unresponsive-engine list.
+engine's own browser loads a real Bing (then Startpage, then DuckDuckGo HTML)
+results page **in a background tab**, never moving the page an agent is working
+on. It advances to the next source when one returns too few rows *or* when the
+query named a place and the rows never mention it — Bing pins a local query to
+the egress IP's own city, Startpage honours the words that were typed — and the
+rows that name the place lead the answer, with `place_source` saying which
+source supplied them. The result then carries `"provider": "browser"`,
+`"fallback_from": "searxng"`, a `fallback_reason`, `sources` (every source
+tried, in order), and the unresponsive-engine list.
 
 `fallback_reason` values: `low_relevance`, `missing_place_terms`,
 `engines_unresponsive`, `error`, `browser_low_relevance` (the browser answer
