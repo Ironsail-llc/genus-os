@@ -198,10 +198,10 @@ model that is not in the registry, an unknown guardrail name, a key sitting in
 the wrong block — stay warnings on every rung, because each describes a
 manifest that loads and runs.
 
-Validation runs on the **merged** manifest: the file, plus `_defaults.yaml`,
-plus `.robothor/config.yaml`, plus env and runtime overrides. A typo in the
-fleet defaults therefore breaks every agent that inherits it, and is reported
-that way rather than passing a per-file check and failing at run time.
+Validation runs on the **merged** manifest: the file plus `_defaults.yaml` —
+exactly the layers a run merges. A typo in the fleet defaults therefore marks
+every agent that inherits it broken, rather than passing a per-file check and
+failing at run time.
 
 Under `enforce`, `/ready` returns `503` with `checks.fleet: "error:broken:<n>"`
 and a `broken_agents` list of ids, and the scheduler refuses to prune any

@@ -118,17 +118,15 @@ class TestReadyDistinguishesBrokenFromAbsent:
 
 
 class TestTriggerRoute:
-    """Driven through the handler, not through HTTP, and that is deliberate.
+    """Driven through the handler, so these stay about the schema guard alone.
 
-    `POST /api/agents/{id}/trigger` is annotated `request: Request` while
-    `Request` is imported INSIDE `create_health_app`. With
-    `from __future__ import annotations` the annotation stays a string FastAPI
-    cannot resolve against health.py's module globals, so it is treated as a
-    required query parameter and the route answers 422 to everyone — on
-    `origin/main` as much as here. `resume_run` and `execute_workflow` carry
-    the same defect. That is a separate bug, reported rather than fixed in this
-    change; calling the handler keeps THIS test about the schema guard instead
-    of silently depending on a route nobody can reach.
+    The route itself is exercised over HTTP in
+    `test_health_route_annotations.py`, which pins the separate defect found on
+    the way here: `Request` was imported inside `create_health_app`, so under
+    `from __future__ import annotations` FastAPI could not resolve it and
+    answered 422 to every caller. That is fixed in this branch. Calling the
+    handler keeps the two concerns in separate files — a change to either the
+    routing or the guard fails exactly one of them.
     """
 
     def _handler(self, config):

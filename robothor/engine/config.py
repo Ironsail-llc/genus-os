@@ -234,16 +234,22 @@ def _enforce_manifest_schema(
     *,
     manifest_dir: Path,
     defaults: dict[str, Any] | None = None,
-    workspace: Path | None = None,
 ) -> None:
     """Under ``enforce`` only, refuse a manifest the schema rejects.
 
-    Validates the MERGED document — the same one :func:`load_agent_config`
-    will build — not the file on its own. That is the whole point: a typo in
-    ``_defaults.yaml`` or a project override breaks every agent that inherits
-    it, and validating each raw file would report a clean scan, a green
-    ``/ready`` and nothing pruned, while every run raised inside an APScheduler
-    job. Broken everywhere, visible nowhere.
+    Validates the MERGED document, not the file on its own: a typo in
+    ``_defaults.yaml`` breaks every agent that inherits it, and validating each
+    raw file would report a clean scan, a green ``/ready`` and nothing pruned
+    while every run raised inside an APScheduler job. Broken everywhere,
+    visible nowhere.
+
+    Merged with EXACTLY what a run merges, which today means ``_defaults.yaml``
+    and no ``workspace``. Not an oversight: no runtime caller of
+    :func:`load_agent_config` passes one, so ``.robothor/config.yaml`` is dead
+    weight at run time. A scan that applied it would refuse agents that load
+    and run perfectly well — the fleet marked broken over a layer nothing
+    reads. The scan must judge the document that actually runs, and if project
+    overrides are ever wired into the runtime, they get wired in here too.
 
     Deliberately a no-op on the other two rungs: ``observe`` reports from
     :func:`_apply_schema_mode`, where the merged manifest is already in hand,
@@ -258,7 +264,7 @@ def _enforce_manifest_schema(
         data,
         agent_id=agent_id,
         defaults=defaults if defaults is not None else _load_defaults(manifest_dir),
-        workspace=workspace,
+        workspace=None,
         trigger_type=None,
     )
     raise_if_invalid(merged, agent_id=agent_id)
@@ -269,7 +275,6 @@ def _load_manifest_classified(
     *,
     validate_schema: bool = True,
     defaults: dict[str, Any] | None = None,
-    workspace: Path | None = None,
 ) -> tuple[dict[str, Any] | None, ManifestFailure | None, bool]:
     """``(data, failure, was_skipped)`` for one manifest file.
 
@@ -283,10 +288,10 @@ def _load_manifest_classified(
     too would swallow that raise into a ``None`` return and the caller would
     only learn that the agent "was not found".
 
-    ``defaults`` and ``workspace`` are the other layers of the document this
-    manifest becomes at load. :func:`load_manifest_dir` passes them so the scan
-    validates what will actually run; pass nothing and the defaults are read
-    from the manifest's own directory.
+    ``defaults`` is the other layer of the document this manifest becomes at
+    load. :func:`load_manifest_dir` passes it so the scan validates what will
+    actually run; pass nothing and the defaults are read from the manifest's
+    own directory.
     """
     path = Path(manifest_path)
     name = path.name
@@ -303,12 +308,7 @@ def _load_manifest_classified(
         if data and isinstance(data, dict) and "id" in data:
             resolved: dict[str, Any] = _resolve_env_vars(data)  # type: ignore[assignment]
             if validate_schema:
-                _enforce_manifest_schema(
-                    resolved,
-                    manifest_dir=path.parent,
-                    defaults=defaults,
-                    workspace=workspace,
-                )
+                _enforce_manifest_schema(resolved, manifest_dir=path.parent, defaults=defaults)
             return resolved, None, False
         # Valid YAML, just not an agent manifest (_defaults.yaml, schema.yaml).
         return None, None, True
@@ -349,7 +349,7 @@ def load_manifest(manifest_path: Path) -> dict | None:  # type: ignore[type-arg]
     return data
 
 
-def load_manifest_dir(manifest_dir: Path, workspace: Path | None = None) -> ManifestScan:
+def load_manifest_dir(manifest_dir: Path) -> ManifestScan:
     """Read a manifest directory and report what could NOT be read.
 
     This is the function to use anywhere a decision depends on the fleet being
@@ -357,10 +357,11 @@ def load_manifest_dir(manifest_dir: Path, workspace: Path | None = None) -> Mani
 
     ``_defaults.yaml`` is read ONCE and handed to every file, so that under
     ``enforce`` each manifest is judged as the merged document it becomes
-    rather than as the fragment on disk. Pass ``workspace`` — callers have it
-    on ``EngineConfig`` — to include the project overrides layer; without it a
-    defect introduced by ``.robothor/config.yaml`` alone still escapes the
-    scan, and the manifests returned are unchanged either way.
+    rather than as the fragment on disk. There is deliberately no ``workspace``
+    parameter: the scan merges exactly what a run merges, and no runtime caller
+    of :func:`load_agent_config` passes one. See
+    :func:`_enforce_manifest_schema`. The manifests returned are the raw
+    per-file documents either way — only validation sees the merge.
     """
     if not manifest_dir.is_dir():
         logger.warning("Manifest directory not found: %s", manifest_dir)
@@ -373,9 +374,7 @@ def load_manifest_dir(manifest_dir: Path, workspace: Path | None = None) -> Mani
     scanned = 0
     for f in sorted(manifest_dir.glob("*.yaml")):
         scanned += 1
-        data, failure, was_skipped = _load_manifest_classified(
-            f, defaults=defaults, workspace=workspace
-        )
+        data, failure, was_skipped = _load_manifest_classified(f, defaults=defaults)
         if failure is not None:
             failures.append(failure)
         elif was_skipped:

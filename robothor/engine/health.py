@@ -145,7 +145,7 @@ async def _fleet_readiness(config: EngineConfig, details: dict[str, Any]) -> str
 
     from robothor.engine.config import load_manifest_dir
 
-    scan = await asyncio.to_thread(load_manifest_dir, config.manifest_dir, config.workspace)
+    scan = await asyncio.to_thread(load_manifest_dir, config.manifest_dir)
     broken = [f.agent_id or Path(f.filename).stem for f in scan.failures]
     if broken:
         details["broken_agents"] = sorted(broken)

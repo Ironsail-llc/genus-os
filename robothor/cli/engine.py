@@ -7,26 +7,26 @@ import sys
 from typing import Any
 
 
-def _load_agent_config_or_report(agent_id: str, manifest_dir: Any) -> Any:
-    """``load_agent_config``, with a schema refusal printed instead of raised.
+def _load_agent_config_or_report(agent_id: str, manifest_dir: Any, out: Any = None) -> Any:
+    """``load_agent_config``; on failure, print ONE line and return None.
 
-    A CLI command answers "no such agent" with a stderr line and exit 1. Under
-    `enforce` a refused manifest has to reach the same answer, naming the
-    SchemaError so the operator edits the file rather than hunting for a
-    missing one. Returns None when there is nothing to run.
+    A CLI command answers "no such agent" with a line and exit 1. A refused
+    manifest has to reach the same exit code with a DIFFERENT line, and only
+    that line: telling an operator "manifest rejected by schema" and then "not
+    found in <dir>" sends them to look for a file that is sitting right there.
+
+    Printing here rather than returning the reason to each caller is what keeps
+    the two messages mutually exclusive — the caller prints nothing at all.
+    ``out`` is the stream the caller would have used (``cmd_run`` writes to
+    stderr, ``_cmd_engine_run`` to stdout).
     """
-    from robothor.engine.config import load_agent_config
-    from robothor.engine.manifest_schema import ManifestSchemaError
+    from robothor.engine.config import load_agent_config_or_reason
 
-    try:
-        return load_agent_config(agent_id, manifest_dir)
-    except ManifestSchemaError as e:
-        print(
-            f"Error: Agent '{agent_id}' manifest was refused by the schema "
-            f"(SchemaError): {e.summary()}",
-            file=sys.stderr,
-        )
-        return None
+    stream = out if out is not None else sys.stderr
+    config, reason = load_agent_config_or_reason(agent_id, manifest_dir, "cli")
+    if config is None:
+        print(f"Error: {reason}", file=stream)
+    return config
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -57,7 +57,6 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     agent_config = _load_agent_config_or_report(agent_id, config.manifest_dir)
     if not agent_config:
-        print(f"Error: Agent '{agent_id}' not found in {config.manifest_dir}", file=sys.stderr)
         return 1
 
     if not args.print_only and not args.json_output:
@@ -241,9 +240,8 @@ def _cmd_engine_run(args: argparse.Namespace) -> int:
     if getattr(args, "deep", False):
         return _cmd_engine_run_deep(args, config)
 
-    agent_config = _load_agent_config_or_report(agent_id, config.manifest_dir)
+    agent_config = _load_agent_config_or_report(agent_id, config.manifest_dir, sys.stdout)
     if not agent_config:
-        print(f"Error: Agent '{agent_id}' not found in {config.manifest_dir}")
         return 1
 
     # Build message

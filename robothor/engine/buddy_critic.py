@@ -85,9 +85,11 @@ def _get_review_model() -> str:
         return _review_model_cache[1]
 
     try:
-        from robothor.engine.config import load_agent_config
+        from robothor.engine.config import load_agent_config_or_broken
 
-        config = load_agent_config("buddy", AGENTS_DIR)
+        # Inside the broad except, not instead of it — the schema refusal is
+        # the one cause here specific enough to be worth naming.
+        config = load_agent_config_or_broken("buddy", AGENTS_DIR, "buddy review model")
     except Exception as e:
         logger.warning("Could not load buddy model from manifest: %s", e)
         config = None

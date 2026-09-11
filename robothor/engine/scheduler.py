@@ -274,7 +274,7 @@ class CronScheduler:
         # the agent gets no job at all, rather than keeping a stale one. Same
         # dedup key as the watchdog path, so a restart during a known-broken
         # window does not double-page.
-        scan = load_manifest_dir(self.config.manifest_dir, self.config.workspace)
+        scan = load_manifest_dir(self.config.manifest_dir)
         await alert_manifest_scan(scan, context="scheduler start")
         manifests = list(scan.manifests)
         loaded = 0
@@ -1413,9 +1413,7 @@ class CronScheduler:
         It cannot page — see :meth:`reconcile` for the alerting wrapper the
         watchdog uses. Either way, a dirty scan prunes nothing.
         """
-        return self._reconcile_from_scan(
-            load_manifest_dir(self.config.manifest_dir, self.config.workspace)
-        )
+        return self._reconcile_from_scan(load_manifest_dir(self.config.manifest_dir))
 
     async def reconcile(self) -> list[str]:
         """Reconcile, and page the operator when a manifest cannot be read.
@@ -1425,9 +1423,7 @@ class CronScheduler:
         engine internals).
         """
         loop = asyncio.get_running_loop()
-        scan = await loop.run_in_executor(
-            None, load_manifest_dir, self.config.manifest_dir, self.config.workspace
-        )
+        scan = await loop.run_in_executor(None, load_manifest_dir, self.config.manifest_dir)
         # Unconditionally: the guard owns BOTH transitions. A clean scan is how
         # it clears its dedup key and sends the recovery notice. Gating this on
         # `not scan.clean` left the guard armed forever after a fix, so the next

@@ -252,9 +252,9 @@ The engine reads that schema every time it loads a manifest, on a ladder set by
 | `observe` *(default)* | Each error is logged with the agent, path and code, and counted in `robothor_manifest_schema_would_reject_total`. The agent still loads. |
 | `enforce` | The manifest is refused and the agent is reported **broken** — never absent. `/ready` returns 503 with `broken_agents: [ids]`, and the scheduler will not prune its schedules. |
 
-Validation runs on the merged manifest — the file plus `_defaults.yaml` plus
-any project, env and runtime overrides — so a typo in the fleet defaults is
-reported against every agent that inherits it.
+Validation runs on the merged manifest — the file plus `_defaults.yaml`, the
+layers a run merges — so a typo in the fleet defaults is reported against every
+agent that inherits it.
 
 `observe` is the default deliberately: it makes the promotion to `enforce` a
 decision taken on a count from your own fleet rather than on nerve. See

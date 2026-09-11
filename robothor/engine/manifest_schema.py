@@ -54,6 +54,7 @@ ISSUE_CODES = frozenset(
         "wrong_type",
         "invalid_enum",
         "unknown_key",
+        "deprecated_key",
         "schema_unreadable",
         # semantic, moved verbatim from config_schema
         "misplaced_key",
@@ -130,6 +131,12 @@ class _Field:
     enum: tuple[Any, ...] | None = None
     children: dict[str, _Field] | None = None
     items: dict[str, _Field] | None = None
+    #: The schema's own description marks the field DEPRECATED. Derived from
+    #: the text rather than a second list, for the same reason everything else
+    #: here is: a parallel list of deprecated keys would drift from the
+    #: document that tells humans which keys are deprecated.
+    deprecated: bool = False
+    note: str = ""
 
 
 def _parse_field(node: Any) -> _Field:
@@ -147,9 +154,12 @@ def _parse_field(node: Any) -> _Field:
         raw_enum = node.get("enum")
         props = node.get("properties")
         items = node.get("items")
+        note = " ".join(str(node.get("description") or "").split())
         return _Field(
             type=str(node["type"]),
             enum=tuple(raw_enum) if isinstance(raw_enum, list) else None,
+            deprecated=note.upper().startswith("DEPRECATED"),
+            note=note,
             children=(
                 {k: _parse_field(v) for k, v in props.items()} if isinstance(props, dict) else None
             ),
@@ -295,6 +305,19 @@ def _check_object(
             # An empty block (`v2:` with nothing under it) parses as None.
             # That is "absent", not "wrong".
             continue
+        if field.deprecated:
+            # A warning, never an error: the manifest loads and runs. But
+            # silence here reads as "live field", and the operator goes on
+            # believing a knob is turned that the engine does not read. That
+            # is the same defect as an accepted typo, wearing documentation.
+            issues.append(
+                ManifestIssue(
+                    path=child_path,
+                    code="deprecated_key",
+                    message=f"{child_path} is deprecated and has no effect — {field.note}",
+                    severity="warning",
+                )
+            )
         _check_value(issues, child_path, child_value, field, strict)
 
 

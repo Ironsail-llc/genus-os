@@ -372,14 +372,18 @@ def _build_tools(
 
     # Load agent config to get tool filtering
     try:
-        from robothor.engine.config import load_agent_config
+        from robothor.engine.config import load_agent_config_or_broken
 
         manifest_dir = (
             Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
             / "docs"
             / "agents"
         )
-        agent_config = load_agent_config(agent_id, manifest_dir)
+        # `_or_broken` inside the broad except, not instead of it: a refused
+        # manifest is specific and actionable and must be NAMED, while the
+        # except still covers whatever else goes wrong. "Could not load agent
+        # config" for a typo tells nobody which typo.
+        agent_config = load_agent_config_or_broken(agent_id, manifest_dir, "managed-agent tools")
     except Exception:
         logger.warning("Could not load agent config for %s, using empty tools", agent_id)
         tools: list[dict[str, Any]] = []
@@ -402,11 +406,11 @@ def _build_tools(
 def _load_system_prompt(agent_id: str) -> str:
     """Load system prompt from agent manifest."""
     try:
-        from robothor.engine.config import build_system_prompt, load_agent_config
+        from robothor.engine.config import build_system_prompt, load_agent_config_or_broken
 
         workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
         manifest_dir = workspace / "docs" / "agents"
-        config = load_agent_config(agent_id, manifest_dir)
+        config = load_agent_config_or_broken(agent_id, manifest_dir, "managed-agent prompt")
         if config is None:
             return ""
         parts = build_system_prompt(config, workspace)

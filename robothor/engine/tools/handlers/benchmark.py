@@ -1682,7 +1682,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         return {"error": "Runner not available — benchmark_run requires a running engine"}
 
     # Execute each task as a sub-agent run
-    from robothor.engine.config import load_agent_config
+    from robothor.engine.config import load_agent_config_or_reason
     from robothor.engine.models import DeliveryMode
 
     # Parent linkage for every task in this suite — see _benchmark_spawn_context.
@@ -1722,8 +1722,8 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         # — which used to truncate output mid-task and tank the score.
         task_spend_ceiling = _agent_task_cost_ceiling(agent_id, runner.config.manifest_dir)
 
-        # Load and configure the target agent
-        child_config = load_agent_config(agent_id, runner.config.manifest_dir)
+        # Load the target agent; `_or_reason` so a refusal scores 0 with a why
+        child_config, load_error = load_agent_config_or_reason(agent_id, runner.config.manifest_dir)
         if child_config is None:
             results.append(
                 {
@@ -1731,7 +1731,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                     "category": task.get("category", "correctness"),
                     "score": 0.0,
                     "outcome": _OUTCOME_ERROR,
-                    "error": f"Agent config not found: {agent_id}",
+                    "error": load_error,
                 }
             )
             continue

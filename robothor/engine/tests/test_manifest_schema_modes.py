@@ -15,6 +15,7 @@ which makes reconcile refuse to prune anything.
 
 from __future__ import annotations
 
+import copy
 import logging
 
 import pytest
@@ -254,6 +255,119 @@ class TestTheScanValidatesTheMergedDocument:
         (tmp_path / "alice.yaml").write_text(GOOD)
         (tmp_path / "_defaults.yaml").write_text("schedule:\n  timezone: UTC\n")
         assert load_manifest_dir(tmp_path).clean
+
+
+class TestTheScanMergesExactlyWhatARunMerges:
+    """Parity, in both directions, on the same manifest.
+
+    The scan refuses agents; a refusal the runtime cannot reproduce is the
+    fleet marked broken over a document nothing runs. So the scan's merge and
+    `load_agent_config`'s merge have to be the same merge — which today means
+    `_defaults.yaml` and nothing else.
+
+    `.robothor/config.yaml` is the trap. `_merged_manifest` applies it when
+    given a `workspace`, and `load_manifest_dir` has one available on
+    `EngineConfig` — but NO runtime caller of `load_agent_config` passes one,
+    so project overrides are inert at run time. A scan that applied them would
+    refuse manifests that load and run perfectly well.
+    """
+
+    @pytest.fixture
+    def project_override_defect(self, tmp_path):
+        manifests = tmp_path / "agents"
+        manifests.mkdir()
+        (manifests / "alice.yaml").write_text(GOOD)
+        robothor_dir = tmp_path / ".robothor"
+        robothor_dir.mkdir()
+        (robothor_dir / "config.yaml").write_text(
+            '_all:\n  schedule:\n    timeout_seconds: "soon"\n'
+        )
+        return tmp_path, manifests
+
+    def test_the_scan_does_not_refuse_what_a_run_accepts(
+        self, project_override_defect, monkeypatch
+    ):
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_SCHEMA_MODE", "enforce")
+        workspace, manifests = project_override_defect
+
+        # The runtime call — every real caller looks exactly like this.
+        assert load_agent_config("alice", manifests) is not None
+        # ...so the scan must agree.
+        assert load_manifest_dir(manifests).clean
+
+    def test_the_defect_is_real_when_the_layer_is_actually_applied(
+        self, project_override_defect, monkeypatch
+    ):
+        """The counter-case. Without it the test above passes on a validator
+        that never looks at anything, and proves nothing about parity."""
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_SCHEMA_MODE", "enforce")
+        workspace, manifests = project_override_defect
+
+        with pytest.raises(ManifestSchemaError):
+            load_agent_config("alice", manifests, workspace)
+
+    def test_defaults_are_applied_by_both(self, tmp_path, monkeypatch):
+        """The other direction: the layer the runtime DOES apply is a layer the
+        scan applies too."""
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_SCHEMA_MODE", "enforce")
+        (tmp_path / "alice.yaml").write_text(GOOD)
+        (tmp_path / "_defaults.yaml").write_text('schedule:\n  timeout_seconds: "soon"\n')
+
+        assert not load_manifest_dir(tmp_path).clean
+        with pytest.raises(ManifestSchemaError):
+            load_agent_config("alice", tmp_path)
+
+    def test_both_paths_validate_the_identical_document(self, tmp_path, monkeypatch):
+        """Not "both accept it" — the same dict, key for key.
+
+        Behavioural parity only proves the two merges agree on the manifests a
+        test happened to write. Comparing the DOCUMENTS catches a layer added
+        to one side that no fixture yet trips over, which is how the scan came
+        to refuse agents the runtime ran perfectly well in the first place.
+        """
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_SCHEMA_MODE", "enforce")
+        manifests = tmp_path / "agents"
+        manifests.mkdir()
+        # Every layer the merge knows about is present and DIFFERENT, so a
+        # side that applies one the other does not shows up as a differing
+        # document rather than as two documents that happen to both validate.
+        (manifests / "alice.yaml").write_text(
+            GOOD
+            + "when:\n  - trigger_type: cron\n    overrides:\n      v2:\n        max_cost_usd: 3.0\n"
+        )
+        (manifests / "_defaults.yaml").write_text(
+            "schedule:\n  timeout_seconds: 900\nv2:\n  max_cost_usd: 40.0\n"
+        )
+        robothor_dir = tmp_path / ".robothor"
+        robothor_dir.mkdir()
+        (robothor_dir / "config.yaml").write_text("_all:\n  v2:\n    max_cost_usd: 9.0\n")
+
+        seen: list[dict] = []
+        real_validate = manifest_schema.validate
+
+        def _spy(data, *, strict=False):
+            seen.append(copy.deepcopy(data))
+            return real_validate(data, strict=strict)
+
+        monkeypatch.setattr(manifest_schema, "validate", _spy)
+
+        load_manifest_dir(manifests)
+        from_scan = seen[-1]
+        seen.clear()
+        # The runtime call as every real caller makes it: no workspace, no
+        # trigger_type.
+        load_agent_config("alice", manifests)
+        from_runtime = seen[-1]
+
+        assert from_scan == from_runtime
+
+    def test_the_scan_takes_no_workspace(self):
+        """A guard on the signature, because re-adding the parameter is the
+        obvious "improvement" and it silently breaks parity."""
+        import inspect
+
+        params = inspect.signature(load_manifest_dir).parameters
+        assert list(params) == ["manifest_dir"], params
 
 
 class TestBrokenIsNotDeleted:

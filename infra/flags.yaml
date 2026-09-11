@@ -584,9 +584,20 @@ flags:
       So enforce is already a no-op on this box, and the strict findings are
       precisely the silent-no-op class the validator was built to surface.
 
+      Know the blast radius before flipping. Validation runs on the MERGED
+      document, so a single typo in docs/agents/_defaults.yaml marks the WHOLE
+      FLEET broken: every agent inherits that file, every one of them becomes a
+      ManifestFailure("SchemaError"), /ready goes 503 and the scheduler prunes
+      nothing until it is fixed. That is the design, not a bug — a defect in
+      the file every agent reads IS a fleet-wide outage, and the old behaviour
+      was to run anyway and fail per-agent at dispatch. But it means one
+      careless edit to a shared file stops everything, where today it degrades
+      one agent.
+
       BLOCKER: the measurement above is one instance. enforce refuses a
       manifest, and the blast radius of getting the schema wrong is an agent
-      that will not load — so the gate is a full upgrade cycle in observe with
+      that will not load — a whole fleet of them, if the mistake is in
+      _defaults.yaml — so the gate is a full upgrade cycle in observe with
       robothor_manifest_schema_would_reject_total staying at zero, on an
       instance that did NOT write the schema. Flipping on the evidence of the
       box the schema was authored against proves only that the author agreed

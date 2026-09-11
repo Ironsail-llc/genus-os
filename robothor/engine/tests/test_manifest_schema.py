@@ -193,6 +193,33 @@ class TestKnownV2KeysComeFromTheSchemaToo:
         assert not [i for i in validate(data) if "typo" in i.message], validate(data)
         assert not [w for w in validate_manifest(data) if "typo" in w]
 
+    def test_a_deprecated_key_is_named_as_deprecated(self):
+        """Silence would say "live field". It is not one.
+
+        `token_budget` is DEPRECATED — auto-derived at runtime — so a manifest
+        setting it is expressing an intent nothing acts on. Accepting it
+        without comment is the same silence as accepting a typo: the operator
+        believes a knob is turned.
+        """
+        data = _valid()
+        data["v2"] = {"token_budget": 40000}
+        issues = [i for i in validate(data) if i.code == "deprecated_key"]
+        assert issues, validate(data)
+        assert issues[0].path == "v2.token_budget"
+        assert issues[0].severity == "warning"
+        assert "token_budget" in issues[0].message
+
+    def test_a_deprecated_key_never_blocks_enforce(self):
+        """It is advice about a live, loadable manifest — not an error."""
+        data = _valid()
+        data["v2"] = {"token_budget": 0, "cost_budget_usd": 0.0}
+        assert _errors(validate(data, strict=True)) == []
+
+    def test_a_live_key_is_not_called_deprecated(self):
+        data = _valid()
+        data["v2"] = {"max_cost_usd": 1.0}
+        assert not [i for i in validate(data) if i.code == "deprecated_key"]
+
     def test_a_real_typo_is_still_a_typo(self):
         data = _valid()
         data["v2"] = {"planing_enabled": True}

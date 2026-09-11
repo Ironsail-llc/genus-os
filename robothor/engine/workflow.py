@@ -934,14 +934,18 @@ class WorkflowEngine:
         self, step: WorkflowStepDef, run: WorkflowRun, result: WorkflowStepResult
     ) -> None:
         """Execute an agent step via runner.execute()."""
-        from robothor.engine.config import load_agent_config
+        from robothor.engine.config import load_agent_config_or_reason
         from robothor.engine.dedup import release, try_acquire
         from robothor.engine.delivery import deliver
 
-        agent_config = load_agent_config(step.agent_id, self.config.manifest_dir)
+        # `_or_reason`: a refused manifest is a FAILED step with a reason the
+        # run report can show, not a raise out of the workflow engine.
+        agent_config, reason = load_agent_config_or_reason(
+            step.agent_id, self.config.manifest_dir, "workflow step"
+        )
         if not agent_config:
             result.status = WorkflowStepStatus.FAILED
-            result.error_message = f"Agent config not found: {step.agent_id}"
+            result.error_message = reason
             return
 
         # Prevent overlap with cron-triggered or other workflow-triggered runs
