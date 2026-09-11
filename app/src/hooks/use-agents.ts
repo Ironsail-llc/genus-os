@@ -50,6 +50,9 @@ export function useAgents() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [summary, setSummary] = useState<AgentSummary>({ healthy: 0, degraded: 0, failed: 0, sleeping: 0, total: 0 });
   const [isLoading, setIsLoading] = useState(true);
+  // A refused fetch must be reportable: "no agents" and "could not ask" are
+  // not the same answer.
+  const [error, setError] = useState<{ endpoint: string; status: number } | null>(null);
   const lastVisibleRef = useRef(Date.now());
   const fetchIdRef = useRef(0);
 
@@ -62,10 +65,16 @@ export function useAgents() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tool: "agent_status", params: {} }),
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        if (id === fetchIdRef.current) {
+          setError({ endpoint: "/api/actions/execute", status: res.status });
+        }
+        return;
+      }
       const json = await res.json();
       if (id !== fetchIdRef.current) return;
 
+      setError(null);
       const agentList: AgentInfo[] = json.data?.agents || [];
       setAgents(agentList);
 
@@ -112,5 +121,5 @@ export function useAgents() {
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [fetchAgents]);
 
-  return { agents, summary, isLoading, refetch: fetchAgents };
+  return { agents, summary, isLoading, error, refetch: fetchAgents };
 }

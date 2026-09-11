@@ -12,6 +12,7 @@ export { DataTable } from "./data-table";
 export { Timeline } from "./timeline";
 export { MemorySearch } from "./memory-search";
 export { ServiceHealth } from "./service-health";
+export { SectionError, toSectionFailure } from "./section-error";
 export { TaskBoard } from "./task-board";
 export { MarkdownView } from "./markdown-view";
 export { FormPanel } from "./form-panel";
