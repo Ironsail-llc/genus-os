@@ -37,7 +37,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-315 settings in 13 groups.
+345 settings in 13 groups.
 
 ## paths
 
@@ -86,7 +86,7 @@ PostgreSQL connection, tenancy and row-level security.
 | `ROBOTHOR_DB_USER` | str | _(empty)_ | yes | no | legacy | PostgreSQL role. Empty falls back to $USER, then 'robothor'. Must be a non-superuser for row-level security to actually apply. |
 | `ROBOTHOR_DEFAULT_TENANT` | str | `default` | yes | no | legacy | The tenant DAL calls tag rows with when the caller names none. Read at import time into robothor.constants.DEFAULT_TENANT. |
 | `ROBOTHOR_PLATFORM_TENANT` | str | _(empty)_ | yes | no | legacy | Tenant the bridge treats as the platform operator for owner-only endpoints. Empty means the default tenant. |
-| `ROBOTHOR_RLS_ENABLED` | bool | `false` | yes | no | legacy | **governed.** Bind every connection to a tenant so PostgreSQL row-level security applies. Inert unless the DB user is a non-superuser; federation refuses to activate a link while it is off. |
+| `ROBOTHOR_RLS_ENABLED` | bool | `false` | yes | no | legacy | Bind every connection to a tenant so PostgreSQL row-level security applies. Inert unless the DB user is a non-superuser; federation refuses to activate a link while it is off. |
 | `ROBOTHOR_SOAK_TEMPLATE` | str | `robothor_test` | yes | no | legacy | Template database the federation soak clones per instance. |
 | `ROBOTHOR_TENANT_ID` | str | _(empty)_ | yes | no | legacy | The tenant this process operates AS — what the RLS connection binds to. Must agree with ROBOTHOR_DEFAULT_TENANT or every default-tenant write is refused by the RLS WITH CHECK and the caller gets None. |
 | `ROBOTHOR_TEST_ADMIN_DSN` | str | _(unset)_ | yes | yes | legacy | Full libpq DSN for the administrative role CI creates and drops test databases with. |
@@ -189,7 +189,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_RECORD_ASSISTANT_TURNS` | bool | `false` | yes | no | legacy | Persist assistant turns into the session transcript as well as user turns. Larger transcripts, fuller replay. |
 | `ROBOTHOR_REQUIRED_AGENT_IDS` | str | _(empty)_ | yes | no | legacy | Comma-separated agent ids that must be loaded, or /ready returns 503. Names a broken manifest instead of letting the fleet run short. |
 | `ROBOTHOR_RESERVED_INTERACTIVE_SLOTS` | int | `1` | no | no | legacy | Concurrency slots held back for interactive chat so background work cannot starve the operator's own conversation. |
-| `ROBOTHOR_RESUME_IN_FLIGHT` | bool | `false` | yes | no | legacy | **governed.** Resume runs that were in flight when the engine restarted. Verify it from a recovered run, never from the log line it prints itself. |
+| `ROBOTHOR_RESUME_IN_FLIGHT` | bool | `false` | yes | no | legacy | Resume runs that were in flight when the engine restarted. Verify it from a recovered run, never from the log line it prints itself. |
 | `ROBOTHOR_RIP_1_AGENTS` | str | _(empty)_ | yes | no | legacy | Comma-separated soak allowlist for the background-review rip: when set, only these agents take the new path. |
 | `ROBOTHOR_SANDBOX_BINARY` | str | _(empty)_ | yes | no | legacy | Container runtime used for sandboxed exec. Empty prefers rootless podman, then docker. |
 | `ROBOTHOR_SANDBOX_DEFAULT_MODE` | str | _(empty)_ | yes | no | legacy | **governed.** Fleet default sandbox mode for agents whose manifest names none. Empty leaves exec unrouted, which is sandboxing in name only. |
@@ -231,7 +231,7 @@ Who may reach the bridge and the dashboard, and how that is proven.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `GENUS_AUTH_ENFORCE` | bool | `false` | yes | no | legacy | **governed.** One-way compatibility switch that turns identity checks on. It never relaxes the existing role_permissions policy. |
+| `GENUS_AUTH_ENFORCE` | bool | `false` | yes | no | legacy | One-way compatibility switch that turns identity checks on. It never relaxes the existing role_permissions policy. |
 | `GENUS_AUTH_SIGNING_KEY` | str | _(unset)_ | yes | yes | legacy | Key session tokens are signed with; at least 32 bytes. Required in production, where startup fails without it. |
 | `GENUS_BRIDGE_SSO_SECRET` | str | _(unset)_ | yes | yes | legacy | Shared secret the dashboard and bridge exchange SSO assertions with. The two must match or every sign-in is refused. |
 | `GENUS_ENVIRONMENT` | str | _(empty)_ | yes | no | legacy | Deployment environment. 'production' makes the auth preconditions hard requirements instead of warnings. Also read from `ROBOTHOR_ENVIRONMENT`. |
@@ -247,26 +247,55 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `ROBOTHOR_ACCRETION_ENABLED` | bool | `false` | yes | no | legacy | **governed.** Let agents accrete durable notes from their runs into the workspace. |
-| `ROBOTHOR_ADMISSION_ENABLED` | bool | `false` | yes | no | legacy | **governed.** Run the admission check that refuses work an agent is not equipped to do rather than letting it fail late. |
+| `ROBOTHOR_ACCRETION_ENABLED` | bool | `false` | yes | no | legacy | Let agents accrete durable notes from their runs into the workspace. |
+| `ROBOTHOR_ADMISSION_ENABLED` | bool | `false` | yes | no | legacy | Run the admission check that refuses work an agent is not equipped to do rather than letting it fail late. |
 | `ROBOTHOR_ADMISSION_MODE` | str | `observe` | yes | no | legacy | **governed.** Admission ladder position: observe logs refusals, enforce applies them. |
-| `ROBOTHOR_CURATOR_APPLY` | bool | `false` | yes | no | legacy | **governed.** Let the memory curator write its proposed edits. Off, it only proposes — the prompt-trust boundary for accreted content. |
-| `ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED` | bool | `false` | yes | no | legacy | **governed.** Hold a run to the deliverable it promised, so 'done' means the artefact exists. |
+| `ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED` | bool | `false` | yes | no | legacy | Switch for fail-closed human approval: a tool an agent must ask about is denied when the operator does not answer in time. |
+| `ROBOTHOR_APPROVAL_MODE` | str | `observe` | yes | no | legacy | **governed.** Human-approval ladder position: observe records what would have been escalated, enforce actually asks and denies on timeout. |
+| `ROBOTHOR_BENCHMARK_DECONTAMINATION_ENABLED` | bool | `false` | yes | no | legacy | Switch for separating benchmark-harness traffic from production metrics, so a nightly suite does not read as fleet activity. |
+| `ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE` | str | `observe` | yes | no | legacy | **governed.** Decontamination ladder position: observe reports benchmark runs and cost separately, enforce excludes them from production surfaces. |
+| `ROBOTHOR_BENCHMARK_SANDBOX_ENABLED` | bool | `false` | yes | no | legacy | Switch for seeded benchmark fixtures and sandboxed CRM writes, so a graded task can act instead of only reading. |
+| `ROBOTHOR_BENCHMARK_SANDBOX_MODE` | str | `observe` | yes | no | legacy | **governed.** Benchmark-sandbox ladder position: observe seeds fixtures and records read-backs without grading them, enforce folds them into the score. |
+| `ROBOTHOR_COMPLETION_CONTRACTS_ENABLED` | bool | `false` | yes | no | legacy | Switch for evidence-based completion contracts: a run claiming success must show the tool trace that produced it. |
+| `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | str | `observe` | yes | no | legacy | **governed.** Completion-contract ladder position: observe records unevidenced claims, enforce fails the run that makes one. |
+| `ROBOTHOR_CONFIG_STRICT_MODE` | str | `observe` | yes | no | 1.66 | What an unknown key in the settings: block of config.yaml does. 'off' ignores it, 'observe' (default for existing installs) logs one warning naming the key and carries on, 'enforce' refuses to start. Inventoried in infra/flags.yaml but deliberately NOT governed: it is read while settings are being resolved, which happens before and without a database. |
+| `ROBOTHOR_CURATOR_APPLY` | bool | `false` | yes | no | legacy | Let the memory curator write its proposed edits. Off, it only proposes — the prompt-trust boundary for accreted content. |
+| `ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED` | bool | `false` | yes | no | legacy | Hold a run to the deliverable it promised, so 'done' means the artefact exists. |
 | `ROBOTHOR_DELIVERABLE_CONTRACT_MODE` | str | `observe` | yes | no | legacy | **governed.** Deliverable-contract ladder position: observe records breaches, enforce fails the run. |
 | `ROBOTHOR_DETECTORS_ENABLED` | bool | `true` | yes | no | legacy | Run the background detectors that propose workflows and surface anomalies. Set 0 to disable them all. |
-| `ROBOTHOR_DISABLE_ALL_GUARDRAILS` | bool | `false` | yes | no | legacy | **governed.** Master off switch for every guardrail. A break-glass control: an instance running with this set has no safety checks at all. |
+| `ROBOTHOR_DISABLE_ALL_GUARDRAILS` | bool | `false` | yes | no | legacy | Master off switch for every guardrail. A break-glass control: an instance running with this set has no safety checks at all. |
+| `ROBOTHOR_DISABLE_ALL_RIPS` | bool | `false` | yes | no | legacy | Panic switch: forces every rip and every ladder above to 'off' regardless of its own flag. An instance left with this set runs with none of the controls it appears to have. |
 | `ROBOTHOR_DNC_MODE` | str | `observe` | yes | no | legacy | **governed.** Do-not-contact ladder position: observe logs an attempted contact of a suppressed person, enforce blocks it. |
-| `ROBOTHOR_FEDERATION_ALLOW_INERT_RLS` | bool | `false` | yes | no | legacy | **governed.** Let a federation link activate while row-level security is inert. A deliberate escape hatch: the gate exists because a child could otherwise reach its parent's data. |
+| `ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED` | bool | `false` | yes | no | legacy | Switch for rejecting shell-chaining metacharacters in an allowlisted exec command, so an allowlisted binary cannot carry a second one. |
+| `ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE` | str | `observe` | yes | no | legacy | **governed.** Exec-allowlist ladder position: observe logs the chained command, enforce refuses it. |
+| `ROBOTHOR_FEDERATION_ALLOW_INERT_RLS` | bool | `false` | yes | no | legacy | Let a federation link activate while row-level security is inert. A deliberate escape hatch: the gate exists because a child could otherwise reach its parent's data. |
 | `ROBOTHOR_HA_DEDUP_ENABLED` | bool | `false` | yes | no | legacy | Deduplicate work across engine replicas through Redis instead of in-process only. Off is the correct single-node default. |
 | `ROBOTHOR_HA_LEADER_ENABLED` | bool | `false` | yes | no | legacy | Elect a leader among engine replicas so scheduled work runs once. Unset means single-node, where every process is the leader. |
+| `ROBOTHOR_HONESTY_SUITE_MODE` | str | `observe` | yes | no | legacy | **governed.** Honesty cases in every benchmark suite: 'off' omits them, 'observe' (default) runs and reports them outside the weighted aggregate, 'enforce' counts them toward the grade. A grader, not a guardrail, so it has no 'alert' rung and no separate enabled switch. |
+| `ROBOTHOR_INJECTION_SCAN_ENABLED` | bool | `false` | yes | no | legacy | Switch for prompt-injection scanning of assembled system-run prompts. |
+| `ROBOTHOR_INJECTION_SCAN_MODE` | str | `observe` | yes | no | legacy | **governed.** Injection-scan ladder position: observe logs a suspect prompt, enforce refuses to run it. |
+| `ROBOTHOR_JUDGE_ENABLED` | bool | `false` | yes | no | legacy | **governed.** Let the goal-judge grade recent runs against real outcome signals and write the agent_reviews rows the achievement score is built on. |
 | `ROBOTHOR_MANIFEST_SCHEMA_MODE` | str | `observe` | yes | no | legacy | **governed.** Agent-manifest schema ladder position: observe logs and counts what enforcement would refuse, enforce refuses the manifest and reports the agent broken. off skips validation entirely. |
-| `ROBOTHOR_PLANNER_ENABLED` | bool | `true` | yes | no | legacy | **governed.** Let the forward planner turn a thread into structured CRM tasks. Set 0 to fall back to stage-3 behaviour. |
-| `ROBOTHOR_PLUGIN_MANIFEST_ENABLED` | bool | `true` | yes | no | legacy | **governed.** Validate plugin manifests before a plugin is allowed to load. |
-| `ROBOTHOR_PLUGIN_MANIFEST_MODE` | str | `observe` | yes | no | legacy | **governed.** Plugin-manifest ladder position: observe logs violations, enforce refuses to load the plugin. |
-| `ROBOTHOR_SANDBOX_ENFORCE_OVERRIDES_MANIFEST` | bool | `false` | yes | no | legacy | **governed.** Make sandbox 'enforce' outrank a manifest's per-agent opt-out. Without it an agent can decline the sandbox it is enforced under. |
+| `ROBOTHOR_PLANNER_ENABLED` | bool | `true` | yes | no | legacy | Let the forward planner turn a thread into structured CRM tasks. Set 0 to fall back to stage-3 behaviour. |
+| `ROBOTHOR_PLUGIN_MANIFEST_ENABLED` | bool | `true` | yes | no | legacy | Validate plugin manifests before a plugin is allowed to load. |
+| `ROBOTHOR_PLUGIN_MANIFEST_MODE` | str | `observe` | yes | no | legacy | Plugin-manifest ladder position: observe logs violations, enforce refuses to load the plugin. |
+| `ROBOTHOR_RBAC_ENABLED` | bool | `false` | yes | no | legacy | Switch for role-based access control over system, cron and hook runs. Off, every run may call every tool its manifest allows. |
+| `ROBOTHOR_RBAC_MODE` | str | `observe` | yes | no | legacy | **governed.** RBAC ladder position: observe records the denials it would have made, alert also notifies, enforce denies. |
+| `ROBOTHOR_RIP_13_ENABLED` | bool | `false` | yes | no | legacy | Rip 13: symbolic compaction of tool logs into a symbol graph. |
+| `ROBOTHOR_RIP_13_MODE` | str | `observe` | yes | no | legacy | **governed.** Rip 13 ladder position: observe logs the tokens compaction would have saved, enforce injects the compact graph instead of raw tool output. Two rungs only -- there is nothing to alert about. |
+| `ROBOTHOR_RIP_1_ENABLED` | bool | `false` | yes | no | legacy | **governed.** Rip 1: per-agent memory scoping, so an agent reads the blocks it owns rather than the whole workspace. |
+| `ROBOTHOR_RIP_4_ENABLED` | bool | `false` | yes | no | legacy | **governed.** Rip 4: structured tool-result envelopes the runner can check instead of prose it can only quote. |
+| `ROBOTHOR_RIP_5_ENABLED` | bool | `false` | yes | no | legacy | **governed.** Rip 5: the destructive LLM skill-consolidation curator pass. The non-destructive lifecycle runs either way. |
+| `ROBOTHOR_RIP_7_ENABLED` | bool | `false` | yes | no | legacy | Rip 7: the drift detector over memory_facts. |
+| `ROBOTHOR_RIP_7_MODE` | str | `observe` | yes | no | legacy | **governed.** Rip 7 ladder position: observe logs a drifting write, alert also notifies, enforce snapshots and refuses it. |
+| `ROBOTHOR_RUN_VERIFICATION_ENABLED` | bool | `false` | yes | no | legacy | Switch for verifying a finished run's claims against its tool trace. |
+| `ROBOTHOR_RUN_VERIFICATION_MODE` | str | `observe` | yes | no | legacy | **governed.** Run-verification ladder position: observe records the verdict, enforce marks the run failed when its claims are unsupported. |
+| `ROBOTHOR_SANDBOX_ENFORCE_OVERRIDES_MANIFEST` | bool | `false` | yes | no | legacy | Make sandbox 'enforce' outrank a manifest's per-agent opt-out. Without it an agent can decline the sandbox it is enforced under. |
 | `ROBOTHOR_TODO_ESCALATE_ENABLED` | bool | `true` | yes | no | legacy | Escalate a run's unfinished todos into CRM tasks when it ends, so leftovers are tracked rather than lost with the transcript. |
-| `ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED` | bool | `false` | yes | no | legacy | **governed.** Promote a todo's subtasks into their own CRM tasks. |
-| `ROBOTHOR_WEB_SEARCH_BROWSER_FALLBACK` | str | _(empty)_ | yes | no | legacy | **governed.** 'on' lets web_search fall back to a real browser when the scraped engines block the host IP — the failure mode behind a whole day of 'can't even web search'. |
+| `ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED` | bool | `false` | yes | no | legacy | Promote a todo's subtasks into their own CRM tasks. |
+| `ROBOTHOR_TOOL_VERIFY_ENABLED` | bool | `false` | yes | no | legacy | Switch for tool-level post-condition checks -- did the write the tool reported actually land? |
+| `ROBOTHOR_TOOL_VERIFY_MODE` | str | `observe` | yes | no | legacy | **governed.** Tool-verification ladder position: observe records a failed post-condition, enforce reports the tool call as failed. |
+| `ROBOTHOR_WEB_SEARCH_BROWSER_FALLBACK` | str | _(empty)_ | yes | no | legacy | 'on' lets web_search fall back to a real browser when the scraped engines block the host IP — the failure mode behind a whole day of 'can't even web search'. |
 
 ## services
 
