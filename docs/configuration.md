@@ -167,6 +167,52 @@ certificate is reported as such. Redirects are followed one hop at a time and
 re-vetted at every hop, up to 5 real hops (the canonical `http→https` and
 `apex↔www` bounces do not count against that).
 
+## Web search (optional)
+
+**From a residential or datacenter IP, most scraped engines block you.** Google,
+Startpage, Brave-via-SearXNG, DuckDuckGo, Qwant and Mojeek all answer "access
+denied"/"CAPTCHA"/"too many requests" from a typical home or cloud egress, and
+DuckDuckGo's HTML endpoint answers a real browser with an HTTP 202 challenge
+page. **The Brave Search API is the supported reliable path**; the scraping
+chain below is the best effort for an instance without a key.
+
+The `web_search` tool grades the answer it gets back. It scores results by the
+*rare* terms of the query — a term carried by nearly every result is what the
+results have in common, not evidence they answer the question — and always
+requires a place or number the operator named (Jamaica, Queens, a ZIP) to
+appear. When SearXNG errors, reports its general engines unresponsive, or comes
+back failing that grade, the search re-runs through the `browser` provider: the
+engine's own browser loads a real Bing (then DuckDuckGo HTML) results page **in
+a background tab**, never moving the page an agent is working on. The result
+then carries `"provider": "browser"`, `"fallback_from": "searxng"`, a
+`fallback_reason`, and the unresponsive-engine list.
+
+`fallback_reason` values: `low_relevance`, `missing_place_terms`,
+`engines_unresponsive`, `error`, `browser_low_relevance` (the browser answer
+missed too), `browser_parse_empty` (page loaded, nothing parsed — the result
+selectors have moved), `browser_blocked` (challenge/interstitial),
+`browser_timeout`, `browser_denied` (the run may not use the browser tool),
+`browser_unavailable`, `browser_fallback_disabled`.
+
+A local-looking query ("… near X", "… in Springfield", a ZIP) also gets up to
+five OpenStreetMap rows under `places`: for a mapped category (coworking,
+cafe/coffee, gym) the place is geocoded once with Nominatim — using exactly the
+words the query gave, never an inferred city or state — and the amenities around
+it come from Overpass; anything else falls back to a free-text Nominatim lookup.
+Both APIs share one ≤1 request/second courtesy budget. When the local path runs
+and finds nothing, the result says why in `places_reason`:
+`geocode_failed:<place>`, `overpass_empty`, `overpass_error`,
+`category_unmapped`, or `place_not_in_query`.
+
+An agent can force one provider with the tool's `provider` argument
+(`searxng`, `browser`, `brave`, `perplexity`); omitting it runs the automatic
+chain.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BRAVE_SEARCH_API_KEY` | *(empty)* | Brave Search API key. When set — and when the caller did not name a different provider — `web_search` prefers the Brave API and falls back to the SearXNG → browser chain on any error. Unset means the provider is absent: no call, no error. |
+| `ROBOTHOR_WEB_SEARCH_BROWSER_FALLBACK` | `on` | `off`/`0`/`false`/`no` disables the *implicit* browser fallback (it drives a headed Chromium on the operator's display). An explicit `provider="browser"` still runs. |
+
 ## Failure-mode detectors
 
 See [Observability](OBSERVABILITY.md#failure-mode-detectors) for what each
