@@ -61,6 +61,51 @@ def _execution_mode_block() -> dict[str, Any]:
         return {"available": False}
 
 
+def _mount_subsystem_routers(app: Any, config: EngineConfig, runner: AgentRunner | None) -> None:
+    """Attach every subsystem that owns its own router.
+
+    Lifted out of ``create_health_app`` so that adding a subsystem is one line
+    there instead of another five in the engine's largest function. Imports stay
+    inside the body on purpose: each subsystem pulls in its own dependencies,
+    and importing all of them at module scope would make a bare
+    ``import robothor.engine.health`` load the chat stack, the IDE websocket,
+    and the webhook ingress.
+    """
+    from robothor.engine.dashboards import (
+        get_completion_router,
+        get_dashboard_router,
+        get_public_router,
+    )
+
+    # Dashboard endpoints (replaces the brain/ Node.js servers)
+    app.include_router(get_dashboard_router())
+    app.include_router(get_public_router())
+    app.include_router(get_completion_router())
+
+    # Chat + IDE endpoints only exist when there is a runner to serve them
+    if runner is not None:
+        from robothor.engine.chat import init_chat
+        from robothor.engine.chat import router as chat_router
+        from robothor.engine.ide import init_ide
+        from robothor.engine.ide import router as ide_router
+
+        init_chat(runner, config)
+        app.include_router(chat_router)
+        init_ide(runner, config)
+        app.include_router(ide_router)
+
+    # Webhook ingress
+    from robothor.engine.webhooks import get_webhook_router
+
+    app.include_router(get_webhook_router())
+
+    # Provider credentials, models, and the test connection. Its own module so
+    # the credential surface is findable rather than buried in this file.
+    from robothor.engine.admin_providers import register as register_admin_providers
+
+    register_admin_providers(app)
+
+
 def create_health_app(
     config: EngineConfig, runner: AgentRunner | None = None, workflow_engine: Any = None
 ) -> Any:
@@ -90,36 +135,7 @@ def create_health_app(
             request.state.auth = context
         return await call_next(request)
 
-    # Mount dashboard endpoints (replaces brain/ Node.js servers)
-    from robothor.engine.dashboards import (
-        get_completion_router,
-        get_dashboard_router,
-        get_public_router,
-    )
-
-    app.include_router(get_dashboard_router())
-    app.include_router(get_public_router())
-    app.include_router(get_completion_router())
-
-    # Mount chat endpoints when runner is available
-    if runner is not None:
-        from robothor.engine.chat import init_chat
-        from robothor.engine.chat import router as chat_router
-
-        init_chat(runner, config)
-        app.include_router(chat_router)
-
-        # IDE WebSocket integration
-        from robothor.engine.ide import init_ide
-        from robothor.engine.ide import router as ide_router
-
-        init_ide(runner, config)
-        app.include_router(ide_router)
-
-    # Mount webhook ingress
-    from robothor.engine.webhooks import get_webhook_router
-
-    app.include_router(get_webhook_router())
+    _mount_subsystem_routers(app, config, runner)
 
     # ── Buddy / KAIROS / Extensions API routes ───────────────────────────
 

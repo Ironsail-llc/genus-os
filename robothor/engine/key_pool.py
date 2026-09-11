@@ -100,13 +100,310 @@ class KeyStatus:
     reason: Retirement | None
 
 
-#: Model-prefix -> the env var holding that provider's credential. Only
-#: providers whose pooling has actually been exercised belong here: a model
-#: whose prefix is absent gets no pool and keeps litellm's own env
-#: resolution, which is the behaviour every deployment has today.
-_PROVIDER_KEY_VARS = {
-    "openrouter/": "OPENROUTER_API_KEY",
-}
+@dataclass(frozen=True)
+class ProviderSpec:
+    """One credential-bearing LLM provider the appliance knows how to configure.
+
+    The catalog is deliberately small and explicit. A provider listed here is
+    one the setup wizard offers, the Settings page can hold a key for, and the
+    pool rotates spares across; a model whose prefix is absent keeps litellm's
+    own environment resolution, which is the behaviour every deployment had
+    before pooling existed.
+    """
+
+    id: str
+    label: str
+    model_prefix: str
+    env_var: str
+    default_model: str
+
+
+#: Every provider the appliance can be configured with, in the order the
+#: Settings page shows them. ``default_model`` is what a test connection dials
+#: when the caller names no model — a cheap, widely available model for that
+#: provider, never a pin anything else depends on.
+PROVIDERS: tuple[ProviderSpec, ...] = (
+    ProviderSpec(
+        id="openrouter",
+        label="OpenRouter",
+        model_prefix="openrouter/",
+        env_var="OPENROUTER_API_KEY",
+        default_model="openrouter/openai/gpt-5.4",
+    ),
+    ProviderSpec(
+        id="anthropic",
+        label="Anthropic",
+        model_prefix="anthropic/",
+        env_var="ANTHROPIC_API_KEY",
+        default_model="anthropic/claude-sonnet-4.6",
+    ),
+    ProviderSpec(
+        id="openai",
+        label="OpenAI",
+        model_prefix="openai/",
+        env_var="OPENAI_API_KEY",
+        default_model="openai/gpt-5.4",
+    ),
+    ProviderSpec(
+        id="gemini",
+        label="Google Gemini",
+        model_prefix="gemini/",
+        env_var="GEMINI_API_KEY",
+        default_model="gemini/gemini-2.5-flash",
+    ),
+    ProviderSpec(
+        id="deepseek",
+        label="DeepSeek",
+        model_prefix="deepseek/",
+        env_var="DEEPSEEK_API_KEY",
+        default_model="deepseek/deepseek-chat",
+    ),
+)
+
+#: Model-prefix -> the env var holding that provider's credential. Derived
+#: from ``PROVIDERS`` rather than hand-maintained beside it: a list kept in
+#: parallel with the thing it describes is the drift that produced three
+#: separate "hardcoded names" defects on this instance already.
+_PROVIDER_KEY_VARS = {spec.model_prefix: spec.env_var for spec in PROVIDERS}
+
+_PROVIDERS_BY_ID = {spec.id: spec for spec in PROVIDERS}
+_PROVIDERS_BY_VAR = {spec.env_var: spec for spec in PROVIDERS}
+
+
+def provider_by_id(provider_id: str) -> ProviderSpec | None:
+    """The spec for a provider id, or None for an id we do not know."""
+    return _PROVIDERS_BY_ID.get(provider_id.strip().lower())
+
+
+def provider_for_var(var: str) -> ProviderSpec | None:
+    """The spec owning a credential environment variable, if any."""
+    return _PROVIDERS_BY_VAR.get(var)
+
+
+def key_fingerprint(key: str) -> str:
+    """A short, stable, non-reversible name for a key, for API responses.
+
+    ``sha256:`` prefixed so a reader can tell at a glance that this is a
+    digest and not a truncated credential — the last-four convention it
+    replaces prints real key material.
+    """
+    return "sha256:" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+
+
+# ── Vault-backed credentials ────────────────────────────────────────
+#
+# A credential written from the UI lands in the encrypted vault, not in the
+# process environment, so resolution has to read both. The vault is imported
+# lazily on purpose: it pulls in psycopg2 and the master key file, and this
+# module is imported long before either is guaranteed to exist.
+
+#: Latched once the vault has been found unusable, so a box without a master
+#: key logs one INFO line instead of one per credential lookup per call.
+_vault_unavailable = False
+
+
+def reset_vault_availability() -> None:
+    """Re-arm the vault probe. Called on a secrets reload and by tests."""
+    global _vault_unavailable  # noqa: PLW0603
+    _vault_unavailable = False
+
+
+def _vault_read(key: str) -> str | None:
+    """Read one secret from the vault. Raises if the vault is unusable."""
+    from robothor import vault
+
+    return vault.get(key)
+
+
+def _vault_export() -> dict[str, str]:
+    """Every vault secret as ``{ENV_NAME: value}``. Raises if unusable."""
+    from robothor import vault
+
+    return vault.export_env()
+
+
+def _vault_lookup(key: str) -> str | None:
+    """Read one secret, degrading to "not configured" if the vault is not there.
+
+    A fresh install has no master key, and an engine that refused to start —
+    or worse, refused to make an LLM call — because the optional credential
+    store is empty would be strictly worse than the environment-only
+    behaviour this replaces.
+    """
+    global _vault_unavailable  # noqa: PLW0603
+    if _vault_unavailable:
+        return None
+    try:
+        return _vault_read(key)
+    except Exception as exc:  # noqa: BLE001 - the vault is optional, by design
+        _vault_unavailable = True
+        logger.info(
+            "Vault unavailable (%s: %s); provider credentials resolve from the "
+            "environment only until a secrets reload.",
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+
+@dataclass(frozen=True)
+class ResolvedKey:
+    """One credential and where it came from. Carries key material."""
+
+    position: int
+    key: str
+    source: str  # "vault" | "env"
+
+
+@dataclass(frozen=True)
+class SlotStatus:
+    """One credential slot as the API may describe it — no key material."""
+
+    position: int
+    source: str  # "vault" | "env"
+    fingerprint: str
+    state: str  # "active" | "spare" | "capped" | "revoked"
+
+
+def resolve_keys(provider_id: str) -> list[ResolvedKey]:
+    """Every credential configured for a provider, vault first, then env.
+
+    Slot by slot rather than store by store: an operator who typed slot 1 into
+    the UI and left slot 2 in the shell has both, and the UI value wins for
+    the slot it was written to. The walk stops at the first empty slot for the
+    same reason ``keys_from_env`` does — a hole is a typo, and skipping it
+    hides a key the operator believes is loaded.
+    """
+    from robothor.vault.naming import provider_key
+
+    spec = provider_by_id(provider_id)
+    if spec is None:
+        return []
+
+    resolved: list[ResolvedKey] = []
+    seen: set[str] = set()
+    for index in range(1, _MAX_POOL_KEYS + 1):
+        value = (_vault_lookup(provider_key(spec.id, index)) or "").strip()
+        source = "vault"
+        if not value:
+            name = spec.env_var if index == 1 else f"{spec.env_var}_{index}"
+            value = os.environ.get(name, "").strip()
+            source = "env"
+        if not value:
+            break
+        if value in seen:
+            continue
+        seen.add(value)
+        resolved.append(ResolvedKey(position=len(resolved) + 1, key=value, source=source))
+    return resolved
+
+
+def provider_slots(provider_id: str) -> list[SlotStatus]:
+    """What is knowable about a provider's credentials without disclosing them.
+
+    ``state`` folds the pool's rotation state into the four words the UI shows:
+    the first credential still in rotation is ``active``, the rest of the live
+    ones are ``spare``, a credit/quota retirement is ``capped``, and a rejected
+    key is ``revoked``.
+    """
+    resolved = resolve_keys(provider_id)
+    if not resolved:
+        return []
+
+    spec = provider_by_id(provider_id)
+    assert spec is not None  # resolve_keys returned rows, so the id is known
+    pool = _SHARED.get(spec.env_var)
+    availability = {}
+    if pool is not None:
+        by_fingerprint = {status.fingerprint: status for status in pool.status()}
+        for item in resolved:
+            status = by_fingerprint.get(pool.fingerprint(item.key))
+            if status is not None:
+                availability[item.position] = status
+
+    slots: list[SlotStatus] = []
+    active_taken = False
+    for item in resolved:
+        status = availability.get(item.position)
+        if status is not None and not status.available:
+            state = "revoked" if status.reason is Retirement.AUTH_FAILED else "capped"
+        elif active_taken:
+            state = "spare"
+        else:
+            state = "active"
+            active_taken = True
+        slots.append(
+            SlotStatus(
+                position=item.position,
+                source=item.source,
+                fingerprint=key_fingerprint(item.key),
+                state=state,
+            )
+        )
+    return slots
+
+
+@dataclass(frozen=True)
+class ReloadResult:
+    """What one secrets reload actually changed."""
+
+    reloaded: list[str]
+    slots: int
+
+
+#: Environment values displaced by a vault-backed credential, so removing the
+#: vault row puts the box back where it was instead of leaving the engine with
+#: a credential the operator has just deleted.
+_env_displaced: dict[str, str | None] = {}
+
+
+def reload_provider_keys() -> ReloadResult:
+    """Re-read provider credentials from the vault into the process.
+
+    litellm resolves credentials from ``os.environ`` on paths the pool does
+    not cover, so a vault write that only reached the pool would work for
+    agent turns and fail for everything else. Exporting into the environment
+    here is what lets a key written in the browser be used without a restart.
+
+    Never raises: an unusable vault reloads nothing and leaves the environment
+    exactly as it was.
+    """
+    from robothor.vault.naming import env_name, provider_key
+
+    reset_vault_availability()
+    try:
+        exported = _vault_export()
+    except Exception as exc:  # noqa: BLE001 - the vault is optional, by design
+        logger.info("Vault unavailable (%s: %s); nothing to reload.", type(exc).__name__, exc)
+        return ReloadResult(reloaded=[], slots=0)
+
+    reloaded: list[str] = []
+    slots = 0
+    for spec in PROVIDERS:
+        touched = 0
+        for index in range(1, _MAX_POOL_KEYS + 1):
+            var = spec.env_var if index == 1 else f"{spec.env_var}_{index}"
+            value = (exported.get(env_name(provider_key(spec.id, index))) or "").strip()
+            if value:
+                if var not in _env_displaced:
+                    _env_displaced[var] = os.environ.get(var)
+                os.environ[var] = value
+                touched += 1
+            elif var in _env_displaced:
+                previous = _env_displaced.pop(var)
+                if previous is None:
+                    os.environ.pop(var, None)
+                else:
+                    os.environ[var] = previous
+        if touched:
+            reloaded.append(spec.id)
+            slots += touched
+
+    # The pools cache their key list, so a reload that did not drop them would
+    # keep dialling the credential the operator just replaced.
+    reset_shared_pools()
+    logger.info("Secrets reload: %d provider(s), %d slot(s) from the vault", len(reloaded), slots)
+    return ReloadResult(reloaded=reloaded, slots=slots)
 
 
 def env_var_for_model(model: str) -> str | None:
@@ -303,7 +600,10 @@ def shared_pool(
     """
     pool = _SHARED.get(var)
     if pool is None:
-        keys = keys_from_env(var)
+        spec = provider_for_var(var)
+        keys = (
+            [item.key for item in resolve_keys(spec.id)] if spec is not None else keys_from_env(var)
+        )
         if not keys:
             return None
         pool = KeyPool(keys, on_exhausted=on_exhausted)

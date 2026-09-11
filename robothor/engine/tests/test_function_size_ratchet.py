@@ -34,7 +34,10 @@ MAX_NEW_FUNCTION_LINES = 200
 #: down with it. Delete an entry when its function drops under the threshold.
 KNOWN_LARGE: dict[str, int] = {
     "tools/schemas.py::get_engine_schemas": 3520,
-    "health.py::create_health_app": 1477,  # +1: execution_mode block in /health
+    # -29: every subsystem router mount extracted to _mount_subsystem_routers,
+    # which is what made room for the /api/admin registration rather than
+    # raising this number for it.
+    "health.py::create_health_app": 1448,
     "runner.py::execute": 990,  # +7: task_id propagated onto the run at INSERT time
     "runner.py::_run_loop": 775,
     # +12: run/tenant threaded onto the signature, and the do-not-contact

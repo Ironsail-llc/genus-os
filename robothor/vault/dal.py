@@ -82,6 +82,30 @@ def get_secret(
         conn.close()
 
 
+def get_secret_updated_at(
+    key: str,
+    *,
+    tenant_id: str = DEFAULT_TENANT,
+) -> datetime | None:
+    """When a secret was last written, without decrypting it.
+
+    Separate from ``get_secret`` on purpose: a status page wants to say "set
+    three days ago" and has no business holding the plaintext to do it, and no
+    master key is needed to answer.
+    """
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT updated_at FROM vault_secrets WHERE tenant_id = %s AND key = %s",
+                (tenant_id, key),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+    finally:
+        conn.close()
+
+
 def delete_secret(key: str, *, tenant_id: str = DEFAULT_TENANT) -> bool:
     """Delete a secret. Returns True if a row was deleted."""
     conn = _get_conn()

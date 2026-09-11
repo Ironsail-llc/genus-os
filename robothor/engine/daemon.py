@@ -843,6 +843,18 @@ def _handle_plugin_reload_signal() -> int | None:
         logger.warning("Plugin reload failed, keeping the current set: %s", exc)
         return None
 
+    # Credentials written to the vault by another process — the bridge's
+    # Settings page, `genus vault set` — are the same kind of "re-read what is
+    # on disk" this signal already means for plugins. Without this, an
+    # operator who has just saved a provider key still has to restart the
+    # engine, which cancels every running agent.
+    try:
+        from robothor.engine.key_pool import reload_provider_keys
+
+        reload_provider_keys()
+    except Exception as exc:  # noqa: BLE001 - a reload must never kill the daemon
+        logger.warning("Provider secrets could not be reloaded: %s", exc)
+
     # Tools, schemas, guardrails, hooks and models rebuild lazily on next
     # use. Scheduled jobs cannot — nothing reads them again until they fire —
     # so the scheduler is told explicitly, or a job installed while the
