@@ -100,7 +100,7 @@ boundary. Keep them limited to these classes:
 | `bridge-sso` | `GENUS_BRIDGE_SSO_SECRET`; Bridge and dashboard BFF only |
 | `bridge-oidc` | `GENUS_OIDC_ISSUERS`; Bridge only |
 | `dashboard-auth` | `AUTH_SECRET`, OIDC issuer/client ID/client secret/name, optional `CF_ACCESS_TEAM_DOMAIN`/`CF_ACCESS_AUD` (sign in via a fronting Cloudflare Access policy instead of a second IdP prompt); dashboard only. `AUTH_URL` is **not** a secret — it is the public origin and belongs in `dashboard.env`, set to `https://<dashboard.ingress.host>`; unset, sign-in redirects fall back to the container's `HOSTNAME=0.0.0.0` bind address. |
-| `engine-providers` | LLM, delivery, and tool-provider tokens required by Engine only |
+| `engine-providers` | LLM, delivery, and tool-provider tokens required by Engine only — including `BRAVE_SEARCH_API_KEY`, which `web_search` prefers over scraped engines (from a datacenter IP most of those are blocked, so in-cluster this key is the reliable path) |
 | `bridge-integrations` | Bridge webhook/integration tokens only |
 | `orchestrator-providers` | retrieval/reranking provider tokens required by Orchestrator only |
 

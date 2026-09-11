@@ -7,17 +7,19 @@ from typing import Any
 # Long descriptions live out here: get_engine_schemas is already one of the
 # engine's largest functions and the size ratchet only lets it shrink.
 _WEB_SEARCH_DESCRIPTION = (
-    "Search the web and return results. By default it uses the Brave API when a key "
-    "is configured, else SearXNG, and automatically falls back to the 'browser' "
-    "provider (a real Bing/DuckDuckGo results page driven through the browser tool) "
-    "when SearXNG errors or its engines are blocked — the result then carries "
-    "'fallback_from'. Local-looking queries also get a 'places' list from OpenStreetMap."
+    "Search the web and return results. With no provider named it uses the Brave API "
+    "when a key is configured, else SearXNG, and automatically falls back to the "
+    "'browser' provider (a real Bing/DuckDuckGo results page in a background tab) "
+    "when SearXNG errors, its engines are blocked, or its results never mention what "
+    "was asked — the result then carries 'fallback_from' and 'fallback_reason'. "
+    "Local-looking queries also get a 'places' list from OpenStreetMap."
 )
 
 _WEB_SEARCH_PROVIDER_DESCRIPTION = (
-    "Search provider: 'searxng' (default, free/private, auto-falls back to the "
-    "browser), 'browser' (force a real results page via the browser tool), 'brave' "
-    "(API, needs BRAVE_SEARCH_API_KEY), or 'perplexity' (AI-powered, requires API key)"
+    "Search provider. Omit it for the automatic chain (Brave if configured → SearXNG "
+    "→ browser fallback). 'searxng' uses SearXNG alone, 'browser' forces a real "
+    "results page via the browser, 'brave' the API (needs BRAVE_SEARCH_API_KEY), "
+    "'perplexity' the AI provider (requires API key)"
 )
 
 
@@ -177,8 +179,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     "provider": {
                         "type": "string",
                         "description": _WEB_SEARCH_PROVIDER_DESCRIPTION,
-                        "enum": ["searxng", "browser", "brave", "perplexity"],
-                        "default": "searxng",
+                        "enum": ["auto", "searxng", "browser", "brave", "perplexity"],
+                        "default": "auto",
                     },
                 },
                 "required": ["query"],

@@ -13,6 +13,8 @@ no Nominatim, no Brave.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import time
 from pathlib import Path
 from typing import Any
@@ -53,7 +55,7 @@ class FakeResponse:
 
 
 class FakeHttp:
-    """Routes GETs by URL substring; records every call."""
+    """Routes GETs and POSTs by URL substring; records every call."""
 
     def __init__(self, routes: dict[str, Any]) -> None:
         self.routes = routes
@@ -75,7 +77,35 @@ class FakeHttp:
         headers: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> FakeResponse:
-        self.calls.append({"url": url, "params": params or {}, "headers": headers or {}})
+        return self._route("GET", url, params=params, headers=headers)
+
+    async def post(
+        self,
+        url: str,
+        content: str | None = None,
+        data: Any = None,
+        headers: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> FakeResponse:
+        return self._route("POST", url, headers=headers, body=content or data)
+
+    def _route(
+        self,
+        method: str,
+        url: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        body: Any = None,
+    ) -> FakeResponse:
+        self.calls.append(
+            {
+                "method": method,
+                "url": url,
+                "params": params or {},
+                "headers": headers or {},
+                "body": body,
+            }
+        )
         for key, value in self.routes.items():
             if key in url:
                 if isinstance(value, Exception):
@@ -90,7 +120,14 @@ class FakeHttp:
 
 
 class FakeBrowser:
-    """Stand-in for the browser tool handler: records actions, serves rows."""
+    """Stand-in for browser.py's session helpers.
+
+    Carries the state a real session carries — the page the agent is on and the
+    @N element registry bound to it — so a test can prove a background search
+    left both alone.
+    """
+
+    AGENT_PAGE = "https://intranet.example.com/form"
 
     def __init__(
         self,
@@ -98,39 +135,81 @@ class FakeBrowser:
         running: bool = False,
         pages: dict[str, Any] | None = None,
         html_pages: dict[str, str] | None = None,
+        statuses: dict[str, int] | None = None,
+        start_error: str = "",
+        navigate_delay: float = 0.0,
     ) -> None:
         self.running = running
         self.pages = pages or {}
         self.html_pages = html_pages or {}
+        self.statuses = statuses or {}
+        self.start_error = start_error
+        self.navigate_delay = navigate_delay
+        # State the agent owns; a background fetch must not touch either.
+        self.agent_page_url = self.AGENT_PAGE
+        self.element_registry: dict[int, str] = {1: "textbox 'Name'"}
         self.actions: list[str] = []
         self.navigated: list[str] = []
         self.js: list[str] = []
-        self.current = ""
+        self.open_tabs = 0
+        self.max_open_tabs = 0
 
-    async def __call__(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-        action = args.get("action", "")
-        self.actions.append(action)
-        if action == "status":
-            return {"status": "running" if self.running else "not_running"}
-        if action == "start":
-            self.running = True
-            return {"status": "started"}
-        if action == "stop":
-            self.running = False
-            return {"status": "stopped"}
-        if action == "navigate":
-            self.current = args.get("url") or args.get("targetUrl", "")
-            self.navigated.append(self.current)
-            return {"url": self.current, "title": "results"}
-        if action == "evaluate":
-            js = args.get("js", "")
-            self.js.append(js)
-            source = self.html_pages if "outerHTML" in js else self.pages
-            for key, payload in source.items():
-                if key in self.current:
-                    return {"result": payload}
-            return {"result": []}
-        raise AssertionError(f"unexpected browser action: {action}")
+    def install(self, monkeypatch: pytest.MonkeyPatch | None = None) -> tuple[Any, ...]:
+        from robothor.engine.tools.handlers import browser as browser_mod
+
+        return (
+            patch.object(browser_mod, "ensure_session", self.ensure_session),
+            patch.object(browser_mod, "close_session", self.close_session),
+            patch.object(browser_mod, "isolated_fetch", self.isolated_fetch),
+        )
+
+    async def ensure_session(self, ctx: ToolContext) -> tuple[bool, str]:
+        self.actions.append("ensure_session")
+        if self.running:
+            return False, ""
+        if self.start_error:
+            return False, self.start_error
+        self.running = True
+        self.actions.append("start")
+        return True, ""
+
+    async def close_session(self, ctx: ToolContext) -> None:
+        self.actions.append("stop")
+        self.running = False
+
+    async def isolated_fetch(
+        self,
+        ctx: ToolContext,
+        url: str,
+        js: str,
+        html_js: str = "",
+        timeout_ms: int = 20000,
+    ) -> dict[str, Any]:
+        self.actions.append("isolated_fetch")
+        self.navigated.append(url)
+        self.js.append(js)
+        self.open_tabs += 1
+        self.max_open_tabs = max(self.max_open_tabs, self.open_tabs)
+        try:
+            if self.navigate_delay:
+                await asyncio.sleep(self.navigate_delay)
+            status = 200
+            for key, code in self.statuses.items():
+                if key in url:
+                    status = code
+            result: Any = []
+            for key, payload in self.pages.items():
+                if key in url:
+                    result = payload
+            html = None
+            if html_js and not result:
+                self.js.append(html_js)
+                for key, payload in self.html_pages.items():
+                    if key in url:
+                        html = payload
+            return {"status": status, "url": url, "result": result, "html": html}
+        finally:
+            self.open_tabs -= 1
 
 
 def _rows(n: int, *, relevant: bool) -> list[dict[str, str]]:
@@ -171,6 +250,86 @@ BROWSER_ROWS = [
     },
 ]
 
+# What the browser actually brings back for REMOTE_QUERY — rows that answer it.
+ASYNCIO_BROWSER_ROWS = [
+    {
+        "title": "Cancellation semantics in asyncio",
+        "url": "https://docs.example.org/asyncio/cancellation",
+        "snippet": "How asyncio delivers cancellation to awaited tasks in Python.",
+    },
+    {
+        "title": "Python asyncio task cancellation",
+        "url": "https://example.com/python-asyncio-cancel",
+        "snippet": "Cancellation arrives as CancelledError at the next await point.",
+    },
+    {
+        "title": "Structured concurrency and cancel scopes",
+        "url": "https://example.net/structured-cancellation",
+        "snippet": "Cancellation semantics of nested scopes in Python asyncio.",
+    },
+]
+
+# The exact query the box probed: eight on-topic-looking pages that explain what
+# coworking is, and not one of them mentions the place the operator asked about.
+JAMAICA_QUERY = "coworking private office Jamaica Queens"
+GENERIC_COWORKING_ROWS = [
+    {
+        "title": f"What is coworking? A definition ({i})",
+        "url": f"https://dictionary.example.com/coworking/{i}",
+        "content": "Coworking spaces explained: private office vs hot desk vs dedicated desk.",
+    }
+    for i in range(8)
+]
+
+# What the browser brings back for it: listings that name the place.
+JAMAICA_BROWSER_ROWS = [
+    {
+        "title": "Private offices in Jamaica, Queens",
+        "url": "https://example.com/jamaica-queens-offices",
+        "snippet": "Coworking and private office suites on Jamaica Avenue, Queens.",
+    },
+    {
+        "title": "Queens coworking directory",
+        "url": "https://example.org/queens-coworking",
+        "snippet": "Desks and private offices across Queens, including Jamaica.",
+    },
+]
+
+GEOCODE_PAYLOAD = [
+    {
+        "lat": "42.1015",
+        "lon": "-72.5898",
+        "display_name": "Springfield, Example County",
+        "osm_type": "relation",
+        "osm_id": 1,
+    }
+]
+
+OVERPASS_PAYLOAD = {
+    "elements": [
+        {
+            "type": "node",
+            "id": 111,
+            "tags": {
+                "name": "Springfield Coworking",
+                "addr:housenumber": "12",
+                "addr:street": "Main Street",
+                "addr:city": "Springfield",
+            },
+        },
+        {
+            "type": "way",
+            "id": 222,
+            "center": {"lat": 42.1, "lon": -72.6},
+            "tags": {
+                "name": "Desks & Suites",
+                "addr:street": "Station Road",
+                "addr:city": "Springfield",
+            },
+        },
+    ]
+}
+
 NOMINATIM_PAYLOAD = [
     {
         "display_name": "Springfield Coworking, Main Street, Springfield",
@@ -209,27 +368,31 @@ def _no_brave_key(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
-def _reset_nominatim_throttle():
-    web._nominatim_last = 0.0
+def _reset_places_throttle():
+    web._places_last = 0.0
     yield
-    web._nominatim_last = 0.0
+    web._places_last = 0.0
 
 
-def _install(http: FakeHttp, browser: FakeBrowser):
-    from robothor.engine.tools.handlers import browser as browser_mod
+@pytest.fixture(autouse=True)
+def _browser_tool_allowed():
+    """Default: the browser tool is permitted. Denial has its own test."""
+    with patch.object(web, "_browser_permission_error", _allow_browser):
+        yield
 
-    return (
-        patch.object(web.httpx, "AsyncClient", http.client_factory),
-        patch.object(browser_mod, "_browser", browser),
-    )
+
+async def _allow_browser(ctx: ToolContext) -> str:
+    return ""
 
 
 async def _search(
     http: FakeHttp, browser: FakeBrowser, args: dict[str, Any], ctx: ToolContext
 ) -> dict[str, Any]:
-    http_patch, browser_patch = _install(http, browser)
-    with http_patch, browser_patch:
-        return await web._web_search(args, ctx)
+    with patch.object(web.httpx, "AsyncClient", http.client_factory):
+        with contextlib.ExitStack() as stack:
+            for p in browser.install():
+                stack.enter_context(p)
+            return await web._web_search(args, ctx)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -240,19 +403,62 @@ async def _search(
 async def test_generic_searxng_results_fall_back_to_browser(ctx: ToolContext) -> None:
     """Five results that mention nothing the operator asked for is not an answer."""
     http = FakeHttp({"searxng.test": {"results": _rows(5, relevant=False)}})
-    browser = FakeBrowser(pages={"bing.com": BROWSER_ROWS})
+    browser = FakeBrowser(pages={"bing.com": ASYNCIO_BROWSER_ROWS})
 
     out = await _search(http, browser, {"query": REMOTE_QUERY}, ctx)
 
     assert out["provider"] == "browser"
     assert out["fallback_from"] == "searxng"
-    assert [r["url"] for r in out["results"]] == [r["url"] for r in BROWSER_ROWS]
+    assert [r["url"] for r in out["results"]] == [r["url"] for r in ASYNCIO_BROWSER_ROWS]
     assert browser.navigated and "bing.com/search" in browser.navigated[0]
+
+
+async def test_generic_pages_that_share_the_common_term_still_fall_back(
+    ctx: ToolContext,
+) -> None:
+    """Eight "what is coworking" pages are not an answer about Jamaica, Queens.
+
+    Every row contains the query's commonest word, which is exactly why a
+    "does any term appear" gate passed this on the box. The place terms appear
+    in none of them, and that is the signal that matters.
+    """
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": GENERIC_COWORKING_ROWS},
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser(pages={"bing.com": JAMAICA_BROWSER_ROWS})
+
+    out = await _search(http, browser, {"query": JAMAICA_QUERY, "limit": 8}, ctx)
+
+    assert out["provider"] == "browser"
+    assert out["fallback_from"] == "searxng"
+    assert out["fallback_reason"] == "missing_place_terms"
+
+
+def test_saturated_common_term_carries_no_signal() -> None:
+    rows = [
+        web._row(r["title"], r["url"], r["content"])  # type: ignore[index]
+        for r in GENERIC_COWORKING_ROWS
+    ]
+    assert web._grade_results(rows, JAMAICA_QUERY) == "missing_place_terms"
+
+
+def test_results_that_mention_every_term_are_accepted() -> None:
+    rows = [web._row(r["title"], r["url"], r["content"]) for r in _rows(4, relevant=True)]
+    assert web._grade_results(rows, LOCAL_QUERY) == ""
+
+
+def test_results_about_something_else_are_rejected() -> None:
+    rows = [web._row(r["title"], r["url"], r["content"]) for r in _rows(5, relevant=False)]
+    assert web._grade_results(rows, REMOTE_QUERY) == "low_relevance"
 
 
 async def test_searxng_error_falls_back_to_browser(ctx: ToolContext) -> None:
     http = FakeHttp({"searxng.test": httpx.ConnectError("connection refused")})
-    browser = FakeBrowser(pages={"bing.com": BROWSER_ROWS})
+    browser = FakeBrowser(pages={"bing.com": ASYNCIO_BROWSER_ROWS})
 
     out = await _search(http, browser, {"query": REMOTE_QUERY}, ctx)
 
@@ -273,7 +479,7 @@ async def test_unresponsive_engines_are_reported_with_the_fallback(ctx: ToolCont
             }
         }
     )
-    browser = FakeBrowser(pages={"bing.com": BROWSER_ROWS})
+    browser = FakeBrowser(pages={"bing.com": ASYNCIO_BROWSER_ROWS})
 
     out = await _search(http, browser, {"query": REMOTE_QUERY}, ctx)
 
@@ -286,7 +492,8 @@ async def test_relevant_searxng_results_are_kept(ctx: ToolContext) -> None:
     http = FakeHttp(
         {
             "searxng.test": {"results": _rows(4, relevant=True)},
-            "nominatim.openstreetmap.org": NOMINATIM_PAYLOAD,
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
         }
     )
     browser = FakeBrowser(pages={"bing.com": BROWSER_ROWS})
@@ -345,7 +552,48 @@ async def test_thin_bing_page_pulls_in_duckduckgo(ctx: ToolContext) -> None:
     assert out["sources"] == ["bing", "duckduckgo"]
 
 
-async def test_browser_results_are_capped_at_ten(ctx: ToolContext) -> None:
+async def test_duckduckgo_challenge_page_is_reported_as_blocked(ctx: ToolContext) -> None:
+    """DDG answers this box's browser with HTTP 202 and a challenge form.
+
+    Contributing zero rows silently is how "DuckDuckGo had nothing" gets
+    mistaken for "there is nothing"; say the source was blocked instead.
+    """
+    browser = FakeBrowser(
+        pages={"bing.com": BROWSER_ROWS[:1]},
+        html_pages={"duckduckgo.com": (FIXTURES / "ddg_challenge.html").read_text()},
+        statuses={"duckduckgo.com": 202},
+    )
+
+    out = await _search(FakeHttp({}), browser, {"query": REMOTE_QUERY, "provider": "browser"}, ctx)
+
+    assert "duckduckgo:blocked" in out["sources"]
+    assert "bing" in out["sources"]
+    assert len(out["results"]) == 1
+
+
+async def test_bing_page_without_parsable_rows_reports_selector_drift(
+    ctx: ToolContext, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A 200 with nothing parsable means our selectors moved — say so loudly."""
+    browser = FakeBrowser(
+        pages={"bing.com": []},
+        html_pages={"bing.com": "<html><body><div id='b_results'></div></body></html>"},
+        statuses={"bing.com": 200, "duckduckgo.com": 200},
+    )
+
+    with caplog.at_level("WARNING", logger="robothor.engine.tools.handlers.web"):
+        out = await _search(
+            FakeHttp({}), browser, {"query": REMOTE_QUERY, "provider": "browser"}, ctx
+        )
+
+    assert out["results"] == []
+    assert out["fallback_reason"] == "browser_parse_empty"
+    assert any("parse" in r.message.lower() for r in caplog.records)
+
+
+@pytest.mark.parametrize("limit,expected", [(2, 3), (5, 5), (25, 10)])
+async def test_browser_honours_limit_up_to_ten(ctx: ToolContext, limit: int, expected: int) -> None:
+    """Honour what was asked for, floor at the two-source threshold, cap at 10."""
     many = [
         {"title": f"Result {i}", "url": f"https://example.com/{i}", "snippet": "x"}
         for i in range(25)
@@ -353,9 +601,139 @@ async def test_browser_results_are_capped_at_ten(ctx: ToolContext) -> None:
     http = FakeHttp({})
     browser = FakeBrowser(pages={"bing.com": many})
 
-    out = await _search(http, browser, {"query": REMOTE_QUERY, "provider": "browser"}, ctx)
+    out = await _search(
+        http, browser, {"query": REMOTE_QUERY, "provider": "browser", "limit": limit}, ctx
+    )
 
-    assert len(out["results"]) == 10
+    assert len(out["results"]) == expected
+
+
+async def test_fallback_leaves_the_agents_own_page_and_refs_alone(ctx: ToolContext) -> None:
+    """A session holds ONE page. Navigating it would move the agent's document
+    out from under the @N refs it is mid-way through using."""
+    http = FakeHttp({"searxng.test": {"results": _rows(5, relevant=False)}})
+    browser = FakeBrowser(running=True, pages={"bing.com": ASYNCIO_BROWSER_ROWS})
+
+    out = await _search(http, browser, {"query": REMOTE_QUERY}, ctx)
+
+    assert out["provider"] == "browser"
+    assert browser.agent_page_url == FakeBrowser.AGENT_PAGE
+    assert browser.element_registry == {1: "textbox 'Name'"}
+    assert browser.open_tabs == 0  # every tab the search opened was closed
+    assert browser.max_open_tabs == 1
+
+
+async def test_fallback_is_skipped_when_the_browser_tool_is_denied(
+    ctx: ToolContext,
+) -> None:
+    """web_search must not become a way around the browser tool's permissions."""
+    http = FakeHttp({"searxng.test": {"results": _rows(5, relevant=True)}})
+    browser = FakeBrowser(pages={"bing.com": ASYNCIO_BROWSER_ROWS})
+    audits: list[dict[str, Any]] = []
+
+    async def _deny(_ctx: ToolContext) -> str:
+        return "Role 'service' is not permitted to use tool 'browser'"
+
+    with patch.object(web, "_browser_permission_error", _deny):
+        with patch.object(
+            web,
+            "_audit_tool_call",
+            lambda *a, **k: audits.append({"args": a, "kwargs": k}),
+        ):
+            out = await _search(http, browser, {"query": REMOTE_QUERY}, ctx)
+
+    assert browser.actions == []  # the browser was never touched
+    assert out["provider"] == "searxng"
+    assert out["fallback_reason"] == "browser_denied"
+    assert out["degraded"] == "low_relevance"
+    assert audits and audits[0]["kwargs"]["status"] == "denied"
+
+
+async def test_allowed_browser_fallback_is_audited(ctx: ToolContext) -> None:
+    http = FakeHttp({"searxng.test": {"results": _rows(5, relevant=False)}})
+    browser = FakeBrowser(pages={"bing.com": ASYNCIO_BROWSER_ROWS})
+    audits: list[dict[str, Any]] = []
+
+    with patch.object(
+        web, "_audit_tool_call", lambda *a, **k: audits.append({"args": a, "kwargs": k})
+    ):
+        out = await _search(http, browser, {"query": REMOTE_QUERY}, ctx)
+
+    assert out["provider"] == "browser"
+    assert audits and audits[0]["args"][0] == "browser"
+    assert audits[0]["kwargs"].get("status", "ok") == "ok"
+
+
+async def test_a_wedged_browser_does_not_hang_the_search(
+    ctx: ToolContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(web, "_BROWSER_SEARCH_TIMEOUT", 0.05)
+    http = FakeHttp({"searxng.test": {"results": _rows(5, relevant=True)}})
+    browser = FakeBrowser(pages={"bing.com": ASYNCIO_BROWSER_ROWS}, navigate_delay=5.0)
+
+    out = await _search(http, browser, {"query": REMOTE_QUERY, "limit": 5}, ctx)
+
+    assert out["fallback_reason"] == "browser_timeout"
+    assert out["provider"] == "searxng"  # the weak rows still come back
+    assert "stop" in browser.actions  # and the session we started is stopped
+
+
+async def test_operator_can_switch_the_implicit_fallback_off(
+    ctx: ToolContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It drives a headed Chromium on the operator's display — give them a switch."""
+    monkeypatch.setenv("ROBOTHOR_WEB_SEARCH_BROWSER_FALLBACK", "off")
+    http = FakeHttp({"searxng.test": {"results": _rows(5, relevant=False)}})
+    browser = FakeBrowser(pages={"bing.com": ASYNCIO_BROWSER_ROWS})
+
+    out = await _search(http, browser, {"query": REMOTE_QUERY}, ctx)
+
+    assert browser.actions == []
+    assert out["fallback_reason"] == "browser_fallback_disabled"
+
+    # …but an explicit provider="browser" is still honoured.
+    explicit = await _search(http, browser, {"query": REMOTE_QUERY, "provider": "browser"}, ctx)
+    assert explicit["provider"] == "browser"
+
+
+async def test_two_runs_of_one_agent_do_not_race_the_session(ctx: ToolContext) -> None:
+    """Both runs share one browser session: one must not stop it under the other."""
+    http = FakeHttp({"searxng.test": {"results": _rows(5, relevant=False)}})
+    browser = FakeBrowser(pages={"bing.com": ASYNCIO_BROWSER_ROWS}, navigate_delay=0.02)
+
+    with patch.object(web.httpx, "AsyncClient", http.client_factory):
+        with contextlib.ExitStack() as stack:
+            for p in browser.install():
+                stack.enter_context(p)
+            first, second = await asyncio.gather(
+                web._web_search({"query": REMOTE_QUERY}, ctx),
+                web._web_search({"query": REMOTE_QUERY}, ctx),
+            )
+
+    assert first["provider"] == second["provider"] == "browser"
+    assert browser.max_open_tabs == 1
+    assert browser.open_tabs == 0
+
+
+async def test_browser_answer_is_graded_too(ctx: ToolContext) -> None:
+    """Falling back is not the same as answering the question."""
+    http = FakeHttp({"searxng.test": {"results": _rows(5, relevant=False)}})
+    browser = FakeBrowser(pages={"bing.com": BROWSER_ROWS})  # Springfield, not asyncio
+
+    out = await _search(http, browser, {"query": REMOTE_QUERY}, ctx)
+
+    assert out["provider"] == "browser"
+    assert out["fallback_reason"] == "browser_low_relevance"
+    assert out["degraded"] == "low_relevance"
+
+
+async def test_unknown_provider_is_an_error(ctx: ToolContext) -> None:
+    out = await _search(
+        FakeHttp({}), FakeBrowser(), {"query": REMOTE_QUERY, "provider": "kagi"}, ctx
+    )
+
+    assert "error" in out
+    assert "kagi" in out["error"]
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -371,12 +749,45 @@ def test_bing_html_fixture_parses_into_rows() -> None:
         "https://desks.example.org/springfield",
         "https://example.net/listings/springfield-office",
         "https://example.com/coworking-guide",
+        "https://springfield-cowork.example.com/private-offices",
     ]
     assert rows[0]["title"] == "Springfield Coworking — Private Offices"
     assert "downtown Springfield" in rows[0]["snippet"]
     assert rows[1]["title"] == "Desks & Suites of Springfield"
     # the li.b_ad block is not an organic result
     assert all("ads.example.com" not in r["url"] for r in rows)
+
+
+def test_bing_click_tracking_links_are_decoded() -> None:
+    """Handing the agent bing.com/ck/a?...&u=a1<base64> is handing it nothing."""
+    rows = web._parse_bing_html((FIXTURES / "bing_results.html").read_text())
+
+    assert rows[-1]["url"] == "https://springfield-cowork.example.com/private-offices"
+    assert all("/ck/a" not in r["url"] for r in rows)
+
+
+@pytest.mark.parametrize(
+    "href,expected",
+    [
+        (
+            "https://www.bing.com/ck/a?!&&p=1&u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS9h&ntb=1",
+            "https://example.com/a",
+        ),
+        # undecodable payload → keep the wrapper rather than invent a URL
+        (
+            "https://www.bing.com/ck/a?!&&p=1&u=a1%%%notbase64%%%",
+            "https://www.bing.com/ck/a?!&&p=1&u=a1%%%notbase64%%%",
+        ),
+        ("https://example.com/plain", "https://example.com/plain"),
+    ],
+)
+def test_bing_href_unwrapping(href: str, expected: str) -> None:
+    assert web._unwrap_bing_href(href) == expected
+
+
+def test_bing_extraction_js_decodes_click_tracking() -> None:
+    assert "ck/a" in web._BING_EXTRACT_JS
+    assert "atob" in web._BING_EXTRACT_JS
 
 
 def test_ddg_html_fixture_parses_into_rows() -> None:
@@ -456,11 +867,38 @@ async def test_brave_is_preferred_when_the_key_is_set(
     assert http.hit("searxng.test") == []
 
 
+async def test_explicit_searxng_is_not_quietly_answered_by_brave(
+    ctx: ToolContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An agent that named a provider gets that provider."""
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-key")
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": _rows(4, relevant=True)},
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser()
+
+    out = await _search(
+        http, browser, {"query": LOCAL_QUERY, "provider": "searxng", "limit": 4}, ctx
+    )
+
+    assert out["provider"] == "searxng"
+    assert "degraded" not in out  # the SearXNG answer stood on its own
+    assert http.hit("api.search.brave.com") == []
+    assert browser.actions == []
+    # nothing refused to answer, so nothing is reported as unresponsive
+    assert "unresponsive_engines" not in out
+
+
 async def test_brave_is_absent_without_a_key(ctx: ToolContext) -> None:
     http = FakeHttp(
         {
             "searxng.test": {"results": _rows(4, relevant=True)},
-            "nominatim.openstreetmap.org": NOMINATIM_PAYLOAD,
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
         }
     )
     browser = FakeBrowser()
@@ -480,7 +918,8 @@ async def test_brave_failure_falls_through_to_searxng(
         {
             "api.search.brave.com": httpx.ConnectError("brave down"),
             "searxng.test": {"results": _rows(4, relevant=True)},
-            "nominatim.openstreetmap.org": NOMINATIM_PAYLOAD,
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
         }
     )
     browser = FakeBrowser()
@@ -492,11 +931,58 @@ async def test_brave_failure_falls_through_to_searxng(
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Places, via Nominatim
+# Places, via Nominatim + Overpass
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def test_local_query_appends_places(ctx: ToolContext) -> None:
+async def test_known_category_geocodes_then_queries_overpass(ctx: ToolContext) -> None:
+    """ "coworking near X" is an OSM tag query, not a free-text geocode."""
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": _rows(4, relevant=True)},
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser()
+
+    out = await _search(http, browser, {"query": LOCAL_QUERY, "limit": 4}, ctx)
+
+    geocode = http.hit("nominatim.openstreetmap.org")
+    assert len(geocode) == 1
+    assert geocode[0]["params"]["q"] == "Springfield"
+    assert "genus" in geocode[0]["headers"]["User-Agent"].lower()
+
+    overpass = http.hit("overpass-api.de")
+    assert len(overpass) == 1
+    assert overpass[0]["method"] == "POST"
+    body = overpass[0]["body"]
+    assert '["office"="coworking"]' in body
+    assert "around:5000,42.1015,-72.5898" in body
+
+    assert [p["title"] for p in out["places"]] == ["Springfield Coworking", "Desks & Suites"]
+    assert out["places"][0]["url"] == "https://www.openstreetmap.org/node/111"
+    assert out["places"][1]["url"] == "https://www.openstreetmap.org/way/222"
+    assert "Main Street" in out["places"][0]["snippet"]
+
+
+@pytest.mark.parametrize(
+    "query,tag",
+    [
+        ("coworking near Springfield", '["office"="coworking"]'),
+        ("coffee near Springfield", '["amenity"="cafe"]'),
+        ("a cafe in Springfield", '["amenity"="cafe"]'),
+        ("gym near Springfield", '["leisure"="fitness_centre"]'),
+    ],
+)
+def test_category_to_osm_tag_map(query: str, tag: str) -> None:
+    category = web._place_category(query)
+    assert category is not None
+    assert tag in web._overpass_query(category, 42.0, -72.0)
+
+
+async def test_unknown_category_skips_overpass(ctx: ToolContext) -> None:
+    """No tag map for "hardware store" — geocode it free-text instead."""
     http = FakeHttp(
         {
             "searxng.test": {"results": _rows(4, relevant=True)},
@@ -505,23 +991,22 @@ async def test_local_query_appends_places(ctx: ToolContext) -> None:
     )
     browser = FakeBrowser()
 
-    out = await _search(http, browser, {"query": LOCAL_QUERY, "limit": 4}, ctx)
+    out = await _search(http, browser, {"query": "hardware store in Springfield", "limit": 4}, ctx)
 
+    assert http.hit("overpass-api.de") == []
     assert len(out["places"]) == 2
-    assert out["places"][0]["title"].startswith("Springfield Coworking")
     assert out["places"][0]["url"] == "https://www.openstreetmap.org/node/12345"
     assert "coworking_space" in out["places"][0]["snippet"]
-    ua = http.hit("nominatim.openstreetmap.org")[0]["headers"]["User-Agent"]
-    assert "genus" in ua.lower()
 
 
-async def test_non_local_query_never_touches_nominatim(ctx: ToolContext) -> None:
+async def test_non_local_query_never_touches_nominatim_or_overpass(ctx: ToolContext) -> None:
     http = FakeHttp({"searxng.test": {"results": _rows(4, relevant=True)}})
     browser = FakeBrowser()
 
     out = await _search(http, browser, {"query": REMOTE_QUERY, "limit": 4}, ctx)
 
     assert http.hit("nominatim") == []
+    assert http.hit("overpass") == []
     assert "places" not in out
 
 
@@ -532,32 +1017,37 @@ async def test_non_local_query_never_touches_nominatim(ctx: ToolContext) -> None
         ("dentist nearby", True),
         ("hardware store in Springfield", True),
         ("pizza 02134", True),
+        ("coworking private office Jamaica Queens", True),  # category + proper nouns
         ("asyncio cancellation semantics python", False),
         ("what is a private office", False),
+        ("how to mount a share in Ubuntu", False),  # "in <software>" is not a place
+        ("install postgres in Docker", False),
     ],
 )
 def test_local_query_detection(query: str, local: bool) -> None:
     assert web._looks_local(query) is local
 
 
-async def test_nominatim_is_rate_limited(ctx: ToolContext, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Nominatim's usage policy is one request per second — honour it."""
-    monkeypatch.setattr(web, "_NOMINATIM_MIN_INTERVAL", 0.3)
+async def test_geocoding_is_rate_limited(ctx: ToolContext, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nominatim and Overpass are free, courteous-use APIs: ≤1 request/second."""
+    monkeypatch.setattr(web, "_PLACES_MIN_INTERVAL", 0.2)
     http = FakeHttp(
         {
             "searxng.test": {"results": _rows(4, relevant=True)},
-            "nominatim.openstreetmap.org": NOMINATIM_PAYLOAD,
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
         }
     )
     browser = FakeBrowser()
 
     started = time.monotonic()
     await _search(http, browser, {"query": LOCAL_QUERY, "limit": 4}, ctx)
-    await _search(http, browser, {"query": "bakery near Springfield", "limit": 4}, ctx)
     elapsed = time.monotonic() - started
 
-    assert len(http.hit("nominatim.openstreetmap.org")) == 2
-    assert elapsed >= 0.3
+    # geocode + Overpass = two courtesy-gated calls, so one interval elapses
+    assert len(http.hit("nominatim.openstreetmap.org")) == 1
+    assert len(http.hit("overpass-api.de")) == 1
+    assert elapsed >= 0.2
 
 
 # ──────────────────────────────────────────────────────────────────────
