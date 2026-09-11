@@ -1,10 +1,20 @@
 /**
  * E2E smoke tests for the Robothor Helm dashboard.
- * Tests: layout rendering, dashboard iframe sizing, chat scroll, welcome dashboard.
+ *
+ * Home is the real-data dashboard: health, tasks and agents read from the BFF,
+ * with no model call on load. The generated canvas is behind an explicit
+ * control, so the iframe-sizing checks run after that control is used.
  */
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 const BASE_URL = "/";
+
+/** Open the AI canvas from Home and wait for the generated view to render. */
+async function openAiCanvas(page: Page) {
+  await page.locator('[data-testid="dashboard-generate-ai"]').click();
+  await expect(page.locator('[data-testid="live-canvas"]')).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('[data-testid="srcdoc-renderer"]')).toBeVisible({ timeout: 20000 });
+}
 
 /** Set up standard mocks so tests are deterministic (no real engine calls). */
 async function setupMocks(page: Page) {
@@ -37,11 +47,32 @@ async function setupMocks(page: Page) {
   await page.route("**/api/dashboard/generate", (route: Route) => {
     route.fulfill({ status: 204, body: "" });
   });
+  // The real /api/health shape — Home reads `services` to fill its tile.
   await page.route("**/api/health", (route: Route) => {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ status: "healthy", agents: {} }),
+      body: JSON.stringify({
+        status: "ok",
+        services: [
+          { name: "bridge", status: "healthy" },
+          { name: "orchestrator", status: "healthy" },
+        ],
+        timestamp: new Date().toISOString(),
+      }),
+    });
+  });
+  // Tasks and agents both come through the action executor.
+  await page.route("**/api/actions/execute", (route: Route) => {
+    const body = route.request().postDataJSON() as { tool?: string } | null;
+    const payload =
+      body?.tool === "agent_status"
+        ? { agents: [{ name: "worker", schedule: "hourly", status: "healthy" }] }
+        : { tasks: [{ id: "t1", title: "A task", status: "TODO" }] };
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ data: payload }),
     });
   });
   await page.route("**/api/events/stream*", (route: Route) => {
@@ -55,19 +86,48 @@ async function setupMocks(page: Page) {
 }
 
 test.describe("Dashboard Layout", () => {
-  test("page loads with canvas and chat panels", async ({ page }) => {
+  test("page loads with the real-data dashboard and chat panels", async ({ page }) => {
+    let welcomeCalls = 0;
     await setupMocks(page);
+    page.on("request", (req) => {
+      if (req.url().includes("/api/dashboard/welcome")) welcomeCalls++;
+    });
     await page.goto(BASE_URL, { waitUntil: "networkidle" });
 
     // App shell should exist
     const shell = page.locator('[data-testid="app-shell"]');
     await expect(shell).toBeVisible({ timeout: 10000 });
 
-    // Both panels should be present
-    const canvas = page.locator('[data-testid="live-canvas"]');
+    // Home is the real-data dashboard, beside the chat panel.
+    const home = page.locator('[data-testid="default-dashboard"]');
     const chatPanel = page.locator('[data-testid="chat-panel"]');
-    await expect(canvas).toBeVisible({ timeout: 10000 });
+    await expect(home).toBeVisible({ timeout: 10000 });
     await expect(chatPanel).toBeVisible({ timeout: 10000 });
+
+    // Its sections carry real values, not empty cards.
+    const metrics = page.locator('[data-testid="metric-summary"]');
+    await expect(metrics).toContainText("2/2");
+    await expect(metrics).toContainText("Active Tasks");
+    await expect(metrics).toContainText("Agents Online");
+    await expect(page.locator('[data-testid="service-health"]')).toBeVisible();
+    await expect(page.locator('[data-testid="quick-action"]').first()).toBeVisible();
+
+    // No generated view, and no model call, on load.
+    await expect(page.locator('[data-testid="live-canvas"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="srcdoc-renderer"]')).toHaveCount(0);
+    expect(welcomeCalls).toBe(0);
+  });
+
+  test("the AI control mounts the generated canvas on click", async ({ page }) => {
+    await setupMocks(page);
+    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
+
+    await openAiCanvas(page);
+
+    // And the operator can get back to the real-data home.
+    await page.locator('[data-testid="dashboard-close-ai"]').click();
+    await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible();
   });
 
   test("chat container has usable width", async ({ page }) => {
@@ -85,30 +145,25 @@ test.describe("Dashboard Layout", () => {
   });
 });
 
-test.describe("Welcome Dashboard (iframe sizing)", () => {
-  test("welcome dashboard renders and iframe is not cut off", async ({ page }) => {
+test.describe("Generated canvas (iframe sizing)", () => {
+  test("generated dashboard renders and iframe is not cut off", async ({ page }) => {
     await setupMocks(page);
     await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
 
-    // Wait for either the welcome dashboard iframe or the default dashboard
+    // Sizing only means anything once the canvas is on screen, and reaching it
+    // is now an explicit act.
+    await openAiCanvas(page);
+
     const iframe = page.locator('[data-testid="srcdoc-renderer"]');
-    const defaultDash = page.locator('[data-testid="default-dashboard"]');
+    const box = await iframe.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.height).toBeGreaterThan(150);
+    expect(box!.width).toBeGreaterThan(200);
 
-    // One of these should appear within 15s
-    await expect(iframe.or(defaultDash)).toBeVisible({ timeout: 20000 });
-
-    if (await iframe.isVisible()) {
-      const box = await iframe.boundingBox();
-      expect(box).not.toBeNull();
-      expect(box!.height).toBeGreaterThan(150);
-      expect(box!.width).toBeGreaterThan(200);
-
-      const parent = page.locator('[data-testid="live-canvas"]');
-      const parentBox = await parent.boundingBox();
-      if (parentBox && box) {
-        expect(box.width).toBeGreaterThan(parentBox.width * 0.8);
-      }
-    }
+    const parentBox = await page.locator('[data-testid="live-canvas"]').boundingBox();
+    expect(parentBox).not.toBeNull();
+    expect(box!.width).toBeGreaterThan(parentBox!.width * 0.8);
   });
 });
 

@@ -90,8 +90,13 @@ export function DefaultDashboard() {
     (t) => t.status === "TODO" || t.status === "IN_PROGRESS" || t.status === "REVIEW"
   ).length;
 
-  const healthyCount = health?.services.filter((s) => s.status === "healthy").length ?? 0;
-  const totalServices = health?.services.length ?? 0;
+  // Defensive on the payload's shape, not just its presence: this component is
+  // the home screen, so a 200 whose body is missing `services` must degrade to
+  // "awaiting first probe" rather than throw out of render and take the whole
+  // app (chat panel included) down with it.
+  const services = Array.isArray(health?.services) ? health.services : [];
+  const healthyCount = services.filter((s) => s.status === "healthy").length;
+  const totalServices = services.length;
 
   const quickActions = [
     {
@@ -145,7 +150,7 @@ export function DefaultDashboard() {
         const h = await fetchHealth();
         pushView({
           toolName: "render_service_health",
-          props: { services: h.services, overallStatus: h.status },
+          props: { services: h?.services ?? [], overallStatus: h?.status },
           title: "Service Health",
         });
       },
@@ -236,11 +241,8 @@ export function DefaultDashboard() {
 
       {/* Service health grid — the last good snapshot stays on screen while a
           refresh fails, with the failure reported in the tile above. */}
-      {health && (
-        <ServiceHealth
-          services={health.services}
-          overallStatus={health.status}
-        />
+      {services.length > 0 && (
+        <ServiceHealth services={services} overallStatus={health?.status} />
       )}
 
       {/* Quick actions */}

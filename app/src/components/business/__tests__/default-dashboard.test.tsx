@@ -112,6 +112,18 @@ describe("DefaultDashboard", () => {
     expect((await screen.findByTestId("section-error-agents")).textContent).toMatch(/no response/i);
   });
 
+  it("survives a health payload with no services list rather than taking the page down", async () => {
+    // Home renders this component on every load now, so a 200 whose body is
+    // not the shape we expect must degrade to "awaiting first probe" — not
+    // throw out of render and white-screen the whole app.
+    vi.stubGlobal("fetch", routedFetch({ health: jsonResponse({ status: "healthy" }) }));
+    renderDashboard();
+
+    expect(await screen.findByTestId("default-dashboard")).toBeTruthy();
+    expect(screen.getByTestId("metric-summary").textContent).toMatch(/awaiting first probe/i);
+    expect(screen.getAllByTestId("quick-action").length).toBeGreaterThan(0);
+  });
+
   it("shows no section error while every call succeeds", async () => {
     renderDashboard();
     await waitFor(() => expect(screen.getByTestId("metric-summary")).toBeTruthy());
