@@ -27,6 +27,7 @@ from robothor.engine.models import (
 
 logger = logging.getLogger(__name__)
 
+from robothor.engine.manifest_schema import ManifestSchemaError  # noqa: E402
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 from robothor.engine.service_roles import resolve_service_role  # noqa: E402
 
@@ -221,14 +222,35 @@ def _scrub_path(detail: object, path: Path) -> str:
     return text
 
 
+def _enforce_manifest_schema(data: dict[str, Any]) -> None:
+    """Under ``enforce`` only, refuse a manifest the schema rejects.
+
+    Deliberately a no-op on the other two rungs: ``observe`` reports from
+    :func:`_apply_schema_mode`, where the MERGED manifest is available, and
+    reporting the same defect twice per load would double every count.
+    """
+    from robothor.engine.manifest_schema import MODE_ENFORCE, raise_if_invalid, schema_mode
+
+    if schema_mode() == MODE_ENFORCE:
+        raise_if_invalid(data, agent_id=str(data.get("id") or ""))
+
+
 def _load_manifest_classified(
     manifest_path: Path,
+    *,
+    validate_schema: bool = True,
 ) -> tuple[dict[str, Any] | None, ManifestFailure | None, bool]:
     """``(data, failure, was_skipped)`` for one manifest file.
 
     Classification is by exception TYPE, never by matching on message text —
     error strings change between library versions and a guard that depends on
     them fails silently.
+
+    ``validate_schema=False`` is for :func:`load_manifest`, whose caller
+    (:func:`load_agent_config`) validates the MERGED manifest a moment later
+    and wants the raise, with its issue list, to reach IT. Classifying here
+    too would swallow that raise into a ``None`` return and the caller would
+    only learn that the agent "was not found".
     """
     path = Path(manifest_path)
     name = path.name
@@ -243,9 +265,21 @@ def _load_manifest_classified(
         with checked.open() as f:  # noqa: PTH123
             data = yaml.safe_load(f)
         if data and isinstance(data, dict) and "id" in data:
-            return _resolve_env_vars(data), None, False  # type: ignore[return-value]
+            resolved: dict[str, Any] = _resolve_env_vars(data)  # type: ignore[assignment]
+            if validate_schema:
+                _enforce_manifest_schema(resolved)
+            return resolved, None, False
         # Valid YAML, just not an agent manifest (_defaults.yaml, schema.yaml).
         return None, None, True
+    except ManifestSchemaError as e:
+        # A manifest the schema refuses is BROKEN, not absent. Same bucket as a
+        # YAML syntax error, for the same reason: on 2026-08-23 a file that
+        # would not parse was dropped silently and reconcile deleted the
+        # agent's schedules five minutes later. The detail carries paths and
+        # codes only — it ends up on an operator page, and platform code must
+        # not surface instance values (rules 1 and 2).
+        logger.error("Manifest %s refused by the schema: %s", name, e.summary())
+        return None, ManifestFailure(name, "SchemaError", e.summary()), False
     except Exception as e:
         sanitized_path = str(manifest_path).replace("\n", "\\n").replace("\r", "\\r")
         logger.error("Failed to load manifest %s: %s", sanitized_path, _sanitize(e))
@@ -263,8 +297,14 @@ def load_manifest(manifest_path: Path) -> dict | None:  # type: ignore[type-arg]
     Returns ``dict | None`` — an unchanged contract, deliberately. The swallow
     was never the bug; the bug was that no caller could ask WHY. Callers that
     need the reason use :func:`load_manifest_dir`.
+
+    Schema enforcement is skipped here on purpose. Twelve call sites read this
+    function's ``None`` as "no manifest", and turning a schema refusal into
+    that answer would mean ``enforce`` reported a broken agent as an absent
+    one — the exact confusion the whole broken-vs-absent machinery exists to
+    remove.
     """
-    data, _failure, _skipped = _load_manifest_classified(manifest_path)
+    data, _failure, _skipped = _load_manifest_classified(manifest_path, validate_schema=False)
     return data
 
 
@@ -879,6 +919,61 @@ def _merge_lifecycle_hooks(merged: dict[str, Any], defaults: dict[str, Any]) -> 
     v2["lifecycle_hooks"] = result
 
 
+#: Logged-once keys for the schema ladder, same shape and same reason as
+#: ``_logged_validation_warnings``: ``load_agent_config`` runs on every agent
+#: run, so an undeduplicated line here would repeat the same finding thousands
+#: of times a day and get filtered out. The COUNTER still increments every
+#: time — "how often" is half the promotion evidence, and it is the half a
+#: deduplicated log cannot answer.
+_logged_schema_issues: set[tuple[str, str, str]] = set()
+
+
+def _apply_schema_mode(agent_id: str, issues: list[Any]) -> None:
+    """Act on manifest schema errors according to the mode ladder.
+
+    ``off`` skips the check entirely. ``observe`` — the default — logs and
+    counts what ``enforce`` would have refused, which is the only way the
+    decision to promote ever gets made on evidence instead of nerve.
+    ``enforce`` raises, and the raise is caught in exactly one place
+    (:func:`_load_manifest_classified`) so a refused manifest lands in the
+    "broken, therefore not prunable" bucket rather than looking deleted.
+
+    Takes the already-computed issue list rather than the manifest: validating
+    a second time would be a second opinion about the same document, and two
+    opinions is how a guard and the warning it prints drift apart.
+    """
+    from robothor.engine.manifest_schema import (
+        MODE_ENFORCE,
+        MODE_OFF,
+        ManifestSchemaError,
+        errors,
+        record_would_reject,
+        schema_mode,
+    )
+
+    mode = schema_mode()
+    if mode == MODE_OFF:
+        return
+    found = errors(issues)
+    if not found:
+        return
+    if mode == MODE_ENFORCE:
+        raise ManifestSchemaError(agent_id, found)
+    record_would_reject(agent_id)
+    sanitized_id = _sanitize(agent_id)
+    for issue in found:
+        key = (sanitized_id, issue.path, issue.code)
+        if key in _logged_schema_issues:
+            continue
+        _logged_schema_issues.add(key)
+        logger.warning(
+            "Manifest schema [%s]: enforce would reject — %s (%s)",
+            sanitized_id,
+            _sanitize(issue.path),
+            issue.code,
+        )
+
+
 def load_agent_config(
     agent_id: str,
     manifest_dir: Path,
@@ -927,10 +1022,15 @@ def load_agent_config(
         # Fleet-level lifecycle hooks (concatenate, not replace)
         _merge_lifecycle_hooks(merged, defaults)
 
-        # Validate
-        from robothor.engine.config_schema import validate_manifest
+        # Validate ONCE, on the MERGED manifest — the document the agent
+        # actually runs on. A defaults file or a project override can
+        # introduce the defect just as easily as the agent's own file, and
+        # validating only the raw file would miss exactly those.
+        from robothor.engine.manifest_schema import legacy_warnings, validate
 
-        warnings = validate_manifest(merged)
+        issues = validate(merged)
+        warnings = legacy_warnings(issues)
+        _apply_schema_mode(agent_id, issues)  # off / observe / enforce
         for w in warnings:
             sanitized_w = str(w).replace("\n", "\\n").replace("\r", "\\r")
             # Logged once per (agent, warning) per process — see

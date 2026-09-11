@@ -54,6 +54,16 @@ ADMISSION_DEFERRALS_TOTAL = Counter(
     ["mode", "priority"],
 )
 
+#: What `ROBOTHOR_MANIFEST_SCHEMA_MODE=enforce` would have refused, counted
+#: while the ladder is still on `observe`. The promotion decision is "is this
+#: zero on my own fleet", and that question needs a number from a running
+#: instance, not from the repo's templates.
+MANIFEST_SCHEMA_WOULD_REJECT = Counter(
+    "robothor_manifest_schema_would_reject_total",
+    "Manifest loads that would have been refused under ROBOTHOR_MANIFEST_SCHEMA_MODE=enforce",
+    ["agent_id"],
+)
+
 _EXECUTION_MODES = ("cloud", "local")
 
 
