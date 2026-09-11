@@ -427,6 +427,24 @@ def issue_for_account(
     }
 
 
+def revoke_user_sessions(user_id: str) -> int:
+    """Revoke every live refresh session for one account. Returns how many.
+
+    Called whenever the account's password changes. A password change that
+    leaves a stolen refresh token working has not locked anyone out — the
+    thief simply rotates it every thirty days and the owner never finds out.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE user_sessions SET revoked_at = NOW() WHERE user_id = %s AND revoked_at IS NULL",
+            (user_id,),
+        )
+        revoked = int(cur.rowcount or 0)
+        conn.commit()
+        return revoked
+
+
 def revoke_session(refresh_token_hash: str) -> bool:
     with get_connection() as conn:
         cur = conn.cursor()

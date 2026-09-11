@@ -177,8 +177,21 @@ export function checkDashboardAuthConfig(): ServiceHealth {
   const common = ["AUTH_SECRET", "GENUS_BRIDGE_SSO_SECRET"].every((name) =>
     Boolean(process.env[name]?.trim()),
   );
-  const aProviderWorks = oidcConfiguredLocally() || cfAccessConfiguredLocally();
+  // Local email+password is a sign-in provider like any other — on a
+  // day-one install it is the ONLY one, and reporting that box unhealthy is
+  // the same false `degraded` that taught everyone to ignore /api/ready.
+  // Exactly "true", mirroring localLoginEnabled() in @/lib/auth-local, which
+  // this file deliberately does not import (a readiness probe must not drag
+  // NextAuth in through auth.ts).
+  const localLogin = process.env.GENUS_LOCAL_LOGIN === "true";
+  const aProviderWorks = localLogin || oidcConfiguredLocally() || cfAccessConfiguredLocally();
   const configured = insecureDevelopment || (common && aProviderWorks);
+
+  const methods = [
+    localLogin ? "local email+password" : "",
+    oidcConfiguredLocally() ? "OIDC" : "",
+    cfAccessConfiguredLocally() ? "Cloudflare Access" : "",
+  ].filter(Boolean);
 
   return {
     name: "authentication",
@@ -189,8 +202,8 @@ export function checkDashboardAuthConfig(): ServiceHealth {
     detail: configured
       ? insecureDevelopment
         ? "insecure development mode"
-        : "shared secrets set and a sign-in provider configured"
-      : "AUTH_SECRET, GENUS_BRIDGE_SSO_SECRET and one sign-in provider (OIDC or Cloudflare Access) are required",
+        : `shared secrets set; sign-in via ${methods.join(", ")}`
+      : "AUTH_SECRET, GENUS_BRIDGE_SSO_SECRET and one sign-in method (GENUS_LOCAL_LOGIN=true, OIDC, or Cloudflare Access) are required",
   };
 }
 

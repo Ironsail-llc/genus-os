@@ -302,6 +302,46 @@ how the count leaves the process today.
 | `ROBOTHOR_CAPABILITIES_MANIFEST` | `$WORKSPACE/agent_capabilities.json` | Agent RBAC manifest path |
 | `ROBOTHOR_SERVICES_MANIFEST` | `$WORKSPACE/robothor-services.json` | Service registry path |
 
+## Authentication
+
+Three sign-in methods, and a deployment needs at least one. Local
+email+password exists so a five-minute install does not have to stand up an
+identity provider first; OIDC and Cloudflare Access are unchanged and can run
+alongside it.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GENUS_AUTH_SIGNING_KEY` | *(vault)* | HS256 key the Bridge signs sessions with. At least 32 bytes; required in production. Also derives the key that encrypts stored TOTP secrets — rotating it invalidates every enrolled second factor (recover with `genus user mfa-reset`) |
+| `GENUS_BRIDGE_SSO_SECRET` | *(empty)* | Shared dashboard↔Bridge secret. Required in production for every method |
+| `GENUS_OIDC_ISSUERS` | *(empty)* | Comma-separated allowlist of OIDC issuers the Bridge will JIT-provision for |
+| `GENUS_LOCAL_LOGIN` | `false` | Exactly `true` enables local email+password sign-in. Off by default: a password endpoint must be opted into, never appear on upgrade |
+| `CF_ACCESS_TEAM_DOMAIN` / `CF_ACCESS_AUD` | *(empty)* | Sign in through a fronting Cloudflare Access policy |
+| `GENUS_INSECURE_DEV_MODE` | `false` | Loopback-only development escape hatch. Not a sign-in method; forbidden in production |
+
+### Local email and password
+
+With `GENUS_LOCAL_LOGIN=true` the sign-in page renders an email + password
+form (alongside the SSO button when both are configured) and the Bridge serves
+`GET /api/auth/methods` and `POST /api/auth/login`.
+
+- Passwords are argon2id (`robothor/auth/passwords.py`), minimum 12 characters.
+- Every failure — unknown email, wrong password, disabled account, locked
+  account — answers the same `invalid credentials`. The only distinguishable
+  state is `mfa_required`, and only after a correct password.
+- Ten consecutive failures freeze the account for 15 minutes; five attempts per
+  (email, IP) per minute are allowed before a 429.
+- **Owner MFA is mandatory when local login is the only configured method.**
+  The owner still signs in, but the Helm shows a banner that cannot be
+  dismissed until a factor is enrolled at `/account/security`.
+
+Operator commands:
+
+```bash
+genus user set-password alice@example.com      # prompts twice, no echo
+genus user set-password alice@example.com --password-stdin < secret
+genus user mfa-reset alice@example.com         # clears a lost authenticator
+```
+
 ## Notifications (optional)
 
 | Variable | Default | Description |

@@ -44,6 +44,7 @@ def test_set_password_hashes_with_argon2id_and_never_prints_it(capsys) -> None:
             "robothor.auth.local_login._store_password_hash",
             side_effect=lambda uid, h: stored.append((uid, h)),
         ),
+        patch("robothor.auth.accounts.revoke_user_sessions"),
         patch("robothor.cli.user.getpass", side_effect=[SECRET, SECRET]),
     ):
         rc = cmd_user(_args(user_command="set-password", password_stdin=False))
@@ -91,6 +92,7 @@ def test_set_password_reads_stdin_for_automation(capsys, monkeypatch) -> None:
             "robothor.auth.local_login._store_password_hash",
             side_effect=lambda uid, h: stored.append((uid, h)),
         ),
+        patch("robothor.auth.accounts.revoke_user_sessions"),
         patch("robothor.cli.user.getpass") as prompt,
     ):
         rc = cmd_user(_args(user_command="set-password", password_stdin=True))

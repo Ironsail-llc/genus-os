@@ -46,6 +46,7 @@ __all__ = [
     "GENERIC_FAILURE",
     "MFA_REQUIRED",
     "LoginResult",
+    "MfaAlreadyEnabledError",
     "WeakPasswordError",
     "authenticate",
     "begin_enrollment",
@@ -90,6 +91,10 @@ _DUMMY_HASH = hash_password("local-login-timing-equalizer")
 
 class WeakPasswordError(ValueError):
     """The supplied password does not meet the minimum policy."""
+
+
+class MfaAlreadyEnabledError(RuntimeError):
+    """Enrollment was attempted on an account that already has a live factor."""
 
 
 @dataclass(frozen=True)
@@ -363,7 +368,9 @@ def authenticate(
         return LoginResult()
 
     normalized = (email or "").strip().casefold()
-    if _rate_limited(normalized, ip):
+    # Namespaced so a sign-in bucket can never be the same key as one of the
+    # authenticated credential routes' buckets in the shared map.
+    if _rate_limited(f"login:{normalized}", ip):
         return LoginResult(rate_limited=True)
 
     account_row = _load_account(tenant_id, normalized)
@@ -384,7 +391,10 @@ def authenticate(
         return LoginResult()
 
     stored_hash = account_row.get("password_hash")
-    if not verify_password(password, stored_hash):
+    # An SSO-only account has password_hash IS NULL, and verify_password
+    # short-circuits on a falsy hash — which would answer instantly and tell an
+    # attacker exactly which accounts have no local credential. Equalize.
+    if not verify_password(password, stored_hash or _DUMMY_HASH) or not stored_hash:
         _record_failure(str(account_row["id"]))
         return LoginResult()
 
@@ -423,11 +433,16 @@ def set_password(user_id: str, new_password: str) -> None:
     for the operator CLI and administrative reset only."""
     validate_password(new_password)
     _store_password_hash(user_id, hash_password(new_password))
+    accounts.revoke_user_sessions(user_id)
     _audit("password.set", user_id=user_id)
 
 
 def change_password(user_id: str, current_password: str, new_password: str) -> bool:
-    """Self-service password change. False when ``current_password`` is wrong."""
+    """Self-service password change. False when ``current_password`` is wrong.
+
+    Every existing refresh session is revoked on success: a password change
+    that leaves a stolen refresh token working has not locked anyone out.
+    """
     validate_password(new_password)
     account_row = _load_account_by_id(user_id)
     if not account_row or account_row.get("status") != "active":
@@ -436,6 +451,7 @@ def change_password(user_id: str, current_password: str, new_password: str) -> b
         _audit("password.change", status="denied", user_id=user_id)
         return False
     _store_password_hash(user_id, hash_password(new_password))
+    accounts.revoke_user_sessions(user_id)
     _audit("password.change", user_id=user_id)
     return True
 
@@ -447,7 +463,16 @@ def begin_enrollment(user_id: str, email: str) -> dict[str, str]:
     receive it. It is stored encrypted and ``mfa_enabled`` stays false until
     ``confirm_enrollment`` proves the operator's app holds the same seed — so
     a half-finished enrollment can never lock anyone out.
+
+    Refuses outright when a CONFIRMED factor already exists. Without that, a
+    hijacked session could POST /mfa/enroll and the write would replace the
+    victim's live secret with a pending one — silently turning their second
+    factor OFF, which is the one thing /mfa/disable deliberately demands both
+    a password and a live code to do.
     """
+    existing = _load_account_by_id(user_id)
+    if existing and existing.get("mfa_enabled"):
+        raise MfaAlreadyEnabledError("this account already has a confirmed second factor")
     secret = totp.new_secret()
     _store_mfa_secret(user_id, mfa_secrets.encrypt_secret(secret), enabled=False)
     _audit("mfa.enroll.begin", user_id=user_id)

@@ -374,6 +374,13 @@ def auth_methods() -> dict[str, Any]:
     render before anyone has a session. It answers with NAMES and booleans
     only: issuer URLs are already public metadata, and no secret (the bridge
     shared secret, the Cloudflare audience, a client secret) appears here.
+
+    Not rate limited, unlike ``/login``. A limiter is there to make guessing
+    expensive, and there is nothing here to guess: the handler reads three
+    environment variables, touches no database and performs no crypto, so it is
+    no more of a lever than ``/ready`` — which is already public. Throttling it
+    would instead risk hiding the sign-in form from a whole office behind one
+    NAT address.
     """
     return {
         "local": local_login.local_login_enabled(),
@@ -491,7 +498,13 @@ def mfa_enroll_route(request: Request) -> dict[str, Any] | JSONResponse:
     account = accounts.get_account_by_id(ctx.user_id)
     if not account or account.get("status") != "active":
         return JSONResponse({"error": "account not found"}, status_code=404)
-    enrolled = local_login.begin_enrollment(ctx.user_id, str(account["email"]))
+    try:
+        enrolled = local_login.begin_enrollment(ctx.user_id, str(account["email"]))
+    except local_login.MfaAlreadyEnabledError:
+        audited(request, "auth.mfa_enroll", action="local", status="denied", user_id=ctx.user_id)
+        return JSONResponse(
+            {"error": "two-factor is already enabled; disable it first"}, status_code=409
+        )
     audited(request, "auth.mfa_enroll", action="local", user_id=ctx.user_id)
     return enrolled
 

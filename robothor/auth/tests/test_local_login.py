@@ -315,6 +315,7 @@ def test_change_password_stores_an_argon2id_hash() -> None:
     with (
         patch.object(local_login, "_load_account_by_id", return_value=row),
         patch.object(local_login, "_store_password_hash") as store,
+        patch("robothor.auth.accounts.revoke_user_sessions"),
     ):
         assert local_login.change_password("uid-1", GOOD_PASSWORD, "a-new-long-password") is True
     stored = store.call_args[0][1]
@@ -326,7 +327,10 @@ def test_change_password_stores_an_argon2id_hash() -> None:
 
 
 def test_enrollment_stores_the_secret_encrypted_and_disabled() -> None:
-    with patch.object(local_login, "_store_mfa_secret") as store:
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=account()),
+        patch.object(local_login, "_store_mfa_secret") as store,
+    ):
         out = local_login.begin_enrollment("uid-1", "alice@example.com")
     assert out["secret"] and out["otpauth_uri"].startswith("otpauth://totp/")
     stored = store.call_args[0][1]
@@ -380,3 +384,68 @@ def test_authenticate_refuses_when_the_feature_is_off(monkeypatch) -> None:
         result = local_login.authenticate("default", "alice@example.com", GOOD_PASSWORD)
     assert result.ok is False
     load.assert_not_called()
+
+
+# ── hostile-review findings ──────────────────────────────────────────
+
+
+def test_an_account_with_no_password_still_costs_a_hash_comparison() -> None:
+    """verify_password(x, None) returns False instantly. Without an explicit
+    equalizer, response time tells an attacker which accounts are SSO-only."""
+    with (
+        patch.object(local_login, "_load_account", return_value=account(password_hash=None)),
+        patch.object(local_login, "_record_failure"),
+        patch.object(local_login, "verify_password", return_value=False) as verify,
+    ):
+        local_login.authenticate("default", "alice@example.com", "x", ip="10.0.0.1")
+    assert verify.call_args[0][1] == local_login._DUMMY_HASH
+
+
+def test_enrollment_refuses_to_overwrite_a_confirmed_factor() -> None:
+    """Otherwise POST /mfa/enroll from a hijacked session silently turns the
+    victim's second factor OFF by replacing the secret with a pending one."""
+    secret = totp.new_secret()
+    row = _mfa_account(secret)
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=row),
+        patch.object(local_login, "_store_mfa_secret") as store,
+    ):
+        with pytest.raises(local_login.MfaAlreadyEnabledError):
+            local_login.begin_enrollment("uid-1", "alice@example.com")
+    store.assert_not_called()
+
+
+def test_changing_a_password_revokes_every_refresh_session() -> None:
+    """A password change that leaves a stolen refresh token working has not
+    actually locked the attacker out."""
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=account()),
+        patch.object(local_login, "_store_password_hash"),
+        patch("robothor.auth.accounts.revoke_user_sessions") as revoke,
+    ):
+        assert local_login.change_password("uid-1", GOOD_PASSWORD, "a-new-long-password") is True
+    revoke.assert_called_once_with("uid-1")
+
+
+def test_set_password_revokes_every_refresh_session_too() -> None:
+    with (
+        patch.object(local_login, "_store_password_hash"),
+        patch("robothor.auth.accounts.revoke_user_sessions") as revoke,
+    ):
+        local_login.set_password("uid-1", "a-new-long-password")
+    revoke.assert_called_once_with("uid-1")
+
+
+def test_sign_in_attempts_cannot_consume_another_routes_quota() -> None:
+    """The limiter is one map. A login key and a /mfa key for the same string
+    must not be the same bucket."""
+    local_login.reset_rate_limiter()
+    for _ in range(local_login.RATE_LIMIT_ATTEMPTS):
+        assert local_login.throttled("mfa:uid-1", "10.0.0.1") is False
+    assert local_login.throttled("mfa:uid-1", "10.0.0.1") is True
+    with (
+        patch.object(local_login, "_load_account", return_value=None),
+        patch.object(local_login, "_record_failure"),
+    ):
+        result = local_login.authenticate("default", "mfa:uid-1", "x", ip="10.0.0.1")
+    assert result.rate_limited is False

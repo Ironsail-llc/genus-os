@@ -1,6 +1,8 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { LocalSignInForm } from "@/components/local-signin-form";
+import { localLoginEnabled } from "@/lib/auth-local";
 import { oidcProviderConfigured, signIn } from "@/lib/auth";
 import { CF_JWT_HEADER, cfAccessEnabled, resolveSignInMode } from "@/lib/cf-access";
 
@@ -28,6 +30,7 @@ export default async function SignInPage({
   const requestHeaders = await headers();
   const cfEnabled = cfAccessEnabled();
   const hasCfHeader = Boolean(requestHeaders.get(CF_JWT_HEADER));
+  const localEnabled = localLoginEnabled();
 
   const mode = resolveSignInMode({
     hasCfHeader,
@@ -69,6 +72,16 @@ export default async function SignInPage({
         {errorMessage && (
           <p className="text-center text-sm text-destructive">{errorMessage}</p>
         )}
+        {localEnabled && <LocalSignInForm callbackUrl={callbackUrl || "/"} />}
+
+        {mode === "oidc-button" && localEnabled && (
+          <div className="flex w-full items-center gap-3">
+            <span className="h-px flex-1 bg-border" aria-hidden />
+            <span className="text-xs uppercase tracking-wide text-muted-foreground">or</span>
+            <span className="h-px flex-1 bg-border" aria-hidden />
+          </div>
+        )}
+
         {mode === "oidc-button" ? (
           <form action={doSignIn} className="w-full">
             <button
@@ -79,7 +92,8 @@ export default async function SignInPage({
             </button>
           </form>
         ) : (
-          !errorMessage && (
+          !errorMessage &&
+          !localEnabled && (
             <p className="text-center text-sm text-muted-foreground">
               {cfEnabled && !hasCfHeader
                 ? "This deployment signs in through its access-protected hostname. Open the dashboard via its public URL."

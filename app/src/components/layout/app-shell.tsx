@@ -14,6 +14,7 @@ import { RunsView } from "@/components/views/runs-view";
 import { WorkflowsView } from "@/components/views/workflows-view";
 import { HealthView } from "@/components/views/health-view";
 import { CanvasView } from "@/components/views/canvas-view";
+import { MfaSetupBanner } from "@/components/mfa-setup-banner";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { CommandPalette } from "@/components/business/command-palette";
 import { useTasks } from "@/hooks/use-tasks";
@@ -92,7 +93,14 @@ export function AppShell() {
   const mobileInChat = isMobile && activeView === "chat";
 
   return (
-    <div className="flex flex-col md:flex-row h-full w-full" data-testid="app-shell">
+    <div className="flex h-full w-full flex-col">
+      {/* Above the shell, not inside a view: an owner who owes a second factor
+          must see it whatever they navigate to, and it has no dismiss. */}
+      <MfaSetupBanner />
+      <div
+        className="flex flex-col md:flex-row flex-1 min-h-0 w-full"
+        data-testid="app-shell"
+      >
       <CommandPalette onNavigate={(v) => setActiveView(v as MobileViewId)} />
       {/* Desktop sidebar — hidden on mobile */}
       {!isMobile && (
@@ -209,6 +217,7 @@ export function AppShell() {
           unhealthyCount={unhealthyCount}
         />
       )}
+      </div>
     </div>
   );
 }

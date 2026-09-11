@@ -307,6 +307,35 @@ async def test_enroll_returns_the_uri_and_secret_once(test_client):
 
 
 @pytest.mark.asyncio
+async def test_enroll_refuses_to_replace_a_live_factor(test_client):
+    """A hijacked session must not be able to turn the victim's second factor
+    off by re-enrolling; disabling deliberately costs a password AND a code."""
+    from robothor.auth.local_login import MfaAlreadyEnabledError
+
+    with (
+        patch(
+            "routers.auth.local_login.begin_enrollment",
+            side_effect=MfaAlreadyEnabledError("already on"),
+        ),
+        patch(
+            "routers.auth.accounts.get_account_by_id",
+            return_value={
+                "id": "uid-1",
+                "email": "alice@example.com",
+                "status": "active",
+                "display_name": "Alice",
+                "role": "owner",
+                "tenant_id": "default",
+                "mfa_enabled": True,
+            },
+        ),
+    ):
+        r = await test_client.post("/api/auth/mfa/enroll", json={}, headers=_bearer())
+    assert r.status_code == 409
+    assert "secret" not in r.text
+
+
+@pytest.mark.asyncio
 async def test_enroll_requires_authentication(test_client, monkeypatch):
     monkeypatch.setenv("GENUS_AUTH_ENFORCE", "true")
     r = await test_client.post("/api/auth/mfa/enroll", json={})
