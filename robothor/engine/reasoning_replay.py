@@ -24,6 +24,7 @@ Two rules, and they pull in opposite directions:
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Final
 
@@ -166,6 +167,72 @@ def strip_reasoning_for_model(messages: list[dict[str, Any]], model: str) -> lis
             }
         )
     return cleaned
+
+
+#: How many messages a rejection digest may describe. A capped run's history is
+#: thousands of turns; the tail is where the rejected shape lives.
+HISTORY_DIGEST_MAX_TURNS: Final = 60
+
+
+def _field_shape(value: Any) -> Any:
+    """The size of a reasoning field, never its content."""
+    if isinstance(value, str):
+        return {"chars": len(value)}
+    if isinstance(value, list):
+        return {"items": len(value), "chars": len(json.dumps(value, default=str))}
+    return {"type": type(value).__name__}
+
+
+def redacted_history_digest(
+    messages: list[dict[str, Any]],
+    model: str,
+    *,
+    limit: int = HISTORY_DIGEST_MAX_TURNS,
+) -> str:
+    """A one-line JSON sketch of a rejected history — shapes only, no content.
+
+    Live replay of every obvious variant against OpenRouter/DeepSeek returned
+    200, so the shape that actually 400s is one nobody has reproduced: most
+    likely a history where some assistant turns kept their reasoning and others
+    lost it (persistence, compaction, hygiene), or reasoning that crossed models
+    on a fallback. Only the rejected conversation itself can say which, and it
+    is made of the operator's mail and CRM — so this records per turn: its index,
+    role, whether content is empty, how many tool calls it carries, which
+    reasoning keys are present **and how large**, and which model produced it.
+    No message text, ever.
+
+    Indices are true positions in the history, so a capped digest still says
+    where in the conversation each turn sat.
+    """
+    turns: list[dict[str, Any]] = []
+    start = max(0, len(messages) - limit)
+    for index, message in enumerate(messages[start:], start=start):
+        if not isinstance(message, dict):
+            turns.append({"i": index, "role": "?", "type": type(message).__name__})
+            continue
+        content = message.get("content")
+        turn: dict[str, Any] = {
+            "i": index,
+            "role": str(message.get("role", "")),
+            "content_empty": not content,
+            "tool_calls": len(message.get("tool_calls") or []),
+        }
+        for field in REASONING_FIELDS:
+            if field in message and message[field] is not None:
+                turn[field] = _field_shape(message[field])
+        producer = message.get(PRODUCER_MODEL_KEY)
+        if producer is not None:
+            turn[PRODUCER_MODEL_KEY] = str(producer)
+        turns.append(turn)
+
+    digest: dict[str, Any] = {
+        "target_model": model,
+        "messages": len(messages),
+        "turns": turns,
+    }
+    if start:
+        digest["omitted_head"] = start
+    return json.dumps({"reasoning_replay_history": digest}, default=str)
 
 
 #: The provider's own wording for a history replayed without its reasoning.

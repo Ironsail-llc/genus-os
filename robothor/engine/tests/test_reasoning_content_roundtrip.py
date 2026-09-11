@@ -338,6 +338,132 @@ class TestTheRejectionIsNamed:
         assert "reasoning_replay_rejected" not in caplog.text
 
 
+class TestTheRejectedHistoryShapeIsPinned:
+    """The 11:55 burst came from a history shape nobody has reproduced.
+
+    Live replay against OpenRouter/DeepSeek returned 200 for every variant
+    tried (reasoning omitted, included, null, empty, and litellm appending the
+    Message object exactly as the runner does), so the shape that 400s is
+    something else — an early turn that lost its reasoning through
+    persistence/compaction/hygiene while later turns kept theirs, or
+    cross-model reasoning on a fallback. The next occurrence has to say which,
+    in one line, without printing the operator's mail into the journal.
+    """
+
+    SECRET = "SECRET-CONTENT-THAT-MUST-NOT-BE-LOGGED"
+
+    def _history(self) -> list[dict]:
+        return [
+            {"role": "system", "content": self.SECRET},
+            {"role": "user", "content": self.SECRET},
+            {  # an early turn that LOST its reasoning
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [_tool_call()],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": self.SECRET},
+            {  # a later turn that kept it, from a different model
+                "role": "assistant",
+                "content": self.SECRET,
+                "tool_calls": [_tool_call(), _tool_call()],
+                "reasoning_content": "x" * 812,
+                "reasoning_details": [{"type": "reasoning.text", "text": self.SECRET}],
+                "_model": DEEPSEEK_REPORTED,
+            },
+        ]
+
+    def _digest(self, caplog) -> dict:
+        error = Exception(DEEPSEEK_400)
+        error.status_code = 400  # type: ignore[attr-defined]
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.llm_client"):
+            LLMClient._handle_model_error(error, ANTHROPIC, set(), messages=self._history())
+
+        lines = [
+            r.getMessage() for r in caplog.records if "reasoning_replay_history" in r.getMessage()
+        ]
+        assert lines, f"no history digest was logged: {caplog.text}"
+        assert len(lines) == 1, "the digest must be ONE line"
+        assert "\n" not in lines[0], "the digest must be a single line"
+        payload = lines[0][lines[0].index("{") :]
+        return json.loads(payload)["reasoning_replay_history"]
+
+    def test_no_message_content_reaches_the_journal(self, caplog) -> None:
+        digest = self._digest(caplog)
+        assert self.SECRET not in json.dumps(digest)
+        assert self.SECRET not in caplog.text
+
+    def test_the_digest_names_the_shape(self, caplog) -> None:
+        digest = self._digest(caplog)
+
+        assert digest["target_model"] == ANTHROPIC
+        assert digest["messages"] == 5
+        turns = {turn["i"]: turn for turn in digest["turns"]}
+
+        # The turn that lost its reasoning, and how much it lost it by.
+        assert turns[2]["role"] == "assistant"
+        assert turns[2]["content_empty"] is True
+        assert turns[2]["tool_calls"] == 1
+        assert "reasoning_content" not in turns[2]
+        assert "_model" not in turns[2]
+
+        # The turn that kept it — lengths, never values.
+        assert turns[4]["tool_calls"] == 2
+        assert turns[4]["content_empty"] is False
+        assert turns[4]["reasoning_content"] == {"chars": 812}
+        assert turns[4]["reasoning_details"]["items"] == 1
+        assert turns[4]["_model"] == DEEPSEEK_REPORTED
+
+    def test_a_long_history_is_capped_and_says_what_it_dropped(self, caplog) -> None:
+        error = Exception(DEEPSEEK_400)
+        error.status_code = 400  # type: ignore[attr-defined]
+        history = [{"role": "user", "content": self.SECRET} for _ in range(70)]
+
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.llm_client"):
+            LLMClient._handle_model_error(error, DEEPSEEK, set(), messages=history)
+
+        line = next(
+            r.getMessage() for r in caplog.records if "reasoning_replay_history" in r.getMessage()
+        )
+        digest = json.loads(line[line.index("{") :])["reasoning_replay_history"]
+
+        assert digest["messages"] == 70
+        assert len(digest["turns"]) == 60
+        assert digest["omitted_head"] == 10
+        # Indices stay true positions so the picture is not silently re-based.
+        assert digest["turns"][0]["i"] == 10
+
+    @pytest.mark.asyncio
+    async def test_the_agent_loop_wires_its_own_history_into_the_digest(
+        self, runner, sample_agent_config, caplog
+    ) -> None:
+        """A digest no caller feeds is a control that does nothing."""
+        sample_agent_config.model_primary = DEEPSEEK
+        sample_agent_config.model_fallbacks = []
+        error = Exception(DEEPSEEK_400)
+        error.status_code = 400  # type: ignore[attr-defined]
+
+        with (
+            caplog.at_level(logging.ERROR, logger="robothor.engine.llm_client"),
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.create_step"),
+            patch("litellm.acompletion", new=AsyncMock(side_effect=error)),
+        ):
+            await runner.execute("test-agent", "hello", agent_config=sample_agent_config)
+
+        digests = [
+            r.getMessage() for r in caplog.records if "reasoning_replay_history" in r.getMessage()
+        ]
+        assert digests, f"the agent loop logged no history digest: {caplog.text}"
+        assert DEEPSEEK in digests[0]
+
+    def test_an_unrelated_failure_logs_no_digest(self, caplog) -> None:
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.llm_client"):
+            LLMClient._handle_model_error(TimeoutError(), DEEPSEEK, set(), messages=self._history())
+
+        assert "reasoning_replay_history" not in caplog.text
+
+
 class TestTheRejectionIsNamedOnTheAuxiliaryPath:
     """Judge, buddy review and background legs call ``llm_call`` directly."""
 
@@ -358,6 +484,7 @@ class TestTheRejectionIsNamedOnTheAuxiliaryPath:
                 )
 
         assert "reasoning_replay_rejected=True" in caplog.text
+        assert "reasoning_replay_history" in caplog.text, "no digest on the auxiliary path"
 
     @pytest.fixture(autouse=True)
     def _failing_provider(self):

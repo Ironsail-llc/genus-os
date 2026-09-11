@@ -47,6 +47,7 @@ from robothor.engine.model_breaker import _current_run_id_var, get_model_breaker
 from robothor.engine.reasoning_replay import (
     is_reasoning_replay_error,
     merge_streamed_reasoning_details,
+    redacted_history_digest,
     strip_reasoning_for_model,
 )
 from robothor.engine.retry import retry_async
@@ -564,7 +565,11 @@ async def _emit_tool_call_events(
             )
 
 
-def _log_reasoning_replay_rejection(model: str, e: BaseException) -> None:
+def _log_reasoning_replay_rejection(
+    model: str,
+    e: BaseException,
+    messages: list[dict[str, Any]] | None = None,
+) -> None:
     """Name a thinking-mode replay rejection, or say nothing.
 
     A history replayed without the provider's own reasoning arrives as a
@@ -572,6 +577,11 @@ def _log_reasoning_replay_rejection(model: str, e: BaseException) -> None:
     from a dozen other bad requests — on 2026-09-11 that cost the fleet a day
     on the local tier with nothing pointing at the cause. Every path that
     swallows a model error calls this.
+
+    ``messages`` adds a redacted digest of the rejected history. Replaying the
+    obvious variants against the live provider returned 200 every time, so the
+    shape that actually 400s is still unidentified and only the rejected
+    conversation can name it — shapes and sizes only, never message text.
     """
     if not is_reasoning_replay_error(e):
         return
@@ -582,6 +592,15 @@ def _log_reasoning_replay_rejection(model: str, e: BaseException) -> None:
         _sanitize(model),
         _sanitize(e),
     )
+    if messages is None:
+        return
+    # The digest is diagnosis, not control flow: a run must not die, and the
+    # rejection above must not go unlogged, because a history had a shape this
+    # sketch could not walk.
+    try:
+        logger.error("reasoning_replay_history %s", redacted_history_digest(messages, model))
+    except Exception as digest_error:  # noqa: BLE001 — never lose the real error
+        logger.warning("reasoning-replay history digest failed: %s", _sanitize(digest_error))
 
 
 async def llm_call(
@@ -671,7 +690,7 @@ async def llm_call(
             # Judge, buddy review and the background legs never touch
             # _handle_model_error, so without this the same rejection is
             # silent on every path outside the agent loop.
-            _log_reasoning_replay_rejection(candidate, exc)
+            _log_reasoning_replay_rejection(candidate, exc, kwargs["messages"])
             if candidate != chain[-1]:
                 logger.warning(
                     "llm_call: %s failed (%s); trying the next model in the chain",
@@ -1331,11 +1350,17 @@ class LLMClient:
         broken_models: set[str] | None,
         *,
         streaming: bool = False,
+        messages: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Handle model failure: mark broken or log warning."""
+        """Handle model failure: mark broken or log warning.
+
+        ``messages`` is the history the call carried, used only to describe the
+        shape of a rejected conversation (redacted) when the failure is a
+        thinking-mode replay rejection.
+        """
         # Named before anything else classifies it — a 400 tells the operator
         # nothing on its own.
-        _log_reasoning_replay_rejection(model, e)
+        _log_reasoning_replay_rejection(model, e, messages)
         status = getattr(e, "status_code", None)
         is_timeout = isinstance(e, (asyncio.TimeoutError, TimeoutError))
         # Provider-availability failures (e.g. the Codex CLI missing from the
@@ -1739,7 +1764,7 @@ class LLMClient:
                         # would blind the fleet's only offline tier for the
                         # cooldown, during the outage it exists to cover.
                         breaker.record_failure(model, reason=str(e)[:120])
-                    self._handle_model_error(e, model, broken_models)
+                    self._handle_model_error(e, model, broken_models, messages=messages)
                     if self._active_watchdog:
                         self._active_watchdog.touch(f"model_fallback:{model}")
                     break  # advance to the next model in the chain
@@ -1957,12 +1982,7 @@ class LLMClient:
                     merge_streamed_reasoning_details(rebuilt, streamed_reasoning_details)
                     return rebuilt
                 except TimeoutError as te:
-                    self._handle_model_error(
-                        te,
-                        model,
-                        broken_models,
-                        streaming=True,
-                    )
+                    self._handle_model_error(te, model, broken_models, streaming=True)
                     last_error = te
                     # Model rotation is activity — don't let watchdog kill us mid-fallback
                     if self._active_watchdog:
@@ -1998,7 +2018,9 @@ class LLMClient:
                         )
                         last_error = e
                         break
-                    self._handle_model_error(e, model, broken_models, streaming=True)
+                    self._handle_model_error(
+                        e, model, broken_models, streaming=True, messages=messages
+                    )
                     last_error = e
                     if self._active_watchdog:
                         self._active_watchdog.touch(f"stream_error_fallback:{model}")

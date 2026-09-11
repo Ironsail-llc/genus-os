@@ -58,10 +58,11 @@ KNOWN_LARGE: dict[str, int] = {
     "llm_client.py::_call_llm": 267,
     "config.py::manifest_to_agent_config": 268,
     "scheduler.py::start": 266,
-    # 261 -> 250: the per-delta tool_use event emission moved to
+    # 261 -> 247: the per-delta tool_use event emission moved to
     # _emit_tool_call_events, which more than paid for accumulating the
-    # streamed reasoning_details litellm's stream_chunk_builder drops.
-    "llm_client.py::_call_llm_streaming": 250,
+    # streamed reasoning_details litellm's stream_chunk_builder drops and for
+    # threading the rejected history into the replay digest.
+    "llm_client.py::_call_llm_streaming": 247,
     "telegram.py::run_agent": 257,
     "tools/handlers/experiment.py::_experiment_commit": 256,
     "telegram.py::_handle_goal_command": 242,
