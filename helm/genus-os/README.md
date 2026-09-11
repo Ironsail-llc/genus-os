@@ -126,9 +126,13 @@ Private ingress is not the application authentication mechanism:
 - The dashboard requires Auth.js OIDC configuration and a successful
   Bridge-authenticated session exchange. Existing users require an explicit
   issuer/subject binding; verified email does not silently link accounts.
-- Local email+password sign-in (`GENUS_LOCAL_LOGIN=true`) is a supported
+- Local email+password sign-in (`global.localLogin`) is a supported
   alternative to OIDC for deployments with no identity provider, and owner MFA
-  is mandatory whenever it is the only configured method.
+  is mandatory whenever it is the only configured method. Set
+  `global.trustedProxies` to the dashboard's pod CIDR so the Bridge's per-IP
+  sign-in limiter sees real client addresses; loopback is not trusted
+  implicitly, so a same-host tunnel cannot let clients choose their own
+  limiter key.
 - Bridge verifies signed audience/expiry/tenant/role/scope claims and enforces
   route-specific scopes and tenant restrictions.
 - Engine independently verifies signed, same-tenant `engine:*` authority for

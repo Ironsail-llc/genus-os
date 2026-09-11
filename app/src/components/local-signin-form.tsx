@@ -37,9 +37,22 @@ const GENERIC_FAILURE = "That email or password is not correct.";
  * So the value is resolved against a sentinel origin with the SAME parser the
  * browser will use, and is accepted only if it stayed there. Control
  * characters are rejected outright rather than reasoned about.
+ *
+ * Checking the resolved ORIGIN is still not enough, because resolution
+ * NORMALISES `..` segments before the origin is read. `/..//evil.example.com`
+ * resolves to origin `https://x.invalid` — it passes — with a pathname of
+ * `//evil.example.com`, and `location.assign("//evil.example.com")` is
+ * protocol-relative. `/./..//`, `/a/../..//`, `/%2e%2e//` and
+ * `/..//user:pass@host` all arrive at the same place. So the string actually
+ * handed to the browser is re-checked: it must begin with exactly one slash.
  */
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 const SENTINEL_ORIGIN = "https://x.invalid";
+
+/** A path no browser can read as "some other host". */
+function isSingleSlashPath(value: string): boolean {
+  return value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\");
+}
 
 export function safeCallbackUrl(candidate: string | undefined): string {
   const value = (candidate ?? "").trim();
@@ -48,7 +61,12 @@ export function safeCallbackUrl(candidate: string | undefined): string {
   try {
     const resolved = new URL(value, SENTINEL_ORIGIN);
     if (resolved.origin !== SENTINEL_ORIGIN) return "/";
-    return `${resolved.pathname}${resolved.search}${resolved.hash}`;
+    if (!isSingleSlashPath(resolved.pathname)) return "/";
+    const out = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+    // Belt and braces. The value handed to location.assign() decides where the
+    // browser goes, so that exact string is what is checked last — not an
+    // intermediate the reasoning happens to be about.
+    return isSingleSlashPath(out) ? out : "/";
   } catch {
     return "/";
   }

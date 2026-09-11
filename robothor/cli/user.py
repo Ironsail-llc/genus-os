@@ -121,6 +121,7 @@ def _cmd_list(args: Namespace) -> int:
 def _cmd_add(args: Namespace) -> int:
     import psycopg2
 
+    from robothor.auth import accounts as crm_accounts
     from robothor.constants import DEFAULT_TENANT
     from robothor.crm import dal as crm_dal
     from robothor.crm.validation import validate_person_input
@@ -245,7 +246,7 @@ def _cmd_add(args: Namespace) -> int:
                     # sign-in path both casefold what they look up, and a row
                     # written as "Alice@Example.com" must not be a row only
                     # one of them can find. (See migration 114.)
-                    (tenant, email.casefold(), name, role, resolved_person_id),
+                    (tenant, crm_accounts.canonical_email(email), name, role, resolved_person_id),
                 )
                 account_created = bool(cur.fetchone())
     except psycopg2.errors.UniqueViolation as exc:
@@ -472,7 +473,7 @@ def _resolve_account(args: Namespace) -> dict | None:
     from robothor.constants import DEFAULT_TENANT
 
     tenant = getattr(args, "tenant", None) or DEFAULT_TENANT
-    email = (getattr(args, "email", None) or "").strip().casefold()
+    email = accounts.canonical_email(getattr(args, "email", None))
     account = accounts.get_account_by_email(tenant, email)
     if not account:
         print(

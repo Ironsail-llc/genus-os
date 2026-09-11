@@ -272,6 +272,9 @@ def me(request: Request) -> dict[str, Any] | JSONResponse:
 
 _MAX_CODE_LENGTH = 16
 _MAX_EMAIL_LENGTH = 320
+# tokens.new_refresh_token() is token_urlsafe(48) — 64 characters. 512 leaves
+# generous room for a future format without leaving the field unbounded.
+_MAX_TOKEN_LENGTH = 512
 
 _NOT_FOUND = JSONResponse({"error": "Not found"}, status_code=404)
 _UNAUTHORIZED = JSONResponse({"error": local_login.GENERIC_FAILURE}, status_code=401)
@@ -352,6 +355,11 @@ def _credential_lengths_ok(parsed: dict[str, str]) -> bool:
             return False
         if "password" in name and len(value) > local_login.MAX_PASSWORD_LENGTH:
             return False
+        # A refresh token is a fixed-width random string. Leaving the one field
+        # here unbounded would hand a caller who has a session and nothing else
+        # a free megabyte of SHA-256 per request.
+        if name == "keep_refresh_token" and len(value) > _MAX_TOKEN_LENGTH:
+            return False
     return True
 
 
@@ -395,11 +403,19 @@ def _trusted_proxies() -> set[str]:
 def _peer_is_trusted(peer: str | None) -> bool:
     """Whether *peer* may speak for someone else's address.
 
-    Loopback always may — that is the dashboard and the bridge in the same pod
-    or on the same box, which is the whole shipped topology. Anything else has
-    to be named in ``GENUS_TRUSTED_PROXIES``, as an address or as a CIDR range
-    (a Kubernetes pod address changes on every restart, so a range is the only
-    usable way to say "the dashboard" there).
+    ONLY peers named in ``GENUS_TRUSTED_PROXIES`` may — as an address or a CIDR
+    range (a Kubernetes pod address changes on every restart, so a range is the
+    only usable way to say "the dashboard" there). An empty variable trusts
+    nobody, which is the safe default for a deployment that has not thought
+    about it.
+
+    Loopback is NOT trusted implicitly, and that is the whole point of this
+    function. A tunnel on the same host — cloudflared, a reverse proxy, an SSH
+    forward — makes every remote client a loopback peer. Trusting loopback by
+    default would therefore let every one of them choose its own rate-limit
+    bucket by sending a header, deleting the limiter entirely on the strength
+    of a deployment detail nobody wrote down. An operator who wants it says so:
+    ``GENUS_TRUSTED_PROXIES=127.0.0.1/32``.
 
     A malformed entry is skipped, not fatal: a typo in an environment variable
     must not turn every sign-in into a 500.
@@ -408,10 +424,6 @@ def _peer_is_trusted(peer: str | None) -> bool:
         return False
     import ipaddress
 
-    from robothor.auth.runtime import is_loopback_host
-
-    if is_loopback_host(peer):
-        return True
     try:
         address = ipaddress.ip_address(peer)
     except ValueError:
@@ -435,10 +447,11 @@ def _client_ip(request: Request) -> str | None:
     user of that email out for a minute, and a distributed spray is not slowed
     down by a shared bucket it can refill from any source.
 
-    ``X-Client-IP`` is honoured ONLY from a trusted peer. A header anyone can
-    set is a limiter anyone can bypass by varying it, so the untrusted case
-    falls back to the real peer address, and so does a value that is not a
-    parseable IP.
+    ``X-Client-IP`` is honoured ONLY from a peer listed in
+    ``GENUS_TRUSTED_PROXIES`` — loopback included, which must be named
+    explicitly. A header anyone can set is a limiter anyone can bypass by
+    varying it, so the untrusted case falls back to the real peer address, and
+    so does a value that is not a parseable IP.
     """
     peer = _peer_ip(request)
     if not _peer_is_trusted(peer):

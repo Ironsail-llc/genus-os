@@ -360,13 +360,12 @@ def test_confirm_enrollment_requires_the_right_code() -> None:
     )
     with (
         patch.object(local_login, "_load_account_by_id", return_value=row),
-        patch.object(local_login, "_set_mfa_enabled") as enable,
-        patch.object(local_login, "_record_mfa_step"),
+        patch.object(local_login, "_confirm_enrollment_atomically", return_value=True) as enable,
     ):
         assert local_login.confirm_enrollment(USER_ID, "000000") is False
         enable.assert_not_called()
         assert local_login.confirm_enrollment(USER_ID, totp.generate(secret)) is True
-        enable.assert_called_once_with(USER_ID, True)
+        assert enable.call_args[0][0] == USER_ID
 
 
 def test_disable_mfa_requires_both_password_and_code() -> None:
@@ -519,8 +518,7 @@ def test_confirming_an_enrollment_burns_the_step_it_used() -> None:
     )
     with (
         patch.object(local_login, "_load_account_by_id", return_value=row),
-        patch.object(local_login, "_set_mfa_enabled"),
-        patch.object(local_login, "_record_mfa_step") as burn,
+        patch.object(local_login, "_confirm_enrollment_atomically", return_value=True) as burn,
     ):
         assert local_login.confirm_enrollment(USER_ID, totp.generate(secret)) is True
     assert burn.call_args[0][0] == USER_ID
@@ -635,3 +633,111 @@ def test_the_audit_subject_is_keyed_stable_and_not_the_address() -> None:
     assert handle != local_login.audit_subject("bob@example.com")
     assert "alice" not in handle.lower()
     assert len(handle) == 32
+
+
+# ── fix round 2 ──────────────────────────────────────────────────────
+
+
+def test_the_sign_in_lookup_uses_lower_not_casefold() -> None:
+    """See test_email_canonicalisation_uses_lower_not_casefold: casefold turns
+    Straße into strasse, which is someone else's mailbox."""
+    seen: list[str] = []
+
+    def _capture(tenant, email):
+        seen.append(email)
+        return
+
+    with (
+        patch.object(local_login, "_load_account", side_effect=_capture),
+        patch.object(local_login, "_record_noop"),
+    ):
+        local_login.authenticate("default", " Straße@X.DE ", "x", ip="10.0.0.1")
+    assert seen == ["straße@x.de"]
+
+
+def test_the_audit_subject_uses_lower_and_keeps_distinct_addresses_distinct() -> None:
+    assert local_login.audit_subject("Straße@X.DE") == local_login.audit_subject("straße@x.de")
+    assert local_login.audit_subject("Straße@x.de") != local_login.audit_subject("strasse@x.de")
+
+
+def test_the_audit_subject_is_an_hmac_under_a_derived_key() -> None:
+    """The address is the MESSAGE and the derived key is the KEY. Feeding both
+    into HKDF's input keying material instead makes the "key" just more salt —
+    the construction is only as strong as an unkeyed hash of a low-entropy,
+    enumerable input, i.e. reversible by anyone with a list of addresses."""
+    import hashlib
+    import hmac as hmac_mod
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    from robothor.auth.tokens import signing_key
+
+    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b"genus-audit-email").derive(
+        signing_key().encode("utf-8")
+    )
+    expected = hmac_mod.new(key, b"alice@example.com", hashlib.sha256).hexdigest()[:32]
+    assert local_login.audit_subject("Alice@Example.com") == expected
+
+
+def test_a_replayed_step_lost_at_the_database_refuses_the_sign_in() -> None:
+    """_record_success claims the step in the same statement that clears the
+    failure state. Losing that claim means another request spent this code a
+    moment ago — a correct password and a correct code, and still a replay."""
+    secret = totp.new_secret()
+    row = _mfa_account(secret)
+    with (
+        patch.object(local_login, "_load_account", return_value=row),
+        patch.object(local_login, "_record_failure") as fail,
+        patch.object(local_login, "_record_noop"),
+        patch.object(local_login, "_record_success", return_value=False) as ok,
+        patch("robothor.auth.accounts.issue_for_account") as issue,
+    ):
+        result = local_login.authenticate(
+            "default", "alice@example.com", GOOD_PASSWORD, totp.generate(secret), ip="10.0.0.1"
+        )
+    assert result.ok is False and result.mfa_required is True
+    ok.assert_called_once()
+    issue.assert_not_called()
+    fail.assert_called_once()
+
+
+def test_confirming_an_enrollment_enables_and_claims_in_one_transaction() -> None:
+    secret = totp.new_secret()
+    row = account(
+        mfa_enabled=False, mfa_secret_enc=mfa_secrets.encrypt_secret(secret, user_id=USER_ID)
+    )
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=row),
+        patch.object(local_login, "_confirm_enrollment_atomically", return_value=True) as once,
+        patch.object(local_login, "_set_mfa_enabled") as separate_enable,
+        patch.object(local_login, "_record_mfa_step") as separate_burn,
+    ):
+        assert local_login.confirm_enrollment(USER_ID, totp.generate(secret)) is True
+    once.assert_called_once()
+    separate_enable.assert_not_called()
+    separate_burn.assert_not_called()
+
+
+def test_a_lost_confirm_claim_does_not_enable_the_factor() -> None:
+    secret = totp.new_secret()
+    row = account(
+        mfa_enabled=False, mfa_secret_enc=mfa_secrets.encrypt_secret(secret, user_id=USER_ID)
+    )
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=row),
+        patch.object(local_login, "_confirm_enrollment_atomically", return_value=False),
+    ):
+        assert local_login.confirm_enrollment(USER_ID, totp.generate(secret)) is False
+
+
+def test_disabling_mfa_claims_the_step_before_stripping_the_factor() -> None:
+    secret = totp.new_secret()
+    row = _mfa_account(secret)
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=row),
+        patch.object(local_login, "_record_mfa_step", return_value=False),
+        patch.object(local_login, "_clear_mfa") as clear,
+    ):
+        assert local_login.disable_mfa(USER_ID, GOOD_PASSWORD, totp.generate(secret)) is False
+    clear.assert_not_called()

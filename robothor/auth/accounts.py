@@ -22,6 +22,20 @@ DEFAULT_ROLE = "member"
 JIT_PROVISIONABLE_ROLES = frozenset({"member", "viewer"})
 
 
+def canonical_email(email: str | None) -> str:
+    """The one canonical form of an address, used on every read and write.
+
+    ``str.lower()``, NOT ``str.casefold()``. Casefold is for caseless
+    *comparison* of arbitrary text and maps ß to ss, so
+    ``"Straße@x.de".casefold()`` is ``"strasse@x.de"`` — a different mailbox,
+    quite possibly someone else's. ``lower()`` matches PostgreSQL's ``lower()``
+    and CITEXT's comparison exactly, which is what the stored side and the
+    migration use, so the Python and SQL sides can never disagree about which
+    row an address names.
+    """
+    return (email or "").strip().lower()
+
+
 class AccountProvisioningError(RuntimeError):
     """Base class for fail-closed SSO account resolution failures."""
 
@@ -60,6 +74,8 @@ def get_account_by_email(tenant_id: str, email: str) -> dict[str, Any] | None:
     this stays an equality predicate and keeps using the
     ``UNIQUE (tenant_id, email)`` index.
 
+    ``canonical_email`` is ``lower()``, never ``casefold()`` — see its note.
+
     It is deliberately NOT ``lower(email) = lower(%s)``. That would work, but
     it makes the predicate non-sargable — a sequential scan of every account
     on the busiest unauthenticated route in the product, which is a denial-of-
@@ -71,7 +87,7 @@ def get_account_by_email(tenant_id: str, email: str) -> dict[str, Any] | None:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             "SELECT * FROM user_accounts WHERE tenant_id = %s AND email = %s",
-            (tenant_id, (email or "").strip().casefold()),
+            (tenant_id, canonical_email(email)),
         )
         row = cur.fetchone()
         return dict(row) if row else None
@@ -111,7 +127,7 @@ def jit_provision(
     if default_role not in JIT_PROVISIONABLE_ROLES:
         raise UnsafeProvisioningRoleError("privileged roles cannot be JIT provisioned")
 
-    email = email.strip().casefold()
+    email = canonical_email(email)
     existing = get_account_by_idp(issuer, subject)
     if existing:
         if existing.get("status") != "active":
@@ -227,7 +243,7 @@ def create_binding_grant(
     the same email so at most one grant is ever live. An ``issuer`` pin
     restricts consumption to that IdP; otherwise any allowlisted IdP matches.
     """
-    email = email.strip().casefold()
+    email = canonical_email(email)
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
@@ -513,7 +529,7 @@ def bootstrap_owner_account() -> dict[str, Any] | None:
     # CITEXT today, which would have hidden this — but a guarantee that rests
     # on one column type is not a guarantee, and the owner row is the one
     # account whose lockout has no recovery path.
-    email = owner.email.strip().casefold()
+    email = canonical_email(owner.email)
 
     # Link the CRM rolodex row if resolvable (mirrors tenant_users.person_id).
     person_id = None

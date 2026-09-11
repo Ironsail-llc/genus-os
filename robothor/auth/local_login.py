@@ -305,11 +305,37 @@ def _record_noop(user_id: str | None) -> None:
         conn.commit()
 
 
-def _record_success(user_id: str, *, mfa_step: int | None = None) -> None:
-    """Clear the failure state, and burn the TOTP step that was just spent.
+# Claim one TOTP step, or claim nothing. The predicate and the write are the
+# SAME statement, so the database decides the winner.
+#
+# Reading the watermark and then writing it was a check-then-write across two
+# connections: two requests carrying the same code both read "nothing spent",
+# both verified, and both signed in. A one-time password that works twice at
+# once is not one-time. Row-level locking serialises the two UPDATEs, the
+# predicate is re-evaluated under EvalPlanQual against the committed row, and
+# the loser gets ``rowcount == 0`` — which every caller reads as "replay".
+#
+# The ``<`` also refuses an OLDER step, so a late arrival cannot walk the
+# watermark backwards and re-open a window that was already spent.
+#
+# Parameters, in order: step (to write), user_id, step (to compare).
+BURN_STEP_SQL = """
+    UPDATE {table}
+       SET mfa_last_used_step = %s, updated_at = NOW()
+     WHERE id = %s
+       AND (mfa_last_used_step IS NULL OR mfa_last_used_step < %s)
+"""
 
-    One statement: the step must not be recordable separately from the sign-in
-    it belongs to, or a crash between the two leaves the code replayable.
+
+def _record_success(user_id: str, *, mfa_step: int | None = None) -> bool:
+    """Clear the failure state, and claim the TOTP step that was just spent.
+
+    One statement, so the step cannot be recorded separately from the sign-in
+    it belongs to — a crash between the two would leave the code replayable —
+    and so two simultaneous uses of one code cannot both win.
+
+    Returns False when the step had already been claimed: the caller must
+    refuse that sign-in even though the password and the code were correct.
     """
     with get_connection() as conn:
         cur = conn.cursor()
@@ -319,30 +345,54 @@ def _record_success(user_id: str, *, mfa_step: int | None = None) -> None:
                 "last_login_at = NOW(), updated_at = NOW() WHERE id = %s",
                 (user_id,),
             )
-        else:
-            cur.execute(
-                "UPDATE user_accounts SET failed_login_count = 0, locked_until = NULL, "
-                "last_login_at = NOW(), mfa_last_used_step = %s, updated_at = NOW() "
-                "WHERE id = %s",
-                (mfa_step, user_id),
-            )
+            conn.commit()
+            return True
+        cur.execute(
+            "UPDATE user_accounts SET failed_login_count = 0, locked_until = NULL, "
+            "last_login_at = NOW(), mfa_last_used_step = %s, updated_at = NOW() "
+            "WHERE id = %s AND (mfa_last_used_step IS NULL OR mfa_last_used_step < %s)",
+            (mfa_step, user_id, mfa_step),
+        )
+        claimed = bool(cur.rowcount)
         conn.commit()
+        return claimed
 
 
-def _record_mfa_step(user_id: str, step: int) -> None:
-    """Burn a TOTP step outside a sign-in (enrollment confirm, MFA disable).
+def _record_mfa_step(user_id: str, step: int) -> bool:
+    """Claim a TOTP step outside a sign-in (enrollment confirm, MFA disable).
 
-    ``GREATEST`` so a late-arriving older step cannot walk the watermark
-    backwards and re-open a window that was already spent.
+    Returns False when the step was already spent — a replay, which the caller
+    must refuse.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(BURN_STEP_SQL.format(table="user_accounts"), (step, user_id, step))
+        claimed = bool(cur.rowcount)
+        conn.commit()
+        return claimed
+
+
+def _confirm_enrollment_atomically(user_id: str, step: int) -> bool:
+    """Enable MFA and claim the confirming step in ONE transaction.
+
+    Two statements on two connections could leave the factor enabled with the
+    step unclaimed (the confirming code still usable at the sign-in page) or
+    the step claimed with the factor off. One transaction has neither state.
     """
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE user_accounts SET mfa_last_used_step = "
-            "GREATEST(COALESCE(mfa_last_used_step, 0), %s), updated_at = NOW() WHERE id = %s",
-            (step, user_id),
+            "UPDATE user_accounts SET mfa_enabled = TRUE, mfa_last_used_step = %s, "
+            "updated_at = NOW() "
+            "WHERE id = %s AND (mfa_last_used_step IS NULL OR mfa_last_used_step < %s)",
+            (step, user_id, step),
         )
+        claimed = bool(cur.rowcount)
+        if not claimed:
+            conn.rollback()
+            return False
         conn.commit()
+        return True
 
 
 def _store_password_hash(user_id: str, password_hash: str) -> None:
@@ -442,23 +492,34 @@ def audit_subject(email: str) -> str:
     ``ceo@acme.example`` has an account here, especially on a FAILED attempt
     where the address may be an attacker's guess rather than a real user.
 
-    So: HKDF-SHA256 over the server-held signing key (info
-    ``b"genus-audit-email"``) keyed onto the casefolded address. Equal emails
-    give equal handles, so spray patterns are still visible; the handle does
-    not leave the instance's key, so a leaked audit export is not an address
-    book. Falls back to a fixed placeholder rather than raising if no key is
-    resolvable — an audit row must never be the reason a sign-in 500s.
+    So: HKDF-SHA256 derives a key from the server-held signing key (info
+    ``b"genus-audit-email"``), and the address is HMAC'd **under** that key.
+
+    The key belongs in the key slot. The first version concatenated the address
+    and the signing key into HKDF's input keying material, which makes the
+    "key" just more salt: the construction then reduces to an unkeyed hash of a
+    low-entropy, fully enumerable input, and anyone holding the export plus a
+    list of plausible addresses reverses it by trying them. As an HMAC key, the
+    secret is what an attacker must have to compute a single handle.
+
+    Equal addresses give equal handles, so spray patterns stay visible. Falls
+    back to a fixed placeholder rather than raising if no key is resolvable —
+    an audit row must never be the reason a sign-in 500s.
     """
     try:
+        import hashlib
+        import hmac as hmac_module
+
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
         from robothor.auth.tokens import signing_key
 
-        digest = HKDF(
-            algorithm=hashes.SHA256(), length=16, salt=None, info=b"genus-audit-email"
-        ).derive((email or "").strip().casefold().encode("utf-8") + signing_key().encode("utf-8"))
-        return digest.hex()
+        key = HKDF(
+            algorithm=hashes.SHA256(), length=32, salt=None, info=b"genus-audit-email"
+        ).derive(signing_key().encode("utf-8"))
+        message = accounts.canonical_email(email).encode("utf-8")
+        return hmac_module.new(key, message, hashlib.sha256).hexdigest()[:32]
     except Exception:  # pragma: no cover - never break a sign-in over an audit field
         return "unavailable"
 
@@ -512,7 +573,7 @@ def authenticate(
     if not local_login_enabled():
         return LoginResult()
 
-    normalized = (email or "").strip().casefold()
+    normalized = accounts.canonical_email(email)
     # Namespaced so a sign-in bucket can never be the same key as one of the
     # authenticated credential routes' buckets in the shared map.
     if _rate_limited(f"login:{normalized}", ip):
@@ -565,7 +626,13 @@ def authenticate(
             _record_failure(str(account_row["id"]))
             return LoginResult(mfa_required=True, error=MFA_REQUIRED)
 
-    _record_success(str(account_row["id"]), mfa_step=mfa_step)
+    # The step is claimed by the SAME statement that clears the failure state,
+    # and the database decides who gets it. A loser here presented a correct
+    # password and a correct code — and a code someone else was already using
+    # this instant, which is the replay this refuses.
+    if not _record_success(str(account_row["id"]), mfa_step=mfa_step):
+        _record_failure(str(account_row["id"]))
+        return LoginResult(mfa_required=True, error=MFA_REQUIRED)
     if isinstance(stored_hash, str) and needs_rehash(stored_hash):
         try:
             _store_password_hash(str(account_row["id"]), hash_password(password))
@@ -672,8 +739,11 @@ def confirm_enrollment(user_id: str, code: str) -> bool:
     if step is None:
         _audit("mfa.enroll.confirm", status="denied", user_id=user_id)
         return False
-    _set_mfa_enabled(user_id, True)
-    _record_mfa_step(user_id, step)
+    # Enable and claim in one transaction — never a state where the factor is
+    # on but the confirming code is still spendable at the sign-in page.
+    if not _confirm_enrollment_atomically(user_id, step):
+        _audit("mfa.enroll.confirm", status="denied", user_id=user_id)
+        return False
     _audit("mfa.enroll.confirm", user_id=user_id)
     return True
 
@@ -691,7 +761,12 @@ def disable_mfa(user_id: str, password: str, code: str) -> bool:
     if step is None:
         _audit("mfa.disable", status="denied", user_id=user_id)
         return False
-    _record_mfa_step(user_id, step)
+    # Claim FIRST. Two simultaneous requests carrying the same code must not
+    # both count as "proved the second factor", and the loser must not get to
+    # strip the factor on the strength of a code someone else just spent.
+    if not _record_mfa_step(user_id, step):
+        _audit("mfa.disable", status="denied", user_id=user_id)
+        return False
     _clear_mfa(user_id)
     _audit("mfa.disable", user_id=user_id)
     return True

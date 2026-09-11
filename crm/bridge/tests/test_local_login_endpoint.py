@@ -278,14 +278,54 @@ async def test_password_change_enforces_a_minimum_length(test_client):
 
 
 @pytest.mark.asyncio
-async def test_the_forwarded_client_ip_is_honoured_from_a_loopback_caller(test_client):
-    with patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth:
+async def test_loopback_is_not_trusted_implicitly(test_client, monkeypatch):
+    """cloudflared, a reverse proxy or any tunnel on the same host makes every
+    remote client a loopback peer. Trusting loopback by default therefore lets
+    every one of them pick its own rate-limit bucket by sending a header —
+    which is the whole limiter, gone, on the strength of a deployment detail."""
+    monkeypatch.delenv("GENUS_TRUSTED_PROXIES", raising=False)
+    with (
+        patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth,
+        patch("routers.auth._peer_ip", return_value="127.0.0.1"),
+    ):
+        await test_client.post(
+            "/api/auth/login",
+            json={"email": "alice@example.com", "password": "x" * 12},
+            headers={"X-Client-IP": "203.0.113.7"},
+        )
+    assert auth.call_args.kwargs["ip"] == "127.0.0.1"
+
+
+@pytest.mark.asyncio
+async def test_loopback_is_trusted_when_listed_explicitly(test_client, monkeypatch):
+    monkeypatch.setenv("GENUS_TRUSTED_PROXIES", "127.0.0.1/32")
+    with (
+        patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth,
+        patch("routers.auth._peer_ip", return_value="127.0.0.1"),
+    ):
         await test_client.post(
             "/api/auth/login",
             json={"email": "alice@example.com", "password": "x" * 12},
             headers={"X-Client-IP": "203.0.113.7"},
         )
     assert auth.call_args.kwargs["ip"] == "203.0.113.7"
+
+
+@pytest.mark.asyncio
+async def test_a_non_empty_allowlist_that_omits_loopback_still_excludes_it(
+    test_client, monkeypatch
+):
+    monkeypatch.setenv("GENUS_TRUSTED_PROXIES", "10.42.0.0/16")
+    with (
+        patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth,
+        patch("routers.auth._peer_ip", return_value="127.0.0.1"),
+    ):
+        await test_client.post(
+            "/api/auth/login",
+            json={"email": "alice@example.com", "password": "x" * 12},
+            headers={"X-Client-IP": "203.0.113.7"},
+        )
+    assert auth.call_args.kwargs["ip"] == "127.0.0.1"
 
 
 @pytest.mark.asyncio
@@ -374,7 +414,8 @@ async def test_a_malformed_trusted_proxies_entry_is_ignored_not_fatal(test_clien
 
 
 @pytest.mark.asyncio
-async def test_a_junk_forwarded_value_falls_back_to_the_peer(test_client):
+async def test_a_junk_forwarded_value_falls_back_to_the_peer(test_client, monkeypatch):
+    monkeypatch.setenv("GENUS_TRUSTED_PROXIES", "127.0.0.1")
     with (
         patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth,
         patch("routers.auth._peer_ip", return_value="127.0.0.1"),
@@ -416,7 +457,8 @@ async def test_a_well_formed_email_still_gets_through(test_client):
 
 
 @pytest.mark.asyncio
-async def test_a_failed_login_is_audited_with_a_hashed_subject_and_the_ip(test_client):
+async def test_a_failed_login_is_audited_with_a_hashed_subject_and_the_ip(test_client, monkeypatch):
+    monkeypatch.setenv("GENUS_TRUSTED_PROXIES", "127.0.0.1")
     with (
         patch("routers.auth.local_login.authenticate", return_value=LoginResult()),
         patch("routers.auth.audited") as audit,
@@ -469,6 +511,24 @@ async def test_password_change_spares_the_callers_own_session(test_client):
     assert change.call_args.kwargs["keep_refresh_hash"] == tokens.hash_refresh_token(
         "raw-refresh-token"
     )
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_kept_token_is_refused_before_any_hashing(test_client):
+    """Every other field in this body is bounded; an unbounded one is a free
+    megabyte of SHA-256 for a caller who has a session and nothing else."""
+    with patch("routers.auth.local_login.change_password") as change:
+        r = await test_client.post(
+            "/api/auth/password",
+            json={
+                "current_password": "x" * 12,
+                "new_password": "y" * 14,
+                "keep_refresh_token": "z" * 100_000,
+            },
+            headers=_bearer(),
+        )
+    assert r.status_code == 422
+    change.assert_not_called()
 
 
 @pytest.mark.asyncio

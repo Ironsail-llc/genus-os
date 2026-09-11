@@ -27,11 +27,15 @@ global:
   # 404s. When this is the only configured method, owner MFA is mandatory.
   localLogin: false
 
-  # Peers allowed to speak for someone else's client address via X-Client-IP.
-  # Comma-separated; loopback is always trusted. The dashboard calls the
+  # Peers allowed to speak for someone else's client address via X-Client-IP,
+  # as comma-separated addresses or CIDR ranges. The dashboard calls the
   # bridge server-side, so without this the bridge's per-IP sign-in limiter
-  # sees one address for the whole internet. Leave empty when the two run in
-  # the same pod or on the same host.
+  # sees one address for the whole internet.
+  #
+  # LOOPBACK IS NOT TRUSTED IMPLICITLY, and empty trusts nobody. A tunnel on
+  # the same host makes every remote client a loopback peer, so an implicit
+  # trust would let all of them pick their own limiter key. Set this to the
+  # dashboard's pod CIDR (or "127.0.0.1/32" when they share a host).
   trustedProxies: ""
 
   # Image registry. Single GHCR org, two image names beneath it.

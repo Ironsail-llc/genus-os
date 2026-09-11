@@ -64,7 +64,11 @@ tests:
             value: "10.42.0.0/16,10.43.1.7"
         documentIndex: 0
 
-  - it: no proxy is trusted by default
+  # Empty means "trust nobody", INCLUDING loopback. A tunnel on the same host
+  # makes every remote client a loopback peer, so an implicit loopback trust
+  # would let all of them pick their own rate-limit key by sending a header.
+  # An operator who wants it names 127.0.0.1/32.
+  - it: no proxy is trusted by default, and that includes loopback
     template: bridge/workload.yaml
     asserts:
       - contains:
@@ -72,4 +76,16 @@ tests:
           content:
             name: GENUS_TRUSTED_PROXIES
             value: ""
+        documentIndex: 0
+
+  - it: loopback can be trusted, but only by naming it
+    template: bridge/workload.yaml
+    set:
+      global.trustedProxies: "127.0.0.1/32"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_TRUSTED_PROXIES
+            value: "127.0.0.1/32"
         documentIndex: 0

@@ -395,3 +395,40 @@ def test_revoke_user_sessions_without_an_exception_revokes_everything():
     sql, params = cur.execute.call_args[0]
     assert "refresh_token_hash" not in sql
     assert params == ("uid-1",)
+
+
+# ── fix round 2: one case-folding rule, and it is lower() ────────────
+
+
+def test_email_canonicalisation_uses_lower_not_casefold():
+    """`"Straße@x.de".casefold()` is `"strasse@x.de"` — a DIFFERENT mailbox.
+    Python's casefold maps ß to ss; `str.lower()`, PostgreSQL's `lower()` and
+    CITEXT all leave it alone. Using casefold anywhere in this path would let
+    one person's address silently resolve to another's account, so the whole
+    stack uses lower() and only lower()."""
+    conn, cur = _mock_conn([None])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        accounts.get_account_by_email("default", "  Straße@X.DE ")
+    assert cur.execute.call_args[0][1] == ("default", "straße@x.de")
+
+
+def test_two_addresses_that_casefold_alike_stay_distinct():
+    seen = []
+    conn, cur = _mock_conn([None, None])
+    cur.execute.side_effect = lambda sql, params=None: seen.append(params)
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        accounts.get_account_by_email("default", "Straße@x.de")
+        accounts.get_account_by_email("default", "Strasse@x.de")
+    assert seen[0] != seen[1], "ß and ss must not resolve to the same account"
+
+
+def test_bootstrap_owner_account_uses_lower_too():
+    owner = MagicMock(email="Straße@X.DE", tenant_id="default", first_name="Ann", last_name="Smith")
+    conn, cur = _mock_conn([{"id": "uid-1"}])
+    with (
+        patch("robothor.owner_config.load_owner_config", return_value=owner),
+        patch("robothor.auth.accounts.get_connection", return_value=conn),
+        patch("robothor.crm.dal.get_owner_person", return_value=None),
+    ):
+        accounts.bootstrap_owner_account()
+    assert cur.execute.call_args[0][1][1] == "straße@x.de"

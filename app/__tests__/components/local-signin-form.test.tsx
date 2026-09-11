@@ -106,6 +106,15 @@ describe("LocalSignInForm", () => {
     "/\r/evil.example.com",
     "/\t\t//evil.example.com",
     "/\u0000//evil.example.com",
+    // Resolution NORMALISES these to a pathname of "//evil.example.com", which
+    // window.location.assign then reads as protocol-relative. Checking the
+    // resolved origin is not enough; the resolved PATH has to be checked too.
+    "/..//evil.example.com",
+    "/./..//evil.example.com",
+    "/a/../..//evil.example.com",
+    "/%2e%2e//evil.example.com",
+    "/..//user:pass@evil.example.com",
+    "/..//evil.example.com/path?a=1#b",
   ])("never navigates off-origin after sign-in (%s)", async (hostile) => {
     // `callbackUrl` arrives from the query string, so /signin?callbackUrl=...
     // is attacker-controlled. A post-sign-in window.location.assign() of that
