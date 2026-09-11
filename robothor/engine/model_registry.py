@@ -757,6 +757,48 @@ def _cache_control_from_litellm(model_id: str) -> bool:
         return False
 
 
+def _register_reasoning_capability() -> None:
+    """Tell litellm which curated models reason, so ``thinking`` is accepted.
+
+    ``llm_client._build_kwargs`` attaches an Anthropic-style ``thinking`` block
+    whenever a model's :class:`ModelLimits` says ``supports_thinking``. litellm
+    honours that parameter only for models its own *bundled* cost map marks
+    ``supports_reasoning``, and a model registered the week it launches is
+    never in that bundled map yet. The call then fails in-process with
+    ``UnsupportedParamsError`` before it reaches OpenRouter — not a degraded
+    answer, no answer at all, on every request. On 2026-09-11
+    ``openrouter/deepseek/deepseek-v4.1-flash`` failed 100% of its benchmark
+    tasks this way (three consecutive failures also tripped the model breaker)
+    while ``mimo-v2.5`` and ``glm-5.3-flash`` beside it passed, for no reason
+    other than litellm's bundled map already knowing those two.
+
+    Two deliberate choices:
+
+    * **Not gated on rip 17.** That flag chooses where *pricing* comes from.
+      This is a precondition for the request being made at all, and rip 17 is
+      off on this instance — a fix that only ran with the flag on would have
+      been inert exactly where the failure was.
+    * **Widens only.** A curated ``supports_thinking=False`` publishes nothing.
+      The engine does not send ``thinking`` for such a model anyway, so
+      writing a ``False`` could only take a working parameter away from some
+      other caller on no evidence. litellm's map stays the authority for
+      everything we have not explicitly marked.
+
+    ``register_model`` merges into an existing entry rather than replacing it,
+    so a model litellm already prices keeps its costs and cache fields.
+    """
+    import litellm
+
+    payload = {
+        model_id: {"supports_reasoning": True}
+        for model_id, limits in _MODEL_REGISTRY.items()
+        # codex/* is a custom subscription provider litellm does not catalog.
+        if limits.supports_thinking and not model_id.startswith("codex/")
+    }
+    if payload:
+        litellm.register_model(payload)
+
+
 def register_pricing_with_litellm() -> None:
     """Seed litellm's cost table so ``completion_cost`` prices our models.
 
@@ -765,6 +807,9 @@ def register_pricing_with_litellm() -> None:
     drift where a separate hand-maintained dict in runner.py held divergent
     prices. When off, registers the legacy two-model dict to preserve exact
     prior behavior until the flag is flipped.
+
+    It also publishes ``supports_reasoning`` — see
+    :func:`_register_reasoning_capability`, which runs either way.
     """
     import litellm
 
@@ -777,6 +822,7 @@ def register_pricing_with_litellm() -> None:
                     "max_tokens": limits.max_input_tokens,
                     "input_cost_per_token": limits.input_cost_per_token,
                     "output_cost_per_token": limits.output_cost_per_token,
+                    "supports_reasoning": limits.supports_thinking,
                 }
                 for model_id, limits in _MODEL_REGISTRY.items()
                 # codex is subscription-billed ($0) — leave it out of litellm pricing.
@@ -799,6 +845,9 @@ def register_pricing_with_litellm() -> None:
                 },
             }
         )
+
+    # Last, so it is the final word on the capability under either branch.
+    _register_reasoning_capability()
 
 
 # Reasoning-effort → thinking-token budget. Promotes the single global
