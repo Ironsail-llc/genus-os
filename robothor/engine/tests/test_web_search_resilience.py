@@ -534,7 +534,7 @@ async def test_browser_failures_do_not_log_the_whole_query(
 
     logged = " ".join(r.getMessage() for r in caplog.records)
     logged_hosts = {urlparse(u).hostname for u in re.findall(r"https?://[^\s'\"]+", logged)}
-    assert "www.bing.com" in logged_hosts  # which source failed is still legible
+    assert {"www.bing.com"} <= logged_hosts  # which source failed is still legible
     assert quote_plus(LONG_LOCAL_QUERY) not in logged
     assert LONG_LOCAL_QUERY not in logged
 
