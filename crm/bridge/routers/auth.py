@@ -68,9 +68,32 @@ def sso_secret_present() -> bool:
     return False
 
 
-def sso_secret_readiness_check() -> str:
-    """Readiness contract string for the shared secret ("ok" / "error:...")."""
+def sso_secret_readiness_check(*, bind_host: str | None = None) -> str:
+    """Readiness contract string for the shared secret ("ok" / "error:...").
+
+    Gated on ``auth_required``: a loopback development bridge legitimately runs
+    with no shared secret and never performs an SSO exchange, and marking it
+    not-ready forever is not a warning but an outage — under Helm the readiness
+    probe removes the pod from its Service, so a check meant to expose a broken
+    login would take down a deployment that never had one. The contract has
+    only "ok" and "error:…", so "not applicable" has to read as ok; the log
+    line above still fires, and the 403 refusal is unchanged either way.
+
+    A raise from ``auth_required`` (an unsafe dev-mode combination) is treated
+    as auth being required — fail closed, and let the check say so.
+    """
     if sso_secret_present():
+        return "ok"
+    from robothor.auth.runtime import auth_required
+
+    host = (
+        bind_host if bind_host is not None else os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1")
+    )
+    try:
+        required = auth_required(bind_host=host)
+    except Exception:
+        required = True
+    if not required:
         return "ok"
     return f"error:{SSO_SECRET_ENV}-not-set"
 

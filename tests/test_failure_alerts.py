@@ -625,6 +625,18 @@ class TestConsequenceLine:
         assert "no consequence mapped" not in text
         assert "drift" in text.lower()
 
+    def test_the_secrets_unit_says_which_services_cannot_start(self, tmp_path: Path):
+        """The one page whose consequence is four OTHER units.
+
+        robothor-secrets.service failing is not a degraded service: engine,
+        bridge, app and orchestrator all sit in 'dependency failed', where
+        Restart=always never fires. A page carrying only the unit name would
+        send the operator to the wrong journal.
+        """
+        text = self.page_for(tmp_path, "robothor-secrets.service")
+        assert "no consequence mapped" not in text
+        assert "secrets" in text.lower()
+
     def test_the_four_mapped_watchdog_units_exist(self):
         """A consequence for a unit that does not exist is a comment.
 

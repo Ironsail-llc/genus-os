@@ -69,11 +69,15 @@ async def readiness():
         r = await http_client.get(f"{_bridge_config['memory_url']}/ready")
         return "ok" if r.status_code == 200 else f"error:{r.status_code}"
 
-    async def check_sso_secret():
+    async def check_sso_secret() -> str:
         # A bridge with no GENUS_BRIDGE_SSO_SECRET refuses every /api/auth/sso
         # exchange, so nobody can sign in. That is not "ready", and before this
         # check it was invisible: the bridge reported ready for eight days
         # while every login 403'd (2026-09-03 boot-order race).
+        #
+        # Gated on auth_required() inside the helper: a loopback dev bridge
+        # that never performs an SSO exchange must not be marked not-ready
+        # forever, or a readiness probe would pull it out of its Service.
         from routers.auth import sso_secret_readiness_check
 
         return sso_secret_readiness_check()

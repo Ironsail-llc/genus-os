@@ -77,6 +77,7 @@ def test_configured_secret_is_silent(monkeypatch, caplog):
 async def test_readiness_names_the_missing_secret(test_client, mock_http_client, monkeypatch):
     """A bridge that cannot complete any login must not report ready."""
     monkeypatch.delenv(SSO_SECRET_ENV, raising=False)
+    monkeypatch.setenv("GENUS_AUTH_ENFORCE", "true")
     mock_http_client.get = AsyncMock(return_value=MagicMock(spec=httpx.Response, status_code=200))
 
     with patch("robothor.crm.dal.check_health", return_value={"status": "ok"}):
@@ -86,6 +87,31 @@ async def test_readiness_names_the_missing_secret(test_client, mock_http_client,
     assert SSO_SECRET_ENV in checks["sso_secret"]
     assert checks["sso_secret"].startswith("error:")
     assert r.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_readiness_does_not_fail_a_deployment_that_needs_no_sso(
+    test_client, mock_http_client, monkeypatch
+):
+    """Loopback development legitimately runs with no shared secret.
+
+    Marking such a bridge not-ready forever is not a warning, it is an outage:
+    under Helm the readiness probe removes the pod from its Service, so the
+    check meant to expose a broken login would take down a deployment that
+    never had one. The health contract has only "ok" and "error:…", so "not
+    applicable" has to read as ok. The 403 refusal itself is unchanged.
+    """
+    monkeypatch.delenv(SSO_SECRET_ENV, raising=False)
+    monkeypatch.delenv("GENUS_AUTH_ENFORCE", raising=False)
+    monkeypatch.setenv("GENUS_INSECURE_DEV_MODE", "true")
+    monkeypatch.setenv("ROBOTHOR_BRIDGE_HOST", "127.0.0.1")
+    mock_http_client.get = AsyncMock(return_value=MagicMock(spec=httpx.Response, status_code=200))
+
+    with patch("robothor.crm.dal.check_health", return_value={"status": "ok"}):
+        r = await test_client.get("/ready")
+
+    assert r.json()["checks"]["sso_secret"] == "ok"
+    assert r.status_code == 200
 
 
 @pytest.mark.asyncio

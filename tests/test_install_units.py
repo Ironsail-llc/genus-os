@@ -668,6 +668,55 @@ def test_secrets_unit_exists_and_runs_the_decrypt_script():
         "an instance with no SOPS secrets file must SKIP this unit, not fail it "
         "— a failed Requires= dependency would block every consumer from starting"
     )
+    assert "OnFailure=robothor-alert@%n.service" in text, (
+        "a failed decrypt now leaves FOUR services in 'dependency failed' with "
+        "Restart=always never firing — nothing retries it, so it must page"
+    )
+
+
+def test_secrets_unit_hardening_is_a_subset_of_what_already_runs_the_script():
+    """No sandboxing the engine does not already apply to the same script.
+
+    scripts/decrypt-secrets.sh has run in production for months as
+    robothor-engine.service's ExecStartPre, and a unit's [Service] sandboxing
+    applies to ExecStartPre exactly as it does to ExecStart. So every sandbox
+    directive here must already be on the engine unit with the same value —
+    otherwise the first start of this oneshot is an untested four-service
+    gamble, which is the opposite of what this branch is for.
+    """
+    sandbox_prefixes = (
+        "NoNewPrivileges=",
+        "RestrictSUIDSGID=",
+        "CapabilityBoundingSet=",
+        "AmbientCapabilities=",
+        "ProtectSystem=",
+        "ProtectHome=",
+        "PrivateTmp=",
+        "ProtectKernelTunables=",
+        "ProtectKernelModules=",
+        "ProtectKernelLogs=",
+        "ProtectControlGroups=",
+        "ProtectClock=",
+        "RestrictRealtime=",
+        "LockPersonality=",
+    )
+    engine = set(directives((UNIT_DIR / "robothor-engine.service").read_text()).splitlines())
+    for line in directives((UNIT_DIR / SECRETS_UNIT).read_text()).splitlines():
+        if line.startswith(sandbox_prefixes):
+            assert line in engine, (
+                f"{SECRETS_UNIT}: {line!r} is not applied by robothor-engine.service, "
+                "which is the only place this script has ever actually run"
+            )
+
+
+def test_secrets_unit_does_not_relax_the_runtime_directory():
+    """/run/robothor is 0750 on a live box and holds files that are not 0600
+    (model-breaker-alerts.json is 0644). 0755 here would quietly make every
+    one of them world-readable."""
+    text = directives((UNIT_DIR / SECRETS_UNIT).read_text())
+    for line in text.splitlines():
+        if line.startswith("RuntimeDirectoryMode="):
+            assert line == "RuntimeDirectoryMode=0750", line
 
 
 @pytest.mark.parametrize("name", SECRETS_CONSUMERS, ids=lambda n: n)
