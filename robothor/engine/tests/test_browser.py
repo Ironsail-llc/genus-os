@@ -682,17 +682,31 @@ class TestShadowDomFallback:
 
 
 class _StubPage:
-    def __init__(self, *, evaluate_result=None, evaluate_error: Exception | None = None):
+    def __init__(
+        self,
+        *,
+        evaluate_result=None,
+        evaluate_error: Exception | None = None,
+        wait_error: Exception | None = None,
+    ):
         self.url = "https://results.example.com/search"
         self.closed = False
         self.goto_calls: list[str] = []
         self.evaluated: list[str] = []
+        self.waited_for: list[str] = []
         self._evaluate_result = evaluate_result if evaluate_result is not None else []
         self._evaluate_error = evaluate_error
+        self._wait_error = wait_error
 
     async def goto(self, url, wait_until=None, timeout=None):
         self.goto_calls.append(url)
         return MagicMock(status=200)
+
+    async def wait_for_selector(self, selector, timeout=None):
+        self.waited_for.append(selector)
+        if self._wait_error is not None:
+            raise self._wait_error
+        return MagicMock()
 
     async def evaluate(self, js):
         self.evaluated.append(js)
@@ -771,6 +785,52 @@ async def test_isolated_fetch_closes_its_tab_when_evaluation_fails(stub_session_
 
     assert "error" in out
     assert tab.closed is True
+
+
+async def test_isolated_fetch_waits_for_the_rows_before_reading_them(stub_session_cleanup):
+    """Startpage answers with a proof-of-work interstitial that clears itself.
+
+    Evaluating at domcontentloaded reads the interstitial and calls the source
+    empty; waiting for the result anchors is what tells "still loading" apart
+    from "nothing here".
+    """
+    from robothor.engine.tools.dispatch import ToolContext
+    from robothor.engine.tools.handlers import browser as browser_mod
+
+    tab = _StubPage(evaluate_result=[{"title": "t", "url": "https://example.com/", "snippet": ""}])
+    _install_stub_session("isolation-test", tab)
+
+    out = await browser_mod.isolated_fetch(
+        ToolContext(agent_id="isolation-test"),
+        "https://www.startpage.com/do/search?q=x",
+        "() => 1",
+        wait_selector="a.result-link",
+    )
+
+    assert tab.waited_for == ["a.result-link"]
+    assert out["result"]
+
+
+async def test_isolated_fetch_reads_a_page_whose_rows_never_appear(stub_session_cleanup):
+    """A page that really has no results is still read, not turned into an error."""
+    from robothor.engine.tools.dispatch import ToolContext
+    from robothor.engine.tools.handlers import browser as browser_mod
+
+    tab = _StubPage(evaluate_result=[], wait_error=RuntimeError("Timeout 6000ms exceeded"))
+    _install_stub_session("isolation-test", tab)
+
+    out = await browser_mod.isolated_fetch(
+        ToolContext(agent_id="isolation-test"),
+        "https://www.startpage.com/do/search?q=x",
+        "() => 1",
+        html_js="() => 'html'",
+        wait_selector="a.result-link",
+    )
+
+    assert tab.waited_for == ["a.result-link"]
+    assert out["result"] == []
+    assert tab.evaluated == ["() => 1", "() => 'html'"]  # the page was still read
+    assert "error" not in out
 
 
 async def test_isolated_fetch_without_a_session_does_not_start_one():

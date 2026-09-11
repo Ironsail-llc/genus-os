@@ -170,6 +170,7 @@ class FakeBrowser:
         self.actions: list[str] = []
         self.navigated: list[str] = []
         self.js: list[str] = []
+        self.waits: list[tuple[str, str]] = []
         self.open_tabs = 0
         self.max_open_tabs = 0
 
@@ -203,10 +204,12 @@ class FakeBrowser:
         js: str,
         html_js: str = "",
         timeout_ms: int = 20000,
+        wait_selector: str = "",
     ) -> dict[str, Any]:
         self.actions.append("isolated_fetch")
         self.navigated.append(url)
         self.js.append(js)
+        self.waits.append((url, wait_selector))
         self.open_tabs += 1
         self.max_open_tabs = max(self.max_open_tabs, self.open_tabs)
         try:
@@ -319,6 +322,26 @@ JAMAICA_BROWSER_ROWS = [
         "title": "Queens coworking directory",
         "url": "https://example.org/queens-coworking",
         "snippet": "Desks and private offices across Queens, including Jamaica.",
+    },
+]
+
+# What Bing hands this box back for JAMAICA_QUERY: seven rows about the city the
+# egress IP sits in, not one of them about the place that was typed.
+GEOLOCATED_BING_ROWS = [
+    {
+        "title": f"Coworking space in Riverport #{i}",
+        "url": f"https://riverport-cowork.example.com/{i}",
+        "snippet": "Private offices and hot desks in downtown Riverport.",
+    }
+    for i in range(7)
+]
+
+# Enough place-naming rows that the count rule alone would stop the chain.
+JAMAICA_BING_ROWS = JAMAICA_BROWSER_ROWS + [
+    {
+        "title": "Jamaica Avenue office suites",
+        "url": "https://example.net/jamaica-ave-suites",
+        "snippet": "Private offices to rent in Jamaica, Queens.",
     },
 ]
 
@@ -645,7 +668,7 @@ async def test_thin_bing_page_pulls_in_duckduckgo(ctx: ToolContext) -> None:
     assert any("duckduckgo.com/html" in u for u in browser.navigated)
     urls = [r["url"] for r in out["results"]]
     assert urls == [r["url"] for r in BROWSER_ROWS]  # bing first, DDG appended, deduped
-    assert out["sources"] == ["bing", "duckduckgo"]
+    assert out["sources"] == ["bing", "startpage:empty", "duckduckgo"]
 
 
 async def test_duckduckgo_challenge_page_is_reported_as_blocked(ctx: ToolContext) -> None:
@@ -950,6 +973,209 @@ def test_extraction_js_uses_the_documented_selectors() -> None:
     assert ".b_caption p" in web._BING_EXTRACT_JS
     assert ".result__a" in web._DDG_EXTRACT_JS
     assert ".result__snippet" in web._DDG_EXTRACT_JS
+    assert "a.result-link" in web._STARTPAGE_EXTRACT_JS
+    assert "a.w-gl__result-title" in web._STARTPAGE_EXTRACT_JS
+    assert "p.description" in web._STARTPAGE_EXTRACT_JS
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Startpage: the source that honours the place the query named
+# ──────────────────────────────────────────────────────────────────────
+
+
+async def test_bing_that_drops_the_place_advances_to_startpage(ctx: ToolContext) -> None:
+    """Seven rows about the box's own city are not an answer about Queens.
+
+    Measured on the box: Bing pins a local-intent query to the egress IP and
+    ignores the typed place, and it returns *enough* rows that a count-only
+    advance rule never reaches for another source. Startpage honours the words.
+    """
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": GENERIC_COWORKING_ROWS},
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser(
+        pages={"bing.com": GEOLOCATED_BING_ROWS, "startpage.com": JAMAICA_BROWSER_ROWS}
+    )
+
+    out = await _search(http, browser, {"query": JAMAICA_QUERY, "limit": 8}, ctx)
+
+    assert out["sources"] == ["bing", "startpage"]
+    assert out["place_source"] == "startpage"
+    urls = [r["url"] for r in out["results"]]
+    assert urls[:2] == [r["url"] for r in JAMAICA_BROWSER_ROWS]  # the place-naming rows lead
+    assert urls[2:] == [r["url"] for r in GEOLOCATED_BING_ROWS][: len(urls) - 2]
+    assert out.get("degraded") != "missing_place_terms"
+
+
+async def test_bing_that_honours_the_place_is_the_whole_chain(ctx: ToolContext) -> None:
+    """One page is expensive: rows that name the place end the chain."""
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": GENERIC_COWORKING_ROWS},
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser(
+        pages={"bing.com": JAMAICA_BING_ROWS, "startpage.com": JAMAICA_BROWSER_ROWS}
+    )
+
+    out = await _search(http, browser, {"query": JAMAICA_QUERY, "limit": 8}, ctx)
+
+    assert len(browser.navigated) == 1
+    assert out["sources"] == ["bing"]
+    assert "place_source" not in out
+
+
+async def test_a_place_named_by_one_word_still_advances(ctx: ToolContext) -> None:
+    """The rule must not be inert for "in Springfield" — one word is a place too."""
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": _rows(5, relevant=False)},
+            "nominatim.openstreetmap.org": FakeHttp.by_params(
+                geocode=GEOCODE_PAYLOAD, free_text=[]
+            ),
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser(pages={"bing.com": GEOLOCATED_BING_ROWS, "startpage.com": BROWSER_ROWS})
+
+    out = await _search(http, browser, {"query": "coworking private office in Springfield"}, ctx)
+
+    assert out["sources"] == ["bing", "startpage"]
+    assert out["place_source"] == "startpage"
+    assert [r["url"] for r in out["results"]][:3] == [r["url"] for r in BROWSER_ROWS]
+
+
+async def test_every_source_blocked_keeps_bings_rows_and_says_so(ctx: ToolContext) -> None:
+    """An honest trace: which sources were tried, and that the answer is weak."""
+    http = FakeHttp(
+        {
+            "searxng.test": {"results": GENERIC_COWORKING_ROWS},
+            "nominatim.openstreetmap.org": GEOCODE_PAYLOAD,
+            "overpass-api.de": OVERPASS_PAYLOAD,
+        }
+    )
+    browser = FakeBrowser(
+        pages={"bing.com": GEOLOCATED_BING_ROWS},
+        html_pages={
+            "startpage.com": (FIXTURES / "startpage_challenge.html").read_text(),
+            "duckduckgo.com": (FIXTURES / "ddg_challenge.html").read_text(),
+        },
+        statuses={"duckduckgo.com": 202},
+    )
+
+    out = await _search(http, browser, {"query": JAMAICA_QUERY, "limit": 8}, ctx)
+
+    assert out["sources"] == ["bing", "startpage:blocked", "duckduckgo:blocked"]
+    assert [r["url"] for r in out["results"]] == [r["url"] for r in GEOLOCATED_BING_ROWS]
+    assert out["degraded"] == "missing_place_terms"
+    assert "place_source" not in out
+
+
+async def test_thin_bing_page_reaches_startpage_before_duckduckgo(ctx: ToolContext) -> None:
+    """The count rule still works, and Startpage sits between the two."""
+    http = FakeHttp({})
+    browser = FakeBrowser(
+        pages={"bing.com": ASYNCIO_BROWSER_ROWS[:1], "startpage.com": ASYNCIO_BROWSER_ROWS[1:]}
+    )
+
+    out = await _search(http, browser, {"query": REMOTE_QUERY, "provider": "browser"}, ctx)
+
+    hosts = [urlparse(u).hostname for u in browser.navigated]
+    assert hosts == ["www.bing.com", "www.startpage.com"]
+    assert out["sources"] == ["bing", "startpage"]
+    assert [r["url"] for r in out["results"]] == [r["url"] for r in ASYNCIO_BROWSER_ROWS]
+    assert "place_source" not in out  # nothing was asked about a place
+
+
+async def test_startpage_failures_do_not_log_the_whole_query(
+    ctx: ToolContext, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Startpage's URL carries the query too — redact it before it reaches a log."""
+    http = FakeHttp({"searxng.test": httpx.ConnectError("down")})
+    browser = FakeBrowser(fetch_error="Navigation failed: net::ERR_ABORTED")
+
+    with caplog.at_level("WARNING", logger="robothor.engine.tools.handlers.web"):
+        await _search(http, browser, {"query": LONG_LOCAL_QUERY}, ctx)
+
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    logged_hosts = {urlparse(u).hostname for u in re.findall(r"https?://[^\s'\"]+", logged)}
+    assert {"www.bing.com", "www.startpage.com"} <= logged_hosts
+    assert quote_plus(LONG_LOCAL_QUERY) not in logged
+    assert LONG_LOCAL_QUERY not in logged
+
+
+async def test_startpage_is_given_time_to_clear_its_interstitial(ctx: ToolContext) -> None:
+    """The wait is the whole reason Startpage answers at all — ask for it.
+
+    Measured on the box: Startpage serves a proof-of-work interstitial first and
+    replaces it with the results about a second later. Without waiting for the
+    result anchors the source reads as empty every single time.
+    """
+    browser = FakeBrowser(pages={"bing.com": ASYNCIO_BROWSER_ROWS[:1]})
+
+    await _search(FakeHttp({}), browser, {"query": REMOTE_QUERY, "provider": "browser"}, ctx)
+
+    waits = {urlparse(u).hostname: selector for u, selector in browser.waits}
+    assert waits["www.startpage.com"] == "a.result-link, a.w-gl__result-title"
+    assert waits["www.bing.com"] == ""  # Bing answers straight away; do not pay for a wait
+
+
+def test_startpage_html_fixture_parses_into_rows() -> None:
+    rows = web._parse_startpage_html((FIXTURES / "startpage_results.html").read_text())
+
+    assert len(rows) == 3
+    assert rows[0]["title"] == "Springfield Coworking — Private Offices"
+    assert rows[0]["url"] == "https://springfield-cowork.example.com/"
+    assert "meeting rooms" in rows[0]["snippet"]
+    assert [r["url"] for r in rows[1:]] == [
+        "https://desks.example.org/springfield",
+        "https://example.net/listings/springfield-office",
+    ]
+    assert all(r["title"] for r in rows)
+
+
+def test_startpage_parser_reads_either_result_class() -> None:
+    """Startpage serves both the old and the new result-anchor class."""
+    html = (
+        "<html><body>"
+        "<div class='w-gl__result'><a class='result-link' href='https://a.example.com/'>A</a>"
+        "<p class='description'>First.</p></div>"
+        "<div class='w-gl__result'>"
+        "<a class='w-gl__result-title' href='https://b.example.com/'>B</a>"
+        "<p class='w-gl__description'>Second.</p></div>"
+        "</body></html>"
+    )
+
+    rows = web._parse_startpage_html(html)
+
+    assert [(r["title"], r["url"], r["snippet"]) for r in rows] == [
+        ("A", "https://a.example.com/", "First."),
+        ("B", "https://b.example.com/", "Second."),
+    ]
+
+
+def test_startpage_captcha_page_is_a_challenge_not_an_empty_page() -> None:
+    challenge = (FIXTURES / "startpage_challenge.html").read_text()
+    results = (FIXTURES / "startpage_results.html").read_text()
+
+    assert web._looks_like_challenge(challenge, web._STARTPAGE_RESULT_MARKERS) is True
+    assert web._looks_like_challenge(results, web._STARTPAGE_RESULT_MARKERS) is False
+
+
+def test_the_grader_and_the_chain_ask_the_same_question() -> None:
+    """One implementation, so "Bing dropped the place" cannot drift from the grade."""
+    generic = [web._row(r["title"], r["url"], r["content"]) for r in GENERIC_COWORKING_ROWS]
+    naming = [web._row(r["title"], r["url"], r["snippet"]) for r in JAMAICA_BROWSER_ROWS]
+
+    assert web._grade_results(generic, JAMAICA_QUERY) == "missing_place_terms"
+    assert web._rows_mention_place(generic, JAMAICA_QUERY) is False
+    assert web._rows_mention_place(naming, JAMAICA_QUERY) is True
 
 
 # ──────────────────────────────────────────────────────────────────────

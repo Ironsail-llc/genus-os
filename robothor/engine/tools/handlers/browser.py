@@ -353,18 +353,32 @@ async def close_session(ctx: ToolContext) -> None:
     await _close_session(ctx.agent_id or "default")
 
 
+# How long a throwaway tab waits for the content its caller asked for. Long
+# enough for a proof-of-work interstitial to clear, short enough that three of
+# them still fit inside the browser fallback's own budget.
+_SELECTOR_WAIT_MS = 6000
+
+
 async def isolated_fetch(
     ctx: ToolContext,
     url: str,
     js: str,
     html_js: str = "",
     timeout_ms: int = 20000,
+    wait_selector: str = "",
 ) -> dict[str, Any]:
     """Load ``url`` in a throwaway tab and evaluate ``js`` there.
 
     Never touches ``session.page`` or ``element_registry``: the agent's own tab
     keeps its document and its refs. The tab opened here is always closed,
     including on navigation or evaluation failure.
+
+    ``wait_selector`` waits for the content the caller came for before reading
+    the page. Measured: Startpage answers the first request with a
+    proof-of-work interstitial that replaces itself with the results a second
+    or so later, so evaluating at ``domcontentloaded`` reads an empty page and
+    calls a working source empty. A selector that never appears is not an
+    error — the page is read as it stands.
 
     Returns ``{status, url, result, html, error}``. ``html`` is populated only
     when ``html_js`` is given and ``js`` returned nothing useful.
@@ -386,6 +400,17 @@ async def isolated_fetch(
         except Exception as e:
             out["error"] = f"Navigation failed: {e}"
             return out
+        if wait_selector:
+            try:
+                await page.wait_for_selector(
+                    wait_selector, timeout=min(_SELECTOR_WAIT_MS, timeout_ms)
+                )
+            except Exception as e:
+                # Including a page object that cannot wait at all: read what is
+                # there rather than turning a slow page into a failed fetch.
+                logger.debug(
+                    "isolated_fetch saw no %s on %s: %s", wait_selector, _loggable_url(url), e
+                )
         try:
             out["result"] = await page.evaluate(js)
         except Exception as e:

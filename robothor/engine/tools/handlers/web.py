@@ -383,6 +383,10 @@ async def _web_fetch(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 _USER_AGENT = f"GenusOS/{__version__} (+https://github.com/Ironsail-llc/genus-os)"
 
 BING_SEARCH_URL = "https://www.bing.com/search"
+# Startpage is CAPTCHA'd for a plain-HTTP scraper but answers a real browser,
+# and — measured on the box — it honours a place typed into the query instead
+# of the city the egress IP sits in.
+STARTPAGE_SEARCH_URL = "https://www.startpage.com/do/search"
 DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
@@ -578,6 +582,23 @@ _BING_EXTRACT_JS = """() => {
     .filter(Boolean);
 }"""
 
+_STARTPAGE_EXTRACT_JS = """() => {
+  const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+  return Array.from(document.querySelectorAll('a.result-link, a.w-gl__result-title'))
+    .slice(0, 10)
+    .map(a => {
+      if (!a.href) return null;
+      const box = a.closest('.w-gl__result, .result, li') || a.parentElement;
+      const p = box ? box.querySelector('p.description, .w-gl__description') : null;
+      return {
+        title: clean(a.innerText || a.textContent),
+        url: a.href,
+        snippet: p ? clean(p.innerText || p.textContent) : ''
+      };
+    })
+    .filter(Boolean);
+}"""
+
 _DDG_EXTRACT_JS = """() => Array.from(document.querySelectorAll('.result'))
   .filter(el => !el.className.includes('result--ad'))
   .slice(0, 10)
@@ -698,16 +719,14 @@ def _grade_results(rows: list[dict[str, str]], query: str, limit: int = 0) -> st
     """
     if not rows:
         return "low_relevance"
-    distinctive, required = _query_terms(query)
+    distinctive, _ = _query_terms(query)
     if not distinctive:
         return ""
 
     frequency = {term: sum(1 for r in rows if term in _haystack(r)) for term in distinctive}
     saturation = _SATURATION * len(rows)
 
-    # A place term cannot appear in two results when only one was asked for.
-    needed = max(1, min(_MIN_REQUIRED_HITS, limit or len(rows), len(rows)))
-    missing = sorted(t for t in required if frequency.get(t, 0) < needed)
+    missing = _missing_place_terms(rows, query, limit)
     if missing:
         logger.info(
             "web_search: results never mention %s (query %r) — treating as no answer",
@@ -727,6 +746,34 @@ def _grade_results(rows: list[dict[str, str]], query: str, limit: int = 0) -> st
     if not discriminating and len(matched) < len(distinctive):
         return "low_relevance"
     return ""
+
+
+def _missing_place_terms(rows: list[dict[str, str]], query: str, limit: int = 0) -> list[str]:
+    """Terms the query pinned the answer to (proper nouns, a ZIP) that no row names.
+
+    The single implementation behind both the grader's ``missing_place_terms``
+    verdict and the browser fallback's advance-to-the-next-source rule, so
+    "these results dropped the place" cannot come to mean two different things.
+
+    Takes the whole query, not the extracted place phrase: :func:`_query_terms`
+    ignores the first token (a query's opening word is capitalised for reasons
+    of its own), so a one-word place handed over alone would yield no required
+    terms at all and quietly make the caller's check inert.
+    """
+    if not rows:
+        return []
+    _, required = _query_terms(query)
+    if not required:
+        return []
+    # A place term cannot appear in two results when only one was asked for.
+    needed = max(1, min(_MIN_REQUIRED_HITS, limit or len(rows), len(rows)))
+    hits = {term: sum(1 for r in rows if term in _haystack(r)) for term in required}
+    return sorted(t for t in required if hits[t] < needed)
+
+
+def _rows_mention_place(rows: list[dict[str, str]], query: str, limit: int = 0) -> bool:
+    """True when the rows actually name the place (or number) the query named."""
+    return not _missing_place_terms(rows, query, limit)
 
 
 def _looks_local(query: str) -> bool:
@@ -912,6 +959,54 @@ class _DdgParser(_StackParser):
         self._flush()
 
 
+class _StartpageParser(_StackParser):
+    """Mirrors ``a.result-link, a.w-gl__result-title`` + the description beside it.
+
+    Startpage serves both anchor classes (often both on the same anchor), so a
+    row opens on the first of them and the next one closes it.
+    """
+
+    _TITLE_CLASSES = frozenset({"result-link", "w-gl__result-title"})
+    _DESC_CLASSES = frozenset({"description", "w-gl__description"})
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[dict[str, str]] = []
+        self._cur: dict[str, Any] | None = None
+        self._mode: str | None = None
+        self._mode_tag: str | None = None
+
+    def _flush(self) -> None:
+        row, self._cur, self._mode = self._cur, None, None
+        if row and str(row["url"]).startswith("http"):
+            self.rows.append(
+                _row(" ".join(row["title"]), str(row["url"]), " ".join(row["snippet"]))
+            )
+
+    def on_open(self, tag: str, attrs: dict[str, str], classes: set[str]) -> None:
+        if tag == "a" and classes & self._TITLE_CLASSES:
+            self._flush()
+            self._cur = {"title": [], "url": attrs.get("href", ""), "snippet": []}
+            self._mode, self._mode_tag = "title", tag
+        elif classes & self._DESC_CLASSES and self._cur is not None:
+            self._mode, self._mode_tag = "snippet", tag
+
+    def on_close(self, tag: str, classes: set[str]) -> None:
+        if tag == self._mode_tag:
+            self._mode, self._mode_tag = None, None
+
+    def handle_data(self, data: str) -> None:
+        if self._cur is None or self._mode is None:
+            return
+        text = data.strip()
+        if text:
+            self._cur[self._mode].append(text)
+
+    def close(self) -> None:
+        super().close()
+        self._flush()
+
+
 def _unwrap_bing_href(href: str) -> str:
     """Bing wraps every organic link in /ck/a?…&u=a1<base64url of the real URL>.
 
@@ -950,6 +1045,13 @@ def _unwrap_ddg_href(href: str) -> str:
 
 def _parse_bing_html(html: str) -> list[dict[str, str]]:
     parser = _BingParser()
+    parser.feed(html)
+    parser.close()
+    return parser.rows[:_MAX_BROWSER_RESULTS]
+
+
+def _parse_startpage_html(html: str) -> list[dict[str, str]]:
+    parser = _StartpageParser()
     parser.feed(html)
     parser.close()
     return parser.rows[:_MAX_BROWSER_RESULTS]
@@ -1000,7 +1102,51 @@ _OUTER_HTML_JS = "() => document.documentElement.outerHTML.slice(0, 524288)"
 # Markers that say "this document really is a results page", used to tell an
 # empty results page apart from an anti-bot interstitial.
 _BING_RESULT_MARKERS = ("b_algo",)
+_STARTPAGE_RESULT_MARKERS = ("w-gl", "result-link")
+# The anchors both the injected JS and the wait look for — Startpage serves a
+# proof-of-work interstitial first, and these are what replaces it.
+_STARTPAGE_RESULT_SELECTOR = "a.result-link, a.w-gl__result-title"
 _DDG_RESULT_MARKERS = ("result__a", "result__snippet")
+
+# What an anti-bot page says out loud. Only consulted on a page that carries no
+# result markers at all, so a results page mentioning any of them stays a
+# results page.
+_CHALLENGE_PHRASES = ("captcha", "unusual traffic", "verify you", "are you a robot")
+
+
+@dataclass(frozen=True)
+class _BrowserSource:
+    """One results page the browser fallback knows how to read."""
+
+    name: str
+    url: str
+    js: str
+    parse: Callable[[str], list[dict[str, str]]]
+    markers: tuple[str, ...]
+    # Content to wait for before reading the page, for a source that serves an
+    # interstitial first. Empty means "read it as soon as it parses".
+    wait_selector: str = ""
+
+
+# The order the browser fallback tries sources in. Bing answers this box at all
+# (Google and DuckDuckGo's HTML endpoint do not), Startpage answers a real
+# browser and keeps the place the query named, DuckDuckGo is the last resort.
+_BROWSER_SOURCES = (
+    _BrowserSource(
+        "bing", BING_SEARCH_URL, _BING_EXTRACT_JS, _parse_bing_html, _BING_RESULT_MARKERS
+    ),
+    _BrowserSource(
+        "startpage",
+        STARTPAGE_SEARCH_URL,
+        _STARTPAGE_EXTRACT_JS,
+        _parse_startpage_html,
+        _STARTPAGE_RESULT_MARKERS,
+        wait_selector=_STARTPAGE_RESULT_SELECTOR,
+    ),
+    _BrowserSource(
+        "duckduckgo", DDG_HTML_URL, _DDG_EXTRACT_JS, _parse_ddg_html, _DDG_RESULT_MARKERS
+    ),
+)
 
 
 @dataclass
@@ -1022,6 +1168,10 @@ def _looks_like_challenge(html: str, markers: tuple[str, ...]) -> bool:
     lowered = html.lower()
     if any(m in lowered for m in markers):
         return False
+    # Startpage's block page is a 200 with a CAPTCHA widget and no form at all,
+    # so the form shape alone would read it as an empty web.
+    if any(phrase in lowered for phrase in _CHALLENGE_PHRASES):
+        return True
     return "<form" in lowered and lowered.count("<input") >= 3
 
 
@@ -1031,6 +1181,7 @@ async def _browser_page_results(
     js: str,
     parse_html: Callable[[str], list[dict[str, str]]],
     markers: tuple[str, ...],
+    wait_selector: str = "",
 ) -> _PageOutcome:
     """Load one results page in a throwaway tab and extract its rows.
 
@@ -1041,7 +1192,9 @@ async def _browser_page_results(
     """
     from robothor.engine.tools.handlers import browser as browser_mod
 
-    out = await browser_mod.isolated_fetch(ctx, url, js, html_js=_OUTER_HTML_JS)
+    out = await browser_mod.isolated_fetch(
+        ctx, url, js, html_js=_OUTER_HTML_JS, wait_selector=wait_selector
+    )
     if out.get("error") and not out.get("result"):
         logger.warning("web_search browser fetch failed (%s): %s", _redact_query(url), out["error"])
     status = out.get("status")
@@ -1153,33 +1306,42 @@ async def _browser_search_locked(query: str, cap: int, ctx: ToolContext) -> dict
 
     rows: list[dict[str, str]] = []
     sources: list[str] = []
+    place_source = ""
+    # A query that names somewhere is answered by rows that name it. Bing pins a
+    # local-intent query to the egress IP's own city and still returns a page
+    # full of rows, so a count-only advance rule never looks any further.
+    place = _place_text(query)
     timed_out = False
     try:
         try:
             async with asyncio.timeout(_BROWSER_SEARCH_TIMEOUT):
-                bing = await _browser_page_results(
-                    ctx,
-                    f"{BING_SEARCH_URL}?q={quote_plus(query)}",
-                    _BING_EXTRACT_JS,
-                    _parse_bing_html,
-                    _BING_RESULT_MARKERS,
-                )
-                rows = list(bing.rows)
-                sources.append("bing:blocked" if bing.blocked else "bing" if rows else "bing:empty")
-                if len(rows) < _MIN_USEFUL_RESULTS:
-                    ddg = await _browser_page_results(
+                for source in _BROWSER_SOURCES:
+                    page = await _browser_page_results(
                         ctx,
-                        f"{DDG_HTML_URL}?q={quote_plus(query)}",
-                        _DDG_EXTRACT_JS,
-                        _parse_ddg_html,
-                        _DDG_RESULT_MARKERS,
+                        f"{source.url}?q={quote_plus(query)}",
+                        source.js,
+                        source.parse,
+                        source.markers,
+                        source.wait_selector,
                     )
-                    if ddg.rows:
-                        sources.append("duckduckgo")
-                        seen = {r["url"] for r in rows}
-                        rows.extend(r for r in ddg.rows if r["url"] not in seen)
+                    if page.rows:
+                        sources.append(source.name)
                     else:
-                        sources.append("duckduckgo:blocked" if ddg.blocked else "duckduckgo:empty")
+                        sources.append(f"{source.name}:{'blocked' if page.blocked else 'empty'}")
+                    if page.rows and not rows:
+                        rows = list(page.rows)
+                    elif page.rows and place and _rows_mention_place(page.rows, query, cap):
+                        # This source honoured the place the earlier one dropped:
+                        # its rows lead, and the earlier ones follow it.
+                        seen = {r["url"] for r in page.rows}
+                        rows = list(page.rows) + [r for r in rows if r["url"] not in seen]
+                        place_source = source.name
+                    elif page.rows:
+                        seen = {r["url"] for r in rows}
+                        rows.extend(r for r in page.rows if r["url"] not in seen)
+                    enough = len(rows) >= _MIN_USEFUL_RESULTS
+                    if enough and (not place or _rows_mention_place(rows, query, cap)):
+                        break
         except TimeoutError:
             timed_out = True
     except Exception as e:
@@ -1198,6 +1360,9 @@ async def _browser_search_locked(query: str, cap: int, ctx: ToolContext) -> dict
         "provider": "browser",
         "sources": sources,
     }
+    if place_source:
+        # Why the order changed: a later source, not the first, named the place.
+        out["place_source"] = place_source
     if timed_out:
         out["fallback_reason"] = "browser_timeout"
         logger.warning(
