@@ -54,3 +54,50 @@ class TestReasoningEffort:
         assert mr.current_thinking_budget() == 24_000
         mr.set_reasoning_effort("medium")
         assert mr.current_thinking_budget() == mr.THINKING_BUDGET_TOKENS
+
+
+class TestReasoningEffortReachesTheRequest:
+    """The per-agent effort must reach the ``thinking`` block, not just a var.
+
+    ``AgentConfig.reasoning_effort`` is parsed from the manifest, the runner
+    calls ``set_reasoning_effort`` at run start, and ``current_thinking_budget``
+    converts it to tokens — but on 2026-09-11 that function had **no production
+    caller**. ``LLMClient._build_llm_kwargs`` hardcoded the
+    ``THINKING_BUDGET_TOKENS`` constant, so every level from ``low`` to ``max``
+    produced the identical 10,000-token budget and the setting was decoration.
+    So read the request the engine would actually send, never the ContextVar it
+    set — the ContextVar was always right.
+    """
+
+    @staticmethod
+    def _thinking_kwargs(effort: str) -> dict:
+        from robothor.engine.llm_client import LLMClient
+
+        mr.set_reasoning_effort(effort)
+        try:
+            kwargs = LLMClient._build_llm_kwargs(
+                "openrouter/z-ai/glm-5.3-flash",
+                [{"role": "user", "content": "hi"}],
+                [],
+                100,
+                0.2,
+            )
+        finally:
+            mr.set_reasoning_effort("medium")
+        assert "thinking" in kwargs, "this model should be sending a thinking block at all"
+        return kwargs["thinking"]
+
+    def test_low_effort_bounds_the_budget(self):
+        assert self._thinking_kwargs("low")["budget_tokens"] == 2_000
+
+    def test_max_effort_raises_the_budget(self):
+        assert self._thinking_kwargs("max")["budget_tokens"] == 48_000
+
+    def test_medium_is_unchanged(self):
+        """The fleet's default stays byte-for-byte what it was.
+
+        No manifest on this instance sets ``reasoning_effort``, so every live
+        agent resolves to ``medium``: making the knob real changes nothing any
+        of them sends today.
+        """
+        assert self._thinking_kwargs("medium")["budget_tokens"] == mr.THINKING_BUDGET_TOKENS

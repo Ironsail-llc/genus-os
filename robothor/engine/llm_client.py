@@ -1332,12 +1332,20 @@ class LLMClient:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
         if limits.supports_thinking:
-            from robothor.engine.model_registry import THINKING_BUDGET_TOKENS
+            # The budget comes from the RUN's reasoning effort, not the module
+            # constant. `AgentConfig.reasoning_effort` was parsed from the
+            # manifest and pushed into a ContextVar by the runner, but nothing
+            # read it back here — `current_thinking_budget()` had no production
+            # caller at all, so `low` and `max` both shipped the same 10,000
+            # tokens and the per-agent setting was decoration. `medium` still
+            # resolves to THINKING_BUDGET_TOKENS, which is what every manifest
+            # on this instance resolves to, so no live agent's request changes.
+            from robothor.engine.model_registry import current_thinking_budget
 
             kwargs["temperature"] = 1.0  # Required by Anthropic API
             kwargs["thinking"] = {
                 "type": "enabled",
-                "budget_tokens": THINKING_BUDGET_TOKENS,
+                "budget_tokens": current_thinking_budget(),
             }
         return kwargs
 
