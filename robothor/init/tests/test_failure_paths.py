@@ -168,6 +168,81 @@ class TestAnUnprobedProviderIsNotRecordedAsDone:
         )
 
 
+class TestTheSmallerWaysARunCanMislead:
+    def test_a_malformed_state_file_is_no_progress_not_a_traceback(self, tmp_path):
+        """This is the command whose job is to fix a broken box."""
+        ctx = _ctx(tmp_path)
+        (ctx.workspace / ".robothor").mkdir(parents=True)
+        (ctx.workspace / ".robothor" / "init_state.yaml").write_text("- not\n- a mapping\n")
+
+        assert ctx.state == {}
+
+    def test_json_mode_keeps_the_token_out_of_the_log_half(self, tmp_path, capsys):
+        """`genus init --json > x.json 2> x.log` must not leave a live
+        single-use credential in x.log; first_run_url already carries it."""
+        ctx = _ctx(tmp_path, json_mode=True)
+        ctx.workspace.mkdir(parents=True)
+
+        LocalLinkStep(is_a_terminal=lambda: False).apply(ctx)
+
+        captured = capsys.readouterr()
+        token = ctx.first_run_url.partition("token=")[2]
+        assert token
+        assert token not in captured.out
+        assert token not in captured.err
+
+    def test_an_existing_owner_yaml_in_another_tenant_blocks_in_phase_one(
+        self, tmp_path, monkeypatch
+    ):
+        """The tenant guard used to fire at step 12, after the schema and the
+        fleet were in place."""
+        from robothor.init.steps import IdentityStep
+
+        path = tmp_path / "identity" / "owner.yaml"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            "tenant_id: acme\nfirst_name: Alice\nlast_name: Example\nemail: alice@example.com\n"
+        )
+        monkeypatch.setenv("ROBOTHOR_OWNER_CONFIG", str(path))
+
+        result = IdentityStep().check(_ctx(tmp_path, answers={"tenant_id": "other"}))
+
+        assert result.ok is False
+        assert "acme" in result.detail
+        assert "other" in result.detail
+
+    def test_an_existing_owner_yaml_names_who_it_names(self, tmp_path, monkeypatch):
+        from robothor.init.steps import IdentityStep
+
+        path = tmp_path / "identity" / "owner.yaml"
+        path.parent.mkdir(parents=True)
+        path.write_text("tenant_id: default\nfirst_name: Alice\nemail: alice@example.com\n")
+        monkeypatch.setenv("ROBOTHOR_OWNER_CONFIG", str(path))
+
+        result = IdentityStep().check(_ctx(tmp_path, answers={"tenant_id": "default"}))
+
+        assert result.action == "exists"
+        assert "alice@example.com" in result.detail
+
+    def test_the_bot_token_is_sent_once_not_twice(self, tmp_path):
+        from robothor.doctor.context import HttpResponse
+        from robothor.init.steps import ChannelsStep
+
+        calls: list[str] = []
+
+        def fetch(method, url, body, timeout):
+            calls.append(url)
+            return HttpResponse(status=200, body='{"ok": true, "result": {"username": "a_bot"}}')
+
+        ctx = _ctx(tmp_path, answers={"telegram_token": "123:abc"}, http_fetch=fetch)
+        ctx.workspace.mkdir(parents=True)
+        step = ChannelsStep()
+        step.check(ctx)
+        step.apply(ctx)
+
+        assert len(calls) == 1
+
+
 class TestVerifySkipsDatabaseChecksUnderSkipDb:
     def _report(self, *rows: tuple[str, str, str, str]) -> Any:
         from robothor.doctor.runner import CheckResult as DoctorResult

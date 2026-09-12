@@ -177,6 +177,14 @@ class LocalLinkStep(BaseStep):
             return
 
         ctx.first_run_url = url
+        if ctx.json_mode:
+            # `first_run_url` already carries it, and in json mode the human
+            # lines go to stderr -- so printing them here would put a live
+            # single-use credential in the log half of
+            # `genus init --json > x.json 2> x.log`.
+            ctx.detail(self.id, "a single-use sign-in link is in first_run_url")
+            return
+
         minutes = max(1, setup_token.configured_ttl_seconds() // 60)
         ctx.say(f"  Open the setup wizard (the link works once, for {minutes} minutes):")
         ctx.say(f"    {url}")

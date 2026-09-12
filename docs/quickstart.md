@@ -23,8 +23,13 @@ genus init --docker
 ## Option B: Local infrastructure
 
 Install PostgreSQL with pgvector, Redis and (optionally) Ollama, export a
-provider key, then run the wizard. These are the exact commands CI replays on
-a fresh machine:
+provider key, then run the wizard.
+
+These are the exact commands CI replays on a fresh machine. The block assumes
+PostgreSQL and Redis are already installed and running — `genus init` REQUIRES
+both for the `local` substrate and blocks in phase 1 without them, so the
+acceptance gate runs it on an image that provides them (or use Option A above,
+which starts them in containers first):
 
 <!-- install-gate: local -->
 ```bash

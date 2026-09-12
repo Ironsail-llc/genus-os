@@ -473,10 +473,40 @@ class IdentityStep(BaseStep):
 
         return owner_config_override_path() or owner_config_path()
 
+    @staticmethod
+    def _existing(path: Any) -> dict[str, str]:
+        """What an existing owner.yaml says. ``{}`` if it cannot be read."""
+        import yaml
+
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:  # noqa: BLE001 - an unreadable identity is not a crash
+            return {}
+        if not isinstance(loaded, dict):
+            return {}
+        return {str(key): str(value) for key, value in loaded.items() if value is not None}
+
     def check(self, ctx: InitContext) -> CheckResult:
         path = self._path(ctx)
         if path.exists():
-            return CheckResult(True, detail=f"{path} already names the operator", action="exists")
+            # Read it, and say WHO it names: "already names the operator" tells
+            # an operator nothing about which operator. The tenant is compared
+            # here rather than left to the operator step, which is eight steps
+            # and one schema later -- phase 1 can know this, so it should.
+            existing = self._existing(path)
+            email = existing.get("email") or "an operator"
+            tenant = existing.get("tenant_id") or ""
+            wanted = str(ctx.answers.get("tenant_id") or "")
+            if tenant and wanted and tenant != wanted:
+                return CheckResult(
+                    False,
+                    detail=f"{path} names {email} in tenant {tenant!r}, not {wanted!r}",
+                    fix_hint=(
+                        f"drop --tenant/ROBOTHOR_DEFAULT_TENANT to keep {tenant!r}, or move "
+                        f"{path} aside if this instance really is a different operator"
+                    ),
+                )
+            return CheckResult(True, detail=f"{path} already names {email}", action="exists")
         name = str(ctx.answers.get("owner_name") or "")
         email = str(ctx.answers.get("owner_email") or "")
         if ctx.yes and not (name and email):
@@ -882,12 +912,18 @@ class ChannelsStep(BaseStep):
                 fix_hint="check the token with @BotFather, or omit --telegram-token",
             )
         username = self._username(response.body)
+        # Carried, not re-fetched: `apply` used to send the bot token a second
+        # time to learn the same thing.
+        ctx.answers["telegram_bot_name"] = username
         return CheckResult(True, detail=f"Telegram bot @{username}" if username else "Telegram bot")
 
     def apply(self, ctx: InitContext) -> None:
-        token = str(ctx.answers.get("telegram_token") or "")
-        response = ctx.http("GET", f"https://api.telegram.org/bot{token}/getMe")
-        username = self._username(response.body)
+        username = str(ctx.answers.get("telegram_bot_name") or "")
+        if not username:
+            token = str(ctx.answers.get("telegram_token") or "")
+            username = self._username(
+                ctx.http("GET", f"https://api.telegram.org/bot{token}/getMe").body
+            )
         if username:
             ctx.write_setting("ROBOTHOR_TELEGRAM_BOT_NAME", username)
         ctx.detail(self.id, f"Telegram bot @{username}" if username else "Telegram configured")

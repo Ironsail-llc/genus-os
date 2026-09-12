@@ -261,11 +261,26 @@ class InitContext:
         Loaded once. The file is a flat ``step: status`` mapping, and it stays
         one: an existing instance's state file has to keep loading, or every
         box that ran the old wizard restarts from step one.
+
+        A file that is not that shape -- hand-edited, truncated, a list, a bare
+        string -- reads as "no progress recorded" rather than raising. This is
+        the one command whose job is to fix a broken box; a traceback out of
+        the state loader takes that away.
         """
         if self._state is None:
             from robothor.setup import _load_init_state
 
-            self._state = dict(_load_init_state(self.workspace))
+            try:
+                loaded = _load_init_state(self.workspace)
+            except Exception:  # noqa: BLE001 - unreadable progress is no progress
+                loaded = {}
+            if not isinstance(loaded, dict):
+                loaded = {}
+            self._state = {
+                str(key): str(value)
+                for key, value in loaded.items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
         return self._state
 
     def mark_completed(self, step_id: str) -> None:
