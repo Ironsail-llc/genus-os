@@ -432,17 +432,21 @@ def create_workspace(path: Path) -> None:
         for fname in ROOT_SCAFFOLD_FILES:
             _copy_scaffold_file(template_dir, fname, path / fname)
 
-        # Snapshot template hashes so `robothor upgrade` can detect changes
-        from robothor.cli.upgrade import _save_state, _snapshot_template_hashes
+        # Snapshot template hashes so `robothor upgrade` can detect changes.
+        #
+        # Written to `path`, explicitly. `_save_state()` resolves its own
+        # location from ROBOTHOR_WORKSPACE or ~/robothor, so a scaffold created
+        # at X used to drop this file into Y — and Y is somebody's live
+        # instance whenever X came from `--workspace`.
+        from robothor.cli.upgrade import _snapshot_template_hashes
 
         state_data: dict[str, Any] = {}
         state_file = path / ".robothor" / "migrations_applied.yaml"
         if state_file.exists():
-            import yaml
-
             state_data = yaml.safe_load(state_file.read_text()) or {}
         state_data["template_hashes"] = _snapshot_template_hashes()
-        _save_state(state_data)
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(yaml.dump(state_data, default_flow_style=False))
 
 
 #: Scaffold files that carry ``{{...}}`` placeholders the wizard fills in.

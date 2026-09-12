@@ -602,7 +602,10 @@ class AgentsStep(BaseStep):
             install = install_preset
 
         preset = self._preset(ctx)
-        outcome = install(preset, auto_yes=True)
+        # The workspace is passed, never inferred. `install_preset` otherwise
+        # resolves ROBOTHOR_WORKSPACE or ~/robothor, which is how a run aimed
+        # at a temporary directory overwrote a live instance's manifests.
+        outcome = install(preset, auto_yes=True, workspace=ctx.workspace)
         if outcome.get("unknown_preset"):
             available = ", ".join(outcome.get("available") or [])
             raise StepError(f"no preset named {preset!r}; the presets are {available}")
