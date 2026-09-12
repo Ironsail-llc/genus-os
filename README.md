@@ -113,9 +113,16 @@ cp docs/AGENT_BUILDER.md .claude/AGENT_BUILDER.md
 git clone https://github.com/Ironsail-llc/genus-os.git
 cd genus-os
 pip install -e ".[all]"
-robothor init       # Interactive setup: DB, Redis, Ollama, migrations
-robothor serve      # Start the orchestrator (engine runs separately: robothor engine start)
+genus init          # Two phases: prints the plan, then applies it
+genus serve         # Start the orchestrator (engine runs separately: genus engine start)
 ```
+
+`genus init` checks everything before it writes anything — prerequisites, the
+database, and a real one-token completion against the provider you choose. If a
+required check fails, nothing is written and it exits 1 naming the check, so
+`genus init --yes` either produces a running instance or changes nothing.
+`--dry-run` prints the plan alone; `--json` emits it, every step's result and
+the first-run URL as one document on stdout.
 
 Then open the link `init` printed — `http://127.0.0.1:3004/setup?token=…`. It is
 single-use, expires in 30 minutes, and is the only way into a fresh instance:
@@ -718,7 +725,7 @@ robothor/
 
 | Command | Purpose |
 |---------|---------|
-| `robothor init` | Interactive setup wizard; prints the `/setup` link |
+| `genus init` | Two-phase setup wizard; probes the provider, prints the `/setup` link |
 | `genus auth setup-link` | Mint a fresh first-run `/setup` link (before an owner exists) |
 | `robothor serve` | Start the orchestrator (engine runs separately) |
 | `robothor status` | System health overview |

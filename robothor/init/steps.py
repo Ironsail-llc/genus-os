@@ -382,10 +382,18 @@ class IdentityStep(BaseStep):
     id = "identity"
     title = "Operator identity"
 
-    def _path(self, ctx: InitContext) -> Any:
-        from robothor.constants import owner_config_path
+    @staticmethod
+    def _path(ctx: InitContext) -> Any:
+        """The file ``load_owner_config()`` will read back.
 
-        return owner_config_path()
+        Honours ``ROBOTHOR_OWNER_CONFIG`` because the LOADER does: writing to
+        the hardcoded path while the loader reads an override is a wizard that
+        reports an identity the platform cannot find.
+        """
+        from robothor.constants import owner_config_path
+        from robothor.settings.sources import owner_config_override_path
+
+        return owner_config_override_path() or owner_config_path()
 
     def check(self, ctx: InitContext) -> CheckResult:
         path = self._path(ctx)

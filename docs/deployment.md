@@ -248,6 +248,47 @@ ollama pull qwen3-embedding:0.6b
 ollama pull Qwen3-Reranker-0.6B:F16
 ```
 
+## Running `genus init` on a server
+
+`genus init` is two phases. The first runs every step's check and prints the
+plan; the second applies it, recording each finished step in
+`<workspace>/.robothor/init_state.yaml` so an interrupted install resumes at the
+next step rather than the first. If a **required** check fails, phase 2 never
+starts: nothing is written and the command exits 1 naming the check. That is
+what makes it safe to put in a provisioning script — it either produces a
+running instance or changes nothing.
+
+For an unattended install, give it everything up front:
+
+```bash
+export ROBOTHOR_DB_HOST=db.internal.test
+export ROBOTHOR_DB_PASSWORD="$DB_PASSWORD"
+export OPENROUTER_API_KEY="$PROVIDER_KEY"
+genus init --yes --json \
+  --owner-name "Ada Lovelace" --owner-email ada@example.com \
+  --preset standard --secrets-backend sops
+```
+
+`--json` puts one document on stdout — `plan`, `steps`, `first_run_url` and
+`exit_code` — with the human narration on stderr. No credential appears in
+either stream; the setup token appears exactly once, inside `first_run_url`,
+which is the point of it.
+
+What the wizard writes, and where:
+
+| What | Where | Why there |
+|------|-------|-----------|
+| Operator identity | `~/.robothor/owner.yaml` | The file the platform reads. Never `.env` — two files naming one operator is how an instance answers to one name and files CRM rows under another. |
+| Settings (database, provider model, secrets backend) | `<workspace>/.robothor/config.yaml` | Written through the same writer `genus config set` uses. |
+| Workspace pointer | `<workspace>/.env` | `ROBOTHOR_WORKSPACE` only — config.yaml lives inside the workspace and cannot say where it is. |
+| Provider key, Telegram token | The instance vault | Secrets never go in config.yaml, which gets copied into bug reports. |
+| Resume state | `<workspace>/.robothor/init_state.yaml` | One `step: completed` line each. |
+
+Re-running is routine. An existing `owner.yaml` is never overwritten, and
+completed steps are skipped — except the security note, the verification and the
+link, which run every time, because each one mints or checks something that must
+be current.
+
 ## First run on a headless box
 
 A fresh instance has no operator account, so the dashboard's sign-in page has

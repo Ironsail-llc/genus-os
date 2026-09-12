@@ -1,10 +1,17 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Operator identity for this Genus OS instance.
 #
-# Copy this file to: <ROBOTHOR_WORKSPACE>/.robothor/owner.yaml
+# Copy this file to: ~/.robothor/owner.yaml
+#
+# That path is the operator's HOME, NOT the workspace: the identity belongs to
+# the person, so two workspaces on one account cannot disagree about who the
+# operator is. ROBOTHOR_OWNER_CONFIG overrides it; robothor.constants
+# .owner_config_path() is the one place that decides.
+#
 # The .robothor/ directory is gitignored; the content is per-instance.
 #
-# Read by robothor.owner_config.load_owner_config() at daemon startup.
+# `genus init` writes this file for you. It is read by
+# robothor.owner_config.load_owner_config() at daemon startup.
 # Used to:
 #   - Link the operator's row in crm_people to tenant_users.person_id
 #   - Resolve bare first-name mentions (e.g. "Alice") to the operator

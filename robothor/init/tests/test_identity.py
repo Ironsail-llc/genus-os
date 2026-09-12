@@ -58,6 +58,30 @@ class TestOwnerYaml:
         assert path.stat().st_mode & 0o077 == 0
 
 
+class TestTheWizardWritesWhereTheLoaderReads:
+    def test_the_owner_config_override_is_honoured(self, tmp_path, monkeypatch):
+        """Writing the hardcoded path while the loader reads an override is a
+        wizard that reports an identity the platform cannot find."""
+        from robothor.init.context import InitContext
+        from robothor.init.steps import IdentityStep
+
+        override = tmp_path / "elsewhere" / "owner.yaml"
+        monkeypatch.setenv("ROBOTHOR_OWNER_CONFIG", str(override))
+        ctx = InitContext(workspace=tmp_path / "workspace")
+
+        assert IdentityStep._path(ctx) == override
+
+    def test_without_an_override_it_is_the_hardcoded_path(self, tmp_path, monkeypatch):
+        from robothor.constants import owner_config_path
+        from robothor.init.context import InitContext
+        from robothor.init.steps import IdentityStep
+
+        monkeypatch.delenv("ROBOTHOR_OWNER_CONFIG", raising=False)
+        ctx = InitContext(workspace=tmp_path / "workspace")
+
+        assert IdentityStep._path(ctx) == owner_config_path()
+
+
 class TestEnvFileNoLongerCarriesTheOperator:
     def test_the_env_writer_emits_no_owner_variables(self, tmp_path):
         from robothor.config import DatabaseConfig, OllamaConfig, RedisConfig
