@@ -682,6 +682,20 @@ def _build_parser() -> argparse.ArgumentParser:
     auth_revoke = auth_sub.add_parser("revoke-binding", help="Revoke a pending binding grant")
     auth_revoke.add_argument("grant_id", help="Grant ID")
     auth_revoke.add_argument("--tenant", default=None, help="Tenant ID (default: any)")
+    auth_setup_link = auth_sub.add_parser(
+        "setup-link", help="Mint a fresh first-run /setup link (before an owner account exists)"
+    )
+    auth_setup_link.add_argument(
+        "--host",
+        default=None,
+        help="Host the browser will reach the dashboard on (default: 127.0.0.1)",
+    )
+    auth_setup_link.add_argument(
+        "--ttl", default=None, help="Link lifetime, e.g. 45s/15m/2h (default: the configured TTL)"
+    )
+    auth_setup_link.add_argument(
+        "--json", dest="json_output", action="store_true", help="Output JSON"
+    )
 
     # user — closed-allowlist registration: link a human into the identity graph
     user_parser = subparsers.add_parser(

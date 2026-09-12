@@ -83,7 +83,7 @@ class TestCreate:
         """The setting must not be a control aimed at nothing."""
         from robothor.settings import get_settings
 
-        with patch.object(setup_token, "_configured_ttl_seconds", return_value=60) as configured:
+        with patch.object(setup_token, "configured_ttl_seconds", return_value=60) as configured:
             setup_token.create_setup_token(workspace)
 
         configured.assert_called_once()

@@ -24,6 +24,7 @@ import os
 import platform
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -33,6 +34,7 @@ from typing import Any
 import httpx
 import yaml
 
+from robothor import setup_token
 from robothor.config import DatabaseConfig, OllamaConfig, RedisConfig
 
 # Models required for the RAG pipeline
@@ -378,6 +380,7 @@ def run_init(args: Any) -> int:
 
     print()
     _print_next_steps(install_mode)
+    _print_setup_link(workspace)
     return 0
 
 
@@ -698,6 +701,71 @@ def _print_next_steps(install_mode: str) -> None:
         print(f"    {i}. {step}")
     print("    (optional) Open Claude Code for identity setup")
     print()
+
+
+def helm_port() -> int:
+    """The port the Helm dashboard serves the wizard on.
+
+    Read from the settings model so an instance that moved the dashboard gets a
+    link that works. A config.yaml that does not parse falls back to the
+    declared default rather than stopping init: this is the command an operator
+    runs to fix such a box.
+    """
+    try:
+        from robothor.settings import get_settings
+
+        return int(get_settings().services.helm_port)
+    except Exception:  # noqa: BLE001 - a broken config must not block first run
+        return 3004
+
+
+def _print_setup_link(workspace: Path) -> None:
+    """Mint the first-run token and print the URL that opens the wizard.
+
+    This is the line that turns a finished install into a signed-in dashboard,
+    and before it existed the sign-in page rendered no buttons at all on a
+    fresh box: no OIDC, no Cloudflare Access, no account, and the only escape
+    hatch was ``GENUS_INSECURE_DEV_MODE``.
+
+    Printed, never logged. The token exists in the operator's terminal and in
+    no other place — ``setup_token.yaml`` holds a digest.
+
+    A failure here does NOT fail init. A completed install with no printed link
+    is recoverable with one command; a non-zero exit from ``genus init``
+    because a token file could not be written sends the operator back to the
+    start of a ten-minute process.
+    """
+    try:
+        token = setup_token.create_setup_token(workspace)
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        print(f"  ! Could not write the setup token ({type(exc).__name__}: {exc}).")
+        print("    Run `genus auth setup-link` once the workspace is writable.")
+        print()
+        return
+
+    port = helm_port()
+    # Loopback on purpose: the dashboard binds locally on the appliance and is
+    # published, if at all, through a tunnel. Printing a guessed public
+    # hostname would hand the operator a URL that does not resolve and a token
+    # that has already started expiring.
+    host = "127.0.0.1"
+    print("  Open the setup wizard (the link works once, for 30 minutes):")
+    print(f"    {setup_token.setup_link(host, port, token)}")
+    if not _stdin_is_a_terminal() or not setup_token.is_loopback_host(host):
+        # No browser on this box, or the address is not one the operator's own
+        # browser can reach. Forward the port rather than exposing it.
+        print("    Not at this machine? Forward the port first:")
+        print(f"      {setup_token.port_forward_hint(socket.getfqdn(), port)}")
+    print()
+
+
+def _stdin_is_a_terminal() -> bool:
+    """Whether a human is at this install. Never raises: a closed or replaced
+    stdin is "no terminal", which is the branch that prints MORE help."""
+    try:
+        return bool(sys.stdin.isatty())
+    except Exception:  # noqa: BLE001 - a detached stdin is not a terminal
+        return False
 
 
 def run_migration(db_config: DatabaseConfig) -> int:

@@ -55,6 +55,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_TTL_SECONDS",
+    "configured_ttl_seconds",
     "consume_setup_token",
     "create_setup_token",
     "is_loopback_host",
@@ -101,7 +102,7 @@ def token_path(workspace: Path | str) -> Path:
     return Path(workspace) / _CONFIG_DIRNAME / _TOKEN_FILENAME
 
 
-def _configured_ttl_seconds() -> int:
+def configured_ttl_seconds() -> int:
     """The instance's declared token lifetime, or the default.
 
     Wrapped so a config.yaml that does not parse cannot stop ``genus init``
@@ -127,7 +128,7 @@ def create_setup_token(workspace: Path | str, *, ttl_seconds: int | None = None)
     Any existing token is replaced. Re-running ``genus init`` is routine, and
     an operator who has lost the printed link needs the next one to work.
     """
-    ttl = _configured_ttl_seconds() if ttl_seconds is None else int(ttl_seconds)
+    ttl = configured_ttl_seconds() if ttl_seconds is None else int(ttl_seconds)
     if ttl <= 0:
         raise ValueError("ttl_seconds must be positive")
 
