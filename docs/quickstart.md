@@ -38,6 +38,7 @@ curl -fsSLO https://raw.githubusercontent.com/Ironsail-llc/genus-os/main/infra/d
 export ROBOTHOR_DB_PASSWORD=choose-a-password
 export OPENROUTER_API_KEY=sk-your-key
 genus init --substrate compose --yes --workspace . --owner-name "Ada Lovelace" --owner-email ada@example.com
+export ROBOTHOR_WORKSPACE="$PWD"
 genus doctor --json
 ```
 <!-- /install-gate -->
