@@ -40,7 +40,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-345 settings in 13 groups.
+350 settings in 13 groups.
 
 ## paths
 
@@ -234,12 +234,17 @@ Who may reach the bridge and the dashboard, and how that is proven.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `CF_ACCESS_AUD` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Cloudflare Access application audience tag that the dashboard verifies sign-in assertions against. |
+| `CF_ACCESS_TEAM_DOMAIN` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Cloudflare Access team domain that fronts the dashboard; with the audience, lets the bridge and dashboard treat Access as a sign-in method. |
 | `GENUS_AUTH_ENFORCE` | bool | `false` | `robothor-bridge`, `robothor-app` | no | legacy | One-way compatibility switch that turns identity checks on. It never relaxes the existing role_permissions policy. |
 | `GENUS_AUTH_SIGNING_KEY` | str | _(unset)_ | `robothor-bridge`, `robothor-app` | yes | legacy | Key session tokens are signed with; at least 32 bytes. Required in production, where startup fails without it. |
 | `GENUS_BRIDGE_SSO_SECRET` | str | _(unset)_ | `robothor-bridge`, `robothor-app` | yes | legacy | Shared secret the dashboard and bridge exchange SSO assertions with. The two must match or every sign-in is refused. |
 | `GENUS_ENVIRONMENT` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Deployment environment. 'production' makes the auth preconditions hard requirements instead of warnings. Also read from `ROBOTHOR_ENVIRONMENT`. |
 | `GENUS_INSECURE_DEV_MODE` | bool | `false` | `robothor-bridge`, `robothor-app` | no | legacy | Skip authentication for local development. Rejected outright in a production environment or on any non-loopback bind address. |
+| `GENUS_LOCAL_LOGIN` | bool | `false` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Offer local email + password sign-in (bridge routes and the dashboard form). Off by default: a fresh instance must opt in. Owner MFA becomes mandatory when this is the only sign-in method. |
 | `GENUS_OIDC_ISSUERS` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Comma-separated OIDC issuer URLs whose tokens the bridge accepts. |
+| `GENUS_OWNER_MFA_REQUIRED` | bool | `true` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Tell an owner account with no second factor to enrol one while local login is on. Setting it false gives up the only compensating control for a public password endpoint: one argon2-verified password then becomes the entire authentication for the instance and its stored credentials, and the operator is never prompted. |
+| `GENUS_TRUSTED_PROXIES` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Comma-separated peer addresses or CIDR ranges allowed to assert the end user's address in X-Client-IP (the dashboard pod, a reverse proxy). Empty trusts nobody, loopback included; the real peer address is used. |
 | `ROBOTHOR_BRIDGE_HOST` | str | `127.0.0.1` | `robothor-bridge`, `robothor-app` | no | legacy | Address the bridge binds to. Anything but loopback requires real authentication to be configured. |
 | `ROBOTHOR_BRIDGE_PORT` | int | `9100` | `robothor-bridge`, `robothor-app` | no | legacy | Bridge HTTP port. |
 | `ROBOTHOR_DEFAULT_SERVICE_ROLE` | str | `service` | `robothor-bridge`, `robothor-app` | no | legacy | Role assigned to internal service callers. A fresh install with this unseeded denies every agent every tool. |

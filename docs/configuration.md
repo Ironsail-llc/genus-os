@@ -315,6 +315,7 @@ alongside it.
 | `GENUS_BRIDGE_SSO_SECRET` | *(empty)* | Shared dashboard↔Bridge secret. Required in production for every method |
 | `GENUS_OIDC_ISSUERS` | *(empty)* | Comma-separated allowlist of OIDC issuers the Bridge will JIT-provision for |
 | `GENUS_LOCAL_LOGIN` | `false` | Exactly `true` enables local email+password sign-in. Off by default: a password endpoint must be opted into, never appear on upgrade. Set it on **both** the Bridge (serves `/api/auth/login`) and the dashboard (registers the provider that calls it) |
+| `GENUS_OWNER_MFA_REQUIRED` | `true` | Tell an owner account with no second factor to enrol one while local login is on. `false` gives up the only compensating control for a public password endpoint — one password then *is* the authentication for the instance and its stored credentials |
 | `GENUS_TRUSTED_PROXIES` | *(empty)* | Comma-separated addresses or CIDR ranges allowed to set `X-Client-IP` on a Bridge request. **Loopback is not trusted implicitly** — list it (`127.0.0.1/32`) if the dashboard shares the host. Empty trusts nobody and the Bridge uses the peer address, so the sign-in limiter sees one address for every user |
 | `CF_ACCESS_TEAM_DOMAIN` / `CF_ACCESS_AUD` | *(empty)* | Sign in through a fronting Cloudflare Access policy |
 | `GENUS_INSECURE_DEV_MODE` | `false` | Loopback-only development escape hatch. Not a sign-in method; forbidden in production |
@@ -342,9 +343,13 @@ form (alongside the SSO button when both are configured) and the Bridge serves
   cannot be replayed inside the verifier's ±1 step window (RFC 6238 §5.2).
 - Changing a password revokes every other refresh session, keeping only the
   one that made the change.
-- **Owner MFA is mandatory when local login is the only configured method.**
-  The owner still signs in, but the Helm shows a banner that cannot be
-  dismissed until a factor is enrolled at `/account/security`.
+- **Owner MFA is mandatory whenever local login is on.** The owner still signs
+  in, but the Helm shows a banner that cannot be dismissed until a factor is
+  enrolled at `/account/security`. It does not matter what else is configured:
+  `GENUS_OIDC_ISSUERS` is the Bridge's issuer allowlist, not a sign-in method
+  (the dashboard's `AUTH_OIDC_*` variables are what render an SSO button), and
+  `CF_ACCESS_*` are dashboard-only, so neither can answer "is there another way
+  in". Set `GENUS_OWNER_MFA_REQUIRED=false` to opt out explicitly.
 
 Operator commands:
 

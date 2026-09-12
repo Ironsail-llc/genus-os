@@ -836,10 +836,8 @@ async def test_a_rejected_mfa_disable_never_echoes_the_password(test_client):
     assert "hunter2" not in r.text
 
 
-@pytest.mark.asyncio
-async def test_me_does_not_force_mfa_when_oidc_exists(test_client, monkeypatch):
-    monkeypatch.setenv("GENUS_OIDC_ISSUERS", "https://idp.example.test")
-    account = {
+def _owner_row() -> dict[str, object]:
+    return {
         "id": "uid-1",
         "email": "alice@example.com",
         "display_name": "Alice",
@@ -848,6 +846,25 @@ async def test_me_does_not_force_mfa_when_oidc_exists(test_client, monkeypatch):
         "status": "active",
         "mfa_enabled": False,
     }
-    with patch("routers.auth.accounts.get_account_by_id", return_value=account):
+
+
+@pytest.mark.asyncio
+async def test_me_still_forces_owner_mfa_when_oidc_issuers_exist(test_client, monkeypatch):
+    """A bridge issuer allowlist is not a sign-in method a human can use.
+
+    The autouse fixture already sets GENUS_OIDC_ISSUERS, which used to turn the
+    policy off — so the owner was never told to enrol, and one password was the
+    whole authentication for the appliance.
+    """
+    monkeypatch.setenv("GENUS_OIDC_ISSUERS", "https://idp.example.test")
+    with patch("routers.auth.accounts.get_account_by_id", return_value=_owner_row()):
+        r = await test_client.get("/api/auth/me", headers=_bearer())
+    assert r.json()["mfa_setup_required"] is True
+
+
+@pytest.mark.asyncio
+async def test_me_honours_the_owner_mfa_escape_hatch(test_client, monkeypatch):
+    monkeypatch.setenv("GENUS_OWNER_MFA_REQUIRED", "false")
+    with patch("routers.auth.accounts.get_account_by_id", return_value=_owner_row()):
         r = await test_client.get("/api/auth/me", headers=_bearer())
     assert r.json()["mfa_setup_required"] is False

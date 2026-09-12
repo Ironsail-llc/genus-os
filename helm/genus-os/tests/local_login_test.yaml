@@ -89,3 +89,30 @@ tests:
             name: GENUS_TRUSTED_PROXIES
             value: "127.0.0.1/32"
         documentIndex: 0
+
+  # Owner MFA is the only compensating control the feature offers for exposing
+  # a password endpoint, so it is on unless the operator types the opt-out.
+  - it: owner MFA is mandatory by default
+    template: bridge/workload.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_OWNER_MFA_REQUIRED
+            value: "true"
+        documentIndex: 0
+
+  # `default true` would silently rewrite this back to "true": a false value is
+  # falsey to Helm, which is exactly the shape of bug that makes an opt-out
+  # look accepted and do nothing.
+  - it: an explicit opt-out is not rewritten back to on
+    template: bridge/workload.yaml
+    set:
+      global.ownerMfaRequired: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_OWNER_MFA_REQUIRED
+            value: "false"
+        documentIndex: 0

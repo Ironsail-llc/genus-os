@@ -21,10 +21,13 @@ The rules, and why each one is here:
 * **Rate limit.** Five attempts per (email, IP) per minute, ahead of the
   database, so a throttled attempt costs no argon2 hash and is not charged
   against the lockout counter.
-* **Owner MFA.** When local login is the only configured method, the owner
-  account is told to enroll a second factor. ``mfa_setup_required`` is a flag
-  on a successful sign-in, not a refusal: locking the operator out of their
-  own appliance to enforce a policy is worse than the policy.
+* **Owner MFA.** While local login is on, an owner account with no live second
+  factor is told to enroll one — regardless of what else is configured, because
+  the variables that looked like "another sign-in method exists" did not mean
+  that (see ``mfa_setup_required_for``). ``GENUS_OWNER_MFA_REQUIRED=false``
+  opts out explicitly. ``mfa_setup_required`` is a flag on a successful
+  sign-in, not a refusal: locking the operator out of their own appliance to
+  enforce a policy is worse than the policy.
 """
 
 from __future__ import annotations
@@ -57,7 +60,6 @@ __all__ = [
     "disable_mfa",
     "local_login_enabled",
     "mfa_setup_required_for",
-    "other_providers_configured",
     "reset_mfa",
     "reset_rate_limiter",
     "set_password",
@@ -132,29 +134,38 @@ class LoginResult:
     error: str = GENERIC_FAILURE
 
 
-def other_providers_configured() -> bool:
-    """Whether a sign-in method other than local login exists.
+def mfa_setup_required_for(account_row: dict[str, Any]) -> bool:
+    """Whether this account must enroll a second factor before it is safe.
 
-    OIDC issuers, or a Cloudflare Access team domain + audience. Used only to
-    decide whether owner MFA is *mandatory*: with a second method configured,
-    the operator has another way back in and the appliance is not betting
-    everything on one password.
+    The rule is deliberately blunt: an ``owner`` with no live factor, while
+    local login is on. Fail closed, because the two predicates this used to ask
+    instead did not answer the question the policy asks —
+
+    * ``GENUS_OIDC_ISSUERS`` is the BRIDGE's allowlist of issuers whose tokens
+      it will accept, not a sign-in method. A human can only sign in with OIDC
+      when the DASHBOARD has ``AUTH_OIDC_ISSUER`` *and* ``AUTH_OIDC_CLIENT_ID``,
+      a disjoint pair of variables. So a stale issuer — or the one
+      ``infra/robothor.env.example`` tells the operator to add for Cloudflare
+      Access — turned the policy off while the sign-in page still offered
+      nothing but email and password.
+    * ``CF_ACCESS_TEAM_DOMAIN`` / ``CF_ACCESS_AUD`` are dashboard-only secrets
+      (see the chart README's secret classes), unset in this process, so that
+      branch was dead under Helm anyway.
+
+    ``GENUS_OWNER_MFA_REQUIRED=false`` is the escape hatch, and an operator has
+    to type it. It is advisory either way: this flag raises a banner and a panel
+    message, never a refusal — locking the operator out of their own appliance
+    to enforce a policy is worse than the policy.
     """
+    if account_row.get("role") != "owner" or account_row.get("mfa_enabled"):
+        return False
+    if not local_login_enabled():
+        # No password endpoint, so there is no password for a second factor to
+        # sit behind: whatever gets this account in, it is not local login.
+        return False
     from robothor.settings import get_settings
 
-    auth = get_settings().auth
-    if any(item.strip() for item in auth.oidc_issuers.split(",")):
-        return True
-    return bool(auth.cf_access_team_domain.strip() and auth.cf_access_aud.strip())
-
-
-def mfa_setup_required_for(account_row: dict[str, Any]) -> bool:
-    """Whether this account must enroll a second factor before it is safe."""
-    return bool(
-        account_row.get("role") == "owner"
-        and not account_row.get("mfa_enabled")
-        and not other_providers_configured()
-    )
+    return bool(get_settings().auth.owner_mfa_required)
 
 
 # ── rate limiter ─────────────────────────────────────────────────────

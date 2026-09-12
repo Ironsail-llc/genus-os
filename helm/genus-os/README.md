@@ -127,8 +127,11 @@ Private ingress is not the application authentication mechanism:
   Bridge-authenticated session exchange. Existing users require an explicit
   issuer/subject binding; verified email does not silently link accounts.
 - Local email+password sign-in (`global.localLogin`) is a supported
-  alternative to OIDC for deployments with no identity provider, and owner MFA
-  is mandatory whenever it is the only configured method. Set
+  alternative to OIDC for deployments with no identity provider. Owner MFA is
+  mandatory for as long as it is on — `global.ownerMfaRequired: false` is the
+  explicit opt-out, and nothing else turns the policy off, because the Bridge's
+  issuer allowlist and the dashboard-only `CF_ACCESS_*` secrets cannot tell it
+  whether a human has another way in. Set
   `global.trustedProxies` to the dashboard's pod CIDR so the Bridge's per-IP
   sign-in limiter sees real client addresses; loopback is not trusted
   implicitly, so a same-host tunnel cannot let clients choose their own

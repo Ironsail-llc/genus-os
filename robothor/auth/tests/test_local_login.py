@@ -235,22 +235,47 @@ def test_a_pending_unconfirmed_secret_never_satisfies_a_challenge() -> None:
 # ── owner MFA policy ─────────────────────────────────────────────────
 
 
-def test_owner_without_mfa_and_no_other_provider_must_set_it_up() -> None:
+def test_owner_without_mfa_must_set_it_up_while_local_login_is_on() -> None:
     result, _, _ = _authenticate(account(role="owner"))
     assert result.ok is True and result.mfa_setup_required is True
 
 
-def test_owner_with_oidc_configured_is_not_forced(monkeypatch) -> None:
+def test_owner_is_still_forced_when_oidc_issuers_are_configured(monkeypatch) -> None:
+    """GENUS_OIDC_ISSUERS is not a sign-in method, and must not turn the policy off.
+
+    It is the BRIDGE's allowlist of issuers whose tokens it will accept. A human
+    can only sign in with OIDC when the DASHBOARD has AUTH_OIDC_ISSUER and
+    AUTH_OIDC_CLIENT_ID — a disjoint pair of variables. Deciding the policy from
+    it meant a stale value, or the one infra/robothor.env.example tells the
+    operator to set for Cloudflare Access, silently left the owner with a single
+    password as the entire authentication for the appliance.
+    """
     monkeypatch.setenv("GENUS_OIDC_ISSUERS", "https://idp.example.test")
+    result, _, _ = _authenticate(account(role="owner"))
+    assert result.ok is True and result.mfa_setup_required is True
+
+
+def test_owner_is_still_forced_when_cloudflare_access_is_configured(monkeypatch) -> None:
+    """CF_ACCESS_* are dashboard-only secrets, unset in the bridge process."""
+    monkeypatch.setenv("CF_ACCESS_TEAM_DOMAIN", "team.example.com")
+    monkeypatch.setenv("CF_ACCESS_AUD", "aud-1")
+    result, _, _ = _authenticate(account(role="owner"))
+    assert result.mfa_setup_required is True
+
+
+def test_the_operator_can_turn_the_policy_off_explicitly(monkeypatch) -> None:
+    monkeypatch.setenv("GENUS_OWNER_MFA_REQUIRED", "false")
     result, _, _ = _authenticate(account(role="owner"))
     assert result.ok is True and result.mfa_setup_required is False
 
 
-def test_owner_with_cloudflare_access_configured_is_not_forced(monkeypatch) -> None:
-    monkeypatch.setenv("CF_ACCESS_TEAM_DOMAIN", "team.example.com")
-    monkeypatch.setenv("CF_ACCESS_AUD", "aud-1")
-    result, _, _ = _authenticate(account(role="owner"))
-    assert result.mfa_setup_required is False
+def test_no_one_is_forced_when_local_login_is_off(monkeypatch) -> None:
+    """Nothing to enrol against: with no password endpoint there is no password."""
+    monkeypatch.setenv("GENUS_LOCAL_LOGIN", "false")
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    assert local_login.mfa_setup_required_for(account(role="owner")) is False
 
 
 def test_owner_with_mfa_enabled_is_not_forced() -> None:

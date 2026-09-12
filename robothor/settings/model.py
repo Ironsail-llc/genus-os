@@ -1045,6 +1045,16 @@ class AuthSettings(SettingsGroup):
         since="1.69.0",
         restart_required=True,
     )
+    owner_mfa_required: bool = declare(
+        True,
+        "GENUS_OWNER_MFA_REQUIRED",
+        "Tell an owner account with no second factor to enrol one while local "
+        "login is on. Setting it false gives up the only compensating control "
+        "for a public password endpoint: one argon2-verified password then "
+        "becomes the entire authentication for the instance and its stored "
+        "credentials, and the operator is never prompted.",
+        since="1.69.0",
+    )
     trusted_proxies: str = declare(
         "",
         "GENUS_TRUSTED_PROXIES",

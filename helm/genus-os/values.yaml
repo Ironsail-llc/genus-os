@@ -24,8 +24,17 @@ global:
   # into, never appear on an upgrade. Reaches BOTH the bridge (which serves
   # /api/auth/login) and the dashboard (which registers the provider that
   # calls it) — set in only one and the sign-in page has no form, or its form
-  # 404s. When this is the only configured method, owner MFA is mandatory.
+  # 404s. While this is on, owner MFA is mandatory (ownerMfaRequired).
   localLogin: false
+
+  # Owner MFA while local email+password sign-in is on. The owner still signs
+  # in; the dashboard shows a banner it cannot dismiss until a second factor is
+  # enrolled. Setting this false gives up the only compensating control for a
+  # public password endpoint, so it has to be typed out — nothing else turns
+  # the policy off, because neither the bridge's OIDC issuer allowlist nor the
+  # dashboard-only CF_ACCESS_* secrets can tell the bridge whether a human has
+  # another way in.
+  ownerMfaRequired: true
 
   # Peers allowed to speak for someone else's client address via X-Client-IP,
   # as comma-separated addresses or CIDR ranges. The dashboard calls the
