@@ -114,7 +114,16 @@ def _isolated_settings(monkeypatch):
     from robothor.settings.aliases import DEPRECATED_ALIASES, reset_alias_warnings
 
     for name in list(os.environ):
-        if name.startswith(("ROBOTHOR_", "GENUS_")) or name in DEPRECATED_ALIASES:
+        # Provider credentials too. They are not ROBOTHOR_/GENUS_ names, so the
+        # sibling fixtures in tests/ leave them alone -- and a models check that
+        # consults the credential pool then reads whatever this machine happens
+        # to export. That made two tests green here and red on CI, which is the
+        # precise failure this fixture exists to prevent.
+        if (
+            name.startswith(("ROBOTHOR_", "GENUS_"))
+            or name.endswith(("_API_KEY", "_API_TOKEN"))
+            or name in DEPRECATED_ALIASES
+        ):
             monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ROBOTHOR_WORKSPACE", tempfile.mkdtemp(prefix="genus-doctor-"))
     reset_alias_warnings()

@@ -21,6 +21,7 @@ from robothor.doctor.context import HttpResponse
 from robothor.doctor.tests.conftest import fake_http, make_ctx
 
 FAKE_TOKEN = "1234567:AAfake-telegram-token-value"
+FAKE_API_KEY = "sk-test-do-not-print-9999999999"
 
 
 def _run(checks, check_id: str, ctx):
@@ -103,7 +104,28 @@ def test_redis_failure_does_not_print_the_password(monkeypatch, settings) -> Non
 # ── models ───────────────────────────────────────────────────────────────────
 
 
-FAKE_API_KEY = "sk-test-do-not-print-9999999999"
+def test_no_provider_credential_is_visible_to_a_test_in_this_tree() -> None:
+    """The property every models test relies on, asserted once.
+
+    `_completion` consults the real credential pool, so a test that forgets to
+    fake the pool silently reads whatever THIS machine exports: green here, red
+    on CI, and unreproducible on a clean checkout. The sibling fixtures in
+    `tests/` strip `ROBOTHOR_*`/`GENUS_*` only, because provider keys are not
+    platform-prefixed -- so this tree's `_isolated_settings` strips them too,
+    and this is what fails if it stops.
+    """
+    import os
+
+    from robothor.engine import key_pool
+
+    visible = [
+        name
+        for name in os.environ
+        if name.endswith(("_API_KEY", "_API_TOKEN"))
+        or key_pool.provider_for_var(name) is not None
+    ]
+    assert visible == [], f"a provider credential reached a test from the host: {visible}"
+
 
 
 def _fake_slots(monkeypatch, slots_by_provider: dict[str, list]) -> None:
@@ -174,12 +196,30 @@ def test_completion_is_skipped_offline() -> None:
 
 
 def test_completion_is_skipped_when_there_is_no_model_to_call(monkeypatch) -> None:
+    _one_credential(monkeypatch)
     monkeypatch.setattr(model_checks, "_fleet_model", lambda: "")
     rows = _run(model_checks.CHECKS, "provider.completion", make_ctx())
     assert rows[0].status == "skip"
 
 
+def _one_credential(monkeypatch) -> None:
+    """A resolvable credential, so `_completion` gets past its M3 skip.
+
+    Stubbing `_fleet_model` alone left these tests reading the HOST's ambient
+    OPENROUTER_API_KEY: green on this box, red on CI, and unreproducible on a
+    clean machine -- which is the exact failure `_isolated_settings` exists to
+    prevent.
+    """
+    from robothor.engine.key_pool import SlotStatus, key_fingerprint
+
+    slot = SlotStatus(
+        position=1, source="env", fingerprint=key_fingerprint(FAKE_API_KEY), state="active"
+    )
+    _fake_slots(monkeypatch, {"openrouter": [slot]})
+
+
 def test_completion_passes_on_a_real_answer(monkeypatch) -> None:
+    _one_credential(monkeypatch)
     monkeypatch.setattr(model_checks, "_fleet_model", lambda: "openrouter/test/model")
 
     seen: dict = {}
@@ -198,6 +238,7 @@ def test_completion_passes_on_a_real_answer(monkeypatch) -> None:
 
 
 def test_completion_failure_reports_an_error_class_not_the_exception_text(monkeypatch) -> None:
+    _one_credential(monkeypatch)
     monkeypatch.setattr(model_checks, "_fleet_model", lambda: "openrouter/test/model")
 
     async def _call(_messages, **_kwargs):
@@ -240,35 +281,99 @@ def test_completion_makes_no_call_when_no_credential_resolves(monkeypatch) -> No
     assert calls == []
 
 
-def test_ollama_skips_on_a_cloud_only_instance() -> None:
+def _no_ollama_in_the_fleet(monkeypatch) -> None:
+    """A cloud-only fleet: no model in the chain routes through Ollama."""
+    monkeypatch.setattr(model_checks, "_fleet_models", lambda: ["openrouter/test/model"])
+
+
+def _ollama_in_the_fleet(monkeypatch) -> None:
+    monkeypatch.setattr(
+        model_checks, "_fleet_models", lambda: ["openrouter/test/model", "ollama_chat/qwen3:8b"]
+    )
+
+
+def test_ollama_skips_on_a_cloud_only_instance(monkeypatch) -> None:
     """Every Ollama setting carries a default, so a cloud-only instance that
     never configured one would otherwise carry a permanent recommended failure
     for a service it does not use -- and a red line an operator learns to
     ignore is worse than no line."""
+    _no_ollama_in_the_fleet(monkeypatch)
     ctx = make_ctx(http_fetch=fake_http({}))
     rows = _run(model_checks.CHECKS, "ollama.reachable", ctx)
     assert rows[0].status == "skip"
-    assert "not configured" in rows[0].detail
+    assert "no model in the fleet" in rows[0].detail
+    assert ctx.http_fetch.calls == []  # type: ignore[union-attr]
 
 
-def test_ollama_that_answers_on_the_default_endpoint_still_passes() -> None:
-    """Untouched defaults and a live server is the normal single-box install.
-    Skipping there would hide a dependency the memory path actually uses."""
+def test_a_cloud_only_instance_does_not_dial_a_live_ollama_either(monkeypatch) -> None:
+    """Whether an unused server happens to answer is not information an
+    operator needs, and the check decides "is it used" BEFORE dialling so a
+    cloud-only instance spends nothing. The dependency this used to protect --
+    defaults untouched but the fleet using Ollama anyway -- is now caught by the
+    fleet signal instead of by probing everything."""
+    _no_ollama_in_the_fleet(monkeypatch)
     ctx = make_ctx(
         http_fetch=fake_http({"http://127.0.0.1:11434/api/tags": HttpResponse(status=200)})
     )
-    assert _run(model_checks.CHECKS, "ollama.reachable", ctx)[0].status == "pass"
+    rows = _run(model_checks.CHECKS, "ollama.reachable", ctx)
+    assert rows[0].status == "skip"
+    assert ctx.http_fetch.calls == []  # type: ignore[union-attr]
 
 
-def test_an_explicitly_configured_ollama_that_is_down_is_a_failure(settings) -> None:
-    """The operator said it should be there. Silence is then a real finding."""
+def test_an_explicitly_configured_ollama_that_is_down_is_a_failure(monkeypatch, settings) -> None:
+    """The operator said it should be there. Silence is then a real finding.
+
+    Asked of `settings.provenance`, which knows the value came from the
+    environment -- comparing against the declared default cannot tell a
+    deliberate `ROBOTHOR_OLLAMA_HOST=127.0.0.1` from no setting at all.
+    """
+    _no_ollama_in_the_fleet(monkeypatch)
     settings(ROBOTHOR_OLLAMA_URL="http://ollama.example.test:11434")
     ctx = make_ctx(http_fetch=fake_http({}))
     rows = _run(model_checks.CHECKS, "ollama.reachable", ctx)
     assert rows[0].status == "fail"
 
 
-def test_ollama_passes_when_tags_answers() -> None:
+def test_an_endpoint_set_to_its_own_default_value_still_counts_as_configured(
+    monkeypatch, settings
+) -> None:
+    """The structural test could not see this: typing the default value out is
+    still a statement that Ollama should be there."""
+    _no_ollama_in_the_fleet(monkeypatch)
+    settings(ROBOTHOR_OLLAMA_HOST="127.0.0.1")
+    ctx = make_ctx(http_fetch=fake_http({}))
+    rows = _run(model_checks.CHECKS, "ollama.reachable", ctx)
+    assert rows[0].status == "fail"
+    assert "not configured" not in rows[0].detail
+
+
+def test_a_dead_ollama_an_instance_actually_uses_is_a_failure_not_a_skip(monkeypatch) -> None:
+    """The commonest install: every Ollama setting on its default AND the fleet
+    routing a tier through it. A skip there leaves `recommended_failed` at 0 and
+    the Helm banner green during an embedding outage -- and calls a completed,
+    failed probe "could not run", which is not what the word means here."""
+    _ollama_in_the_fleet(monkeypatch)
+    ctx = make_ctx(http_fetch=fake_http({}))
+    rows = _run(model_checks.CHECKS, "ollama.reachable", ctx)
+
+    assert rows[0].status == "fail"
+    assert "not configured" not in rows[0].detail
+    assert ctx.http_fetch.calls  # type: ignore[union-attr]
+
+
+def test_a_skip_never_describes_a_probe_that_ran(monkeypatch) -> None:
+    """`model.py` defines skip as "a check that could not run". A failed probe
+    ran."""
+    _no_ollama_in_the_fleet(monkeypatch)
+    ctx = make_ctx(http_fetch=fake_http({}))
+    rows = _run(model_checks.CHECKS, "ollama.reachable", ctx)
+    assert rows[0].status == "skip"
+    assert "did not answer" not in rows[0].detail
+
+
+def test_ollama_passes_when_tags_answers(monkeypatch) -> None:
+    """An instance that uses Ollama, with a server that answers."""
+    _ollama_in_the_fleet(monkeypatch)
     ctx = make_ctx(
         http_fetch=fake_http({"http://127.0.0.1:11434/api/tags": HttpResponse(status=200)})
     )
@@ -276,9 +381,10 @@ def test_ollama_passes_when_tags_answers() -> None:
     assert rows[0].status == "pass"
 
 
-def test_ollama_failure_is_recommended_not_required(settings) -> None:
+def test_ollama_failure_is_recommended_not_required(monkeypatch, settings) -> None:
     check = next(item for item in model_checks.CHECKS if item.id == "ollama.reachable")
     assert check.severity == "recommended"
+    _no_ollama_in_the_fleet(monkeypatch)
     settings(ROBOTHOR_OLLAMA_URL="http://ollama.example.test:11434")
     ctx = make_ctx(http_fetch=fake_http({}))
     assert _run(model_checks.CHECKS, "ollama.reachable", ctx)[0].status == "fail"
