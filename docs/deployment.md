@@ -269,14 +269,17 @@ ollama pull Qwen3-Reranker-0.6B:F16
 
 `genus doctor` is the single answer to "is this instance actually working?".
 It replaces `genus config validate`, which still works and now prints a
-deprecation note and runs the doctor.
+deprecation note and runs `genus doctor --offline` — the free checks only, so a
+runbook that still types it does not start spending provider budget. Its
+`--json` shape is the doctor's; see
+[Configuration](configuration.md#validate-is-now-an-alias-for-genus-doctor).
 
 ```bash
 genus doctor                        # everything, as a table
 genus doctor --json                 # the same report, machine-readable
 genus doctor --only db.migrations   # one check
 genus doctor --category secrets     # one category
-genus doctor --offline              # make no upstream call
+genus doctor --offline              # nothing that costs money, leaves the box, or forks
 genus doctor --fix                  # repair what can be repaired
 genus doctor --fix --dry-run        # say what --fix would repair
 ```
@@ -343,9 +346,18 @@ reported as a failure and the run continues.
 
 ### From the dashboard
 
-`GET /api/doctor` on the bridge serves the same report as `--json`, gated on
-the operator role. Its `status` and `checks` keys mirror the readiness contract
-so the Helm's Health view renders either payload.
+`GET /api/doctor` on the bridge serves the same report as `--json --offline`,
+gated on the operator role. Its `status` and `checks` keys mirror the readiness
+contract so the Helm's Health view renders either payload.
+
+It runs **offline** and under a 30-second budget for the whole run, on top of
+the per-check five seconds. This is what a Health panel polls: online, every
+refresh would make a paid completion through the fleet's default model, a call
+to Telegram and a fork of the host script, so two operator tabs at 30-second
+intervals would be thousands of provider calls a day caused by a dashboard.
+The three checks that cost money, leave the box or fork report themselves
+`skip` with the reason; run the CLI for those. Checks the total budget does not
+reach are reported as **not run**, never as passing.
 
 ## Health Endpoints
 
