@@ -3,9 +3,11 @@
 # operator if it fails.
 # Usage: cron-wrapper.sh <command> [args...]
 #
-# Sources /run/robothor/secrets.env (decrypted by systemd or previous cron).
+# Sources /run/robothor/secrets.env (written by systemd or a previous cron run).
 # If the file doesn't exist yet (e.g., after a reboot before services start),
-# runs decrypt-secrets.sh to create it.
+# runs load-secrets.sh to create it — the backend dispatcher, not
+# decrypt-secrets.sh directly, so a cron job on an instance that does not use
+# SOPS recovers its secrets too instead of running without them.
 #
 # On a non-zero exit of the wrapped command the wrapper pages via
 # send_failure_alert.sh (same Telegram path as the systemd OnFailure hook,
@@ -57,10 +59,10 @@ require_tools dirname
 
 SECRETS_ENV="${ROBOTHOR_SECRETS_FILE:-/run/robothor/secrets.env}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DECRYPT_SCRIPT="${SCRIPT_DIR}/decrypt-secrets.sh"
+LOAD_SECRETS_SCRIPT="${SCRIPT_DIR}/load-secrets.sh"
 
 if [ ! -f "$SECRETS_ENV" ]; then
-    "$DECRYPT_SCRIPT" 2>/dev/null || true
+    "$LOAD_SECRETS_SCRIPT" >/dev/null 2>&1 || true
 fi
 
 if [ -f "$SECRETS_ENV" ]; then

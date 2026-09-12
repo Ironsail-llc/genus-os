@@ -40,7 +40,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-351 settings in 13 groups.
+354 settings in 13 groups.
 
 ## paths
 
@@ -343,6 +343,9 @@ Secret material that belongs to no single service.
 | --- | --- | --- | --- | --- | --- | --- |
 | `ROBOTHOR_ENV_FILE` | str | `/etc/robothor/robothor.env` | `robothor-engine`, `robothor-bridge` | no | legacy | The EnvironmentFile systemd loads secrets from. It is instance data, never in git; the path is what the platform declares. |
 | `ROBOTHOR_INTENT_HMAC_SECRET` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | legacy | Key that signs memory intents so a stored intent cannot be forged. Signing raises rather than falling back when it is unset. |
+| `ROBOTHOR_SECRETS_BACKEND` | str | _(empty)_ | `robothor-secrets`, `robothor-engine`, `robothor-bridge`, `robothor-app`, `robothor-orchestrator` | no | 1.70.0 | Where scripts/load-secrets.sh gets this instance's credentials: `sops` (decrypt /etc/robothor/secrets.enc.json with the age key), `file` (a plaintext file the operator manages, mode 0600 or 0400), or `env` (they are already in the unit environment, so an empty secrets.env is written). Empty means auto-detect: sops if an encrypted store exists, else file if one exists, else env. SOPS is therefore opt-in rather than a precondition for starting. |
+| `ROBOTHOR_SECRETS_BACKEND_FILE` | str | `/etc/robothor/secrets.env` | `robothor-secrets`, `robothor-engine`, `robothor-bridge`, `robothor-app`, `robothor-orchestrator` | no | 1.70.0 | Plaintext KEY=VALUE file the `file` backend reads and copies to /run/robothor/secrets.env. Refused unless it is a regular file of mode 0600 or 0400 owned by root or by the service account. Distinct from ROBOTHOR_SECRETS_FILE, which names the tmpfs file every consumer READS -- one is the input, the other the output. |
+| `ROBOTHOR_SECRETS_ROOT` | str | _(empty)_ | no | no | 1.70.0 | Filesystem prefix load-secrets.sh and decrypt-secrets.sh apply to /etc/robothor and /run/robothor. A test seam, the same idea as install-units.sh --root: it lets the suite exercise every backend for real without root. Empty -- the only value a unit ever supplies -- means the real paths. |
 
 ## substrate
 

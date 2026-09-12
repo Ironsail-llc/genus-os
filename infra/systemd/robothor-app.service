@@ -22,7 +22,7 @@ Type=simple
 User=robothor
 Group=robothor
 WorkingDirectory=/opt/robothor/app
-ExecStartPre=/opt/robothor/scripts/decrypt-secrets.sh
+ExecStartPre=/opt/robothor/scripts/load-secrets.sh
 # Next standalone output does not include static assets — stage them in.
 # -T: treat the destination as a normal file. `cp -r SRC DST` where DST already
 # exists copies INTO it, so this was creating .next/standalone/public/public and
