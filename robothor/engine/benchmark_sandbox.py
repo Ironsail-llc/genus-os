@@ -182,6 +182,22 @@ MEMORY_WRITE_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+#: Tools that a benchmark child KEEPS even though their handler reaches a
+#: durable write, because the write is refused at the boundary instead.
+#:
+#: ``search_memory`` is a read the suites genuinely need, and it writes one
+#: ``fact_access_log`` row per consulted fact — rows that are the only input to
+#: ``fact_access_rollup`` and hence to the memory decay scorer. Denying the tool
+#: would break the suites; letting the write through seeded the production
+#: decay scorer from ~220 graded runs. So the tool stays and
+#: ``robothor.memory.outcomes`` asks the boundary, exactly like ``facts`` and
+#: ``blocks`` do.
+#:
+#: This set is an EXCEPTION LIST and it is load-bearing: the derivation test
+#: subtracts it, so an entry added here silently re-opens a write path. Nothing
+#: belongs here unless its write is guarded AND that guard has its own test.
+BOUNDARY_GUARDED_TOOLS: frozenset[str] = frozenset({"search_memory"})
+
 #: CRM writes that are safe *only* because every row they touch lives in the
 #: sandbox tenant and is deleted when the task ends. Deliberately excludes every
 #: delete and merge: they are irreversible, and refusing to delete is what the

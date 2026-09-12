@@ -51,6 +51,19 @@ def log_fact_access(
     if not run_id or not fact_ids:
         return
     tid = tenant_id or DEFAULT_TENANT
+
+    # A read tool that writes is still a write. ``search_memory`` is allowed to
+    # a benchmark child in BOTH sandbox modes, and it lands here once per fact
+    # it consulted — so ~220 graded runs each seeded this table under the
+    # production tenant. These rows are the only input to fact_access_rollup
+    # and so to the decay scorer, and they are what bump_failure_for_run joins
+    # against to decrement confidence on real facts. Skipped, never raised: the
+    # contract above says best-effort, and the caller is a retrieval.
+    from robothor.engine.run_context import benchmark_write_refused
+
+    if benchmark_write_refused(tid, what="log_fact_access"):
+        return
+
     try:
         from psycopg2.extras import execute_values
 
@@ -82,6 +95,13 @@ def bump_failure_for_run(
     """
     tid = tenant_id or DEFAULT_TENANT
     if not run_id:
+        return {"facts_touched": 0, "facts_confidence_dropped": 0}
+
+    # The damaging half of the pair: this UPDATEs memory_facts.confidence on
+    # rows a benchmark run merely READ. See log_fact_access above.
+    from robothor.engine.run_context import benchmark_write_refused
+
+    if benchmark_write_refused(tid, what="bump_failure_for_run"):
         return {"facts_touched": 0, "facts_confidence_dropped": 0}
 
     with get_connection() as conn:
