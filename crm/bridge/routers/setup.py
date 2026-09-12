@@ -229,14 +229,16 @@ async def detect(request: Request, _gated: Gate, _claim: Claim) -> dict[str, Any
     is missing, and that is a map for anyone who should not have it. The strip
     at the top of the wizard needs an id and a word.
     """
-    providers, ollama, telegram, checks = await asyncio.gather(
+    providers, ollama, telegram, checks, models = await asyncio.gather(
         asyncio.to_thread(_provider_state),
         asyncio.to_thread(_ollama_state),
         asyncio.to_thread(_telegram_configured),
         asyncio.to_thread(_required_check_rows),
+        _model_catalog(),
     )
     return {
         "providers": providers,
+        "models": models,
         "ollama": ollama,
         "telegram": {"configured": telegram},
         "doctor": {"checks": checks},
@@ -665,6 +667,33 @@ def _ollama_state() -> dict[str, Any]:
         if "tools" in (shown.get("capabilities") or []):
             tool_models.append(name)
     return {"reachable": True, "tool_models": tool_models}
+
+
+async def _model_catalog() -> list[dict[str, str]]:
+    """Model ids the engine can route to, so the wizard can offer a list.
+
+    ``GET /api/models`` is operator-gated, and the caller here has no session
+    by definition, so the catalogue comes through this route instead. Nothing
+    in it is a secret: ids and their provider, which is what a ``<select>``
+    needs.
+
+    Best effort. An engine that is down or still starting on a fresh box is the
+    normal case at this point in an install, and it must degrade to a free-text
+    model field rather than blocking the whole detect call.
+    """
+    from routers._engine_client import engine_request
+
+    try:
+        status, body = await engine_request("GET", "/api/admin/models")
+    except Exception:  # noqa: BLE001 - no engine yet is the common first-run case
+        return []
+    if status >= 400 or not isinstance(body, dict):
+        return []
+    return [
+        {"id": str(entry.get("id")), "provider": str(entry.get("provider") or "")}
+        for entry in body.get("models", [])
+        if entry.get("id")
+    ]
 
 
 def _telegram_configured() -> bool:

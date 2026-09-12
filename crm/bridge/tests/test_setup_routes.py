@@ -321,6 +321,21 @@ class TestDetect:
             lambda: [{"id": "db.connect", "status": "pass"}],
         )
 
+        async def catalog():
+            return [{"id": "openrouter/openai/gpt-5.4", "provider": "openrouter"}]
+
+        monkeypatch.setattr(setup_router, "_model_catalog", catalog)
+
+    async def test_offers_the_model_catalogue(self, test_client, claim, workspace):
+        """`GET /api/models` is operator-gated and this caller has no session,
+        so the ids the wizard's select needs come through here. Nothing in the
+        list is a secret."""
+        response = await test_client.get("/api/setup/detect", headers=_auth(claim))
+
+        assert response.json()["models"] == [
+            {"id": "openrouter/openai/gpt-5.4", "provider": "openrouter"}
+        ]
+
     async def test_reports_what_the_box_already_has(self, test_client, claim, workspace):
         response = await test_client.get("/api/setup/detect", headers=_auth(claim))
 
