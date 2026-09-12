@@ -339,20 +339,12 @@ def test_no_subcommand_prints_usage(capsys) -> None:
 # ── the shared connectivity checks ───────────────────────────────────────────
 
 
-def test_required_env_no_longer_demands_telegram(monkeypatch) -> None:
-    """A Telegram-free deploy is supported, so it must not fail a check.
-
-    The daemon has always started without a bot token -- agents with
-    ``delivery: none`` talk through CRM tasks -- but validate() demanded one,
-    so every such instance failed two checks it could never pass. Telegram is
-    checked by the doctor's ``telegram.token``: absent is information,
-    misconfigured is an error.
-    """
-    from robothor.config import required_env_checks
-
-    names = {name for name, _ok, _detail in required_env_checks()}
-    assert not [name for name in names if "TELEGRAM" in name]
-    assert "env:OPENROUTER_API_KEY" in names
+# ``required_env_checks`` is gone with the rest of ``robothor.config.validate``'s
+# probe body. What its test held down -- a Telegram-free deploy must not fail a
+# check it can never pass, and a missing provider key must fail one -- is now
+# ``robothor/doctor/tests/test_checks_runtime.py``:
+# ``test_telegram_absent_is_a_skip_not_a_failure`` and
+# ``test_provider_keys_fails_with_nothing_configured``.
 
 
 def test_explain_a_governed_flag_does_not_ask_for_a_restart(capsys) -> None:
