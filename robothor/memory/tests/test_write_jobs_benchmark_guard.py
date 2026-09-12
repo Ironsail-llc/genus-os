@@ -157,3 +157,109 @@ class TestStoreFactsBatch:
             )
         assert ids == [1]
         assert seen == [_SANDBOX]
+
+
+class TestFactAccessLog:
+    """``search_memory`` is allowed to a benchmark child in BOTH modes, and it
+    writes a ``fact_access_log`` row per consulted fact.
+
+    Those rows are the only input to ``fact_access_rollup`` and so to the
+    memory decay scorer, and they are what ``bump_failure_for_run`` joins
+    against to decrement ``confidence`` on real facts. A read tool that writes
+    is still a write, and the runbook's headline rule — "a benchmark run may
+    write exactly one tenant" — was false while this one was unguarded.
+    """
+
+    def test_a_benchmark_child_logs_no_access_against_a_production_tenant(
+        self, monkeypatch: Any
+    ) -> None:
+        """Counted, not raised. ``log_fact_access`` swallows every exception by
+        contract, so a probe that raises inside it proves nothing — it would
+        pass against a completely unguarded function."""
+        import robothor.memory.outcomes as outcomes
+
+        opened = 0
+
+        class _Ctx:
+            def __enter__(self) -> MagicMock:
+                nonlocal opened
+                opened += 1
+                conn = MagicMock()
+                conn.cursor.return_value = MagicMock()
+                return conn
+
+            def __exit__(self, *_a: Any) -> bool:
+                return False
+
+        monkeypatch.setattr(outcomes, "get_connection", lambda: _Ctx())
+        monkeypatch.setattr("psycopg2.extras.execute_values", lambda *a, **kw: None)
+        with benchmark_run_scope(True, agent_id="a", run_id="r"):
+            outcomes.log_fact_access("run-1", [1, 2, 3], tenant_id=_PRODUCTION)
+        assert opened == 0, "the refused access log still reached the database"
+
+    def test_it_never_raises_into_the_read_that_called_it(self) -> None:
+        """log_fact_access is best-effort by contract: search_memory must
+        return its results whatever the logger does."""
+        import robothor.memory.outcomes as outcomes
+
+        with benchmark_run_scope(True, agent_id="a", run_id="r"):
+            assert outcomes.log_fact_access("run-1", [1], tenant_id=_PRODUCTION) is None
+
+    def test_the_sandbox_tenant_still_logs(self, monkeypatch: Any) -> None:
+        import robothor.memory.outcomes as outcomes
+
+        opened = False
+
+        class _Ctx:
+            def __enter__(self) -> MagicMock:
+                nonlocal opened
+                opened = True
+                conn = MagicMock()
+                conn.cursor.return_value = MagicMock()
+                return conn
+
+            def __exit__(self, *_a: Any) -> bool:
+                return False
+
+        monkeypatch.setattr(outcomes, "get_connection", lambda: _Ctx())
+        monkeypatch.setattr("psycopg2.extras.execute_values", lambda *a, **kw: None)
+        with benchmark_run_scope(True, agent_id="a", run_id="r"):
+            outcomes.log_fact_access("run-1", [1], tenant_id=_SANDBOX)
+        assert opened is True
+
+    def test_bump_failure_for_run_is_guarded_too(self, monkeypatch: Any) -> None:
+        """It UPDATEs memory_facts.confidence on production rows, keyed off the
+        access log — the more damaging half of the same pair."""
+        import robothor.memory.outcomes as outcomes
+
+        def _no_database() -> Any:
+            raise AssertionError("bump_failure_for_run opened a connection")
+
+        monkeypatch.setattr(outcomes, "get_connection", _no_database)
+        with benchmark_run_scope(True, agent_id="a", run_id="r"):
+            result = outcomes.bump_failure_for_run("run-1", tenant_id=_PRODUCTION)
+        assert result == {"facts_touched": 0, "facts_confidence_dropped": 0}
+
+    def test_outside_a_benchmark_run_both_still_write(self, monkeypatch: Any) -> None:
+        import robothor.memory.outcomes as outcomes
+
+        opened = 0
+
+        class _Ctx:
+            def __enter__(self) -> MagicMock:
+                nonlocal opened
+                opened += 1
+                conn = MagicMock()
+                cur = MagicMock()
+                cur.rowcount = 2
+                conn.cursor.return_value = cur
+                return conn
+
+            def __exit__(self, *_a: Any) -> bool:
+                return False
+
+        monkeypatch.setattr(outcomes, "get_connection", lambda: _Ctx())
+        monkeypatch.setattr("psycopg2.extras.execute_values", lambda *a, **kw: None)
+        outcomes.log_fact_access("run-1", [1], tenant_id=_PRODUCTION)
+        assert outcomes.bump_failure_for_run("run-1", tenant_id=_PRODUCTION)["facts_touched"] == 2
+        assert opened == 2
