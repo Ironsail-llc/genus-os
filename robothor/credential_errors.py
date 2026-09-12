@@ -45,6 +45,14 @@ CREDENTIAL_BODY_PATHS: tuple[re.Pattern[str], ...] = (
     # routes hand-parse their bodies precisely because of that echo; this covers
     # the older ones, and anything added under the prefix later.
     re.compile(r"^/api/auth(?:/|$)"),
+    # First-run setup. Its bodies carry the setup token, the operator's
+    # password, a provider key and a bot token — four of the appliance's five
+    # credential shapes, all arriving on routes that answer an UNAUTHENTICATED
+    # caller. The handlers parse by hand so no pydantic 422 should reach the
+    # default handler at all; this is the backstop for the day one of them
+    # grows a request model, which is exactly how `/api/auth/refresh` came to
+    # echo a live refresh token.
+    re.compile(r"^/api/setup(?:/|$)"),
 )
 
 #: Validation-error members that can hold a fragment of the request.

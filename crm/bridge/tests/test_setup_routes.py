@@ -1037,6 +1037,21 @@ class TestNotProxiedWithASession:
 # ── middleware ───────────────────────────────────────────────────────
 
 
+class TestValidationErrorsDoNotEcho:
+    def test_the_setup_prefix_is_a_credential_path(self):
+        """These bodies carry the setup token, the operator's password, a
+        provider key and a bot token — and they arrive from an unauthenticated
+        caller. The handlers parse by hand so no pydantic 422 should reach the
+        default handler; this is the backstop for the day one of them grows a
+        request model, which is exactly how `/api/auth/refresh` came to echo a
+        live refresh token back to the browser."""
+        from robothor.credential_errors import carries_credentials
+
+        assert carries_credentials("/api/setup")
+        assert carries_credentials("/api/setup/operator")
+        assert not carries_credentials("/api/setup-something-else")
+
+
 class TestMiddleware:
     def test_only_the_setup_router_lives_under_the_setup_prefix(self):
         """The auth middleware lets `/api/setup/*` past without a session, so
