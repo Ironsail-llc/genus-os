@@ -12,9 +12,10 @@ its own JWT).
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import os
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, TypeAlias
 
 from robothor.settings import get_settings
 
@@ -282,6 +283,9 @@ _NOT_FOUND = JSONResponse({"error": "Not found"}, status_code=404)
 _UNAUTHORIZED = JSONResponse({"error": local_login.GENERIC_FAILURE}, status_code=401)
 _THROTTLED = JSONResponse({"error": "too many attempts"}, status_code=429)
 _BAD_REQUEST = JSONResponse({"error": "invalid request"}, status_code=422)
+# Fixed string, like every other refusal here: a size complaint must not quote
+# the body it is complaining about.
+_TOO_LARGE = JSONResponse({"error": "request too large"}, status_code=413)
 _SERVICE_REFUSED = JSONResponse(
     {"error": "service credentials cannot manage human credentials"}, status_code=403
 )
@@ -292,9 +296,42 @@ _WEAK_PASSWORD = JSONResponse(
 )
 
 
+class BodyTooLarge:
+    """Sentinel: the request body exceeded ``MAX_CREDENTIAL_BODY_BYTES``.
+
+    A distinct value rather than ``None`` so the handlers can answer 413 instead
+    of folding an oversized body into the same 422 as a malformed one — and so
+    the refusal can be made before the bytes are deserialised at all.
+    """
+
+    __slots__ = ()
+
+
+BODY_TOO_LARGE = BodyTooLarge()
+
+
+async def _bounded_body(request: Request) -> bytes | None:
+    """Read at most ``MAX_CREDENTIAL_BODY_BYTES``, or None if there is more.
+
+    ``await request.json()`` buffers whatever arrives first and only then are
+    the field ceilings applied, so a single large POST was a cheaper memory
+    lever than argon2 — and a chunked request declares no ``Content-Length`` to
+    refuse it by, so the read itself has to stop.
+    """
+    cap = local_login.MAX_CREDENTIAL_BODY_BYTES
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > cap:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def credential_body(
     required: tuple[str, ...], optional: tuple[str, ...] = ()
-) -> Callable[[Request], Awaitable[dict[str, str] | None]]:
+) -> Callable[[Request], Awaitable[dict[str, str] | BodyTooLarge | None]]:
     """A dependency that parses a credential-bearing JSON body WITHOUT pydantic.
 
     FastAPI serializes pydantic's ``input`` field into its 422 response, and
@@ -311,15 +348,27 @@ def credential_body(
     which is where argon2 and psycopg2 belong — see
     ``test_only_genuinely_async_routes_run_on_the_event_loop``.
 
-    Returns ``None`` for anything malformed; the caller turns that into its own
-    no-echo refusal.
+    Returns ``None`` for anything malformed and ``BODY_TOO_LARGE`` for a body
+    over the cap; the caller turns those into its own no-echo refusals.
     """
 
     allowed = set(required) | set(optional)
 
-    async def parse(request: Request) -> dict[str, str] | None:
+    async def parse(request: Request) -> dict[str, str] | BodyTooLarge | None:
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            # Cheapest possible refusal: from the header, before a byte of the
+            # body is read or parsed.
+            try:
+                if int(declared) > local_login.MAX_CREDENTIAL_BODY_BYTES:
+                    return BODY_TOO_LARGE
+            except ValueError:
+                return None
+        body = await _bounded_body(request)
+        if body is None:
+            return BODY_TOO_LARGE
         try:
-            raw = await request.json()
+            raw = json.loads(body)
         except Exception:
             return None
         if not isinstance(raw, dict) or set(raw) - allowed:
@@ -498,18 +547,17 @@ def auth_methods() -> dict[str, Any]:
     }
 
 
-_LoginBody = Annotated[
-    "dict[str, str] | None", Depends(credential_body(("email", "password"), ("code",)))
-]
+_Body: TypeAlias = "dict[str, str] | BodyTooLarge | None"
+_LoginBody = Annotated[_Body, Depends(credential_body(("email", "password"), ("code",)))]
 _PasswordBody = Annotated[
-    "dict[str, str] | None",
+    _Body,
     Depends(
         credential_body(("current_password", "new_password"), ("keep_refresh_token",)),
     ),
 ]
-_MfaCodeBody = Annotated["dict[str, str] | None", Depends(credential_body(("code",)))]
-_MfaDisableBody = Annotated["dict[str, str] | None", Depends(credential_body(("password", "code")))]
-_MfaEnrollBody = Annotated["dict[str, str] | None", Depends(credential_body(("password",)))]
+_MfaCodeBody = Annotated[_Body, Depends(credential_body(("code",)))]
+_MfaDisableBody = Annotated[_Body, Depends(credential_body(("password", "code")))]
+_MfaEnrollBody = Annotated[_Body, Depends(credential_body(("password",)))]
 
 
 @router.post("/login", response_model=None)
@@ -517,6 +565,13 @@ def local_login_route(body: _LoginBody, request: Request) -> dict[str, Any] | JS
     """Exchange an email + password (+ TOTP code) for bridge tokens."""
     if _local_login_off():
         return _NOT_FOUND
+    # The aggregate ceiling, keyed on the TCP peer and on this process — the
+    # only two quantities on this route that a caller cannot choose. Ahead of
+    # the body, the per-(email, IP) window, the account load and argon2.
+    if local_login.flood_limited(_peer_ip(request)):
+        return _THROTTLED
+    if isinstance(body, BodyTooLarge):
+        return _TOO_LARGE
     if body is None or not _credential_lengths_ok(body):
         return _BAD_REQUEST
     ip = _client_ip(request)
@@ -608,11 +663,18 @@ def change_password_route(body: _PasswordBody, request: Request) -> dict[str, An
     """Change the caller's own password. Requires the current one."""
     if _local_login_off():
         return _NOT_FOUND
+    # The aggregate ceiling, keyed on the TCP peer and on this process — the
+    # only two quantities on this route that a caller cannot choose. Ahead of
+    # the body, the per-(email, IP) window, the account load and argon2.
+    if local_login.flood_limited(_peer_ip(request)):
+        return _THROTTLED
     if _caller_is_service(request):
         return _SERVICE_REFUSED
     ctx = _verified_caller(request)
     if ctx is None:
         return JSONResponse({"error": "authentication required"}, status_code=401)
+    if isinstance(body, BodyTooLarge):
+        return _TOO_LARGE
     if body is None or not _credential_lengths_ok(body):
         return _BAD_REQUEST
     if len(body["new_password"]) < local_login.MIN_PASSWORD_LENGTH:
@@ -666,11 +728,18 @@ def mfa_enroll_route(body: _MfaEnrollBody, request: Request) -> dict[str, Any] |
     """
     if _local_login_off():
         return _NOT_FOUND
+    # The aggregate ceiling, keyed on the TCP peer and on this process — the
+    # only two quantities on this route that a caller cannot choose. Ahead of
+    # the body, the per-(email, IP) window, the account load and argon2.
+    if local_login.flood_limited(_peer_ip(request)):
+        return _THROTTLED
     if _caller_is_service(request):
         return _SERVICE_REFUSED
     ctx = _verified_caller(request)
     if ctx is None:
         return JSONResponse({"error": "authentication required"}, status_code=401)
+    if isinstance(body, BodyTooLarge):
+        return _TOO_LARGE
     if body is None or not _credential_lengths_ok(body):
         return _BAD_REQUEST
     if local_login.throttled(f"mfa:{ctx.user_id}", _client_ip(request)):
@@ -694,11 +763,18 @@ def mfa_confirm_route(body: _MfaCodeBody, request: Request) -> dict[str, Any] | 
     """Turn MFA on once the caller proves the pending secret arrived."""
     if _local_login_off():
         return _NOT_FOUND
+    # The aggregate ceiling, keyed on the TCP peer and on this process — the
+    # only two quantities on this route that a caller cannot choose. Ahead of
+    # the body, the per-(email, IP) window, the account load and argon2.
+    if local_login.flood_limited(_peer_ip(request)):
+        return _THROTTLED
     if _caller_is_service(request):
         return _SERVICE_REFUSED
     ctx = _verified_caller(request)
     if ctx is None:
         return JSONResponse({"error": "authentication required"}, status_code=401)
+    if isinstance(body, BodyTooLarge):
+        return _TOO_LARGE
     if body is None or not _credential_lengths_ok(body):
         return _BAD_REQUEST
     if local_login.throttled(f"mfa:{ctx.user_id}", _client_ip(request)):
@@ -720,11 +796,18 @@ def mfa_disable_route(body: _MfaDisableBody, request: Request) -> dict[str, Any]
     on its own cannot strip the second factor."""
     if _local_login_off():
         return _NOT_FOUND
+    # The aggregate ceiling, keyed on the TCP peer and on this process — the
+    # only two quantities on this route that a caller cannot choose. Ahead of
+    # the body, the per-(email, IP) window, the account load and argon2.
+    if local_login.flood_limited(_peer_ip(request)):
+        return _THROTTLED
     if _caller_is_service(request):
         return _SERVICE_REFUSED
     ctx = _verified_caller(request)
     if ctx is None:
         return JSONResponse({"error": "authentication required"}, status_code=401)
+    if isinstance(body, BodyTooLarge):
+        return _TOO_LARGE
     if body is None or not _credential_lengths_ok(body):
         return _BAD_REQUEST
     if local_login.throttled(f"mfa:{ctx.user_id}", _client_ip(request)):

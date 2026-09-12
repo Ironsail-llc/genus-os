@@ -58,6 +58,7 @@ __all__ = [
     "change_password",
     "confirm_enrollment",
     "disable_mfa",
+    "flood_limited",
     "local_login_enabled",
     "mfa_setup_required_for",
     "reset_mfa",
@@ -86,6 +87,37 @@ MIN_PASSWORD_LENGTH = 12
 # argon2 hashes whatever it is handed; a megabyte "password" is a free CPU
 # burn for an unauthenticated caller.
 MAX_PASSWORD_LENGTH = 1024
+
+# The whole request body on a credential route. The field ceilings above are
+# enforced AFTER the body is deserialised, so without this a single large POST
+# was a cheaper memory lever than argon2: 8 KiB is two orders of magnitude more
+# than the largest legitimate body (email + password + a six-digit code + a
+# 64-character refresh token).
+MAX_CREDENTIAL_BODY_BYTES = 8 * 1024
+
+# ── the aggregate ceiling ────────────────────────────────────────────
+# The (email, ip) window above constrains REPETITION of one pair, and both
+# halves of that key come from the caller: a fabricated email is a fresh quota,
+# and every request with an unseen email spends a full argon2id verification
+# (64 MiB, ~50 ms) on a PUBLIC route. 40 anyio worker threads × 64 MiB is a
+# 2.5 GiB, 160-thread lever on the process that mints every session in the
+# appliance, and the lockout cannot help: an unknown email is never counted.
+#
+# So: two buckets that do not depend on any caller-supplied value — the TCP
+# peer address, read before X-Client-IP is consulted, and a process-wide total.
+#
+# On the appliance the dashboard is usually the ONLY peer (it calls the bridge
+# server-side), so the per-peer bucket is in practice an appliance-wide ceiling
+# on credential attempts per minute. That is the intended trade: 30 refusals a
+# minute is a 429, while argon2 saturation is an outage of every sign-in method
+# at once. The global bucket is what still bounds a spray arriving from many
+# peers (a directly-exposed bridge, several proxies, a botnet).
+FLOOD_WINDOW_SECONDS = 60
+FLOOD_PEER_ATTEMPTS = 30
+FLOOD_GLOBAL_ATTEMPTS = 300
+# Peer addresses are caller-supplied when the bridge is directly exposed, so
+# this map is capped for the same reason _ATTEMPTS is.
+FLOOD_MAX_PEERS = 10_000
 
 _NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
@@ -194,10 +226,86 @@ _ATTEMPTS: dict[tuple[str, str], deque[float]] = {}
 _ATTEMPTS_LOCK = threading.Lock()
 
 
+_PEER_ATTEMPTS: dict[str, deque[float]] = {}
+_GLOBAL_ATTEMPTS: deque[float] = deque()
+_FLOOD_LOCK = threading.Lock()
+_flood_alarm_at: float = 0.0
+
+
 def reset_rate_limiter() -> None:
     """Forget every recorded attempt. For tests; production never calls it."""
+    global _flood_alarm_at
     with _ATTEMPTS_LOCK:
         _ATTEMPTS.clear()
+    with _FLOOD_LOCK:
+        _PEER_ATTEMPTS.clear()
+        _GLOBAL_ATTEMPTS.clear()
+        _flood_alarm_at = 0.0
+
+
+def flood_limited(peer: str | None) -> bool:
+    """Record one credential attempt from *peer* and say whether to refuse it.
+
+    The coarse ceiling in front of argon2 and the database, checked before the
+    per-(email, IP) window and before any account is loaded. *peer* must be the
+    address the TCP connection came from — ``request.client.host``, NOT the
+    forwarded ``X-Client-IP`` — or the one control that does not depend on a
+    caller-supplied value depends on a caller-supplied value.
+
+    Deliberately NOT audited per refusal: this fires exactly when request volume
+    IS the attack, so a row per refusal would turn a flood into a log
+    amplifier. It logs once per window instead, because a control that refuses
+    silently is indistinguishable from an outage.
+    """
+    global _flood_alarm_at
+
+    now = time.monotonic()
+    cutoff = now - FLOOD_WINDOW_SECONDS
+    key = peer or "-"
+
+    with _FLOOD_LOCK:
+        while _GLOBAL_ATTEMPTS and _GLOBAL_ATTEMPTS[0] < cutoff:
+            _GLOBAL_ATTEMPTS.popleft()
+
+        window = _PEER_ATTEMPTS.get(key)
+        if window is None:
+            if len(_PEER_ATTEMPTS) >= FLOOD_MAX_PEERS:
+                _prune_peers(cutoff)
+            window = _PEER_ATTEMPTS.setdefault(key, deque())
+        while window and window[0] < cutoff:
+            window.popleft()
+
+        over_peer = len(window) >= FLOOD_PEER_ATTEMPTS
+        if over_peer or len(_GLOBAL_ATTEMPTS) >= FLOOD_GLOBAL_ATTEMPTS:
+            alarm = now - _flood_alarm_at >= FLOOD_WINDOW_SECONDS
+            if alarm:
+                _flood_alarm_at = now
+            scope = "one peer" if over_peer else "this process"
+            if alarm:
+                # No peer address, no email, no body: identifiers only, and the
+                # scope is one of two literals.
+                logger.warning(
+                    "local login: credential requests from %s are over the aggregate "
+                    "limit and are being refused with 429",
+                    scope,
+                )
+            return True
+
+        window.append(now)
+        _GLOBAL_ATTEMPTS.append(now)
+        return False
+
+
+def _prune_peers(cutoff: float) -> None:
+    """Bound the peer map. Called with ``_FLOOD_LOCK`` held."""
+    for key, window in list(_PEER_ATTEMPTS.items()):
+        if not window or window[-1] < cutoff:
+            _PEER_ATTEMPTS.pop(key, None)
+    if len(_PEER_ATTEMPTS) >= FLOOD_MAX_PEERS:
+        snapshot = list(_PEER_ATTEMPTS)
+        snapshot.sort(key=lambda k: (_PEER_ATTEMPTS.get(k) or deque([float("-inf")]))[-1])
+        for key in snapshot[: FLOOD_MAX_PEERS // 10]:
+            _PEER_ATTEMPTS.pop(key, None)
 
 
 def throttled(key: str, ip: str | None) -> bool:

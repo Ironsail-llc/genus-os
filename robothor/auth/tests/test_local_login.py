@@ -775,3 +775,45 @@ def test_disabling_mfa_claims_the_step_before_stripping_the_factor() -> None:
     ):
         assert local_login.disable_mfa(USER_ID, GOOD_PASSWORD, totp.generate(secret)) is False
     clear.assert_not_called()
+
+
+# ── the aggregate ceiling ────────────────────────────────────────────
+
+
+def test_the_peer_bucket_refuses_past_its_limit(monkeypatch) -> None:
+    monkeypatch.setattr(local_login, "FLOOD_PEER_ATTEMPTS", 3)
+    for _ in range(3):
+        assert local_login.flood_limited("198.51.100.7") is False
+    assert local_login.flood_limited("198.51.100.7") is True
+    # A different peer still has its own quota.
+    assert local_login.flood_limited("198.51.100.8") is False
+
+
+def test_the_global_bucket_refuses_a_spray_across_many_peers(monkeypatch) -> None:
+    """Per-peer alone is a botnet away from useless, and the bridge is the one
+    process that mints every session for every sign-in method."""
+    monkeypatch.setattr(local_login, "FLOOD_PEER_ATTEMPTS", 1000)
+    monkeypatch.setattr(local_login, "FLOOD_GLOBAL_ATTEMPTS", 4)
+    for n in range(4):
+        assert local_login.flood_limited(f"198.51.100.{n}") is False
+    assert local_login.flood_limited("198.51.100.99") is True
+
+
+def test_a_refusal_is_not_charged_and_the_window_expires(monkeypatch) -> None:
+    """The window is a window: it must forgive, or one burst bans a peer forever."""
+    monkeypatch.setattr(local_login, "FLOOD_PEER_ATTEMPTS", 2)
+    monkeypatch.setattr(local_login, "FLOOD_WINDOW_SECONDS", 0.05)
+    assert local_login.flood_limited("198.51.100.7") is False
+    assert local_login.flood_limited("198.51.100.7") is False
+    assert local_login.flood_limited("198.51.100.7") is True
+    time.sleep(0.06)
+    assert local_login.flood_limited("198.51.100.7") is False
+
+
+def test_the_peer_map_does_not_grow_without_bound(monkeypatch) -> None:
+    """A directly-exposed bridge sees caller-chosen peer addresses."""
+    monkeypatch.setattr(local_login, "FLOOD_MAX_PEERS", 200)
+    monkeypatch.setattr(local_login, "FLOOD_GLOBAL_ATTEMPTS", 10**9)
+    for n in range(300):
+        local_login.flood_limited(f"10.2.{n // 256}.{n % 256}")
+    assert len(local_login._PEER_ATTEMPTS) <= 200

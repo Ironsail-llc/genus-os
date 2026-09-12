@@ -10,6 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from robothor.auth import local_login  # noqa: E402
 from robothor.auth.local_login import LoginResult  # noqa: E402
 
 SIGNING_KEY = "test-signing-key-at-least-32-bytes-long-xyz"
@@ -219,7 +220,10 @@ async def test_login_rejects_an_oversized_password_without_hashing(test_client):
         r = await test_client.post(
             "/api/auth/login", json={"email": "alice@example.com", "password": "x" * 100_000}
         )
-    assert r.status_code in (401, 422)
+    # 413 now: 100 KB is over MAX_CREDENTIAL_BODY_BYTES, so it is refused from
+    # the Content-Length header before the body is even deserialised. The
+    # invariant under test is the same — nothing reached argon2.
+    assert r.status_code in (401, 413, 422)
     auth.assert_not_called()
 
 
@@ -527,7 +531,8 @@ async def test_an_oversized_kept_token_is_refused_before_any_hashing(test_client
             },
             headers=_bearer(),
         )
-    assert r.status_code == 422
+    # 413 rather than 422 now — the body cap fires first — and still no hashing.
+    assert r.status_code in (413, 422)
     change.assert_not_called()
 
 
@@ -868,3 +873,139 @@ async def test_me_honours_the_owner_mfa_escape_hatch(test_client, monkeypatch):
     with patch("routers.auth.accounts.get_account_by_id", return_value=_owner_row()):
         r = await test_client.get("/api/auth/me", headers=_bearer())
     assert r.json()["mfa_setup_required"] is False
+
+
+# ── aggregate limits in front of argon2 ──────────────────────────────
+#
+# The per-(email, IP) window constrains REPETITION of one pair, and both halves
+# of the key come from the caller. Nothing constrained total volume, so every
+# request with an unseen email bought a full argon2id verification (64 MiB,
+# ~50 ms) on a public route, and ~800 of those per second is all it takes to
+# saturate the threadpool of the process that mints every session.
+
+
+@pytest.mark.asyncio
+async def test_a_flood_from_one_peer_is_refused_before_authentication(test_client, monkeypatch):
+    monkeypatch.setattr(local_login, "FLOOD_PEER_ATTEMPTS", 3)
+    monkeypatch.setattr(local_login, "FLOOD_GLOBAL_ATTEMPTS", 1000)
+    local_login.reset_rate_limiter()
+    with patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth:
+        for n in range(3):
+            r = await test_client.post(
+                "/api/auth/login",
+                json={"email": f"n{n}@example.com", "password": "x" * 12},
+            )
+            assert r.status_code == 401, n
+        r = await test_client.post(
+            "/api/auth/login", json={"email": "n99@example.com", "password": "x" * 12}
+        )
+    assert r.status_code == 429
+    assert r.json() == {"error": "too many attempts"}
+    # The refusal is AHEAD of the argon2 path, not after it.
+    assert auth.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_a_global_flood_is_refused_even_across_peers(test_client, monkeypatch):
+    """A per-peer bucket alone is a botnet away from useless."""
+    monkeypatch.setattr(local_login, "FLOOD_PEER_ATTEMPTS", 1000)
+    monkeypatch.setattr(local_login, "FLOOD_GLOBAL_ATTEMPTS", 2)
+    local_login.reset_rate_limiter()
+    with patch("routers.auth.local_login.authenticate", return_value=LoginResult()):
+        for _ in range(2):
+            r = await test_client.post(
+                "/api/auth/login", json={"email": "alice@example.com", "password": "x" * 12}
+            )
+            assert r.status_code == 401
+        r = await test_client.post(
+            "/api/auth/login", json={"email": "alice@example.com", "password": "x" * 12}
+        )
+    assert r.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_the_peer_bucket_ignores_the_forwarded_client_address(test_client, monkeypatch):
+    """Keyed on the TCP peer, BEFORE X-Client-IP is consulted.
+
+    Otherwise the one control that does not depend on a caller-supplied value
+    depends on a caller-supplied value.
+    """
+    monkeypatch.setenv("GENUS_TRUSTED_PROXIES", "127.0.0.1/32")
+    monkeypatch.setattr(local_login, "FLOOD_PEER_ATTEMPTS", 2)
+    local_login.reset_rate_limiter()
+    with patch("routers.auth.local_login.authenticate", return_value=LoginResult()):
+        for n in range(2):
+            r = await test_client.post(
+                "/api/auth/login",
+                json={"email": "alice@example.com", "password": "x" * 12},
+                headers={"X-Client-IP": f"198.51.100.{n}"},
+            )
+            assert r.status_code == 401
+        r = await test_client.post(
+            "/api/auth/login",
+            json={"email": "alice@example.com", "password": "x" * 12},
+            headers={"X-Client-IP": "198.51.100.9"},
+        )
+    assert r.status_code == 429
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/auth/login", {"email": "alice@example.com"}),
+        ("/api/auth/password", {"current_password": "x" * 12}),
+        ("/api/auth/mfa/enroll", {}),
+        ("/api/auth/mfa/confirm", {}),
+        ("/api/auth/mfa/disable", {"code": "123456"}),
+    ],
+)
+async def test_an_oversized_credential_body_is_refused(test_client, path, body):
+    """413 from the Content-Length header, before the body is deserialised.
+
+    MAX_PASSWORD_LENGTH was enforced only after ``await request.json()`` had
+    already buffered the whole thing, so a single large POST was a cheaper
+    memory lever than argon2 was.
+    """
+    payload = {**body, "password": "x" * (local_login.MAX_CREDENTIAL_BODY_BYTES + 1)}
+    r = await test_client.post(path, json=payload, headers=_bearer())
+    assert r.status_code == 413
+    assert r.json() == {"error": "request too large"}
+    assert "xxxx" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_body_with_no_content_length_is_refused(test_client):
+    """A chunked request declares no length, so the read itself must be bounded."""
+
+    async def chunks():
+        blob = b"x" * 4096
+        for _ in range(8):
+            yield blob
+
+    r = await test_client.post(
+        "/api/auth/login",
+        content=chunks(),
+        headers={"Content-Type": "application/json"},
+    )
+    assert r.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_a_bogus_content_length_is_refused_without_echoing_the_body(test_client):
+    r = await test_client.post(
+        "/api/auth/login",
+        content=b'{"email": "alice@example.com", "password": "hunter2-hunter2"}',
+        headers={"Content-Type": "application/json", "Content-Length": "not-a-number"},
+    )
+    assert r.status_code in (413, 422)
+    assert "hunter2" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_a_body_inside_the_cap_still_works(test_client):
+    with patch("routers.auth.local_login.authenticate", return_value=LoginResult()):
+        r = await test_client.post(
+            "/api/auth/login", json={"email": "alice@example.com", "password": "x" * 12}
+        )
+    assert r.status_code == 401
