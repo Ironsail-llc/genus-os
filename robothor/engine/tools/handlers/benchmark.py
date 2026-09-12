@@ -384,9 +384,31 @@ def _benchmark_tools_denied(
     from robothor.engine.benchmark_sandbox import benchmark_allowed_tools
 
     allowed = benchmark_allowed_tools(sandbox=sandbox)
-    denied = set(agent_tools_allowed or []) - allowed
+    denied = set(agent_tools_allowed or _every_registered_tool()) - allowed
     denied |= GOAL_TOOLS - allowed
     return sorted(denied)
+
+
+def _every_registered_tool() -> set[str]:
+    """Every tool name this instance registers.
+
+    The fallback when the graded agent's manifest lists no ``tools_allowed`` —
+    which means "everything", not "nothing". Subtracting the allow-list from an
+    EMPTY list produced an EMPTY deny-list, so the agents that restrict
+    themselves least were the ones the harness restricted least: a benchmark
+    child of such an agent was handed ``store_memory`` and every other write
+    the allow-list exists to withhold. Only the handler guards stood between a
+    graded run and production, and on 2026-09-12 one of the tools had no
+    handler guard.
+    """
+    try:
+        from robothor.api.mcp import get_tool_definitions
+        from robothor.engine.tools.schemas import get_engine_schemas
+
+        return {d["name"] for d in get_tool_definitions()} | set(get_engine_schemas())
+    except Exception:  # noqa: BLE001 - a deny-list is not worth failing a suite over
+        logger.warning("benchmark: could not enumerate registered tools for the deny-list")
+        return set()
 
 
 def _resolve_model_tier(model_primary: str) -> str:
@@ -1314,35 +1336,50 @@ async def _execute_task_run(
 ) -> Any:
     """Run one benchmark task, tenant-scoped to the sandbox when seeded.
 
-    Two layers, because one is not enough. ``runner.execute(tenant_id=…)`` is
-    what the CRM DAL reads for its WHERE clauses; ``tenant_scope`` binds
+    Three layers, because two were not enough. ``runner.execute(tenant_id=…)``
+    is what the CRM DAL reads for its WHERE clauses; ``tenant_scope`` binds
     ``app.tenant_id`` on every connection taken inside the block, which is what
     row-level security enforces at the database. Without the second, a
     sandbox-tenant INSERT is refused by the RLS ``WITH CHECK`` clause the moment
     ``ROBOTHOR_RLS_ENABLED`` is on.
+
+    The third is ``benchmark_run_scope``, and it is the one that covers the
+    ``seeded is None`` branch — the branch that runs under the AGENT's own
+    tenant whenever the sandbox is off or the suite declares no fixtures.
+    Nothing bound that branch to anything before 2026-09-12, which is how a
+    fixture person reached production memory. The scope makes every durable
+    memory write inside the child refuse any tenant but the sandbox, and it
+    restores the previous marker on the way out so the benchmark runner's own
+    writes are unaffected.
     """
-    if seeded is None:
-        return await runner.execute(
-            agent_id=agent_id,
-            message=prompt,
-            trigger_type=TriggerType.SUB_AGENT,
-            trigger_detail=trigger_detail,
-            agent_config=child_config,
-            spawn_context=spawn_context,
-        )
+    from robothor.engine.run_context import benchmark_run_scope
 
-    from robothor.db.connection import tenant_scope
+    # run_id is left empty here and refined by the runner the moment the child's
+    # row exists; the marker has to be bound before `execute` is entered, and
+    # the id does not exist until it has been.
+    with benchmark_run_scope(True, agent_id=agent_id):
+        if seeded is None:
+            return await runner.execute(
+                agent_id=agent_id,
+                message=prompt,
+                trigger_type=TriggerType.SUB_AGENT,
+                trigger_detail=trigger_detail,
+                agent_config=child_config,
+                spawn_context=spawn_context,
+            )
 
-    with tenant_scope(seeded.tenant_id):
-        return await runner.execute(
-            agent_id=agent_id,
-            message=prompt,
-            trigger_type=TriggerType.SUB_AGENT,
-            trigger_detail=trigger_detail,
-            agent_config=child_config,
-            spawn_context=spawn_context,
-            tenant_id=seeded.tenant_id,
-        )
+        from robothor.db.connection import tenant_scope
+
+        with tenant_scope(seeded.tenant_id):
+            return await runner.execute(
+                agent_id=agent_id,
+                message=prompt,
+                trigger_type=TriggerType.SUB_AGENT,
+                trigger_detail=trigger_detail,
+                agent_config=child_config,
+                spawn_context=spawn_context,
+                tenant_id=seeded.tenant_id,
+            )
 
 
 def _run_task_state_checks(

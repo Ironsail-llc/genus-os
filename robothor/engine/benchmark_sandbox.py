@@ -32,7 +32,14 @@ Deletes and merges are excluded too: they are irreversible, and "never deletes"
 is precisely what the hygiene suite is supposed to be measuring.
 
 Rollout: ``ROBOTHOR_BENCHMARK_SANDBOX_ENABLED`` + ``…_MODE``
-(off → observe → alert → enforce). ``off`` is byte-for-byte today's behaviour.
+(off → observe → alert → enforce).
+
+``off`` seeds nothing and scopes nothing — the graded child runs under the
+graded AGENT's tenant. It was described as "read-only"; on 2026-09-12 that
+turned out to be a description rather than a control, and a fixture person
+reached production memory through a path no tool guard covered. Every durable
+write from a benchmark run is now refused at the write itself unless the tenant
+is this module's sandbox — see :mod:`robothor.engine.run_context`.
 """
 
 from __future__ import annotations
@@ -131,12 +138,47 @@ EXTERNAL_SIDE_EFFECT_TOOLS: frozenset[str] = frozenset(
         "desktop_screenshot",
         "enroll_face",
         "speak",
-        # Durable agent state outside the sandbox tenant.
+        # Durable agent state outside the sandbox tenant. See
+        # MEMORY_WRITE_TOOLS below for why these are here and not in
+        # SANDBOX_WRITE_TOOLS.
         "store_memory",
         "memory_block_write",
         "append_to_block",
+        "record_resolution",
+        "leave_breadcrumb",
+        "record_procedure",
+        "report_procedure_outcome",
+        "log_interaction",
         "vault_put",
         "vault_delete",
+    }
+)
+
+#: Tools whose handler reaches a durable memory write — ``memory_facts``,
+#: ``agent_memory_blocks``, the memory write-job queue, or the contact timeline
+#: that feeds them. Named as a set rather than left implicit because
+#: ``test_benchmark_isolation`` DERIVES the same set from the handler sources
+#: and fails when the two disagree: on 2026-09-12 a benchmark child's fixture
+#: person became 25 production ``memory_facts`` rows, and a real agent read
+#: them back as established fact for eleven days.
+#:
+#: Every member is in :data:`EXTERNAL_SIDE_EFFECT_TOOLS`, so these stay denied
+#: in EVERY sandbox mode rather than being re-allowed in the sandbox tenant the
+#: way the CRM writes are. Two reasons. Memory has no teardown: the sweep in
+#: :func:`teardown_sandbox` clears CRM tables, so a fact written under the
+#: sandbox tenant would outlive the task and be recalled by the next night's
+#: run — self-reinforcing benchmark fiction, which is the original defect with
+#: a smaller blast radius rather than a fixed one. And no suite grades a memory
+#: write, so allowing them buys nothing measurable.
+MEMORY_WRITE_TOOLS: frozenset[str] = frozenset(
+    {
+        "store_memory",
+        "memory_block_write",
+        "append_to_block",
+        "record_resolution",
+        "leave_breadcrumb",
+        "record_procedure",
+        "report_procedure_outcome",
     }
 )
 
