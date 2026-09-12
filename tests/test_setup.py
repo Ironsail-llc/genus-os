@@ -387,6 +387,7 @@ class TestIdentityEnvVars:
         """With --yes, identity should come from env vars."""
         workspace = tmp_path / "robothor"
         monkeypatch.setenv("ROBOTHOR_OWNER_NAME", "Alice")
+        monkeypatch.setenv("ROBOTHOR_OWNER_EMAIL", "alice@example.com")
         monkeypatch.setenv("ROBOTHOR_AI_NAME", "Jarvis")
         # owner.yaml is written under the HOME of the account running init;
         # pin it so a test can never touch the developer's own identity file.
