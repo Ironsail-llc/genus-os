@@ -971,3 +971,24 @@ def test_installs_the_privileged_helper_and_tmpfiles_conf(tmp_path: Path):
     assert rows, f"no tmpfiles row installed:\n{conf.read_text()}"
     fields = rows[0]
     assert fields[3] == USER and fields[4] == USER, f"unrendered account: {fields}"
+
+
+def test_every_unit_runs_python_from_the_workspace_venv():
+    """One interpreter per workspace.
+
+    The bridge unit once pointed at ``crm/bridge/venv``, a second venv nobody
+    provisions from the lockfile; the bridge imports the platform package, so
+    every new core dependency (pydantic-settings, argon2) was missing there
+    until a request reached the import and the unit crash-looped. Any unit
+    that runs Python runs the workspace venv's interpreter.
+    """
+    offenders = []
+    for unit in sorted(UNIT_DIR.glob("robothor-*.service")):
+        for line in unit.read_text().splitlines():
+            if not line.startswith("ExecStart"):
+                continue
+            if "python" in line and "/opt/robothor/venv/bin/python" not in line:
+                offenders.append(f"{unit.name}: {line}")
+    assert not offenders, "units running a Python other than the workspace venv:\n" + "\n".join(
+        offenders
+    )

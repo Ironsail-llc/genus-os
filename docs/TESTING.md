@@ -342,7 +342,7 @@ The flows themselves are still the gap:
 pytest -m "not slow and not llm and not e2e"
 
 # Bridge tests only
-cd ~/robothor && crm/bridge/venv/bin/pytest crm/bridge/tests/ -v
+cd ~/robothor && venv/bin/pytest crm/bridge/tests/ -v
 
 # Memory system tests (uses its own venv)
 cd ~/robothor/brain/memory_system && ./run_tests.sh

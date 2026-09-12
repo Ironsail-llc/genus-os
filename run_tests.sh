@@ -120,7 +120,10 @@ if [ -n "$MARK_EXPR" ]; then
     echo "  Filter: $MARK_EXPR"
 fi
 
-BRIDGE_VENV="$ROOT/crm/bridge/venv/bin"
+# The bridge runs from the workspace venv (see infra/systemd/robothor-bridge.service);
+# a legacy nested crm/bridge/venv is honoured only if the workspace venv is absent.
+BRIDGE_VENV="$ROOT/venv/bin"
+[ -x "$BRIDGE_VENV/pytest" ] || BRIDGE_VENV="$ROOT/crm/bridge/venv/bin"
 MEMORY_DIR="$ROOT/brain/memory_system"
 ANY_FAILED=false
 
