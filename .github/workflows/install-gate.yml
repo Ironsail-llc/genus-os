@@ -236,17 +236,45 @@ jobs:
       # read GENUS_IMAGE_TAG from the environment and writes `v<this CLI's
       # version>` into genus.env itself, so the version tag is the one that is
       # actually resolved.
-      - name: Build the release images from this branch
+      - name: Read the version the substrate will write into genus.env
+        id: version
         run: |
           VERSION="$(python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
-          echo "building ghcr.io/ironsail-llc/genus-os/{python,app}:{${GENUS_IMAGE_TAG},v${VERSION}}"
-          docker buildx build --load --target production -f Dockerfile.python \
-            -t "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG}" \
-            -t "ghcr.io/ironsail-llc/genus-os/python:v${VERSION}" .
-          docker buildx build --load --target production -f Dockerfile.app \
-            -t "ghcr.io/ironsail-llc/genus-os/app:${GENUS_IMAGE_TAG}" \
-            -t "ghcr.io/ironsail-llc/genus-os/app:v${VERSION}" .
-          docker image ls | grep genus-os
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # Through build-push-action rather than a bare `docker buildx build`, for
+      # the GitHub cache: `type=gha` needs the Actions runtime token, which the
+      # action exports and a plain `run:` step does not have. Without a cache
+      # the gate spends four minutes compiling before it can say anything,
+      # which is how a PR signal becomes one nobody waits for.
+      - name: Build the python image from this branch
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile.python
+          target: production
+          load: true
+          cache-from: type=gha,scope=install-gate-python
+          cache-to: type=gha,scope=install-gate-python,mode=max
+          tags: |
+            ghcr.io/ironsail-llc/genus-os/python:${{ env.GENUS_IMAGE_TAG }}
+            ghcr.io/ironsail-llc/genus-os/python:${{ steps.version.outputs.tag }}
+
+      - name: Build the dashboard image from this branch
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile.app
+          target: production
+          load: true
+          cache-from: type=gha,scope=install-gate-app
+          cache-to: type=gha,scope=install-gate-app,mode=max
+          tags: |
+            ghcr.io/ironsail-llc/genus-os/app:${{ env.GENUS_IMAGE_TAG }}
+            ghcr.io/ironsail-llc/genus-os/app:${{ steps.version.outputs.tag }}
+
+      - name: Show what compose will find locally
+        run: docker image ls | grep genus-os
 
       - name: Build a wheelhouse so the block's pip install is THIS branch
         run: |
