@@ -22,20 +22,28 @@ prints a single-use `/setup` link. See the [quick start](quickstart.md).
 ### By hand
 
 ```bash
-# The two files the stack is made of
-mkdir -p ~/genus && cd ~/genus
+# One directory holds the compose files, the env file and the workspace.
+mkdir -p "$HOME/genus/workspace" && cd "$HOME/genus"
 curl -fsSLO https://raw.githubusercontent.com/Ironsail-llc/genus-os/main/infra/docker-compose.yml
 curl -fsSLO https://raw.githubusercontent.com/Ironsail-llc/genus-os/main/infra/docker-compose.apps.yml
 
-# Every credential, in one file nothing else may read
-cat > genus.env <<'ENV'
+# Every credential, in one file nothing else may read. The paths inside it
+# must be the paths you are standing in: compose resolves each service's
+# env_file against them, and dockerd would create a missing bind-mount source
+# as a root-owned directory the containers cannot write.
+cat > genus.env <<ENV
 GENUS_IMAGE_TAG=v1.68.0
-GENUS_WORKSPACE=/srv/genus/workspace
-GENUS_ENV_FILE=/srv/genus/genus.env
+GENUS_WORKSPACE=$HOME/genus/workspace
+GENUS_ENV_FILE=$HOME/genus/genus.env
+GENUS_UID=$(id -u)
+GENUS_GID=$(id -g)
 ROBOTHOR_DB_NAME=robothor_memory
 ROBOTHOR_DB_USER=robothor
 ROBOTHOR_DB_PASSWORD=choose-a-password
 ROBOTHOR_SECRETS_BACKEND=env
+AUTH_SECRET=$(openssl rand -base64 32)
+GENUS_BRIDGE_SSO_SECRET=$(openssl rand -base64 32)
+GENUS_LOCAL_LOGIN=true
 OPENROUTER_API_KEY=sk-your-key
 ENV
 chmod 600 genus.env
@@ -43,6 +51,15 @@ chmod 600 genus.env
 docker compose --env-file ./genus.env \
   -f docker-compose.yml -f docker-compose.apps.yml up -d
 ```
+
+`AUTH_SECRET`, `GENUS_BRIDGE_SSO_SECRET` and one sign-in method are not
+optional: the dashboard's `/api/ready` reports unhealthy without all three, so
+the stack never finishes coming up. `genus init --substrate compose` generates
+them for you.
+
+`docker compose config` prints this file's contents in full, including the
+database password and the provider key. Redirect it to a file only you can
+read, or do not redirect it at all.
 
 Three variables configure the compose FILE rather than the platform, so none of
 them is a declared setting and `genus config` does not know them:
@@ -53,8 +70,14 @@ them is a declared setting and `genus config` does not know them:
   instead, naming the variable.
 - **`GENUS_WORKSPACE`** — the host directory holding this instance's own
   `brain/`, `docs/agents/` and `.robothor/` (instance data, created by
-  `genus init`), mounted at `/workspace`. It must be writable by uid 1000, the
-  `app` user the released image runs as.
+  `genus init`), mounted at `/workspace`. Create it before `up`: a missing bind
+  source is created by dockerd as root.
+- **`GENUS_UID` / `GENUS_GID`** — the account the python services run as
+  (default 1000, the image's own user). Everything in the workspace is 0600 and
+  owned by whoever installed, and the bridge must be able to read
+  `.robothor/setup_token.yaml` — that file is the only door into a fresh
+  instance. `genus init` writes your real uid and gid here and refuses to run
+  as root.
 - **`GENUS_ENV_FILE`** — the file above. Every service reads it through
   `env_file`; nothing is inlined in the compose file.
 
@@ -82,7 +105,9 @@ docker compose --env-file ./genus.env -f docker-compose.yml -f docker-compose.ap
 ### Working on Genus OS itself
 
 The dev overlay restores the source bind mounts and the local builds the
-release file gave up:
+release file gave up. It needs no `genus.env` — the release file's `env_file`
+entry is optional, so a checkout with nothing but the two variables the base
+file interpolates renders and builds:
 
 ```bash
 docker compose \

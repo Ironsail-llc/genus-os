@@ -10,14 +10,20 @@ From zero to a working Genus OS instance in 10 minutes.
 - **Ollama** (for embeddings, reranking, and generation)
 
 Those are what the `local` substrate needs. `--substrate compose` needs none of
-them — only Docker — because the whole stack runs in containers.
+them except Python — PostgreSQL, Redis and Ollama all run in containers.
 
 ## Option A: The whole stack in Docker (`--substrate compose`)
 
 The enterprise pilot path, and the shortest one: released images from GHCR, a
 one-shot migration the services wait on, and a dashboard on
-`http://127.0.0.1:3004`. Nothing but Docker Engine 24+ with the Compose v2
-plugin has to be on the box.
+`http://127.0.0.1:3004`. The box needs Docker Engine 24+ with the Compose v2
+plugin, plus Python 3.11+ and pip for the CLI itself. On current Debian and
+Ubuntu a system-wide `pip install` is refused (PEP 668) — use `pipx install
+genusos`, or a virtualenv.
+
+Run it as the account that will own the instance, **not** as root: the
+containers run as that account so they can read the workspace, and `genus init`
+refuses a root install rather than leaving files nothing else can open.
 
 The wheel does not carry the compose files, so fetch the two the stack is made
 of first. They land in the directory you run `genus init` from, which is also
@@ -32,21 +38,22 @@ curl -fsSLO https://raw.githubusercontent.com/Ironsail-llc/genus-os/main/infra/d
 export ROBOTHOR_DB_PASSWORD=choose-a-password
 export OPENROUTER_API_KEY=sk-your-key
 genus init --substrate compose --yes --workspace . --owner-name "Ada Lovelace" --owner-email ada@example.com
-set -a; . ./genus.env; set +a
 genus doctor --json
 ```
 <!-- /install-gate -->
 
-The `set -a; . ./genus.env` line is not decoration: the containers read that
-file through `env_file`, and `genus doctor` runs on the HOST, where nothing has
-handed it the database password yet.
+`genus doctor` runs on the HOST, where nothing has handed it the database
+password — so it reads `genus.env` itself, from the workspace, the same file
+the containers get through `env_file`. It refuses to read that file unless it
+is mode 0600 and says so, because it holds the database password and the
+provider key.
 
 What the substrate adds to the wizard:
 
 | Step | What it does |
 |------|--------------|
 | `prereqs` | Docker 24+ and Compose v2 are **required**; `nvidia-smi` is optional and decides whether the GPU overlay is used |
-| `render` | Writes `genus.env` (0600), copies `owner.yaml` into the workspace the containers mount, picks the image tag |
+| `render` | Writes `genus.env` (0600) — the database password, the provider key, the dashboard's `AUTH_SECRET` and `GENUS_BRIDGE_SSO_SECRET`, and the uid the containers run as — copies `owner.yaml` into the workspace the containers mount, and picks the image tag |
 | `up` | One `docker compose --env-file genus.env -f docker-compose.yml -f docker-compose.apps.yml up -d` |
 | `wait` | Polls `/ready` on the engine, bridge, orchestrator and dashboard (`--wait-timeout`, default 180s) and names whichever did not answer |
 
@@ -63,6 +70,11 @@ CLI you installed into `genus.env`; `--image-tag vX.Y.Z` overrides it.
 
 `genus init --substrate compose --yes --json` emits the usual document with one
 extra key: `compose.files`, `compose.images` and `compose.ready`.
+
+**Sign-in.** The wizard turns on local email+password for the instance and mints
+the two shared secrets the dashboard and the bridge authenticate each other
+with. Nothing else is needed on day one; OIDC or Cloudflare Access can be added
+later, and `genus doctor` will tell you when one is configured.
 
 ## Option B: Docker for the infrastructure only
 
