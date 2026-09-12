@@ -119,6 +119,25 @@ def test_exit_two_when_the_doctor_itself_errored() -> None:
     assert "the registry is broken" in report.error_detail
 
 
+def test_an_info_failure_does_not_paint_the_instance_degraded() -> None:
+    """`status` is what the Helm's banner renders. An informational finding --
+    a Slack token that is not shaped like one, on an instance that does not use
+    Slack -- would otherwise show the appliance as degraded while the CLI
+    exits 0, which is two surfaces disagreeing about the same run."""
+    checks = [_check("a.one"), _check("slack.token", status="fail", severity="info")]
+    report = run_sync(_ctx(), checks=checks)
+
+    assert report.status == "ok"
+    assert report.exit_code == 0
+    assert report.summary["required_failed"] == 0
+    assert report.summary["recommended_failed"] == 0
+
+
+def test_a_recommended_failure_still_reads_degraded() -> None:
+    checks = [_check("a.one"), _check("b.one", status="fail", severity="recommended")]
+    assert run_sync(_ctx(), checks=checks).status == "degraded"
+
+
 def test_status_is_ok_when_everything_passed_or_skipped() -> None:
     checks = [_check("a.one"), _check("b.one", status="skip", severity="recommended")]
     report = run_sync(_ctx(), checks=checks)

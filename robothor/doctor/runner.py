@@ -103,10 +103,21 @@ class DoctorReport:
         """``ok`` or ``degraded`` -- the same two words, in the same key, as
         :func:`robothor.health_contract.readiness_response`, so the Helm Health
         view can render a readiness payload and a doctor payload with one
-        component."""
+        component.
+
+        An ``info`` failure does NOT degrade the instance. This word is what a
+        dashboard banner renders, and severity is the whole vocabulary the
+        report has for "how much does this matter": a Slack token that is not
+        shaped like one, on an instance that does not use Slack, would
+        otherwise paint the appliance red while the CLI exits 0 -- two surfaces
+        disagreeing about the same run, which is how an operator learns to
+        distrust both.
+        """
         if self.errored:
             return "degraded"
-        return "ok" if not any(row.status == "fail" for row in self.results) else "degraded"
+        summary = self.summary
+        degraded = summary["required_failed"] or summary["recommended_failed"]
+        return "degraded" if degraded else "ok"
 
     @property
     def exit_code(self) -> int:
