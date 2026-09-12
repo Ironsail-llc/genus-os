@@ -7,12 +7,6 @@ department: core
 reports_to: {{ reports_to }}
 escalates_to: {{ escalates_to }}
 
-model:
-  primary: {{ model_primary }}
-  fallbacks:
-    - openrouter/minimax/minimax-m2.5
-    - openrouter/google/gemini-2.5-pro
-
 schedule:
   cron: "0 20 * * *"
   timezone: {{ timezone }}

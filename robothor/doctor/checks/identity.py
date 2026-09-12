@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from robothor.doctor.model import Check, Result, fail, ok
+from robothor.doctor.model import Check, Result, fail, ok, skip
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.doctor.context import DoctorContext
@@ -64,6 +64,31 @@ async def _owner_config(ctx: DoctorContext) -> Result:
     if not has_email:
         return fail("owner.yaml is present but carries no email address")
     return ok(f"operator configured{f' for tenant {tenant}' if tenant else ''}")
+
+
+def _first_run_is_pending(ctx: DoctorContext) -> bool:
+    """Has this instance been installed but never claimed in the browser?
+
+    ``genus init`` deliberately creates no account: the first-run wizard does,
+    with the operator's password. So "there is no owner yet" is the EXPECTED
+    state of a correct fresh install, and the signal that the ceremony has not
+    happened is the marker the wizard itself writes when it finishes --
+    ``setup_completed_at`` in the workspace's ``config.yaml``.
+
+    The wizard's own marker rather than the setup token, because the token has
+    a lifetime and an ordering: ``genus init`` mints it in its LAST step, after
+    the verification that asks this question, and it expires in half an hour.
+    A doctor run a day later would then call a never-claimed instance broken.
+
+    Unreadable reads as NOT pending, which is the conservative direction: the
+    check stays required, and a genuinely ownerless instance is still reported.
+    """
+    try:
+        from robothor import setup_token
+
+        return not setup_token.setup_recorded(ctx.workspace)
+    except Exception:  # noqa: BLE001 - unknown is not "still installing"
+        return False
 
 
 async def _owner_account(ctx: DoctorContext) -> Result:
@@ -156,6 +181,18 @@ async def _owner_account(ctx: DoctorContext) -> Result:
             f"{tenant}) — this connection is tenant-scoped, so it cannot tell whether an "
             "owner exists in another tenant; check from an unscoped session, or reconcile "
             "owner.yaml with the scope"
+        )
+
+    if _first_run_is_pending(ctx):
+        # Not a fault: `genus init` hands the browser wizard the job of creating
+        # the operator, precisely so the account arrives WITH a password. Telling
+        # the operator to mint one by hand here would close the wizard they have
+        # not opened yet -- the gate 404s every first-run route the moment any
+        # owner row exists.
+        return skip(
+            f"no owner account yet (owner.yaml names {tenant}) — finish the first run at "
+            "/setup using the link `genus init` printed, or run `genus auth setup-link` "
+            "for a fresh one"
         )
 
     return fail(

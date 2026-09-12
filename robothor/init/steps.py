@@ -33,7 +33,6 @@ __all__ = [
     "IdentityStep",
     "MigrateStep",
     "ModelsStep",
-    "OperatorStep",
     "PrereqsStep",
     "ProviderStep",
     "SECRETS_BACKENDS",
@@ -51,6 +50,12 @@ __all__ = [
 #: ``apply()`` is an idempotent refresh rather than a first write. ``skip`` --
 #: it will not run at all (a flag turned it off, or it does not apply here).
 ACTIONS = ("create", "exists", "skip")
+
+#: How many of a provider's other known models back up the chosen one in the
+#: fleet's default chain. Short on purpose: every extra entry is another
+#: full timeout an agent spends before it gives up, and they all share the
+#: one credential this install has actually proved.
+FLEET_FALLBACK_LIMIT = 2
 
 
 class StepError(RuntimeError):
@@ -203,6 +208,16 @@ class SubstrateStep(BaseStep):
 
     def apply(self, ctx: InitContext) -> None:
         ctx.answers["substrate"] = ctx.substrate_name
+        # Recorded where a LATER run -- and the doctor -- can read it back.
+        # `--substrate` defaults to `local` and nothing remembered what this
+        # instance was, so a re-run in a compose workspace planned a local
+        # install against it. The doctor needs the same fact for a different
+        # reason: on a compose host the services are containers, so "no systemd
+        # unit" must not read as "nothing was meant to be running".
+        #
+        # config.yaml rather than init_state.yaml: that file is a flat
+        # step-id -> status ledger, and `substrate` is already a step id.
+        ctx.write_setting("ROBOTHOR_INIT_SUBSTRATE", ctx.substrate_name)
         ctx.detail(self.id, ctx.substrate_name)
 
 
@@ -441,7 +456,67 @@ class ProviderStep(BaseStep):
         ctx.answers["provider_model"] = model
         ctx.answers["provider_probed"] = result.probed
         ctx.write_setting("ROBOTHOR_LAST_RESORT_MODEL", model)
-        ctx.detail(self.id, f"{model}: {result.detail}")
+        fallbacks = self._write_fleet_default(ctx, provider_id, model)
+        detail = f"{model}: {result.detail}"
+        if fallbacks:
+            detail += f"; the fleet falls back to {', '.join(fallbacks)}"
+        ctx.detail(self.id, detail)
+
+    @staticmethod
+    def _write_fleet_default(ctx: InitContext, provider_id: str, model: str) -> list[str]:
+        """Make the probed model the fleet's default, and say what backs it up.
+
+        The wizard used to test a credential, get a real completion, and then
+        install a fleet pinned to whatever model a template placeholder named.
+        On a fresh compose install that meant `genus run --agent main` walked
+        `ollama/qwen3.5:122b` -- a localhost Ollama that does not exist inside a
+        container -- then three cloud models the box had no key for, and
+        reported "All models failed to respond". The model the operator chose
+        and the model the fleet dials are now the same model.
+
+        The file is MERGED, never replaced: it is the operator's own fleet-wide
+        configuration, and a re-run of `genus init` must not silently drop a
+        timezone or a tool policy they put there.
+        """
+        import yaml
+
+        from robothor.init.provider_probe import models_for_provider
+
+        # The registry's other known models for this provider, in its own
+        # order. Nothing from a different provider: a fallback needs a
+        # credential, and this install has proved exactly one.
+        fallbacks = [known for known in models_for_provider(provider_id) if known != model][
+            :FLEET_FALLBACK_LIMIT
+        ]
+
+        path = ctx.workspace / "docs" / "agents" / "_defaults.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        document: dict[str, Any] = {}
+        if path.is_file():
+            try:
+                loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+            except yaml.YAMLError:
+                loaded = None
+            if isinstance(loaded, dict):
+                document = loaded
+
+        block = document.get("model")
+        document["model"] = {**block} if isinstance(block, dict) else {}
+        document["model"]["primary"] = model
+
+        # `primary` moves because that is what the operator just chose. The
+        # fallback chain does NOT get reset on top of it: a curated chain is
+        # the operator's own work, and silently replacing it with the
+        # registry's first two entries is not an upgrade. Seeded only when
+        # there is nothing there.
+        existing = document["model"].get("fallbacks")
+        if isinstance(existing, list) and existing:
+            fallbacks = []
+        else:
+            document["model"]["fallbacks"] = fallbacks
+
+        path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+        return fallbacks
 
     def completed(self, ctx: InitContext) -> bool:
         """An unprobed choice is not a finished step.
@@ -786,7 +861,7 @@ class ModelsStep(BaseStep):
 
     @staticmethod
     def _base_url(ctx: InitContext) -> str:
-        return str(ctx.settings.ollama.url).rstrip("/")
+        return ctx.settings.ollama.base_url
 
     def check(self, ctx: InitContext) -> CheckResult:
         if ctx.answers.get("skip_models"):
@@ -880,42 +955,20 @@ class AgentsStep(BaseStep):
         ctx.detail(self.id, detail)
 
 
-class OperatorStep(BaseStep):
-    """Seed the operator's account in the tenant owner.yaml names."""
-
-    id = "operator"
-    title = "Operator account"
-
-    def __init__(self, *, bootstrap: Callable[[], dict[str, Any] | None] | None = None) -> None:
-        self._bootstrap = bootstrap
-
-    def check(self, ctx: InitContext) -> CheckResult:
-        if ctx.answers.get("skip_db"):
-            return CheckResult(
-                True,
-                detail="skipped (--skip-db: the account lives in the database)",
-                action="skip",
-            )
-        return CheckResult(True, detail="will seed the owner account (no password)")
-
-    def apply(self, ctx: InitContext) -> None:
-        from robothor.constants import DEFAULT_TENANT
-        from robothor.init.identity import Identity, bootstrap_operator
-
-        identity = ctx.answers.get("identity")
-        if not isinstance(identity, Identity):
-            from robothor.owner_config import load_owner_config
-
-            owner = load_owner_config()
-            if owner is None:
-                raise StepError("no owner.yaml to seed an account from; re-run the identity step")
-            identity = Identity(
-                name=" ".join(p for p in (owner.first_name, owner.last_name) if p),
-                email=owner.email,
-                tenant_id=owner.tenant_id or DEFAULT_TENANT,
-            )
-        account = bootstrap_operator(identity, bootstrap=self._bootstrap)
-        ctx.detail(self.id, f"owner account in tenant {account.get('tenant_id')} (no password yet)")
+# `OperatorStep` used to live here, and its removal is the point of the fix.
+#
+# It seeded `role='owner', status='active'` in `user_accounts` -- and the setup
+# wizard's gate 404s `/api/setup/status`, `/claim` and `/operator` the moment
+# ANY owner row exists, credential or no credential. So `genus init` closed the
+# wizard before it printed the link to it: `/setup` answered 404, `genus auth
+# setup-link` refused, and the seeded owner had no password to sign in with. A
+# fresh instance was unreachable by either door.
+#
+# The browser wizard creates the operator now -- with the password, in the
+# tenant owner.yaml names (`crm/bridge/routers/setup.py`, POST
+# /api/setup/operator). `genus init` still writes owner.yaml (`identity`) and
+# still mints the single-use link (`link`); it simply no longer claims the
+# instance on the operator's behalf.
 
 
 class ChannelsStep(BaseStep):
@@ -1102,17 +1155,11 @@ class VerifyStep(BaseStep):
         refusal is said: permissions that have slipped on the file holding the
         provider key are a finding, not a detail.
         """
-        from robothor.secrets.env_file import load_instance_env
+        from robothor.secrets.env_file import apply_instance_env
 
-        result = load_instance_env(ctx.workspace)
+        result = apply_instance_env(ctx.workspace)
         if result.refused:
             ctx.say(f"  ! {result.refused}")
-            return
-        if result.loaded:
-            from robothor.settings import reset_settings
-
-            # Settings were resolved before these existed.
-            reset_settings()
 
     def apply(self, ctx: InitContext) -> None:
         from robothor.doctor.context import DoctorContext
@@ -1128,7 +1175,15 @@ class VerifyStep(BaseStep):
         # must not be the thing that first spends money on an instance, and
         # `provider.completion` is the only check that would.
         offline = not bool(ctx.answers.get("provider_probed"))
-        context = DoctorContext(offline=offline)
+        # `genus init` is the one caller that KNOWS whether anything was asked
+        # to start: without `--start` the services step deliberately prints the
+        # commands instead of running them. Leaving the doctor to guess made a
+        # documented `genus init --yes` end in exit 1 on a complete instance,
+        # naming two daemons it had just chosen not to launch.
+        context = DoctorContext(
+            offline=offline,
+            services_expected=bool(ctx.answers.get("start")),
+        )
 
         note = ""
         if ctx.answers.get("skip_db"):

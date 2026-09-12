@@ -503,8 +503,46 @@ def test_an_auth_gated_service_counts_as_up(monkeypatch) -> None:
 
 def test_a_refused_connection_fails(monkeypatch) -> None:
     monkeypatch.setattr(service_checks, "_probe", lambda url, _t: (False, f"{url}: refused"))
+    monkeypatch.setattr(service_checks, "_units_installed", lambda: True)
     rows = _run(service_checks.CHECKS, "service.engine", make_ctx())
     assert rows[0].status == "fail"
+
+
+def test_a_refused_connection_skips_when_nothing_was_asked_to_run(monkeypatch) -> None:
+    """`genus init --yes` without `--start` starts no daemons, by design.
+
+    Failing the install on services the wizard deliberately did not start made
+    the documented quickstart exit 1 after writing a complete, working
+    instance. "Not started" is not "broken", and the difference is the whole
+    contract of a non-interactive install.
+    """
+    monkeypatch.setattr(service_checks, "_probe", lambda url, _t: (False, f"{url}: refused"))
+
+    rows = _run(service_checks.CHECKS, "service.engine", make_ctx(services_expected=False))
+
+    assert rows[0].status == "skip"
+    assert "not started" in rows[0].detail
+    assert "genus engine start" in rows[0].detail
+
+
+def test_a_running_service_passes_even_when_none_was_expected(monkeypatch) -> None:
+    """Truth beats the flag: a service that answers is up, whatever we assumed."""
+    monkeypatch.setattr(service_checks, "_probe", lambda url, _t: (True, f"{url}/ready → 200"))
+
+    rows = _run(service_checks.CHECKS, "service.engine", make_ctx(services_expected=False))
+
+    assert rows[0].status == "pass"
+
+
+def test_an_unset_expectation_asks_the_box(monkeypatch) -> None:
+    """Nobody said, so look: a box with systemd units is meant to be serving."""
+    monkeypatch.setattr(service_checks, "_probe", lambda url, _t: (False, f"{url}: refused"))
+
+    monkeypatch.setattr(service_checks, "_units_installed", lambda: True)
+    assert _run(service_checks.CHECKS, "service.bridge", make_ctx())[0].status == "fail"
+
+    monkeypatch.setattr(service_checks, "_units_installed", lambda: False)
+    assert _run(service_checks.CHECKS, "service.bridge", make_ctx())[0].status == "skip"
 
 
 def test_the_optional_services_are_recommended_and_the_core_ones_required() -> None:
@@ -520,3 +558,50 @@ def test_every_service_is_probed_on_the_port_the_settings_declare(settings) -> N
     urls = service_checks._urls(make_ctx())
     assert urls["bridge"].endswith(":9200")
     assert "19000" in urls["engine"] or urls["engine"].endswith(":19000")
+
+
+def test_a_crashed_service_on_a_compose_host_is_a_required_failure(monkeypatch, settings) -> None:
+    """A compose host has no systemd units -- its services are containers -- so
+    "no unit" must not read as "nothing was meant to be running". Before this,
+    a compose box whose bridge had crashed got a skip that also told the
+    operator to run `genus serve`, which is not how that instance starts."""
+    monkeypatch.setattr(service_checks, "_probe", lambda url, _t: (False, f"{url}: refused"))
+    monkeypatch.setattr(service_checks, "_units_installed", lambda: False)
+    settings(ROBOTHOR_INIT_SUBSTRATE="compose")
+
+    rows = _run(service_checks.CHECKS, "service.bridge", make_ctx())
+
+    assert rows[0].status == "fail"
+
+
+def test_a_wheel_install_whose_siblings_answer_expects_them_all(monkeypatch, settings) -> None:
+    """The documented happy path: the operator ran the two commands the wizard
+    printed, and one of the services later died. Nothing on that box carries a
+    unit, so the only evidence it was meant to be serving is that its siblings
+    are."""
+    settings(ROBOTHOR_INIT_SUBSTRATE="local")
+    monkeypatch.setattr(service_checks, "_units_installed", lambda: False)
+    monkeypatch.setattr(
+        service_checks,
+        "_probe",
+        lambda url, _t: (
+            (False, f"{url}: refused") if "9100" in url else (True, f"{url}/ready → 200")
+        ),
+    )
+
+    rows = _run(service_checks.CHECKS, "service.bridge", make_ctx())
+
+    assert rows[0].status == "fail"
+
+
+def test_a_box_with_nothing_running_at_all_still_skips(monkeypatch, settings) -> None:
+    """The case the skip exists for: `genus init --yes` without `--start`
+    started no daemons, so none of them answering is not a fault."""
+    settings(ROBOTHOR_INIT_SUBSTRATE="local")
+    monkeypatch.setattr(service_checks, "_units_installed", lambda: False)
+    monkeypatch.setattr(service_checks, "_probe", lambda url, _t: (False, f"{url}: refused"))
+
+    rows = _run(service_checks.CHECKS, "service.bridge", make_ctx())
+
+    assert rows[0].status == "skip"
+    assert "not started" in rows[0].detail

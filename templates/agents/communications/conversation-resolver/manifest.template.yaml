@@ -9,13 +9,6 @@ creates_tasks_for: []
 receives_tasks_from: []
 escalates_to: {{ escalates_to }}
 
-model:
-  primary: {{ model_primary }}
-  fallbacks:
-    - openrouter/anthropic/claude-sonnet-4-6
-    - gemini/gemini-2.5-pro
-  payload_alias: qwen35
-
 schedule:
   cron: "{{ cron_expr }}"
   timezone: {{ timezone }}

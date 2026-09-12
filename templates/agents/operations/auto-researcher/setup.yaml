@@ -2,10 +2,6 @@ agent_id: auto-researcher
 version: "2026-03-31"
 instruction_file_path: brain/agents/AUTO_RESEARCHER.md
 variables:
-  model_primary:
-    type: string
-    description: Primary LLM model for hypothesis generation
-    default: "openrouter/anthropic/claude-sonnet-4.6"
   timezone:
     type: string
     description: Schedule timezone

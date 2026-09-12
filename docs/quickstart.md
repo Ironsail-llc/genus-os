@@ -43,6 +43,8 @@ genus doctor --json
 ```
 <!-- /install-gate -->
 
+CI replays this block on a fresh machine every night.
+
 `genus doctor` runs on the HOST, where nothing has handed it the database
 password — so it reads `genus.env` itself, from the workspace, the same file
 the containers get through `env_file`. It refuses to read that file unless it
@@ -55,8 +57,16 @@ What the substrate adds to the wizard:
 |------|--------------|
 | `prereqs` | Docker 24+ and Compose v2 are **required**; `nvidia-smi` is optional and decides whether the GPU overlay is used |
 | `render` | Writes `genus.env` (0600) — the database password, the provider key, the dashboard's `AUTH_SECRET` and `GENUS_BRIDGE_SSO_SECRET`, and the uid the containers run as — copies `owner.yaml` into the workspace the containers mount, and picks the image tag |
-| `up` | One `docker compose --env-file genus.env -f docker-compose.yml -f docker-compose.apps.yml up -d` |
+| `up-infra` | Starts PostgreSQL, Redis and Ollama on their own, then waits for Ollama to accept connections |
+| `models` | Pulls the RAG models into the stack's Ollama, over its published port |
+| `up` | One `docker compose --env-file genus.env -f docker-compose.yml -f docker-compose.apps.yml up -d` for the platform services |
 | `wait` | Polls `/ready` on the engine, bridge, orchestrator and dashboard (`--wait-timeout`, default 180s) and names whichever did not answer |
+
+The `up` is split in two on purpose. The dashboard and the bridge only start
+once the orchestrator is healthy, and the orchestrator's readiness depends on
+what is in Ollama — which starts empty. Bringing everything up at once meant
+`docker compose up` exited 1 on a machine that had never run the stack, and
+the bridge and dashboard were never created at all.
 
 There is no migration step: the compose file carries a one-shot `migrate`
 service that the engine, bridge and orchestrator wait on with
@@ -108,6 +118,8 @@ genus doctor --json
 ```
 <!-- /install-gate -->
 
+CI replays this block on a fresh machine every night.
+
 `genus init` runs in two phases. The first prints a plan — every step, and
 whether it will create something, find it already there, or skip it — and
 checks all of it before writing anything:
@@ -140,11 +152,16 @@ your first message. `--offline` records the choice unprobed and says so.
     http://127.0.0.1:3004/setup?token=...
 ```
 
-Open it. That page is the only way into a fresh instance — there is no account
-yet, so the sign-in page has nothing to offer — and it walks you through the
-operator account, one provider API key (tested for real before it lets you
-past), an optional Telegram channel, and your first agents. It ends in the
-chat, signed in.
+Open it. That page is the only way into a fresh instance — `genus init`
+deliberately creates no account, so the sign-in page has nothing to offer yet —
+and it walks you through the operator account, one provider API key (tested for
+real before it lets you past), an optional Telegram channel, and your first
+agents. It ends in the chat, signed in.
+
+The wizard is what creates your account, with your password. `genus init`
+writes the identity (`~/.robothor/owner.yaml`) and mints the link, and stops
+there: an install that claimed the instance on your behalf would close `/setup`
+before you ever opened it, and leave an owner account with no way to sign in.
 
 Three things worth knowing:
 

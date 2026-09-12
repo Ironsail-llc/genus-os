@@ -182,6 +182,26 @@ Service features:
 
 View logs: `journalctl -u robothor-api -f`
 
+### The sign-in secrets the units need
+
+`genus init` mints `AUTH_SECRET` and `GENUS_BRIDGE_SSO_SECRET` into the
+workspace's `genus.env` (mode 0600). `genus doctor` reads that file from the
+workspace, and so does the wizard's own `verify` step — but **systemd does
+not**, because the units read `/etc/robothor/robothor.env`. Point them at it
+once, with a drop-in:
+
+```bash
+sudo systemctl edit robothor-bridge
+# [Service]
+# EnvironmentFile=-/home/robothor/robothor/genus.env
+```
+
+or copy the two lines into `/etc/robothor/robothor.env`. Without them the
+bridge refuses every `/api/auth/sso` exchange and nobody can sign in, while
+`/ready` stays green — the failure mode that kept `app.robothor.ai` locked out
+for eight days. `genus doctor`'s `secrets.bridge_sso` check is the one that
+says so.
+
 ### Secrets backends
 
 `robothor-secrets.service` runs `scripts/load-secrets.sh` before the other

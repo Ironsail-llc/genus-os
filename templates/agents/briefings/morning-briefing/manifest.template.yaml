@@ -9,13 +9,6 @@ creates_tasks_for: []
 receives_tasks_from: []
 escalates_to: null
 
-model:
-  primary: {{ model_primary }}
-  fallbacks:
-    - "openrouter/moonshotai/kimi-k2.5"
-    - "gemini/gemini-2.5-pro"
-  payload_alias: sonnet
-
 schedule:
   cron: "{{ cron_expr }}"
   timezone: {{ timezone }}

@@ -1,0 +1,524 @@
+name: Install Gate
+
+# Replays docs/quickstart.md's own commands on a clean machine, once per
+# substrate. Every install defect this project has shipped -- `pip install
+# robothor` naming a package that does not exist, an unseeded `service` role
+# that denied every tool, a container that could not make an LLM call, an
+# `init` that never wrote owner.yaml, an `init` that installed zero agents and
+# reported success -- was invisible on a developer's box and real on a fresh
+# one, because nothing executed the documented text. Here it is the test:
+# scripts/extract_doc_commands.py pulls the shell out of the
+# `<!-- install-gate: ... -->` blocks verbatim and pipes it into bash.
+#
+# No credentials. tests/acceptance/mock_llm/ stands in for the cloud provider
+# and for Ollama, deterministically, so this runs nightly and on a fork.
+
+on:
+  schedule:
+    # 06:17 UTC. Off the hour so it does not queue behind everyone else's cron.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "robothor/init/**"
+      - "robothor/setup*.py"
+      - "robothor/settings/**"
+      - "robothor/secrets/**"
+      - "robothor/doctor/**"
+      - "infra/docker-compose*.yml"
+      - "Dockerfile.*"
+      - "docs/quickstart.md"
+      - "scripts/load-secrets.sh"
+      - "crm/bridge/routers/setup.py"
+      - "tests/acceptance/**"
+      - ".github/workflows/install-gate.yml"
+      # Where the defects this gate found actually live. Without these four a
+      # regression in the wizard's model resolution, the orchestrator's
+      # readiness, the Ollama endpoint resolver or an agent template would
+      # wait for the nightly instead of failing its own pull request.
+      - "templates/agents/**"
+      - "robothor/api/orchestrator.py"
+      - "robothor/engine/config.py"
+      - "robothor/llm/ollama.py"
+
+concurrency:
+  group: install-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The mock serves both surfaces on one port: `/v1/*` for litellm and
+  # `/api/*` for the platform's Ollama client.
+  MOCK_PORT: "11434"
+  PYTHONUNBUFFERED: "1"
+  # The operator the gate claims the instance as. example.com only.
+  GATE_OWNER_EMAIL: ada@example.com
+  GATE_OWNER_NAME: Ada Lovelace
+
+jobs:
+  local:
+    name: fresh install (local substrate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        # pgvector, not stock postgres: infra/migrations/001_init.sql does
+        # `CREATE EXTENSION vector` inside one transaction.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: robothor
+          POSTGRES_PASSWORD: robothor
+          POSTGRES_DB: robothor
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # What the quickstart's own "Non-interactive mode" section tells a
+      # scripted install to export.
+      ROBOTHOR_DB_HOST: 127.0.0.1
+      ROBOTHOR_DB_PORT: "5432"
+      ROBOTHOR_DB_NAME: robothor
+      ROBOTHOR_DB_USER: robothor
+      ROBOTHOR_DB_PASSWORD: robothor
+      ROBOTHOR_REDIS_HOST: 127.0.0.1
+      ROBOTHOR_REDIS_PORT: "6379"
+      # Both halves of the mock.
+      ROBOTHOR_OLLAMA_URL: http://127.0.0.1:11434
+      OPENROUTER_API_BASE: http://127.0.0.1:11434/v1
+      BRIDGE_URL: http://127.0.0.1:9100
+      ORCHESTRATOR_URL: http://127.0.0.1:9099
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the prerequisites the quickstart names
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client redis-tools jq
+
+      # The documented line installs from PyPI, which would test the last
+      # release rather than the pull request. Building the branch's own wheel
+      # plus every dependency into a local wheelhouse, and running the block
+      # with --no-index against it, keeps the command verbatim and makes it
+      # resolve to the code under test.
+      - name: Build a wheelhouse so the block's pip install is THIS branch
+        run: |
+          python -m pip install --upgrade pip wheel
+          python -m pip wheel ".[api]" -w "$GITHUB_WORKSPACE/wheelhouse"
+          python -m pip install fastapi uvicorn httpx
+
+      - name: Start the mock model server
+        run: |
+          python -m tests.acceptance.mock_llm --host 0.0.0.0 --port "$MOCK_PORT" \
+            > "$RUNNER_TEMP/mock.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -fsS "http://127.0.0.1:${MOCK_PORT}/api/tags" >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS "http://127.0.0.1:${MOCK_PORT}/api/tags" | jq -e '.models | length > 0'
+
+      - name: Replay the quickstart's local block
+        env:
+          PIP_NO_INDEX: "1"
+          PIP_FIND_LINKS: ${{ github.workspace }}/wheelhouse
+        run: |
+          python scripts/extract_doc_commands.py \
+            --file docs/quickstart.md --block local | tee "$RUNNER_TEMP/local-block.sh"
+          cd "$RUNNER_TEMP"
+          set -o pipefail
+          bash -euxo pipefail "$RUNNER_TEMP/local-block.sh" 2>&1 \
+            | tee "$RUNNER_TEMP/local-block.out"
+
+      - name: Assert genus doctor --json has no required failure
+        run: |
+          genus doctor --json > "$RUNNER_TEMP/doctor.json" || true
+          jq . "$RUNNER_TEMP/doctor.json"
+          test "$(jq -r '.summary.required_failed' "$RUNNER_TEMP/doctor.json")" = "0"
+          echo "assertion OK: doctor required_failed == 0"
+
+      # Before the completion call, not after it: a fleet pinned to a model the
+      # wizard never chose fails as four consecutive provider timeouts, and the
+      # log that produces names everything except the cause.
+      - name: Assert the installed fleet resolves to the model the wizard chose
+        run: |
+          export MANIFEST_DIR="$HOME/robothor/docs/agents"
+          python - <<'PROBE'
+          import os, pathlib, sys, yaml
+          from robothor.engine.config import load_agent_config
+
+          manifests = pathlib.Path(os.environ["MANIFEST_DIR"])
+          defaults = yaml.safe_load((manifests / "_defaults.yaml").read_text()) or {}
+          chosen = defaults["model"]["primary"]
+          resolved = load_agent_config("main", manifests).model_primary
+          print(f"fleet default: {chosen}")
+          print(f"main resolves to: {resolved}")
+          if resolved != chosen:
+              sys.exit(f"main is pinned to {resolved}, not the chosen {chosen}")
+          PROBE
+          echo "assertion OK: main resolves to the model genus init probed"
+
+      - name: Assert an agent returns a real completion
+        run: |
+          genus run --agent main --print "say pong" 2>&1 | tee "$RUNNER_TEMP/run.txt"
+          grep -qi pong "$RUNNER_TEMP/run.txt"
+          # One tool round trip, not two hundred. The mock answers the first
+          # tools-bearing request with a fixed `noop` call and then settles, so
+          # a regression that stops the engine settling would still print
+          # `pong` — after running the loop to its ceiling.
+          if grep -q "Safety limit reached" "$RUNNER_TEMP/run.txt"; then
+            echo "the run reached the iteration ceiling instead of settling"; exit 1
+          fi
+          echo 'assertion OK: genus run --agent main "say pong" settled after one tool round trip'
+
+      # The quickstart says so itself, next to the command it prints:
+      # `genus serve` "needs: pip install genusos[api]". The api extra carries
+      # fastapi, uvicorn, pyjwt and argon2-cffi -- without the last one the
+      # bridge cannot even import its auth router. Resolved from the same
+      # wheelhouse, so this is still the branch's code.
+      - name: Install what the bridge needs to run
+        env:
+          PIP_NO_INDEX: "1"
+          PIP_FIND_LINKS: ${{ github.workspace }}/wheelhouse
+        run: python -m pip install "genusos[api]"
+
+      # The two the quickstart prints under "Start the services", plus the
+      # bridge they front. The bridge's own /ready includes a `memory` check
+      # against the orchestrator, so starting it alone answers 503 forever.
+      - name: Start the services the quickstart tells the operator to start
+        run: |
+          # The sign-in secrets `genus init` minted live in the workspace's
+          # genus.env, and a service started by hand does not read it — which
+          # is exactly the `EnvironmentFile=` line docs/deployment.md tells a
+          # systemd install to add. Without it the bridge is up and refuses
+          # every SSO exchange, which is what /ready now reports.
+          set -a
+          . "$HOME/robothor/genus.env"
+          set +a
+
+          nohup genus serve --host 127.0.0.1 --port 9099 \
+            > "$RUNNER_TEMP/orchestrator.log" 2>&1 &
+          (cd crm/bridge && nohup python bridge_service.py > "$RUNNER_TEMP/bridge.log" 2>&1 &)
+
+          for _ in $(seq 1 90); do
+            curl -fsS "${ORCHESTRATOR_URL}/ready" >/dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -f "${ORCHESTRATOR_URL}/ready"
+          for _ in $(seq 1 90); do
+            curl -fsS "${BRIDGE_URL}/ready" >/dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -s "${BRIDGE_URL}/ready" | tee "$RUNNER_TEMP/bridge-ready.json" | jq .
+          curl -f "${BRIDGE_URL}/ready" >/dev/null
+          echo "assertion OK: orchestrator and bridge /ready answered"
+
+      - name: Assert the setup wizard is reachable, claimable, then closed
+        run: |
+          TOKEN="$(grep -oE '/setup\?token=[A-Za-z0-9_-]+' "$RUNNER_TEMP/local-block.out" \
+            | tail -1 | sed 's|.*token=||')"
+          test -n "$TOKEN" || { echo "genus init printed no first-run link"; exit 1; }
+
+          curl -fsS "${BRIDGE_URL}/api/setup/status" | tee "$RUNNER_TEMP/setup-status.json"
+          # The 200 is the assertion: the gate 404s every first-run route the
+          # moment an owner row exists, so reaching this route at all is what
+          # proves the wizard is still open. (`.complete` is a literal in the
+          # handler and proves nothing on its own.)
+          jq -e '.steps.operator == false' "$RUNNER_TEMP/setup-status.json"
+          echo "assertion OK: /api/setup/status answers 200 with no operator yet"
+
+          CLAIM="$(curl -fsS -X POST "${BRIDGE_URL}/api/setup/claim" \
+            -H 'content-type: application/json' \
+            -d "{\"token\":\"${TOKEN}\"}" | jq -r .claim_token)"
+          [ -n "$CLAIM" ] && [ "$CLAIM" != null ] || { echo "no claim token"; exit 1; }
+          echo "assertion OK: the printed token bought a setup claim"
+
+          curl -fsS -X POST "${BRIDGE_URL}/api/setup/operator" \
+            -H "authorization: Bearer ${CLAIM}" \
+            -H 'content-type: application/json' \
+            -d "{\"name\":\"${GATE_OWNER_NAME}\",\"email\":\"${GATE_OWNER_EMAIL}\",\"password\":\"install-gate-P4ssphrase!\"}" \
+            | tee "$RUNNER_TEMP/setup-operator.json"
+          jq -e '.user.role == "owner"' "$RUNNER_TEMP/setup-operator.json"
+          echo "assertion OK: the wizard created the operator account"
+
+          CODE="$(curl -s -o /dev/null -w '%{http_code}' "${BRIDGE_URL}/api/setup/status")"
+          test "$CODE" = "404"
+          echo "assertion OK: /api/setup/status is closed for good (404)"
+
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: install-gate-local-logs
+          path: |
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/*.json
+            ${{ runner.temp }}/*.txt
+            ${{ runner.temp }}/*.out
+            ${{ runner.temp }}/*.sh
+          if-no-files-found: ignore
+
+  compose:
+    name: fresh install (compose substrate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GENUS_IMAGE_TAG: pr-gate
+      # NOT 11434: the compose stack publishes its own Ollama container there,
+      # and two processes cannot bind one port. The host therefore reaches the
+      # real Ollama container for the model steps, and only the cloud-provider
+      # half of the mock is used here.
+      MOCK_PORT: "18080"
+      OPENROUTER_API_BASE: http://127.0.0.1:18080/v1
+      ENGINE_URL: http://127.0.0.1:18800
+      BRIDGE_URL: http://127.0.0.1:9100
+      ORCHESTRATOR_URL: http://127.0.0.1:9099
+      DASHBOARD_URL: http://127.0.0.1:3004
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      # Tagged under the names the compose files reference, so Compose's
+      # default pull policy (`missing`) uses them and never reaches GHCR.
+      # Both `pr-gate` and `v<version>`: the substrate deliberately refuses to
+      # read GENUS_IMAGE_TAG from the environment and writes `v<this CLI's
+      # version>` into genus.env itself, so the version tag is the one that is
+      # actually resolved.
+      - name: Read the version the substrate will write into genus.env
+        id: version
+        run: |
+          VERSION="$(python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # Through build-push-action rather than a bare `docker buildx build`, for
+      # the GitHub cache: `type=gha` needs the Actions runtime token, which the
+      # action exports and a plain `run:` step does not have. Without a cache
+      # the gate spends four minutes compiling before it can say anything,
+      # which is how a PR signal becomes one nobody waits for.
+      - name: Build the python image from this branch
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile.python
+          target: production
+          load: true
+          cache-from: type=gha,scope=install-gate-python
+          cache-to: type=gha,scope=install-gate-python,mode=max
+          tags: |
+            ghcr.io/ironsail-llc/genus-os/python:${{ env.GENUS_IMAGE_TAG }}
+            ghcr.io/ironsail-llc/genus-os/python:${{ steps.version.outputs.tag }}
+
+      - name: Build the dashboard image from this branch
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile.app
+          target: production
+          load: true
+          cache-from: type=gha,scope=install-gate-app
+          cache-to: type=gha,scope=install-gate-app,mode=max
+          tags: |
+            ghcr.io/ironsail-llc/genus-os/app:${{ env.GENUS_IMAGE_TAG }}
+            ghcr.io/ironsail-llc/genus-os/app:${{ steps.version.outputs.tag }}
+
+      - name: Show what compose will find locally
+        run: docker image ls | grep genus-os
+
+      - name: Build a wheelhouse so the block's pip install is THIS branch
+        run: |
+          python -m pip install --upgrade pip wheel
+          python -m pip wheel . -w "$GITHUB_WORKSPACE/wheelhouse"
+          python -m pip install fastapi uvicorn httpx
+
+      - name: Start the mock model server
+        run: |
+          python -m tests.acceptance.mock_llm --host 0.0.0.0 --port "$MOCK_PORT" \
+            > "$RUNNER_TEMP/mock.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -fsS "http://127.0.0.1:${MOCK_PORT}/api/tags" >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS "http://127.0.0.1:${MOCK_PORT}/api/tags" | jq -e '.models | length > 0'
+
+      - name: Replay the quickstart's compose block
+        env:
+          PIP_NO_INDEX: "1"
+          PIP_FIND_LINKS: ${{ github.workspace }}/wheelhouse
+          INSTALL_GATE_REPO: ${{ github.workspace }}
+        run: |
+          # Committed executable; tests/test_install_gate_workflow.py pins that,
+          # so a chmod here would only hide a shim PATH had skipped.
+          export PATH="$GITHUB_WORKSPACE/.github/install-gate:$PATH"
+          python scripts/extract_doc_commands.py \
+            --file docs/quickstart.md --block compose | tee "$RUNNER_TEMP/compose-block.sh"
+          set -o pipefail
+          bash -euxo pipefail "$RUNNER_TEMP/compose-block.sh" 2>&1 \
+            | tee "$RUNNER_TEMP/compose-block.out"
+
+      # The containers reach the mock at their own network's gateway, and only
+      # genus.env can tell them: Compose's `environment:` block beats
+      # `env_file:`, and neither of these names appears there. Without it the
+      # engine dials the real openrouter.ai with the documented placeholder
+      # key, which is the one thing this gate must never depend on.
+      - name: Point the stack's model calls at the mock
+        run: |
+          cd ~/genus
+          COMPOSE=(docker compose --env-file genus.env
+                   -f docker-compose.yml -f docker-compose.apps.yml)
+          NETWORK="$("${COMPOSE[@]}" ps -q engine \
+            | xargs docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}')"
+          GATEWAY="$(docker network inspect "$NETWORK" -f '{{(index .IPAM.Config 0).Gateway}}')"
+          echo "the stack reaches this runner at ${GATEWAY}"
+          {
+            echo "OPENROUTER_API_BASE=\"http://${GATEWAY}:${MOCK_PORT}/v1\""
+            echo "OLLAMA_API_BASE=\"http://${GATEWAY}:${MOCK_PORT}\""
+            echo "ROBOTHOR_OLLAMA_URL=\"http://${GATEWAY}:${MOCK_PORT}\""
+          } >> genus.env
+          "${COMPOSE[@]}" up -d
+
+          # Recreating the containers restarts all four, and the dashboard
+          # waits on the other three. Poll every one of them, the way the
+          # wizard's own `wait` step does, so the readiness assertion below
+          # fails on a service that is broken rather than on one still booting.
+          for url in "${ENGINE_URL}/ready" "${BRIDGE_URL}/ready" \
+                     "${ORCHESTRATOR_URL}/ready" "${DASHBOARD_URL}/api/ready"; do
+            for _ in $(seq 1 60); do
+              curl -fsS "$url" >/dev/null 2>&1 && break
+              sleep 3
+            done
+          done
+          "${COMPOSE[@]}" ps
+
+      - name: Assert every service answers /ready
+        run: |
+          curl -f "${ENGINE_URL}/ready"
+          curl -f "${BRIDGE_URL}/ready"
+          curl -f "${ORCHESTRATOR_URL}/ready"
+          curl -f "${DASHBOARD_URL}/api/ready"
+          echo "assertion OK: engine, bridge, orchestrator and dashboard are ready"
+
+      - name: Assert genus doctor --json has no required failure
+        run: |
+          cd ~/genus
+          ROBOTHOR_WORKSPACE="$PWD" genus doctor --json > "$RUNNER_TEMP/doctor.json" || true
+          jq . "$RUNNER_TEMP/doctor.json"
+          test "$(jq -r '.summary.required_failed' "$RUNNER_TEMP/doctor.json")" = "0"
+          echo "assertion OK: doctor required_failed == 0"
+
+      # Before the completion call, not after it: a fleet pinned to a model the
+      # wizard never chose fails as four consecutive provider timeouts, and the
+      # log that produces names everything except the cause.
+      - name: Assert the installed fleet resolves to the model the wizard chose
+        run: |
+          export MANIFEST_DIR="$HOME/genus/docs/agents"
+          python - <<'PROBE'
+          import os, pathlib, sys, yaml
+          from robothor.engine.config import load_agent_config
+
+          manifests = pathlib.Path(os.environ["MANIFEST_DIR"])
+          defaults = yaml.safe_load((manifests / "_defaults.yaml").read_text()) or {}
+          chosen = defaults["model"]["primary"]
+          resolved = load_agent_config("main", manifests).model_primary
+          print(f"fleet default: {chosen}")
+          print(f"main resolves to: {resolved}")
+          if resolved != chosen:
+              sys.exit(f"main is pinned to {resolved}, not the chosen {chosen}")
+          PROBE
+          echo "assertion OK: main resolves to the model genus init probed"
+
+      - name: Assert an agent returns a real completion
+        run: |
+          cd ~/genus
+          docker compose --env-file genus.env \
+            -f docker-compose.yml -f docker-compose.apps.yml \
+            exec -T engine python -m robothor.cli run --agent main --print "say pong" \
+            2>&1 | tee "$RUNNER_TEMP/run.txt"
+          grep -qi pong "$RUNNER_TEMP/run.txt"
+          # One tool round trip, not two hundred — see the local job.
+          if grep -q "Safety limit reached" "$RUNNER_TEMP/run.txt"; then
+            echo "the run reached the iteration ceiling instead of settling"; exit 1
+          fi
+          echo 'assertion OK: genus run --agent main "say pong" settled after one tool round trip'
+
+      - name: Assert the setup wizard is reachable, claimable, then closed
+        run: |
+          TOKEN="$(grep -oE '/setup\?token=[A-Za-z0-9_-]+' "$RUNNER_TEMP/compose-block.out" \
+            | tail -1 | sed 's|.*token=||')"
+          test -n "$TOKEN" || { echo "genus init printed no first-run link"; exit 1; }
+
+          curl -fsS "${BRIDGE_URL}/api/setup/status" | tee "$RUNNER_TEMP/setup-status.json"
+          # The 200 is the assertion: the gate 404s every first-run route the
+          # moment an owner row exists, so reaching this route at all is what
+          # proves the wizard is still open. (`.complete` is a literal in the
+          # handler and proves nothing on its own.)
+          jq -e '.steps.operator == false' "$RUNNER_TEMP/setup-status.json"
+          echo "assertion OK: /api/setup/status answers 200 with no operator yet"
+
+          CLAIM="$(curl -fsS -X POST "${BRIDGE_URL}/api/setup/claim" \
+            -H 'content-type: application/json' \
+            -d "{\"token\":\"${TOKEN}\"}" | jq -r .claim_token)"
+          [ -n "$CLAIM" ] && [ "$CLAIM" != null ] || { echo "no claim token"; exit 1; }
+          echo "assertion OK: the printed token bought a setup claim"
+
+          curl -fsS -X POST "${BRIDGE_URL}/api/setup/operator" \
+            -H "authorization: Bearer ${CLAIM}" \
+            -H 'content-type: application/json' \
+            -d "{\"name\":\"${GATE_OWNER_NAME}\",\"email\":\"${GATE_OWNER_EMAIL}\",\"password\":\"install-gate-P4ssphrase!\"}" \
+            | tee "$RUNNER_TEMP/setup-operator.json"
+          jq -e '.user.role == "owner"' "$RUNNER_TEMP/setup-operator.json"
+          echo "assertion OK: the wizard created the operator account"
+
+          CODE="$(curl -s -o /dev/null -w '%{http_code}' "${BRIDGE_URL}/api/setup/status")"
+          test "$CODE" = "404"
+          PAGE="$(curl -s -o /dev/null -w '%{http_code}' "${DASHBOARD_URL}/setup")"
+          test "$PAGE" = "404"
+          echo "assertion OK: /api/setup/status and /setup are closed for good (404)"
+
+      - name: Collect the compose logs
+        if: always()
+        run: |
+          cd ~/genus || exit 0
+          docker compose --env-file genus.env \
+            -f docker-compose.yml -f docker-compose.apps.yml \
+            logs --no-color --timestamps > "$RUNNER_TEMP/compose.log" 2>&1 || true
+          docker compose --env-file genus.env \
+            -f docker-compose.yml -f docker-compose.apps.yml \
+            ps -a > "$RUNNER_TEMP/compose-ps.txt" 2>&1 || true
+          sed -E 's/(PASSWORD|SECRET|API_KEY|TOKEN)="[^"]*"/\1="[redacted]"/' \
+            genus.env > "$RUNNER_TEMP/genus.env.txt" 2>/dev/null || true
+
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: install-gate-compose-logs
+          path: |
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/*.json
+            ${{ runner.temp }}/*.txt
+            ${{ runner.temp }}/*.out
+            ${{ runner.temp }}/*.sh
+          if-no-files-found: ignore

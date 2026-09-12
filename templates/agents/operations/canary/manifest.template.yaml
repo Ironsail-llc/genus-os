@@ -7,12 +7,6 @@ department: operations
 reports_to: {{ reports_to }}
 escalates_to: {{ escalates_to }}
 
-model:
-  primary: {{ model_primary }}
-  fallbacks:
-    - openrouter/minimax/minimax-m2.5
-  payload_alias: kimi
-
 schedule:
   cron: ""
   timezone: {{ timezone }}

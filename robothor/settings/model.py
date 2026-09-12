@@ -447,6 +447,19 @@ class OllamaSettings(SettingsGroup):
         "ROBOTHOR_OLLAMA_PORT",
         "Ollama port, used only when no full URL is set.",
     )
+
+    @property
+    def base_url(self) -> str:
+        """Where Ollama actually is, however this instance said it.
+
+        ``url`` is empty by default and means "fall back to host and port", but
+        three callers read it raw -- so `genus init` POSTed its model pull to a
+        relative ``/api/pull``, the puller swallowed the failure, and the step
+        reported success on an instance with no embedding model. One resolver,
+        so there is one answer.
+        """
+        return str(self.url).rstrip("/") or f"http://{self.host}:{self.port}"
+
     num_ctx: int = declare(
         0,
         "ROBOTHOR_OLLAMA_NUM_CTX",
@@ -502,6 +515,19 @@ class ProviderSettings(SettingsGroup):
 
     restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
 
+    openrouter_api_base: str = declare(
+        "",
+        "OPENROUTER_API_BASE",
+        "OpenAI-compatible endpoint every `openrouter/*` model is dialled at, "
+        "instead of https://openrouter.ai/api/v1. Point it at a corporate "
+        "gateway, a recording proxy, or the acceptance gate's mock server. "
+        "Declared here so the knob is documented and inventoried, but litellm "
+        "reads the ENVIRONMENT VARIABLE itself -- setting this key in "
+        "config.yaml alone changes nothing.",
+        restart_required=False,
+        restart_units=(),
+        since="1.71.0",
+    )
     last_resort_model: str = declare(
         "",
         "ROBOTHOR_LAST_RESORT_MODEL",
@@ -1648,6 +1674,20 @@ class SubstrateSettings(SettingsGroup):
         "ROBOTHOR_INIT_PRESET",
         "Agent catalogue preset `genus init` installs when --preset is not "
         "given. `genus agent catalog` lists the presets this build carries.",
+        restart_required=False,
+        restart_units=(),
+        since="1.71.0",
+    )
+    compose_image_tag: str = declare(
+        "",
+        "GENUS_IMAGE_TAG",
+        "Released image tag infra/docker-compose.apps.yml runs, for every "
+        "container in the compose substrate. It has no default in the compose "
+        "file on purpose -- the release build publishes no `latest`, so an "
+        "unset tag must refuse to start rather than pull something that does "
+        "not exist. `genus init --substrate compose` writes `v<this CLI's "
+        "version>` into genus.env and deliberately does NOT read this from "
+        "the environment; `--image-tag` is the override.",
         restart_required=False,
         restart_units=(),
         since="1.71.0",

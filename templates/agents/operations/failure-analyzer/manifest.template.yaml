@@ -12,13 +12,6 @@ escalates_to: {{ escalates_to }}
 tags_produced: [self-improve, escalation, needs-owner]
 tags_consumed: []
 
-model:
-  primary: {{ model_primary }}
-  fallbacks:
-    - openrouter/xiaomi/mimo-v2-pro
-    - gemini/gemini-2.5-pro
-  payload_alias: sonnet
-
 schedule:
   cron: "{{ cron_expr }}"
   timezone: {{ timezone }}

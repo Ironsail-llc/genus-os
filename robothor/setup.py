@@ -174,6 +174,33 @@ _ANSWER_FLAGS = {
 }
 
 
+def _recorded_substrate(workspace: Path) -> str:
+    """What the last `genus init` on THIS workspace set up, if anything.
+
+    `--substrate` defaults to `local`, and nothing used to read back what the
+    instance already was -- so a re-run in a compose workspace planned a local
+    install against it, which is how the compose database password came to be
+    at risk. Read straight from the workspace's own config.yaml rather than
+    through `get_settings()`: `--workspace` may name a different tree than the
+    ambient ROBOTHOR_WORKSPACE, and this is a question about that tree.
+
+    Empty for a fresh workspace, an unreadable file, or anything that is not
+    the expected shape. Unknown falls through to the normal default.
+    """
+    path = Path(workspace).expanduser() / ".robothor" / "config.yaml"
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return ""
+    if not isinstance(document, dict):
+        return ""
+    settings = document.get("settings")
+    substrate = (settings or {}).get("substrate") if isinstance(settings, dict) else None
+    if not isinstance(substrate, dict):
+        return ""
+    return str(substrate.get("init_substrate") or "")
+
+
 def build_init_context(args: Any) -> Any:
     """Turn parsed flags and the environment into an :class:`InitContext`.
 
@@ -198,7 +225,10 @@ def build_init_context(args: Any) -> Any:
             answers[key] = value
 
     substrate_name = str(
-        getattr(args, "substrate", None) or os.environ.get("ROBOTHOR_INIT_SUBSTRATE") or "local"
+        getattr(args, "substrate", None)
+        or os.environ.get("ROBOTHOR_INIT_SUBSTRATE")
+        or _recorded_substrate(workspace)
+        or "local"
     )
 
     if answers.get("docker") or substrate_name == "compose":

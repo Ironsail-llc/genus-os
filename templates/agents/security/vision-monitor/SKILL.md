@@ -14,7 +14,6 @@ unknown persons or after-hours detections to the main agent.
 
 ## Variables
 
-- **model_primary**: Primary LLM model (default: `ollama_chat/qwen3.5:122b`)
 - **cron_expr**: Cron schedule (default: `12 6-22/6 * * *` — every 6h)
 - **timezone**: Schedule timezone (default: `UTC`)
 - **reports_to**: Supervisor agent (default: `main`)

@@ -107,6 +107,14 @@ class TestMainBundleInstalls:
             repo_root=workspace,
         )
 
+        # What `genus init` writes before it installs anything: the model the
+        # provider step probed. Templates name no model, so this is the only
+        # thing that says which one the fleet dials.
+        (workspace / "docs" / "agents" / "_defaults.yaml").write_text(
+            "model:\n  primary: openrouter/openai/gpt-5.4\n  fallbacks: []\n",
+            encoding="utf-8",
+        )
+
         manifest_path = workspace / "docs" / "agents" / "main.yaml"
         manifest = yaml.safe_load(manifest_path.read_text())
 
@@ -122,3 +130,18 @@ class TestMainBundleInstalls:
         )
         failures = [(r.check_id, r.message, r.details) for r in results if r.status == "FAIL"]
         assert failures == [], f"main.yaml fails manifest checks: {failures}"
+
+
+def test_an_install_with_no_fleet_default_says_nothing_names_a_model(real_catalog, workspace):
+    """The check is not removed, only moved: an instance where neither the
+    manifest nor docs/agents/_defaults.yaml names a model has an agent that
+    cannot dial anything, and it still says so."""
+    from robothor.templates.manifest_checks import check_structure
+
+    manifest = {"delivery": {"mode": "none"}, "schedule": {"session_target": "isolated"}}
+
+    result = check_structure(manifest, inherited_model="")
+
+    assert result.status == "FAIL"
+    assert any("nothing tells this agent which model" in detail for detail in result.details)
+    assert check_structure(manifest, inherited_model="openrouter/x/y").status != "FAIL"

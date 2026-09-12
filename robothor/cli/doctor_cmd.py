@@ -33,22 +33,22 @@ def _load_instance_env() -> None:
     Never raises. This is the command an operator runs to diagnose a box whose
     settings do not even parse.
     """
-    from robothor.secrets.env_file import load_instance_env
+    from robothor.secrets.env_file import apply_instance_env
 
     try:
-        from robothor.settings import get_settings, reset_settings
+        from robothor.settings import get_settings
 
         workspace = get_settings().paths.workspace
     except Exception:  # noqa: BLE001 - a box with no usable settings still gets checked
         return
 
-    result = load_instance_env(workspace)
+    # Settings are not the only thing cached by now: `robothor.config` and the
+    # connection pool were both built from an environment that did not have
+    # this file's contents, and the database layer reads the config, not the
+    # settings. `apply_instance_env` drops all three.
+    result = apply_instance_env(workspace)
     if result.refused:
         print(f"genus doctor: {result.refused}", file=sys.stderr)
-        return
-    if result.loaded:
-        # The settings are cached by now and were resolved without these.
-        reset_settings()
 
 
 def run_doctor(args: argparse.Namespace) -> DoctorReport:

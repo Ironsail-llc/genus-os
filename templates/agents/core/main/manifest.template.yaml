@@ -4,12 +4,6 @@ description: Primary interactive agent — talks to the operator and delegates w
 version: "2026-08-18"
 department: core
 
-model:
-  primary: {{ model_primary }}
-  fallbacks:
-    - openrouter/anthropic/claude-sonnet-4.6
-    - openrouter/moonshotai/kimi-k2.5
-
 schedule:
   cron: ""
   timezone: {{ timezone }}

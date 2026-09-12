@@ -21,7 +21,7 @@ CRM tasks.
 
 ## Variables
 
-None — uses global defaults (`model_primary`, `timezone`) from `_defaults.yaml`.
+None — uses global defaults (`timezone`) from `_defaults.yaml`.
 
 ## After Install
 

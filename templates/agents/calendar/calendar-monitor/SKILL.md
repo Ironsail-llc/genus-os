@@ -14,7 +14,6 @@ issues to the main agent.
 
 ## Variables
 
-- **model_primary**: Primary LLM model (default: `openrouter/z-ai/glm-5`)
 - **cron_expr**: Cron schedule (default: `8 6-22/6 * * *` — every 6h)
 - **timezone**: Schedule timezone (default: `UTC`)
 - **reports_to**: Supervisor agent (default: `main`)

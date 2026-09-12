@@ -14,7 +14,6 @@ your own agents.
 
 ## Variables
 
-- **model_primary**: Primary LLM model (default: `ollama_chat/qwen3.5:122b`)
 - **cron_expr**: Cron schedule (default: `0 12 * * *` — noon daily)
 - **timezone**: Schedule timezone (default: `UTC`)
 

@@ -4,10 +4,6 @@ version: "2026-03-17"
 instruction_file_path: brain/agents/hello-world.md
 
 variables:
-  model_primary:
-    type: string
-    default: "ollama_chat/qwen3.5:122b"
-    description: Primary LLM model
   timezone:
     type: string
     default: "UTC"

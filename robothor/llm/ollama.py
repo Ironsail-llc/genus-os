@@ -657,8 +657,36 @@ async def get_embeddings_batch_async(
     return results
 
 
+#: Substrings that mark a model as an embedder or a reranker rather than
+#: something that can hold a conversation. The same exclusion
+#: :func:`detect_generation_model` applies.
+NON_GENERATION_MARKERS = ("embed", "rerank")
+
+
+def _is_generation_model(name: str) -> bool:
+    return not any(marker in name.lower() for marker in NON_GENERATION_MARKERS)
+
+
+def _names_the_same_model(target: str, candidate: str) -> bool:
+    """Is ``candidate`` the model ``target`` asks for, at any tag?
+
+    A tag is a size, not a different model, so ``qwen3:32b`` answers a request
+    for ``qwen3:8b``. A PREFIX is neither: the old test was
+    ``candidate.startswith(target.split(":")[0])``, under which
+    ``qwen3-embedding:0.6b`` satisfied ``qwen3:8b`` -- and the embedder is
+    exactly what ``genus init`` pulls. An instance with no chat model at all
+    reported the generation model present, the orchestrator answered /ready
+    200, and every agent run failed.
+    """
+    return target == candidate or candidate.startswith(target.split(":")[0] + ":")
+
+
 async def check_model_available(model: str | None = None) -> bool:
-    """Check if a model is available in Ollama."""
+    """Whether Ollama is serving a GENERATION model matching ``model``.
+
+    The orchestrator's readiness rests on this, so it is exact: an embedding
+    or reranking model present is not a generation model present.
+    """
     try:
         url = _ollama_url()
         async with _probe_client(5.0) as client:
@@ -666,7 +694,11 @@ async def check_model_available(model: str | None = None) -> bool:
             resp.raise_for_status()
             models = [m["name"] for m in resp.json().get("models", [])]
             target = model or GENERATION_MODEL
-            return any(target in m or m.startswith(target.split(":")[0]) for m in models)
+            return any(
+                _names_the_same_model(target, candidate)
+                for candidate in models
+                if _is_generation_model(candidate)
+            )
     except Exception:
         return False
 

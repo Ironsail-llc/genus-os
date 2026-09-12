@@ -179,10 +179,51 @@ def test_an_owner_account_that_exists_passes(monkeypatch) -> None:
 
 def test_no_owner_account_anywhere_fails_and_names_the_command(monkeypatch) -> None:
     monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner())
+    monkeypatch.setattr(identity_checks, "_first_run_is_pending", lambda _ctx: False)
     ctx = make_ctx(db_factory=fake_db([(None,)]))
     row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
     assert row.status == "fail"
     assert "genus user add --role owner" in row.detail
+
+
+def test_no_owner_account_yet_is_the_expected_state_of_a_fresh_install(monkeypatch) -> None:
+    """`genus init` deliberately creates no account -- the browser wizard does,
+    with the password. Failing here made a correct install exit 1 and told the
+    operator to mint an owner by hand, which is exactly what would close the
+    wizard they have not opened yet."""
+    monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner())
+    monkeypatch.setattr(identity_checks, "_first_run_is_pending", lambda _ctx: True)
+    ctx = make_ctx(db_factory=fake_db([(None,)]))
+
+    row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
+
+    assert row.status == "skip"
+    assert "/setup" in row.detail
+    assert "genus user add" not in row.detail
+
+
+def test_the_first_run_is_pending_until_the_wizard_records_that_it_finished(tmp_path) -> None:
+    """Not the setup token: `genus init` mints that in its LAST step, after the
+    verification that asks this question, and it expires in half an hour. The
+    wizard's own completion marker has neither problem."""
+
+    class _Paths:
+        workspace = str(tmp_path)
+
+    class _Settings:
+        paths = _Paths()
+
+    ctx = make_ctx()
+    ctx._settings = _Settings()
+
+    assert identity_checks._first_run_is_pending(ctx) is True
+
+    (tmp_path / ".robothor").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".robothor" / "config.yaml").write_text(
+        "setup_completed_at: 2026-09-12T00:00:00Z\n", encoding="utf-8"
+    )
+
+    assert identity_checks._first_run_is_pending(ctx) is False
 
 
 def test_a_tenant_mismatch_is_diagnosed_as_a_mismatch_not_as_no_owner(monkeypatch) -> None:
@@ -239,6 +280,7 @@ def test_an_unscoped_connection_keeps_the_any_tenant_claim(monkeypatch) -> None:
     """Superuser, or RLS off: the query really did see every tenant, so the
     prescription is sound."""
     monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
+    monkeypatch.setattr(identity_checks, "_first_run_is_pending", lambda _ctx: False)
     ctx = make_ctx(db_factory=fake_db([(None,)]))
     row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
 
@@ -250,6 +292,7 @@ def test_an_unscoped_connection_keeps_the_any_tenant_claim(monkeypatch) -> None:
 def test_an_empty_scope_setting_counts_as_unscoped(monkeypatch) -> None:
     """`current_setting(..., true)` returns '' as well as NULL when unset."""
     monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
+    monkeypatch.setattr(identity_checks, "_first_run_is_pending", lambda _ctx: False)
     ctx = make_ctx(db_factory=fake_db([("",)]))
     row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
     assert "genus user add --role owner" in row.detail

@@ -51,7 +51,17 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: for the other seven. A name left the raw-read path without a call site
 #: leaving it, which is the ratchet being honest rather than flattering -- it
 #: counts sites, and this move did not remove one.
-ENV_READ_SITE_BASELINE = 495
+#:
+#: 495 -> 489 on 2026-09-12. Six of those had already gone on `main` and the
+#: constant had not followed -- the assertion is `<=`, so a stale baseline
+#: passes silently while carrying that much slack. It was found by a change
+#: that added one raw read (`ROBOTHOR_LAST_RESORT_MODEL` in
+#: `engine/config.fleet_model_chain`) and would have ridden the gap unnoticed;
+#: that read now resolves through `get_settings().providers.last_resort_model`.
+#: Lower this whenever the count drops, or the ratchet stops ratcheting.
+#: 489 -> 488: `llm_client.chain_with_last_resort` now reads through the same
+#: `last_resort_model()` as the agent chain.
+ENV_READ_SITE_BASELINE = 488
 
 
 def _discovery():
@@ -481,3 +491,61 @@ def test_an_empty_numeric_variable_is_unset_for_provenance_too(monkeypatch) -> N
     record = field_index()["ROBOTHOR_MAX_CONCURRENT_AGENTS"]
     monkeypatch.setenv("ROBOTHOR_MAX_CONCURRENT_AGENTS", "")
     assert provenance.env_name_in_use(record) is None
+
+
+# --------------------------------------------------------------------------
+# duplicate field names inside one group
+# --------------------------------------------------------------------------
+#
+# `field_index()` already rejects two fields claiming one ENV name. It cannot
+# see two fields claiming one PYTHON name: Python builds the class body as a
+# namespace, so the second `image_tag: str = declare(...)` simply replaces the
+# first before pydantic ever looks. The declaration vanishes -- no error, no
+# warning, and `declared_env_names()` silently omits an env var the platform
+# now reads. That is how a `GENUS_IMAGE_TAG` declaration disappeared behind an
+# existing `GENUS_OS_IMAGE_TAG` one in `SubstrateSettings`. Only the SOURCE
+# still holds the evidence, so this reads the source.
+
+
+def _duplicate_field_names(source: str) -> dict[str, list[str]]:
+    """Field names declared more than once in one settings-group class body."""
+    import ast
+    from collections import Counter
+
+    duplicates: dict[str, list[str]] = {}
+    for node in ast.parse(source).body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        names = [
+            statement.target.id
+            for statement in node.body
+            if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name)
+        ]
+        repeated = sorted(name for name, count in Counter(names).items() if count > 1)
+        if repeated:
+            duplicates[node.name] = repeated
+    return duplicates
+
+
+def test_no_settings_group_declares_one_field_name_twice() -> None:
+    source = (REPO_ROOT / "robothor" / "settings" / "model.py").read_text(encoding="utf-8")
+
+    duplicates = _duplicate_field_names(source)
+
+    assert not duplicates, (
+        "these settings groups declare a field name more than once, so every "
+        "declaration but the last is silently discarded along with its env var:\n  "
+        + "\n  ".join(f"{group}: {', '.join(names)}" for group, names in duplicates.items())
+    )
+
+
+def test_the_duplicate_field_guard_actually_catches_one() -> None:
+    """A guard nobody has fired is a comment. Fire it."""
+    shadowed = """
+class SubstrateSettings(SettingsGroup):
+    image_tag: str = declare("", "GENUS_IMAGE_TAG", "the compose tag")
+    service_user: str = declare("robothor", "ROBOTHOR_SERVICE_USER", "the account")
+    image_tag: str = declare("", "GENUS_OS_IMAGE_TAG", "the helm tag")
+"""
+
+    assert _duplicate_field_names(shadowed) == {"SubstrateSettings": ["image_tag"]}

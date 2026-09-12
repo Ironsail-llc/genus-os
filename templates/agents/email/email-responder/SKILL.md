@@ -14,7 +14,6 @@ Supports review workflow for high-priority replies.
 
 ## Variables
 
-- **model_primary**: Primary LLM model (default: `openrouter/z-ai/glm-5`)
 - **cron_expr**: Cron schedule (default: `15 8-20/2 * * *` — every 2h)
 - **timezone**: Schedule timezone (default: `UTC`)
 - **reports_to**: Supervisor agent (default: `main`)
