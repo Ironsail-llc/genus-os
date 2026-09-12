@@ -93,7 +93,11 @@ class PluginSet:
     commands: dict[str, Any] = field(default_factory=dict)
     sandboxes: dict[str, Any] = field(default_factory=dict)
     memory: dict[str, Any] = field(default_factory=dict)
-    checks: dict[str, Any] = field(default_factory=dict)
+    #: Doctor checks. Named for the GROUP, not for the payload key -- the
+    #: same convention `memory` follows, and the one
+    #: test_plugin_groups_are_consumed.py enforces so that a declared group
+    #: always names a field something in production actually reads.
+    doctor: dict[str, Any] = field(default_factory=dict)
     #: Tool names the providing plugin declared read-only. Absent means
     #: WRITE, which is the safe default and today's behaviour: a plugin
     #: that says nothing must never be assumed harmless.
@@ -113,7 +117,7 @@ class PluginSet:
             "genus.commands": self.commands,
             "genus.sandboxes": self.sandboxes,
             "genus.memory": self.memory,
-            "genus.doctor": self.checks,
+            "genus.doctor": self.doctor,
         }[group]
 
 

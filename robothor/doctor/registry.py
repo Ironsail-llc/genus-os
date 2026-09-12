@@ -146,7 +146,7 @@ def plugin_checks(entry_points: Sequence[Any] | None = None) -> tuple[Check, ...
             logger.warning(
                 "doctor: plugin %r contributed no checks: %s", failure.name, failure.reason
             )
-        contributed = dict(getattr(loaded, "checks", {}) or {})
+        contributed = dict(loaded.doctor)
         if not contributed:
             continue
 

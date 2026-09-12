@@ -45,6 +45,7 @@ available to any agent whose manifest lists it in `tools_allowed`.
 | `genus.commands` | `commands` | operator verbs — `robothor <verb>` |
 | `genus.sandboxes` | `sandboxes` | alternative sandbox runtimes (**opt-in**, see below) |
 | `genus.memory` | `providers` | extra memory sources, merged **after** built-in recall |
+| `genus.doctor` | `checks` | `genus doctor` checks — ids must be prefixed with the distribution's own name and may not shadow a built-in |
 
 A tool normally ships in two groups: the handler and its schema. The engine
 keeps those in separate registries and so does the loader.
