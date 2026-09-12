@@ -415,6 +415,37 @@ def required_env_checks() -> list[tuple[str, bool, str]]:
     return results
 
 
+def probe_service(base_url: str, *, timeout: float = 3.0) -> tuple[bool, str]:
+    """Ask a local service whether it is up, using an endpoint the CLI may reach.
+
+    ``/ready`` is unauthenticated on every service that serves it, so it is
+    tried first. ``/health`` is the fallback for services without ``/ready``;
+    in production the bridge gates ``/health`` behind auth, so a 401/403 from
+    it proves the service is up and enforcing auth, not that it is down.
+    Returns ``(ok, detail)`` where *detail* names the URL and status seen.
+    """
+    import urllib.error
+    import urllib.request
+
+    last_detail = ""
+    for path in ("/ready", "/health"):
+        url = f"{base_url}{path}"
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return True, f"{url} → {resp.status}"
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                return True, f"{url} → {e.code} (up, authenticated)"
+            last_detail = f"{url} → {e.code}"
+            if e.code == 404:
+                continue
+            return False, last_detail
+        except Exception as e:  # URLError, timeout, connection refused
+            return False, f"{url}: {e}"
+    return False, last_detail or f"{base_url}: no /ready or /health"
+
+
 def validate() -> list[tuple[str, bool, str]]:
     """Validate system configuration and connectivity.
 
@@ -483,25 +514,19 @@ def validate() -> list[tuple[str, bool, str]]:
         import urllib.request
 
         req = urllib.request.Request(f"{cfg.ollama.base_url}/api/tags", method="GET")
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        with urllib.request.urlopen(req, timeout=3):
             results.append(("ollama", True, cfg.ollama.base_url))
     except Exception as e:
         results.append(("ollama", False, str(e)))
 
     # 6. Service health
-    import urllib.request
-
     for name, url in [
         ("bridge", cfg.bridge_url),
         ("orchestrator", cfg.orchestrator_url),
         ("vision", cfg.vision_url),
     ]:
-        try:
-            req = urllib.request.Request(f"{url}/health", method="GET")
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                results.append((f"service:{name}", True, f"{url}/health → {resp.status}"))
-        except Exception as e:
-            results.append((f"service:{name}", False, str(e)))
+        ok, detail = probe_service(url)
+        results.append((f"service:{name}", ok, detail))
 
     # 7. File paths
     for label, path in [
