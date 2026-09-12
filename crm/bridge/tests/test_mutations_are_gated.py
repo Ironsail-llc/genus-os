@@ -90,6 +90,21 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
         "It must stay reachable to another tenant's own owner, which require_operator "
         "(platform-tenant only) would forbid."
     ),
+    "/api/setup": (
+        "First-run only, and require_operator is circular here in the strongest "
+        "sense: these routes EXIST to create the operator, on a box that has no "
+        "account, no issuer and no password. Two constraints stand in for the "
+        "gate and both are enforced in routers/setup.py rather than by a "
+        "middleware clause: every route calls _gate(), which 404s the moment "
+        "robothor.setup_token.setup_complete() sees an owner row in the "
+        "DATABASE, and every route but status/claim requires a setup CLAIM "
+        "token (typ='setup', audience='genus-setup') that verify_token rejects "
+        "and that a browser session can never be. The claim is bought once with "
+        "the single-use token `genus init` printed, behind the same flood "
+        "ceiling and a five-a-minute window. test_setup_routes.py parametrises "
+        "the 404 over every route in the router and fails if one is added "
+        "without coverage."
+    ),
     # Root-mounted legacy integration webhooks — the reason this guard does not
     # filter on "/api/".
     "/resolve-contact": (

@@ -29,7 +29,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-__all__ = ["NEW_FILE_MODE", "write_setting"]
+__all__ = ["NEW_FILE_MODE", "write_setting", "write_top_level"]
 
 
 def write_setting(
@@ -61,6 +61,44 @@ def write_setting(
         # which is where the operator gets the error.
         text = ""
     _write_atomically(path, _splice(text, group, field, _render(value), names))
+    return path
+
+
+def write_top_level(key: str, value: Any, *, path: Path) -> Path:
+    """Set a TOP-LEVEL key in config.yaml, outside the ``settings:`` block.
+
+    For notes that are not settings — ``setup_completed_at`` is the first — and
+    the distinction is load-bearing, not tidiness. The ``settings:`` block is
+    validated against the registry, and under ``config_strict_mode: enforce``
+    an undeclared key in it is REJECTED by name: a marker written there would
+    make a freshly-completed instance refuse to start. Everything outside that
+    block is explicitly not the settings model's to validate (federation
+    identity already lives there).
+
+    Same textual edit and same atomic replace as :func:`write_setting`, so an
+    operator's comments and the file's mode survive.
+    """
+    if not key or ":" in key or key.strip() != key:
+        raise ValueError(f"{key!r} is not a usable top-level key")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+
+    rendered = _render(value)
+    lines = text.splitlines()
+    for index, raw in enumerate(lines):
+        stripped = raw.strip()
+        if _indent_of(raw) == 0 and stripped.split(":", 1)[0] == key and ":" in stripped:
+            lines[index] = f"{key}: {rendered}{_inline_comment(stripped)}"
+            _write_atomically(path, "\n".join(lines) + "\n")
+            return path
+
+    # Appended rather than prepended: a leading comment block in a
+    # hand-written file is the first thing an operator reads, and a machine
+    # line above it moves their own header down the page on every write.
+    prefix = lines + ([""] if lines and lines[-1].strip() else [])
+    _write_atomically(path, "\n".join([*prefix, f"{key}: {rendered}"]) + "\n")
     return path
 
 
