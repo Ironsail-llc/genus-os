@@ -10,10 +10,20 @@ to:
 - Auto-attend the operator on outgoing calendar invites.
 
 Fallback order:
-    1. ``owner.yaml`` at the hardcoded path (authoritative).
+    1. ``owner.yaml`` at the hardcoded path, or at ``ROBOTHOR_OWNER_CONFIG``
+       when that is set (authoritative either way — see
+       ``robothor.settings.sources.owner_config_override_path``).
     2. Legacy env vars ``ROBOTHOR_OWNER_EMAIL`` / ``ROBOTHOR_OWNER_NAME`` —
        emits a ``DeprecationWarning`` and synthesizes a minimal config.
     3. ``None`` — caller must handle (log + degrade gracefully, never crash).
+
+``ROBOTHOR_OWNER_CONFIG`` exists so the platform test suite is hermetic: a
+caller passing no explicit ``path`` otherwise always resolves to the real
+``~/.robothor/owner.yaml``, so a real operator identity on the machine
+running the tests would silently win over a test's ``ROBOTHOR_OWNER_EMAIL``.
+``conftest.py`` points every test at an empty temp path via this variable.
+Precedence between ``owner.yaml`` and ``ROBOTHOR_OWNER_EMAIL`` is unchanged —
+the file is still authoritative when it exists, wherever it is located.
 
 The loader is intentionally tolerant: missing optional fields produce empty
 values rather than errors. Callers should never pass the dataclass directly
@@ -175,6 +185,10 @@ def _from_env() -> OwnerConfig | None:
 
 def load_owner_config(path: Path | None = None) -> OwnerConfig | None:
     """Load the operator identity. ``None`` when nothing is configured."""
+    if path is None:
+        from robothor.settings.sources import owner_config_override_path
+
+        path = owner_config_override_path()
     target = path or owner_config_path()
     # An existing owner.yaml is authoritative, including when it is malformed.
     # Silently falling through to legacy environment variables in that case can
