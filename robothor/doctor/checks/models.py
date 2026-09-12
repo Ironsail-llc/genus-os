@@ -14,7 +14,7 @@ states; ``provider.completion`` reports a latency and an error class.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from robothor.doctor.model import Check, Result, fail, ok, skip
 
@@ -100,11 +100,23 @@ async def _completion(ctx: DoctorContext) -> Result:
     means credentials, litellm, the network and the provider all work
     together; a fail names the error class (``auth``, ``rate_limit``,
     ``network``, ``model``) and never echoes the response. Skipped under
-    ``--offline`` and when no credential is configured -- there is nothing to
-    test, and a red line for an absent key would duplicate ``provider.keys``.
+    ``--offline``, and skipped when no credential resolves at all -- there is
+    nothing to dial, and a second red line for an absent key would tell the
+    operator what ``provider.keys`` has already told them while hiding which
+    of the two is the cause.
     """
     if ctx.offline:
         return skip("--offline: no upstream call was made")
+
+    try:
+        configured = await ctx.run_blocking(_configured)
+    except Exception as exc:  # noqa: BLE001 - provider.keys owns that failure
+        return skip(f"the credential pool could not be read ({type(exc).__name__})")
+    if not configured:
+        # provider.keys has already said this, as a required failure. Saying it
+        # again here tells the operator the same thing twice and hides which of
+        # the two is the cause.
+        return skip("no provider credential configured — see provider.keys")
 
     try:
         model = await ctx.run_blocking(_fleet_model)
@@ -131,23 +143,53 @@ async def _completion(ctx: DoctorContext) -> Result:
     return ok(f"{model} answered a 1-token completion")
 
 
+def _ollama_endpoint(ollama: Any) -> tuple[str, bool]:
+    """``(base url, was it configured deliberately)``.
+
+    Every Ollama field carries a default, so "is Ollama configured?" cannot be
+    answered by asking whether a value is set -- there is always one. It is
+    answered by asking whether any of them was CHANGED from what the model
+    declares, which is the same test the engine URL/port precedence uses.
+    """
+    from robothor.settings.model import OllamaSettings
+
+    fields = OllamaSettings.model_fields
+    configured = any(
+        getattr(ollama, name) != fields[name].default for name in ("url", "host", "port")
+    )
+    base = ollama.url or f"http://{ollama.host}:{ollama.port}"
+    return base, configured
+
+
 async def _ollama(ctx: DoctorContext) -> Result:
     """The local Ollama server answers, for the offline tier and embeddings.
 
     Recommended, not required: an instance that runs entirely on a cloud
     provider needs no Ollama. But memory writes embed through it, so on a box
-    that HAS it configured a failure here means memory search quietly degrades
-    rather than errors -- which is why it is checked rather than assumed.
+    that HAS it a failure here means memory search quietly degrades rather than
+    errors -- which is why it is probed rather than assumed.
+
+    Three outcomes, because two were not enough. Answering is a pass whether or
+    not anyone configured it: untouched defaults plus a live server is the
+    normal single-box install, and skipping there would hide a dependency the
+    memory path really uses. Not answering on settings nobody changed is a
+    SKIP -- a cloud-only instance would otherwise carry a permanent red line
+    for a service it does not run, and a line an operator learns to ignore is
+    worse than no line. Not answering on an endpoint someone deliberately set
+    is a failure: they said it should be there.
     """
-    base = (
-        ctx.settings.ollama.url or f"http://{ctx.settings.ollama.host}:{ctx.settings.ollama.port}"
-    )
+    base, configured = _ollama_endpoint(ctx.settings.ollama)
     if not base:
         return skip("no Ollama endpoint is configured")
     response = await ctx.run_blocking(ctx.fetch, f"{base.rstrip('/')}/api/tags")
     if response.ok:
         return ok(f"{base} answered {response.status}")
     reported = response.error or f"HTTP {response.status}"
+    if not configured:
+        return skip(
+            f"not configured (every Ollama setting is on its default) and nothing is "
+            f"listening on {base} — set ROBOTHOR_OLLAMA_URL if this instance uses one"
+        )
     return fail(f"{base} did not answer: {reported}")
 
 

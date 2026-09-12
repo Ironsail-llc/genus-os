@@ -210,6 +210,64 @@ def test_completion_failure_reports_an_error_class_not_the_exception_text(monkey
     assert "sk-live-abcdef" not in rows[0].detail
 
 
+def test_completion_skips_rather_than_failing_twice_with_no_credential(monkeypatch) -> None:
+    """`provider.keys` already reports "no provider credential is configured"
+    as a required failure. Failing here as well tells the operator the same
+    thing twice and hides which one is the cause."""
+    _fake_slots(monkeypatch, {})
+
+    def _never():
+        raise AssertionError("the fleet model must not be resolved with no credential")
+
+    monkeypatch.setattr(model_checks, "_fleet_model", _never)
+
+    rows = _run(model_checks.CHECKS, "provider.completion", make_ctx())
+    assert rows[0].status == "skip"
+    assert "no provider credential" in rows[0].detail
+
+
+def test_completion_makes_no_call_when_no_credential_resolves(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def _call(_messages, **kwargs):
+        calls.append(str(kwargs.get("model")))
+        return object()
+
+    monkeypatch.setattr("robothor.engine.llm_client.llm_call", _call)
+    _fake_slots(monkeypatch, {})
+
+    _run(model_checks.CHECKS, "provider.completion", make_ctx())
+    assert calls == []
+
+
+def test_ollama_skips_on_a_cloud_only_instance() -> None:
+    """Every Ollama setting carries a default, so a cloud-only instance that
+    never configured one would otherwise carry a permanent recommended failure
+    for a service it does not use -- and a red line an operator learns to
+    ignore is worse than no line."""
+    ctx = make_ctx(http_fetch=fake_http({}))
+    rows = _run(model_checks.CHECKS, "ollama.reachable", ctx)
+    assert rows[0].status == "skip"
+    assert "not configured" in rows[0].detail
+
+
+def test_ollama_that_answers_on_the_default_endpoint_still_passes() -> None:
+    """Untouched defaults and a live server is the normal single-box install.
+    Skipping there would hide a dependency the memory path actually uses."""
+    ctx = make_ctx(
+        http_fetch=fake_http({"http://127.0.0.1:11434/api/tags": HttpResponse(status=200)})
+    )
+    assert _run(model_checks.CHECKS, "ollama.reachable", ctx)[0].status == "pass"
+
+
+def test_an_explicitly_configured_ollama_that_is_down_is_a_failure(settings) -> None:
+    """The operator said it should be there. Silence is then a real finding."""
+    settings(ROBOTHOR_OLLAMA_URL="http://ollama.example.test:11434")
+    ctx = make_ctx(http_fetch=fake_http({}))
+    rows = _run(model_checks.CHECKS, "ollama.reachable", ctx)
+    assert rows[0].status == "fail"
+
+
 def test_ollama_passes_when_tags_answers() -> None:
     ctx = make_ctx(
         http_fetch=fake_http({"http://127.0.0.1:11434/api/tags": HttpResponse(status=200)})
@@ -218,9 +276,10 @@ def test_ollama_passes_when_tags_answers() -> None:
     assert rows[0].status == "pass"
 
 
-def test_ollama_failure_is_recommended_not_required() -> None:
+def test_ollama_failure_is_recommended_not_required(settings) -> None:
     check = next(item for item in model_checks.CHECKS if item.id == "ollama.reachable")
     assert check.severity == "recommended"
+    settings(ROBOTHOR_OLLAMA_URL="http://ollama.example.test:11434")
     ctx = make_ctx(http_fetch=fake_http({}))
     assert _run(model_checks.CHECKS, "ollama.reachable", ctx)[0].status == "fail"
 

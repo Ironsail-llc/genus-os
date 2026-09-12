@@ -86,9 +86,14 @@ def test_offline_forks_no_host_script(monkeypatch) -> None:
     assert "--offline" in rows[0].detail
 
 
-def test_ollama_and_the_loopback_services_still_run_offline() -> None:
+def test_ollama_and_the_loopback_services_still_run_offline(monkeypatch) -> None:
     """Offline means "costs nothing and leaves nothing"; it does not mean
     blind. A local probe is free and is the whole point of the report."""
+    monkeypatch.setenv("ROBOTHOR_OLLAMA_URL", "http://ollama.example.test:11434")
+    from robothor.settings import reset_settings
+
+    reset_settings()
+
     ctx = make_ctx(offline=True, http_fetch=fake_http({}))
     rows = _run(model_checks.CHECKS, "ollama.reachable", ctx)
     assert rows[0].status == "fail"  # it was actually probed, and nothing answered
