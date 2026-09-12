@@ -199,7 +199,7 @@ class InitContext:
         """
         if self.db_factory is not None:
             return self.db_factory()
-        import psycopg2  # type: ignore[import-untyped]
+        import psycopg2
 
         config = self.db_config()
         return psycopg2.connect(

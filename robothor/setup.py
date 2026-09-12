@@ -806,7 +806,7 @@ def wait_for_services(workspace: Path, timeout: int = 60, password: str = "") ->
     deadline = time.monotonic() + timeout
     while True:
         try:
-            import psycopg2  # type: ignore[import-untyped]
+            import psycopg2
 
             conn = psycopg2.connect(
                 host=DOCKER_DB_HOST,
