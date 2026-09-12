@@ -1,3 +1,10 @@
+## [1.69.1](https://github.com/Ironsail-llc/genus-os/compare/v1.69.0...v1.69.1) (2026-09-12)
+
+### Bug Fixes
+
+* **deploy:** promote release values to 1.69.0 so the gate clears and images rebuild ([#512](https://github.com/Ironsail-llc/genus-os/issues/512)) ([1fd8030](https://github.com/Ironsail-llc/genus-os/commit/1fd8030ca52717bd47fcb8c2a4358d6f630be9ac)), closes [#511](https://github.com/Ironsail-llc/genus-os/issues/511)
+* **docker:** the python image copies the readme pyproject actually names ([#511](https://github.com/Ironsail-llc/genus-os/issues/511)) ([cee75e5](https://github.com/Ironsail-llc/genus-os/commit/cee75e52bdf34aec4c4ec185c4883c6f4ed8f02a)), closes [#476](https://github.com/Ironsail-llc/genus-os/issues/476) [#509](https://github.com/Ironsail-llc/genus-os/issues/509)
+
 ## [1.69.0](https://github.com/Ironsail-llc/genus-os/compare/v1.68.0...v1.69.0) (2026-09-12)
 
 ### Features
