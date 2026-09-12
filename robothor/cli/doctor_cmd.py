@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from robothor.doctor.context import DoctorContext
 from robothor.doctor.render import render_json, render_text
-from robothor.doctor.runner import run_sync
+from robothor.doctor.runner import DoctorReport, run_sync
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import argparse
@@ -21,7 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = ["cmd_doctor", "run_doctor"]
 
 
-def run_doctor(args: argparse.Namespace):
+def run_doctor(args: argparse.Namespace) -> DoctorReport:
     """Build the context from parsed flags and run. Returns the report.
 
     Shared with ``genus config validate``, which is an alias for this command.
@@ -50,4 +50,4 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         # Also on stderr: a --json consumer piping stdout into jq would
         # otherwise see a well-formed document and no sign that nothing ran.
         print(f"genus doctor: {report.error_detail}", file=sys.stderr)
-    return report.exit_code
+    return int(report.exit_code)
