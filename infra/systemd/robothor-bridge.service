@@ -37,7 +37,11 @@ User=robothor
 Group=robothor
 WorkingDirectory=/opt/robothor/crm/bridge
 
-ExecStart=/opt/robothor/crm/bridge/venv/bin/python bridge_service.py
+# The workspace venv, like every other unit: the bridge imports the platform
+# package (robothor.auth, robothor.settings, ...), so a venv built from
+# crm/bridge/requirements.txt alone is missing every platform dependency and
+# fails on the first request that reaches one. Install with the `api` extra.
+ExecStart=/opt/robothor/venv/bin/python bridge_service.py
 
 EnvironmentFile=/etc/robothor/robothor.env
 # GENUS_BRIDGE_SSO_SECRET and GENUS_OIDC_ISSUERS live in secrets.env, not
