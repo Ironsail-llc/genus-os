@@ -186,6 +186,36 @@ def test_config_validate_exits_one_when_a_required_check_failed(monkeypatch, cap
     assert cmd_config(argparse.Namespace(config_command="validate", json=False)) == 1
 
 
+def test_config_validate_runs_offline_so_a_deprecated_alias_gets_no_dearer(
+    monkeypatch,
+) -> None:
+    """The command this replaces made no upstream call. Every runbook and cron
+    entry that still types it must not start spending provider budget."""
+    from robothor.cli.config_cmd import cmd_config
+
+    seen = {}
+
+    def _fake_run_sync(ctx, **kwargs):
+        seen["offline"] = ctx.offline
+        return DoctorReport()
+
+    monkeypatch.setattr("robothor.cli.doctor_cmd.run_sync", _fake_run_sync)
+    cmd_config(argparse.Namespace(config_command="validate", json=False))
+    assert seen["offline"] is True
+
+
+def test_the_alias_note_says_the_json_shape_changed(monkeypatch, capsys) -> None:
+    """A script doing `--json | jq .errors` gets null and reads it as healthy,
+    so the one place it will be seen has to say so."""
+    from robothor.cli.config_cmd import cmd_config
+
+    monkeypatch.setattr("robothor.cli.doctor_cmd.run_sync", lambda ctx, **kw: DoctorReport())
+    cmd_config(argparse.Namespace(config_command="validate", json=True))
+    err = capsys.readouterr().err
+    assert "genus doctor" in err
+    assert "summary" in err and "errors" in err
+
+
 def test_config_validate_deprecation_note_is_not_on_stdout(monkeypatch, capsys) -> None:
     """``genus config validate --json | jq`` must keep working."""
     from robothor.cli.config_cmd import cmd_config

@@ -652,12 +652,23 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     The exit codes are unchanged: 0 when nothing required failed, 1 when
     something did. The note goes to stderr so that
     ``genus config validate --json | jq`` keeps working.
+
+    OFFLINE, deliberately. The command this replaces made no upstream call, and
+    a deprecated alias is the last thing that should get more expensive: every
+    runbook, cron entry and habit that still types it would start spending
+    provider budget and calling api.telegram.org. So the alias runs the free
+    checks and the note says where the full report lives. The JSON shape DOES
+    change -- it is the doctor's ``{status, summary, checks}`` -- which the
+    stderr note and docs/configuration.md both say, because a script doing
+    ``--json | jq .errors`` would otherwise read null as healthy.
     """
     from robothor.cli.doctor_cmd import cmd_doctor
 
     print(
-        "genus config validate is deprecated; it now runs 'genus doctor', which checks "
-        "more and can repair some of it.",
+        "genus config validate is deprecated; it now runs 'genus doctor --offline', which "
+        "checks more and can repair some of it. --json emits the doctor's payload "
+        "({status, summary, checks}), not the old {checks, errors, pending_restart}. "
+        "Run 'genus doctor' for the full report, including a live model call.",
         file=sys.stderr,
     )
     return cmd_doctor(
@@ -665,7 +676,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
             json=getattr(args, "json", False),
             fix=False,
             dry_run=False,
-            offline=False,
+            offline=True,
             timeout=5.0,
             only=None,
             category=None,
