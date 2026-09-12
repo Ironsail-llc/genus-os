@@ -369,32 +369,33 @@ class ComposeRenderStep(BaseStep):
             "# Written by `genus init --substrate compose`. Mode 0600 — it holds",
             "# every credential this instance has. Compose reads it twice: as",
             "# --env-file (the ${GENUS_*} variables) and as each service's",
-            "# env_file (the ROBOTHOR_* ones).",
+            "# env_file (the ROBOTHOR_* ones). `set -a; . ./genus.env` gives the",
+            "# same values to `genus doctor` on the host.",
             "",
-            f"GENUS_IMAGE_TAG={image_tag(ctx)}",
+            _env_line("GENUS_IMAGE_TAG", image_tag(ctx)),
             # The HOST path compose bind-mounts. ROBOTHOR_WORKSPACE is
             # /workspace and is set by the compose file: a host path here would
             # point every container at a directory it does not have.
-            f"GENUS_WORKSPACE={ctx.workspace}",
-            f"GENUS_ENV_FILE={env_file_path(ctx)}",
+            _env_line("GENUS_WORKSPACE", ctx.workspace),
+            _env_line("GENUS_ENV_FILE", env_file_path(ctx)),
             "",
-            f"ROBOTHOR_DB_NAME={database['dbname']}",
-            f"ROBOTHOR_DB_USER={database['user']}",
-            f"ROBOTHOR_DB_PASSWORD={database['password']}",
-            f"ROBOTHOR_DB_PORT={database['port']}",
+            _env_line("ROBOTHOR_DB_NAME", database["dbname"]),
+            _env_line("ROBOTHOR_DB_USER", database["user"]),
+            _env_line("ROBOTHOR_DB_PASSWORD", database["password"]),
+            _env_line("ROBOTHOR_DB_PORT", database["port"]),
             "",
             # `env` rather than sops or file: a container has no
             # /run/robothor/secrets.env, and nothing fills one for it.
-            "ROBOTHOR_SECRETS_BACKEND=env",
+            _env_line("ROBOTHOR_SECRETS_BACKEND", "env"),
         ]
 
         tenant = str(ctx.answers.get("tenant_id") or "")
         if tenant:
-            lines.append(f"ROBOTHOR_DEFAULT_TENANT={tenant}")
+            lines.append(_env_line("ROBOTHOR_DEFAULT_TENANT", tenant))
 
         model = str(ctx.answers.get("provider_model") or "")
         if model:
-            lines.append(f"ROBOTHOR_LAST_RESORT_MODEL={model}")
+            lines.append(_env_line("ROBOTHOR_LAST_RESORT_MODEL", model))
 
         provider_id = str(ctx.answers.get("provider_id") or "")
         credential = self._provider_credential(provider_id)
@@ -403,12 +404,12 @@ class ComposeRenderStep(BaseStep):
             lines += [
                 "",
                 "# The provider credential. This file is the only copy on disk.",
-                f"{name}={key}",
+                _env_line(name, key),
             ]
 
         token = str(ctx.answers.get("telegram_token") or "")
         if token:
-            lines += ["", f"ROBOTHOR_TELEGRAM_BOT_TOKEN={token}"]
+            lines += ["", _env_line("ROBOTHOR_TELEGRAM_BOT_TOKEN", token)]
 
         return "\n".join(lines) + "\n"
 
@@ -628,6 +629,19 @@ class ComposeSubstrate:
 def substrate() -> ComposeSubstrate:
     """Factory, so every substrate module has the same shape."""
     return ComposeSubstrate()
+
+
+def _env_line(name: str, value: object) -> str:
+    """One ``NAME="value"`` line, quoted for both readers of this file.
+
+    Quoted because two different parsers read it and a space breaks one of
+    them: ``docker compose`` takes the rest of the line and strips the quotes,
+    while the ``set -a; . ./genus.env`` the docs tell an operator to run is a
+    SHELL, which would split an unquoted password in two and export the first
+    half. Backslashes and quotes are escaped so the value survives both.
+    """
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'{name}="{escaped}"'
 
 
 def _write_private(path: Path, body: str) -> None:

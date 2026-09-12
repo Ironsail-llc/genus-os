@@ -277,11 +277,28 @@ class TestRenderWritesTheEnvFileAndNothingElseReadable:
         _, path = self._render(tmp_path)
         body = path.read_text(encoding="utf-8")
 
-        assert "ROBOTHOR_DB_PASSWORD=generated-by-init" in body
-        assert "ROBOTHOR_DB_NAME=robothor_memory" in body
-        assert "ROBOTHOR_LAST_RESORT_MODEL=openrouter/openai/gpt-5.4" in body
-        assert "ROBOTHOR_SECRETS_BACKEND=env" in body
-        assert "GENUS_IMAGE_TAG=v" in body
+        assert 'ROBOTHOR_DB_PASSWORD="generated-by-init"' in body
+        assert 'ROBOTHOR_DB_NAME="robothor_memory"' in body
+        assert 'ROBOTHOR_LAST_RESORT_MODEL="openrouter/openai/gpt-5.4"' in body
+        assert 'ROBOTHOR_SECRETS_BACKEND="env"' in body
+        assert 'GENUS_IMAGE_TAG="v' in body
+
+    def test_a_password_with_a_space_survives_both_readers(self, tmp_path):
+        """Two parsers read this file, and an unquoted space breaks one.
+
+        `docker compose` takes the rest of the line; the `set -a; . ./genus.env`
+        the quickstart tells an operator to run is a shell, which would export
+        the first word and treat the rest as a command.
+        """
+        _, path = self._render(tmp_path, answers={"db_password": 'two words "and" a quote'})
+
+        line = next(
+            row
+            for row in path.read_text(encoding="utf-8").splitlines()
+            if row.startswith("ROBOTHOR_DB_PASSWORD=")
+        )
+
+        assert line == 'ROBOTHOR_DB_PASSWORD="two words \\"and\\" a quote"'
 
     def test_it_is_readable_only_by_its_owner(self, tmp_path):
         _, path = self._render(tmp_path)
@@ -294,7 +311,7 @@ class TestRenderWritesTheEnvFileAndNothingElseReadable:
         )
         ctx, path = self._render(tmp_path)
 
-        assert f"OPENROUTER_API_KEY={PROVIDER_KEY}" in path.read_text(encoding="utf-8")
+        assert f'OPENROUTER_API_KEY="{PROVIDER_KEY}"' in path.read_text(encoding="utf-8")
         leaked = [
             other
             for other in ctx.workspace.rglob("*")
@@ -315,7 +332,7 @@ class TestRenderWritesTheEnvFileAndNothingElseReadable:
         # is /workspace INSIDE the container and is set by the compose file. A
         # host path leaking into the env file points every container at a
         # directory that does not exist in it.
-        assert f"GENUS_WORKSPACE={tmp_path / 'instance'}" in body
+        assert f'GENUS_WORKSPACE="{tmp_path / "instance"}"' in body
         assert "ROBOTHOR_WORKSPACE=" not in body
 
     def test_the_identity_travels_into_the_workspace_the_containers_mount(
