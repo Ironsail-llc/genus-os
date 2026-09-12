@@ -29,6 +29,12 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic_settings import PydanticBaseSettingsSource
 
+# The one writer for this file, re-exported here so that "where do settings
+# come from" and "how is one written back" have the same address. The
+# implementation lives in a pydantic-free module because `robothor.cli` imports
+# it at import time -- see robothor/settings/config_file.py.
+from robothor.settings.config_file import write_setting
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pydantic.fields import FieldInfo
 
@@ -41,6 +47,7 @@ __all__ = [
     "strict_mode",
     "unknown_config_keys",
     "workspace_path",
+    "write_setting",
 ]
 
 logger = logging.getLogger(__name__)
