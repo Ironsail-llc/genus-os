@@ -50,6 +50,21 @@ KNOWN_DRIFT: dict[str, str] = {
         "plus max output or the server truncates in silence — "
         "test_local_tier_residency pins that invariant."
     ),
+    "openrouter/z-ai/glm-5.3-flash": (
+        "registry 1,048,576 vs catalog 1,310,720 — DELIBERATE. 1,310,720 is "
+        "the id's advertised maximum; OpenRouter's top_provider for this model "
+        "serves 1,048,576, and the route that actually answers the request is "
+        "the one that truncates. Read from the live metadata on 2026-09-11. "
+        "Sizing to the advertised number would fill context past the end of "
+        "the window the serving provider allocated."
+    ),
+    "openrouter/~deepseek/deepseek-v4-flash-latest": (
+        "registry 1,048,576 vs catalog 1,310,720 — same top_provider reason as "
+        "glm-5.3-flash above. This one is a FLOATING alias (the leading '~' is "
+        "OpenRouter's convention for 'newest release of the line'), so what it "
+        "resolves to can move under us; the conservative number is the right "
+        "one to pin."
+    ),
     "openrouter/google/gemini-3.1-pro-preview": (
         "registry 1,000,000 vs catalog 1,048,576 — we compact 5% early on a "
         "model the fleet has not used in the last 7 days."

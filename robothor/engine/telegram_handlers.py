@@ -81,19 +81,33 @@ TEXT_EXTENSIONS = {
     ".env",
 }
 
-# Models available for /model selection (display name → litellm model id)
-# Reverse lookup: model id → display name
+# Models available for /model selection (display name → litellm model id).
+#
+# THIS IS THE ONLY SURFACE ON THIS INSTANCE THAT LISTS MODELS FOR A HUMAN.
+# The TUI's /model only prints the current one, the Helm dashboard renders the
+# per-agent model as a read-only badge, and `GET /v1/models` is a stub.
+#
+# Insertion order IS the button order — `_build_model_keyboard` iterates this
+# dict with no sort — so `current` entries come first and every `legacy` one
+# carries the word in its label. `test_model_status.py` pins both rules, and
+# `test_telegram.py` pins that every id here is a registered openrouter/* id.
+#
+# OpenRouter-only (operator policy 2026-07-07): the OpenAI account was blocked,
+# so codex/* auth is dead — no picker entry may route there.
+#
+# 2026-09-11: Ox Alpha removed (its stealth preview ended; the id no longer
+# resolves on OpenRouter at all), and the two modernisation candidates added.
 AVAILABLE_MODELS: dict[str, str] = {
-    # OpenRouter-only (operator policy 2026-07-07): the OpenAI account was
-    # blocked, so codex/* auth is dead — no picker entry may route there.
-    # MiMo V2.5 Pro is the fleet-wide primary; the premium entries are
-    # operator-selectable escalations billed through the same OpenRouter key.
+    # --- current ---
+    "DeepSeek V4.1 Flash": "openrouter/deepseek/deepseek-v4.1-flash",
+    "GLM 5.3 Flash": "openrouter/z-ai/glm-5.3-flash",
     "MiMo V2.5": "openrouter/xiaomi/mimo-v2.5",
     "MiMo V2.5 Pro": "openrouter/xiaomi/mimo-v2.5-pro",
     "DeepSeek V4 Pro": "openrouter/deepseek/deepseek-v4-pro",
     "Claude Sonnet 4.6": "openrouter/anthropic/claude-sonnet-4.6",
     "Claude Opus 4.7": "openrouter/anthropic/claude-opus-4.7",
-    "Ox Alpha": "openrouter/stealth/ox-alpha",
+    # --- legacy: still served, no longer the pick ---
+    "DeepSeek V4 Flash (legacy)": "openrouter/deepseek/deepseek-v4-flash",
 }
 
 

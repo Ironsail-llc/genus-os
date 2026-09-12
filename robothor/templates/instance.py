@@ -172,7 +172,7 @@ class InstanceConfig:
     def init_config(
         self,
         timezone: str = "America/New_York",
-        default_model: str = "openrouter/xiaomi/mimo-v2-pro",
+        default_model: str = "openrouter/xiaomi/mimo-v2.5",
         quality_model: str = "openrouter/anthropic/claude-sonnet-4.6",
         owner_name: str = "",
         hub_org: str = "programmaticresources",

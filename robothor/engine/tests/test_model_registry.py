@@ -6,11 +6,13 @@ from unittest.mock import patch
 
 from robothor.engine.model_registry import (
     _FALLBACK,
+    _MODEL_REGISTRY,
     THINKING_BUDGET_TOKENS,
     ModelLimits,
     compute_token_budget,
     get_model_limits,
     get_output_tokens,
+    register_pricing_with_litellm,
     supports_cache_control,
 )
 
@@ -264,3 +266,113 @@ class TestGetOutputTokens:
         tokens = get_output_tokens("mystery/model", 50_000)
         # Fallback: 128K input, 8K output, 8K default
         assert tokens == 8_192  # default == max_output for fallback
+
+
+def _merging_register(captured: dict):
+    """A ``litellm.register_model`` stand-in with litellm's merge semantics.
+
+    litellm merges a partial payload into an existing entry rather than
+    replacing it — which is the whole reason a capability-only registration is
+    safe beside a pricing one. A fake that clobbered instead would fail this
+    module's tests for a reason litellm does not have.
+    """
+
+    def register(payload: dict) -> None:
+        for model_id, fields in payload.items():
+            captured.setdefault(model_id, {}).update(fields)
+
+    return register
+
+
+class TestLitellmReasoningRegistration:
+    """The registry must teach litellm which of our models reason.
+
+    ``llm_client._build_kwargs`` sends an Anthropic-style ``thinking`` block
+    whenever ``ModelLimits.supports_thinking`` is set. litellm accepts that
+    parameter only for a model its own *bundled* cost map marks
+    ``supports_reasoning`` — and a model registered the week it launches is
+    never in that bundled map. The result is not a degraded call, it is
+    ``UnsupportedParamsError`` raised in-process before the request leaves:
+    on 2026-09-11 a freshly registered ``openrouter/deepseek/deepseek-v4.1-flash``
+    failed 100% of its benchmark tasks this way while the older ids beside it
+    passed.
+
+    The capability pass is deliberately NOT behind ``ROBOTHOR_RIP_17_ENABLED``.
+    That flag chooses where *pricing* comes from; the reasoning capability is a
+    correctness precondition for the call happening at all, and rip 17 is off
+    on this instance — a fix that only ran with the flag on would have been
+    inert exactly where the outage was.
+    """
+
+    @staticmethod
+    def _thinking_models() -> list[str]:
+        return [
+            m
+            for m, lim in _MODEL_REGISTRY.items()
+            if lim.supports_thinking and not m.startswith("codex/")
+        ]
+
+    def test_capability_published_with_catalog_mode_off(self):
+        """Rip 17 off — the legacy pricing branch — still publishes reasoning."""
+        captured: dict[str, dict] = {}
+
+        with (
+            patch("litellm.register_model", _merging_register(captured)),
+            patch(
+                "robothor.engine.feature_flags.catalog_backed_models_enabled",
+                return_value=False,
+            ),
+        ):
+            register_pricing_with_litellm()
+
+        for model_id in self._thinking_models():
+            assert captured.get(model_id, {}).get("supports_reasoning") is True, model_id
+
+    def test_capability_published_with_catalog_mode_on(self):
+        """Rip 17 on — the curated pricing branch — publishes it too."""
+        captured: dict[str, dict] = {}
+
+        with (
+            patch("litellm.register_model", _merging_register(captured)),
+            patch(
+                "robothor.engine.feature_flags.catalog_backed_models_enabled",
+                return_value=True,
+            ),
+        ):
+            register_pricing_with_litellm()
+
+        for model_id in self._thinking_models():
+            assert captured.get(model_id, {}).get("supports_reasoning") is True, model_id
+
+    def test_capability_only_widens(self):
+        """A curated ``supports_thinking=False`` never publishes a False.
+
+        litellm's own map is the better authority for a model we have not
+        marked as reasoning, and the engine does not send ``thinking`` for one
+        anyway. Narrowing would take a working parameter away from a model on
+        no evidence.
+        """
+        captured: dict[str, dict] = {}
+
+        with patch("litellm.register_model", _merging_register(captured)):
+            register_pricing_with_litellm()
+
+        for model_id, limits in _MODEL_REGISTRY.items():
+            if not limits.supports_thinking:
+                assert captured.get(model_id, {}).get("supports_reasoning") is not False, model_id
+
+    def test_thinking_model_is_accepted_by_litellm_after_registration(self):
+        """The end-to-end symptom: litellm takes ``thinking`` for the new id.
+
+        Asserted against litellm's real parameter table rather than our own
+        payload, because a correct payload is not what was missing — the engine
+        never told litellm at all.
+        """
+        import litellm
+
+        model_id = "openrouter/deepseek/deepseek-v4.1-flash"
+        assert get_model_limits(model_id).supports_thinking is True
+
+        register_pricing_with_litellm()
+
+        assert "thinking" in (litellm.get_supported_openai_params(model=model_id) or [])
