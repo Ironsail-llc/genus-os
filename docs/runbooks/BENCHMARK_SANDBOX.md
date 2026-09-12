@@ -1,5 +1,10 @@
 # Runbook — Benchmark sandbox fixtures
 
+> **Scope.** The flags, the ladder and the fixture rules are platform: every
+> instance that runs the benchmark harness needs them. The dated scores are
+> measurements from the first instance. Purely single-machine runbooks live in
+> `docs/instance/` in the repository.
+
 **Flags:** `ROBOTHOR_BENCHMARK_SANDBOX_ENABLED` + `ROBOTHOR_BENCHMARK_SANDBOX_MODE`
 **Ladder:** `off` → `observe` → `alert` → `enforce`
 **Owner:** ops · **Manifest:** `infra/flags.yaml` · **Live values:** `infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf`

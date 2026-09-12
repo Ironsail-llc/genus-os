@@ -536,8 +536,28 @@ class TestGenerationModelDefaultAgreement:
         assert f"ROBOTHOR_GENERATION_MODEL={self.CANONICAL}" in text
 
     def test_docs_default(self):
-        text = (REPO_ROOT / "docs" / "configuration.md").read_text()
-        assert f"`ROBOTHOR_GENERATION_MODEL` | `{self.CANONICAL}`" in text
+        """The GENERATED reference is where a documented default now lives.
+
+        `docs/configuration.md` is hand-written prose over
+        `docs/reference/configuration.md`; it deliberately carries no table of
+        variables, because a hand-maintained one is what let four files
+        disagree about this default in the first place. The row is read by
+        column rather than by substring so a new column in the generated table
+        does not turn this into a false green.
+        """
+        reference = REPO_ROOT / "docs" / "reference" / "configuration.md"
+        rows = [
+            line
+            for line in reference.read_text().splitlines()
+            if line.startswith("| `ROBOTHOR_GENERATION_MODEL` |")
+        ]
+        assert len(rows) == 1, f"expected one ROBOTHOR_GENERATION_MODEL row, got {rows}"
+        # | `Variable` | Type | Default | Restart | Secret | Since | Description |
+        cells = [cell.strip() for cell in rows[0].strip().strip("|").split("|")]
+        assert cells[2] == f"`{self.CANONICAL}`", (
+            f"documented default {cells[2]} disagrees with the code default "
+            f"`{self.CANONICAL}` -- regenerate with scripts/gen_configuration_doc.py"
+        )
 
     def test_setup_actually_pulls_the_generation_model(self):
         """A print-only 'pull it yourself' note is how a manifest's model

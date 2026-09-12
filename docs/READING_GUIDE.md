@@ -23,6 +23,12 @@ present; do not treat an instance path as a shipped security control.
 
 | Task | Read first |
 |------|-----------|
+| Installing an instance | `docs/quickstart.md` — the one install path, both substrates |
+| Deploying (compose upgrade, systemd units, Helm) | `docs/deployment.md` |
+| Diagnosing an instance | `genus doctor`; `docs/deployment.md` (Diagnostics) |
+| What a setting does | `docs/configuration.md` (the tour) + `docs/reference/configuration.md` (generated, every setting) |
+| What a command does | `docs/reference/cli.md` (generated from the parser) |
+| Runbooks for the first instance only | `docs/instance/README.md` |
 | Working on vision | `robothor/vision/` + `docs/SYSTEM_ARCHITECTURE.md` (reference-appliance section) |
 | Viewing the webcam | `https://cam.${INSTANCE_DOMAIN}/webcam/` (Cloudflare Access) |
 | Changing cron behavior | `docs/CRON_MAP.md` (instance-local, not shipped) + the deployment's agent manifests/scheduler configuration |
@@ -30,13 +36,13 @@ present; do not treat an instance path as a shipped security control.
 | Sending emails or calendar | `robothor/engine/tools/handlers/gws.py` (gws native tools + gog CLI fallback) |
 | Voice calling | instance-local, not shipped — no unit template or package ships for it |
 | Cloudflare tunnel routes | `infra/tunnel/README.md` + `robothor/tunnel.py` |
-| Adding new tunnel subdomain | `infra/tunnel/cloudflare.yml.template` + `robothor tunnel gen-config` |
+| Adding new tunnel subdomain | `infra/tunnel/cloudflare.yml.template` + `genus tunnel generate` |
 | Python Agent Engine | `robothor/engine/` package — runner, tools, session, config, Telegram, scheduler |
-| Engine CLI | `robothor engine {run,start,stop,status,list,history,workflow}` |
+| Engine CLI | `genus engine {run,start,stop,status,list,history,workflow}` |
 | Using deep reasoning | `robothor/engine/rlm_tool.py` |
 | Engine API endpoints | `SERVICES.md` (Engine API Endpoints section) |
 | Engine HTTP/WebSocket authorization | `robothor/engine/auth.py` + `robothor/engine/tests/test_engine_auth.py` |
-| Agent scaffold | `robothor agent scaffold <id> [--description "..."]` |
+| Agent scaffold | `genus agent scaffold <id> [--description "..."]` |
 | Computer use / desktop control | instance-local, not shipped — the virtual-display units are `infra/systemd/robothor-xvfb.service` and `infra/systemd/robothor-vnc.service` |
 | Instance identity / persona | instance-local, not shipped — `docs/PLATFORM_INSTANCE.md` says where it lives |
 | Model selection | `docs/agents/*.yaml` `model:` blocks (instance-local, not shipped) + `robothor/engine/models.py` |
@@ -56,19 +62,19 @@ present; do not treat an instance path as a shipped security control.
 | Read-only generated dashboards | `app/src/lib/dashboard/` + `app/src/components/canvas/srcdoc-renderer.tsx` + `robothor/engine/dashboards/completions.py` |
 | Kubernetes deployment boundary | `helm/genus-os/README.md` + environment values |
 | Database upgrades | `robothor/migrations/manifest.txt` + `robothor/db/migrate.py` + upgrade-safety integration test |
-| Backup / restore | `docs/runbooks/SNAPSHOT_RESTORE.md` + `robothor snapshot --help` |
+| Backup / restore | `docs/runbooks/SNAPSHOT_RESTORE.md` + `genus snapshot --help` |
 | Entity authority / treasury | `docs/ENTITY_KERNEL_TREASURY.md` |
 | Customer or Genus payment data | `docs/compliance/PAYMENT_DATA.md` |
 | Research notebooks (NotebookLM) | `nlm --help` (CLI) — auth: `nlm login`, check: `nlm login --check` |
 | Managing agents | `docs/AGENT_BUILDER.md` |
-| Building a new agent | `robothor agent scaffold <id>` + `docs/AGENT_BUILDER.md` (section 4) |
+| Building a new agent | `genus agent scaffold <id>` + `docs/AGENT_BUILDER.md` (section 4) |
 | Agent manifest schema | `docs/agents/schema.yaml` + `docs/AGENT_BUILDER.md` (section 4) |
 | Instruction file contract | `docs/agents/INSTRUCTION_CONTRACT.md` |
 | Rolling back an agent | Reviewed Git history for its manifest/instructions + `python scripts/validate_agents.py --agent <id>` |
 | Agent validation | `python scripts/validate_agents.py` |
 | Workflow engine | `docs/AGENT_BUILDER.md` (section 3) + `docs/workflows/*.yaml` + `robothor/engine/workflow.py` |
-| Vault / credential storage | `robothor/vault/` + `robothor vault --help` |
+| Vault / credential storage | `robothor/vault/` + `genus vault --help` |
 | Federation / multi-instance | `docs/FEDERATION.md` + `robothor/federation/` package |
-| Federation CLI | `robothor federation {init,invite,connect,status,list,export,suspend,remove}` |
+| Federation CLI | `genus federation {init,invite,connect,status,list,export,suspend,remove}` |
 | NATS server (federation transport) | `docs/FEDERATION.md` + the deployment's NATS config/service definition |
 | Updating documentation | `docs/DOC_MAINTENANCE.md` |

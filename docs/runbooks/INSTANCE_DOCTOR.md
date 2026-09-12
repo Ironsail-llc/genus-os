@@ -1,5 +1,10 @@
 # Instance Doctor Runbook
 
+> **Scope.** `scripts/instance_doctor.sh` and its finding classes are platform.
+> The inventory of what it found — nine untemplated units, twelve `.bak-*`
+> files — is the first instance's. Purely single-machine runbooks live in
+> [`docs/instance/`](../instance/README.md).
+
 `scripts/instance_doctor.sh` answers the question no other command on the box
 could: **what is installed here that the repo did not put there?**
 

@@ -1,20 +1,48 @@
 # Configuration
 
-All configuration is via environment variables with sensible defaults. No config files required for basic usage. See `infra/robothor.env.example` for a complete template.
+This page is the hand-written tour: where a setting comes from, how to read and
+change one, and what the install wizard wrote. It deliberately does **not** list
+the variables.
 
-!!! tip "Complete list"
-    This page is a hand-written tour of the settings an operator touches most.
-    The **complete** list — every variable the platform reads, with its type,
-    default, restart and secret flags — is generated from the typed settings
-    model. It lives in the repository at `docs/reference/configuration.md`
-    (not published on this site), and `genus config schema` prints the same
+!!! tip "The complete list is generated"
+    Every `ROBOTHOR_*` and `GENUS_*` setting — with its type, default, what a
+    change waits on, and whether it holds a credential — is rendered from
+    the typed settings model into the
+    [configuration reference](reference/configuration.md). A hand-written list
+    is how 91 of the platform's variables ended up documented nowhere; this page
+    stopped carrying one for that reason. `genus config schema` prints the same
     information as JSON Schema.
+
+## Where a value comes from
+
+Four layers, lowest priority first:
+
+| Layer | Where it lives | Who writes it |
+|-------|----------------|---------------|
+| 1. Default | The typed settings model | The platform |
+| 2. `config.yaml` | the `settings:` block of `<workspace>/.robothor/config.yaml` | `genus init`, `genus config set` |
+| 3. Environment | the process environment — a systemd `EnvironmentFile`, a drop-in, `genus.env`, your shell | You, or the container |
+| 4. Runtime | a `feature_flags` row, for **governed** flags only | `genus config set`, the dashboard |
+
+`<workspace>` is `$ROBOTHOR_WORKSPACE`, or `~/robothor` when that is unset.
+
+Two consequences worth internalising:
+
+- **The environment beats the file.** A value you edited into `config.yaml`
+  that is also set in the unit environment does nothing, and the running process
+  is right. `genus config get` names the layer that won, which is the only
+  reliable way to answer "what is this actually set to?" on a box with a
+  drop-in, an env file and a config file.
+- **A governed flag outranks everything.** Guardrails and feature gates
+  (`ROBOTHOR_RBAC_MODE` and the rest of the inventory in `infra/flags.yaml`)
+  resolve from the flag store, which is live within seconds and needs no
+  restart. That is deliberate: a guardrail you cannot turn off without a
+  deploy is a guardrail nobody turns on.
 
 ## Reading and changing settings
 
 You should not have to grep `/etc` to answer "what is this set to?", and you
-should not have to guess what a change needs restarting. `genus config` reads
-the same typed registry this page is generated from.
+should not have to guess what a change needs restarting.
 
 ```bash
 genus config get ROBOTHOR_MAX_CONCURRENT_AGENTS   # value + where it came from
@@ -29,9 +57,44 @@ genus doctor                                      # is this instance working?
 |---------|--------------|
 | `get NAME` | The effective value and its provenance: `runtime` (an operator-set `feature_flags` row), `env`, `config.yaml`, or `default`. |
 | `set NAME VALUE` | Routes by the setting's own metadata — see below. |
-| `explain NAME` | Description, group, type, default, deprecated aliases, secret/governed/restart flags, current provenance. |
+| `explain NAME` | Description, group, type, default, deprecated aliases, secret/governed/restart flags, `since`, and the current provenance. |
 | `list [--group G] [--changed]` | Every setting, or one group, or only what is not on its default. |
 | `validate [--json]` | **Deprecated.** Runs [`genus doctor --offline`](deployment.md#diagnostics-genus-doctor) and says so on stderr. |
+
+A misspelled name exits 2 and suggests the nearest real one, rather than
+reporting a value for something nothing reads.
+
+**`set` routes by what the setting is**, not by what you typed:
+
+- a **governed flag** goes to the flag store and is live within seconds — no
+  restart, no file edit. The value is validated against the flag's own declared
+  rungs first;
+- a **secret** is refused, naming `genus vault set`. Writing a credential into
+  a config file is not a shortcut worth having;
+- **everything else** is written into the `settings:` block of
+  `$ROBOTHOR_WORKSPACE/.robothor/config.yaml`, atomically and without
+  disturbing your comments, and the reply is either `applied` or
+  `restart required: robothor-engine`.
+
+A secret is never printed. `get` and `list` show `<set, sha256:ab12cd34>` —
+enough to tell two boxes apart without putting the value on your screen.
+
+### Hot or restart?
+
+Every setting declares this, and both the reference table and
+`genus config set` report the same answer from the same declaration:
+
+| The setting is… | What a change needs |
+|-----------------|---------------------|
+| a governed flag | nothing — it applies live, through the flag store |
+| declared `restart: no` | nothing — it is read each time it is used |
+| declared `restart: next run` | the next invocation of the script or timer that reads it |
+| anything else | the units it names restarted (usually `robothor-engine`, `robothor-bridge`) |
+
+`genus doctor --only config.pending_restart` reports the one case that catches
+people out: the file says one thing and the running process's environment says
+another. It is a `recommended` finding, not a failure — the environment beating
+the file is documented precedence, not a fault.
 
 ### `validate` is now an alias for `genus doctor`
 
@@ -49,36 +112,16 @@ this command's output has to know both:
 - **exit 1 means a *required* check failed.** A key nothing reads is a
   *recommended* finding and exits 0 while `ROBOTHOR_CONFIG_STRICT_MODE` is
   `observe` — under `enforce` the same key stops settings resolving at all and
-  `config.settings_load` fails, which is required, so it exits 1 there. A
-  deprecated name still set and a setting waiting on a restart are likewise
-  recommended: the environment beating the file is documented precedence, not a
-  fault, and exiting non-zero for it would make the command useless as a gate
-  for what *is* broken.
+  `config.settings_load` fails, which is required, so it exits 1 there.
 
 The alias runs `--offline`: no model call, no Telegram round trip, no host
 script. The command it replaces made no upstream call either, and a deprecation
 is the last thing that should get more expensive. Run `genus doctor` for the
 full report, including a live one-token model call.
 
-**`set` routes by what the setting is**, not by what you typed:
+## config.yaml and unknown keys
 
-- a **governed flag** (`ROBOTHOR_RBAC_MODE` and the rest of `infra/flags.yaml`)
-  goes to the flag store and is live within seconds — no restart, no file edit;
-- a **secret** is refused, naming `genus vault set`. Writing a credential into
-  a config file is not a shortcut worth having;
-- **everything else** is written into the `settings:` block of
-  `$ROBOTHOR_WORKSPACE/.robothor/config.yaml`, atomically and without
-  disturbing your comments, and the reply is either `applied` or
-  `restart required: robothor-engine`.
-
-A secret is never printed. `get` and `list` show `<set, sha256:ab12cd34>` —
-enough to tell two boxes apart without putting the value on your screen.
-
-### config.yaml and unknown keys
-
-`config.yaml` sits below the environment and above the defaults: a variable in
-the environment still wins. Its `settings:` block mirrors the groups in the
-generated reference (`docs/reference/configuration.md` in the repository):
+The `settings:` block mirrors the groups in the generated reference:
 
 ```yaml
 settings:
@@ -99,77 +142,60 @@ simply never applies, and you read the default as your value.
 | `enforce` | Resolving settings fails, naming the key. Recommended for new installs, and for any box where `genus doctor --only config.unknown_keys` reports none. |
 
 The rung can be set in the environment or in the file it governs (as above), so
-a new install can ship `enforce` without an environment file.
+a new install can ship `enforce` without an environment file. An unrecognised
+value falls back to `observe` rather than crashing — a typo in the strictness
+knob must not be the thing that stops an instance booting.
 
-## Loading
+## What the install wizard wrote
 
-```python
-from robothor.config import get_config
+`genus init` does not scatter an instance's configuration across `/etc`. Five
+files, each with one job:
 
-cfg = get_config()
-print(cfg.db.dsn)           # "dbname=robothor_memory host=127.0.0.1 ..."
-print(cfg.redis.url)        # "redis://127.0.0.1:6379/0"
-print(cfg.ollama.base_url)  # "http://127.0.0.1:11434"
-print(cfg.workspace)        # Path("/home/your-user/robothor")
-```
+| What | Where | Why there |
+|------|-------|-----------|
+| Operator identity | `~/.robothor/owner.yaml` | The file the platform reads. Never a `.env`: two files naming one operator is how an instance answers to one name and files CRM rows under another. |
+| Settings — database host/port/name/user, provider model, Redis and Ollama endpoints, secrets backend, timezone, substrate | `<workspace>/.robothor/config.yaml` | Written through the same writer `genus config set` uses. The database **password** is never written here. |
+| Sign-in secrets (`AUTH_SECRET`, `GENUS_BRIDGE_SSO_SECRET`) and, for the compose substrate, every other credential | `<workspace>/genus.env`, mode 0600 | One file the services read and nothing else may. `genus doctor` refuses to read it at any other mode. |
+| Provider key, Telegram token | The instance vault | Secrets never go in `config.yaml`, which gets copied into bug reports. |
+| Fleet model defaults | `<workspace>/docs/agents/_defaults.yaml` (instance data) | The probed model becomes the fleet primary, with up to two registry fallbacks — merged, never replacing a chain you wrote. |
 
-The config is a singleton. Call `reset_config()` in tests to reload from environment.
+`<workspace>/.env` holds exactly one variable, `ROBOTHOR_WORKSPACE`: a
+`config.yaml` that lives inside the workspace cannot say where the workspace is.
 
-## Database (PostgreSQL + pgvector)
+## Secrets
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROBOTHOR_DB_HOST` | `127.0.0.1` | PostgreSQL host |
-| `ROBOTHOR_DB_PORT` | `5432` | PostgreSQL port |
-| `ROBOTHOR_DB_NAME` | `robothor_memory` | Database name |
-| `ROBOTHOR_DB_USER` | `$USER` | Database user (falls back to system user) |
-| `ROBOTHOR_DB_PASSWORD` | *(empty)* | Database password |
+Three rules, and the platform enforces all three rather than documenting them:
 
-## Redis
+1. **A credential never goes in `config.yaml`.** `genus config set` refuses a
+   setting declared secret and names `genus vault set` instead.
+2. **Read one through the accessor, not `os.environ`.**
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROBOTHOR_REDIS_HOST` | `127.0.0.1` | Redis host |
-| `ROBOTHOR_REDIS_PORT` | `6379` | Redis port |
-| `ROBOTHOR_REDIS_DB` | `0` | Redis database number |
-| `ROBOTHOR_REDIS_PASSWORD` | *(empty)* | Redis password |
-| `ROBOTHOR_REDIS_MAXMEMORY` | `2gb` | Redis maxmemory (Docker only) |
-| `REDIS_URL` | *(derived)* | Full Redis URL override (e.g., `redis://:pass@host:6379/0`) |
+    ```python
+    from robothor.secrets import get_secret, secret_source
 
-## Ollama (LLM Inference)
+    get_secret("OPENROUTER_API_KEY")      # value, or None
+    secret_source("OPENROUTER_API_KEY")   # "env" | "vault" | "missing" — safe to print
+    ```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROBOTHOR_OLLAMA_HOST` | `127.0.0.1` | Ollama server host |
-| `ROBOTHOR_OLLAMA_PORT` | `11434` | Ollama server port |
-| `ROBOTHOR_EMBEDDING_MODEL` | `qwen3-embedding:0.6b` | Embedding model (1024-dim) |
-| `ROBOTHOR_RERANKER_MODEL` | `Qwen3-Reranker-0.6B:F16` | Cross-encoder reranker |
-| `ROBOTHOR_GENERATION_MODEL` | `qwen3:8b` | RAG generation model |
-| `ROBOTHOR_VISION_MODEL` | `llama3.2-vision:11b` | Vision scene analysis model |
-| `ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB` | `24` | autoDream only unloads the generation model when available memory (GiB) drops below this; `0` disables the unload entirely |
+    It walks the process environment (whatever the backend put there) and then
+    the encrypted vault, and treats an unreadable vault as "not configured"
+    rather than raising. An instance whose vault has no master key resolves from
+    the environment only and says so once at INFO — an engine that could not
+    make an LLM call because its credential store is empty would be worse than
+    no vault at all.
+3. **Nothing prints a key.** Logs, alerts and `repr()` use a one-way
+   fingerprint (`key-1a2b3c4d`) rather than the last-four convention, which
+   prints real key material.
 
-## Memory Generation Provider
+### Where the values come from
 
-Memory generation (fact extraction, episode summaries, insight discovery,
-conflict classification, intent inference) can be offloaded from the local
-Ollama GPU to a remote provider. Embeddings and reranking always stay local.
-On remote failure the system falls back to local Ollama with a WARNING log
-containing `MEMORY_GENERATION_REMOTE_FALLBACK` — watch for that marker.
+The instance chooses one backend at install time (`genus init
+--secrets-backend env|file|sops`), and `scripts/load-secrets.sh` is what
+implements it. **SOPS is opt-in** — it used to be a prerequisite for starting at
+all. The three backends, what each validates, and how a failure reaches a human
+are in [Deployment § Secrets backends](deployment.md#secrets-backends).
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROBOTHOR_MEMORY_GENERATION_PROVIDER` | `ollama` | `ollama` (local, unchanged behavior) or `openrouter` (remote) |
-| `ROBOTHOR_MEMORY_GENERATION_REMOTE_MODEL` | `openrouter/xiaomi/mimo-v2.5` | Remote model when the provider is `openrouter` |
-| `ROBOTHOR_MEMORY_GENERATION_MIN_INTERVAL_S` | `1.5` | Minimum seconds between remote generation calls (`0` disables pacing) |
-
-`openrouter` requires `OPENROUTER_API_KEY` in the environment; if it is
-missing, an ERROR is logged once and generation stays local. Remote 429/503
-responses are retried up to 3 attempts with jittered exponential backoff
-(finite `Retry-After` honored, each sleep capped at 20s, 45s total budget);
-timeouts and network errors get one retry; other errors fall back to local
-immediately.
-
-### Provider keys
+### Provider keys, slot by slot
 
 Five providers can hold credentials: `openrouter`, `anthropic`, `openai`,
 `gemini`, `deepseek`. Each resolves **vault-first, then environment**, slot by
@@ -181,9 +207,7 @@ it was written to, while a spare left in the shell keeps working.
 | 1 (primary) | `providers/<id>/api_key` | `<PROVIDER>_API_KEY` |
 | 2+ (spare) | `providers/<id>/api_key_<N>` | `<PROVIDER>_API_KEY_<N>` |
 
-From a terminal:
-
-```
+```bash
 genus vault set providers/openrouter/api_key sk-or-v1-primary
 genus vault set providers/openrouter/api_key_2 sk-or-v1-spare
 ```
@@ -195,36 +219,24 @@ slot to fill first, and `GET /api/providers` reports any pre-existing stranded
 row as `state: "orphaned"`.
 
 **When the engine reads the vault.** Once at startup (before any subsystem
-runs, so direct-`os.environ` consumers like memory generation see the key on
-the first turn), and again on `POST /api/admin/secrets/reload` — what the
-Settings page calls after a save — or on `SIGHUP`. Neither cancels in-flight
-work, so no restart is needed. Between refreshes the values are served from an
-in-memory snapshot: credential resolution sits on the LLM hot path and must not
-open a database connection per call.
-
-An instance whose vault has no master key resolves from the environment only
-and says so once at INFO — the credential store is optional, and an engine that
-could not make an LLM call because it is empty would be worse than no vault at
-all.
+runs, so direct-`os.environ` consumers see the key on the first turn), and again
+on `POST /api/admin/secrets/reload` — what the Settings page calls after a save
+— or on `SIGHUP`. Neither cancels in-flight work, so no restart is needed.
+Between refreshes the values come from an in-memory snapshot: credential
+resolution sits on the LLM hot path and must not open a database connection per
+call.
 
 Secrets are write-only end to end. `GET /api/providers` reports
 `{configured, source, fingerprint, state, updated_at}` per slot and never a
-value, and the test connection's error text is scrubbed of every credential
-the provider might have echoed back.
+value, and the test connection's error text is scrubbed of every credential the
+provider might have echoed back.
 
-### Credential pools
+### Why spares matter
 
-Every model in a fallback chain authenticates with the same provider key, so
-a chain built on one credential is a chain of one link: on 2026-08-25 a single
+Every model in a fallback chain authenticates with the same provider key, so a
+chain built on one credential is a chain of one link: on 2026-08-25 a single
 capped `OPENROUTER_API_KEY` stopped the whole fleet, four cloud models and a
 local tier notwithstanding.
-
-Configure spares as numbered siblings and the engine rotates through them:
-
-```
-OPENROUTER_API_KEY=sk-or-v1-primary
-OPENROUTER_API_KEY_2=sk-or-v1-spare
-```
 
 | Behaviour | Rule |
 |-----------|------|
@@ -237,111 +249,36 @@ OPENROUTER_API_KEY_2=sk-or-v1-spare
 | Retry target | The **same** model, not the next one — a dead key is not a dead model |
 | Nothing configured | No pool is built and litellm's own env lookup is used, exactly as before |
 
-Keys are never logged. Anything naming a credential — logs, alerts, `repr()` —
-uses a one-way fingerprint (`key-1a2b3c4d`) rather than the usual last-four
-convention, which would print real key material.
+## Settings the generated reference cannot carry
 
-## Service Ports
+The reference is rendered from the typed registry, so three kinds of variable
+are missing from it by design. They are listed here because otherwise they are
+documented nowhere:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROBOTHOR_API_PORT` | `9099` | RAG Orchestrator / API server |
-| `ROBOTHOR_BRIDGE_PORT` | `9100` | Bridge service (CRM, contacts) |
-| `ROBOTHOR_VISION_PORT` | `8600` | Vision service |
-| `ROBOTHOR_HELM_PORT` | `3004` | Helm dashboard |
-| `ROBOTHOR_TTS_PORT` | `8880` | TTS service |
-
-## Vision
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROBOTHOR_VISION_MODE` | `disarmed` | Default mode: `disarmed`, `basic`, `armed`, `disabled` |
-| `ROBOTHOR_CAMERA_SOURCE` | `/dev/video0` | Camera device, RTSP URL, or video file |
-| `ROBOTHOR_CAMERA_WIDTH` | `640` | Capture width |
-| `ROBOTHOR_CAMERA_HEIGHT` | `480` | Capture height |
-| `ROBOTHOR_YOLO_MODEL` | `yolov8n` | YOLO variant: `yolov8n` (6MB), `yolov8s` (22MB), `yolov8m` (52MB) |
-| `ROBOTHOR_VLM_MODEL` | `llama3.2-vision:11b` | Vision language model for scene analysis |
-
-## Memory
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROBOTHOR_MEMORY_TTL_HOURS` | `48` | Short-term memory TTL |
-| `ROBOTHOR_IMPORTANCE_THRESHOLD` | `0.3` | Minimum importance for long-term archival |
-| `ROBOTHOR_MEMORY_BLOCK_MAX_CHARS` | `5000` | Maximum characters per memory block |
-| `ROBOTHOR_MEMORY_DIR` | `$WORKSPACE/memory` | Memory file directory |
-
-## Workspace
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROBOTHOR_WORKSPACE` | `~/robothor` | Base directory for runtime data |
-| `ROBOTHOR_LOG_DIR` | `/var/log/robothor` | Log directory |
-
-## Agent manifests
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROBOTHOR_MANIFEST_SCHEMA_MODE` | `observe` | Validate each manifest against `robothor/engine/schema/agent_manifest.yaml` at load. `off` skips validation; `observe` logs each error with the agent, path and code and counts it in `robothor_manifest_schema_would_reject_total`; `enforce` refuses the manifest and reports the agent **broken** (never absent), so the scheduler will not prune its schedules. |
-
-Only `error`-severity findings block under `enforce`. Advisory findings — a
-model that is not in the registry, an unknown guardrail name, a key sitting in
-the wrong block — stay warnings on every rung, because each describes a
-manifest that loads and runs.
-
-Validation runs on the **merged** manifest: the file plus `_defaults.yaml` —
-exactly the layers a run merges. A typo in the fleet defaults therefore marks
-every agent that inherits it broken, rather than passing a per-file check and
-failing at run time.
-
-Under `enforce`, `/ready` returns `503` with `checks.fleet: "error:broken:<n>"`
-and a `broken_agents` list of ids, and the scheduler refuses to prune any
-schedule while a manifest is broken. An agent reported **broken** needs its
-manifest fixed; an agent reported **missing** needs re-creating. The two are
-never collapsed.
-
-Unknown keys are a warning at load and an error only under `strict`. Nothing in
-the engine runs `strict`; the repo's own template test does, against every
-bundle under `templates/agents/`. A live instance may legitimately carry a field
-a plugin reads; a template shipped from this repo may not.
-
-`observe` counts every occurrence in `robothor_manifest_schema_would_reject_total`
-(labelled by agent) and logs each distinct agent/path/code once — `/metrics` is
-how the count leaves the process today.
-
-## Event Bus
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `EVENT_BUS_ENABLED` | `true` | Enable Redis Streams event bus |
-| `EVENT_BUS_MAXLEN` | `10000` | Max entries per stream (circular buffer) |
-| `ROBOTHOR_CAPABILITIES_MANIFEST` | `$WORKSPACE/agent_capabilities.json` | Agent RBAC manifest path |
-| `ROBOTHOR_SERVICES_MANIFEST` | `$WORKSPACE/robothor-services.json` | Service registry path |
+| Variable | What it is |
+|----------|------------|
+| `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY` (+ `_2`…`_16`) | Provider credentials. They belong to the providers, not to this platform, so they keep the providers' names rather than being renamed into a Genus namespace |
+| `BRAVE_SEARCH_API_KEY` | Brave Search API key. Set it and `web_search` prefers the Brave API; unset means the provider is absent — no call, no error |
+| `AUTH_SECRET` | The dashboard's own Auth.js secret. Read by Next.js, not by the Python settings model. Required, with `GENUS_BRIDGE_SSO_SECRET`, before the dashboard reports ready |
+| `REDIS_URL` | A full Redis URL that overrides the host/port/db settings, for a managed Redis with credentials in the URL |
+| `EVENT_BUS_ENABLED`, `EVENT_BUS_MAXLEN` | The Redis Streams event bus: on by default, 10,000 entries per stream |
+| `BRIDGE_URL`, `ORCHESTRATOR_URL`, `VISION_URL`, `SEARXNG_URL` | Per-service base-URL overrides that outrank `robothor-services.json` |
+| `ROBOTHOR_MEMORY_GENERATION_PROVIDER`, `_REMOTE_MODEL`, `_MIN_INTERVAL_S` | Offload memory generation (fact extraction, episode summaries, insight discovery) from the local GPU to a remote provider. Embeddings and reranking always stay local; a remote failure falls back to local Ollama with a `MEMORY_GENERATION_REMOTE_FALLBACK` WARNING |
+| `ROBOTHOR_DECLARED_TOOL_OUTAGES` | `tool:reason,tool:reason` — outages the operator has already decided about, so the tool-outage detector stops alerting on them |
+| `GENUS_IMAGE_TAG`, `GENUS_WORKSPACE`, `GENUS_ENV_FILE`, `GENUS_UID`, `GENUS_GID` | These configure the **compose file**, not the platform, so `genus config` does not know them. See [Deployment](deployment.md#docker-compose) |
 
 ## Authentication
 
 Three sign-in methods, and a deployment needs at least one. Local
 email+password exists so a five-minute install does not have to stand up an
 identity provider first; OIDC and Cloudflare Access are unchanged and can run
-alongside it.
+alongside it. The wizard turns local login on when it creates your account —
+you do not set `GENUS_LOCAL_LOGIN` yourself — and the dashboard asks the bridge
+which methods are live rather than reading its own environment. Names, defaults
+and restart requirements for all of them are in the
+[`auth` group of the reference](reference/configuration.md).
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GENUS_AUTH_SIGNING_KEY` | *(vault)* | HS256 key the Bridge signs sessions with. At least 32 bytes; required in production. Also derives the key that encrypts stored TOTP secrets — rotating it invalidates every enrolled second factor (recover with `genus user mfa-reset`) |
-| `GENUS_BRIDGE_SSO_SECRET` | *(empty)* | Shared dashboard↔Bridge secret. Required in production for every method |
-| `GENUS_OIDC_ISSUERS` | *(empty)* | Comma-separated allowlist of OIDC issuers the Bridge will JIT-provision for |
-| `GENUS_LOCAL_LOGIN` | `false` | `true` (or `1`/`yes`/`on`/`t`/`y` — the Bridge and the dashboard read the same set, so neither half can switch on alone) enables local email+password sign-in. Off by default: a password endpoint must be opted into, never appear on upgrade. Set it on **both** the Bridge (serves `/api/auth/login`) and the dashboard (registers the provider that calls it) |
-| `GENUS_OWNER_MFA_REQUIRED` | `true` | Tell an owner account with no second factor to enrol one while local login is on. `false` gives up the only compensating control for a public password endpoint — one password then *is* the authentication for the instance and its stored credentials |
-| `GENUS_TRUSTED_PROXIES` | *(empty)* | Comma-separated addresses or CIDR ranges allowed to set `X-Client-IP` on a Bridge request. **Loopback is not trusted implicitly** — list it (`127.0.0.1/32`) if the dashboard shares the host. Empty trusts nobody and the Bridge uses the peer address, so the sign-in limiter sees one address for every user |
-| `GENUS_DASHBOARD_TRUSTED_PROXIES` | *(empty)* | Comma-separated addresses or CIDR ranges the **dashboard** treats as its own edge. It walks `X-Forwarded-For` from the right and forwards the first hop that is not one of these as `X-Client-IP`. Empty sends no header at all. Set it to the ingress/proxy in front of the dashboard, as narrowly as possible |
-| `CF_ACCESS_TEAM_DOMAIN` / `CF_ACCESS_AUD` | *(empty)* | Sign in through a fronting Cloudflare Access policy |
-| `GENUS_INSECURE_DEV_MODE` | `false` | Loopback-only development escape hatch. Not a sign-in method; forbidden in production |
-
-### Local email and password
-
-With `GENUS_LOCAL_LOGIN=true` the sign-in page renders an email + password
-form (alongside the SSO button when both are configured) and the Bridge serves
-`GET /api/auth/methods` and `POST /api/auth/login`.
+What the settings do not tell you:
 
 - Passwords are argon2id (`robothor/auth/passwords.py`), minimum 12 characters.
 - Every failure — unknown email, wrong password, disabled account, locked
@@ -349,38 +286,46 @@ form (alongside the SSO button when both are configured) and the Bridge serves
   state is `mfa_required`, and only after a correct password.
 - Ten consecutive failures freeze the account for 15 minutes; five attempts per
   (email, IP) per minute are allowed before a 429. On top of that, a coarse
-  ceiling that nothing in the request can change: 30 credential attempts per
-  minute per connecting peer and 300 per minute for the whole Bridge process,
-  checked before any account is loaded, so a spray of fabricated addresses
-  cannot spend one 64 MiB argon2 hash per request. A credential body over
-  8 KiB is refused with 413 before it is parsed.
-- **The forwarded client address needs two allowlists to agree.** The dashboard
-  reads `X-Forwarded-For`, walks it from the **right**, and forwards the first
-  hop not named in `GENUS_DASHBOARD_TRUSTED_PROXIES` as `X-Client-IP`; the
-  Bridge honours that header only from a peer named in `GENUS_TRUSTED_PROXIES`.
-  Either one empty means no forwarded address, and the Bridge uses its peer.
-  The left-most `X-Forwarded-For` entry is the one a client can write — every
-  appending proxy produces `<what the client sent>, <the real client>` — so
-  reading it would let a caller choose its own limiter key and write its own
-  address into the audit trail and `user_sessions.ip`.
-  Loopback is **not** implicitly trusted: a tunnel on the same host
-  (cloudflared, a reverse proxy, an SSH forward) makes every remote client a
-  loopback peer. `GENUS_TRUSTED_PROXIES=127.0.0.1/32` when the dashboard and
-  the Bridge share a host — but only when nothing else can reach that loopback
-  port, because that one line grants every client behind such a tunnel the
-  `X-Client-IP` assertion. Prefer a `/32` over a pod CIDR, which covers every
-  workload in the namespace.
+  ceiling nothing in the request can change: 30 credential attempts per minute
+  per connecting peer and 300 per minute for the whole Bridge process, checked
+  before any account is loaded, so a spray of fabricated addresses cannot spend
+  one 64 MiB argon2 hash per request. A credential body over 8 KiB is refused
+  with 413 before it is parsed.
 - TOTP codes are single-use: the accepted time step is recorded, so a code
   cannot be replayed inside the verifier's ±1 step window (RFC 6238 §5.2).
-- Changing a password revokes every other refresh session, keeping only the
-  one that made the change.
+  Rotating `GENUS_AUTH_SIGNING_KEY` invalidates every enrolled second factor,
+  because it derives the key that encrypts stored TOTP secrets — recover with
+  `genus user mfa-reset`.
+- Changing a password revokes every other refresh session, keeping only the one
+  that made the change.
 - **Owner MFA is mandatory whenever local login is on.** The owner still signs
-  in, but the Helm shows a banner that cannot be dismissed until a factor is
-  enrolled at `/account/security`. It does not matter what else is configured:
-  `GENUS_OIDC_ISSUERS` is the Bridge's issuer allowlist, not a sign-in method
-  (the dashboard's `AUTH_OIDC_*` variables are what render an SSO button), and
-  `CF_ACCESS_*` are dashboard-only, so neither can answer "is there another way
-  in". Set `GENUS_OWNER_MFA_REQUIRED=false` to opt out explicitly.
+  in, but the dashboard shows a banner that cannot be dismissed until a factor
+  is enrolled at `/account/security`. It does not matter what else is
+  configured: `GENUS_OIDC_ISSUERS` is the Bridge's issuer allowlist, not a
+  sign-in method, and the `CF_ACCESS_*` variables are dashboard-only, so
+  neither can answer "is there another way in". Set
+  `GENUS_OWNER_MFA_REQUIRED=false` to opt out explicitly.
+
+### The forwarded client address needs two allowlists to agree
+
+The dashboard reads `X-Forwarded-For`, walks it from the **right**, and forwards
+the first hop not named in `GENUS_DASHBOARD_TRUSTED_PROXIES` as `X-Client-IP`;
+the Bridge honours that header only from a peer named in
+`GENUS_TRUSTED_PROXIES`. Either one empty means no forwarded address, and the
+Bridge uses its peer — safe, but then the sign-in limiter sees one address for
+every user.
+
+The left-most `X-Forwarded-For` entry is the one a client can write — every
+appending proxy produces `<what the client sent>, <the real client>` — so
+reading it would let a caller choose its own limiter key and write its own
+address into the audit trail and `user_sessions.ip`.
+
+Loopback is **not** implicitly trusted: a tunnel on the same host (a reverse
+proxy, an SSH forward) makes every remote client a loopback peer. Set
+`GENUS_TRUSTED_PROXIES=127.0.0.1/32` when the dashboard and the Bridge share a
+host — but only when nothing else can reach that loopback port, because that one
+line grants every client behind such a tunnel the `X-Client-IP` assertion.
+Prefer a `/32` over a pod CIDR, which covers every workload in the namespace.
 
 Operator commands:
 
@@ -390,52 +335,67 @@ genus user set-password alice@example.com --password-stdin < secret
 genus user mfa-reset alice@example.com         # clears a lost authenticator
 ```
 
-## Notifications (optional)
+## Agent manifests
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROBOTHOR_TELEGRAM_BOT_TOKEN` | *(empty)* | Telegram bot token for alerts |
-| `ROBOTHOR_TELEGRAM_CHAT_ID` | *(empty)* | Telegram chat ID for notifications |
+`ROBOTHOR_MANIFEST_SCHEMA_MODE` validates each manifest against
+`robothor/engine/schema/agent_manifest.yaml` at load, on a three-rung ladder:
+`off` skips validation, `observe` (the default) logs each error with the agent,
+path and code and counts it in
+`robothor_manifest_schema_would_reject_total`, and `enforce` refuses the
+manifest and reports the agent **broken** — never absent, so the scheduler will
+not prune its schedules.
 
-## Web fetch
+Only `error`-severity findings block under `enforce`. Advisory findings — a
+model that is not in the registry, an unknown guardrail name, a key sitting in
+the wrong block — stay warnings on every rung, because each describes a
+manifest that loads and runs.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROBOTHOR_WEB_FETCH_USER_AGENT` | `GenusOS-web-fetch/1.0 (+https://github.com/Ironsail-llc/genus-os)` | Identity `web_fetch` sends. Sites that block HTTP-library defaults answer 403 to `python-httpx/*`, so the tool names itself; set this to add your own contact address |
+Validation runs on the **merged** manifest: the file plus `_defaults.yaml`,
+exactly the layers a run merges. A typo in the fleet defaults therefore marks
+every agent that inherits it broken, rather than passing a per-file check and
+failing at run time.
+
+Under `enforce`, `/ready` returns `503` with `checks.fleet: "error:broken:<n>"`
+and a `broken_agents` list of ids. An agent reported **broken** needs its
+manifest fixed; an agent reported **missing** needs re-creating. The two are
+never collapsed.
+
+Unknown keys are a warning at load and an error only under `strict`. Nothing in
+the engine runs `strict`; the repository's own template test does, against every
+bundle under `templates/agents/`. A live instance may legitimately carry a field
+a plugin reads; a template shipped from this repository may not.
+
+## Web fetch and web search
 
 `web_fetch` resolves a host, refuses any private, loopback, link-local or
 carrier-internal (CGNAT) address in either IP family, and then connects to the
-exact address it vetted — pinned at the socket, so the
-request keeps its hostname and Host, TLS SNI and certificate verification all
-see the real name. Certificate verification is never disabled; an untrusted
-certificate is reported as such. Redirects are followed one hop at a time and
-re-vetted at every hop, up to 5 real hops (the canonical `http→https` and
-`apex↔www` bounces do not count against that).
+exact address it vetted — pinned at the socket, so the request keeps its
+hostname and Host, TLS SNI and certificate verification all see the real name.
+Certificate verification is never disabled; an untrusted certificate is
+reported as such. Redirects are followed one hop at a time and re-vetted at
+every hop, up to 5 real hops (the canonical `http→https` and `apex↔www` bounces
+do not count). `ROBOTHOR_WEB_FETCH_USER_AGENT` is how the tool names itself —
+sites that block HTTP-library defaults answer 403 to `python-httpx/*`.
 
-## Web search (optional)
-
-**From a residential or datacenter IP, most scraped engines block you.** Google,
-Startpage, Brave-via-SearXNG, DuckDuckGo, Qwant and Mojeek all answer "access
-denied"/"CAPTCHA"/"too many requests" from a typical home or cloud egress, and
-DuckDuckGo's HTML endpoint answers a real browser with an HTTP 202 challenge
-page. **The Brave Search API is the supported reliable path**; the scraping
-chain below is the best effort for an instance without a key.
+**For web search, from a residential or datacenter IP, most scraped engines
+block you.** The Brave Search API is the supported reliable path
+(`BRAVE_SEARCH_API_KEY`); the chain below is the best effort for an instance
+without a key.
 
 The `web_search` tool grades the answer it gets back. It scores results by the
 *rare* terms of the query — a term carried by nearly every result is what the
 results have in common, not evidence they answer the question — and always
-requires a place or number the operator named (Jamaica, Queens, a ZIP) to
-appear. When SearXNG errors, reports its general engines unresponsive, or comes
-back failing that grade, the search re-runs through the `browser` provider: the
-engine's own browser loads a real Bing (then Startpage, then DuckDuckGo HTML)
-results page **in a background tab**, never moving the page an agent is working
-on. It advances to the next source when one returns too few rows *or* when the
-query named a place and the rows never mention it — Bing pins a local query to
-the egress IP's own city, Startpage honours the words that were typed — and the
-rows that name the place lead the answer, with `place_source` saying which
-source supplied them. The result then carries `"provider": "browser"`,
-`"fallback_from": "searxng"`, a `fallback_reason`, `sources` (every source
-tried, in order), and the unresponsive-engine list.
+requires a place or number the operator named to appear. When SearXNG errors,
+reports its general engines unresponsive, or comes back failing that grade, the
+search re-runs through the `browser` provider: the engine's own browser loads a
+real results page **in a background tab**, never moving the page an agent is
+working on. It advances to the next source when one returns too few rows *or*
+when the query named a place and the rows never mention it — one engine pins a
+local query to the egress IP's own city, another honours the words that were
+typed — and the rows that name the place lead the answer, with `place_source`
+saying which source supplied them. The result then carries
+`"provider": "browser"`, `"fallback_from": "searxng"`, a `fallback_reason`,
+`sources` (every source tried, in order), and the unresponsive-engine list.
 
 `fallback_reason` values: `low_relevance`, `missing_place_terms`,
 `engines_unresponsive`, `error`, `browser_low_relevance` (the browser answer
@@ -444,46 +404,42 @@ selectors have moved), `browser_blocked` (challenge/interstitial),
 `browser_timeout`, `browser_denied` (the run may not use the browser tool),
 `browser_unavailable`, `browser_fallback_disabled`.
 
-A local-looking query ("… near X", "… in Springfield", a ZIP) also gets up to
-five OpenStreetMap rows under `places`: for a mapped category (coworking,
-cafe/coffee, gym) the place is geocoded once with Nominatim — using exactly the
-words the query gave, never an inferred city or state — and the amenities around
-it come from Overpass; anything else falls back to a free-text Nominatim lookup.
-Both APIs share one ≤1 request/second courtesy budget. When the local path runs
-and finds nothing, the result says why in `places_reason`:
-`geocode_failed:<place>`, `overpass_empty`, `overpass_error`,
-`category_unmapped`, or `place_not_in_query`.
+A local-looking query ("… near X", "… in Springfield", a postcode) also gets up
+to five OpenStreetMap rows under `places`: for a mapped category the place is
+geocoded once with Nominatim — using exactly the words the query gave, never an
+inferred city or state — and the amenities around it come from Overpass;
+anything else falls back to a free-text Nominatim lookup. Both APIs share one
+≤1 request/second courtesy budget. When the local path runs and finds nothing,
+the result says why in `places_reason`: `geocode_failed:<place>`,
+`overpass_empty`, `overpass_error`, `category_unmapped`, or
+`place_not_in_query`.
 
 An agent can force one provider with the tool's `provider` argument
 (`searxng`, `browser`, `brave`, `perplexity`); omitting it runs the automatic
-chain.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BRAVE_SEARCH_API_KEY` | *(empty)* | Brave Search API key. When set — and when the caller did not name a different provider — `web_search` prefers the Brave API and falls back to the SearXNG → browser chain on any error. Unset means the provider is absent: no call, no error. |
-| `ROBOTHOR_WEB_SEARCH_BROWSER_FALLBACK` | `on` | `off`/`0`/`false`/`no` disables the *implicit* browser fallback (it drives a headed Chromium on the operator's display). An explicit `provider="browser"` still runs. |
+chain. `ROBOTHOR_WEB_SEARCH_BROWSER_FALLBACK=off` disables the *implicit*
+browser fallback (it drives a headed browser on the operator's display); an
+explicit `provider="browser"` still runs.
 
 ## Failure-mode detectors
 
-See [Observability](OBSERVABILITY.md#failure-mode-detectors) for what each
-detector watches.
+`ROBOTHOR_DETECTORS_ENABLED=0` disables every detector; what each one watches
+is in `docs/OBSERVABILITY.md` (repository only), under failure-mode detectors.
+`ROBOTHOR_RECORD_ASSISTANT_TURNS` persists each assistant turn onto its
+`agent_run_steps` row so a finished run's reasoning can be read back. It is off
+by default and should stay off unless you need it: a turn contains whatever the
+agent was reasoning about, which on a real instance is the operator's own data.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ROBOTHOR_DETECTORS_ENABLED` | `1` | `0` disables every detector |
-| `ROBOTHOR_DECLARED_TOOL_OUTAGES` | *(empty)* | `tool:reason,tool:reason` — tool outages the operator has already decided about, so `tool_outage_detector` stops alerting about them |
-| `ROBOTHOR_RECORD_ASSISTANT_TURNS` | *(off)* | `true` persists each assistant turn onto its `agent_run_steps` row, so a finished run's reasoning can be read back. Off by default: a turn contains whatever the agent was reasoning about, which on a real instance is the operator's own data. Capped at 2,500 characters per turn. |
+## Reading settings from Python
 
-## Service URL Overrides
+```python
+from robothor.config import get_config
 
-The service registry supports environment variable overrides for any service:
+cfg = get_config()
+print(cfg.db.dsn)           # "dbname=robothor_memory host=127.0.0.1 ..."
+print(cfg.redis.url)        # "redis://127.0.0.1:6379/0"
+print(cfg.ollama.base_url)  # "http://127.0.0.1:11434"
+print(cfg.workspace)        # Path("<workspace>")
+```
 
-| Variable | Overrides |
-|----------|-----------|
-| `BRIDGE_URL` | Bridge base URL |
-| `ORCHESTRATOR_URL` | API server base URL |
-| `VISION_URL` | Vision service base URL |
-| `ROBOTHOR_OLLAMA_URL` | Ollama base URL (`OLLAMA_URL` still works, deprecated) |
-| `SEARXNG_URL` | SearXNG search URL |
-
-These take precedence over `robothor-services.json` values.
+The config is a singleton. Call `reset_config()` in tests to reload from the
+environment.

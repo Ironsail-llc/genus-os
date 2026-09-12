@@ -8,7 +8,7 @@ the right answer for ``/health`` to print and for nobody to act on.
 
 This is the wire. It runs on a timer because both inputs move: the execution mode
 changes when a credential caps, and the temperature changes within seconds
-(docs/runbooks/THERMAL.md -- the GB10 heats ~2 C/s under 27B prefill).
+(docs/instance/THERMAL.md -- the GB10 heats ~2 C/s under 27B prefill).
 
 Two limits come out of one policy:
 

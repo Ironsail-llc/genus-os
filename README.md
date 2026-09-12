@@ -82,40 +82,20 @@ consent, retention, and jurisdictional requirements.
 
 **Operations & CRM** — Built-in CRM with cross-channel identity resolution and multi-tenancy. Task state machine (TODO &rarr; IN_PROGRESS &rarr; REVIEW &rarr; DONE) with SLA tracking, agent notifications, and human-in-the-loop approval workflows. Fleet analytics with anomaly detection. Nightwatch: overnight self-improving pipeline that diagnoses failures and opens draft PRs. sd_notify watchdog with DB/Redis health pings, zombie run reaping, and stale session cleanup. MCP server exposes 44 tools over stdio; agents can also call external MCP servers as clients. The repository includes SOPS/age, systemd, and Cloudflare Tunnel patterns whose controls depend on deployment configuration.
 
-## Getting Started
-
-1. **Clone and install:**
-   ```bash
-   git clone https://github.com/Ironsail-llc/genus-os.git
-   cd genus-os
-   python3 -m venv venv && source venv/bin/activate
-   pip install -e ".[all]"
-   ```
-
-2. **Activate the onboarding guide:**
-   ```bash
-   cp docs/ONBOARDING.md CLAUDE.md
-   ```
-
-3. **Open Claude Code and ask:** "Help me get started"
-   The guide walks through prerequisites, API keys, identity, agents, and first run.
-
-4. When done, delete `CLAUDE.md` or replace with your own project instructions.
-
-To build custom agents later:
-```bash
-cp docs/AGENT_BUILDER.md .claude/AGENT_BUILDER.md
-```
-
 ## Quick Start
 
+One install path, and CI replays these exact four lines on a fresh machine
+every night:
+
 ```bash
-git clone https://github.com/Ironsail-llc/genus-os.git
-cd genus-os
-pip install -e ".[all]"
-genus init          # Two phases: prints the plan, then applies it
-genus serve         # Start the orchestrator (engine runs separately: genus engine start)
+pip install genusos
+export OPENROUTER_API_KEY=sk-your-key
+genus init --yes --owner-name "Ada Lovelace" --owner-email ada@example.com
+genus doctor --json
 ```
+
+Prerequisites, the container substrate, the setup wizard and what to do when
+the doctor is red: **[docs/quickstart.md](docs/quickstart.md)**.
 
 `genus init` checks everything before it writes anything — prerequisites, the
 database, and a real one-token completion against the provider you choose. If a
@@ -144,23 +124,24 @@ mkdir -p ~/genus && cd ~/genus
 genus init --substrate compose --yes --workspace .
 ```
 
-Or just the dependencies in Docker, with the platform on the host:
+Or just the dependencies in containers, with the platform on the host:
 
 ```bash
-robothor init --docker   # PostgreSQL+pgvector, Redis, Ollama in containers
-robothor serve
+genus init --docker   # PostgreSQL+pgvector, Redis, Ollama in containers
 ```
 
-`systemd` and `helm` are designed but not yet selectable; `genus init` says so
-rather than pretending they do not exist. Deployment details, including the
-dev and GPU overlays, are in [`docs/deployment.md`](docs/deployment.md).
+`systemd` and `helm` are not selectable from `--substrate`; `genus init` says so
+rather than pretending they do not exist. Installing the units on a box the
+wizard has already set up is one script, and the Helm chart has its own
+section — both in [`docs/deployment.md`](docs/deployment.md), along with
+compose upgrades and the dev and GPU overlays.
 
 Engine and TUI commands:
 
 ```bash
-robothor engine status   # Engine health, scheduler, bot status
-robothor engine run <id> # Run any agent manually
-robothor tui             # Terminal dashboard for monitoring
+genus engine status   # Engine health, scheduler, bot status
+genus engine run <id> # Run any agent manually
+genus tui             # Terminal dashboard for monitoring
 ```
 
 Something not working? `genus doctor` is the one command that answers it —
@@ -177,12 +158,26 @@ check means.
 
 ## Production status
 
-The version 1.10 release-candidate change set contains a hardening foundation:
-an ordered, checksum-verified migration manifest with upgrade archives
-(`robothor migrate --check` prints the count), separate liveness/readiness,
-persistent production workspaces, fail-closed dashboard/Bridge/Engine
-authentication, constrained Kubernetes workloads, release gates, encrypted
-snapshot/restore, and the first policy-bound Entity Kernel treasury contracts.
+The release-candidate change set contains a hardening foundation: an ordered,
+checksum-verified migration manifest with upgrade archives, separate
+liveness/readiness, persistent production workspaces, fail-closed
+dashboard/Bridge/Engine authentication, constrained Kubernetes workloads,
+release gates, encrypted snapshot/restore, and the first policy-bound Entity
+Kernel treasury contracts.
+
+**How the schema is enforced, on a ladder, so nothing silently runs behind it:**
+
+| Where | What holds the line |
+|-------|---------------------|
+| Compose | A one-shot `migrate` service. The engine, bridge and orchestrator declare `condition: service_completed_successfully`, so they never start against a half-migrated database |
+| Kubernetes | The chart's `wait-for-migrations` init container, the same contract |
+| Install | `genus init`'s `verify` step runs the doctor's required checks, so an install with unapplied migrations fails the install |
+| Anywhere, any time | `genus doctor`'s `db.migrations` check — `required`, so it exits 1 — and `genus migrate --status` for the ledger |
+
+A host install neither auto-migrates nor refuses to boot: the doctor is what
+tells you, and `genus doctor --fix` or `genus migrate` is what moves it.
+Checksums are compared on every run, so **drift** — a file that changed after it
+was applied — is reported and deliberately *not* auto-repaired.
 
 That does not make an unconfigured checkout production-ready. Before go-live,
 operators must provision Vault and OIDC, seed the agent workspace, validate
@@ -214,7 +209,7 @@ PCI scope, and this boundary is not a PCI certification or live payment adapter.
 Every agent is defined by a YAML manifest and an optional instruction file. Scaffold one, or drop a manifest in your instance's `docs/agents/` yourself.
 
 ```bash
-robothor agent scaffold support-triage --description "Classify incoming support tickets"
+genus agent scaffold support-triage --description "Classify incoming support tickets"
 ```
 
 This creates `docs/agents/support-triage.yaml` (manifest) and `brain/SUPPORT_TRIAGE.md` (instruction file) from templates. Both are instance data — gitignored, yours alone, and they survive platform upgrades. `docs/AGENT_BUILDER.md` walks through filling them in, including the eval suite. Edit the result to fit your needs:
@@ -326,9 +321,9 @@ Full schema: [schema.yaml](docs/agents/schema.yaml) | Reference: [Agent Builder]
 ### Agent Lifecycle
 
 ```bash
-robothor engine list           # See all scheduled agents
-robothor engine run <id>       # Run one manually
-robothor engine history        # Recent runs with status and duration
+genus engine list           # See all scheduled agents
+genus engine run <id>       # Run one manually
+genus engine history        # Recent runs with status and duration
 python scripts/validate_agents.py --agent <id>  # Validate manifest
 ```
 
@@ -438,8 +433,8 @@ steps:
 **Event hooks** on Redis Streams are the primary trigger. Cron schedules serve as safety nets at relaxed frequencies. The workflow engine handles conditional branching, failure modes (`abort` / `skip`), and step chaining.
 
 ```bash
-robothor engine workflow list      # List loaded workflows
-robothor engine workflow run <id>  # Execute manually
+genus engine workflow list      # List loaded workflows
+genus engine workflow run <id>  # Execute manually
 ```
 
 ## Nightwatch
@@ -590,17 +585,16 @@ complete replication, or high availability inside an instance.
 
 ```bash
 # On the parent instance:
-robothor federation init              # Generate Ed25519 identity
-robothor federation invite --relationship child --ttl 48
+genus federation init              # Generate Ed25519 identity
+genus federation invite --relationship child --ttl 48
 # → prints a one-time signed token
 
-# On the new instance:
-git clone https://github.com/Ironsail-llc/genus-os.git
-cd genus-os && pip install -e ".[all]"
-robothor init
-robothor federation init
-robothor federation connect <token>   # Establishes bilateral connection
-robothor engine start
+# On the new instance (install it first -- see docs/quickstart.md):
+pip install genusos
+genus init --yes
+genus federation init
+genus federation connect <token>   # Establishes bilateral connection
+genus engine start
 ```
 
 ### Architecture
@@ -741,30 +735,30 @@ robothor/
 |---------|---------|
 | `genus init` | Two-phase setup wizard; probes the provider, prints the `/setup` link |
 | `genus auth setup-link` | Mint a fresh first-run `/setup` link (before an owner exists) |
-| `robothor serve` | Start the orchestrator (engine runs separately) |
-| `robothor status` | System health overview |
+| `genus serve` | Start the orchestrator (engine runs separately) |
+| `genus status` | System health overview |
 | `genus doctor` | Diagnose the instance; `--fix` repairs what it can |
-| `robothor migrate` | Run database migrations |
-| `robothor mcp` | Start MCP server (44 tools, stdio) |
-| `robothor tui` | Terminal monitoring dashboard |
-| `robothor agent scaffold <id>` | Scaffold a new agent (manifest + instruction file) |
-| `robothor engine start` | Start the engine daemon |
-| `robothor engine stop` | Stop the engine |
-| `robothor engine status` | Engine health, scheduler, bot |
-| `robothor engine run <id>` | Run an agent manually |
-| `robothor engine list` | List all scheduled agents |
-| `robothor engine history` | Recent agent run history |
-| `robothor engine workflow list` | List loaded workflows |
-| `robothor engine workflow run <id>` | Execute a workflow manually |
-| `robothor federation init` | Generate instance identity (Ed25519 keypair) |
-| `robothor federation invite` | Generate signed invite token for a peer |
-| `robothor federation connect <token>` | Accept connection from a peer |
-| `robothor federation status` | Show identity and all connections |
-| `robothor snapshot create` | Create an encrypted database/workspace recovery point |
-| `robothor snapshot list` | Inventory snapshots without decrypting them |
-| `robothor snapshot verify <file>` | Authenticate and verify snapshot contents and compatibility |
-| `robothor snapshot restore <file>` | Produce a restore plan; requires explicit flags to mutate state |
-| `robothor snapshot prune` | Dry-run or apply bounded local retention |
+| `genus migrate` | Run database migrations |
+| `genus mcp` | Start MCP server (44 tools, stdio) |
+| `genus tui` | Terminal monitoring dashboard |
+| `genus agent scaffold <id>` | Scaffold a new agent (manifest + instruction file) |
+| `genus engine start` | Start the engine daemon |
+| `genus engine stop` | Stop the engine |
+| `genus engine status` | Engine health, scheduler, bot |
+| `genus engine run <id>` | Run an agent manually |
+| `genus engine list` | List all scheduled agents |
+| `genus engine history` | Recent agent run history |
+| `genus engine workflow list` | List loaded workflows |
+| `genus engine workflow run <id>` | Execute a workflow manually |
+| `genus federation init` | Generate instance identity (Ed25519 keypair) |
+| `genus federation invite` | Generate signed invite token for a peer |
+| `genus federation connect <token>` | Accept connection from a peer |
+| `genus federation status` | Show identity and all connections |
+| `genus snapshot create` | Create an encrypted database/workspace recovery point |
+| `genus snapshot list` | Inventory snapshots without decrypting them |
+| `genus snapshot verify <file>` | Authenticate and verify snapshot contents and compatibility |
+| `genus snapshot restore <file>` | Produce a restore plan; requires explicit flags to mutate state |
+| `genus snapshot prune` | Dry-run or apply bounded local retention |
 
 ## Deployment Models
 
@@ -834,6 +828,25 @@ provisioned by installing the Python package.
 | qwen3-embedding:0.6b | 639 MB | Dense vector embeddings (1024-dim) |
 | Qwen3-Reranker-0.6B:F16 | 1.2 GB | Cross-encoder reranking |
 | qwen3:8b | 5.2 GB | Local fallback (watchdog, lightweight tasks) |
+
+## Developing with an AI assistant
+
+This is for working **on** Genus OS, not for installing it — the install path is
+[the quick start](docs/quickstart.md) above and needs no checkout.
+
+```bash
+git clone https://github.com/Ironsail-llc/genus-os.git
+cd genus-os
+python3 -m venv venv && source venv/bin/activate
+pip install -e ".[all]"
+cp docs/ONBOARDING.md CLAUDE.md
+```
+
+Then open your coding assistant and ask it to help you get started: the guide
+walks through prerequisites, API keys, identity, agents and a first run.
+Delete `CLAUDE.md` afterwards, or replace it with your own project
+instructions. For building agents, `cp docs/AGENT_BUILDER.md
+.claude/AGENT_BUILDER.md` gives the assistant the manifest contract.
 
 ## Testing
 
