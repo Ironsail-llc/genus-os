@@ -282,3 +282,60 @@ describe("conditional provider registration", () => {
     expect(ids).toContain("cloudflare-access");
   });
 });
+
+describe("the mfa-setup hint across a token refresh", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  const refreshed = {
+    access_token: "new-access-token",
+    refresh_token: "new-refresh-token",
+    user: {
+      id: "user-1",
+      email: "operator@example.com",
+      display_name: "Test Operator",
+      role: "owner",
+      tenant_id: "default",
+    },
+  };
+
+  // The banner re-reads /api/auth/me, which is authoritative, so a stale hint is
+  // cosmetic — but `applyBridgeTokens` never touched `mfaSetupRequired`, so the
+  // value set at local sign-in survived every refresh for the life of the
+  // Auth.js cookie and could end up contradicting the panel.
+  it("is cleared when the refresh response does not carry it", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(true, refreshed)));
+    const token = await bridgeJwtCallback({
+      token: {
+        bridgeAccess: "expired-access-token",
+        bridgeRefresh: "one-use-refresh-token",
+        accessExpiresAt: 0,
+        role: "owner",
+        tenantId: "default",
+        mfaSetupRequired: true,
+      } as JWT,
+    });
+    expect(token.bridgeAccess).toBe("new-access-token");
+    expect(token.mfaSetupRequired).toBeUndefined();
+  });
+
+  it("is refreshed from the response when the bridge does report it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(response(true, { ...refreshed, mfa_setup_required: true })),
+    );
+    const token = await bridgeJwtCallback({
+      token: {
+        bridgeAccess: "expired-access-token",
+        bridgeRefresh: "one-use-refresh-token",
+        accessExpiresAt: 0,
+        role: "owner",
+        tenantId: "default",
+      } as JWT,
+    });
+    expect(token.mfaSetupRequired).toBe(true);
+  });
+});

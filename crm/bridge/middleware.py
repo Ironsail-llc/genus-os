@@ -148,6 +148,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
             "/api/auth/sso",
             "/api/auth/refresh",
             "/api/auth/logout",
+            # Local email+password sign-in. Both must answer an unauthenticated
+            # caller by definition — /methods tells the sign-in page which form
+            # to draw, and /login is where a session comes from. Neither widens
+            # anything else: both handlers 404 unless GENUS_LOCAL_LOGIN=true,
+            # /login is rate limited per (email, IP) and lockout-guarded, and
+            # /methods returns only names and booleans.
+            "/api/auth/methods",
+            "/api/auth/login",
         }
     )
 

@@ -22,6 +22,20 @@ DEFAULT_ROLE = "member"
 JIT_PROVISIONABLE_ROLES = frozenset({"member", "viewer"})
 
 
+def canonical_email(email: str | None) -> str:
+    """The one canonical form of an address, used on every read and write.
+
+    ``str.lower()``, NOT ``str.casefold()``. Casefold is for caseless
+    *comparison* of arbitrary text and maps ß to ss, so
+    ``"Straße@example.com".casefold()`` is ``"strasse@example.com"`` — a different mailbox,
+    quite possibly someone else's. ``lower()`` matches PostgreSQL's ``lower()``
+    and CITEXT's comparison exactly, which is what the stored side and the
+    migration use, so the Python and SQL sides can never disagree about which
+    row an address names.
+    """
+    return (email or "").strip().lower()
+
+
 class AccountProvisioningError(RuntimeError):
     """Base class for fail-closed SSO account resolution failures."""
 
@@ -51,11 +65,29 @@ def get_account_by_id(user_id: str) -> dict[str, Any] | None:
 
 
 def get_account_by_email(tenant_id: str, email: str) -> dict[str, Any] | None:
+    """Look up one account by address, case-insensitively.
+
+    The address is canonicalised HERE rather than trusted from the caller, so
+    every path — sign-in, the CLI, the bridge — asks the same question. The
+    stored side is canonical too (migration 114 lower-cased what existed;
+    ``bootstrap_owner_account`` and ``genus user add`` casefold on write), so
+    this stays an equality predicate and keeps using the
+    ``UNIQUE (tenant_id, email)`` index.
+
+    ``canonical_email`` is ``lower()``, never ``casefold()`` — see its note.
+
+    It is deliberately NOT ``lower(email) = lower(%s)``. That would work, but
+    it makes the predicate non-sargable — a sequential scan of every account
+    on the busiest unauthenticated route in the product, which is a denial-of-
+    service lever handed to anyone who can POST /api/auth/login. Canonical on
+    both sides gives the same case-insensitivity with the index intact, and on
+    this schema the column is CITEXT as well, so the guarantee holds twice.
+    """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             "SELECT * FROM user_accounts WHERE tenant_id = %s AND email = %s",
-            (tenant_id, email),
+            (tenant_id, canonical_email(email)),
         )
         row = cur.fetchone()
         return dict(row) if row else None
@@ -95,7 +127,7 @@ def jit_provision(
     if default_role not in JIT_PROVISIONABLE_ROLES:
         raise UnsafeProvisioningRoleError("privileged roles cannot be JIT provisioned")
 
-    email = email.strip().casefold()
+    email = canonical_email(email)
     existing = get_account_by_idp(issuer, subject)
     if existing:
         if existing.get("status") != "active":
@@ -211,7 +243,7 @@ def create_binding_grant(
     the same email so at most one grant is ever live. An ``issuer`` pin
     restricts consumption to that IdP; otherwise any allowlisted IdP matches.
     """
-    email = email.strip().casefold()
+    email = canonical_email(email)
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
@@ -387,6 +419,77 @@ def consume_active_session(refresh_token_hash: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def issue_for_account(
+    account: dict[str, Any], *, user_agent: str | None = None, ip: str | None = None
+) -> dict[str, Any]:
+    """Mint the access + refresh pair for an already-authenticated account.
+
+    The single issuance point for every sign-in path — SSO exchange, refresh
+    rotation, and local email+password. It lives here rather than in the
+    bridge router so that a second path cannot quietly grow a second set of
+    rules about what a session is: the active-status check, the refresh-token
+    hashing, and the exact user payload are all decided once.
+
+    Raises ``AccountInactiveError`` for anything but an active account; a
+    caller must translate that into its own generic failure, never echo it.
+    """
+    from robothor.auth import tokens
+
+    if account.get("status") != "active":
+        raise AccountInactiveError("account is not active")
+    access = tokens.issue_access_token(str(account["id"]), account["tenant_id"], account["role"])
+    raw_refresh, refresh_hash = tokens.new_refresh_token()
+    create_session(
+        str(account["id"]),
+        refresh_hash,
+        ttl_seconds=tokens.REFRESH_TTL_SECONDS,
+        user_agent=user_agent,
+        ip=ip,
+    )
+    return {
+        "access_token": access,
+        "refresh_token": raw_refresh,
+        "user": {
+            "id": str(account["id"]),
+            "email": str(account["email"]),
+            "display_name": account["display_name"],
+            "role": account["role"],
+            "tenant_id": account["tenant_id"],
+        },
+    }
+
+
+def revoke_user_sessions(user_id: str, *, except_refresh_hash: str | None = None) -> int:
+    """Revoke live refresh sessions for one account. Returns how many.
+
+    Called whenever the account's password changes. A password change that
+    leaves a stolen refresh token working has not locked anyone out — the
+    thief simply rotates it every thirty days and the owner never finds out.
+
+    ``except_refresh_hash`` spares the caller's OWN session, so changing a
+    password does not eject the operator from the page they are standing on.
+    Sparing it is not a weakening: that session just proved it holds the old
+    password, which is exactly what the revocation is testing for.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        if except_refresh_hash:
+            cur.execute(
+                "UPDATE user_sessions SET revoked_at = NOW() "
+                "WHERE user_id = %s AND revoked_at IS NULL AND refresh_token_hash <> %s",
+                (user_id, except_refresh_hash),
+            )
+        else:
+            cur.execute(
+                "UPDATE user_sessions SET revoked_at = NOW() "
+                "WHERE user_id = %s AND revoked_at IS NULL",
+                (user_id,),
+            )
+        revoked = int(cur.rowcount or 0)
+        conn.commit()
+        return revoked
+
+
 def revoke_session(refresh_token_hash: str) -> bool:
     with get_connection() as conn:
         cur = conn.cursor()
@@ -420,6 +523,13 @@ def bootstrap_owner_account() -> dict[str, Any] | None:
 
     tenant_id = owner.tenant_id or DEFAULT_TENANT
     display = " ".join(p for p in (owner.first_name, owner.last_name) if p) or owner.email
+    # Canonical, lower-case storage. Sign-in casefolds what the browser sent,
+    # so an owner seeded from an owner.yaml reading "Alice@Example.com" must
+    # not be stored in a form the lookup can miss. The column happens to be
+    # CITEXT today, which would have hidden this — but a guarantee that rests
+    # on one column type is not a guarantee, and the owner row is the one
+    # account whose lockout has no recovery path.
+    email = canonical_email(owner.email)
 
     # Link the CRM rolodex row if resolvable (mirrors tenant_users.person_id).
     person_id = None
@@ -440,11 +550,9 @@ def bootstrap_owner_account() -> dict[str, Any] | None:
                    SET role = 'owner', person_id = COALESCE(EXCLUDED.person_id, user_accounts.person_id),
                        updated_at = NOW()
                RETURNING *""",
-            (tenant_id, owner.email, display, person_id),
+            (tenant_id, email, display, person_id),
         )
         row = cur.fetchone()
         conn.commit()
-        logger.info(
-            "bootstrap_owner_account: owner '%s' seeded for tenant '%s'", owner.email, tenant_id
-        )
+        logger.info("bootstrap_owner_account: owner '%s' seeded for tenant '%s'", email, tenant_id)
         return dict(row)

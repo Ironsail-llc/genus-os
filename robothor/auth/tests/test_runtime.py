@@ -88,3 +88,41 @@ def test_loopback_hosts(host):
 @pytest.mark.parametrize("host", ["0.0.0.0", "10.0.0.1", "bridge", "example.com"])
 def test_non_loopback_hosts(host):
     assert is_loopback_host(host) is False
+
+
+def test_local_login_satisfies_the_sign_in_provider_requirement(monkeypatch):
+    """An appliance whose only sign-in method is local email+password is a
+    configured deployment, not a misconfigured one — that is the whole point
+    of shipping local login."""
+    monkeypatch.setenv("GENUS_ENVIRONMENT", "production")
+    monkeypatch.delenv("GENUS_INSECURE_DEV_MODE", raising=False)
+    monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "x" * 32)
+    monkeypatch.setenv("GENUS_BRIDGE_SSO_SECRET", "bridge-sso-secret")
+    monkeypatch.delenv("GENUS_OIDC_ISSUERS", raising=False)
+    monkeypatch.setenv("GENUS_LOCAL_LOGIN", "true")
+
+    validate_auth_configuration(bind_host="0.0.0.0")
+
+
+def test_production_with_neither_provider_still_fails(monkeypatch):
+    monkeypatch.setenv("GENUS_ENVIRONMENT", "production")
+    monkeypatch.delenv("GENUS_INSECURE_DEV_MODE", raising=False)
+    monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "x" * 32)
+    monkeypatch.setenv("GENUS_BRIDGE_SSO_SECRET", "bridge-sso-secret")
+    monkeypatch.delenv("GENUS_OIDC_ISSUERS", raising=False)
+    monkeypatch.setenv("GENUS_LOCAL_LOGIN", "false")
+    with pytest.raises(AuthConfigurationError, match="OIDC_ISSUERS"):
+        validate_auth_configuration(bind_host="0.0.0.0")
+
+
+def test_local_login_does_not_excuse_the_bridge_shared_secret(monkeypatch):
+    """Local login does not use the SSO exchange, but the dashboard still
+    proxies every authenticated call through the bridge — relaxing this would
+    be a weakening the feature does not need."""
+    monkeypatch.setenv("GENUS_ENVIRONMENT", "production")
+    monkeypatch.delenv("GENUS_INSECURE_DEV_MODE", raising=False)
+    monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "x" * 32)
+    monkeypatch.delenv("GENUS_BRIDGE_SSO_SECRET", raising=False)
+    monkeypatch.setenv("GENUS_LOCAL_LOGIN", "true")
+    with pytest.raises(AuthConfigurationError, match="SSO_SECRET"):
+        validate_auth_configuration(bind_host="0.0.0.0")

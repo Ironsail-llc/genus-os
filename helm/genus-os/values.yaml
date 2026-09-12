@@ -19,6 +19,48 @@ global:
   environment: development
   authEnforce: true
 
+  # Local email+password sign-in, an alternative to OIDC for deployments with
+  # no identity provider. OFF by default: a password endpoint must be opted
+  # into, never appear on an upgrade. Reaches BOTH the bridge (which serves
+  # /api/auth/login) and the dashboard (which registers the provider that
+  # calls it) — set in only one and the sign-in page has no form, or its form
+  # 404s. While this is on, owner MFA is mandatory (ownerMfaRequired).
+  localLogin: false
+
+  # Owner MFA while local email+password sign-in is on. The owner still signs
+  # in; the dashboard shows a banner it cannot dismiss until a second factor is
+  # enrolled. Setting this false gives up the only compensating control for a
+  # public password endpoint, so it has to be typed out — nothing else turns
+  # the policy off, because neither the bridge's OIDC issuer allowlist nor the
+  # dashboard-only CF_ACCESS_* secrets can tell the bridge whether a human has
+  # another way in.
+  ownerMfaRequired: true
+
+  # Peers allowed to speak for someone else's client address via X-Client-IP,
+  # as comma-separated addresses or CIDR ranges. The dashboard calls the
+  # bridge server-side, so without this the bridge's per-IP sign-in limiter
+  # sees one address for the whole internet.
+  #
+  # LOOPBACK IS NOT TRUSTED IMPLICITLY, and empty trusts nobody. A tunnel on
+  # the same host makes every remote client a loopback peer, so an implicit
+  # trust would let all of them pick their own limiter key.
+  #
+  # Prefer the dashboard pod's own address as a /32, or a range no wider than a
+  # NetworkPolicy already fences off. A whole pod CIDR grants every workload in
+  # the cluster the right to assert someone else's client address. Use
+  # "127.0.0.1/32" when the two share a host.
+  trustedProxies: ""
+
+  # The other half of the same decision, on the DASHBOARD side: which hops it
+  # believes when it reads X-Forwarded-For to work out the browser's address.
+  # It walks that list from the right and forwards the first hop that is NOT
+  # listed here, because the LEFT-most entry is the one a client can write
+  # (every appending proxy produces "<what the client sent>, <the real
+  # client>"). Empty — the default — forwards no address at all, and the bridge
+  # then uses its peer address. Set it to the ingress controller / edge, not to
+  # the dashboard itself.
+  dashboardTrustedProxies: ""
+
   # Image registry. Single GHCR org, two image names beneath it.
   registry: ghcr.io/ironsail-llc/genus-os
   imagePullPolicy: IfNotPresent

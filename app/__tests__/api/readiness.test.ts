@@ -136,4 +136,42 @@ describe("authentication readiness knows both sign-in paths", () => {
     expect(oidcProviderConfigured()).toBe(true);
     expect(checkDashboardAuthConfig().status).toBe("healthy");
   });
+
+  it("is healthy on local login alone, with no identity provider at all", async () => {
+    // The whole point of local login: a five-minute install has no IdP yet,
+    // and reporting that box as `authentication: unhealthy` would teach the
+    // operator to ignore /api/ready on day one.
+    process.env.GENUS_LOCAL_LOGIN = "true";
+    const { checkDashboardAuthConfig } = await import("@/lib/services/health");
+    const health = checkDashboardAuthConfig();
+    expect(health.status).toBe("healthy");
+    expect(health.detail).toContain("local");
+    delete process.env.GENUS_LOCAL_LOGIN;
+  });
+
+  it("counts every spelling the bridge reads as true", async () => {
+    // This probe used to require exactly "true" while the provider registered
+    // on pydantic's wider set, so GENUS_LOCAL_LOGIN=1 reported "no sign-in
+    // provider configured" on a box that had one. One truthiness test, shared.
+    process.env.GENUS_LOCAL_LOGIN = "1";
+    const { checkDashboardAuthConfig } = await import("@/lib/services/health");
+    const health = checkDashboardAuthConfig();
+    expect(health.status).toBe("healthy");
+    expect(health.detail).toContain("local");
+    delete process.env.GENUS_LOCAL_LOGIN;
+  });
+
+  it("does not count a local-login flag that is not a boolean at all", async () => {
+    process.env.GENUS_LOCAL_LOGIN = "enabled";
+    const { checkDashboardAuthConfig } = await import("@/lib/services/health");
+    expect(checkDashboardAuthConfig().status).toBe("unhealthy");
+    delete process.env.GENUS_LOCAL_LOGIN;
+  });
+
+  it("names local login in the remedy when nothing is configured", async () => {
+    const { checkDashboardAuthConfig } = await import("@/lib/services/health");
+    const health = checkDashboardAuthConfig();
+    expect(health.status).toBe("unhealthy");
+    expect(health.detail).toContain("GENUS_LOCAL_LOGIN");
+  });
 });

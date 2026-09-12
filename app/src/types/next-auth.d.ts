@@ -8,14 +8,22 @@
  */
 import type { DefaultSession } from "next-auth";
 
+import type { LocalLoginResult } from "@/lib/auth-local";
 import type { CfVerifiedClaims } from "@/lib/cf-access";
 
 declare module "next-auth" {
   interface Session {
     bridgeAccess?: string;
+    // Server-only, like bridgeAccess: the public session callback deletes it
+    // before anything reaches a browser.
+    bridgeRefresh?: string;
     backendAuthorized?: boolean;
     role?: string;
     tenantId?: string;
+    // Owner accounts on a deployment whose ONLY sign-in method is local
+    // email+password must enrol a second factor. Non-secret, so it may cross
+    // into the browser session — the banner reads it there.
+    mfaSetupRequired?: boolean;
     authError?: "BridgeRefreshFailed" | "BridgeSessionInvalid";
     user?: DefaultSession["user"] & { role?: string };
   }
@@ -24,5 +32,9 @@ declare module "next-auth" {
     // Set by the cloudflare-access provider's authorize(); consumed by the
     // jwt callback for the bridge SSO exchange. Never serialized to clients.
     cfClaims?: CfVerifiedClaims;
+    // Set by the local credentials provider's authorize(): the bridge already
+    // minted the session, so the jwt callback applies these directly instead
+    // of performing a second exchange. Never serialized to clients.
+    localTokens?: LocalLoginResult;
   }
 }

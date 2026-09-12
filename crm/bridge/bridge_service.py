@@ -173,11 +173,24 @@ app.include_router(workflows_router)
 install_credential_safe_validation(app)
 
 
+def uvicorn_options() -> dict[str, object]:
+    """How the bridge is served.
+
+    ``proxy_headers=False`` is deliberate: uvicorn's ProxyHeadersMiddleware
+    trusts loopback by default and rewrites ``request.client`` from a
+    client-supplied ``X-Forwarded-For``. The bridge has its own explicit
+    trusted-proxy logic (``GENUS_TRUSTED_PROXIES``, which trusts nobody by
+    default); two mechanisms that disagree would let a caller choose the peer
+    address the rate limiter and the audit trail key on.
+    """
+    return {
+        "host": os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1"),
+        "port": int(os.environ.get("ROBOTHOR_BRIDGE_PORT", "9100")),
+        "proxy_headers": False,
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(
-        app,
-        host=os.environ.get("ROBOTHOR_BRIDGE_HOST", "127.0.0.1"),
-        port=int(os.environ.get("ROBOTHOR_BRIDGE_PORT", "9100")),
-    )
+    uvicorn.run(app, **uvicorn_options())  # type: ignore[arg-type]

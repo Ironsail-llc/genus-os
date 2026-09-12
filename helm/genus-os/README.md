@@ -126,6 +126,19 @@ Private ingress is not the application authentication mechanism:
 - The dashboard requires Auth.js OIDC configuration and a successful
   Bridge-authenticated session exchange. Existing users require an explicit
   issuer/subject binding; verified email does not silently link accounts.
+- Local email+password sign-in (`global.localLogin`) is a supported
+  alternative to OIDC for deployments with no identity provider. Owner MFA is
+  mandatory for as long as it is on — `global.ownerMfaRequired: false` is the
+  explicit opt-out, and nothing else turns the policy off, because the Bridge's
+  issuer allowlist and the dashboard-only `CF_ACCESS_*` secrets cannot tell it
+  whether a human has another way in. For the Bridge's per-IP sign-in limiter to
+  see real client addresses, set `global.trustedProxies` to the dashboard pod's
+  address (a `/32`, or a range a NetworkPolicy already fences off — a whole pod
+  CIDR would grant every workload in the cluster the right to assert someone
+  else's address) and `global.dashboardTrustedProxies` to the edge in front of
+  the dashboard. Either left empty means no address is forwarded at all, which
+  is the safe default; loopback is never trusted implicitly, so a same-host
+  tunnel cannot let clients choose their own limiter key.
 - Bridge verifies signed audience/expiry/tenant/role/scope claims and enforces
   route-specific scopes and tenant restrictions.
 - Engine independently verifies signed, same-tenant `engine:*` authority for

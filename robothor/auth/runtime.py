@@ -78,6 +78,20 @@ def auth_required(*, bind_host: str = "127.0.0.1") -> bool:
     return not insecure_dev_mode(bind_host=bind_host)
 
 
+def local_login_enabled() -> bool:
+    """Whether this deployment opted into local email+password sign-in.
+
+    Off unless ``GENUS_LOCAL_LOGIN`` is explicitly truthy: a password endpoint
+    that appears by default on every upgraded instance is a new attack surface
+    nobody asked for. Lives here, with the other runtime-mode questions, so
+    that ``validate_auth_configuration`` can ask it without importing the
+    database-backed login module.
+    """
+    from robothor.settings import get_settings
+
+    return bool(get_settings().auth.local_login)
+
+
 def legacy_headers_allowed(*, bind_host: str = "127.0.0.1") -> bool:
     """Return whether unverified identity headers may be used."""
     return not auth_required(bind_host=bind_host)
@@ -108,5 +122,15 @@ def validate_auth_configuration(
         if require_sso_configuration:
             if not os.environ.get("GENUS_BRIDGE_SSO_SECRET"):
                 raise AuthConfigurationError("GENUS_BRIDGE_SSO_SECRET is required in production")
-            if not os.environ.get("GENUS_OIDC_ISSUERS"):
-                raise AuthConfigurationError("GENUS_OIDC_ISSUERS is required in production")
+            # A production bridge must have SOME way for a human to sign in.
+            # Local email+password (GENUS_LOCAL_LOGIN) counts: it is a real
+            # sign-in method with argon2id hashing, lockout and owner MFA, and
+            # requiring an identity provider to exist first is exactly what
+            # makes a five-minute install impossible. The shared secret above
+            # is still required either way — the dashboard proxies through the
+            # bridge whichever method verified the user.
+            if not os.environ.get("GENUS_OIDC_ISSUERS") and not local_login_enabled():
+                raise AuthConfigurationError(
+                    "a sign-in provider is required in production: set GENUS_OIDC_ISSUERS "
+                    "or GENUS_LOCAL_LOGIN=true"
+                )

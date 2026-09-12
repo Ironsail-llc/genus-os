@@ -172,6 +172,16 @@ here when the values are wrong would mask the Vault values silently.
   value: {{ .Values.global.environment | quote }}
 - name: GENUS_AUTH_ENFORCE
   value: {{ .Values.global.authEnforce | quote }}
+- name: GENUS_LOCAL_LOGIN
+  value: {{ .Values.global.localLogin | default false | quote }}
+- name: GENUS_TRUSTED_PROXIES
+  value: {{ .Values.global.trustedProxies | default "" | quote }}
+{{- /* Defaults TRUE, so `default` is the wrong helper: it would rewrite an
+       operator's explicit false back to true. */}}
+{{- $ownerMfa := true }}
+{{- if hasKey .Values.global "ownerMfaRequired" }}{{- $ownerMfa = .Values.global.ownerMfaRequired }}{{- end }}
+- name: GENUS_OWNER_MFA_REQUIRED
+  value: {{ $ownerMfa | quote }}
 - name: GENUS_OS_DEPLOYED_FROM_PR
   value: {{ .Values.global.deployedFromPR | quote }}
 - name: GENUS_OS_DEPLOYED_AT

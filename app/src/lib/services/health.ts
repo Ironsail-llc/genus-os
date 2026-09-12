@@ -1,3 +1,5 @@
+import { localLoginEnabled } from "@/lib/auth-local";
+
 import { serviceEnvVar } from "./registry";
 
 export type ServiceStatus = "healthy" | "degraded" | "unhealthy" | "disabled";
@@ -177,8 +179,25 @@ export function checkDashboardAuthConfig(): ServiceHealth {
   const common = ["AUTH_SECRET", "GENUS_BRIDGE_SSO_SECRET"].every((name) =>
     Boolean(process.env[name]?.trim()),
   );
-  const aProviderWorks = oidcConfiguredLocally() || cfAccessConfiguredLocally();
+  // Local email+password is a sign-in provider like any other — on a
+  // day-one install it is the ONLY one, and reporting that box unhealthy is
+  // the same false `degraded` that taught everyone to ignore /api/ready.
+  // One truthiness test for the whole dashboard. This file used to keep its own
+  // copy requiring exactly "true" while the provider registered on the wider set
+  // the bridge's pydantic field accepts, so GENUS_LOCAL_LOGIN=1 reported "no
+  // sign-in provider configured" on a box that had one. Importing auth-local is
+  // safe — it is a leaf module with no NextAuth dependency, which is why it was
+  // split out of auth.ts in the first place; a readiness probe must not drag
+  // NextAuth in.
+  const localLogin = localLoginEnabled();
+  const aProviderWorks = localLogin || oidcConfiguredLocally() || cfAccessConfiguredLocally();
   const configured = insecureDevelopment || (common && aProviderWorks);
+
+  const methods = [
+    localLogin ? "local email+password" : "",
+    oidcConfiguredLocally() ? "OIDC" : "",
+    cfAccessConfiguredLocally() ? "Cloudflare Access" : "",
+  ].filter(Boolean);
 
   return {
     name: "authentication",
@@ -189,8 +208,8 @@ export function checkDashboardAuthConfig(): ServiceHealth {
     detail: configured
       ? insecureDevelopment
         ? "insecure development mode"
-        : "shared secrets set and a sign-in provider configured"
-      : "AUTH_SECRET, GENUS_BRIDGE_SSO_SECRET and one sign-in provider (OIDC or Cloudflare Access) are required",
+        : `shared secrets set; sign-in via ${methods.join(", ")}`
+      : "AUTH_SECRET, GENUS_BRIDGE_SSO_SECRET and one sign-in method (GENUS_LOCAL_LOGIN=true, OIDC, or Cloudflare Access) are required",
   };
 }
 

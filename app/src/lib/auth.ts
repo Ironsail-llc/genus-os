@@ -16,11 +16,13 @@
  * the bridge credential before allowing private traffic.
  */
 
-import NextAuth from "next-auth";
+import NextAuth, { CredentialsSignin } from "next-auth";
 import type { NextAuthConfig, Profile, Session, User } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 
+import type { LocalLoginResult } from "@/lib/auth-local";
+import { bridgeLocalLogin, clientIpFromRequest, localLoginEnabled } from "@/lib/auth-local";
 import type { CfVerifiedClaims } from "@/lib/cf-access";
 import { CF_JWT_HEADER, cfAccessEnabled, verifyCfAccessJwt } from "@/lib/cf-access";
 import { getServiceUrl } from "@/lib/services/registry";
@@ -94,6 +96,27 @@ function cfClaimsFromUser(user: User | undefined): CfVerifiedClaims | null {
   return claims;
 }
 
+/**
+ * Thrown by the local provider's `authorize()` when the password was right and
+ * a one-time code is owed. Auth.js surfaces `code` as the `error` query
+ * parameter, which is how /signin knows to render the code field — and it is
+ * the ONLY distinguishable sign-in failure, exactly as the bridge decided.
+ */
+export class MfaRequiredError extends CredentialsSignin {
+  code = "mfa_required";
+}
+
+// Credentials-style providers carry no `profile`; the authorize() return value
+// arrives as `user`. Re-validate here so the jwt callback never trusts a
+// malformed object — same reasoning as cfClaimsFromUser above.
+function localTokensFromUser(user: User | undefined): LocalLoginResult | null {
+  const tokens = user?.localTokens;
+  if (!tokens) return null;
+  if (!tokens.access_token?.trim() || !tokens.refresh_token?.trim()) return null;
+  if (!tokens.user?.id?.trim() || !tokens.user?.tenant_id?.trim()) return null;
+  return tokens;
+}
+
 function isSsoResult(value: unknown): value is SsoResult {
   if (!value || typeof value !== "object") return false;
   const result = value as Partial<SsoResult>;
@@ -155,6 +178,13 @@ function applyBridgeTokens(token: JWT, result: SsoResult): JWT {
   token.role = result.user.role;
   token.tenantId = result.user.tenant_id;
   token.accessExpiresAt = Date.now() + ACCESS_SKEW_MS;
+  // Refreshed, or dropped. Left untouched, the hint set at local sign-in
+  // survived every refresh for the life of the Auth.js cookie and could end up
+  // contradicting `/api/auth/me`, which is the authoritative answer the banner
+  // and the security panel actually render from.
+  const reported = (result as { mfa_setup_required?: unknown }).mfa_setup_required;
+  if (typeof reported === "boolean") token.mfaSetupRequired = reported;
+  else delete token.mfaSetupRequired;
   delete token.bridgeAuthError;
   return token;
 }
@@ -169,9 +199,21 @@ function invalidateBridgeToken(token: JWT, error: BridgeAuthError): JWT {
   return token;
 }
 
+function applyLocalTokens(token: JWT, result: LocalLoginResult): JWT {
+  token.bridgeAccess = result.access_token;
+  token.bridgeRefresh = result.refresh_token;
+  token.role = result.user.role;
+  token.tenantId = result.user.tenant_id;
+  token.accessExpiresAt = Date.now() + ACCESS_SKEW_MS;
+  token.mfaSetupRequired = result.mfa_setup_required === true;
+  delete token.bridgeAuthError;
+  return token;
+}
+
 export function signInAllowed({ account, profile, user }: SignInCallbackParams): boolean {
   if (account?.provider === "oidc") return verifiedOidcClaims(profile) !== null;
   if (account?.provider === "cloudflare-access") return cfClaimsFromUser(user) !== null;
+  if (account?.provider === "local") return localTokensFromUser(user) !== null;
   return false;
 }
 
@@ -186,6 +228,17 @@ export async function bridgeJwtCallback({
   // claims or a validated Cloudflare Access JWT. Throwing aborts Auth.js
   // sign-in instead of leaving a dashboard session half-created.
   if (account || trigger === "signIn" || trigger === "signUp") {
+    // Local sign-in already holds bridge-issued tokens: authorize() got them
+    // from POST /api/auth/login, which IS the exchange. Running a second one
+    // here would need the dashboard↔bridge shared secret and an IdP issuer,
+    // neither of which a local-only deployment has.
+    if (account?.provider === "local") {
+      const tokens = localTokensFromUser(user);
+      if (!tokens) {
+        throw new Error("verified identity required");
+      }
+      return applyLocalTokens(token, tokens);
+    }
     const claims =
       account?.provider === "oidc"
         ? verifiedOidcClaims(profile)
@@ -242,14 +295,25 @@ export async function bridgeSessionCallback({
     delete session.bridgeAccess;
     delete session.role;
     delete session.tenantId;
+    delete session.mfaSetupRequired;
+    delete session.bridgeRefresh;
     session.authError = (token.bridgeAuthError as BridgeAuthError | undefined) ??
       "BridgeSessionInvalid";
     return session;
   }
 
   session.bridgeAccess = bridgeAccess;
+  // Server-only. `publicBridgeSessionCallback` deletes it before anything is
+  // serialized to a browser — same treatment as bridgeAccess. The account
+  // security route needs it so a password change can spare the caller's own
+  // session instead of logging them out mid-panel.
+  session.bridgeRefresh =
+    typeof token.bridgeRefresh === "string" ? token.bridgeRefresh : undefined;
   session.role = token.role as string | undefined;
   session.tenantId = token.tenantId as string | undefined;
+  // Not a credential — a policy flag. /api/auth/me stays authoritative; this
+  // only lets the first render draw the banner without waiting on a fetch.
+  session.mfaSetupRequired = token.mfaSetupRequired === true;
   delete session.authError;
   if (session.user) session.user.role = token.role as string | undefined;
   return session;
@@ -272,6 +336,7 @@ export async function publicBridgeSessionCallback({
     internal.user && internal.bridgeAccess && !internal.authError,
   );
   delete internal.bridgeAccess;
+  delete internal.bridgeRefresh;
   return internal;
 }
 
@@ -293,6 +358,42 @@ if (oidcProviderConfigured()) {
     clientId: process.env.AUTH_OIDC_CLIENT_ID,
     clientSecret: process.env.AUTH_OIDC_CLIENT_SECRET,
   });
+}
+if (localLoginEnabled()) {
+  providers.push(
+    Credentials({
+      id: "local",
+      name: "Email and password",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        password: { label: "Password", type: "password" },
+        code: { label: "One-time code", type: "text" },
+      },
+      async authorize(credentials, request) {
+        const email = typeof credentials?.email === "string" ? credentials.email.trim() : "";
+        const password = typeof credentials?.password === "string" ? credentials.password : "";
+        const code = typeof credentials?.code === "string" ? credentials.code.trim() : "";
+        if (!email || !password) return null;
+
+        const result = await bridgeLocalLogin(
+          BRIDGE_URL(),
+          { email, password, code },
+          clientIpFromRequest(request),
+        );
+        // The bridge said the password was right and a code is owed. Throwing
+        // is how Auth.js turns that into ?error=mfa_required rather than an
+        // indistinguishable CredentialsSignin.
+        if (result === "mfa_required") throw new MfaRequiredError();
+        if (!result) return null;
+        return {
+          id: result.user.id,
+          email: result.user.email,
+          name: result.user.display_name,
+          localTokens: result,
+        };
+      },
+    }),
+  );
 }
 if (cfAccessEnabled()) {
   providers.push(

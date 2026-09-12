@@ -20,7 +20,8 @@ context this plugs into.
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING
+from getpass import getpass
+from typing import TYPE_CHECKING, Any
 
 from robothor.cli import _invoked_name
 
@@ -44,7 +45,11 @@ def cmd_user(args: Namespace) -> int:
         return _cmd_link(args)
     if command == "link-face":
         return _cmd_link_face(args)
-    print(f"usage: {_invoked_name()} user {{list,add,link,link-face}}")
+    if command == "set-password":
+        return _cmd_set_password(args)
+    if command == "mfa-reset":
+        return _cmd_mfa_reset(args)
+    print(f"usage: {_invoked_name()} user {{list,add,link,link-face,set-password,mfa-reset}}")
     return 1
 
 
@@ -116,6 +121,7 @@ def _cmd_list(args: Namespace) -> int:
 def _cmd_add(args: Namespace) -> int:
     import psycopg2
 
+    from robothor.auth import accounts as crm_accounts
     from robothor.constants import DEFAULT_TENANT
     from robothor.crm import dal as crm_dal
     from robothor.crm.validation import validate_person_input
@@ -236,7 +242,11 @@ def _cmd_add(args: Namespace) -> int:
                     ON CONFLICT (tenant_id, email) DO NOTHING
                     RETURNING id
                     """,
-                    (tenant, email, name, role, resolved_person_id),
+                    # Canonical, lower-case storage — `robothor auth` and the
+                    # sign-in path both casefold what they look up, and a row
+                    # written as "Alice@Example.com" must not be a row only
+                    # one of them can find. (See migration 114.)
+                    (tenant, crm_accounts.canonical_email(email), name, role, resolved_person_id),
                 )
                 account_created = bool(cur.fetchone())
     except psycopg2.errors.UniqueViolation as exc:
@@ -446,4 +456,98 @@ def _cmd_link_face(args: Namespace) -> int:
         return 1
 
     print(f"✓ Linked face label '{label}' -> person {person_id} (tenant={tenant})")
+    return 0
+
+
+# ─── set-password / mfa-reset (local sign-in credentials) ────────────
+#
+# The operator's recovery path when local email+password is the only way into
+# the Helm. Both commands are deliberately terse about what they print: a
+# password never reaches the terminal, and a TOTP secret never leaves the
+# database — `mfa-reset` CLEARS the factor so the user re-enrolls in the app,
+# rather than reprinting a seed that a shell history would then keep.
+
+
+def _resolve_account(args: Namespace) -> dict[str, Any] | None:
+    from robothor.auth import accounts
+    from robothor.constants import DEFAULT_TENANT
+
+    tenant = getattr(args, "tenant", None) or DEFAULT_TENANT
+    email = accounts.canonical_email(getattr(args, "email", None))
+    account = accounts.get_account_by_email(tenant, email)
+    if not account:
+        print(
+            f"error: no user account with email {email!r} in tenant {tenant!r} "
+            f"— create one with `{_invoked_name()} user add --email {email} ...`",
+            file=sys.stderr,
+        )
+        return None
+    return account
+
+
+def _read_new_password(args: Namespace) -> str | None:
+    """Read the new password from stdin (automation) or two silent prompts.
+
+    Exactly ONE trailing newline is stripped, and CRLF counts as one. The
+    first version used ``rstrip("\\n")``, which eats every trailing newline —
+    so a password deliberately ending in one (generated, base64-ish, pasted
+    from a file) was silently stored as a different string, and the operator
+    would then be unable to sign in with the value they piped in.
+    """
+    if getattr(args, "password_stdin", False):
+        raw = sys.stdin.read()
+        if raw.endswith("\r\n"):
+            return raw.removesuffix("\r\n")
+        return raw.removesuffix("\n")
+    first = getpass("New password: ")
+    second = getpass("Repeat new password: ")
+    if first != second:
+        print("error: passwords do not match", file=sys.stderr)
+        return None
+    return first
+
+
+def _cmd_set_password(args: Namespace) -> int:
+    from robothor.auth import local_login
+
+    account = _resolve_account(args)
+    if not account:
+        return 1
+
+    password = _read_new_password(args)
+    if password is None:
+        return 1
+
+    try:
+        local_login.set_password(str(account["id"]), password)
+    except local_login.WeakPasswordError as exc:
+        # The policy text names the minimum; the value never appears.
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"✓ Password set for {account['email']} (argon2id; sign-in counters cleared)")
+    if not local_login.local_login_enabled():
+        print(
+            "  notice: GENUS_LOCAL_LOGIN is not 'true', so the sign-in page will not "
+            "offer this method yet."
+        )
+    if account.get("role") == "owner" and not account.get("mfa_enabled"):
+        print(
+            f"  next: enable two-factor for this owner account — sign in and open "
+            f"/account/security (or see `{_invoked_name()} user mfa-reset --help`)."
+        )
+    return 0
+
+
+def _cmd_mfa_reset(args: Namespace) -> int:
+    from robothor.auth import local_login
+
+    account = _resolve_account(args)
+    if not account:
+        return 1
+    local_login.reset_mfa(str(account["id"]))
+    print(
+        f"✓ Two-factor cleared for {account['email']}. They can sign in with their "
+        "password alone and must enroll again from /account/security."
+    )
     return 0
