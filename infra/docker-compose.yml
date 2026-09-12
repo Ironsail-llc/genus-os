@@ -12,6 +12,11 @@
 #   docker compose --profile full up -d               # Everything
 #   COMPOSE_PROFILES=monitoring,tts docker compose up -d  # Via env var
 #
+# Every port is published on 127.0.0.1. The platform only ever dials these
+# services over loopback, and an unauthenticated Ollama plus a memory database
+# whose password `genus init` generated have no business on the LAN. Widen it
+# deliberately, in an overlay, with an auth review -- not by default.
+#
 # Copy robothor.env.example to .env and customize before starting.
 # ============================================================================
 
@@ -27,7 +32,7 @@ services:
       POSTGRES_USER: ${ROBOTHOR_DB_USER:-robothor}
       POSTGRES_PASSWORD: ${ROBOTHOR_DB_PASSWORD:?Set ROBOTHOR_DB_PASSWORD in .env}
     ports:
-      - "${ROBOTHOR_DB_PORT:-5432}:5432"
+      - "127.0.0.1:${ROBOTHOR_DB_PORT:-5432}:5432"
     # No SQL is mounted into docker-entrypoint-initdb.d: schema comes from
     # `robothor migrate` only, so every applied file lands in the
     # schema_migrations_v2 ledger with its checksum.
@@ -50,7 +55,7 @@ services:
       --maxmemory-policy allkeys-lru
       --appendonly yes
     ports:
-      - "${ROBOTHOR_REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${ROBOTHOR_REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -64,7 +69,7 @@ services:
     container_name: robothor-ollama
     restart: always
     ports:
-      - "${ROBOTHOR_OLLAMA_PORT:-11434}:11434"
+      - "127.0.0.1:${ROBOTHOR_OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama_data:/root/.ollama
     environment:

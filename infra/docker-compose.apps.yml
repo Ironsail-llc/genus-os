@@ -31,9 +31,16 @@
 # released image runs as.
 # ============================================================================
 
+# `required: false` is not laziness. env_file lists MERGE by append, so no
+# overlay can downgrade a required entry, and the default path resolves against
+# the PROJECT directory (infra/) -- which no checkout has -- so `required: true`
+# broke `-f docker-compose.dev.yml` before it built anything. The release path
+# keeps its guard elsewhere: docker-compose.yml interpolates
+# ${ROBOTHOR_DB_PASSWORD:?...}, so a stack started with no credentials is
+# refused by name rather than started blind.
 x-genus-env-file: &genus-env-file
   - path: ${GENUS_ENV_FILE:-./genus.env}
-    required: true
+    required: false
 
 x-genus-workspace: &genus-workspace
   - ${GENUS_WORKSPACE:-./workspace}:/workspace
@@ -44,6 +51,12 @@ x-genus-workspace: &genus-workspace
 # file waits forever.
 x-genus-python-env: &genus-python-env
   ROBOTHOR_WORKSPACE: /workspace
+  # A uid with no /etc/passwd entry -- which is what `user:` below produces on
+  # any box whose operator is not uid 1000 -- has no home directory, and
+  # `Path.home()` raises for it. /workspace both exists and belongs to that
+  # account, and `~/.robothor` then lands beside the identity we already put
+  # there.
+  HOME: /workspace
   ROBOTHOR_MANIFEST_DIR: /workspace/docs/agents
   ROBOTHOR_OWNER_CONFIG: /workspace/.robothor/owner.yaml
   ROBOTHOR_SECRETS_BACKEND: env
@@ -65,6 +78,12 @@ services:
   migrate:
     image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
     container_name: robothor-migrate
+    # The account that ran `genus init`, because everything it wrote into
+    # the bind-mounted workspace -- owner.yaml, setup_token.yaml, the vault
+    # key -- is 0600 and owned by that account. The image's own uid is 1000;
+    # on a box whose operator is not uid 1000 the bridge could not read
+    # setup_token.yaml, and that file is the only door into a fresh instance.
+    user: "${GENUS_UID:-1000}:${GENUS_GID:-1000}"
     restart: "no"
     command: ["python", "-m", "robothor.cli", "migrate"]
     depends_on:
@@ -77,6 +96,12 @@ services:
   engine:
     image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
     container_name: robothor-engine
+    # The account that ran `genus init`, because everything it wrote into
+    # the bind-mounted workspace -- owner.yaml, setup_token.yaml, the vault
+    # key -- is 0600 and owned by that account. The image's own uid is 1000;
+    # on a box whose operator is not uid 1000 the bridge could not read
+    # setup_token.yaml, and that file is the only door into a fresh instance.
+    user: "${GENUS_UID:-1000}:${GENUS_GID:-1000}"
     restart: always
     depends_on:
       migrate:
@@ -111,6 +136,12 @@ services:
   bridge:
     image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
     container_name: robothor-bridge
+    # The account that ran `genus init`, because everything it wrote into
+    # the bind-mounted workspace -- owner.yaml, setup_token.yaml, the vault
+    # key -- is 0600 and owned by that account. The image's own uid is 1000;
+    # on a box whose operator is not uid 1000 the bridge could not read
+    # setup_token.yaml, and that file is the only door into a fresh instance.
+    user: "${GENUS_UID:-1000}:${GENUS_GID:-1000}"
     restart: always
     depends_on:
       migrate:
@@ -140,6 +171,12 @@ services:
   orchestrator:
     image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
     container_name: robothor-orchestrator
+    # The account that ran `genus init`, because everything it wrote into
+    # the bind-mounted workspace -- owner.yaml, setup_token.yaml, the vault
+    # key -- is 0600 and owned by that account. The image's own uid is 1000;
+    # on a box whose operator is not uid 1000 the bridge could not read
+    # setup_token.yaml, and that file is the only door into a fresh instance.
+    user: "${GENUS_UID:-1000}:${GENUS_GID:-1000}"
     restart: always
     depends_on:
       migrate:

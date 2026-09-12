@@ -219,6 +219,24 @@ class TestSecretsComeFromTheEnvFileAndNowhereElse:
 
         assert offenders == [], f"secret-shaped literals in the release file: {offenders}"
 
+    def test_the_env_file_is_optional_so_an_overlay_can_run_without_one(self, services):
+        """``required: true`` killed the documented dev command.
+
+        ``env_file`` lists MERGE by append, so no overlay can downgrade a
+        required entry, and the default path resolves against the project
+        directory (``infra/``) where no checkout has a ``genus.env``. The
+        release path is still safe: the base file's ``${ROBOTHOR_DB_PASSWORD:?}``
+        refuses to interpolate without credentials, naming the variable.
+        """
+        for name in PLATFORM_SERVICES:
+            entries = services[name].get("env_file") or []
+            required = [entry.get("required") for entry in entries if isinstance(entry, dict)]
+
+            assert required and all(value is False for value in required), (
+                f"{name}'s env_file is required, so `-f docker-compose.dev.yml` "
+                "cannot start without a file no checkout has"
+            )
+
     def test_the_containers_default_to_the_env_secrets_backend(self, services):
         for name in (*PYTHON_SERVICES, "migrate"):
             environment = services[name].get("environment") or {}
@@ -234,6 +252,27 @@ class TestSecretsComeFromTheEnvFileAndNowhereElse:
 
         assert "aiogram" not in text
         assert "this session's stash" not in text
+
+
+class TestTheContainersCanReadWhatTheInstallerWrote:
+    """uid, and the home directory an unknown uid needs.
+
+    Everything `genus init` puts in the bind-mounted workspace is 0600/0700 and
+    owned by whoever ran it. The released image runs as uid 1000, so on any box
+    whose operator is not uid 1000 the bridge cannot read `setup_token.yaml` —
+    and that file is the ONLY door into a fresh instance.
+    """
+
+    @pytest.mark.parametrize("name", (*PYTHON_SERVICES, "migrate"))
+    def test_each_python_service_runs_as_the_installing_account(self, services, name):
+        assert services[name].get("user") == "${GENUS_UID:-1000}:${GENUS_GID:-1000}"
+
+    @pytest.mark.parametrize("name", (*PYTHON_SERVICES, "migrate"))
+    def test_home_is_inside_the_workspace(self, services, name):
+        # A uid with no /etc/passwd entry has no home, and `Path.home()` raises
+        # for it. /workspace is the one directory that both exists and belongs
+        # to the account the container runs as.
+        assert (services[name].get("environment") or {}).get("HOME") == "/workspace"
 
 
 class TestTheBaseFileCreatesNoSchemaOfItsOwn:
@@ -255,6 +294,22 @@ class TestTheBaseFileCreatesNoSchemaOfItsOwn:
         services = (_load(BASE_FILE).get("services") or {}).keys()
 
         assert {"postgres", "redis", "ollama"} <= set(services)
+
+    @pytest.mark.parametrize("name", ("postgres", "redis", "ollama"))
+    def test_the_infrastructure_is_published_on_loopback_only(self, name):
+        """The pilot's database, cache and an unauthenticated Ollama.
+
+        Every service in the release file binds `127.0.0.1`; these three bound
+        `0.0.0.0`, so a `genus init --substrate compose` finished by exposing
+        the memory database — with the password the wizard generated — to the
+        LAN. The host only ever needs loopback: `ready_endpoints`,
+        `DOCKER_DB_HOST` and the model pull all dial 127.0.0.1.
+        """
+        published = [str(entry) for entry in _load(BASE_FILE)["services"][name].get("ports") or []]
+
+        assert published
+        for entry in published:
+            assert entry.startswith("127.0.0.1:"), f"{name} publishes {entry} on every interface"
 
     def test_the_gpu_reservation_moved_to_its_own_overlay(self):
         ollama = _load(BASE_FILE)["services"]["ollama"]
