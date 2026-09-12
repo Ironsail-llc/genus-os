@@ -176,14 +176,13 @@ def _fleet_models() -> list[str]:
 
     Manifests are the source of truth for models (design decision D5), so this
     reads the same ``_defaults.yaml`` the engine loads rather than guessing
-    from the provider catalogue.
+    from the provider catalogue. The orchestrator's readiness probe asks the
+    same question, so the implementation is shared rather than copied -- two
+    answers to "does this instance use Ollama" is how they come to disagree.
     """
-    from robothor.engine import config as engine_config
+    from robothor.engine.config import fleet_model_chain
 
-    manifest_dir = engine_config.EngineConfig.from_env().manifest_dir
-    block = (engine_config._load_defaults(manifest_dir).get("model") or {}) if manifest_dir else {}
-    chain = [block.get("primary"), *(block.get("fallbacks") or [])]
-    return [str(model) for model in chain if model]
+    return fleet_model_chain()
 
 
 def _ollama_in_use() -> tuple[bool, str]:

@@ -33,7 +33,6 @@ __all__ = [
     "IdentityStep",
     "MigrateStep",
     "ModelsStep",
-    "OperatorStep",
     "PrereqsStep",
     "ProviderStep",
     "SECRETS_BACKENDS",
@@ -880,42 +879,20 @@ class AgentsStep(BaseStep):
         ctx.detail(self.id, detail)
 
 
-class OperatorStep(BaseStep):
-    """Seed the operator's account in the tenant owner.yaml names."""
-
-    id = "operator"
-    title = "Operator account"
-
-    def __init__(self, *, bootstrap: Callable[[], dict[str, Any] | None] | None = None) -> None:
-        self._bootstrap = bootstrap
-
-    def check(self, ctx: InitContext) -> CheckResult:
-        if ctx.answers.get("skip_db"):
-            return CheckResult(
-                True,
-                detail="skipped (--skip-db: the account lives in the database)",
-                action="skip",
-            )
-        return CheckResult(True, detail="will seed the owner account (no password)")
-
-    def apply(self, ctx: InitContext) -> None:
-        from robothor.constants import DEFAULT_TENANT
-        from robothor.init.identity import Identity, bootstrap_operator
-
-        identity = ctx.answers.get("identity")
-        if not isinstance(identity, Identity):
-            from robothor.owner_config import load_owner_config
-
-            owner = load_owner_config()
-            if owner is None:
-                raise StepError("no owner.yaml to seed an account from; re-run the identity step")
-            identity = Identity(
-                name=" ".join(p for p in (owner.first_name, owner.last_name) if p),
-                email=owner.email,
-                tenant_id=owner.tenant_id or DEFAULT_TENANT,
-            )
-        account = bootstrap_operator(identity, bootstrap=self._bootstrap)
-        ctx.detail(self.id, f"owner account in tenant {account.get('tenant_id')} (no password yet)")
+# `OperatorStep` used to live here, and its removal is the point of the fix.
+#
+# It seeded `role='owner', status='active'` in `user_accounts` -- and the setup
+# wizard's gate 404s `/api/setup/status`, `/claim` and `/operator` the moment
+# ANY owner row exists, credential or no credential. So `genus init` closed the
+# wizard before it printed the link to it: `/setup` answered 404, `genus auth
+# setup-link` refused, and the seeded owner had no password to sign in with. A
+# fresh instance was unreachable by either door.
+#
+# The browser wizard creates the operator now -- with the password, in the
+# tenant owner.yaml names (`crm/bridge/routers/setup.py`, POST
+# /api/setup/operator). `genus init` still writes owner.yaml (`identity`) and
+# still mints the single-use link (`link`); it simply no longer claims the
+# instance on the operator's behalf.
 
 
 class ChannelsStep(BaseStep):

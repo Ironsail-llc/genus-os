@@ -32,6 +32,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from robothor import __version__
+from robothor.engine.config import fleet_uses_ollama
 from robothor.rag.pipeline import run_pipeline
 from robothor.rag.profiles import RAG_PROFILES
 
@@ -214,11 +215,25 @@ async def readiness() -> Any:
             raise RuntimeError("generation model unavailable")
         return "ok"
 
-    checks = {
-        "database": check_db,
-        "generation_model": check_generation_model,
-    }
-    body, status = await readiness_response("orchestrator", __version__, checks)
+    checks: dict[str, Any] = {"database": check_db}
+    details: dict[str, Any] = {}
+
+    # Only an instance that actually routes a tier through Ollama needs a
+    # local model to be ready. Gating unconditionally is how the compose stack
+    # became unstartable on a fresh machine: the Ollama container comes up
+    # empty, the wizard pulls into it only AFTER `up`, and bridge and dashboard
+    # both wait on this service being healthy -- so `docker compose up` exited
+    # 1 and nothing else ever started. The readiness contract has no "skipped",
+    # so the reason goes in the body rather than in `checks`.
+    if fleet_uses_ollama():
+        checks["generation_model"] = check_generation_model
+    else:
+        details["generation_model"] = (
+            "skipped: no local generation model configured "
+            "(no model in the fleet's chain routes through Ollama)"
+        )
+
+    body, status = await readiness_response("orchestrator", __version__, checks, details)
     return JSONResponse(body, status_code=status)
 
 

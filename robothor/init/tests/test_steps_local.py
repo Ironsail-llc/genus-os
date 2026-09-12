@@ -28,7 +28,12 @@ from robothor.init.steps import (
     VerifyStep,
 )
 from robothor.init.substrate import AVAILABLE_SUBSTRATES, build_plan, get_substrate
-from robothor.init.substrates.local import LocalLinkStep, LocalServicesStep, LocalSubstrate
+from robothor.init.substrates.local import (
+    LocalLinkStep,
+    LocalServicesStep,
+    LocalSignInStep,
+    LocalSubstrate,
+)
 
 
 def _ctx(tmp_path, **kwargs: Any) -> InitContext:
@@ -52,9 +57,9 @@ class TestTheStepOrderIsTheSpecOrder:
             "migrate",
             "models",
             "agents",
-            "operator",
             "channels",
             "secrets",
+            "signin",
             "services",
             "verify",
             "link",
@@ -562,3 +567,59 @@ class TestProviderStep:
 
         assert ctx.answers["provider_probed"] is False
         assert "--offline" in ctx.details["provider"]
+
+
+class TestTheLocalInstallCanBeSignedIntoAtAll:
+    """`secrets.bridge_sso` is a REQUIRED doctor check, and only the compose
+    substrate minted the secret it asks for. So a documented local install
+    failed its own verify step on a value nothing on that path ever wrote --
+    and, had it not, the bridge would have refused every SSO exchange with the
+    dashboard showing a sign-in page that could not work.
+    """
+
+    def test_it_writes_both_shared_secrets_and_turns_local_login_on(self, tmp_path):
+        from robothor.secrets.env_file import instance_env_path, parse_env_file
+
+        ctx = _ctx(tmp_path)
+        ctx.workspace.mkdir(parents=True, exist_ok=True)
+        LocalSignInStep().apply(ctx)
+
+        values = parse_env_file(instance_env_path(ctx.workspace).read_text(encoding="utf-8"))
+        assert len(values["AUTH_SECRET"]) >= 32
+        assert len(values["GENUS_BRIDGE_SSO_SECRET"]) >= 32
+        assert values["AUTH_SECRET"] != values["GENUS_BRIDGE_SSO_SECRET"]
+        assert values["GENUS_LOCAL_LOGIN"] == "true"
+
+    def test_the_file_is_readable_only_by_its_owner(self, tmp_path):
+        import stat
+
+        from robothor.secrets.env_file import instance_env_path
+
+        ctx = _ctx(tmp_path)
+        ctx.workspace.mkdir(parents=True, exist_ok=True)
+        LocalSignInStep().apply(ctx)
+
+        mode = instance_env_path(ctx.workspace).stat().st_mode
+        assert stat.S_IMODE(mode) == 0o600
+
+    def test_a_re_run_does_not_rotate_them(self, tmp_path):
+        """Rotating AUTH_SECRET signs every session out; rotating the SSO
+        secret leaves the bridge and the dashboard disagreeing until both
+        restart. A re-run of `genus init` must do neither."""
+        from robothor.secrets.env_file import instance_env_path, parse_env_file
+
+        ctx = _ctx(tmp_path)
+        ctx.workspace.mkdir(parents=True, exist_ok=True)
+        LocalSignInStep().apply(ctx)
+        first = parse_env_file(instance_env_path(ctx.workspace).read_text(encoding="utf-8"))
+
+        LocalSignInStep().apply(_ctx(tmp_path))
+        second = parse_env_file(instance_env_path(ctx.workspace).read_text(encoding="utf-8"))
+
+        assert second["AUTH_SECRET"] == first["AUTH_SECRET"]
+        assert second["GENUS_BRIDGE_SSO_SECRET"] == first["GENUS_BRIDGE_SSO_SECRET"]
+
+    def test_it_runs_before_verify_reads_the_file(self):
+        ids = [step.id for step in LocalSubstrate().steps()]
+
+        assert ids.index("signin") < ids.index("verify")

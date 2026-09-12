@@ -27,6 +27,7 @@ Nothing here logs a value. Names, yes; values never.
 
 from __future__ import annotations
 
+import os
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,9 +39,14 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = [
     "INSTANCE_ENV_FILENAME",
     "REQUIRED_MODE",
+    "SECRET_BYTES",
     "EnvFileLoad",
+    "env_line",
+    "instance_env_path",
+    "keep_or_mint",
     "load_instance_env",
     "parse_env_file",
+    "write_private",
 ]
 
 #: What ``genus init --substrate compose`` writes, in the workspace root.
@@ -48,6 +54,9 @@ INSTANCE_ENV_FILENAME = "genus.env"
 
 #: The only mode this file may have. Anything wider is refused.
 REQUIRED_MODE = 0o600
+
+#: Entropy of a minted shared secret, in bytes.
+SECRET_BYTES = 32
 
 
 @dataclass(frozen=True)
@@ -105,6 +114,56 @@ def parse_env_file(text: str) -> dict[str, str]:
 def instance_env_path(workspace: Path | str) -> Path:
     """Where this instance keeps its env file."""
     return Path(workspace).expanduser() / INSTANCE_ENV_FILENAME
+
+
+def env_line(name: str, value: object) -> str:
+    """One ``NAME="value"`` line, quoted for both readers of this file.
+
+    Compose expands it as an ``--env-file`` and each service reads it as an
+    ``env_file``; :func:`parse_env_file` undoes exactly this quoting. A bare
+    value would break on the first password containing a space.
+    """
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'{name}="{escaped}"'
+
+
+def write_private(path: Path, body: str) -> None:
+    """Write a file only its owner can read, with no readable moment at all.
+
+    ``O_EXCL | O_NOFOLLOW`` at mode 0600 on a fresh temporary name, then one
+    rename. Writing in place and chmod-ing afterwards leaves a window in which
+    the instance's database password and provider key are world-readable, and
+    following a symlink would write them somewhere else entirely.
+    """
+    import secrets as _secrets
+
+    temporary = path.with_name(f".{path.name}.{_secrets.token_hex(4)}")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def keep_or_mint(path: Path, name: str) -> str:
+    """An existing shared secret, or a new one. Never a rotation.
+
+    The steps that write this file are not resumable -- they run on every
+    ``genus init`` -- so minting a fresh ``AUTH_SECRET`` each time would sign
+    every session out, and a fresh SSO secret would leave the dashboard and the
+    bridge disagreeing until both restarted. An operator who exported one
+    means it.
+    """
+    import secrets as _secrets
+
+    if path.is_file():
+        existing = parse_env_file(path.read_text(encoding="utf-8")).get(name, "").strip()
+        if existing:
+            return existing
+    return (os.environ.get(name) or "").strip() or _secrets.token_urlsafe(SECRET_BYTES)
 
 
 def load_instance_env(

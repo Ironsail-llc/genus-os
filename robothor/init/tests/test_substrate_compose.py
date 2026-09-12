@@ -183,11 +183,11 @@ class TestTheStepsAreTheSubstrateContract:
             "workspace",
             "agents",
             "render",
+            "up-infra",
+            "models",
             "up",
             "wait",
-            "models",
             "database",
-            "operator",
             "channels",
             "secrets",
             "verify",
@@ -508,7 +508,7 @@ class TestUpRunsOneCommandAndSaysWhichOne:
 
         argv = docker.up_calls[0]
         assert argv[:2] == ["docker", "compose"]
-        assert argv[-2:] == ["up", "-d"]
+        assert argv[argv.index("up") + 1] == "-d"
         assert str(env_file_path(ctx)) in argv
         assert argv.count("-f") == 3
 
@@ -729,3 +729,64 @@ class TestTheJsonCarriesWhatTheStackIs:
         from robothor.init.plan import InitResult
 
         assert set(InitResult().as_dict()) == {"plan", "steps", "first_run_url", "exit_code"}
+
+
+class TestTheStackComesUpInAnOrderItCanSurvive:
+    """`up` used to start everything at once, and could not succeed on a fresh
+    machine. The orchestrator's /ready wanted a generation model, the Ollama
+    container starts empty, and the wizard's model pull ran AFTER `up` -- so
+    `docker compose up` exited 1 with "container robothor-orchestrator is
+    unhealthy" and the bridge and dashboard were never created at all.
+
+    Infrastructure first, then the models into it, then the platform.
+    """
+
+    def test_the_infra_step_starts_only_the_three_infrastructure_services(self, tmp_path):
+        from robothor.init.substrates.compose import INFRA_SERVICES, ComposeUpInfraStep
+
+        docker = FakeDocker()
+        ctx = _ctx(tmp_path, docker=docker)
+        ComposeRenderStep().apply(ctx)
+
+        argv = ComposeUpInfraStep().command(ctx)
+
+        assert argv[-len(INFRA_SERVICES) :] == list(INFRA_SERVICES)
+        assert INFRA_SERVICES == ("postgres", "redis", "ollama")
+        assert "engine" not in argv and "dashboard" not in argv
+
+    def test_the_platform_step_names_no_service_so_depends_on_decides(self, tmp_path):
+        docker = FakeDocker()
+        ctx = _ctx(tmp_path, docker=docker)
+        ComposeRenderStep().apply(ctx)
+
+        argv = ComposeUpStep().command(ctx)
+
+        assert argv[-2:] == ["up", "-d"]
+
+    def test_the_models_are_pulled_between_the_two(self):
+        ids = [step.id for step in ComposeSubstrate().steps()]
+
+        assert ids.index("up-infra") < ids.index("models") < ids.index("up") < ids.index("wait")
+
+    def test_the_infra_step_waits_for_ollama_before_the_pull_step_runs(self, tmp_path):
+        """A container that is `Up` is not a server that is listening, and the
+        base compose file gives ollama no healthcheck to wait on."""
+        from robothor.init.substrates.compose import ComposeUpInfraStep
+
+        polled: list[str] = []
+
+        def http(method, url, body=None, timeout=0.0):
+            polled.append(url)
+            return HttpResponse(status=200 if len(polled) > 2 else 0)
+
+        ctx = _ctx(tmp_path, docker=FakeDocker(), http_fetch=http)
+        ComposeRenderStep().apply(ctx)
+
+        ComposeUpInfraStep(sleep=lambda _s: None).apply(ctx)
+
+        assert any(url.endswith("/api/tags") for url in polled)
+
+    def test_a_dry_run_would_create_the_infra_without_starting_it(self, tmp_path):
+        from robothor.init.substrates.compose import ComposeUpInfraStep
+
+        assert "--no-start" in ComposeUpInfraStep().command(_ctx(tmp_path, dry_run=True))

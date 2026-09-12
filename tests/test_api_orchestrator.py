@@ -141,3 +141,102 @@ class TestAppConfig:
     def test_cors_middleware(self):
         # CORS middleware should be configured
         assert len(app.user_middleware) >= 1
+
+
+# ─── Readiness ───────────────────────────────────────────────────────
+
+
+class TestReadinessGatesOnALocalModelOnlyWhenTheFleetUsesOne:
+    """The compose stack could never come up on a fresh machine because of this.
+
+    The orchestrator's `/ready` demanded a generation model in Ollama. The
+    stack's Ollama container starts empty, and the wizard's model-pull step ran
+    after `up` — so `docker compose up` exited 1 with "container
+    robothor-orchestrator is unhealthy" and the bridge and dashboard never
+    started at all. An instance whose agents all run in the cloud does not need
+    a local model to be ready, and one whose chain names an `ollama` model
+    still does.
+    """
+
+    def _readiness(self, monkeypatch, *, chain, available):
+        import asyncio
+
+        from robothor.api import orchestrator
+
+        monkeypatch.setattr(orchestrator, "fleet_uses_ollama", lambda: bool(chain))
+
+        async def _available(*_args, **_kwargs):
+            return available
+
+        monkeypatch.setattr("robothor.llm.ollama.check_model_available", _available)
+
+        async def _db():
+            return "ok"
+
+        monkeypatch.setattr(orchestrator, "_database_check", _db, raising=False)
+        response = asyncio.run(orchestrator.readiness())
+        import json
+
+        return json.loads(bytes(response.body).decode()), response.status_code
+
+    def test_a_cloud_only_fleet_is_ready_without_ollama(self, monkeypatch):
+        body, status = self._readiness(monkeypatch, chain=False, available=False)
+
+        assert status == 200
+        assert "generation_model" not in body["checks"]
+        assert "skipped" in body["generation_model"]
+
+    def test_a_fleet_that_routes_through_ollama_still_requires_the_model(self, monkeypatch):
+        body, status = self._readiness(monkeypatch, chain=True, available=False)
+
+        assert status == 503
+        assert body["checks"]["generation_model"].startswith("error:")
+
+    def test_a_fleet_that_routes_through_ollama_passes_when_the_model_is_there(self, monkeypatch):
+        body, status = self._readiness(monkeypatch, chain=True, available=True)
+
+        assert status == 200
+        assert body["checks"]["generation_model"] == "ok"
+
+
+class TestTheFleetChainPredicate:
+    def test_an_ollama_chat_primary_counts(self, tmp_path, monkeypatch):
+        from robothor.engine.config import fleet_uses_ollama
+
+        (tmp_path / "_defaults.yaml").write_text(
+            "model:\n  primary: ollama_chat/qwen3:8b\n  fallbacks: []\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(tmp_path))
+
+        assert fleet_uses_ollama(tmp_path) is True
+
+    def test_a_cloud_only_chain_does_not(self, tmp_path):
+        from robothor.engine.config import fleet_uses_ollama
+
+        (tmp_path / "_defaults.yaml").write_text(
+            "model:\n  primary: openrouter/openai/gpt-5.4\n"
+            "  fallbacks: [openrouter/anthropic/claude-sonnet-4.6]\n",
+            encoding="utf-8",
+        )
+
+        assert fleet_uses_ollama(tmp_path) is False
+
+    def test_a_local_last_resort_model_counts_even_though_no_manifest_names_it(
+        self, tmp_path, monkeypatch
+    ):
+        """`_with_last_resort` appends it to every chain, so it IS in the chain."""
+        from robothor.engine.config import fleet_uses_ollama
+
+        (tmp_path / "_defaults.yaml").write_text(
+            "model:\n  primary: openrouter/openai/gpt-5.4\n", encoding="utf-8"
+        )
+        monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/qwen3.8:27b")
+
+        assert fleet_uses_ollama(tmp_path) is True
+
+    def test_an_unreadable_fleet_reads_as_using_ollama(self, tmp_path):
+        """Unknown is not "unused": probing costs one loopback request, and
+        reporting ready on an instance that cannot generate costs an outage."""
+        from robothor.engine.config import fleet_uses_ollama
+
+        assert fleet_uses_ollama(tmp_path / "nowhere") is True

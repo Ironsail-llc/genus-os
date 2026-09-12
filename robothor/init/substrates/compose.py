@@ -45,7 +45,6 @@ from robothor.init.steps import (
     DetectStep,
     IdentityStep,
     ModelsStep,
-    OperatorStep,
     ProviderStep,
     SecretsStep,
     StepError,
@@ -54,6 +53,9 @@ from robothor.init.steps import (
     WorkspaceStep,
 )
 from robothor.init.substrates.local import LocalLinkStep
+from robothor.secrets.env_file import env_line as _env_line
+from robothor.secrets.env_file import keep_or_mint as _keep_or_mint_file
+from robothor.secrets.env_file import write_private as _write_private
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Callable, Sequence
@@ -66,11 +68,13 @@ __all__ = [
     "BASE_FILE",
     "DEFAULT_WAIT_TIMEOUT_S",
     "GPU_FILE",
+    "INFRA_SERVICES",
     "MINIMUM_DOCKER_MAJOR",
     "ComposeModelsStep",
     "ComposePrereqsStep",
     "ComposeRenderStep",
     "ComposeSubstrate",
+    "ComposeUpInfraStep",
     "ComposeUpStep",
     "ComposeWaitStep",
     "compose_directory",
@@ -102,6 +106,16 @@ DEFAULT_WAIT_TIMEOUT_S = 180
 
 #: Seconds between ``/ready`` polls.
 READY_POLL_INTERVAL_S = 3.0
+
+#: The services the stack needs before anything that depends on them, in
+#: the order the compose files declare them. Started on their own so the
+#: model pull has an Ollama to pull into before the orchestrator -- whose
+#: readiness can depend on what is IN it -- is asked to be healthy.
+INFRA_SERVICES: tuple[str, ...] = ("postgres", "redis", "ollama")
+
+#: Polls of Ollama's /api/tags after the infrastructure is up. It has no
+#: healthcheck in the base compose file, so nothing else waits for it.
+OLLAMA_READY_ATTEMPTS = 20
 
 #: Seconds ``docker compose up -d`` may take. It pulls two images on a first
 #: run, over whatever link the box has.
@@ -477,21 +491,11 @@ class ComposeRenderStep(BaseStep):
     def _keep_or_mint(ctx: InitContext, name: str) -> str:
         """An existing shared secret, or a new one. Never a rotation.
 
-        `render` is not resumable -- it runs on every `genus init` -- so minting
-        a fresh AUTH_SECRET each time would sign every session out, and a fresh
-        SSO secret would leave the dashboard and the bridge disagreeing until
-        both restarted. An operator who exported one means it.
+        The rule and the implementation live in ``robothor.secrets.env_file``
+        now, because the local substrate mints the same two secrets into the
+        same file — and two copies of "never rotate this" is one copy too many.
         """
-        import secrets as _secrets
-
-        from robothor.secrets.env_file import parse_env_file
-
-        path = env_file_path(ctx)
-        if path.is_file():
-            existing = parse_env_file(path.read_text(encoding="utf-8")).get(name, "").strip()
-            if existing:
-                return existing
-        return (os.environ.get(name) or "").strip() or _secrets.token_urlsafe(SECRET_BYTES)
+        return _keep_or_mint_file(env_file_path(ctx), name)
 
     @staticmethod
     def _provider_credential(provider_id: str) -> tuple[str, str] | None:
@@ -540,12 +544,21 @@ class ComposeRenderStep(BaseStep):
 
 
 class ComposeUpStep(BaseStep):
-    """One ``docker compose up -d``, with every file it was given."""
+    """One ``docker compose up -d``, with every file it was given.
+
+    No service list: ``depends_on`` in the apps file already orders ``migrate``
+    before the three Python services and the dashboard behind all of them, and
+    the infrastructure is up by the time this runs.
+    """
 
     id = "up"
-    title = "Start the stack"
+    title = "Start the platform"
     #: Never skipped: a re-run of `genus init` on a stopped box must start it.
     resumable = False
+
+    #: Services this step starts by name. Empty means "all of them", which is
+    #: what the platform step wants; the infra step overrides it.
+    SERVICES: tuple[str, ...] = ()
 
     def command(self, ctx: InitContext) -> list[str]:
         """The exact argv. ``--no-start`` under ``--dry-run``.
@@ -558,17 +571,21 @@ class ComposeUpStep(BaseStep):
         argv = ["docker", "compose", "--env-file", str(env_file_path(ctx))]
         for path in compose_files(ctx):
             argv += ["-f", str(path)]
-        argv.append("up")
-        return [*argv, "--no-start"] if ctx.dry_run else [*argv, "-d"]
+        argv.append("--no-start" if ctx.dry_run else "-d")
+        argv.insert(len(argv) - 1, "up")
+        return [*argv, *self.SERVICES]
 
     def check(self, ctx: InitContext) -> CheckResult:
         if not compose_files(ctx):
             return CheckResult(False, detail=f"no {APPS_FILE} to run", fix_hint=FETCH_HINT)
         return CheckResult(True, detail=" ".join(self.command(ctx)))
 
+    def _narrate(self, ctx: InitContext) -> None:
+        ctx.say("  Starting the platform services ...")
+
     def apply(self, ctx: InitContext) -> None:
         argv = self.command(ctx)
-        ctx.say("  Starting the stack (this pulls the images on a first run) ...")
+        self._narrate(ctx)
         result = ctx.run(argv, timeout=UP_TIMEOUT_S)
         if not result.ok:
             raise StepError(
@@ -576,6 +593,52 @@ class ComposeUpStep(BaseStep):
                 "Nothing else was configured — fix it and re-run."
             )
         ctx.detail(self.id, f"{len(compose_files(ctx))} compose file(s) up")
+
+
+class ComposeUpInfraStep(ComposeUpStep):
+    """PostgreSQL, Redis and Ollama, before anything that depends on them.
+
+    The stack used to start in one ``up``, and could not succeed on a machine
+    that had never run it. The orchestrator's ``/ready`` demanded a generation
+    model; the Ollama container starts EMPTY; and the wizard's model pull ran
+    after ``up``. So ``docker compose up`` exited 1 with "container
+    robothor-orchestrator is unhealthy", and — because bridge and dashboard
+    both wait on that service being healthy — neither was ever created.
+
+    Splitting the ``up`` gives the ``models`` step somewhere to run: an Ollama
+    that exists, before the services whose readiness depends on what is in it.
+    """
+
+    id = "up-infra"
+    title = "Start the infrastructure"
+    SERVICES = INFRA_SERVICES
+
+    def __init__(self, *, sleep: Callable[[float], None] | None = None) -> None:
+        self._sleep = sleep or time.sleep
+
+    def _narrate(self, ctx: InitContext) -> None:
+        ctx.say("  Starting PostgreSQL, Redis and Ollama (this pulls images on a first run) ...")
+
+    def apply(self, ctx: InitContext) -> None:
+        super().apply(ctx)
+        self._await_ollama(ctx)
+
+    def _await_ollama(self, ctx: InitContext) -> None:
+        """Wait for Ollama to LISTEN, not merely to be ``Up``.
+
+        The base compose file gives it no healthcheck, so nothing else will
+        wait; and the next step pulls models into it over its published port.
+        A pull against a socket that is not accepting yet fails silently —
+        ``pull_ollama_models`` swallows its own exceptions — and the instance
+        would come up with no embeddings and no explanation.
+        """
+        url = f"{str(ctx.settings.ollama.url).rstrip('/')}/api/tags"
+        for attempt in range(OLLAMA_READY_ATTEMPTS):
+            if ctx.http("GET", url).ok:
+                return
+            if attempt < OLLAMA_READY_ATTEMPTS - 1:
+                self._sleep(READY_POLL_INTERVAL_S)
+        ctx.say(f"  ! Ollama did not answer {url}; the model pull may find nothing to pull.")
 
 
 class ComposeWaitStep(BaseStep):
@@ -701,14 +764,19 @@ class ComposeSubstrate:
             WorkspaceStep(),
             AgentsStep(),
             ComposeRenderStep(),
+            # Infrastructure, then the models INTO it, then the platform. One
+            # `up` could not work on a fresh machine: the orchestrator's
+            # readiness can depend on what is in Ollama, Ollama starts empty,
+            # and bridge and dashboard both wait on the orchestrator being
+            # healthy — so `up` exited 1 and two services were never created.
+            ComposeUpInfraStep(),
+            ComposeModelsStep(),
             ComposeUpStep(),
             ComposeWaitStep(),
-            ComposeModelsStep(),
             # Everything below talks to the database the stack just started and
             # the `migrate` service just built. `starts_later` is what stops
             # phase 1 connecting to a container that does not exist yet.
             DatabaseStep(starts_later="the compose stack"),
-            OperatorStep(),
             ChannelsStep(),
             SecretsStep(),
             VerifyStep(),
@@ -734,45 +802,3 @@ class ComposeSubstrate:
 def substrate() -> ComposeSubstrate:
     """Factory, so every substrate module has the same shape."""
     return ComposeSubstrate()
-
-
-def _env_line(name: str, value: object) -> str:
-    """One ``NAME="value"`` line, quoted for both readers of this file.
-
-    Quoted because two different parsers read it and a space breaks one of
-    them: ``docker compose`` takes the rest of the line and strips the quotes,
-    while the ``set -a; . ./genus.env`` the docs tell an operator to run is a
-    SHELL, which would split an unquoted password in two and export the first
-    half. Backslashes and quotes are escaped so the value survives both.
-    """
-    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
-    return f'{name}="{escaped}"'
-
-
-def _write_private(path: Path, body: str) -> None:
-    """Write a file only its owner can read, with no readable moment at all.
-
-    Through a fresh 0600 temp file in the same directory and one ``os.replace``,
-    for two reasons a plain ``os.open`` on the destination could not give:
-
-    * ``O_CREAT``'s mode argument is IGNORED for a file that already exists, so
-      a re-run over a file whose permissions had been widened wrote the new
-      credentials into the wide file and only narrowed it afterwards;
-    * ``O_CREAT`` without ``O_EXCL``/``O_NOFOLLOW`` follows a symlink planted at
-      the destination, which is how a local account gets a copy of the
-      credentials it cannot otherwise read.
-
-    ``os.replace`` is atomic on the same filesystem, so a reader sees the old
-    file or the new one and never a half-written one.
-    """
-    import secrets as _secrets
-
-    temporary = path.with_name(f".{path.name}.{_secrets.token_hex(4)}")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(body)
-        temporary.replace(path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
