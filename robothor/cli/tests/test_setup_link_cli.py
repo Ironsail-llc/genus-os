@@ -45,17 +45,57 @@ def _redacted(line: str) -> str:
     return head + "token=<redacted>"
 
 
+def _init_args(workspace):
+    """The full flag set `genus init` parses, with nothing that leaves the box."""
+    return SimpleNamespace(
+        yes=True,
+        docker=False,
+        skip_models=True,
+        skip_db=True,
+        workspace=str(workspace),
+        substrate=None,
+        dry_run=False,
+        json=False,
+        offline=True,
+        preset=None,
+        provider=None,
+        model=None,
+        secrets_backend=None,
+        telegram_token=None,
+        owner_name=None,
+        owner_email=None,
+        start=False,
+    )
+
+
+@pytest.fixture
+def _link_only(monkeypatch):
+    """Run `genus init` with the link step and nothing else.
+
+    The other sixteen steps want a database, a provider and a fleet of agents;
+    what these tests are about is the last line the operator reads, so the plan
+    is narrowed to the step that prints it. Everything above still runs for
+    real -- ``run_init``'s flag handling, both phases, the renderer and the
+    exit code -- because the substrate is the ONLY thing replaced.
+    """
+    from robothor.init.substrates.local import LocalLinkStep, LocalSubstrate
+
+    class _LinkOnly(LocalSubstrate):
+        def steps(self):
+            return (LocalLinkStep(),)
+
+    monkeypatch.setattr("robothor.init.substrate.get_substrate", lambda name: _LinkOnly())
+
+
+@pytest.mark.usefixtures("_link_only")
 class TestInitPrintsTheLink:
-    def test_prints_a_setup_url_with_a_live_token(self, tmp_path, capsys, monkeypatch):
+    def test_prints_a_setup_url_with_a_live_token(self, tmp_path, capsys):
         import robothor.setup as setup_mod
 
-        monkeypatch.setattr(setup_mod.httpx, "get", MagicMock(side_effect=Exception("no network")))
         workspace = tmp_path / "robothor"
-        args = SimpleNamespace(
-            yes=True, docker=False, skip_models=True, skip_db=True, workspace=str(workspace)
-        )
+        workspace.mkdir(parents=True)
 
-        assert setup_mod.run_init(args) == 0
+        assert setup_mod.run_init(_init_args(workspace)) == 0
 
         out = capsys.readouterr().out
         link = next(line for line in out.splitlines() if "/setup?token=" in line)
@@ -64,15 +104,12 @@ class TestInitPrintsTheLink:
         token = link.strip().partition("token=")[2]
         assert setup_token.verify_setup_token(workspace, token) is True
 
-    def test_the_token_file_holds_no_plaintext(self, tmp_path, capsys, monkeypatch):
+    def test_the_token_file_holds_no_plaintext(self, tmp_path, capsys):
         import robothor.setup as setup_mod
 
-        monkeypatch.setattr(setup_mod.httpx, "get", MagicMock(side_effect=Exception("no network")))
         workspace = tmp_path / "robothor"
-        args = SimpleNamespace(
-            yes=True, docker=False, skip_models=True, skip_db=True, workspace=str(workspace)
-        )
-        setup_mod.run_init(args)
+        workspace.mkdir(parents=True)
+        setup_mod.run_init(_init_args(workspace))
 
         out = capsys.readouterr().out
         token = next(line for line in out.splitlines() if "/setup?token=" in line).strip()
@@ -84,15 +121,14 @@ class TestInitPrintsTheLink:
     def test_a_non_tty_run_also_gets_the_port_forward_line(self, tmp_path, capsys, monkeypatch):
         """`genus init` under `--yes` is how a container or a script installs,
         and there is no browser on that box."""
+        import sys
+
         import robothor.setup as setup_mod
 
-        monkeypatch.setattr(setup_mod.httpx, "get", MagicMock(side_effect=Exception("no network")))
-        monkeypatch.setattr(setup_mod.sys.stdin, "isatty", lambda: False, raising=False)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
         workspace = tmp_path / "robothor"
-        args = SimpleNamespace(
-            yes=True, docker=False, skip_models=True, skip_db=True, workspace=str(workspace)
-        )
-        setup_mod.run_init(args)
+        workspace.mkdir(parents=True)
+        setup_mod.run_init(_init_args(workspace))
 
         out = capsys.readouterr().out
         assert "ssh -L 3004:127.0.0.1:3004" in out
@@ -102,17 +138,14 @@ class TestInitPrintsTheLink:
         setting, so an operator who raised it was told the wrong number."""
         import robothor.setup as setup_mod
 
-        monkeypatch.setattr(setup_mod.httpx, "get", MagicMock(side_effect=Exception("no network")))
         monkeypatch.setenv("GENUS_SETUP_TOKEN_TTL_SECONDS", "7200")
         from robothor.settings import reset_settings
 
         reset_settings()
         workspace = tmp_path / "robothor"
-        args = SimpleNamespace(
-            yes=True, docker=False, skip_models=True, skip_db=True, workspace=str(workspace)
-        )
+        workspace.mkdir(parents=True)
 
-        setup_mod.run_init(args)
+        setup_mod.run_init(_init_args(workspace))
 
         assert "for 120 minutes" in capsys.readouterr().out
         reset_settings()
@@ -122,18 +155,15 @@ class TestInitPrintsTheLink:
         not a reason to lose a completed install."""
         import robothor.setup as setup_mod
 
-        monkeypatch.setattr(setup_mod.httpx, "get", MagicMock(side_effect=Exception("no network")))
         monkeypatch.setattr(
-            setup_mod.setup_token,
+            setup_token,
             "create_setup_token",
             MagicMock(side_effect=OSError("read-only filesystem")),
         )
         workspace = tmp_path / "robothor"
-        args = SimpleNamespace(
-            yes=True, docker=False, skip_models=True, skip_db=True, workspace=str(workspace)
-        )
+        workspace.mkdir(parents=True)
 
-        assert setup_mod.run_init(args) == 0
+        assert setup_mod.run_init(_init_args(workspace)) == 0
         assert "genus auth setup-link" in capsys.readouterr().out
 
 

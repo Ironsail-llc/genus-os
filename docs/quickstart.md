@@ -9,29 +9,59 @@ From zero to a working Genus OS instance in 10 minutes.
 - **Redis 7+**
 - **Ollama** (for embeddings, reranking, and generation)
 
-## Option A: Docker (recommended)
+## Option A: Docker for the infrastructure
+
+`genus init --docker` writes a `docker-compose.yml` into the workspace with
+PostgreSQL+pgvector, Redis and Ollama, starts them, and then runs the same
+wizard as below against them.
 
 ```bash
 pip install genusos
-robothor init --docker   # Generates docker-compose, starts containers, runs migrations, pulls models
-robothor status
-robothor serve
+genus init --docker
 ```
 
-The wizard creates a `~/robothor` workspace with a `docker-compose.yml` (PostgreSQL+pgvector, Redis, Ollama), starts the containers, runs the database migration, and pulls the required embedding/reranker models.
+## Option B: Local infrastructure
 
-## Option B: Local Infrastructure
+Install PostgreSQL with pgvector, Redis and (optionally) Ollama, export a
+provider key, then run the wizard.
 
-Install PostgreSQL with pgvector, Redis, and Ollama on your system, then:
+These are the exact commands CI replays on a fresh machine. The block assumes
+PostgreSQL and Redis are already installed and running — `genus init` REQUIRES
+both for the `local` substrate and blocks in phase 1 without them, so the
+acceptance gate runs it on an image that provides them (or use Option A above,
+which starts them in containers first):
 
+<!-- install-gate: local -->
 ```bash
 pip install genusos
-robothor init            # Interactive: prompts for DB config, runs migrations, pulls models
-robothor status
-robothor serve
+export OPENROUTER_API_KEY=sk-your-key
+genus init --yes --owner-name "Ada Lovelace" --owner-email ada@example.com
+genus doctor --json
+```
+<!-- /install-gate -->
+
+`genus init` runs in two phases. The first prints a plan — every step, and
+whether it will create something, find it already there, or skip it — and
+checks all of it before writing anything:
+
+```
+  Plan (local):
+    + ack         genus init writes an operator identity to ~/.robothor/owner.yaml ...
+    + prereqs     5 present
+    + provider    will test openrouter/openai/gpt-5.4 with a 1-token completion
+    + identity    will write ~/.robothor/owner.yaml
+    - models      skipped (Ollama is not reachable, so memory search has no embeddings)
+    ...
 ```
 
-The wizard checks prerequisites, prompts for database connection details, creates the workspace, runs migrations, and pulls Ollama models.
+If a required check fails, **nothing is written** and the command exits 1
+naming the check. That is the whole contract of `--yes`: it either produces a
+running instance or changes nothing. Fix what it named and run it again — each
+finished step is recorded, so a re-run resumes rather than restarts.
+
+The provider step makes a real one-token completion before it records
+anything. A key that does not work fails here, in ten seconds, rather than on
+your first message. `--offline` records the choice unprobed and says so.
 
 ## Open the link `genus init` printed
 
@@ -68,22 +98,39 @@ Prefer a different lifetime for the link? `GENUS_SETUP_TOKEN_TTL_SECONDS`
 
 ### Non-interactive mode
 
-For CI or scripted installs, use `--yes` with environment variables:
+For CI or scripted installs, `--yes` takes defaults and the environment and
+asks nothing:
 
 ```bash
 export ROBOTHOR_DB_HOST=localhost
 export ROBOTHOR_DB_PASSWORD=mypassword
-robothor init --yes      # Uses env vars + defaults, zero prompts
+export OPENROUTER_API_KEY=sk-your-key
+genus init --yes --owner-name "Ada Lovelace" --owner-email ada@example.com
 ```
+
+Want to see what it would do first? `genus init --dry-run` prints the plan and
+writes nothing. `genus init --yes --json` emits one document on stdout — the
+plan, every step's result, the first-run URL and the exit code — with the human
+narration on stderr, so you can pipe it into `jq` and still watch it work.
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `--yes`, `-y` | Non-interactive mode (uses env vars + defaults) |
-| `--docker` | Generate docker-compose.yml and start containers |
+| `--yes`, `-y` | Non-interactive: take defaults and the environment, ask nothing |
+| `--dry-run` | Print the plan and write nothing |
+| `--json` | Plan, step results and first-run URL as JSON on stdout |
+| `--substrate NAME` | Where the instance runs (`local`; compose/systemd/helm are not yet selectable) |
+| `--offline` | Record the provider choice without testing it |
+| `--provider ID` / `--model ID` | Choose the provider and model instead of being asked |
+| `--preset NAME` | Agent catalogue preset to install (see `genus agent catalog`) |
+| `--secrets-backend env\|file\|sops` | Where this instance's credentials come from |
+| `--telegram-token TOKEN` | Verify and configure a Telegram bot (optional; nothing asks for one) |
+| `--owner-name` / `--owner-email` | Operator identity for `owner.yaml` |
+| `--start` | Start the services at the end instead of printing the commands |
+| `--docker` | Generate docker-compose.yml and start the infrastructure containers |
 | `--skip-models` | Skip Ollama model pulling |
-| `--skip-db` | Skip database migration |
+| `--skip-db` | Skip the database steps |
 | `--workspace PATH` | Workspace directory (default: `~/robothor`) |
 
 ## Store Your First Fact

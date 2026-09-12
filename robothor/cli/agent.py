@@ -247,8 +247,18 @@ def install_preset(
     *,
     overrides: dict[str, str] | None = None,
     auto_yes: bool = True,
+    workspace: Path | None = None,
 ) -> dict[str, Any]:
     """Install every agent in a catalogue preset. Returns what happened.
+
+    ``workspace`` is where the manifests and instruction files land. Passing it
+    is how a caller that already knows the target — the first-run wizard, which
+    was given ``--workspace`` — keeps the install inside that tree. Leaving it
+    ``None`` falls back to the ``ROBOTHOR_WORKSPACE``/``~/robothor`` convention,
+    which is correct for the CLI entry point and WRONG for anything that was
+    handed a path: a wizard run aimed at a temporary directory once overwrote
+    ten manifests in a live instance because this parameter did not exist, and
+    the operator's main agent then ran for hours on a placeholder model chain.
 
     Extracted from ``_cmd_agent_install`` so the first-run wizard's agent step
     installs agents the SAME way ``genus agent install --preset`` does. The
@@ -282,6 +292,16 @@ def install_preset(
             "missing": [],
         }
 
+    # Both boundaries, explicitly, or neither. `install` derives the manifest
+    # and instruction paths from `repo_root` and the installed-agents ledger
+    # from `instance_dir`; naming only one would put half the install in the
+    # caller's workspace and half in whatever the environment says.
+    target: dict[str, Any] = {}
+    if workspace is not None:
+        root = Path(workspace)
+        root.mkdir(parents=True, exist_ok=True)
+        target = {"repo_root": root, "instance_dir": root / ".robothor"}
+
     installed: list[str] = []
     failed: dict[str, str] = {}
     missing: list[str] = []
@@ -291,7 +311,7 @@ def install_preset(
             missing.append(agent_id)
             continue
         try:
-            install(str(template_path), overrides=overrides or {}, auto_yes=auto_yes)
+            install(str(template_path), overrides=overrides or {}, auto_yes=auto_yes, **target)
         except Exception as exc:  # noqa: BLE001 - one bad template is not ten
             failed[agent_id] = f"{type(exc).__name__}: {exc}"
         else:

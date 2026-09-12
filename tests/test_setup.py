@@ -1,12 +1,19 @@
-"""Tests for robothor.setup — init wizard."""
+"""Tests for robothor.setup — the `genus init` orchestrator.
 
+The steps themselves are tested in ``robothor/init/tests``; what this module
+holds is the orchestration (two phases, the streams, the exit code) and the
+handful of helpers ``robothor.setup`` still owns outright.
+"""
+
+import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from robothor.config import DatabaseConfig, OllamaConfig, RedisConfig
+from robothor.init.steps import BaseStep, CheckResult
 from robothor.setup import (
     REQUIRED_MODELS,
     check_prerequisites,
@@ -14,7 +21,6 @@ from robothor.setup import (
     generate_docker_compose,
     pull_ollama_models,
     run_init,
-    run_migration,
     write_env_file,
 )
 
@@ -45,6 +51,17 @@ class TestCheckPrerequisites:
         results = check_prerequisites()
         redis = next(r for r in results if "Redis" in r["name"])
         assert redis["found"] is False
+
+    def test_a_substrate_can_make_postgres_and_redis_required(self, monkeypatch):
+        """Every prerequisite used to be optional on every substrate, so a box
+        with no PostgreSQL passed this check and failed at the migration."""
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        results = check_prerequisites(required=("PostgreSQL (psql)", "Redis (redis-cli)"))
+
+        by_name = {row["name"]: row for row in results}
+        assert by_name["PostgreSQL (psql)"]["required"] is True
+        assert by_name["Redis (redis-cli)"]["required"] is True
+        assert by_name["Ollama"]["required"] is False
 
     def test_docker_required_when_flag_set(self, monkeypatch):
         monkeypatch.setattr("shutil.which", lambda name: None)
@@ -197,113 +214,6 @@ class TestGenerateDockerCompose:
         assert "pgvector/pgvector:pg16" in content
 
 
-class TestRunMigration:
-    def test_mocked_migration(self):
-        """Migration should execute SQL and return table count."""
-        mock_conn = MagicMock()
-        mock_cur = MagicMock()
-        mock_cur.fetchone.return_value = (17,)
-        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-
-        with (
-            patch("psycopg2.connect", return_value=mock_conn),
-            patch("robothor.db.migrate.apply", return_value=["001_init"]) as mock_apply,
-        ):
-            db = DatabaseConfig(host="localhost", password="test")
-            count = run_migration(db)
-
-        assert count == 17
-        mock_apply.assert_called_once_with(connection=mock_conn)
-        assert mock_cur.execute.call_count == 1  # table count query
-
-    def test_connection_failure_returns_negative(self):
-        """If DB is unreachable, should return -1."""
-        with patch("psycopg2.connect", side_effect=Exception("Connection refused")):
-            db = DatabaseConfig(host="nonexistent")
-            count = run_migration(db)
-        assert count == -1
-
-    def test_migration_runner_failure_returns_negative(self):
-        """If the canonical runner fails, setup should return -1."""
-        mock_conn = MagicMock()
-        with (
-            patch("psycopg2.connect", return_value=mock_conn),
-            patch("robothor.db.migrate.apply", side_effect=RuntimeError("drift")),
-        ):
-            db = DatabaseConfig()
-            count = run_migration(db)
-        assert count == -1
-        mock_conn.close.assert_called_once()
-
-    def test_migration_safety_finding_is_surfaced_not_flattened(self, capsys):
-        """A safety refusal must not read as "check your connection settings".
-
-        The caller prints host/port/user advice for a -1, which sends the
-        operator hunting a network problem when the migrator actually refused
-        on purpose and named the remedy.
-        """
-        from robothor.db.migrate import BASELINE_UNADOPTED_MESSAGE, MigrationHistoryError
-
-        mock_conn = MagicMock()
-        with (
-            patch("psycopg2.connect", return_value=mock_conn),
-            patch(
-                "robothor.db.migrate.apply",
-                side_effect=MigrationHistoryError(BASELINE_UNADOPTED_MESSAGE),
-            ),
-        ):
-            count = run_migration(DatabaseConfig())
-
-        from robothor.setup import MIGRATION_SAFETY_FAILURE
-
-        assert count == MIGRATION_SAFETY_FAILURE
-        assert count < 0  # still a failure to the caller's `>= 0` check
-        out = capsys.readouterr().out
-        assert "ledger empty but schema present" in out
-        assert "--adopt-baseline" in out
-
-    def test_a_plain_failure_is_still_the_generic_negative(self):
-        """Only a safety refusal gets the distinct code; everything else is -1."""
-        mock_conn = MagicMock()
-        with (
-            patch("psycopg2.connect", return_value=mock_conn),
-            patch("robothor.db.migrate.apply", side_effect=RuntimeError("boom")),
-        ):
-            assert run_migration(DatabaseConfig()) == -1
-
-    def test_run_init_adds_no_connection_advice_to_a_safety_refusal(self, tmp_path, capsys):
-        """The distinct return code has to actually change what the wizard prints.
-
-        Otherwise the operator reads "check connection settings / Host / Database
-        / User" under a message that already told them to run --adopt-through,
-        and goes looking for a network fault that does not exist.
-        """
-        from robothor.setup import MIGRATION_SAFETY_FAILURE
-
-        args = SimpleNamespace(
-            yes=True,
-            docker=False,
-            skip_models=True,
-            skip_db=False,
-            workspace=str(tmp_path / "workspace"),
-        )
-        with (
-            patch("robothor.setup.check_prerequisites", return_value=[]),
-            patch(
-                "robothor.setup.run_migration", return_value=MIGRATION_SAFETY_FAILURE
-            ) as mock_run,
-        ):
-            rc = run_init(args)
-
-        assert rc == 1
-        mock_run.assert_called_once()
-        out = capsys.readouterr().out
-        assert "Check connection settings" not in out
-        assert "Host:" not in out
-        assert "refused" in out
-
-
 class TestPullModels:
     def test_connection_error_handled(self, capsys, monkeypatch):
         """Should handle Ollama being unreachable gracefully."""
@@ -328,100 +238,168 @@ class TestPullModels:
         assert "Qwen3-Reranker-0.6B:F16" in REQUIRED_MODELS
 
 
-class TestRunInit:
-    def test_yes_skip_all(self, tmp_path, capsys, monkeypatch):
-        """--yes --skip-models --skip-db should create workspace + env only."""
-        workspace = tmp_path / "robothor"
-        args = SimpleNamespace(
-            yes=True,
-            docker=False,
-            skip_models=True,
-            skip_db=True,
-            workspace=str(workspace),
-        )
+class _FakeSubstrate:
+    """A substrate whose steps are whatever a test hands it."""
 
-        # Prevent Ollama probe from hitting network
-        import robothor.setup as setup_mod
+    name = "local"
 
-        monkeypatch.setattr(
-            setup_mod.httpx,
-            "get",
-            MagicMock(side_effect=Exception("no network")),
-        )
+    def __init__(self, steps):
+        self._steps = steps
 
-        rc = run_init(args)
-        assert rc == 0
-        assert workspace.is_dir()
-        assert (workspace / ".env").exists()
-        assert (workspace / "memory").is_dir()
-        assert (workspace / "faces").is_dir()
+    def steps(self):
+        return self._steps
 
-        out = capsys.readouterr().out
-        assert "Genus OS initialized" in out
+    def first_run_url(self, ctx):
+        return "http://127.0.0.1:3004/setup?token=REDACTED"
 
-    def test_missing_required_prereq_exits(self, capsys, monkeypatch):
-        """If a required prerequisite is missing, should exit with code 1."""
-        # Make check_prerequisites return a missing required item
-        fake_prereqs = [
-            {"name": "Python", "found": True, "detail": "3.12", "required": True, "hint": ""},
-            {
-                "name": "Docker",
-                "found": False,
-                "detail": "not found",
-                "required": True,
-                "hint": "install docker",
-            },
-        ]
-        monkeypatch.setattr("robothor.setup.check_prerequisites", lambda **kw: fake_prereqs)
 
-        args = SimpleNamespace(
-            yes=True, docker=True, skip_models=True, skip_db=True, workspace="/tmp/test"
-        )
-        rc = run_init(args)
+def _use_steps(monkeypatch, *steps):
+    monkeypatch.setattr(
+        "robothor.init.substrate.get_substrate",
+        lambda name: _FakeSubstrate(list(steps)),
+    )
+
+
+def _init_args(workspace, **overrides):
+    args = SimpleNamespace(
+        yes=True,
+        docker=False,
+        skip_models=True,
+        skip_db=True,
+        workspace=str(workspace),
+        substrate=None,
+        dry_run=False,
+        json=False,
+        offline=True,
+        preset=None,
+        provider=None,
+        model=None,
+        secrets_backend=None,
+        telegram_token=None,
+        owner_name=None,
+        owner_email=None,
+        start=False,
+    )
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return args
+
+
+class _Touch(BaseStep):
+    """A step whose only effect is a file, so "did it write" is answerable."""
+
+    def __init__(self, step_id, *, ok=True, required=True):
+        self.id = step_id
+        self.title = step_id.title()
+        self.required = required
+        self._ok = ok
+
+    def check(self, ctx):
+        return CheckResult(self._ok, detail=f"{self.id} detail", fix_hint="do the thing")
+
+    def apply(self, ctx):
+        ctx.workspace.mkdir(parents=True, exist_ok=True)
+        (ctx.workspace / f"{self.id}.marker").write_text("x", encoding="utf-8")
+
+
+class TestRunInitIsTwoPhase:
+    def test_a_failing_required_check_writes_nothing_and_exits_one(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        workspace = tmp_path / "workspace"
+        _use_steps(monkeypatch, _Touch("workspace"), _Touch("database", ok=False))
+
+        rc = run_init(_init_args(workspace))
+
         assert rc == 1
-        assert "Cannot continue" in capsys.readouterr().out
+        assert not workspace.exists()
+        out = capsys.readouterr().out
+        assert "Nothing was written" in out
+        assert "database" in out
 
+    def test_a_clean_run_applies_every_step(self, tmp_path, capsys, monkeypatch):
+        workspace = tmp_path / "workspace"
+        _use_steps(monkeypatch, _Touch("workspace"), _Touch("agents"))
 
-class TestIdentityEnvVars:
-    def test_yes_mode_uses_identity_env_vars(self, tmp_path, capsys, monkeypatch):
-        """With --yes, identity should come from env vars."""
-        workspace = tmp_path / "robothor"
-        monkeypatch.setenv("ROBOTHOR_OWNER_NAME", "Alice")
-        monkeypatch.setenv("ROBOTHOR_OWNER_EMAIL", "alice@example.com")
-        monkeypatch.setenv("ROBOTHOR_AI_NAME", "Jarvis")
-        # owner.yaml is written under the HOME of the account running init;
-        # pin it so a test can never touch the developer's own identity file.
-        monkeypatch.setenv("HOME", str(tmp_path))
+        rc = run_init(_init_args(workspace))
 
-        import robothor.setup as setup_mod
-
-        monkeypatch.setattr(
-            setup_mod.httpx,
-            "get",
-            MagicMock(side_effect=Exception("no network")),
-        )
-
-        args = SimpleNamespace(
-            yes=True,
-            docker=False,
-            skip_models=True,
-            skip_db=True,
-            workspace=str(workspace),
-        )
-        rc = run_init(args)
         assert rc == 0
+        assert (workspace / "workspace.marker").exists()
+        assert (workspace / "agents.marker").exists()
+        assert "Genus OS is initialized" in capsys.readouterr().out
 
-        content = (workspace / ".env").read_text()
-        assert "ROBOTHOR_OWNER_NAME" not in content
-        assert "ROBOTHOR_AI_NAME=Jarvis" in content
+    def test_dry_run_prints_the_plan_and_writes_nothing(self, tmp_path, capsys, monkeypatch):
+        workspace = tmp_path / "workspace"
+        _use_steps(monkeypatch, _Touch("workspace"))
 
-        # ...and the identity it was given is in owner.yaml, which is what
-        # load_owner_config() reads.
-        from robothor.owner_config import load_owner_config
+        rc = run_init(_init_args(workspace, dry_run=True))
 
-        owner = load_owner_config(tmp_path / ".robothor" / "owner.yaml")
-        assert owner is not None
-        assert owner.first_name == "Alice"
+        assert rc == 0
+        assert not workspace.exists()
+        out = capsys.readouterr().out
+        assert "Dry run" in out
+        assert "workspace detail" in out
+
+    def test_json_mode_puts_one_document_on_stdout_and_humans_on_stderr(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        workspace = tmp_path / "workspace"
+        _use_steps(monkeypatch, _Touch("workspace"))
+
+        rc = run_init(_init_args(workspace, json=True))
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert set(payload) == {"plan", "steps", "first_run_url", "exit_code"}
+        assert payload["steps"][0]["id"] == "workspace"
+        # The human narration is still readable, just not on the stream the
+        # JSON consumer is parsing.
+        assert "Genus OS Setup" in captured.err
+        assert "Genus OS Setup" not in captured.out
+
+    def test_a_substrate_that_is_not_built_yet_says_where_it_lands(self, tmp_path, capsys):
+        rc = run_init(_init_args(tmp_path / "workspace", substrate="compose"))
+
+        assert rc == 1
+        assert "A10/A11/A12" in capsys.readouterr().out
+
+    def test_an_unknown_substrate_names_the_ones_that_exist(self, tmp_path, capsys):
+        rc = run_init(_init_args(tmp_path / "workspace", substrate="kubernetes"))
+
+        assert rc == 1
+        assert "local" in capsys.readouterr().out
+
+
+class TestWorkspacePointer:
+    def test_it_carries_only_what_config_yaml_cannot_hold(self, tmp_path):
+        from robothor.setup import write_workspace_pointer
+
+        path = write_workspace_pointer(tmp_path)
+
+        assert path == tmp_path / ".env"
+        content = path.read_text()
+        assert f"ROBOTHOR_WORKSPACE={tmp_path}" in content
+        # Everything else now lives in config.yaml, written by the step that
+        # owns it. Two files holding one value is how `genus config set`
+        # reports "applied" while the service reads the old number.
+        for duplicated in (
+            "ROBOTHOR_DB_HOST",
+            "ROBOTHOR_REDIS_HOST",
+            "ROBOTHOR_OLLAMA_HOST",
+            "ROBOTHOR_AI_NAME",
+            "ROBOTHOR_OWNER_NAME",
+            "ROBOTHOR_OWNER_EMAIL",
+        ):
+            assert duplicated not in content
+
+    def test_an_existing_file_is_never_overwritten(self, tmp_path):
+        from robothor.setup import write_workspace_pointer
+
+        (tmp_path / ".env").write_text("EXISTING=value\n")
+
+        assert write_workspace_pointer(tmp_path) is None
+        assert (tmp_path / ".env").read_text() == "EXISTING=value\n"
 
 
 class TestDetectInstallMode:
@@ -449,84 +427,41 @@ class TestDetectInstallMode:
         assert setup_mod._detect_install_mode() == "wheel"
 
 
-class TestPrintNextSteps:
-    def test_wheel_mode_has_no_systemd_guidance(self, capsys):
-        from robothor.setup import _print_next_steps
+class TestServiceCommandsByMode:
+    """The two commands init prints must be runnable on THIS install.
 
-        _print_next_steps("wheel")
-        out = capsys.readouterr().out
+    A wheel has no systemd units, so telling it to `systemctl start` something
+    is advice that cannot work; a checkout has them, and its in-process
+    equivalents would start a second copy beside the units.
+    """
 
-        assert "sudo systemctl" not in out
-        assert "robothor serve" in out
-        assert "[api]" in out  # cmd_serve errors without uvicorn/fastapi
-        assert "robothor engine start" in out
-        assert "robothor status" in out
-        assert "robothor tui" in out
-        assert "[tui]" in out
-        assert "robothor agent install --preset standard" in out
+    def test_wheel_mode_has_no_systemd_guidance(self, monkeypatch):
+        from robothor.init.substrates.local import LocalServicesStep
 
-    def test_checkout_mode_keeps_systemd_note(self, capsys):
-        from robothor.setup import _print_next_steps
+        monkeypatch.setattr("robothor.setup._detect_install_mode", lambda: "wheel")
+        commands = LocalServicesStep.commands()
 
-        _print_next_steps("checkout")
-        out = capsys.readouterr().out
+        assert not any("systemctl" in command for command in commands)
+        assert any("genus engine start" in command for command in commands)
+        assert any("genus serve" in command for command in commands)
 
-        assert "sudo systemctl start robothor-engine" in out
-        assert "infra" in out.lower()  # note that the units need the repo's infra setup
+    def test_checkout_mode_uses_the_units(self, monkeypatch):
+        from robothor.init.substrates.local import LocalServicesStep
 
-    def test_claude_code_is_optional_not_step_one(self, capsys):
-        from robothor.setup import _print_next_steps
+        monkeypatch.setattr("robothor.setup._detect_install_mode", lambda: "checkout")
+        commands = LocalServicesStep.commands()
 
-        _print_next_steps("wheel")
-        out = capsys.readouterr().out
+        assert any("systemctl start robothor-engine" in command for command in commands)
+        assert any("robothor-bridge" in command for command in commands)
 
-        assert "Claude Code" in out
-        assert "optional" in out.lower()
-        numbered_lines = [line for line in out.splitlines() if line.strip()[:1].isdigit()]
-        assert not any("Claude Code" in line for line in numbered_lines)
+    def test_both_modes_name_the_engine_and_the_bridge(self, monkeypatch):
+        from robothor.init.substrates.local import LocalServicesStep
 
-
-class TestRunInitNextStepsByMode:
-    def test_wheel_mode_end_to_end_has_no_sudo_systemctl(self, tmp_path, capsys, monkeypatch):
-        workspace = tmp_path / "robothor"
-        args = SimpleNamespace(
-            yes=True,
-            docker=False,
-            skip_models=True,
-            skip_db=True,
-            workspace=str(workspace),
-        )
-        import robothor.setup as setup_mod
-
-        monkeypatch.setattr(setup_mod.httpx, "get", MagicMock(side_effect=Exception("no network")))
-        monkeypatch.setattr(setup_mod, "_detect_install_mode", lambda: "wheel")
-
-        rc = run_init(args)
-        assert rc == 0
-
-        out = capsys.readouterr().out
-        assert "sudo systemctl" not in out
-        assert "robothor serve" in out
-
-    def test_checkout_mode_end_to_end_keeps_systemd_note(self, tmp_path, capsys, monkeypatch):
-        workspace = tmp_path / "robothor"
-        args = SimpleNamespace(
-            yes=True,
-            docker=False,
-            skip_models=True,
-            skip_db=True,
-            workspace=str(workspace),
-        )
-        import robothor.setup as setup_mod
-
-        monkeypatch.setattr(setup_mod.httpx, "get", MagicMock(side_effect=Exception("no network")))
-        monkeypatch.setattr(setup_mod, "_detect_install_mode", lambda: "checkout")
-
-        rc = run_init(args)
-        assert rc == 0
-
-        out = capsys.readouterr().out
-        assert "sudo systemctl start robothor-engine" in out
+        for mode in ("wheel", "checkout"):
+            monkeypatch.setattr("robothor.setup._detect_install_mode", lambda mode=mode: mode)
+            printed = " ".join(LocalServicesStep.commands())
+            assert "engine" in printed
+            assert "bridge" in printed
 
 
 class TestCliInit:
@@ -538,11 +473,26 @@ class TestCliInit:
             main(["init", "--help"])
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
-        assert "--yes" in out
-        assert "--docker" in out
-        assert "--skip-models" in out
-        assert "--skip-db" in out
-        assert "--workspace" in out
+        for flag in (
+            "--yes",
+            "--docker",
+            "--skip-models",
+            "--skip-db",
+            "--workspace",
+            "--substrate",
+            "--dry-run",
+            "--json",
+            "--offline",
+            "--preset",
+            "--provider",
+            "--model",
+            "--secrets-backend",
+            "--telegram-token",
+            "--owner-name",
+            "--owner-email",
+            "--start",
+        ):
+            assert flag in out, f"{flag} is not in `genus init --help`"
 
     def test_init_dispatches(self, monkeypatch):
         """robothor init should dispatch to run_init."""
