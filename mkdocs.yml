@@ -66,6 +66,10 @@ exclude_docs: |
   !/quickstart.md
   !/configuration.md
   !/deployment.md
+  !/reference/cli.md
+  !/reference/configuration.md
+  !/PLUGINS.md
+  !/runbooks/BENCHMARK_SANDBOX.md
   !/architecture.md
   !/memory-system.md
   !/event-bus.md
@@ -87,6 +91,12 @@ nav:
       - Quick Start: quickstart.md
       - Configuration: configuration.md
       - Deployment: deployment.md
+  - Reference:
+      - CLI: reference/cli.md
+      - Settings: reference/configuration.md
+  - Operating:
+      - Plugins: PLUGINS.md
+      - Benchmark sandbox: runbooks/BENCHMARK_SANDBOX.md
   - Architecture:
       - Overview: architecture.md
       - Memory System: memory-system.md

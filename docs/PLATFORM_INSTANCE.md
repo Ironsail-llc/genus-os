@@ -10,7 +10,7 @@ Genus OS separates **platform code** (what ships to everyone) from **instance co
 | **Instance** | Identity, agent configs, memory, secrets | No | `brain/`, `docs/agents/*.yaml`, `local/`, `.env` |
 | **Runtime** | Session state, assembled prompts, tenant context | No (in-memory) | System prompts, warmup blocks, scratchpad |
 
-Platform upgrades (`git pull` + `robothor upgrade`) only touch Layer 1. Layers 2 and 3 are untouched.
+A platform upgrade — a new wheel, or a new image tag — only touches Layer 1. Layers 2 and 3 are untouched.
 
 ## How Claude Code Sees Both Layers
 
@@ -97,24 +97,29 @@ Legacy env vars `ROBOTHOR_OWNER_EMAIL` / `ROBOTHOR_OWNER_NAME` remain as a fallb
 
 Agents are built using a CLI + Claude Code workflow:
 
-1. **Scaffold**: `robothor agent scaffold <name>` creates a manifest template and instruction file
+1. **Scaffold**: `genus agent scaffold <name>` creates a manifest template and instruction file
 2. **Refine**: Open Claude Code — the `AGENT_BUILDER.md` guide teaches it how to customize agents for your business
-3. **Deploy**: `robothor agent install <name>` activates the agent in the fleet
+3. **Deploy**: `genus agent install <name>` activates the agent in the fleet
 4. **Iterate**: Engine agents (Agent Architect, Nightwatch) can propose improvements via PRs
 
 Agent manifests and instructions are instance data — they stay in `docs/agents/` and `brain/agents/` (gitignored). Platform code provides the engine, tools, and templates.
 
 ## Upgrade Path
 
+How the platform code arrives depends on the substrate — a compose instance
+moves a tag, a host instance moves a wheel — but one migrator moves the schema
+either way, and the doctor is what says whether it landed.
+
 ```bash
-pip install -U genusos     # Get the new platform code (wheel installs)
-robothor upgrade           # Run new migrations + check templates
-robothor upgrade --pull    # Git checkouts: also 'git pull --ff-only' first
-robothor upgrade --dry-run # Preview what would change
+pip install -U genusos     # Host install: the new platform code
+genus migrate              # Apply whatever the new release added
+genus doctor               # Exit 0, or it names what is wrong
 ```
 
-`robothor upgrade` runs the same canonical migrator as `robothor migrate`:
-the manifest, the `schema_migrations_v2` ledger, checksums, advisory lock.
-`git pull` is opt-in behind `--pull` because a pip install has no checkout.
+`genus migrate --status` shows the ledger with the provenance of every row, and
+the migrator holds an advisory lock and verifies each file's checksum. Compose
+upgrades are a tag edit and one `up -d`, with the one-shot `migrate` service
+holding the platform services until it exits 0 — see
+[`docs/deployment.md`](deployment.md).
 
 Upgrades touch platform code only. Your instance's `brain/`, agent configs, and `.env` are untouched. If a template has been updated (e.g., a new field in `templates/SOUL.md`), the upgrade shows a diff and lets you decide whether to adopt it.

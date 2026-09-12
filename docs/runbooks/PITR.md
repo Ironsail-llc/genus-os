@@ -93,7 +93,7 @@ WAL genuinely reached the remote — but it means the WAL marker cannot tell you
 the base backups are stale. `last-basebackup` is the one that goes quiet, and
 the consequence line for `*basebackup*` in `docs/runbooks/PAGING.md` is what
 says so: *PITR must replay every WAL since <marker> — restore time growing
-nightly*. Fix the volume (`docs/runbooks/BACKUP_VOLUME_GUARD.md`); the RPO is
+nightly*. Fix the volume (`docs/instance/BACKUP_VOLUME_GUARD.md`); the RPO is
 fine, the RTO is what is drifting.
 
 The marker is stamped only when `$ROBOTHOR_OFFSITE_REMOTE` is set **and** the

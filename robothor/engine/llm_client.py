@@ -259,7 +259,7 @@ async def _local_slot(model: str, lane: Any = None) -> AsyncIterator[None]:
     """Hold a local inference slot for one call; a no-op for cloud models.
 
     Cloud fan-out stays unguarded — someone else's datacentre is not our heat
-    budget. On-device work is rationed in watts (docs/runbooks/THERMAL.md).
+    budget. On-device work is rationed in watts (docs/instance/THERMAL.md).
 
     A refusal raises ``LocalCapacityBusyError`` (status 503), which
     ``is_capacity_error`` below already recognises, so it routes into the existing

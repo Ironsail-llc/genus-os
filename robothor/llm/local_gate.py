@@ -3,7 +3,7 @@
 Local work is registered at zero cost per token, which is true about money and false
 about everything else. On the GB10 it is paid in watts, and watts are the whole story:
 package temperature tracks instantaneous GPU power almost linearly, at roughly
-0.65 C/W above idle (docs/runbooks/THERMAL.md, measured 2026-08-28).
+0.65 C/W above idle (docs/instance/THERMAL.md, measured 2026-08-28).
 
 Two consequences shape this module, and neither is served by a plain semaphore:
 
