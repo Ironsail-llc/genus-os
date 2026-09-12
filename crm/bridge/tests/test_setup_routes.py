@@ -25,6 +25,7 @@ without the gate fails it.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -575,6 +576,53 @@ class TestOperator:
 
         assert response.status_code == 409
         assert fake_accounts.owner is None
+
+    async def test_two_concurrent_creations_produce_one_owner(
+        self, test_client, claim, workspace, fake_accounts, fake_login, owner_home, monkeypatch
+    ):
+        """The 409 above is a check-then-act, and the act creates the single
+        account that owns the appliance. The lock is what makes the pair
+        atomic; without it both callers pass the check and both go on to write.
+
+        Driven through the real handler with the gate held open, so the lock is
+        the only thing under test.
+        """
+        import asyncio
+
+        import routers.setup as setup_router
+
+        monkeypatch.setattr(setup_router, "setup_complete", lambda *a, **k: False)
+
+        started = 0
+        real = setup_router._create_owner_locked
+
+        def slow(*args, **kwargs):
+            nonlocal started
+            started += 1
+            # Long enough that a second caller would overtake the check if the
+            # section were not serialised.
+            time.sleep(0.05)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(setup_router, "_create_owner_locked", slow)
+
+        first, second = await asyncio.gather(
+            test_client.post("/api/setup/operator", json=_operator_body(), headers=_auth(claim)),
+            test_client.post("/api/setup/operator", json=_operator_body(), headers=_auth(claim)),
+        )
+
+        assert sorted([first.status_code, second.status_code]) == [200, 409]
+        assert started == 2, "both requests reached the critical section"
+
+    async def test_the_lock_is_not_bound_to_one_event_loop(self):
+        """An ``asyncio.Lock`` binds to the first loop that waits on it and
+        raises on any other — wrong for a module-level lock, and it would
+        surface only under exactly the contention the lock exists for."""
+        import threading as _threading
+
+        import routers.setup as setup_router
+
+        assert isinstance(setup_router._OPERATOR_LOCK, type(_threading.Lock()))
 
     async def test_a_stale_owner_env_var_cannot_hijack_the_identity(
         self, test_client, claim, workspace, fake_accounts, fake_login, owner_home, monkeypatch

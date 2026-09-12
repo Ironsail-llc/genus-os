@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
 from datetime import UTC, datetime
 from pathlib import Path  # noqa: TC003 - a runtime return annotation
 from typing import Annotated, Any
@@ -77,7 +78,15 @@ _EMAIL = re.compile(r"^[^@\s]+@[^@\s.]+\.[^@\s]+$")
 #: token behind it is single-use, so two concurrent creations need a race to
 #: happen at all — but the act creates the ONE account that owns the appliance,
 #: and "unlikely" is not a control. One process, one bridge; a lock is enough.
-_OPERATOR_LOCK = asyncio.Lock()
+#:
+#: A THREADING lock, not an ``asyncio`` one, and held INSIDE the worker thread
+#: rather than across an await. An ``asyncio.Lock`` binds to the first event
+#: loop that has to wait on it and raises on any other, so a module-level one
+#: is wrong for any host that serves requests from more than one loop — which
+#: the test client does, one per request, and which would surface only under
+#: the contention the lock exists for. The thing being serialised is blocking
+#: work on a worker thread, so the wait belongs there.
+_OPERATOR_LOCK = threading.Lock()
 
 
 def workspace() -> Path:
@@ -296,10 +305,9 @@ async def create_operator(
         # The message names the policy, never the value.
         raise HTTPException(status_code=422, detail=str(exc)) from None
 
-    async with _OPERATOR_LOCK:
-        return await asyncio.to_thread(
-            _create_owner_blocking, request, name, email, password, tenant_id
-        )
+    return await asyncio.to_thread(
+        _create_owner_blocking, request, name, email, password, tenant_id
+    )
 
 
 def _create_owner_blocking(
@@ -307,10 +315,18 @@ def _create_owner_blocking(
 ) -> dict[str, Any]:
     """The synchronous half: owner.yaml, the account, the password, the session.
 
-    Runs on a worker thread — argon2 and psycopg2 belong there — and under
-    ``_OPERATOR_LOCK``, so two callers cannot both pass the "no owner yet"
-    check and then both create one.
+    Runs on a worker thread — argon2 and psycopg2 belong there — and holds
+    ``_OPERATOR_LOCK`` for the whole of it, so two callers cannot both pass the
+    "no owner yet" check and then both create one.
     """
+    with _OPERATOR_LOCK:
+        return _create_owner_locked(request, name, email, password, tenant_id)
+
+
+def _create_owner_locked(
+    request: Request, name: str, email: str, password: str, tenant_id: str
+) -> dict[str, Any]:
+    """The body of :func:`_create_owner_blocking`, with the lock held."""
     from robothor.auth import accounts
     from robothor.constants import owner_config_path
     from robothor.owner_config import load_owner_config, write_owner_config
