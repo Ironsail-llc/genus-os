@@ -386,11 +386,47 @@ def _benchmark_tools_denied(
     allowed = benchmark_allowed_tools(sandbox=sandbox)
     denied = set(agent_tools_allowed or _every_registered_tool()) - allowed
     denied |= GOAL_TOOLS - allowed
+    # Adapter/MCP tools leave this process, so they are external side effects by
+    # nature and are denied whatever the manifest says. Unioned AFTER the
+    # intersection above because this is the one family a graded agent may not
+    # keep by having asked for it: `dispatch._execute_tool` routes an adapter
+    # tool to its MCP session BEFORE `ToolContext` is constructed, so no
+    # `ctx.is_benchmark` gate can ever see the call and the memory boundary is
+    # in another process. The deny-list is the only place it can be stopped.
+    denied |= _adapter_tools()
     return sorted(denied)
 
 
+def _static_deny_floor() -> set[str]:
+    """Every tool a deny-list can name without asking the registry anything."""
+    from robothor.engine.benchmark_sandbox import (
+        EXTERNAL_SIDE_EFFECT_TOOLS,
+        MEMORY_WRITE_TOOLS,
+        SANDBOX_WRITE_TOOLS,
+    )
+
+    return set(
+        EXTERNAL_SIDE_EFFECT_TOOLS
+        | MEMORY_WRITE_TOOLS
+        | SANDBOX_WRITE_TOOLS
+        | _BENCHMARK_EXCLUDED_TOOLS
+        | GOAL_TOOLS
+    )
+
+
+def _adapter_tools() -> set[str]:
+    """Adapter/MCP tool names, or the whole registry if that cannot be read."""
+    try:
+        from robothor.engine.tools import get_registry
+
+        return get_registry().adapter_tool_names()
+    except Exception:  # noqa: BLE001 - see _every_registered_tool
+        logger.warning("benchmark: could not enumerate adapter tools for the deny-list")
+        return set()
+
+
 def _every_registered_tool() -> set[str]:
-    """Every tool name this instance registers.
+    """Every tool name this instance can dispatch, adapter tools included.
 
     The fallback when the graded agent's manifest lists no ``tools_allowed`` —
     which means "everything", not "nothing". Subtracting the allow-list from an
@@ -400,15 +436,32 @@ def _every_registered_tool() -> set[str]:
     the allow-list exists to withhold. Only the handler guards stood between a
     graded run and production, and on 2026-09-12 one of the tools had no
     handler guard.
-    """
-    try:
-        from robothor.api.mcp import get_tool_definitions
-        from robothor.engine.tools.schemas import get_engine_schemas
 
-        return {d["name"] for d in get_tool_definitions()} | set(get_engine_schemas())
-    except Exception:  # noqa: BLE001 - a deny-list is not worth failing a suite over
-        logger.warning("benchmark: could not enumerate registered tools for the deny-list")
-        return set()
+    Reads the LIVE registry, not the static schema modules: an adapter tool is
+    registered at runtime from a server's ``tools/list`` and appears in neither
+    ``robothor.api.mcp.get_tool_definitions()`` nor ``get_engine_schemas()``,
+    which is how the first version of this function could claim to name "every
+    tool this instance registers" and miss every tool that leaves the process.
+
+    **Fails closed.** An exception here used to return an empty set, which put
+    the deny-list back at two entries with ``exec`` and ``invoke_skill``
+    allowed — the remedy re-opening the defect through its own error path,
+    behind one WARNING nothing gates on. The floor is now everything the static
+    sets can name, which needs no registry at all.
+    """
+    floor = _static_deny_floor()
+    try:
+        from robothor.engine.tools import get_registry
+
+        return get_registry().registered_tool_names() | floor
+    except Exception:  # noqa: BLE001 - a suite is not worth an open deny-list
+        logger.warning(
+            "benchmark: could not enumerate registered tools; falling back to the "
+            "static deny floor (%d names). Adapter and plugin tools cannot be named "
+            "this way — treat any suite run in this state as unvalidated.",
+            len(floor),
+        )
+        return floor
 
 
 def _resolve_model_tier(model_primary: str) -> str:

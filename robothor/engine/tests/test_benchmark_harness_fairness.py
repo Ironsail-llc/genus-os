@@ -251,6 +251,31 @@ class TestToolClassificationParity:
             f"_BENCHMARK_EXCLUDED_TOOLS: {unclassified}"
         )
 
+    def test_a_runtime_registered_adapter_tool_is_classified_as_denied(self, monkeypatch):
+        """The classification universe must include what arrives at RUNTIME.
+
+        ``get_tool_definitions()`` and ``get_engine_schemas()`` are static, so
+        an adapter tool registered from a server's ``tools/list`` was in
+        neither and this parity test could not see it. It is not merely
+        unclassified: it is dispatched at ``dispatch._execute_tool`` before
+        ``ToolContext`` exists, so no ``ctx.is_benchmark`` gate runs on it.
+        """
+        from robothor.engine.tools import get_registry
+        from robothor.engine.tools.handlers.benchmark import _benchmark_tools_denied
+
+        name = "acme_delete_patient"
+        registry = get_registry()
+        monkeypatch.setitem(
+            registry._schemas,
+            name,
+            {"type": "function", "function": {"name": name, "parameters": {}}},
+        )
+        monkeypatch.setitem(registry._adapter_routes, name, "acme")
+
+        assert name in registry.registered_tool_names()
+        assert name in _benchmark_tools_denied(None, sandbox=False)
+        assert name in _benchmark_tools_denied([name], sandbox=True)
+
     def test_excluded_and_allowed_do_not_overlap(self):
         """Since 2026-09-10 ``benchmark_readonly_tools()`` subtracts
         ``_BENCHMARK_EXCLUDED_TOOLS`` itself, so the read-only half of this can

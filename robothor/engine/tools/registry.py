@@ -419,6 +419,24 @@ class ToolRegistry:
         """Return the adapter server name for a tool, or None if not adapter-provided."""
         return self._adapter_routes.get(tool_name)
 
+    def registered_tool_names(self) -> set[str]:
+        """Every tool name this instance can dispatch, right now.
+
+        Including the ones registered at runtime from an adapter's
+        ``tools/list``, which no static schema module knows about. A caller
+        building a DENY-list needs exactly this set: the benchmark harness
+        computed its deny-list from ``robothor.api.mcp.get_tool_definitions()``
+        and ``get_engine_schemas()``, and an adapter tool is in neither — so it
+        was advertised to a graded sub-agent and dispatched at
+        ``dispatch._execute_tool`` before ``ToolContext`` (and therefore before
+        every ``ctx.is_benchmark`` gate) existed.
+        """
+        return set(self._schemas) | set(self._adapter_routes)
+
+    def adapter_tool_names(self) -> set[str]:
+        """Just the adapter-provided names — the ones that leave this process."""
+        return set(self._adapter_routes)
+
     def build_for_agent(self, config: AgentConfig) -> list[dict[str, Any]]:
         """Return filtered tool schemas for an agent based on allow/deny lists.
 
