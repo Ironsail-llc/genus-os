@@ -189,33 +189,44 @@ async def liveness() -> dict[str, Any]:
     return liveness_response("orchestrator", __version__)
 
 
+async def _check_database() -> str:
+    """Round-trip one trivial query through a pooled connection.
+
+    Module level rather than a closure inside :func:`readiness` on purpose: a
+    closure has no name a test can replace, so the readiness tests could only
+    stub something `readiness()` never read and then dialled a real Postgres --
+    passing on a developer box and failing on every runner without a database.
+    A probe that reaches out over the network needs a seam.
+    """
+    import asyncio
+
+    from robothor.db.connection import get_connection
+
+    def _query() -> None:
+        with get_connection() as conn:
+            conn.cursor().execute("SELECT 1")
+
+    await asyncio.to_thread(_query)
+    return "ok"
+
+
+async def _check_generation_model() -> str:
+    """Whether the local Ollama holds a model the fleet could generate with."""
+    from robothor.llm.ollama import check_model_available
+
+    if not await check_model_available():
+        raise RuntimeError("generation model unavailable")
+    return "ok"
+
+
 @app.get("/ready")
 async def readiness() -> Any:
     """Report whether the database and required generation model are usable."""
-    import asyncio
-
     from fastapi.responses import JSONResponse
 
     from robothor.health_contract import readiness_response
 
-    async def check_db() -> str:
-        from robothor.db.connection import get_connection
-
-        def _query() -> None:
-            with get_connection() as conn:
-                conn.cursor().execute("SELECT 1")
-
-        await asyncio.to_thread(_query)
-        return "ok"
-
-    async def check_generation_model() -> str:
-        from robothor.llm.ollama import check_model_available
-
-        if not await check_model_available():
-            raise RuntimeError("generation model unavailable")
-        return "ok"
-
-    checks: dict[str, Any] = {"database": check_db}
+    checks: dict[str, Any] = {"database": _check_database}
     details: dict[str, Any] = {}
 
     # Only an instance that actually routes a tier through Ollama needs a
@@ -226,7 +237,7 @@ async def readiness() -> Any:
     # 1 and nothing else ever started. The readiness contract has no "skipped",
     # so the reason goes in the body rather than in `checks`.
     if fleet_uses_ollama():
-        checks["generation_model"] = check_generation_model
+        checks["generation_model"] = _check_generation_model
     else:
         details["generation_model"] = (
             "skipped: no local generation model configured "

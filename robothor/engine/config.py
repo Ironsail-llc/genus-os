@@ -707,6 +707,31 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return merged
 
 
+def last_resort_model() -> str:
+    """The model that must terminate every fallback chain, read from ONE place.
+
+    Both the dispatch path (:func:`_with_last_resort`) and the readiness path
+    (:func:`fleet_model_chain`) need this name, and they used to read it from
+    different sources -- the raw ``ROBOTHOR_LAST_RESORT_MODEL`` variable and the
+    declared ``ProviderSettings.last_resort_model`` respectively. Those
+    disagree for exactly the instance ``genus init`` produces, which writes the
+    name into ``config.yaml`` and not into the environment: readiness would gate
+    on a local model dispatch was never going to dial, or skip one it was.
+
+    The declared setting is the authority because it already layers the
+    environment over ``config.yaml``. The raw variable is the fallback for the
+    one case where settings resolution cannot answer -- an unrelated bad key in
+    ``config.yaml`` raises ``ValidationError`` -- because dispatch losing the
+    offline tier is a worse outcome than a config file nobody has fixed yet.
+    """
+    try:
+        from robothor.settings import get_settings
+
+        return str(get_settings().providers.last_resort_model or "").strip()
+    except Exception:  # noqa: BLE001 - dispatch keeps its offline tier regardless
+        return os.environ.get("ROBOTHOR_LAST_RESORT_MODEL", "").strip()
+
+
 def _with_last_resort(primary: str, fallbacks: list[str]) -> list[str]:
     """Append the instance's model of last resort to a fallback chain.
 
@@ -719,7 +744,7 @@ def _with_last_resort(primary: str, fallbacks: list[str]) -> list[str]:
     instance thought its whole fleet had (2026-08-25 drill). Unset, nothing
     changes.
     """
-    last_resort = os.environ.get("ROBOTHOR_LAST_RESORT_MODEL", "").strip()
+    last_resort = last_resort_model()
     if not last_resort or last_resort == primary or last_resort in fallbacks:
         return fallbacks
     return [*fallbacks, last_resort]
@@ -790,12 +815,9 @@ def fleet_model_chain(manifest_dir: Path | str | None = None) -> list[str]:
     block = (_load_defaults(Path(directory)).get("model") or {}) if directory else {}
     chain = [block.get("primary"), *(block.get("fallbacks") or [])]
     models = [str(model) for model in chain if model]
-    # Through the settings registry, not os.environ: this is a declared name
-    # (ProviderSettings.last_resort_model), and a fresh raw read here would be
-    # a new site on a ratchet this same change set is trying to lower.
-    from robothor.settings import get_settings
-
-    last_resort = str(get_settings().providers.last_resort_model or "").strip()
+    # The same reader dispatch uses, deliberately: a chain readiness gates on
+    # must be the chain the engine will actually dial.
+    last_resort = last_resort_model()
     if last_resort and last_resort not in models:
         models.append(last_resort)
     return models
