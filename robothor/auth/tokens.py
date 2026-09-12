@@ -65,7 +65,10 @@ def signing_key() -> str:
     # token encode/decode stays usable on a box with no vault at all.
     from robothor.secrets import resolve_secret
 
-    resolved = resolve_secret(_ENV_NAME, vault_key=_VAULT_KEY)
+    # live=True: the generate branch below acts on "missing", so the verdict
+    # must come from the vault NOW, not from a cooldown that may be sitting out
+    # a vault that has since recovered.
+    resolved = resolve_secret(_ENV_NAME, vault_key=_VAULT_KEY, live=True)
     if resolved.value is not None:
         if len(resolved.value.encode("utf-8")) < 32:
             raise TokenError(
@@ -75,6 +78,17 @@ def signing_key() -> str:
             )
         _signing_key_cache = resolved.value
         return resolved.value
+
+    if resolved.source == "unavailable":
+        # Unreadable is not empty. vault.set is an UPSERT: generating here on a
+        # vault whose read failed but whose write works would overwrite the
+        # stored key, killing every session and every MFA secret derived from
+        # it. Refusing to mint is an outage the operator can see; a silent
+        # rotation is one they cannot.
+        raise TokenError(
+            f"no signing key: {_ENV_NAME} is unset and the vault cannot be read, "
+            "so a key cannot be resolved or safely generated"
+        )
 
     # First boot: nothing holds a key, so mint one and keep it. A key that is
     # not stored is a new key on every restart, and every session dies with it.

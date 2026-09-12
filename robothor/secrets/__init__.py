@@ -22,11 +22,18 @@ The chain, in order:
 
 Two rules hold this module together.
 
-**A vault that cannot be read is "unset", never an exception.** Most instances
-have no vault: no master key file, no database, or both. ``key_pool`` learned
-this the expensive way — raising here turns every optional credential into a
-startup crash. The failure is logged once per cooldown and the lookup returns
-``None``.
+**A vault that cannot be read is "unavailable", never an exception — and never
+"missing".** Most instances have no vault: no master key file, no database, or
+both. ``key_pool`` learned this the expensive way — raising here turns every
+optional credential into a startup crash. So ``get_secret`` returns ``None``
+either way and the failure is logged once per cooldown. But the SOURCE keeps
+the two apart: ``"missing"`` means the vault answered and holds no row,
+``"unavailable"`` means nobody knows. The difference is load-bearing for one
+caller: ``tokens.signing_key()`` generates-and-stores a key when nothing holds
+one, and the store is an UPSERT. A vault whose read fails while its write works
+would otherwise overwrite the live signing key, invalidating every session and
+making every stored MFA secret undecryptable. A caller that must not act on a
+stale verdict passes ``live=True`` to skip the cooldown and probe the vault now.
 
 **No value reaches a log record.** Names and sources are logged; values are
 not, and neither is the text of an exception that may carry a connection
@@ -62,7 +69,7 @@ __all__ = [
     "secret_source",
 ]
 
-SecretSource = Literal["env", "vault", "missing"]
+SecretSource = Literal["env", "vault", "missing", "unavailable"]
 
 #: How long an unreadable vault sits out. A per-call retry would put a
 #: synchronous psycopg2 connect on whatever path asked for the credential; five
@@ -109,12 +116,19 @@ def _clean(value: str | None) -> str | None:
     return stripped or None
 
 
-def _vault_read(name: str, vault_key: str | None, tenant_id: str) -> str | None:
-    """The vault's answer, or None — including when the vault is unusable."""
+def _vault_read(
+    name: str, vault_key: str | None, tenant_id: str, *, live: bool = False
+) -> tuple[str | None, bool]:
+    """``(value, available)``: the vault's answer and whether it answered at all.
+
+    ``(None, False)`` is an unusable vault (or one inside its cooldown when
+    ``live`` is False); ``(None, True)`` is a vault that was read and holds no
+    such row. Callers that generate on absence must only do so on the second.
+    """
     global _vault_retry_after  # noqa: PLW0603
 
-    if _vault_retry_after is not None and _clock() < _vault_retry_after:
-        return None
+    if not live and _vault_retry_after is not None and _clock() < _vault_retry_after:
+        return None, False
 
     try:
         # Lazy: importing the vault pulls in the crypto and DAL layers, and a
@@ -144,10 +158,10 @@ def _vault_read(name: str, vault_key: str | None, tenant_id: str) -> str | None:
             type(exc).__name__,
             VAULT_RETRY_SECONDS,
         )
-        return None
+        return None, False
 
     _vault_retry_after = None
-    return _clean(found)
+    return _clean(found), True
 
 
 def resolve_secret(
@@ -155,6 +169,7 @@ def resolve_secret(
     *,
     vault_key: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
+    live: bool = False,
 ) -> ResolvedSecret:
     """Resolve one credential and report which layer answered.
 
@@ -169,16 +184,23 @@ def resolve_secret(
             generate a second signing key on a box that already had one and
             invalidate every session and every MFA secret derived from it.
         tenant_id: whose vault to read.
+        live: probe the vault even inside its failure cooldown. For a caller
+            that will act on "missing" (generate a key, for instance) and must
+            not act on a five-minute-old verdict about a vault that may have
+            recovered.
     """
     from_env = _clean(process_env_get(name, None))
     if from_env is not None:
         logger.debug("secrets: %s resolved from the process environment", name)
         return ResolvedSecret(from_env, "env")
 
-    from_vault = _vault_read(name, vault_key, tenant_id)
+    from_vault, available = _vault_read(name, vault_key, tenant_id, live=live)
     if from_vault is not None:
         logger.debug("secrets: %s resolved from the vault", name)
         return ResolvedSecret(from_vault, "vault")
+    if not available:
+        logger.debug("secrets: %s is not in the environment and the vault is unavailable", name)
+        return ResolvedSecret(None, "unavailable")
 
     logger.debug("secrets: %s is not configured in the environment or the vault", name)
     return ResolvedSecret(None, "missing")
@@ -189,9 +211,14 @@ def get_secret(
     *,
     vault_key: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
+    live: bool = False,
 ) -> str | None:
-    """The credential ``name`` holds, or None if this instance has none."""
-    return resolve_secret(name, vault_key=vault_key, tenant_id=tenant_id).value
+    """The credential ``name`` holds, or None if this instance has none.
+
+    None also when the vault is unavailable; use :func:`resolve_secret` when
+    that distinction changes what you do next.
+    """
+    return resolve_secret(name, vault_key=vault_key, tenant_id=tenant_id, live=live).value
 
 
 def secret_source(
@@ -199,11 +226,13 @@ def secret_source(
     *,
     vault_key: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
+    live: bool = False,
 ) -> SecretSource:
-    """Where ``name`` would be resolved from: ``env``, ``vault`` or ``missing``.
+    """Where ``name`` would be resolved from: ``env``, ``vault``, ``missing`` or
+    ``unavailable`` (the vault could not be read, so nobody knows).
 
     Safe to print: it is the answer to "is this configured, and where?" with
     the value left out, which is what the doctor and ``genus config explain``
     need.
     """
-    return resolve_secret(name, vault_key=vault_key, tenant_id=tenant_id).source
+    return resolve_secret(name, vault_key=vault_key, tenant_id=tenant_id, live=live).source

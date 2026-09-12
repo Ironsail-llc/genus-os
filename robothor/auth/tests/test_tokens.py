@@ -211,3 +211,46 @@ def test_an_unreadable_vault_does_not_crash_the_resolution(monkeypatch):
     secrets_module.reset_vault_availability()
     tokens.reset_signing_key_cache()
     assert tokens.signing_key() == "env-signing-key-at-least-32-bytes-long-ok"
+
+
+def test_an_unreadable_vault_never_generates_over_the_stored_key(monkeypatch):
+    """Read fails, write works: the one shape that overwrites the live key.
+
+    ``vault.set`` is an UPSERT. Generating here would rotate the signing key
+    underneath every session and every MFA secret derived from it. The
+    resolution must refuse loudly instead.
+    """
+    from robothor import secrets as secrets_module
+    from robothor import vault
+
+    def boom(*a, **kw):
+        raise ConnectionError("vault database down")
+
+    monkeypatch.delenv("GENUS_AUTH_SIGNING_KEY", raising=False)
+    monkeypatch.setattr(vault, "get", boom)
+    monkeypatch.setattr(vault, "export_env", boom)
+    monkeypatch.setattr(
+        vault, "set", lambda *a, **kw: pytest.fail("the stored key was overwritten")
+    )
+    secrets_module.reset_vault_availability()
+    tokens.reset_signing_key_cache()
+    with pytest.raises(TokenError, match="cannot be read"):
+        tokens.signing_key()
+
+
+def test_a_cooling_down_vault_is_probed_before_a_key_is_generated(monkeypatch):
+    """A five-minute-old failure must not decide that no key exists."""
+    from robothor import secrets as secrets_module
+    from robothor import vault
+
+    monkeypatch.delenv("GENUS_AUTH_SIGNING_KEY", raising=False)
+    # The vault failed a moment ago and is inside its cooldown...
+    secrets_module._vault_retry_after = secrets_module._clock() + 300
+    # ...but it is healthy now and holds the key.
+    monkeypatch.setattr(vault, "get", lambda key, **kw: LONG_ENOUGH)
+    monkeypatch.setattr(
+        vault, "set", lambda *a, **kw: pytest.fail("a key was generated over the stored one")
+    )
+    tokens.reset_signing_key_cache()
+    assert tokens.signing_key() == LONG_ENOUGH
+    secrets_module.reset_vault_availability()

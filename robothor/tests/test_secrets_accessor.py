@@ -140,7 +140,7 @@ def test_an_unreadable_vault_degrades_to_unset(monkeypatch, caplog):
     _vault_raises(monkeypatch, FileNotFoundError("no master key"))
     with caplog.at_level(logging.INFO, logger="robothor.secrets"):
         assert get_secret(NAME) is None
-        assert secret_source(NAME) == "missing"
+        assert secret_source(NAME) == "unavailable"
     degrades = [r for r in caplog.records if "vault" in r.getMessage()]
     assert len(degrades) == 1, (
         "an unreadable vault must say so exactly once, not once per lookup: "
@@ -222,3 +222,53 @@ def test_resolve_returns_the_value_and_its_source_in_one_lookup(monkeypatch):
 def test_the_source_of_a_missing_secret_is_missing_not_none(monkeypatch):
     _vault_holds(monkeypatch, {})
     assert secrets_module.resolve_secret(NAME) == (None, "missing")
+
+
+# ── unavailable is not missing ───────────────────────────────────────────────
+
+
+def test_an_unreadable_vault_is_unavailable_not_missing(monkeypatch):
+    """The source tells a generate-on-absence caller NOT to generate.
+
+    ``vault.set`` is an UPSERT: a caller that mints a key because the accessor
+    said "missing" would overwrite the stored one if the read had merely
+    failed. So a failed read is its own answer.
+    """
+    from robothor.secrets import resolve_secret
+
+    _vault_raises(monkeypatch, ConnectionError("vault database down"))
+    resolved = resolve_secret(NAME)
+    assert resolved.value is None
+    assert resolved.source == "unavailable"
+    assert secret_source(NAME) == "unavailable"
+
+
+def test_a_cooling_down_vault_is_unavailable(monkeypatch):
+    """Inside the cooldown nobody has asked the vault, so nobody knows."""
+    from robothor.secrets import resolve_secret
+
+    _vault_raises(monkeypatch, ConnectionError("down"))
+    assert resolve_secret(NAME).source == "unavailable"
+    # The vault recovers, but the cooldown has not expired: still unknown.
+    _vault_holds(monkeypatch, {})
+    assert resolve_secret(NAME).source == "unavailable"
+
+
+def test_live_bypasses_the_cooldown(monkeypatch):
+    """A caller about to act on "missing" gets today's answer, not the cached one."""
+    from robothor.secrets import resolve_secret
+
+    _vault_raises(monkeypatch, ConnectionError("down"))
+    assert resolve_secret(NAME).source == "unavailable"
+    asked = _vault_holds(monkeypatch, {NAME: SENTINEL})
+    assert resolve_secret(NAME, live=True) == (SENTINEL, "vault")
+    assert asked, "live=True must probe the vault inside the cooldown"
+    # A live probe that succeeds clears the cooldown for everyone.
+    assert resolve_secret(NAME).source == "vault"
+
+
+def test_a_vault_that_answers_with_no_row_is_missing(monkeypatch):
+    from robothor.secrets import resolve_secret
+
+    _vault_holds(monkeypatch, {})
+    assert resolve_secret(NAME).source == "missing"
