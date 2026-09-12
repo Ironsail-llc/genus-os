@@ -20,6 +20,7 @@ did not cause. Its contract, in order of how expensive getting it wrong is:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 import threading
@@ -206,7 +207,13 @@ class _Worker:
 
     def _serve(self) -> None:
         asyncio.set_event_loop(self.loop)
-        self.loop.run_forever()
+        try:
+            self.loop.run_forever()
+        finally:
+            # Reached when the loop is stopped -- by close(), or by abandon()
+            # once a wedged or overrunning body finally returns. Closing here
+            # is what reclaims the epoll fd and the self-pipe of an orphan.
+            self.loop.close()
 
     def owns_current_loop(self) -> bool:
         """Is the caller already running on this worker's loop?"""
@@ -230,23 +237,30 @@ class _Worker:
             if not future.done():
                 setter(value)
 
+        def _relay(setter: Callable[[Any], None], value: Any) -> None:
+            # The caller's loop is gone when this worker was abandoned and the
+            # run has already finished: a late result has nowhere to go, and
+            # that is not an error worth a traceback on a daemon thread.
+            with contextlib.suppress(RuntimeError):
+                caller.call_soon_threadsafe(_deliver, setter, value)
+
         def _finish(task: asyncio.Task[Any]) -> None:
             if task.cancelled():  # pragma: no cover - only on loop teardown
                 return
             error = task.exception()
             if error is not None:
-                caller.call_soon_threadsafe(_deliver, future.set_exception, error)
+                _relay(future.set_exception, error)
             else:
-                caller.call_soon_threadsafe(_deliver, future.set_result, task.result())
+                _relay(future.set_result, task.result())
 
         def _start() -> None:
             try:
                 outcome = body(ctx)
             except BaseException as exc:  # noqa: BLE001 - relayed to the awaiter
-                caller.call_soon_threadsafe(_deliver, future.set_exception, exc)
+                _relay(future.set_exception, exc)
                 return
             if not inspect.isawaitable(outcome):
-                caller.call_soon_threadsafe(_deliver, future.set_result, outcome)
+                _relay(future.set_result, outcome)
                 return
             self.loop.create_task(_drive(outcome)).add_done_callback(_finish)
 
@@ -302,8 +316,15 @@ class _WorkerPool:
             self._replacements + 1,
             _MAX_REPLACEMENTS + 1,
         )
+        orphan = self._worker
         self._worker = None
         self._ctx._worker = None
+        if orphan is not None:
+            # Not a kill -- nothing can kill it -- but a scheduled stop: the
+            # moment the wedged body returns, the loop exits, _serve closes it
+            # and the thread ends. An overrun that completes is reclaimed;
+            # only a body that never returns stays orphaned.
+            orphan.loop.call_soon_threadsafe(orphan.loop.stop)
         if self._replacements >= _MAX_REPLACEMENTS:
             self._exhausted = True
         else:

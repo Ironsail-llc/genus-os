@@ -586,3 +586,29 @@ def test_selection_error_is_raised_by_the_selector_itself() -> None:
 
     with pytest.raises(CheckSelectionError):
         select([_check("a.one")], only="nope")
+
+
+def test_a_check_that_overruns_and_then_completes_is_reclaimed() -> None:
+    """Important F (round 4): the common shape is not a wedge but an OVERRUN --
+    a check that blows its box and finishes a moment later (``provider.completion``
+    did, on one of three live runs). Its orphaned worker must then stop its loop,
+    close it and exit, leaving no thread or descriptor behind, and its late
+    delivery into the run's already-closed loop must be swallowed, not raised.
+    """
+    import time
+
+    async def overrun(ctx: DoctorContext) -> Result:
+        await ctx.run_blocking(time.sleep, 0.6)
+        return Result(status="pass", detail="late")
+
+    before_threads, before_fds = _threads(), _open_fds()
+    for _ in range(3):
+        report = run_sync(
+            _ctx(timeout_s=0.1, total_timeout_s=1.0), checks=[_check("late.one", run=overrun)]
+        )
+        assert report.results[0].status == "fail"
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and _threads() > before_threads:
+        time.sleep(0.05)
+    assert _threads() <= before_threads, "an overrunning worker was never reclaimed"
+    assert _open_fds() <= before_fds + 1, "an overrunning worker kept its loop's descriptors"
