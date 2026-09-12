@@ -147,22 +147,6 @@ _ANSWER_FLAGS = {
 }
 
 
-def _provider_key_from_env() -> str:
-    """The credential for the provider whose key this box already carries.
-
-    Read straight from the process environment rather than through the settings
-    model on purpose: provider keys are secrets, they are not settings, and the
-    only thing this value is ever used for is one probe call.
-    """
-    from robothor.engine.key_pool import PROVIDERS
-
-    for spec in PROVIDERS:
-        value = os.environ.get(spec.env_var, "").strip()
-        if value:
-            return value
-    return ""
-
-
 def build_init_context(args: Any) -> Any:
     """Turn parsed flags and the environment into an :class:`InitContext`.
 
@@ -185,10 +169,12 @@ def build_init_context(args: Any) -> Any:
         value = os.environ.get(variable, "").strip()
         if value:
             answers[key] = value
-    key = _provider_key_from_env()
-    if key:
-        answers["provider_key"] = key
 
+    # No credential is ever seeded into `answers`. The provider step resolves
+    # the CHOSEN provider's own key through key_pool at the moment it probes:
+    # an answer reaches the plan, the JSON and the state file the moment
+    # anything renders answers, and a box-wide "first key we found" is how a
+    # live OpenRouter key was sent to api.anthropic.com.
     return InitContext(
         workspace=workspace,
         answers=answers,

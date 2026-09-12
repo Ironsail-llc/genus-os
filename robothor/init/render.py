@@ -4,11 +4,12 @@ Two audiences, two streams. With ``--json`` the document on stdout is the whole
 contract and every human line goes to stderr, so a caller can pipe stdout into
 ``jq`` and still read the progress. Without it, stdout is the terminal.
 
-Nothing here formats a secret. The provider key and the Telegram token live in
-``ctx.answers`` and are never part of a plan row, a step detail or the JSON;
-the setup token appears exactly once, inside the URL the link step prints,
-which is the design — it is the credential, and it goes to the operator's
-terminal and nowhere else.
+Nothing here formats a secret, and nothing it is given carries one: the
+provider key is resolved at the moment of the probe and never stored in
+``ctx.answers``, so it cannot reach a plan row, a step detail or the JSON. The
+Telegram token is an answer but is never rendered. The setup token appears
+exactly once, inside the URL the link step prints, which is the design — it is
+the credential, and it goes to the operator's terminal and nowhere else.
 """
 
 from __future__ import annotations
@@ -69,11 +70,22 @@ def render_summary(result: InitResult, *, workspace: str) -> list[str]:
         failed = [row for row in result.steps if row.status == "failed"]
         detail = failed[0].detail if failed else "a step failed"
         step_id = failed[0].id if failed else "?"
-        return [
+        applied = [row.id for row in result.steps if row.status == "applied"]
+        lines = [
             "",
             f"  Stopped at `{step_id}`: {detail}",
-            "  Everything before it was recorded — `genus init` resumes where it stopped.",
         ]
+        if applied:
+            # Naming what DID land matters more here than anywhere else: the
+            # operator has to know the instance is part-built before deciding
+            # whether to fix forward or start over.
+            lines.append(f"  Applied before it: {', '.join(applied)}.")
+        lines.append("  Everything applied was recorded — `genus init` resumes where it stopped.")
+        if result.first_run_url:
+            lines.append("  The first-run link above still works; use it to finish in the browser.")
+        else:
+            lines.append("  Need a way in? `genus auth setup-link` mints a fresh /setup link.")
+        return lines
     planned = any(row.status == "planned" for row in result.steps)
     if planned:
         return ["", "  Dry run: nothing was written."]

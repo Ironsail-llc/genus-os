@@ -173,8 +173,17 @@ def run_plan(
             on_step(outcome)
         return outcome
 
+    # The id of the first step that failed, or None. A failure stops the run,
+    # but NOT the steps marked ``run_on_failure`` -- the first-run link is the
+    # one thing an operator needs most on the run that went wrong, because by
+    # then the instance is installed and the URL is the only way into it.
+    failed_at: str | None = None
+
     for step in plan.steps:
         entry = by_id[step.id]
+        if failed_at is not None and not getattr(step, "run_on_failure", False):
+            record(StepOutcome(step.id, "not-run", f"not run: {failed_at} failed"))
+            continue
         if step.resumable and ctx.state.get(step.id) == "completed":
             record(StepOutcome(step.id, "skipped", "already completed"))
             continue
@@ -182,22 +191,43 @@ def run_plan(
             record(StepOutcome(step.id, "skipped", entry.detail))
             continue
         if ctx.dry_run:
+            # Not "applied and wrote nothing" -- apply() is never entered. A
+            # step that reached a helper resolving its own paths would already
+            # have escaped the workspace before any guard could see it.
             record(StepOutcome(step.id, "planned", entry.detail))
             continue
         try:
             step.apply(ctx)
         except StepError as exc:
             record(StepOutcome(step.id, "failed", str(exc)))
-            return InitResult(plan=entries, steps=outcomes, exit_code=1)
+            failed_at = failed_at or step.id
+            continue
         except Exception as exc:  # noqa: BLE001 - report it, do not traceback
             record(StepOutcome(step.id, "failed", f"{type(exc).__name__}: {exc}"))
-            return InitResult(plan=entries, steps=outcomes, exit_code=1)
+            failed_at = failed_at or step.id
+            continue
         record(StepOutcome(step.id, "applied", ctx.details.get(step.id, entry.detail)))
-        ctx.mark_completed(step.id)
+        if _completed(step, ctx):
+            ctx.mark_completed(step.id)
 
     return InitResult(
         plan=entries,
         steps=outcomes,
         first_run_url=ctx.first_run_url,
-        exit_code=0,
+        exit_code=1 if failed_at else 0,
     )
+
+
+def _completed(step: Step, ctx: InitContext) -> bool:
+    """Whether a successful step may be recorded in ``init_state.yaml``.
+
+    A ``completed`` line means no later run will try again, so a step that
+    succeeded WITHOUT doing the thing a later run must still do says so. The
+    provider step does exactly that under ``--offline``: it recorded a choice
+    it never probed, and one such install made every subsequent `genus init`
+    skip the probe forever.
+    """
+    decide = getattr(step, "completed", None)
+    if decide is None:
+        return True
+    return bool(decide(ctx))

@@ -160,6 +160,9 @@ class TestResume:
         assert [(row.id, row.status) for row in result.steps] == [
             ("workspace", "applied"),
             ("migrate", "failed"),
+            # Recorded as not-run rather than omitted: a reader of the JSON has
+            # to be able to tell "did not run" from "was never in the plan".
+            ("agents", "not-run"),
         ]
         state_path = ctx.workspace / ".robothor" / "init_state.yaml"
         assert "workspace: completed" in state_path.read_text()

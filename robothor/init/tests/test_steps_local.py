@@ -286,23 +286,32 @@ class TestAgentsPreset:
         assert "scout" in ctx.details["agents"]
 
 
-class TestModelsOnlyWhenOllamaWasChosen:
-    def test_a_cloud_provider_skips_the_pull(self, tmp_path):
-        ctx = _ctx(tmp_path, answers={"provider_id": "openrouter"})
+class TestModelsFollowOllama:
+    """The pull tracks whether Ollama is THERE, not which model answers chat.
 
-        assert ModelsStep().check(ctx).action == "skip"
+    (See `test_failure_paths.py` for the cloud-provider case and the reason.)
+    The HTTP seam is injected rather than left to resolve: a unit test that
+    reaches the developer's own Ollama passes or fails with the host.
+    """
 
-    def test_ollama_pulls_the_required_models(self, tmp_path):
+    @staticmethod
+    def _reachable(tmp_path, **answers):
+        def fetch(method, url, body, timeout):
+            return HttpResponse(status=200, body='{"models": []}')
+
+        return _ctx(tmp_path, answers=answers, http_fetch=fetch)
+
+    def test_a_reachable_ollama_pulls_the_required_models(self, tmp_path):
         pulled: list[list[str]] = []
-        ctx = _ctx(tmp_path, answers={"provider_id": "ollama"})
+        ctx = self._reachable(tmp_path, provider_id="ollama")
         step = ModelsStep(puller=lambda base, models: pulled.append(list(models)))
 
         assert step.check(ctx).action == "create"
         step.apply(ctx)
         assert pulled and "qwen3-embedding:0.6b" in pulled[0]
 
-    def test_skip_models_wins_over_the_provider_choice(self, tmp_path):
-        ctx = _ctx(tmp_path, answers={"provider_id": "ollama", "skip_models": True})
+    def test_skip_models_wins_over_a_reachable_ollama(self, tmp_path):
+        ctx = self._reachable(tmp_path, provider_id="ollama", skip_models=True)
 
         assert ModelsStep().check(ctx).action == "skip"
 
@@ -487,22 +496,29 @@ class TestTheFirstRunLink:
 
 
 class TestProviderStep:
-    def test_no_credential_and_no_local_model_blocks_the_run(self, tmp_path):
+    def test_no_credential_and_no_local_model_blocks_the_run(self, tmp_path, monkeypatch):
+        # Stubbed rather than left to resolve: this box has real provider keys,
+        # and a check that consults them passes or fails with the host.
+        monkeypatch.setattr("robothor.engine.key_pool.scan_slots", lambda provider_id: [])
         ctx = _ctx(tmp_path)
         result = ProviderStep().check(ctx)
 
         assert result.ok is False
         assert "OPENROUTER_API_KEY" in result.fix_hint
 
-    def test_a_failed_probe_blocks_rather_than_writing_a_provider(self, tmp_path):
+    def test_a_failed_probe_blocks_rather_than_writing_a_provider(self, tmp_path, monkeypatch):
+        from robothor.engine.key_pool import ResolvedKey
         from robothor.init.provider_probe import ProbeResult
 
+        monkeypatch.setattr(
+            "robothor.engine.key_pool.scan_slots",
+            lambda provider_id: [ResolvedKey(position=1, key="sk-bad", source="env")],
+        )
         ctx = _ctx(
             tmp_path,
             answers={
                 "provider_id": "openrouter",
                 "provider_model": "openrouter/openai/gpt-5.4",
-                "provider_key": "sk-bad",
             },
         )
         step = ProviderStep(

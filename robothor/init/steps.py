@@ -93,16 +93,31 @@ class Step(Protocol):
         resumable: whether a completed run of this step may be skipped on a
             re-run. ``False`` for steps that must happen every time, such as
             the security acknowledgement.
+        run_on_failure: whether this step still runs after an earlier step
+            failed. ``True`` only for the first-run link, which is the one
+            thing an operator needs MOST on the run that went wrong: the
+            instance is installed, and without the URL there is no way in.
     """
 
     id: str
     title: str
     required: bool
     resumable: bool
+    run_on_failure: bool
 
     def check(self, ctx: InitContext) -> CheckResult: ...
 
     def apply(self, ctx: InitContext) -> None: ...
+
+    def completed(self, ctx: InitContext) -> bool:
+        """Whether a successful ``apply`` may be recorded as done.
+
+        Almost always True. It is False for a step that succeeded without doing
+        the thing a later run must still do — an ``--offline`` provider choice
+        that was never probed — because a ``completed`` line in
+        ``init_state.yaml`` means no later run will try again.
+        """
+        ...
 
 
 class BaseStep:
@@ -117,12 +132,16 @@ class BaseStep:
     title: str = ""
     required: bool = True
     resumable: bool = True
+    run_on_failure: bool = False
 
     def check(self, ctx: InitContext) -> CheckResult:
         return CheckResult(True)
 
     def apply(self, ctx: InitContext) -> None:
         return None
+
+    def completed(self, ctx: InitContext) -> bool:
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -305,38 +324,75 @@ class ProviderStep(BaseStep):
     def __init__(self, *, probe: Callable[..., Any] | None = None) -> None:
         self._probe = probe
 
+    NO_CREDENTIAL_HINT = (
+        "export a provider key (OPENROUTER_API_KEY, ANTHROPIC_API_KEY, "
+        "OPENAI_API_KEY, GEMINI_API_KEY or DEEPSEEK_API_KEY) and re-run, "
+        "or pull a tool-capable Ollama model"
+    )
+
+    def _configured(self, ctx: InitContext) -> list[Any]:
+        """Providers this box can dial — vault first, then the environment.
+
+        Asked here rather than read out of ``ctx.answers`` alone, because the
+        ``detect`` step's findings are absent on a resumed run and the
+        credential normally lives in the VAULT by then. A phase-1 refusal on a
+        fully configured instance would block the re-run the deployment docs
+        call routine.
+        """
+        from robothor.init.provider_probe import providers_with_credentials
+
+        detected = list(ctx.answers.get("detected_providers") or [])
+        if detected:
+            return detected
+        found = providers_with_credentials()
+        ctx.answers["detected_providers"] = found
+        return found
+
     def _candidates(self, ctx: InitContext) -> tuple[str, str]:
         """The provider id and model this step will use, before any question."""
-        detected = list(ctx.answers.get("detected_providers") or [])
+        configured = self._configured(ctx)
         local = list(ctx.answers.get("detected_ollama") or [])
         provider_id = str(ctx.answers.get("provider_id") or "")
         model = str(ctx.answers.get("provider_model") or "")
         if not provider_id:
-            if detected:
-                provider_id = detected[0].id
+            if configured:
+                provider_id = configured[0].id
             elif local:
                 provider_id = "ollama"
         if not model:
             if provider_id == "ollama" and local:
                 model = f"ollama/{local[0]}"
             else:
-                for row in detected:
+                for row in configured:
                     if row.id == provider_id:
                         model = row.default_model
                         break
         return provider_id, model
 
     def check(self, ctx: InitContext) -> CheckResult:
-        _provider_id, model = self._candidates(ctx)
-        if not model and not ctx.answers.get("provider_key"):
+        provider_id, model = self._candidates(ctx)
+        if not model:
+            if provider_id:
+                # A provider was named and nothing can dial it. Saying which
+                # one beats the old row, which read "will test  with a 1-token
+                # completion" and named no model at all.
+                return CheckResult(
+                    False,
+                    detail=f"no credential for {provider_id} and no model to test",
+                    fix_hint=self.NO_CREDENTIAL_HINT,
+                )
             return CheckResult(
                 False,
                 detail="no provider credential and no tool-capable local model found",
-                fix_hint=(
-                    "export a provider key (OPENROUTER_API_KEY, ANTHROPIC_API_KEY, "
-                    "OPENAI_API_KEY, GEMINI_API_KEY or DEEPSEEK_API_KEY) and re-run, "
-                    "or pull a tool-capable Ollama model"
-                ),
+                fix_hint=self.NO_CREDENTIAL_HINT,
+            )
+
+        recorded = str(ctx.settings.providers.last_resort_model or "")
+        if recorded:
+            return CheckResult(
+                True,
+                detail=f"{recorded} is already recorded; {model} will be re-tested",
+                action="exists",
             )
         if ctx.offline:
             return CheckResult(True, detail=f"{model} (recorded unprobed, --offline)")
@@ -347,6 +403,7 @@ class ProviderStep(BaseStep):
             models_for_provider,
             probe_model,
             record_unprobed,
+            resolve_provider_key,
         )
 
         provider_id, model = self._candidates(ctx)
@@ -361,8 +418,15 @@ class ProviderStep(BaseStep):
         if ctx.offline:
             result = record_unprobed(provider_id, model)
         else:
+            # AFTER the provider is chosen, and only that provider's own
+            # credential. Resolving it earlier -- which is what a
+            # `provider_key` answer amounted to -- sent whichever key the box
+            # happened to carry first to whichever endpoint was chosen, so a
+            # live OpenRouter key went to api.anthropic.com. The key is never
+            # stored in ctx.answers: an answer reaches the plan, the JSON and
+            # the state file the moment anyone renders answers.
             probe = self._probe or probe_model
-            result = probe(model, api_key=ctx.answers.get("provider_key") or None)
+            result = probe(model, api_key=resolve_provider_key(provider_id))
         if not result.ok:
             raise StepError(
                 f"the provider probe failed for {model}: {result.detail}. "
@@ -374,6 +438,16 @@ class ProviderStep(BaseStep):
         ctx.answers["provider_probed"] = result.probed
         ctx.write_setting("ROBOTHOR_LAST_RESORT_MODEL", model)
         ctx.detail(self.id, f"{model}: {result.detail}")
+
+    def completed(self, ctx: InitContext) -> bool:
+        """An unprobed choice is not a finished step.
+
+        Recording ``provider: completed`` after ``--offline`` made every later
+        run skip the probe entirely -- and, because ``provider_probed`` was then
+        unset, run ``verify`` offline too, which skips ``provider.completion``.
+        One ``--offline`` install and nothing ever tested the credential again.
+        """
+        return bool(ctx.answers.get("provider_probed"))
 
 
 class IdentityStep(BaseStep):
@@ -541,7 +615,15 @@ class MigrateStep(BaseStep):
 
 
 class ModelsStep(BaseStep):
-    """Ollama pulls, and only when Ollama is the model this instance uses."""
+    """The RAG models, pulled whenever Ollama is there to pull them into.
+
+    NOT gated on the chat provider. ``llm/ollama.py`` resolves
+    ``ollama.embedding_model`` for every instance regardless of which provider
+    answers chat, and the doctor's only Ollama check is ``recommended`` and
+    merely asks whether the server answers -- so a cloud install that skipped
+    this finished green, stayed green, and 404'd inside Ollama on the first
+    memory write. ``--skip-models`` is the only opt-out.
+    """
 
     id = "models"
     title = "Local models"
@@ -550,12 +632,23 @@ class ModelsStep(BaseStep):
     def __init__(self, *, puller: Callable[[str, list[str]], None] | None = None) -> None:
         self._puller = puller
 
+    @staticmethod
+    def _base_url(ctx: InitContext) -> str:
+        return str(ctx.settings.ollama.url).rstrip("/")
+
     def check(self, ctx: InitContext) -> CheckResult:
         if ctx.answers.get("skip_models"):
             return CheckResult(True, detail="skipped (--skip-models)", action="skip")
-        if str(ctx.answers.get("provider_id") or "") != "ollama":
+
+        reachable = ctx.http("GET", f"{self._base_url(ctx)}/api/tags")
+        if not reachable.ok:
+            # Absent, not "not wanted". An instance whose memory search needs
+            # embeddings and has no Ollama has a problem; it is just not one
+            # `genus init` can pull its way out of.
             return CheckResult(
-                True, detail="skipped (the chosen provider is not Ollama)", action="skip"
+                True,
+                detail="skipped (Ollama is not reachable, so memory search has no embeddings)",
+                action="skip",
             )
         from robothor.setup import REQUIRED_MODELS
 
@@ -569,7 +662,7 @@ class ModelsStep(BaseStep):
             from robothor.setup import pull_ollama_models
 
             pull = pull_ollama_models
-        pull(str(ctx.settings.ollama.url).rstrip("/"), list(REQUIRED_MODELS))
+        pull(self._base_url(ctx), list(REQUIRED_MODELS))
         ctx.detail(self.id, "pulled " + ", ".join(REQUIRED_MODELS))
 
 
@@ -743,22 +836,43 @@ class SecretsStep(BaseStep):
         setup_vault_key(ctx.workspace)
         detail = f"backend {backend}; vault master key present"
 
-        key = str(ctx.answers.get("provider_key") or "")
         provider_id = str(ctx.answers.get("provider_id") or "")
-        if key and provider_id and not ctx.answers.get("skip_db"):
-            detail += "; " + self._store_provider_key(ctx, provider_id, key)
-        elif key:
-            detail += "; the provider key was NOT stored (no database) — export it in the unit"
+        if provider_id and not ctx.answers.get("skip_db"):
+            detail += "; " + self._file_provider_key(ctx, provider_id)
+
+        # The database password is the one credential the wizard PROVES and
+        # cannot keep: `config.py` and every other reader take it straight from
+        # the process environment, so a vault row here would be an inert
+        # control -- written, tested, and read by nothing.
+        if ctx.db_config().get("password"):
+            detail += (
+                "; the database password is not stored — keep it in the unit "
+                "environment or the secrets file"
+            )
         ctx.detail(self.id, detail)
 
-    def _store_provider_key(self, ctx: InitContext, provider_id: str, key: str) -> str:
-        """Put the probed credential where ``key_pool`` will find it.
+    def _file_provider_key(self, ctx: InitContext, provider_id: str) -> str:
+        """Move an environment-only credential into the instance vault.
 
-        Slot 1 of the instance vault, the same place the Settings page writes.
-        A failure here is reported, not raised: the install is otherwise
-        complete and the operator can export the variable instead.
+        Slot 1, the same place the Settings page writes and ``key_pool``
+        reads, so the instance keeps working once the operator's shell is gone.
+        A key already resolved FROM the vault is left alone -- rewriting it
+        would be a no-op that can only fail.
+
+        The key is fetched here, at the moment of the write, and never held in
+        ``ctx.answers``. A failure is reported, not raised: the install is
+        otherwise complete and exporting the variable is a working fallback.
         """
         try:
+            from robothor.engine.key_pool import scan_slots
+
+            slots = scan_slots(provider_id)
+            first = next((slot for slot in slots if (slot.key or "").strip()), None)
+            if first is None:
+                return "no provider credential to file"
+            if first.source != "env":
+                return f"the provider credential is already in the vault ({provider_id})"
+
             from robothor.vault.crypto import get_master_key
             from robothor.vault.dal import set_secret
             from robothor.vault.naming import provider_key
@@ -767,7 +881,7 @@ class SecretsStep(BaseStep):
             tenant = getattr(identity, "tenant_id", None)
             set_secret(
                 provider_key(provider_id, 1),
-                key,
+                first.key,
                 get_master_key(ctx.workspace),
                 **({"tenant_id": tenant} if tenant else {}),
             )
@@ -787,10 +901,18 @@ class VerifyStep(BaseStep):
     title = "Verify"
     resumable = False
 
-    def __init__(self, *, doctor: Callable[[Any], Any] | None = None) -> None:
+    #: Checks that cannot pass on a box the operator told us to leave alone.
+    SKIP_DB_CATEGORY = "database"
+
+    def __init__(self, *, doctor: Callable[..., Any] | None = None) -> None:
         self._doctor = doctor
 
     def check(self, ctx: InitContext) -> CheckResult:
+        if ctx.answers.get("skip_db"):
+            return CheckResult(
+                True,
+                detail="will run genus doctor's required checks, minus the database ones (--skip-db)",
+            )
         return CheckResult(True, detail="will run genus doctor's required checks")
 
     def apply(self, ctx: InitContext) -> None:
@@ -806,11 +928,29 @@ class VerifyStep(BaseStep):
         # must not be the thing that first spends money on an instance, and
         # `provider.completion` is the only check that would.
         offline = not bool(ctx.answers.get("provider_probed"))
-        report = run(DoctorContext(offline=offline))
+        context = DoctorContext(offline=offline)
+
+        note = ""
+        if ctx.answers.get("skip_db"):
+            # `db.connect`, `db.migrations` and `db.rbac_service_role` are all
+            # severity=required, so running them here made `--skip-db` -- a
+            # documented flag -- always end in exit 1, after the identity, the
+            # config, the fleet and the vault key had been written.
+            from robothor.doctor.registry import all_checks
+
+            selected = [check for check in all_checks() if check.category != self.SKIP_DB_CATEGORY]
+            report = run(context, checks=selected)
+            note = " (database checks skipped: --skip-db)"
+        else:
+            report = run(context)
+
         failed = [
             row for row in report.results if row.status == "fail" and row.severity == "required"
         ]
         if failed:
             named = "; ".join(f"{row.id} ({row.detail})" for row in failed)
             raise StepError(f"genus doctor found {len(failed)} required failure(s): {named}")
-        ctx.detail(self.id, f"genus doctor: 0 required failures, {len(report.results)} checks")
+        ctx.detail(
+            self.id,
+            f"genus doctor: 0 required failures, {len(report.results)} checks{note}",
+        )

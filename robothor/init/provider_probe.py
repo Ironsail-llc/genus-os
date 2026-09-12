@@ -34,6 +34,7 @@ __all__ = [
     "models_for_provider",
     "probe_model",
     "record_unprobed",
+    "resolve_provider_key",
 ]
 
 #: The cheapest question that still proves the whole path works: a model id,
@@ -87,6 +88,48 @@ def _provider_for_model(model: str) -> str:
         if model.startswith(spec.model_prefix):
             return spec.id
     return ""
+
+
+def resolve_provider_key(provider_id: str) -> str | None:
+    """THIS provider's credential, or None. Never another vendor's.
+
+    Resolved through ``key_pool.scan_slots``, which is the instance's one
+    credential resolver: the vault first, then that provider's own environment
+    variable via ``process_env_get``. Two resolvers is how the wizard came to
+    put a live OpenRouter key in an ``Authorization`` header to
+    ``api.anthropic.com`` — it walked the provider catalogue and took the first
+    key the box carried, without looking at which provider had been chosen.
+
+    ``None`` rather than a fallback, deliberately: ``llm_call`` then resolves
+    litellm's own variable and fails honestly with "no credential for this
+    provider", instead of succeeding against the wrong endpoint or failing with
+    a 401 that reads as "your key is bad" and invites more pasting.
+
+    Never raises. A box with no database has no vault, and that is a provider
+    with no credential, not a crash in the command that sets the box up.
+    """
+    from robothor.engine.key_pool import scan_slots
+
+    try:
+        slots = scan_slots(provider_id)
+    except Exception:  # noqa: BLE001 - an unreadable vault is "no credential"
+        return None
+    for slot in slots:
+        key = (slot.key or "").strip()
+        if key:
+            return key
+    return None
+
+
+def providers_with_credentials() -> list[DetectedProvider]:
+    """Every provider this box can actually dial, vault or environment.
+
+    Distinct from :func:`detect_provider_keys` only in that it is the question
+    the provider STEP asks -- "is there anything to configure" -- and it must
+    keep working on a re-run, when the credential lives in the vault and is no
+    longer exported in whatever shell the operator happens to be in.
+    """
+    return detect_provider_keys()
 
 
 def models_for_provider(provider_id: str) -> list[str]:

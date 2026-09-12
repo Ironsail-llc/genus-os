@@ -142,6 +142,11 @@ class LocalLinkStep(BaseStep):
     #: install whose link step was "already completed" would print nothing on
     #: exactly the run where the operator needs the URL.
     resumable = False
+    #: Runs even after an earlier step failed. A `verify` failure used to end
+    #: the run here, so the ONE run that had written the identity, the config,
+    #: the schema, the fleet and the owner account printed no way into the box
+    #: -- and a fresh instance has no other way in: no account, no OIDC.
+    run_on_failure = True
 
     def __init__(
         self,
