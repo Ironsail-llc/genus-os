@@ -40,7 +40,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-355 settings in 13 groups.
+357 settings in 13 groups.
 
 ## paths
 
@@ -367,6 +367,8 @@ Where and how the instance runs: host accounts, federation, backups.
 | `ROBOTHOR_DEV` | bool | `false` | `robothor-engine`, `robothor-bridge` | no | legacy | Set inside the development container image. Marks a build that carries dev tooling and must not be what production runs. |
 | `ROBOTHOR_GPU_CLOCK_CAP_MHZ` | int | `0` | `robothor-engine`, `robothor-bridge` | no | legacy | Upper GPU clock cap applied by the thermal guard. 0 leaves it alone. |
 | `ROBOTHOR_GPU_CLOCK_MIN_MHZ` | int | `0` | `robothor-engine`, `robothor-bridge` | no | legacy | Lower GPU clock bound the guard will not throttle below. 0 leaves it alone. |
+| `ROBOTHOR_INIT_PRESET` | str | `standard` | no | no | 1.71.0 | Agent catalogue preset `genus init` installs when --preset is not given. `genus agent catalog` lists the presets this build carries. |
+| `ROBOTHOR_INIT_SUBSTRATE` | str | `local` | no | no | 1.71.0 | Substrate `genus init` sets up when --substrate is not given: `local` (this machine). `compose`, `systemd` and `helm` are designed but not yet selectable. |
 | `ROBOTHOR_INSTANCE_ID` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Stable id of this instance in a federation. Both sides must agree or a link mints two different connection ids and carries no messages. |
 | `ROBOTHOR_INSTANCE_NAME` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Human-readable name of this instance, shown to federated peers. |
 | `ROBOTHOR_LIVENESS_FAILURE_THRESHOLD` | int | `3` | `robothor-engine`, `robothor-bridge` | no | legacy | Consecutive failed probes before the guard acts. |

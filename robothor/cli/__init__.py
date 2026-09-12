@@ -157,6 +157,53 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--skip-models", action="store_true", help="Skip Ollama model pulling")
     init_parser.add_argument("--skip-db", action="store_true", help="Skip database migration")
     init_parser.add_argument("--workspace", type=str, help="Workspace dir (default: ~/robothor)")
+    # Deliberately not an argparse `choices` list: a substrate that is designed
+    # but not yet built has a better answer than "invalid choice" ("lands in
+    # A10"), and only the init package knows which of the four that is.
+    init_parser.add_argument(
+        "--substrate",
+        type=str,
+        help="Where the instance runs: local (compose, systemd and helm are not yet selectable)",
+    )
+    init_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the plan and write nothing",
+    )
+    init_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the plan, the step results and the first-run URL as JSON on stdout",
+    )
+    init_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Record the provider choice without testing it (no completion is made)",
+    )
+    init_parser.add_argument(
+        "--preset",
+        type=str,
+        help="Agent catalogue preset to install (see: genus agent catalog)",
+    )
+    init_parser.add_argument("--provider", type=str, help="Model provider id to configure")
+    init_parser.add_argument("--model", type=str, help="Model id to test and record")
+    init_parser.add_argument(
+        "--secrets-backend",
+        choices=["env", "file", "sops"],
+        help="Where this instance's credentials come from (default: env)",
+    )
+    init_parser.add_argument(
+        "--telegram-token",
+        type=str,
+        help="Verify and configure a Telegram bot token (optional; nothing asks for one)",
+    )
+    init_parser.add_argument("--owner-name", type=str, help="Operator's name for owner.yaml")
+    init_parser.add_argument("--owner-email", type=str, help="Operator's email for owner.yaml")
+    init_parser.add_argument(
+        "--start",
+        action="store_true",
+        help="Start the services at the end instead of printing the commands",
+    )
 
     # upgrade
     upgrade_parser = subparsers.add_parser("upgrade", help="Upgrade platform to latest version")

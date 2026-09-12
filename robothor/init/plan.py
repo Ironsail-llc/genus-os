@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 from robothor.init.steps import StepError
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Callable
+
     from robothor.init.context import InitContext
     from robothor.init.steps import Step
 
@@ -141,35 +143,56 @@ class InitPlan:
         return entries
 
 
-def run_plan(ctx: InitContext, plan: InitPlan) -> InitResult:
-    """Both phases. Returns the whole run; raises nothing a caller must catch."""
+def run_plan(
+    ctx: InitContext,
+    plan: InitPlan,
+    *,
+    on_plan: Callable[[list[PlanEntry]], None] | None = None,
+    on_step: Callable[[StepOutcome], None] | None = None,
+) -> InitResult:
+    """Both phases. Returns the whole run; raises nothing a caller must catch.
+
+    ``on_plan`` is called once between the phases and ``on_step`` after each
+    step, so the CLI can print the plan before phase 2 starts and report
+    progress as it goes. Rendering afterwards from the returned result would
+    leave an operator watching a silent terminal through a migration.
+    """
     entries = plan.check_all(ctx)
+    if on_plan is not None:
+        on_plan(entries)
     blocked = [row.id for row in entries if row.status == "blocked"]
     if blocked:
         return InitResult(plan=entries, steps=[], exit_code=1, blocked=blocked)
 
     by_id = {row.id: row for row in entries}
     outcomes: list[StepOutcome] = []
+
+    def record(outcome: StepOutcome) -> StepOutcome:
+        outcomes.append(outcome)
+        if on_step is not None:
+            on_step(outcome)
+        return outcome
+
     for step in plan.steps:
         entry = by_id[step.id]
         if step.resumable and ctx.state.get(step.id) == "completed":
-            outcomes.append(StepOutcome(step.id, "skipped", "already completed"))
+            record(StepOutcome(step.id, "skipped", "already completed"))
             continue
         if entry.status in ("skip", "warn"):
-            outcomes.append(StepOutcome(step.id, "skipped", entry.detail))
+            record(StepOutcome(step.id, "skipped", entry.detail))
             continue
         if ctx.dry_run:
-            outcomes.append(StepOutcome(step.id, "planned", entry.detail))
+            record(StepOutcome(step.id, "planned", entry.detail))
             continue
         try:
             step.apply(ctx)
         except StepError as exc:
-            outcomes.append(StepOutcome(step.id, "failed", str(exc)))
+            record(StepOutcome(step.id, "failed", str(exc)))
             return InitResult(plan=entries, steps=outcomes, exit_code=1)
         except Exception as exc:  # noqa: BLE001 - report it, do not traceback
-            outcomes.append(StepOutcome(step.id, "failed", f"{type(exc).__name__}: {exc}"))
+            record(StepOutcome(step.id, "failed", f"{type(exc).__name__}: {exc}"))
             return InitResult(plan=entries, steps=outcomes, exit_code=1)
-        outcomes.append(StepOutcome(step.id, "applied", ctx.details.get(step.id, entry.detail)))
+        record(StepOutcome(step.id, "applied", ctx.details.get(step.id, entry.detail)))
         ctx.mark_completed(step.id)
 
     return InitResult(

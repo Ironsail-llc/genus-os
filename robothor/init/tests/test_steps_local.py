@@ -178,6 +178,40 @@ class TestMigrateUsesTheCanonicalMigrator:
 
         assert "--adopt-baseline 001_init" in str(exc.value)
 
+    def test_a_safety_refusal_reaches_the_operator_intact(self, tmp_path):
+        """The migrator names its own remedy; flattening it sends the operator
+        hunting a network fault that does not exist."""
+        from robothor.db.migrate import BASELINE_UNADOPTED_MESSAGE, MigrationHistoryError
+
+        def fake_migrator(*, connection: Any) -> None:
+            raise MigrationHistoryError(BASELINE_UNADOPTED_MESSAGE)
+
+        ctx = _ctx(tmp_path, db_factory=lambda: object())
+
+        with pytest.raises(StepError) as exc:
+            MigrateStep(migrator=fake_migrator).apply(ctx)
+
+        message = str(exc.value)
+        assert "--adopt-baseline" in message
+        assert "connection" not in message.lower().replace("connection settings", "")
+
+    def test_the_connection_is_closed_even_when_the_migrator_raises(self, tmp_path):
+        closed: list[str] = []
+
+        class _Connection:
+            def close(self) -> None:
+                closed.append("closed")
+
+        def fake_migrator(*, connection: Any) -> None:
+            raise RuntimeError("boom")
+
+        ctx = _ctx(tmp_path, db_factory=_Connection)
+
+        with pytest.raises(RuntimeError):
+            MigrateStep(migrator=fake_migrator).apply(ctx)
+
+        assert closed == ["closed"]
+
     def test_skip_db_skips_the_step_rather_than_failing_it(self, tmp_path):
         ctx = _ctx(tmp_path, answers={"skip_db": True})
 

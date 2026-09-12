@@ -435,9 +435,14 @@ class WorkspaceStep(BaseStep):
         return CheckResult(True, detail=f"will create {ctx.workspace}")
 
     def apply(self, ctx: InitContext) -> None:
-        from robothor.setup import create_workspace, resolve_workspace_templates
+        from robothor.setup import (
+            create_workspace,
+            resolve_workspace_templates,
+            write_workspace_pointer,
+        )
 
         create_workspace(ctx.workspace)
+        write_workspace_pointer(ctx.workspace)
         identity = ctx.answers.get("identity")
         resolve_workspace_templates(
             ctx.workspace,
