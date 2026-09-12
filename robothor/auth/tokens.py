@@ -35,6 +35,17 @@ DEFAULT_AUDIENCE = "genus-bridge"
 _HUMAN_ROLES = frozenset({"owner", "admin", "member", "user", "viewer", "auditor"})
 _TOKEN_TYPES = frozenset({"user", "service"})
 
+#: The first-run wizard's claim token. Its own audience, so that the bridge's
+#: session verifier — which requests ``genus-bridge`` explicitly — cannot
+#: accept one even if the ``typ`` check below were ever relaxed. Five minutes:
+#: long enough to fill in a form, short enough that a claim left in a closed
+#: tab is not a credential.
+SETUP_AUDIENCE = "genus-setup"
+SETUP_TOKEN_TYPE = "setup"
+SETUP_CLAIM_TTL_SECONDS = 5 * 60
+#: There is no user yet, so ``sub`` names the ceremony rather than a person.
+_SETUP_SUBJECT = "setup"
+
 _ENV_NAME = "GENUS_AUTH_SIGNING_KEY"
 _VAULT_KEY = "auth/jwt_signing_key"
 _signing_key_cache: str | None = None
@@ -228,6 +239,66 @@ def decode_token(token: str, *, expected_audience: str = DEFAULT_AUDIENCE) -> di
         return dict(claims)
     except jwt.PyJWTError as e:
         raise TokenError(str(e)) from e
+
+
+def issue_setup_claim_token(*, ttl_seconds: int = SETUP_CLAIM_TTL_SECONDS) -> str:
+    """Mint the short-lived credential the first-run wizard carries.
+
+    A THIRD token type, and it has to be: the caller holding a setup token has
+    no account yet, so there is no ``sub``, ``tid`` or ``role`` to put in a
+    session. Minting a session for a nobody — a nil user id in the default
+    tenant with the ``owner`` role, which is the shape this nearly became —
+    would hand an unauthenticated caller a real operator session on every route
+    in the appliance.
+
+    So the claim is deliberately NOT a session, and two independent things say
+    so: ``typ: "setup"``, which :func:`verify_token` rejects outright, and its
+    own audience, which :func:`decode_token` will not accept. Either alone
+    would do; both, because one of them is exactly the kind of check a later
+    refactor widens by accident.
+
+    It carries no identity and no scopes, because it authorises nothing except
+    the routes under ``/api/setup`` — and those exist only while the instance
+    has no owner account at all.
+    """
+    if ttl_seconds <= 0:
+        raise ValueError("ttl_seconds must be positive")
+    now = int(time.time())
+    claims: dict[str, Any] = {
+        "sub": _SETUP_SUBJECT,
+        "typ": SETUP_TOKEN_TYPE,
+        "aud": SETUP_AUDIENCE,
+        "iss": _ISSUER,
+        "jti": secrets.token_urlsafe(24),
+        "iat": now,
+        "exp": now + ttl_seconds,
+    }
+    return str(jwt.encode(claims, signing_key(), algorithm=ALGORITHM))
+
+
+def decode_setup_claim_token(token: str) -> dict[str, Any]:
+    """Verify a setup claim token. Raises ``TokenError`` for anything else.
+
+    The ``typ`` check is repeated here even though the audience already
+    separates the two worlds: an audience is one string comparison in a library
+    call, and this is the gate in front of routes that create the owner account.
+    """
+    if not token:
+        raise TokenError("empty token")
+    try:
+        claims = jwt.decode(
+            token,
+            signing_key(),
+            algorithms=[ALGORITHM],
+            issuer=_ISSUER,
+            audience=SETUP_AUDIENCE,
+            options={"require": ["aud", "exp", "iat", "iss", "jti", "sub", "typ"]},
+        )
+    except jwt.PyJWTError as e:
+        raise TokenError(str(e)) from e
+    if claims.get("typ") != SETUP_TOKEN_TYPE:
+        raise TokenError("not a setup claim token")
+    return dict(claims)
 
 
 def _default_scopes(typ: str, role: str) -> tuple[str, ...]:

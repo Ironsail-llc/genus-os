@@ -93,6 +93,37 @@ def get_account_by_email(tenant_id: str, email: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def owner_account_exists(tenant_id: str | None = None) -> bool:
+    """Whether this instance has an owner account at all.
+
+    The signal first-run setup is finished by. Deliberately a DATABASE
+    question: a file-backed one would let anyone who can delete a file re-open
+    the wizard on a running appliance and create the second owner.
+
+    ``tenant_id=None`` asks across every tenant, which is the question the
+    setup gate needs: an owner in ANY tenant means this box has been claimed,
+    and scoping the check to the default tenant would leave a wizard open on an
+    instance whose operator happens to live somewhere else.
+
+    Raises whatever the connection raises. The caller decides what an
+    unreachable database means, and for the setup gate it means "complete" —
+    see :func:`robothor.setup_token.setup_complete`.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        if tenant_id is None:
+            cur.execute(
+                "SELECT 1 FROM user_accounts WHERE role = 'owner' AND status = 'active' LIMIT 1"
+            )
+        else:
+            cur.execute(
+                "SELECT 1 FROM user_accounts WHERE tenant_id = %s AND role = 'owner' "
+                "AND status = 'active' LIMIT 1",
+                (tenant_id,),
+            )
+        return cur.fetchone() is not None
+
+
 def get_account_by_idp(issuer: str, subject: str) -> dict[str, Any] | None:
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)

@@ -40,7 +40,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-354 settings in 13 groups.
+355 settings in 13 groups.
 
 ## paths
 
@@ -245,6 +245,7 @@ Who may reach the bridge and the dashboard, and how that is proven.
 | `GENUS_LOCAL_LOGIN` | bool | `false` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Offer local email + password sign-in (bridge routes and the dashboard form). Off by default: a fresh instance must opt in. Owner MFA becomes mandatory when this is the only sign-in method. |
 | `GENUS_OIDC_ISSUERS` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Comma-separated OIDC issuer URLs whose tokens the bridge accepts. |
 | `GENUS_OWNER_MFA_REQUIRED` | bool | `true` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Tell an owner account with no second factor to enrol one while local login is on. Setting it false gives up the only compensating control for a public password endpoint: one argon2-verified password then becomes the entire authentication for the instance and its stored credentials, and the operator is never prompted. |
+| `GENUS_SETUP_TOKEN_TTL_SECONDS` | int | `1800` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | How long the first-run setup link printed by `genus init` stays usable. The link reaches a page that creates the owner account, so a long window turns a terminal scrollback into a standing credential; raise it only for an install someone has to walk away from. |
 | `GENUS_TRUSTED_PROXIES` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Comma-separated peer addresses or CIDR ranges allowed to assert the end user's address in X-Client-IP (the dashboard pod, a reverse proxy). Empty trusts nobody, loopback included; the real peer address is used. |
 | `ROBOTHOR_BRIDGE_HOST` | str | `127.0.0.1` | `robothor-bridge`, `robothor-app` | no | legacy | Address the bridge binds to. Anything but loopback requires real authentication to be configured. |
 | `ROBOTHOR_BRIDGE_PORT` | int | `9100` | `robothor-bridge`, `robothor-app` | no | legacy | Bridge HTTP port. |
