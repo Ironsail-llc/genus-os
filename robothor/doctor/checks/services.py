@@ -10,7 +10,7 @@ function existed.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from robothor.doctor.model import Check, Result, fail, ok
 
@@ -24,10 +24,28 @@ def _loopback(port: int) -> str:
     return f"http://127.0.0.1:{port}"
 
 
+def _engine_url(engine: Any) -> str:
+    """The engine's base URL, preferring the PORT over the default URL.
+
+    ``ROBOTHOR_ENGINE_URL`` and ``ROBOTHOR_ENGINE_PORT`` are two names for
+    overlapping facts, and they carry the same default. An operator who moves
+    the engine sets the port -- so taking the URL unconditionally would probe
+    18800 on a box serving 19000 and report a healthy engine as down. The URL
+    wins only when it has actually been changed from its default, which is the
+    case where it says something the port cannot.
+    """
+    from robothor.settings.model import EngineSettings
+
+    default_url = EngineSettings.model_fields["url"].default
+    if engine.url and engine.url != default_url:
+        return engine.url
+    return _loopback(engine.port)
+
+
 def _urls(ctx: DoctorContext) -> dict[str, str]:
     settings = ctx.settings
     return {
-        "engine": settings.engine.url or _loopback(settings.engine.port),
+        "engine": _engine_url(settings.engine),
         "bridge": _loopback(settings.auth.bridge_port),
         "orchestrator": _loopback(settings.services.orchestrator_port),
         "vision": _loopback(settings.services.vision_port),
