@@ -748,12 +748,20 @@ def _print_setup_link(workspace: Path) -> None:
     # published, if at all, through a tunnel. Printing a guessed public
     # hostname would hand the operator a URL that does not resolve and a token
     # that has already started expiring.
+    #
+    # It is therefore ALWAYS a loopback address, so the port-forward hint turns
+    # on the one condition that can actually vary — whether a human with a
+    # browser is at this machine. An earlier version also tested
+    # `is_loopback_host(host)` here, which could never be false and read as if
+    # two cases were covered when only one was.
     host = "127.0.0.1"
-    print("  Open the setup wizard (the link works once, for 30 minutes):")
+    minutes = max(1, setup_token.configured_ttl_seconds() // 60)
+    print(f"  Open the setup wizard (the link works once, for {minutes} minutes):")
     print(f"    {setup_token.setup_link(host, port, token)}")
-    if not _stdin_is_a_terminal() or not setup_token.is_loopback_host(host):
-        # No browser on this box, or the address is not one the operator's own
-        # browser can reach. Forward the port rather than exposing it.
+    if not _stdin_is_a_terminal():
+        # Nobody is watching this terminal — a container, a provisioning script
+        # — so the address above is loopback on a machine the operator is not
+        # sitting at. Forward the port rather than exposing it.
         print("    Not at this machine? Forward the port first:")
         print(f"      {setup_token.port_forward_hint(socket.getfqdn(), port)}")
     print()

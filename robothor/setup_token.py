@@ -23,12 +23,20 @@ not answer "has anyone run init here?" either.
 window and one use: a token that lives in a terminal scrollback forever is a
 permanent back door into the appliance.
 
-**Completion is a DATABASE fact.** :func:`setup_complete` asks whether an
-owner account exists. It deliberately does not look at this file: a
-file-backed completion signal is a first-run wizard that anyone who can delete
-a file can re-open on a running instance, and re-opening it means a stranger
-creating the second owner account. An unreadable database reads as *complete*,
-because "nobody knows" must not publish a public write surface.
+**Two questions, not one.** :func:`setup_complete` asks the DATABASE whether an
+owner account exists; it deliberately does not look at any file, because a
+file-backed signal is a first-run wizard that anyone who can delete a file can
+re-open, and re-opening it means a stranger creating the second owner account.
+An unreadable database reads as *complete*, because "nobody knows" must not
+publish a public write surface.
+
+But that answer becomes true in the MIDDLE of the ceremony — the operator step
+is what creates the owner row — so it cannot also be what closes the wizard's
+later steps. :func:`setup_recorded` is that second question: a
+``setup_completed_at`` marker written by the last step. ``claim`` and
+``operator`` gate on the database (they must not run twice); everything after
+them gates on the marker, and needs a claim that only the database gate could
+have issued. The marker is additive, never a replacement.
 
 The file lives at ``<workspace>/.robothor/setup_token.yaml``. That is the
 workspace's private directory, not ``~/.robothor`` — the operator identity
@@ -55,12 +63,15 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_TTL_SECONDS",
+    "SETUP_COMPLETED_KEY",
     "configured_ttl_seconds",
     "consume_setup_token",
     "create_setup_token",
     "is_loopback_host",
     "port_forward_hint",
+    "record_setup_completed",
     "setup_complete",
+    "setup_recorded",
     "setup_link",
     "token_path",
     "verify_setup_token",
@@ -80,6 +91,12 @@ _TOKEN_BYTES = 32
 
 _CONFIG_DIRNAME = ".robothor"
 _TOKEN_FILENAME = "setup_token.yaml"
+_CONFIG_FILENAME = "config.yaml"
+
+#: Top-level key in config.yaml recording that the wizard finished. Top level,
+#: not inside ``settings:``, because that block is validated against the
+#: settings registry and an undeclared key in it is rejected under strict mode.
+SETUP_COMPLETED_KEY = "setup_completed_at"
 
 #: Mode for the token file and for the directory holding it. Anything wider is
 #: a credential every local account can read.
@@ -211,6 +228,66 @@ def setup_complete(workspace: Path | str | None = None) -> bool:
             exc_info=True,
         )
         return True
+
+
+def setup_recorded(workspace: Path | str) -> bool:
+    """Whether the wizard has recorded that it FINISHED.
+
+    A different question from :func:`setup_complete`, and keeping them apart is
+    the whole reason this function exists. "Has this instance got an owner?"
+    becomes true in the MIDDLE of the ceremony — the operator step creates that
+    row — so gating the wizard's later steps on it makes the wizard kill itself
+    at step 2: the provider, channel, agent and complete routes all vanish, the
+    browser holding a live claim sees 404 on every call, and
+    ``setup_completed_at`` is never written on any real install.
+
+    So the later steps close on THIS instead: a ``setup_completed_at`` key at
+    the top level of ``config.yaml``, written by ``POST /api/setup/complete``.
+
+    That is only safe because it is additive, never a replacement. ``claim`` and
+    ``operator`` stay gated on :func:`setup_complete` — the database — so an
+    attacker who deletes ``config.yaml`` to clear this marker cannot mint a new
+    claim on an instance that has an owner, and the routes below it require one.
+
+    An unreadable or unparseable file reads as RECORDED, i.e. closed. Missing is
+    not unreadable: a file that is simply not there yet is the fresh-install
+    case and reads as "still in setup".
+    """
+    path = _config_path(workspace)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    except OSError:
+        logger.warning("setup_token: %s could not be read; treating setup as finished", path)
+        return True
+    try:
+        document = yaml.safe_load(text)
+    except yaml.YAMLError:
+        logger.warning("setup_token: %s does not parse; treating setup as finished", path)
+        return True
+    if not isinstance(document, dict):
+        return True
+    return bool(document.get(SETUP_COMPLETED_KEY))
+
+
+def record_setup_completed(workspace: Path | str) -> str:
+    """Write ``setup_completed_at`` and return the stamp.
+
+    Top level of ``config.yaml``, deliberately NOT inside ``settings:``: that
+    block is validated against the registry, and under
+    ``config_strict_mode: enforce`` an undeclared key in it is rejected by name
+    — a marker there would stop a freshly completed instance from starting.
+    """
+    from robothor.settings.config_file import write_top_level
+
+    stamp = _stamp(datetime.now(UTC))
+    write_top_level(SETUP_COMPLETED_KEY, stamp, path=_config_path(workspace))
+    return stamp
+
+
+def _config_path(workspace: Path | str) -> Path:
+    return Path(workspace) / _CONFIG_DIRNAME / _CONFIG_FILENAME
 
 
 def setup_link(host: str, port: int, token: str) -> str:

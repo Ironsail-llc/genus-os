@@ -97,6 +97,26 @@ class TestInitPrintsTheLink:
         out = capsys.readouterr().out
         assert "ssh -L 3004:127.0.0.1:3004" in out
 
+    def test_the_printed_window_is_the_configured_one(self, tmp_path, capsys, monkeypatch):
+        """The sentence used to say "30 minutes" while the TTL was a declared
+        setting, so an operator who raised it was told the wrong number."""
+        import robothor.setup as setup_mod
+
+        monkeypatch.setattr(setup_mod.httpx, "get", MagicMock(side_effect=Exception("no network")))
+        monkeypatch.setenv("GENUS_SETUP_TOKEN_TTL_SECONDS", "7200")
+        from robothor.settings import reset_settings
+
+        reset_settings()
+        workspace = tmp_path / "robothor"
+        args = SimpleNamespace(
+            yes=True, docker=False, skip_models=True, skip_db=True, workspace=str(workspace)
+        )
+
+        setup_mod.run_init(args)
+
+        assert "for 120 minutes" in capsys.readouterr().out
+        reset_settings()
+
     def test_a_failed_token_mint_does_not_fail_init(self, tmp_path, capsys, monkeypatch):
         """An unwritable workspace is a problem the operator should hear about,
         not a reason to lose a completed install."""

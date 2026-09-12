@@ -5,9 +5,11 @@ agents, and they answer a caller with no session at all — because on a fresh
 box there is nobody to have one. Everything here is about the three walls that
 make that safe:
 
-1. **They exist only before there is an owner.** ``setup_complete()`` asks the
-   DATABASE, and the moment it says yes every route in this router answers 404
-   — status included. A completed appliance has no first-run surface to find.
+1. **They exist only during first run**, and that is two predicates, not one.
+   ``status``/``claim``/``operator`` close on an owner row in the DATABASE;
+   everything after them closes on the ``setup_completed_at`` marker the last
+   step writes. They have to differ, because the operator step is what creates
+   the owner row — see ``TestTheWholeCeremony``.
 2. **A setup token, then a claim token.** The token was printed once by
    ``genus init``; it buys a five-minute claim, and the claim is what every
    other route requires. A session token is not a claim and a claim is not a
@@ -17,9 +19,12 @@ make that safe:
    and no log line — asserted by walking every response for the fixture
    values.
 
-The parametrised 404 test at the bottom is the one that must never be deleted:
-it enumerates the router's own routes off the app, so a route added later
-without the gate fails it.
+Two tests must never be deleted. ``test_enumerates_every_route_the_router_actually_has``
+reads the router's routes off the app, so a route added later without coverage
+fails. And ``TestTheWholeCeremony`` is the only test that crosses the
+owner-creation boundary with nothing pinned: every other test here patches
+``owner_account_exists`` to a constant, which is exactly how a gate that killed
+the wizard at step 2 shipped green.
 """
 
 from __future__ import annotations
@@ -93,11 +98,15 @@ def printed_token(workspace) -> str:
 
 @pytest.fixture(autouse=True)
 def _fresh_limiter():
+    import routers.setup as setup_router
+
     from robothor.auth import local_login
 
     local_login.reset_rate_limiter()
+    setup_router.reset_step_state_cache()
     yield
     local_login.reset_rate_limiter()
+    setup_router.reset_step_state_cache()
 
 
 @pytest.fixture
@@ -141,6 +150,31 @@ class TestStatus:
     async def test_needs_no_claim_token(self, test_client, incomplete, workspace):
         """proxy.ts polls this before anyone has anything."""
         assert (await test_client.get("/api/setup/status")).status_code == 200
+
+    async def test_the_work_behind_it_is_memoised(
+        self, test_client, incomplete, workspace, monkeypatch
+    ):
+        """Public and polled, and answering honestly costs vault reads and a
+        directory glob. Free amplification on the one unauthenticated surface a
+        fresh box exposes, so the ceiling belongs on the bridge as well as on
+        the dashboard."""
+        import routers.setup as setup_router
+
+        calls = 0
+
+        def counted() -> bool:
+            nonlocal calls
+            calls += 1
+            return False
+
+        monkeypatch.setattr(setup_router, "_any_provider_configured", counted)
+        monkeypatch.setattr(setup_router, "_telegram_configured", lambda: False)
+        monkeypatch.setattr(setup_router, "_any_agent_installed", lambda: False)
+
+        for _ in range(5):
+            assert (await test_client.get("/api/setup/status")).status_code == 200
+
+        assert calls == 1, f"five polls did {calls} rounds of work"
 
 
 # ── claim ────────────────────────────────────────────────────────────
@@ -227,6 +261,42 @@ class TestClaim:
 
         assert response.status_code in (400, 401)
         _assert_no_secret(response.json())
+
+    async def test_no_signing_key_is_a_503_naming_the_remedy(
+        self, test_client, incomplete, workspace, printed_token, monkeypatch
+    ):
+        """`GENUS_AUTH_SIGNING_KEY` unset and the vault not yet initialised is a
+        REAL state on the box this route exists to serve — it is where a fresh
+        install sits before `genus vault init`. Unhandled it was a 500 and a
+        traceback on the one route that has to work on a fresh box."""
+        from robothor.auth import tokens
+
+        def refuse(*_args, **_kwargs):
+            raise tokens.TokenError("no signing key: GENUS_AUTH_SIGNING_KEY is unset")
+
+        monkeypatch.setattr(tokens, "issue_setup_claim_token", refuse)
+
+        response = await test_client.post("/api/setup/claim", json={"token": printed_token})
+
+        assert response.status_code == 503
+        assert "genus vault init" in response.json()["detail"]
+
+    async def test_a_missing_signing_key_never_falls_back_to_an_ephemeral_one(
+        self, test_client, incomplete, workspace, printed_token, monkeypatch
+    ):
+        """A generated-but-unstored key would mint claims that stop verifying at
+        the next restart, under a key nobody kept."""
+        from robothor.auth import tokens
+
+        monkeypatch.setattr(
+            tokens,
+            "issue_setup_claim_token",
+            lambda *a, **k: (_ for _ in ()).throw(tokens.TokenError("no key")),
+        )
+
+        response = await test_client.post("/api/setup/claim", json={"token": printed_token})
+
+        assert "claim_token" not in response.json()
 
     async def test_the_claim_route_does_not_consume_the_setup_token(
         self, test_client, incomplete, signing_key, printed_token, workspace
@@ -998,13 +1068,212 @@ class TestComplete:
         assert "setup_completed_at" not in (document.get("settings") or {})
 
 
+# ── the whole ceremony, end to end, with nothing pinned ──────────────
+
+
+class TestTheWholeCeremony:
+    """The one test that drives every route across the owner-creation boundary.
+
+    Every other test in this file pins ``owner_account_exists`` to a constant,
+    and that is exactly how the original gate shipped broken: the operator step
+    CREATES the owner row, so a gate that closed on "an owner exists" turned
+    ``detect``, ``provider``, ``channel``, ``agent`` and ``complete`` into 404s
+    from step 3 onward — with no state in which ``POST /api/setup/complete``
+    could return 200 — and every test stayed green because none of them crossed
+    that boundary.
+
+    So: a STATEFUL account store, no patched gate, and the same sequence a
+    browser performs.
+    """
+
+    async def test_claim_to_complete_then_everything_closes(
+        self,
+        test_client,
+        signing_key,
+        workspace,
+        printed_token,
+        fake_login,
+        owner_home,
+        monkeypatch,
+    ):
+        accounts = FakeAccounts()
+        monkeypatch.setattr(
+            "robothor.auth.accounts.owner_account_exists", accounts.owner_account_exists
+        )
+        monkeypatch.setattr(
+            "robothor.auth.accounts.bootstrap_owner_account", accounts.bootstrap_owner_account
+        )
+        monkeypatch.setattr(
+            "robothor.auth.accounts.get_account_by_email", accounts.get_account_by_email
+        )
+
+        import routers.setup as setup_router
+
+        async def store_key(provider_id, api_key):
+            return None
+
+        async def store_model(model):
+            return None
+
+        async def test_connection(provider_id, model):
+            return 200, {"ok": True, "model": model, "latency_ms": 7, "error_class": None}
+
+        async def verify_bot(token):
+            return True, "genus_test_bot"
+
+        async def store_bot(token):
+            return None
+
+        monkeypatch.setattr(setup_router, "_store_provider_key", store_key)
+        monkeypatch.setattr(setup_router, "_store_default_model", store_model)
+        monkeypatch.setattr(setup_router, "_test_provider", test_connection)
+        monkeypatch.setattr(setup_router, "_verify_telegram_token", verify_bot)
+        monkeypatch.setattr(setup_router, "_store_telegram_token", store_bot)
+        monkeypatch.setattr(setup_router, "_provider_state", list)
+        monkeypatch.setattr(
+            setup_router, "_ollama_state", lambda: {"reachable": False, "tool_models": []}
+        )
+        monkeypatch.setattr(setup_router, "_telegram_configured", lambda: False)
+        monkeypatch.setattr(setup_router, "_any_agent_installed", lambda: False)
+        monkeypatch.setattr(setup_router, "_required_check_rows", list)
+
+        async def catalog():
+            return []
+
+        monkeypatch.setattr(setup_router, "_model_catalog", catalog)
+        monkeypatch.setattr(
+            setup_router,
+            "install_preset",
+            lambda preset, **kwargs: {
+                "unknown_preset": False,
+                "available": ["standard"],
+                "requested": 1,
+                "installed": ["main"],
+                "failed": {},
+                "missing": [],
+            },
+        )
+
+        # 1. status is open, 2. the printed token buys a claim.
+        assert (await test_client.get("/api/setup/status")).status_code == 200
+        claimed = await test_client.post("/api/setup/claim", json={"token": printed_token})
+        assert claimed.status_code == 200
+        claim_token = claimed.json()["claim_token"]
+        headers = _auth(claim_token)
+
+        # 3. the operator step — and from here the owner row exists.
+        operator = await test_client.post(
+            "/api/setup/operator", json=_operator_body(), headers=headers
+        )
+        assert operator.status_code == 200, operator.text
+        assert accounts.owner is not None
+
+        # 4. everything after it must still answer the claim it just issued.
+        assert (await test_client.get("/api/setup/detect", headers=headers)).status_code == 200
+        provider = await test_client.post(
+            "/api/setup/provider",
+            json={
+                "provider_id": "openrouter",
+                "api_key": FIXTURE_API_KEY,
+                "default_model": "openrouter/openai/gpt-5.4",
+            },
+            headers=headers,
+        )
+        assert provider.status_code == 200, provider.text
+        assert provider.json()["ok"] is True
+        channel = await test_client.post(
+            "/api/setup/channel",
+            json={"telegram_bot_token": FIXTURE_BOT_TOKEN},
+            headers=headers,
+        )
+        assert channel.status_code == 200, channel.text
+        agent = await test_client.post(
+            "/api/setup/agent", json={"preset": "standard"}, headers=headers
+        )
+        assert agent.status_code == 200, agent.text
+
+        # 5. complete has a reachable 200, and it writes the marker.
+        finished = await test_client.post("/api/setup/complete", headers=headers)
+        assert finished.status_code == 200, finished.text
+        assert finished.json()["next"] == "/?v=chat"
+
+        import yaml
+
+        document = yaml.safe_load((workspace / ".robothor" / "config.yaml").read_text())
+        assert document["setup_completed_at"].endswith("Z")
+        assert setup_token_module().setup_recorded(workspace) is True
+
+        # 6. and now every route is gone, to the same claim.
+        for method, path in SETUP_ROUTES:
+            response = await test_client.request(method, path, json={}, headers=headers)
+            assert response.status_code == 404, f"{method} {path} answered {response.status_code}"
+
+    async def test_the_operator_step_does_not_close_the_later_steps(
+        self,
+        test_client,
+        signing_key,
+        workspace,
+        printed_token,
+        fake_login,
+        owner_home,
+        monkeypatch,
+    ):
+        """The regression itself, stated as a property: an owner row alone must
+        not 404 the routes that come after the step which creates it."""
+        accounts = FakeAccounts()
+        monkeypatch.setattr(
+            "robothor.auth.accounts.owner_account_exists", accounts.owner_account_exists
+        )
+        accounts.owner = {"id": "x", "tenant_id": "default", "email": OPERATOR_EMAIL}
+
+        import routers.setup as setup_router
+
+        monkeypatch.setattr(setup_router, "_required_check_rows", list)
+        claim_token = __import__("robothor.auth.tokens", fromlist=["x"]).issue_setup_claim_token()
+
+        # An owner exists and nothing is recorded: mid-ceremony.
+        assert setup_token_module().setup_recorded(workspace) is False
+        response = await test_client.post("/api/setup/complete", headers=_auth(claim_token))
+
+        assert response.status_code == 200
+
+    async def test_a_claim_cannot_be_minted_once_an_owner_exists(
+        self, test_client, signing_key, workspace, printed_token, monkeypatch
+    ):
+        """What makes the weaker post-operator gate safe. Deleting config.yaml
+        to clear the marker re-opens nothing, because the credential those
+        routes require can no longer be obtained."""
+        monkeypatch.setattr("robothor.auth.accounts.owner_account_exists", lambda *a, **k: True)
+
+        response = await test_client.post("/api/setup/claim", json={"token": printed_token})
+
+        assert response.status_code == 404
+
+
+def setup_token_module():
+    from robothor import setup_token
+
+    return setup_token
+
+
 # ── the gate: every route disappears once an owner exists ────────────
 
 
 class TestTheRouterDisappears:
     @pytest.fixture
-    def complete(self, monkeypatch):
+    def complete(self, monkeypatch, workspace):
+        """A FINISHED instance: an owner row and a recorded completion.
+
+        Both, because the two gates are deliberately different predicates —
+        ``status``/``claim``/``operator`` close on the database, the rest on the
+        marker the last step writes. A fixture that set only one of them would
+        be asserting a mid-ceremony state, which is what the original version of
+        this suite did and why it could not see the wizard dying at step 2.
+        """
         monkeypatch.setattr("robothor.auth.accounts.owner_account_exists", lambda *a, **k: True)
+        from robothor import setup_token
+
+        setup_token.record_setup_completed(workspace)
 
     @pytest.mark.parametrize(("method", "path"), SETUP_ROUTES)
     async def test_every_route_404s_once_setup_is_complete(
@@ -1026,22 +1295,40 @@ class TestTheRouterDisappears:
         path,
         monkeypatch,
     ):
-        """The claim outlives the token by five minutes, so the gate has to be
-        checked on every request rather than once at claim time."""
+        """The claim outlives the token by five minutes, so both gates have to
+        be checked on every request rather than once at claim time."""
         response = await test_client.post("/api/setup/claim", json={"token": printed_token})
         claim_token = response.json()["claim_token"]
 
         monkeypatch.setattr("robothor.auth.accounts.owner_account_exists", lambda *a, **k: True)
+        from robothor import setup_token
+
+        setup_token.record_setup_completed(workspace)
         after = await test_client.request(method, path, json={}, headers=_auth(claim_token))
 
         assert after.status_code == 404
 
-    async def test_the_gate_is_the_database_not_the_token_file(
+    async def test_the_first_gate_is_the_database_not_the_token_file(
+        self, test_client, signing_key, workspace, printed_token, monkeypatch
+    ):
+        """An owner row closes status/claim/operator on its own — no marker, and
+        no file an attacker could delete to re-open them."""
+        monkeypatch.setattr("robothor.auth.accounts.owner_account_exists", lambda *a, **k: True)
+
+        assert (await test_client.get("/api/setup/status")).status_code == 404
+        assert (
+            await test_client.post("/api/setup/claim", json={"token": printed_token})
+        ).status_code == 404
+
+    async def test_deleting_config_yaml_does_not_re_open_the_later_steps(
         self, test_client, complete, signing_key, workspace, printed_token
     ):
-        """Deleting the token file must not reopen anything, and neither must
-        writing a fresh one."""
-        response = await test_client.get("/api/setup/status")
+        """The marker gate is weaker than the database one, and this is why that
+        is safe: clearing the marker cannot produce the claim those routes
+        require, because the route that mints one is database-gated."""
+        (workspace / ".robothor" / "config.yaml").unlink()
+
+        response = await test_client.post("/api/setup/claim", json={"token": printed_token})
 
         assert response.status_code == 404
 
@@ -1083,6 +1370,68 @@ class TestNotProxiedWithASession:
 
 
 # ── middleware ───────────────────────────────────────────────────────
+
+
+class TestBodySizeIsBounded:
+    """The cap has to stop the READ, not measure what was already allocated.
+
+    `await request.body()` concatenates the whole stream first, so an 8 KiB
+    ceiling applied afterwards is no ceiling: a caller holding a claim could
+    make the bridge allocate an arbitrary body, and a chunked request declares
+    no Content-Length for any front to refuse it by.
+    """
+
+    @pytest.mark.parametrize(
+        "path", ["/api/setup/provider", "/api/setup/channel", "/api/setup/agent"]
+    )
+    async def test_an_oversized_body_is_refused(self, test_client, claim, workspace, path):
+        from robothor.auth.local_login import MAX_CREDENTIAL_BODY_BYTES
+
+        oversized = json.dumps({"provider_id": "x" * (MAX_CREDENTIAL_BODY_BYTES + 1024)})
+
+        response = await test_client.post(
+            path,
+            content=oversized,
+            headers={**_auth(claim), "Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 413
+
+    async def test_the_read_stops_before_the_whole_body_arrives(
+        self, test_client, claim, workspace
+    ):
+        """Counted at the stream, so a regression to `request.body()` fails here
+        rather than passing on a body it had already buffered."""
+        from robothor.auth.local_login import MAX_CREDENTIAL_BODY_BYTES
+
+        chunk = b"a" * 4096
+        chunks_sent = 0
+
+        async def body():
+            nonlocal chunks_sent
+            # Four times the cap, in 4 KiB pieces.
+            for _ in range((MAX_CREDENTIAL_BODY_BYTES * 4) // len(chunk)):
+                chunks_sent += 1
+                yield chunk
+
+        response = await test_client.post(
+            "/api/setup/provider",
+            content=body(),
+            headers={**_auth(claim), "Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 413
+        # 8 KiB cap, 4 KiB chunks: the read stops on the chunk that crosses it.
+        assert chunks_sent <= (MAX_CREDENTIAL_BODY_BYTES // len(chunk)) + 1, (
+            f"read {chunks_sent} chunks; the cap did not stop the stream"
+        )
+
+    async def test_a_body_within_the_cap_still_works(self, test_client, claim, workspace):
+        response = await test_client.post(
+            "/api/setup/channel", json={"telegram_bot_token": ""}, headers=_auth(claim)
+        )
+
+        assert response.status_code == 200
 
 
 class TestValidationErrorsDoNotEcho:

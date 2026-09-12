@@ -222,6 +222,73 @@ class TestSetupComplete:
             assert setup_token.setup_complete(workspace) is True
 
 
+class TestSetupRecorded:
+    """The SECOND question, and the reason there are two.
+
+    ``setup_complete`` turns true halfway through the ceremony — the operator
+    step creates the owner row — so it cannot also be what closes the wizard's
+    later steps. Gating them on it shipped a wizard that killed itself at step
+    2, with no state in which ``POST /api/setup/complete`` could succeed.
+    """
+
+    def test_false_before_anything_is_recorded(self, workspace: Path) -> None:
+        assert setup_token.setup_recorded(workspace) is False
+
+    def test_true_after_recording(self, workspace: Path) -> None:
+        stamp = setup_token.record_setup_completed(workspace)
+
+        assert stamp.endswith("Z")
+        assert setup_token.setup_recorded(workspace) is True
+
+    def test_the_marker_is_at_the_top_level_not_in_settings(self, workspace: Path) -> None:
+        """``settings:`` is validated against the registry, and an undeclared
+        key there is rejected under strict mode — a marker in it would stop a
+        freshly completed instance from starting."""
+        setup_token.record_setup_completed(workspace)
+
+        document = yaml.safe_load(
+            (workspace / ".robothor" / "config.yaml").read_text(encoding="utf-8")
+        )
+        assert document[setup_token.SETUP_COMPLETED_KEY].endswith("Z")
+        assert setup_token.SETUP_COMPLETED_KEY not in (document.get("settings") or {})
+
+    def test_recording_preserves_an_existing_config(self, workspace: Path) -> None:
+        path = workspace / ".robothor" / "config.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "# hand-written\nsettings:\n  auth:\n    local_login: true\n", encoding="utf-8"
+        )
+
+        setup_token.record_setup_completed(workspace)
+
+        text = path.read_text(encoding="utf-8")
+        assert "# hand-written" in text
+        assert "local_login: true" in text
+        assert setup_token.setup_recorded(workspace) is True
+
+    def test_an_unparseable_config_reads_as_recorded(self, workspace: Path) -> None:
+        """Fail closed. "Nobody knows" must not re-open a public write surface."""
+        path = workspace / ".robothor" / "config.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("this: [is not: valid", encoding="utf-8")
+
+        assert setup_token.setup_recorded(workspace) is True
+
+    def test_a_missing_file_is_not_an_unreadable_one(self, workspace: Path) -> None:
+        """A config.yaml that simply does not exist yet is the fresh-install
+        case, and must read as "still in setup" rather than as broken."""
+        assert not (workspace / ".robothor" / "config.yaml").exists()
+
+        assert setup_token.setup_recorded(workspace) is False
+
+    def test_it_is_independent_of_the_database_answer(self, workspace: Path) -> None:
+        """The two predicates must be able to disagree — that mid-ceremony
+        state (an owner, nothing recorded) is the whole point."""
+        with patch("robothor.auth.accounts.owner_account_exists", return_value=True):
+            assert setup_token.setup_complete(workspace) is True
+            assert setup_token.setup_recorded(workspace) is False
+
+
 class TestSetupLink:
     def test_builds_the_url_the_operator_opens(self) -> None:
         link = setup_token.setup_link("127.0.0.1", 3004, FIXTURE_TOKEN)

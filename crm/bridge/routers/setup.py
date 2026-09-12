@@ -8,11 +8,23 @@ looking at a sign-in page with no buttons on it, reaching for
 
 So this router is a narrow, temporary exception, and three walls make it safe.
 
-**It exists only before there is an owner.** Every handler calls
-:func:`_gate`, which asks ``setup_complete()`` — an ``owner`` row in the
-DATABASE, never a file — and answers 404 the moment there is one. The status
-route included: a completed appliance has no first-run surface to find, and a
-404 is also the honest answer to "is there a wizard here?".
+**It exists only during first run** — and that is TWO questions, not one,
+because the wizard itself changes the answer to the first halfway through.
+
+``status``, ``claim`` and ``operator`` gate on :func:`_gate`, which asks
+``setup_complete()`` — an ``owner`` row in the DATABASE, never a file — and
+answers 404 the moment there is one. Those three must not run twice: a claimed
+appliance has no first run to start, no link to redeem and no second owner to
+create, and it should not confirm that this API ever existed here.
+
+Everything after the operator step gates on :func:`_ceremony_gate`, the
+``setup_completed_at`` marker the last step writes. It has to: the operator
+step CREATES the owner row, so gating those routes on the database made the
+wizard kill itself at step 2 — provider, channel, agent and complete all 404'd
+to a browser holding a live claim, and the marker was never written on any real
+install. The weaker predicate is safe only because it is additive: every route
+under it needs a claim, and a claim can only be minted by the route that IS
+database-gated, spending the single-use token ``genus init`` printed.
 
 **Two credentials, not one.** The token ``genus init`` printed buys a
 five-minute claim token; the claim is what every other route requires. A
@@ -39,9 +51,10 @@ import asyncio
 import logging
 import re
 import threading
-from datetime import UTC, datetime
 from pathlib import Path  # noqa: TC003 - a runtime return annotation
+from time import monotonic
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -58,12 +71,27 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["setup"])
 
-#: One message for every refusal on the claim route. "Wrong token", "expired",
-#: "already used" and "nobody ever ran init here" are four different facts
-#: about this box, and an unauthenticated caller is entitled to none of them.
-_CLAIM_REFUSED = JSONResponse({"error": "invalid or expired token"}, status_code=401)
-_THROTTLED = JSONResponse({"error": "too many attempts"}, status_code=429)
-_BAD_REQUEST = JSONResponse({"error": "invalid request"}, status_code=400)
+# One message for every refusal on the claim route. "Wrong token", "expired",
+# "already used" and "nobody ever ran init here" are four different facts about
+# this box, and an unauthenticated caller is entitled to none of them.
+#
+# Built per call rather than held as module singletons: a Response is a mutable
+# object, and handing the same instance to concurrent requests on the
+# appliance's most-sprayed route is the kind of sharing that is harmless right
+# up until something downstream sets a header on it.
+
+
+def _claim_refused() -> JSONResponse:
+    return JSONResponse({"error": "invalid or expired token"}, status_code=401)
+
+
+def _throttled() -> JSONResponse:
+    return JSONResponse({"error": "too many attempts"}, status_code=429)
+
+
+def _bad_request() -> JSONResponse:
+    return JSONResponse({"error": "invalid request"}, status_code=400)
+
 
 #: The limiter bucket for claim attempts. Namespaced so it can never share a
 #: window with a sign-in for the same address.
@@ -103,17 +131,48 @@ def workspace() -> Path:
 
 
 def _gate() -> None:
-    """404 every route once this instance has an owner account.
+    """404 ``status``, ``claim`` and ``operator`` once this instance is claimed.
 
-    A dependency rather than a line in each handler so that a route added later
-    cannot forget it — and ``test_enumerates_every_route_the_router_actually_has``
-    fails if one is added without coverage.
+    These three are the routes that must not run a SECOND time: an instance
+    with an owner has no first-run to start, no link to redeem and no second
+    owner to create. The predicate is the database — an owner row — so deleting
+    a file cannot re-open them.
 
-    404 rather than 403: a completed appliance should not confirm that a
-    first-run API ever existed at this path. ``setup_complete`` fails CLOSED on
-    an unreachable database for the same reason.
+    404 rather than 403: a claimed appliance should not confirm that a first-run
+    API ever existed at this path. ``setup_complete`` fails CLOSED on an
+    unreachable database for the same reason.
+
+    NOT used on the routes after the operator step. That was the original
+    version and it killed the wizard at step 2: the operator step creates the
+    owner row, so from the next request on, ``detect``, ``provider``,
+    ``channel``, ``agent`` and ``complete`` all answered 404 to a browser
+    holding a live claim, the provider step (which has no Skip) showed "that key
+    did not work" forever, and ``setup_completed_at`` was never written on any
+    real install. See :func:`_ceremony_gate`.
     """
     if setup_complete():
+        raise HTTPException(status_code=404, detail="not found")
+
+
+def _ceremony_gate() -> None:
+    """404 the post-operator routes once the wizard has RECORDED that it
+    finished.
+
+    The distinction from :func:`_gate` is the whole of the C1 fix. "Has an
+    owner" turns true halfway through the ceremony; "has recorded completion"
+    turns true at the end of it, written by ``POST /api/setup/complete``.
+
+    This is a weaker predicate on its own, and it is only safe because it is
+    additive. Every route below requires a setup CLAIM, and a claim can only be
+    minted by ``POST /api/setup/claim`` — which IS gated on the database, and
+    which spends the single-use token ``genus init`` printed. So on an instance
+    with an owner, nobody can obtain a new claim at all; the only claim that can
+    reach these routes is one minted moments earlier by the operator running the
+    wizard, and it expires five minutes later. Deleting ``config.yaml`` to clear
+    the marker therefore re-opens nothing: there is no way to get the credential
+    these routes require.
+    """
+    if setup_token.setup_recorded(workspace()):
         raise HTTPException(status_code=404, detail="not found")
 
 
@@ -144,7 +203,12 @@ def _claim_context(request: Request) -> dict[str, Any]:
     return claims
 
 
+#: The database gate: "this instance has an owner, so first run is over".
+#: ``status``, ``claim`` and ``operator`` only.
 Gate = Annotated[None, Depends(_gate)]
+#: The ceremony gate: "the wizard recorded that it finished". Everything after
+#: the operator step, each of which also requires a claim.
+Ceremony = Annotated[None, Depends(_ceremony_gate)]
 Claim = Annotated["dict[str, Any]", Depends(_claim_context)]
 
 
@@ -168,14 +232,45 @@ async def setup_status(request: Request, _gated: Gate) -> dict[str, Any]:
     return {"complete": False, "steps": steps}
 
 
+#: How long a computed step state is reused. This route is PUBLIC and polled,
+#: and answering it honestly costs vault reads (`provider_slots`) and a
+#: directory glob — cheap per call, free amplification in bulk, on the one
+#: unauthenticated surface a fresh box exposes. The dashboard memoises for 5 s
+#: on its side, but the bridge port is reachable directly, so the ceiling
+#: belongs here too. Two seconds is well inside a wizard step.
+_STEP_STATE_TTL_S = 2.0
+_step_state_cache: tuple[float, dict[str, bool]] | None = None
+_step_state_lock = threading.Lock()
+
+
+def reset_step_state_cache() -> None:
+    """Forget the memoised step state. For tests."""
+    global _step_state_cache  # noqa: PLW0603
+    with _step_state_lock:
+        _step_state_cache = None
+
+
 def _step_state() -> dict[str, bool]:
-    """Which wizard steps are already satisfied on this box. Booleans only."""
-    return {
-        "operator": False,  # reaching this route at all means there is no owner
-        "provider": _any_provider_configured(),
-        "channel": _telegram_configured(),
-        "agents": _any_agent_installed(),
-    }
+    """Which wizard steps are already satisfied on this box. Booleans only.
+
+    Memoised behind a lock for the same two reasons the doctor route is: the
+    memo bounds how often the work happens, the lock bounds how many happen at
+    once, and this is the route an unauthenticated caller can poll.
+    """
+    global _step_state_cache  # noqa: PLW0603
+
+    with _step_state_lock:
+        cached = _step_state_cache
+        if cached is not None and monotonic() - cached[0] < _STEP_STATE_TTL_S:
+            return cached[1]
+        state = {
+            "operator": False,  # reaching this route at all means there is no owner
+            "provider": _any_provider_configured(),
+            "channel": _telegram_configured(),
+            "agents": _any_agent_installed(),
+        }
+        _step_state_cache = (monotonic(), state)
+        return state
 
 
 # ── claim ────────────────────────────────────────────────────────────
@@ -205,31 +300,54 @@ def claim_setup(body: _ClaimBody, request: Request, _gated: Gate) -> Any:
     from routers.auth import _client_ip, _peer_ip
 
     if local_login.flood_limited(_peer_ip(request)):
-        return _THROTTLED
+        return _throttled()
     if local_login.throttled(_CLAIM_BUCKET, _client_ip(request)):
-        return _THROTTLED
+        return _throttled()
     if isinstance(body, BodyTooLarge) or not isinstance(body, dict):
-        return _BAD_REQUEST
+        return _bad_request()
 
     token = body.get("token") or ""
     if not setup_token.verify_setup_token(workspace(), token):
         # Not audited per refusal: this route is public, so a row per failure
         # turns a spray into a log amplifier. The limiter above bounds it.
-        return _CLAIM_REFUSED
+        return _claim_refused()
+
+    try:
+        claim = tokens.issue_setup_claim_token()
+    except TokenError as exc:
+        # No signing key. This is a REAL state on the box this route exists to
+        # serve: GENUS_AUTH_SIGNING_KEY unset and the vault not yet initialised
+        # is exactly where a fresh install sits before `genus vault init`, and
+        # `signing_key()` refuses rather than generating one it cannot store.
+        # Unhandled it was a 500 and a traceback on the one route that has to
+        # work on a fresh box, with nothing telling the operator what to do.
+        #
+        # 503 and the remedy, never a fallback key: an ephemeral one would mint
+        # claims that stop verifying at the next restart, under a key nobody
+        # kept.
+        logger.error("setup: cannot mint a claim, no signing key (%s)", type(exc).__name__)
+        return JSONResponse(
+            {
+                "error": "no signing key",
+                "detail": (
+                    "This instance cannot issue credentials yet. On the server, run "
+                    "`genus vault init` (or set GENUS_AUTH_SIGNING_KEY), restart the "
+                    "bridge, then open the setup link again."
+                ),
+            },
+            status_code=503,
+        )
 
     request.state.actor_id = "setup"
     audited(request, "setup.claim", action="claim")
-    return {
-        "claim_token": tokens.issue_setup_claim_token(),
-        "expires_in": tokens.SETUP_CLAIM_TTL_SECONDS,
-    }
+    return {"claim_token": claim, "expires_in": tokens.SETUP_CLAIM_TTL_SECONDS}
 
 
 # ── detect ───────────────────────────────────────────────────────────
 
 
 @router.get("/api/setup/detect")
-async def detect(request: Request, _gated: Gate, _claim: Claim) -> dict[str, Any]:
+async def detect(request: Request, _gated: Ceremony, _claim: Claim) -> dict[str, Any]:
     """What this box already has, so the wizard can skip what is done.
 
     Fingerprints, model ids, booleans and check statuses. Never a credential,
@@ -264,7 +382,11 @@ _OperatorBody = Annotated[
 
 @router.post("/api/setup/operator", response_model=None)
 async def create_operator(
-    body: _OperatorBody, request: Request, _gated: Gate, _claim: Claim
+    body: _OperatorBody,
+    request: Request,
+    _gated: Gate,
+    _finished: Ceremony,
+    _claim: Claim,
 ) -> Any:
     """Create the owner account and hand the browser a signed-in session.
 
@@ -290,7 +412,7 @@ async def create_operator(
     echo the body.
     """
     if isinstance(body, BodyTooLarge) or not isinstance(body, dict):
-        return _BAD_REQUEST
+        return _bad_request()
 
     name = str(body.get("name") or "").strip()
     email = str(body.get("email") or "").strip().lower()
@@ -414,7 +536,13 @@ def _create_owner_locked(
         return payload
 
     payload.update(result.tokens)
-    payload["mfa_setup_required"] = bool(result.mfa_setup_required) or True
+    # Deliberately a CONSTANT, not `result.mfa_setup_required`. That flag is
+    # advisory and goes false when `GENUS_OWNER_MFA_REQUIRED=false`; the wizard
+    # still puts enrolment in front of the operator, because the account it has
+    # just created is the owner of the appliance and a password is currently the
+    # whole of what protects it. The earlier `bool(...) or True` was the same
+    # value written as if it were a computation.
+    payload["mfa_setup_required"] = True
     payload["signed_in"] = True
     return payload
 
@@ -457,7 +585,7 @@ def _default_tenant() -> str:
 
 
 @router.post("/api/setup/provider")
-async def configure_provider(request: Request, _gated: Gate, _claim: Claim) -> JSONResponse:
+async def configure_provider(request: Request, _gated: Ceremony, _claim: Claim) -> JSONResponse:
     """Store one provider credential, point the fleet at a model, and dial it.
 
     The verdict is what gates the step in the UI, and a provider that refuses
@@ -499,7 +627,7 @@ async def configure_provider(request: Request, _gated: Gate, _claim: Claim) -> J
 
 
 @router.post("/api/setup/channel")
-async def configure_channel(request: Request, _gated: Gate, _claim: Claim) -> dict[str, Any]:
+async def configure_channel(request: Request, _gated: Ceremony, _claim: Claim) -> dict[str, Any]:
     """Verify a Telegram bot token with ``getMe`` and store it. Optional.
 
     An empty token is Skip, not an error: a channel-free instance is a normal,
@@ -524,7 +652,7 @@ async def configure_channel(request: Request, _gated: Gate, _claim: Claim) -> di
 
 
 @router.post("/api/setup/agent")
-async def install_agents(request: Request, _gated: Gate, _claim: Claim) -> dict[str, Any]:
+async def install_agents(request: Request, _gated: Ceremony, _claim: Claim) -> dict[str, Any]:
     """Install one catalogue preset, in this process.
 
     ``robothor.cli.agent.install_preset`` is the same function
@@ -556,7 +684,11 @@ async def install_agents(request: Request, _gated: Gate, _claim: Claim) -> dict[
     return {
         "preset": preset,
         "installed": outcome["installed"],
-        "failed": outcome["failed"],
+        # Ids only. The collected messages are exception strings and typically
+        # carry an absolute path under `templates/agents/...`; the rest of this
+        # router is scrupulous about not describing the box, and the operator's
+        # next move is the same either way. The detail is in the bridge log.
+        "failed": sorted(outcome["failed"]),
         "missing": outcome["missing"],
     }
 
@@ -565,19 +697,22 @@ async def install_agents(request: Request, _gated: Gate, _claim: Claim) -> dict[
 
 
 @router.post("/api/setup/complete")
-async def complete(request: Request, _gated: Gate, _claim: Claim) -> dict[str, Any]:
+async def complete(request: Request, _gated: Ceremony, _claim: Claim) -> dict[str, Any]:
     """Close first-run setup and point the browser at the chat.
 
-    Refuses (409) unless an owner account actually exists. This is the step
-    that makes the instance claim itself; letting it succeed on a box with no
-    account would record a completion that the gate — which asks the database —
-    does not agree with.
+    Refuses (409) unless an owner account actually exists. Recording completion
+    on a box with nobody in it would close the wizard over an instance that has
+    no way in at all — and the marker this writes is the gate for every route
+    above, so it must not be reachable before there is something to protect.
 
-    The recorded ``setup_completed_at`` is a note for an operator reading the
-    file, NOT the gate. It is written at the TOP LEVEL of config.yaml rather
-    than inside ``settings:``, because that block is validated against the
-    registry and an undeclared key in it is rejected under strict mode: a
-    marker there would make a completed instance refuse to start.
+    The write is what closes the ceremony: from here on
+    :func:`_ceremony_gate` answers 404 for ``detect``, ``provider``,
+    ``channel``, ``agent`` and this route, and ``status``/``claim``/``operator``
+    were already closed by the owner row. It goes at the TOP LEVEL of
+    config.yaml rather than inside ``settings:``, because that block is
+    validated against the registry and an undeclared key in it is rejected
+    under strict mode: a marker there would stop a freshly completed instance
+    from starting.
     """
     from robothor.auth import accounts
 
@@ -594,11 +729,24 @@ async def complete(request: Request, _gated: Gate, _claim: Claim) -> dict[str, A
 
 
 async def _json_body(request: Request) -> dict[str, Any]:
-    """Parse a JSON object body, refusing anything else without echoing it."""
+    """Parse a JSON object body, refusing anything else without echoing it.
+
+    The read is BOUNDED, through the same ``_bounded_body`` the credential
+    routes in ``auth.py`` use — imported, not copied, so there is one answer to
+    "how much of a body will this bridge hold". ``await request.body()``
+    concatenates the entire stream first and applies the ceiling afterwards,
+    which is no ceiling at all: a caller holding a claim could make the bridge
+    allocate an arbitrary body, and a chunked request declares no
+    ``Content-Length`` for any front to refuse it by. That is the precise lever
+    ``_bounded_body`` was written to close, and this router had reimplemented
+    the unbounded version next to it.
+    """
     import json as _json
 
-    raw = await request.body()
-    if len(raw) > local_login.MAX_CREDENTIAL_BODY_BYTES:
+    from routers.auth import _bounded_body
+
+    raw = await _bounded_body(request)
+    if raw is None:
         raise HTTPException(status_code=413, detail="request body too large")
     try:
         parsed = _json.loads(raw or b"{}")
@@ -804,16 +952,28 @@ async def _verify_telegram_token(token: str) -> tuple[bool, str]:
     is real, unrevoked, and belongs to the bot the operator thinks it does."""
     import httpx
 
+    # Percent-encoded into the path. The host is a literal so there is no SSRF
+    # here, but a bot token is operator-supplied text and a stray `/` or `?`
+    # would silently change which Bot API method is called.
+    url = f"https://api.telegram.org/bot{quote(token, safe='')}/getMe"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+            response = await client.get(url)
     except Exception:  # noqa: BLE001 - unreachable is a verdict, not a 500
         return False, ""
     if response.status_code != 200:
         return False, ""
     try:
-        result = response.json().get("result") or {}
+        payload = response.json()
     except ValueError:
+        return False, ""
+    # A 200 whose body is a list, a string or null is not an answer this
+    # understands. `.get` on one of those is an AttributeError and a 500 on an
+    # operator-supplied value, which is the wrong way to fail a verification.
+    if not isinstance(payload, dict):
+        return False, ""
+    result = payload.get("result")
+    if not isinstance(result, dict):
         return False, ""
     return True, str(result.get("username") or "")
 
@@ -828,13 +988,12 @@ async def _store_telegram_token(token: str) -> None:
     )
 
 
-def _record_completion() -> None:
-    """Note the moment, at the top level of config.yaml. Never a gate."""
-    from robothor.settings.config_file import write_top_level
-    from robothor.settings.sources import config_yaml_path
+def _record_completion() -> str:
+    """Write ``setup_completed_at`` — the act that closes the wizard.
 
-    path = config_yaml_path()
-    if path is None:  # pragma: no cover - the gate already needed a workspace
-        return
-    stamp = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    write_top_level("setup_completed_at", stamp, path=path)
+    Not a note: this IS the gate for every route after the operator step (see
+    :func:`_ceremony_gate`), which is why it must go through the same function
+    the gate reads, against the same workspace. Two spellings of that path would
+    be a wizard that records completion somewhere nothing looks.
+    """
+    return setup_token.record_setup_completed(workspace())
