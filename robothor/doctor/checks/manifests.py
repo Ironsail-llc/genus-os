@@ -38,28 +38,47 @@ def _manifest_dir(ctx: DoctorContext) -> Path:
 
 
 def _scan_schema(directory: Path) -> tuple[int, list[str], list[str]]:
-    """``(files, error lines, warning lines)`` from a strict validation pass."""
+    """``(agents, error lines, warning lines)`` from a strict validation pass.
+
+    Two things this does the same way the ENGINE does, because a doctor whose
+    verdict differs from the loader's is worse than no doctor:
+
+    * **a file with no ``id`` is not an agent.** ``_defaults.yaml`` and
+      ``schema.yaml`` live in the same directory; judging them as manifests
+      reports five missing required fields per file for documents that were
+      never meant to have them.
+    * **what is validated is the MERGED document**, defaults plus manifest,
+      which is what ``_enforce_manifest_schema`` judges and therefore what
+      ``enforce`` would actually refuse. Validating the raw file reports
+      errors the engine would not, and misses a typo in ``_defaults.yaml``
+      that breaks every agent inheriting it.
+    """
     import yaml
 
+    from robothor.engine import config as engine_config
     from robothor.engine import manifest_schema
 
     errors: list[str] = []
     warnings: list[str] = []
-    files = 0
+    agents = 0
+    defaults = engine_config._load_defaults(directory)
     for path in sorted(directory.glob("*.yaml")):
-        files += 1
         try:
             data: Any = yaml.safe_load(path.read_text())
         except Exception as exc:  # noqa: BLE001 - manifests.broken owns unreadable files
             errors.append(f"{path.stem}: unreadable ({type(exc).__name__})")
             continue
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or "id" not in data:
             continue
+        agents += 1
         agent_id = str(data.get("id") or path.stem)
-        for issue in manifest_schema.validate(data, strict=True):
+        merged = engine_config._merged_manifest(
+            data, agent_id=agent_id, defaults=defaults, workspace=None, trigger_type=None
+        )
+        for issue in manifest_schema.validate(merged, strict=True):
             line = f"{agent_id}: {issue.path} [{issue.code}]"
             (errors if issue.severity == "error" else warnings).append(line)
-    return files, errors, warnings
+    return agents, errors, warnings
 
 
 def _summarise(kind: str, lines: list[str]) -> str:

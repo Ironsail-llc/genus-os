@@ -81,6 +81,29 @@ def test_a_schema_failure_never_echoes_the_instruction_text(manifest_dir) -> Non
     assert secret_prose not in row.detail
 
 
+def test_a_defaults_fragment_is_not_judged_as_an_agent(manifest_dir) -> None:
+    """``_defaults.yaml`` has no ``id`` and was never meant to have a name, a
+    description or a department. The engine skips it; a doctor that did not
+    would report five missing required fields on every install."""
+    _write(manifest_dir, "alice", _GOOD_MANIFEST)
+    (manifest_dir / "_defaults.yaml").write_text(
+        yaml.safe_dump({"model": {"primary": "openrouter/test/model"}})
+    )
+    row = _run(manifest_checks.CHECKS, "manifests.schema")[0]
+    assert row.status == "pass"
+    assert "1 manifest" in row.detail
+
+
+def test_the_merged_document_is_what_is_judged(manifest_dir) -> None:
+    """``enforce`` refuses the document a run BUILDS, defaults included, so a
+    doctor validating the raw file would disagree with the loader."""
+    _write(manifest_dir, "alice", _GOOD_MANIFEST)
+    (manifest_dir / "_defaults.yaml").write_text(yaml.safe_dump({"not_a_schema_key": True}))
+    row = _run(manifest_checks.CHECKS, "manifests.schema")[0]
+    assert row.status == "fail"
+    assert "not_a_schema_key" in row.detail
+
+
 def test_an_absent_manifest_directory_is_a_skip(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(manifest_checks, "_manifest_dir", lambda _ctx: tmp_path / "nope")
     assert _run(manifest_checks.CHECKS, "manifests.schema")[0].status == "skip"

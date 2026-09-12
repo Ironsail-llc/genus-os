@@ -209,6 +209,15 @@ def test_a_live_token_is_proved_by_get_me(settings) -> None:
     assert "1234567" in rows[0].detail
 
 
+def test_the_token_and_the_chat_id_never_share_a_row_id(settings) -> None:
+    """Two findings about two different settings. A dashboard keying on
+    `telegram.token` would otherwise show one of them at random."""
+    settings(ROBOTHOR_TELEGRAM_BOT_TOKEN=FAKE_TOKEN, ROBOTHOR_TELEGRAM_CHAT_ID="12345")
+    fetch = fake_http({f"https://api.telegram.org/bot{FAKE_TOKEN}/getMe": HttpResponse(status=200)})
+    rows = _run(channel_checks.CHECKS, "telegram.token", make_ctx(http_fetch=fetch))
+    assert [row.sub_id for row in rows] == ["token", "chat"]
+
+
 def test_a_revoked_token_is_a_failure(settings) -> None:
     settings(ROBOTHOR_TELEGRAM_BOT_TOKEN=FAKE_TOKEN, ROBOTHOR_TELEGRAM_CHAT_ID="12345")
     fetch = fake_http({f"https://api.telegram.org/bot{FAKE_TOKEN}/getMe": HttpResponse(status=401)})

@@ -93,6 +93,34 @@ def test_a_ledger_row_this_checkout_does_not_ship_fails(monkeypatch) -> None:
     assert result.fixable is False
 
 
+def test_a_role_that_may_not_read_the_ledger_is_a_skip(monkeypatch) -> None:
+    """A least-privilege deployment applies migrations as one account and runs
+    the services as another. Failing here would leave `genus doctor` exiting 1
+    forever on a correctly configured box, which is how an operator learns to
+    ignore red output."""
+
+    class DeniedError(RuntimeError):
+        pgcode = "42501"
+
+    def _raise():
+        raise DeniedError("permission denied for schema public")
+
+    monkeypatch.setattr(db_checks, "_migration_rows", _raise)
+    result = _run("db.migrations", make_ctx())
+    assert result.status == "skip"
+    assert "genus migrate --status" in result.detail
+
+
+def test_any_other_ledger_error_is_still_a_failure(monkeypatch) -> None:
+    def _raise():
+        raise RuntimeError("the manifest is missing")
+
+    monkeypatch.setattr(db_checks, "_migration_rows", _raise)
+    result = _run("db.migrations", make_ctx())
+    assert result.status == "fail"
+    assert "RuntimeError" in result.detail
+
+
 def test_the_migration_fix_reruns_the_check_and_it_passes(monkeypatch) -> None:
     from robothor.doctor.runner import run_sync
 

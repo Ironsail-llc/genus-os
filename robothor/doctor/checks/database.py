@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from robothor.doctor.model import Check, FixResult, Result, fail, ok
+from robothor.doctor.model import Check, FixResult, Result, fail, ok, skip
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.doctor.context import DoctorContext
@@ -28,6 +28,11 @@ __all__ = ["CHECKS", "SERVICE_ROLE_MIGRATION"]
 #: repeatedly, and here the two disagreeing would mean the doctor "fixing" a
 #: database into a state no migration produces.
 SERVICE_ROLE_MIGRATION = "107_seed_service_role.sql"
+
+#: PostgreSQL's SQLSTATE for insufficient_privilege. Matched on the code rather
+#: than the exception class so this module never imports psycopg2 -- the doctor
+#: has to import on a box where the database driver may not be installed at all.
+_INSUFFICIENT_PRIVILEGE = "42501"
 
 
 def _migration_sql(name: str) -> str:
@@ -85,10 +90,23 @@ async def _migrations(ctx: DoctorContext) -> Result:
     changed since it ran, and ``MISSING`` that the ledger records one this
     install does not ship: neither can be repaired by applying anything, and
     both need a human. Only pending is fixable, and only with ``--fix``.
+
+    A least-privilege deployment is SKIPPED, not failed. The migrator creates
+    its ledger table if it is absent, so reading status needs CREATE on the
+    schema -- and a correctly configured instance runs its services as a role
+    that deliberately does not have it, with migrations applied by a different
+    account. Reporting that as a required failure would leave `genus doctor`
+    permanently exiting 1 on a healthy box, which is precisely how an operator
+    learns that red output here is normal.
     """
     try:
         rows = await ctx.run_blocking(_migration_rows)
-    except Exception as exc:  # noqa: BLE001 - a ledger that will not read is a failure
+    except Exception as exc:  # noqa: BLE001 - a ledger that will not read is a result
+        if getattr(exc, "pgcode", "") == _INSUFFICIENT_PRIVILEGE:
+            return skip(
+                "this database role may not read the migration ledger — run "
+                "'genus migrate --status' as the account that applies migrations"
+            )
         return fail(f"cannot read the migration ledger: {type(exc).__name__}")
 
     pending = [row["migration_id"] for row in rows if row["status"] == "pending"]

@@ -38,7 +38,7 @@ def _engine_url(engine: Any) -> str:
 
     default_url = EngineSettings.model_fields["url"].default
     if engine.url and engine.url != default_url:
-        return engine.url
+        return str(engine.url)
     return _loopback(engine.port)
 
 

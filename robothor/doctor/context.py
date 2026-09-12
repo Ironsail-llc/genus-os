@@ -96,7 +96,8 @@ class DoctorContext:
             from robothor.settings import get_settings
 
             self._settings = get_settings()
-        return self._settings
+        settings: GenusSettings = self._settings
+        return settings
 
     @property
     def workspace(self) -> Path:

@@ -45,6 +45,11 @@ async def _telegram(ctx: DoctorContext) -> list[Result]:
     if not token and not chat:
         return [skip("not configured — delivery=none is a supported deployment")]
 
+    # Every row below carries a sub_id, passing rows included. Two findings
+    # about two different settings must never share a row id: a dashboard or a
+    # log filter keying on `telegram.token` would otherwise see one of them at
+    # random depending on which branch was taken.
+
     results: list[Result] = []
     head, _, tail = token.partition(":")
     token_shaped = bool(head.isdigit() and len(head) >= _TOKEN_PREFIX_DIGITS and tail)
@@ -66,7 +71,9 @@ async def _telegram(ctx: DoctorContext) -> list[Result]:
     else:
         response = await ctx.run_blocking(ctx.fetch, _GET_ME.format(token=token))
         if response.ok:
-            results.append(ok(f"bot {head} answered getMe"))
+            results.append(
+                Result(status="pass", detail=f"bot {head} answered getMe", sub_id="token")
+            )
         elif response.status in (401, 404):
             results.append(
                 fail(
@@ -89,7 +96,7 @@ async def _telegram(ctx: DoctorContext) -> list[Result]:
             fail("a bot token is set but ROBOTHOR_TELEGRAM_CHAT_ID is not", sub_id="chat")
         )
     elif chat.startswith("@") or chat.lstrip("-").isdigit():
-        results.append(ok(f"chat {chat}"))
+        results.append(Result(status="pass", detail=f"chat {chat}", sub_id="chat"))
     else:
         results.append(
             fail(
