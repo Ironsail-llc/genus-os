@@ -14,7 +14,6 @@ haven't had activity in 7+ days.
 
 ## Variables
 
-- **model_primary**: Primary LLM model (default: `ollama_chat/qwen3.5:122b`)
 - **cron_expr**: Cron schedule (default: `20 8,14,20 * * *` — 3x daily)
 - **timezone**: Schedule timezone (default: `UTC`)
 - **reports_to**: Supervisor agent (default: `main`)

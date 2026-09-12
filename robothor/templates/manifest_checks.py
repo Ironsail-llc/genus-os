@@ -105,7 +105,29 @@ def check_schema_required(
     return result
 
 
-def check_structure(manifest: dict[str, Any]) -> CheckResult:
+def fleet_default_model(repo_root: Path) -> str:
+    """The ``model.primary`` the fleet's own ``_defaults.yaml`` supplies, if any.
+
+    A manifest that names no model is not under-specified: it INHERITS, and
+    the engine merges ``docs/agents/_defaults.yaml`` under every manifest it
+    loads. Agent templates deliberately name no model at all, so that the one
+    the wizard probed is the one the fleet dials -- and a check that demanded a
+    literal id here would push the placeholder straight back in.
+    """
+    import yaml
+
+    path = Path(repo_root) / "docs" / "agents" / "_defaults.yaml"
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return ""
+    if not isinstance(document, dict):
+        return ""
+    block = document.get("model")
+    return str((block or {}).get("primary") or "") if isinstance(block, dict) else ""
+
+
+def check_structure(manifest: dict[str, Any], inherited_model: str = "") -> CheckResult:
     """B. Manifest structure -- delivery, session, model enums."""
     result = CheckResult("B", "Manifest structure")
     issues = []
@@ -124,8 +146,11 @@ def check_structure(manifest: dict[str, Any]) -> CheckResult:
         if not manifest.get("delivery", {}).get("to"):
             issues.append("delivery.mode=announce but no delivery.to")
 
-    if not manifest.get("model", {}).get("primary"):
-        issues.append("No model.primary specified")
+    if not manifest.get("model", {}).get("primary") and not inherited_model:
+        issues.append(
+            "No model.primary specified, and docs/agents/_defaults.yaml supplies none "
+            "either — nothing tells this agent which model to dial"
+        )
 
     if issues:
         return result.fail("Structure issues", issues)
@@ -385,7 +410,7 @@ def validate_agent(
 
     checks = [
         check_schema_required(manifest, required_fields, departments),
-        check_structure(manifest),
+        check_structure(manifest, fleet_default_model(repo_root)),
     ]
 
     if ci:

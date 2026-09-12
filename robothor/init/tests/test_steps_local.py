@@ -663,3 +663,89 @@ class TestTheWizardDialsOllamaWhereItActuallyIs:
         monkeypatch.setenv("ROBOTHOR_OLLAMA_PORT", "1234")
         reset_settings()
         assert get_settings().ollama.base_url == "http://box.example.test:1234"
+
+
+class TestTheProviderTheOperatorChoseIsTheOneTheFleetDials:
+    """The wizard probed a real credential, got a real completion, and then
+    installed a fleet pinned to a model from a template placeholder. On a
+    fresh compose install `genus run --agent main` walked
+    `ollama/qwen3.5:122b` -- a localhost Ollama that does not exist inside a
+    container -- then three cloud models the box had no key for, and reported
+    "All models failed to respond".
+
+    The chosen model is now the fleet default, and installed manifests carry
+    no model block at all, so they inherit it.
+    """
+
+    @staticmethod
+    def _probe_ok(model, *, api_key=None, **_kwargs):
+        from robothor.init.provider_probe import ProbeResult
+
+        return ProbeResult(ok=True, provider="openrouter", model=model, detail="ok", probed=True)
+
+    def _apply(self, tmp_path, model="openrouter/openai/gpt-5.4"):
+        ctx = _ctx(tmp_path, answers={"provider_id": "openrouter", "provider_model": model})
+        ProviderStep(probe=self._probe_ok).apply(ctx)
+        return ctx
+
+    def test_it_writes_the_chosen_model_as_the_fleet_default(self, tmp_path):
+        import yaml
+
+        ctx = self._apply(tmp_path)
+
+        defaults = yaml.safe_load(
+            (ctx.workspace / "docs" / "agents" / "_defaults.yaml").read_text(encoding="utf-8")
+        )
+        assert defaults["model"]["primary"] == "openrouter/openai/gpt-5.4"
+        assert isinstance(defaults["model"]["fallbacks"], list)
+        assert "openrouter/openai/gpt-5.4" not in defaults["model"]["fallbacks"]
+
+    def test_a_manifest_with_no_model_block_resolves_to_it(self, tmp_path):
+        """The property that matters: what `genus run --agent main` will dial."""
+        from robothor.engine.config import load_agent_config
+
+        ctx = self._apply(tmp_path)
+        manifests = ctx.workspace / "docs" / "agents"
+        (manifests / "main.yaml").write_text(
+            "id: main\nname: Main\ndescription: d\nversion: '1'\ndepartment: core\n"
+            'schedule:\n  cron: ""\n  timezone: UTC\ndelivery:\n  mode: none\n',
+            encoding="utf-8",
+        )
+
+        assert load_agent_config("main", manifests).model_primary == "openrouter/openai/gpt-5.4"
+
+    def test_a_re_run_with_a_different_model_moves_the_fleet(self, tmp_path):
+        import yaml
+
+        self._apply(tmp_path)
+        ctx = self._apply(tmp_path, model="openrouter/anthropic/claude-sonnet-4.6")
+
+        defaults = yaml.safe_load(
+            (ctx.workspace / "docs" / "agents" / "_defaults.yaml").read_text(encoding="utf-8")
+        )
+        assert defaults["model"]["primary"] == "openrouter/anthropic/claude-sonnet-4.6"
+
+    def test_nothing_else_in_the_fleet_defaults_is_lost(self, tmp_path):
+        """An operator's own fleet-wide setting must survive a re-run."""
+        import yaml
+
+        ctx = _ctx(tmp_path, answers={"provider_id": "openrouter", "provider_model": "m"})
+        manifests = ctx.workspace / "docs" / "agents"
+        manifests.mkdir(parents=True, exist_ok=True)
+        (manifests / "_defaults.yaml").write_text(
+            "timezone: Europe/Lisbon\nmodel:\n  primary: old\n", encoding="utf-8"
+        )
+
+        ProviderStep(probe=self._probe_ok).apply(ctx)
+
+        defaults = yaml.safe_load((manifests / "_defaults.yaml").read_text(encoding="utf-8"))
+        assert defaults["timezone"] == "Europe/Lisbon"
+        assert defaults["model"]["primary"] == "m"
+
+    @pytest.mark.parametrize("substrate", ["local", "compose"])
+    def test_the_agents_step_runs_after_the_provider_step(self, substrate):
+        from robothor.init.substrate import get_substrate
+
+        ids = [step.id for step in get_substrate(substrate).steps()]
+
+        assert ids.index("provider") < ids.index("agents")

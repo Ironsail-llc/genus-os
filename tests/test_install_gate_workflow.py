@@ -131,6 +131,22 @@ def test_each_job_gets_a_real_completion_out_of_an_agent(
 
 
 @pytest.mark.parametrize("job_name", ["compose", "local"])
+def test_each_job_checks_the_fleet_resolves_to_the_chosen_model_first(
+    workflow: dict[str, Any], job_name: str
+) -> None:
+    """A fleet pinned to a model the wizard never chose fails as four
+    consecutive provider timeouts, and that log names everything but the
+    cause. The assertion has to come before the completion call."""
+    steps = workflow["jobs"][job_name]["steps"]
+    names = [str(step.get("name", "")) for step in steps]
+    resolves = next(i for i, name in enumerate(names) if "resolves to the model" in name)
+    completes = next(i for i, name in enumerate(names) if "real completion" in name)
+
+    assert resolves < completes
+    assert "load_agent_config" in str(steps[resolves]["run"])
+
+
+@pytest.mark.parametrize("job_name", ["compose", "local"])
 def test_each_job_walks_the_setup_wizard_to_completion(
     workflow: dict[str, Any], job_name: str
 ) -> None:

@@ -12,11 +12,6 @@ escalates_to: {{ escalates_to }}
 tags_produced: [autoresearch, optimization]
 tags_consumed: []
 
-model:
-  primary: {{ model_primary }}
-  fallbacks:
-    - gemini/gemini-2.5-pro
-
 schedule:
   cron: ""
   timezone: {{ timezone }}

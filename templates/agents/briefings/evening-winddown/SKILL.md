@@ -14,7 +14,6 @@ email pipeline status, health stats, and a week-ahead glance.
 
 ## Variables
 
-- **model_primary**: Primary LLM model (default: `openrouter/z-ai/glm-5`)
 - **cron_expr**: Cron schedule (default: `0 21 * * *` — 9 PM daily)
 - **timezone**: Schedule timezone (default: `UTC`)
 - **delivery_mode**: Delivery mode (default: `announce`)

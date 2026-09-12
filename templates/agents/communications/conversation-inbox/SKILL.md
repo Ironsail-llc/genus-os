@@ -14,7 +14,6 @@ main agent. Does not reply to messages — only triages and escalates.
 
 ## Variables
 
-- **model_primary**: Primary LLM model (default: `openrouter/z-ai/glm-5`)
 - **cron_expr**: Cron schedule (default: `5 6-22 * * *` — hourly)
 - **timezone**: Schedule timezone (default: `UTC`)
 - **reports_to**: Supervisor agent (default: `main`)

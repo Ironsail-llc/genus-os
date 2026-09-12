@@ -14,7 +14,6 @@ company hygiene, and contact enrichment via sub-agent research.
 
 ## Variables
 
-- **model_primary**: Primary LLM model (default: `openrouter/z-ai/glm-5`)
 - **cron_expr**: Cron schedule (default: `0 10 * * *` — daily at 10 AM)
 - **timezone**: Schedule timezone (default: `UTC`)
 - **reports_to**: Supervisor agent (default: `main`)

@@ -14,7 +14,6 @@ and create actionable improvement tasks for the overnight PR agent.
 
 ## Variables
 
-- **model_primary**: Primary LLM model (default: `openrouter/anthropic/claude-sonnet-4-6`)
 - **cron_expr**: Cron schedule (default: `25 */2 * * *` — every 2h)
 - **timezone**: Schedule timezone (default: `UTC`)
 - **reports_to**: Supervisor agent (default: `main`)

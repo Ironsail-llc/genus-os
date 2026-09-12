@@ -146,6 +146,27 @@ jobs:
           test "$(jq -r '.summary.required_failed' "$RUNNER_TEMP/doctor.json")" = "0"
           echo "assertion OK: doctor required_failed == 0"
 
+      # Before the completion call, not after it: a fleet pinned to a model the
+      # wizard never chose fails as four consecutive provider timeouts, and the
+      # log that produces names everything except the cause.
+      - name: Assert the installed fleet resolves to the model the wizard chose
+        run: |
+          export MANIFEST_DIR="$HOME/robothor/docs/agents"
+          python - <<'PROBE'
+          import os, pathlib, sys, yaml
+          from robothor.engine.config import load_agent_config
+
+          manifests = pathlib.Path(os.environ["MANIFEST_DIR"])
+          defaults = yaml.safe_load((manifests / "_defaults.yaml").read_text()) or {}
+          chosen = defaults["model"]["primary"]
+          resolved = load_agent_config("main", manifests).model_primary
+          print(f"fleet default: {chosen}")
+          print(f"main resolves to: {resolved}")
+          if resolved != chosen:
+              sys.exit(f"main is pinned to {resolved}, not the chosen {chosen}")
+          PROBE
+          echo "assertion OK: main resolves to the model genus init probed"
+
       - name: Assert an agent returns a real completion
         run: |
           genus run --agent main --print "say pong" 2>&1 | tee "$RUNNER_TEMP/run.txt"
@@ -378,6 +399,27 @@ jobs:
           jq . "$RUNNER_TEMP/doctor.json"
           test "$(jq -r '.summary.required_failed' "$RUNNER_TEMP/doctor.json")" = "0"
           echo "assertion OK: doctor required_failed == 0"
+
+      # Before the completion call, not after it: a fleet pinned to a model the
+      # wizard never chose fails as four consecutive provider timeouts, and the
+      # log that produces names everything except the cause.
+      - name: Assert the installed fleet resolves to the model the wizard chose
+        run: |
+          export MANIFEST_DIR="$HOME/genus/docs/agents"
+          python - <<'PROBE'
+          import os, pathlib, sys, yaml
+          from robothor.engine.config import load_agent_config
+
+          manifests = pathlib.Path(os.environ["MANIFEST_DIR"])
+          defaults = yaml.safe_load((manifests / "_defaults.yaml").read_text()) or {}
+          chosen = defaults["model"]["primary"]
+          resolved = load_agent_config("main", manifests).model_primary
+          print(f"fleet default: {chosen}")
+          print(f"main resolves to: {resolved}")
+          if resolved != chosen:
+              sys.exit(f"main is pinned to {resolved}, not the chosen {chosen}")
+          PROBE
+          echo "assertion OK: main resolves to the model genus init probed"
 
       - name: Assert an agent returns a real completion
         run: |

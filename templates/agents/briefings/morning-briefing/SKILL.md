@@ -13,7 +13,6 @@ calendar events, email summary, health data, and CRM activity.
 
 ## Variables
 
-- **model_primary**: Primary LLM model (default: `openrouter/anthropic/claude-sonnet-4.6`)
 - **cron_expr**: Cron schedule (default: `30 6 * * *` — 6:30 AM daily)
 - **timezone**: Schedule timezone (default: `UTC`)
 - **delivery_mode**: Delivery mode (default: `announce`)

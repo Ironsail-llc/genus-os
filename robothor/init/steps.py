@@ -51,6 +51,12 @@ __all__ = [
 #: it will not run at all (a flag turned it off, or it does not apply here).
 ACTIONS = ("create", "exists", "skip")
 
+#: How many of a provider's other known models back up the chosen one in the
+#: fleet's default chain. Short on purpose: every extra entry is another
+#: full timeout an agent spends before it gives up, and they all share the
+#: one credential this install has actually proved.
+FLEET_FALLBACK_LIMIT = 2
+
 
 class StepError(RuntimeError):
     """A step could not do its job. The message is shown to the operator."""
@@ -440,7 +446,56 @@ class ProviderStep(BaseStep):
         ctx.answers["provider_model"] = model
         ctx.answers["provider_probed"] = result.probed
         ctx.write_setting("ROBOTHOR_LAST_RESORT_MODEL", model)
-        ctx.detail(self.id, f"{model}: {result.detail}")
+        fallbacks = self._write_fleet_default(ctx, provider_id, model)
+        detail = f"{model}: {result.detail}"
+        if fallbacks:
+            detail += f"; the fleet falls back to {', '.join(fallbacks)}"
+        ctx.detail(self.id, detail)
+
+    @staticmethod
+    def _write_fleet_default(ctx: InitContext, provider_id: str, model: str) -> list[str]:
+        """Make the probed model the fleet's default, and say what backs it up.
+
+        The wizard used to test a credential, get a real completion, and then
+        install a fleet pinned to whatever model a template placeholder named.
+        On a fresh compose install that meant `genus run --agent main` walked
+        `ollama/qwen3.5:122b` -- a localhost Ollama that does not exist inside a
+        container -- then three cloud models the box had no key for, and
+        reported "All models failed to respond". The model the operator chose
+        and the model the fleet dials are now the same model.
+
+        The file is MERGED, never replaced: it is the operator's own fleet-wide
+        configuration, and a re-run of `genus init` must not silently drop a
+        timezone or a tool policy they put there.
+        """
+        import yaml
+
+        from robothor.init.provider_probe import models_for_provider
+
+        # The registry's other known models for this provider, in its own
+        # order. Nothing from a different provider: a fallback needs a
+        # credential, and this install has proved exactly one.
+        fallbacks = [known for known in models_for_provider(provider_id) if known != model][
+            :FLEET_FALLBACK_LIMIT
+        ]
+
+        path = ctx.workspace / "docs" / "agents" / "_defaults.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        document: dict[str, Any] = {}
+        if path.is_file():
+            try:
+                loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+            except yaml.YAMLError:
+                loaded = None
+            if isinstance(loaded, dict):
+                document = loaded
+
+        block = document.get("model")
+        document["model"] = {**block} if isinstance(block, dict) else {}
+        document["model"]["primary"] = model
+        document["model"]["fallbacks"] = fallbacks
+        path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+        return fallbacks
 
     def completed(self, ctx: InitContext) -> bool:
         """An unprobed choice is not a finished step.

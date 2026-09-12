@@ -14,7 +14,6 @@ Runs on a cron schedule with event hooks for real-time processing.
 
 ## Variables
 
-- **model_primary**: Primary LLM model (default: `openrouter/moonshotai/kimi-k2.5`)
 - **cron_expr**: Cron schedule (default: `0 6-22/2 * * *` — every 2h)
 - **timezone**: Schedule timezone (default: `UTC`)
 - **reports_to**: Supervisor agent (default: `main`)

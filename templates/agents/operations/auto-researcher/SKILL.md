@@ -39,7 +39,6 @@ Given a metric command (any shell command that outputs a number) and a search sp
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `model_primary` | `openrouter/anthropic/claude-sonnet-4.6` | Primary LLM model |
 | `timezone` | `UTC` | Schedule timezone |
 | `delivery_mode` | `announce` | How to notify on significant improvements |
 | `cost_budget_usd` | `3.0` | Max cost per agent run |
