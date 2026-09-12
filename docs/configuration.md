@@ -21,8 +21,8 @@ genus config get ROBOTHOR_MAX_CONCURRENT_AGENTS   # value + where it came from
 genus config explain ROBOTHOR_RBAC_MODE           # everything declared about it
 genus config list --group engine --changed        # what is off its default
 genus config set ROBOTHOR_MAX_CONCURRENT_AGENTS 6
-genus config validate                             # --json for machines
 genus config schema                               # JSON Schema, for tooling
+genus doctor                                      # is this instance working?
 ```
 
 | Command | What it does |
@@ -30,6 +30,7 @@ genus config schema                               # JSON Schema, for tooling
 | `get NAME` | The effective value and its provenance: `runtime` (an operator-set `feature_flags` row), `env`, `config.yaml`, or `default`. |
 | `set NAME VALUE` | Routes by the setting's own metadata — see below. |
 | `explain NAME` | Description, group, type, default, deprecated aliases, secret/governed/restart flags, current provenance. |
+| `validate` | Deprecated. Prints a note and runs [`genus doctor`](deployment.md#diagnostics-genus-doctor), which asks everything it used to and a dozen more. |
 | `list [--group G] [--changed]` | Every setting, or one group, or only what is not on its default. |
 | `validate [--json]` | Connectivity checks, plus unknown keys, deprecated names in use, and settings the running process disagrees with. Exit 1 only for errors — see below. |
 
@@ -80,7 +81,7 @@ simply never applies, and you read the default as your value.
 |------|-----------|
 | `off` | The key is ignored silently. |
 | `observe` | **Default.** The key is ignored and logged once, naming it. What every existing install gets on upgrade. |
-| `enforce` | Resolving settings fails, naming the key. Recommended for new installs, and for any box where `genus config validate` reports no unknown keys. |
+| `enforce` | Resolving settings fails, naming the key. Recommended for new installs, and for any box where `genus doctor --only config.unknown_keys` reports none. |
 
 The rung can be set in the environment or in the file it governs (as above), so
 a new install can ship `enforce` without an environment file.

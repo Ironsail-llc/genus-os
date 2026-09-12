@@ -134,6 +134,18 @@ robothor engine run <id> # Run any agent manually
 robothor tui             # Terminal dashboard for monitoring
 ```
 
+Something not working? `genus doctor` is the one command that answers it —
+settings, database, migrations, the RBAC seed, credentials, a real model call,
+manifests, services, secrets and host units, with severities and an exit code:
+
+```bash
+genus doctor             # the full report; exit 0 healthy, 1 broken
+genus doctor --fix       # repair what can be repaired (migrations, RBAC seed)
+```
+
+See [Diagnostics](docs/deployment.md#diagnostics-genus-doctor) for what each
+check means.
+
 ## Production status
 
 The version 1.10 release-candidate change set contains a hardening foundation:
@@ -701,6 +713,7 @@ robothor/
 | `robothor init` | Interactive setup wizard |
 | `robothor serve` | Start the orchestrator (engine runs separately) |
 | `robothor status` | System health overview |
+| `genus doctor` | Diagnose the instance; `--fix` repairs what it can |
 | `robothor migrate` | Run database migrations |
 | `robothor mcp` | Start MCP server (44 tools, stdio) |
 | `robothor tui` | Terminal monitoring dashboard |
