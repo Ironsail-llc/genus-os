@@ -196,7 +196,7 @@ class SubstrateStep(BaseStep):
                 fix_hint=(
                     "use --substrate "
                     + "|".join(AVAILABLE_SUBSTRATES)
-                    + "; compose, systemd and helm land in later releases"
+                    + "; systemd and helm land in later releases"
                 ),
             )
         return CheckResult(True, detail=name)
@@ -630,10 +630,27 @@ class WorkspaceStep(BaseStep):
 
 
 class DatabaseStep(BaseStep):
-    """Where PostgreSQL is, proved by connecting to it before writing it down."""
+    """Where PostgreSQL is, proved by connecting to it before writing it down.
+
+    ``starts_later`` names whatever will START PostgreSQL during this same run
+    -- the compose stack, on the substrate whose ``up`` step is three steps
+    below this one. It is a constructor argument rather than an answer because
+    a substrate that assembles this step already knows: an answer seeded
+    somewhere else is a plan that differs depending on who built the context,
+    which is how a control comes to be inert in exactly one caller.
+    """
 
     id = "database"
     title = "Database"
+
+    def __init__(self, *, starts_later: str = "") -> None:
+        self._starts_later_name = starts_later
+
+    def _starts_later(self, ctx: InitContext) -> str:
+        """What will start PostgreSQL during this run, or "" if it is up now."""
+        if self._starts_later_name:
+            return self._starts_later_name
+        return "docker" if ctx.answers.get("docker") else ""
 
     FIX = (
         "start PostgreSQL and set ROBOTHOR_DB_HOST / ROBOTHOR_DB_PORT / ROBOTHOR_DB_NAME / "
@@ -675,13 +692,14 @@ class DatabaseStep(BaseStep):
         config = ctx.db_config()
         target = self._target(config)
 
-        if ctx.answers.get("docker"):
-            # The containers do not exist yet -- the prereqs step creates them
-            # in phase 2, and every check runs before that. Connecting here made
-            # `--docker`, whose entire purpose is "you do not have PostgreSQL
-            # yet", refuse to run without PostgreSQL. The connection is proved
-            # in apply() instead, after the containers are up.
-            return CheckResult(True, detail=f"docker will start it, then {target}")
+        starts_later = self._starts_later(ctx)
+        if starts_later:
+            # The containers do not exist yet -- an earlier step in phase 2
+            # creates them, and every check runs before that. Connecting here
+            # made `--docker`, whose entire purpose is "you do not have
+            # PostgreSQL yet", refuse to run without PostgreSQL. The connection
+            # is proved in apply() instead, after the containers are up.
+            return CheckResult(True, detail=f"{starts_later} will start it, then {target}")
 
         error = self._connect(ctx)
         if error:
@@ -690,12 +708,12 @@ class DatabaseStep(BaseStep):
 
     def apply(self, ctx: InitContext) -> None:
         config = ctx.db_config()
-        if ctx.answers.get("docker"):
+        if self._starts_later(ctx):
             error = self._connect(ctx)
             if error:
                 raise StepError(
                     f"the containers started but PostgreSQL did not answer: {error}. "
-                    "Check `docker compose logs postgres` in the workspace."
+                    "Check `docker compose logs postgres`."
                 )
 
         ctx.write_setting("ROBOTHOR_DB_HOST", config["host"])

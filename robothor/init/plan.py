@@ -77,6 +77,11 @@ class InitResult:
 
     This is the ``--json`` document. Its four keys are the contract the
     install gate and the browser wizard read, so they are fixed.
+
+    ``extra`` is how a substrate adds what only it knows -- compose adds
+    ``"compose": {"files": [...], "images": {...}, "ready": {...}}`` -- without
+    every other substrate growing an empty key for it. It is merged at the top
+    level and may never shadow the four reserved names.
     """
 
     plan: list[PlanEntry] = field(default_factory=list)
@@ -84,14 +89,23 @@ class InitResult:
     first_run_url: str = ""
     exit_code: int = 0
     blocked: list[str] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    #: Keys a substrate may not take over, because consumers read them.
+    RESERVED = ("plan", "steps", "first_run_url", "exit_code")
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        document: dict[str, Any] = {
             "plan": [row.as_dict() for row in self.plan],
             "steps": [row.as_dict() for row in self.steps],
             "first_run_url": self.first_run_url,
             "exit_code": self.exit_code,
         }
+        for key, value in self.extra.items():
+            if key in self.RESERVED:
+                raise ValueError(f"a substrate may not report under the reserved key {key!r}")
+            document[key] = value
+        return document
 
 
 @dataclass
@@ -215,6 +229,9 @@ def run_plan(
         steps=outcomes,
         first_run_url=ctx.first_run_url,
         exit_code=1 if failed_at else 0,
+        # Whatever the substrate's own steps recorded -- copied, not aliased, so
+        # a later mutation of the context cannot rewrite a finished run.
+        extra=dict(ctx.report),
     )
 
 

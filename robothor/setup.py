@@ -169,6 +169,8 @@ _ANSWER_FLAGS = {
     "skip_db": "skip_db",
     "docker": "docker",
     "start": "start",
+    "wait_timeout": "wait_timeout",
+    "image_tag": "image_tag",
 }
 
 
@@ -195,12 +197,16 @@ def build_init_context(args: Any) -> Any:
         if value:
             answers[key] = value
 
-    if answers.get("docker"):
+    substrate_name = str(
+        getattr(args, "substrate", None) or os.environ.get("ROBOTHOR_INIT_SUBSTRATE") or "local"
+    )
+
+    if answers.get("docker") or substrate_name == "compose":
         # The containers ARE the database, so the connection is the one the
-        # generated compose file stands up -- not whatever this shell happens
-        # to point at. A password is generated when none was supplied: the old
-        # wizard did that and the rewrite dropped it, which left the compose
-        # file with an empty POSTGRES_PASSWORD.
+        # compose file stands up -- not whatever this shell happens to point
+        # at. A password is generated when none was supplied: the old wizard
+        # did that and the rewrite dropped it, which left the compose file with
+        # an empty POSTGRES_PASSWORD.
         answers["db_host"] = DOCKER_DB_HOST
         answers["db_port"] = DOCKER_DB_PORT
         answers["db_name"] = DOCKER_DB_NAME
@@ -224,9 +230,7 @@ def build_init_context(args: Any) -> Any:
         json_mode=bool(getattr(args, "json", False)),
         yes=bool(getattr(args, "yes", False)),
         offline=bool(getattr(args, "offline", False)),
-        substrate_name=str(
-            getattr(args, "substrate", None) or os.environ.get("ROBOTHOR_INIT_SUBSTRATE") or "local"
-        ),
+        substrate_name=substrate_name,
     )
 
 
