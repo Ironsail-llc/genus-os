@@ -54,6 +54,26 @@ class TestChainWithLastResort:
         monkeypatch.setenv("ROBOTHOR_LAST_RESORT_MODEL", "ollama_chat/q")
         assert chain_with_last_resort("ollama_chat/q") == ["ollama_chat/q"]
 
+    def test_reads_the_same_source_as_the_agent_chain(self, tmp_path, monkeypatch):
+        """A `genus init` instance names the offline tier in config.yaml only.
+
+        The agent chain (`_with_last_resort`) resolves it through the declared
+        setting; the judge and reviewer chains must inherit the same model
+        rather than read the raw environment and quietly lose the tier.
+        """
+        (tmp_path / ".robothor").mkdir()
+        (tmp_path / ".robothor" / "config.yaml").write_text(
+            "settings:\n  providers:\n    last_resort_model: ollama_chat/qwen3:8b\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        monkeypatch.delenv("ROBOTHOR_LAST_RESORT_MODEL", raising=False)
+
+        assert chain_with_last_resort("openrouter/x/y") == [
+            "openrouter/x/y",
+            "ollama_chat/qwen3:8b",
+        ]
+
 
 class TestLlmCallWalksAChain:
     @pytest.mark.asyncio

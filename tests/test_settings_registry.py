@@ -59,7 +59,9 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: `engine/config.fleet_model_chain`) and would have ridden the gap unnoticed;
 #: that read now resolves through `get_settings().providers.last_resort_model`.
 #: Lower this whenever the count drops, or the ratchet stops ratcheting.
-ENV_READ_SITE_BASELINE = 489
+#: 489 -> 488: `llm_client.chain_with_last_resort` now reads through the same
+#: `last_resort_model()` as the agent chain.
+ENV_READ_SITE_BASELINE = 488
 
 
 def _discovery():

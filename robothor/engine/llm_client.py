@@ -721,11 +721,15 @@ def chain_with_last_resort(model: str) -> list[str]:
     dark in exactly the outage it exists to measure, while the local tier
     answering the agent's own turns sat unused.
 
-    ``ROBOTHOR_LAST_RESORT_MODEL`` is the same variable ``_with_last_resort``
-    appends to every agent chain, so these callers inherit the fleet's
-    offline tier rather than inventing one.
+    The name comes from :func:`robothor.engine.config.last_resort_model`, the
+    same reader ``_with_last_resort`` uses for every agent chain, so these
+    callers inherit the fleet's offline tier rather than inventing one -- on
+    a ``genus init`` instance the name lives in ``config.yaml``, not in the
+    environment, and a raw ``ROBOTHOR_LAST_RESORT_MODEL`` read would miss it.
     """
-    last_resort = os.environ.get("ROBOTHOR_LAST_RESORT_MODEL", "").strip()
+    from robothor.engine.config import last_resort_model
+
+    last_resort = last_resort_model()
     if not last_resort or last_resort == model:
         return [model]
     return [model, last_resort]
