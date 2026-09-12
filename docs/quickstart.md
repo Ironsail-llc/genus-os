@@ -9,18 +9,73 @@ From zero to a working Genus OS instance in 10 minutes.
 - **Redis 7+**
 - **Ollama** (for embeddings, reranking, and generation)
 
-## Option A: Docker for the infrastructure
+Those are what the `local` substrate needs. `--substrate compose` needs none of
+them — only Docker — because the whole stack runs in containers.
+
+## Option A: The whole stack in Docker (`--substrate compose`)
+
+The enterprise pilot path, and the shortest one: released images from GHCR, a
+one-shot migration the services wait on, and a dashboard on
+`http://127.0.0.1:3004`. Nothing but Docker Engine 24+ with the Compose v2
+plugin has to be on the box.
+
+The wheel does not carry the compose files, so fetch the two the stack is made
+of first. They land in the directory you run `genus init` from, which is also
+where it writes `genus.env` — the 0600 file holding every credential:
+
+<!-- install-gate: compose -->
+```bash
+pip install genusos
+mkdir -p ~/genus && cd ~/genus
+curl -fsSLO https://raw.githubusercontent.com/Ironsail-llc/genus-os/main/infra/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/Ironsail-llc/genus-os/main/infra/docker-compose.apps.yml
+export ROBOTHOR_DB_PASSWORD=choose-a-password
+export OPENROUTER_API_KEY=sk-your-key
+genus init --substrate compose --yes --workspace . --owner-name "Ada Lovelace" --owner-email ada@example.com
+set -a; . ./genus.env; set +a
+genus doctor --json
+```
+<!-- /install-gate -->
+
+The `set -a; . ./genus.env` line is not decoration: the containers read that
+file through `env_file`, and `genus doctor` runs on the HOST, where nothing has
+handed it the database password yet.
+
+What the substrate adds to the wizard:
+
+| Step | What it does |
+|------|--------------|
+| `prereqs` | Docker 24+ and Compose v2 are **required**; `nvidia-smi` is optional and decides whether the GPU overlay is used |
+| `render` | Writes `genus.env` (0600), copies `owner.yaml` into the workspace the containers mount, picks the image tag |
+| `up` | One `docker compose --env-file genus.env -f docker-compose.yml -f docker-compose.apps.yml up -d` |
+| `wait` | Polls `/ready` on the engine, bridge, orchestrator and dashboard (`--wait-timeout`, default 180s) and names whichever did not answer |
+
+There is no migration step: the compose file carries a one-shot `migrate`
+service that the engine, bridge and orchestrator wait on with
+`service_completed_successfully`, and `verify` confirms the result through the
+doctor's `db.migrations` check.
+
+**Image tags.** The release build publishes `vX.Y.Z`, `vX.Y`, `vX` and
+`sha-<short>` and deliberately **no** `latest`, so `GENUS_IMAGE_TAG` has no
+default in the compose file — `docker compose` refuses to run without it rather
+than pulling a tag that does not exist. `genus init` writes the version of the
+CLI you installed into `genus.env`; `--image-tag vX.Y.Z` overrides it.
+
+`genus init --substrate compose --yes --json` emits the usual document with one
+extra key: `compose.files`, `compose.images` and `compose.ready`.
+
+## Option B: Docker for the infrastructure only
 
 `genus init --docker` writes a `docker-compose.yml` into the workspace with
 PostgreSQL+pgvector, Redis and Ollama, starts them, and then runs the same
-wizard as below against them.
+wizard as below against them — the platform itself still runs on the host.
 
 ```bash
 pip install genusos
 genus init --docker
 ```
 
-## Option B: Local infrastructure
+## Option C: Everything local
 
 Install PostgreSQL with pgvector, Redis and (optionally) Ollama, export a
 provider key, then run the wizard.
@@ -28,8 +83,8 @@ provider key, then run the wizard.
 These are the exact commands CI replays on a fresh machine. The block assumes
 PostgreSQL and Redis are already installed and running — `genus init` REQUIRES
 both for the `local` substrate and blocks in phase 1 without them, so the
-acceptance gate runs it on an image that provides them (or use Option A above,
-which starts them in containers first):
+acceptance gate runs it on an image that provides them (or use Option A or B
+above, which start them in containers first):
 
 <!-- install-gate: local -->
 ```bash
@@ -120,7 +175,7 @@ narration on stderr, so you can pipe it into `jq` and still watch it work.
 | `--yes`, `-y` | Non-interactive: take defaults and the environment, ask nothing |
 | `--dry-run` | Print the plan and write nothing |
 | `--json` | Plan, step results and first-run URL as JSON on stdout |
-| `--substrate NAME` | Where the instance runs (`local`; compose/systemd/helm are not yet selectable) |
+| `--substrate NAME` | Where the instance runs (`local` or `compose`; systemd/helm are not yet selectable) |
 | `--offline` | Record the provider choice without testing it |
 | `--provider ID` / `--model ID` | Choose the provider and model instead of being asked |
 | `--preset NAME` | Agent catalogue preset to install (see `genus agent catalog`) |
@@ -132,6 +187,8 @@ narration on stderr, so you can pipe it into `jq` and still watch it work.
 | `--skip-models` | Skip Ollama model pulling |
 | `--skip-db` | Skip the database steps |
 | `--workspace PATH` | Workspace directory (default: `~/robothor`) |
+| `--wait-timeout SECONDS` | How long `--substrate compose` waits for the stack to answer `/ready` (default: 180) |
+| `--image-tag TAG` | Released image tag `--substrate compose` runs (default: `v<this CLI's version>`) |
 
 ## Store Your First Fact
 

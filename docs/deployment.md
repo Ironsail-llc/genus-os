@@ -4,40 +4,92 @@ Three deployment paths: Docker Compose (fastest), systemd services (production),
 
 ## Docker Compose
 
-The included `infra/docker-compose.yml` provides PostgreSQL (pgvector), Redis, and Ollama:
+Two compose files make the whole platform, and two overlays adjust it:
+
+| File | What it carries |
+|------|-----------------|
+| `infra/docker-compose.yml` | PostgreSQL (pgvector), Redis, Ollama, plus the optional monitoring/TTS/media/tunnel profiles |
+| `infra/docker-compose.apps.yml` | The release stack: `migrate`, `engine`, `bridge`, `orchestrator`, `dashboard`, all from GHCR |
+| `infra/docker-compose.gpu.yml` | Ollama's NVIDIA reservation. Add it only where the NVIDIA container runtime works — it fails the whole stack where it does not |
+| `infra/docker-compose.dev.yml` | Source bind mounts and local builds, for working on Genus OS itself |
+
+### The short way
+
+`genus init --substrate compose` does everything below — writes the env file,
+picks the overlays, starts the stack, waits for all four `/ready` endpoints and
+prints a single-use `/setup` link. See the [quick start](quickstart.md).
+
+### By hand
 
 ```bash
-# Clone and configure
-git clone https://github.com/Ironsail-llc/genus-os.git
-cd genus-os
-cp infra/robothor.env.example .env
-# Edit .env -- set at minimum: ROBOTHOR_DB_PASSWORD
+# The two files the stack is made of
+mkdir -p ~/genus && cd ~/genus
+curl -fsSLO https://raw.githubusercontent.com/Ironsail-llc/genus-os/main/infra/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/Ironsail-llc/genus-os/main/infra/docker-compose.apps.yml
 
-# Install the CLI (this is what runs the migrations)
-pip install -e .
+# Every credential, in one file nothing else may read
+cat > genus.env <<'ENV'
+GENUS_IMAGE_TAG=v1.68.0
+GENUS_WORKSPACE=/srv/genus/workspace
+GENUS_ENV_FILE=/srv/genus/genus.env
+ROBOTHOR_DB_NAME=robothor_memory
+ROBOTHOR_DB_USER=robothor
+ROBOTHOR_DB_PASSWORD=choose-a-password
+ROBOTHOR_SECRETS_BACKEND=env
+OPENROUTER_API_KEY=sk-your-key
+ENV
+chmod 600 genus.env
 
-# Start infrastructure
-docker compose -f infra/docker-compose.yml up -d
-
-# Wait for PostgreSQL to pass its healthcheck before migrating
-until [ "$(docker inspect -f '{{.State.Health.Status}}' robothor-postgres)" = healthy ]; do
-  sleep 2
-done
-
-# Create the schema, then confirm it
-robothor migrate
-robothor migrate --status
-
-# Verify the containers
-docker compose -f infra/docker-compose.yml ps
+docker compose --env-file ./genus.env \
+  -f docker-compose.yml -f docker-compose.apps.yml up -d
 ```
 
-The Compose file includes health checks for all services. It does **not** seed
-the schema: `robothor migrate` is the only thing that creates or changes it, so
-every applied file is recorded in the `schema_migrations_v2` ledger with its
-SHA-256 checksum. A schema created any other way (an SQL file mounted into
-`docker-entrypoint-initdb.d`, `psql -f`) leaves that ledger empty and later
-upgrades cannot tell it apart from an empty database.
+Three variables configure the compose FILE rather than the platform, so none of
+them is a declared setting and `genus config` does not know them:
+
+- **`GENUS_IMAGE_TAG`** — required, with no default. The release build publishes
+  `vX.Y.Z`, `vX.Y`, `vX` and `sha-<short>` and deliberately no `latest`, so a
+  default here would name a tag that does not exist; compose refuses to start
+  instead, naming the variable.
+- **`GENUS_WORKSPACE`** — the host directory holding this instance's own
+  `brain/`, `docs/agents/` and `.robothor/` (instance data, created by
+  `genus init`), mounted at `/workspace`. It must be writable by uid 1000, the
+  `app` user the released image runs as.
+- **`GENUS_ENV_FILE`** — the file above. Every service reads it through
+  `env_file`; nothing is inlined in the compose file.
+
+The container-side names (`ROBOTHOR_WORKSPACE=/workspace`,
+`ROBOTHOR_DB_HOST=postgres`, `ROBOTHOR_OWNER_CONFIG=/workspace/.robothor/owner.yaml`)
+are set explicitly per service and therefore outrank the env file. A
+host-oriented value cannot point a container back at itself.
+
+### The schema
+
+The `migrate` service runs `python -m robothor.cli migrate` once, and the
+engine, bridge and orchestrator start only after it exits 0
+(`depends_on: migrate: condition: service_completed_successfully`) — the compose
+equivalent of the chart's `wait-for-migrations` init container. Nothing else
+creates schema: no SQL is mounted into `docker-entrypoint-initdb.d`, so every
+applied file is recorded in the `schema_migrations_v2` ledger with its SHA-256
+checksum. A schema created any other way leaves that ledger empty, and a later
+upgrade cannot tell it apart from an empty database.
+
+```bash
+docker compose --env-file ./genus.env -f docker-compose.yml -f docker-compose.apps.yml ps
+docker compose --env-file ./genus.env -f docker-compose.yml -f docker-compose.apps.yml logs migrate
+```
+
+### Working on Genus OS itself
+
+The dev overlay restores the source bind mounts and the local builds the
+release file gave up:
+
+```bash
+docker compose \
+  -f infra/docker-compose.yml \
+  -f infra/docker-compose.apps.yml \
+  -f infra/docker-compose.dev.yml up -d --build
+```
 
 ### Ollama Model Setup
 
@@ -59,13 +111,16 @@ docker exec robothor-ollama ollama pull llama3.2-vision:11b
 
 ### GPU Support
 
-The Compose file reserves all NVIDIA GPUs by default. For CPU-only:
+The base file reserves nothing: a `deploy.resources.devices` block fails the
+entire stack on a box without the NVIDIA container runtime. Add the overlay
+where GPUs work, and nothing where they do not:
 
-```yaml
-# In docker-compose.yml, replace the deploy block:
-ollama:
-  deploy: {}
+```bash
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.gpu.yml up -d
 ```
+
+`genus init --substrate compose` adds it when `nvidia-smi` answers, and says so
+in the plan.
 
 ## Systemd Services
 
