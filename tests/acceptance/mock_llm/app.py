@@ -19,10 +19,18 @@ embeds through ``/api/embed``, whose vectors must be 1024-dimensional because
 `infra/migrations/001_init.sql` declares ``embedding vector(1024)``. A mock
 that answered 768 would pass every HTTP assertion and fail the first insert.
 
-Answers are deterministic: "pong" for chat, a fixed ``noop`` call when tools
-are supplied, and a hash-seeded unit vector per text so the same input always
-embeds to the same place (and never to the zero vector, whose cosine distance
-is NaN).
+Answers are deterministic: "pong" for chat, a fixed ``noop`` call on the first
+tools-bearing request, and a hash-seeded unit vector per text so the same input
+always embeds to the same place (and never to the zero vector, whose cosine
+distance is NaN).
+
+The tool call is answered exactly once per conversation. The engine loops until
+the model stops calling tools, so a mock that called ``noop`` on every
+tools-bearing request would drive every ``genus run`` to the engine's
+200-iteration ceiling and print its answer only on the way out. Once a
+``tool``-role message is in the request the mock answers plainly, which leaves
+the gate one real tool round trip and a run that settles. The Ollama chat
+surface never emits a tool call at all, so it settles on its first turn.
 """
 
 from __future__ import annotations
@@ -105,10 +113,22 @@ async def list_models() -> JSONResponse:
     )
 
 
-def _completion(model: str, tools: Any) -> dict[str, Any]:
-    message: dict[str, Any] = {"role": "assistant", "content": None if tools else REPLY}
+def _answered_a_tool_call(messages: Any) -> bool:
+    """True once a tool result is in the conversation.
+
+    That is the engine's signal that it has already executed the mock's `noop`
+    call and come back for the next turn, so this turn must settle.
+    """
+    if not isinstance(messages, list):
+        return False
+    return any(isinstance(entry, dict) and entry.get("role") == "tool" for entry in messages)
+
+
+def _completion(model: str, tools: Any, messages: Any = None) -> dict[str, Any]:
+    calls_a_tool = bool(tools) and not _answered_a_tool_call(messages)
+    message: dict[str, Any] = {"role": "assistant", "content": None if calls_a_tool else REPLY}
     finish = "stop"
-    if tools:
+    if calls_a_tool:
         message["tool_calls"] = [
             {
                 "id": "call_noop",
@@ -131,7 +151,7 @@ def _completion(model: str, tools: Any) -> dict[str, Any]:
 async def chat_completions(request: Request) -> Any:
     body = await request.json()
     model = str(body.get("model") or CHAT_MODEL)
-    full = _completion(model, body.get("tools"))
+    full = _completion(model, body.get("tools"), body.get("messages"))
 
     if not body.get("stream"):
         return JSONResponse(full)
@@ -224,6 +244,12 @@ async def embeddings_legacy(request: Request) -> JSONResponse:
 
 
 def _ollama_message() -> dict[str, Any]:
+    """A plain answer, even when the request carries `tools`.
+
+    `/api/chat` accepts tools, but nothing in a fresh install drives an agent
+    loop through it, so the mock never calls one here: the first turn settles
+    and no caller can spin.
+    """
     return {"role": "assistant", "content": REPLY}
 
 

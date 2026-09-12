@@ -179,12 +179,14 @@ jobs:
         run: |
           genus run --agent main --print "say pong" 2>&1 | tee "$RUNNER_TEMP/run.txt"
           grep -qi pong "$RUNNER_TEMP/run.txt"
-          # One turn, not two hundred. The mock answers every tools-bearing
-          # request with a fixed `noop` call, so a regression that stops the
-          # engine settling would still print `pong` — after running the loop
-          # to its ceiling.
-          ! grep -q "Safety limit reached" "$RUNNER_TEMP/run.txt"
-          echo 'assertion OK: genus run --agent main "say pong" answered in one turn'
+          # One tool round trip, not two hundred. The mock answers the first
+          # tools-bearing request with a fixed `noop` call and then settles, so
+          # a regression that stops the engine settling would still print
+          # `pong` — after running the loop to its ceiling.
+          if grep -q "Safety limit reached" "$RUNNER_TEMP/run.txt"; then
+            echo "the run reached the iteration ceiling instead of settling"; exit 1
+          fi
+          echo 'assertion OK: genus run --agent main "say pong" settled after one tool round trip'
 
       # The quickstart says so itself, next to the command it prints:
       # `genus serve` "needs: pip install genusos[api]". The api extra carries
@@ -245,7 +247,7 @@ jobs:
           CLAIM="$(curl -fsS -X POST "${BRIDGE_URL}/api/setup/claim" \
             -H 'content-type: application/json' \
             -d "{\"token\":\"${TOKEN}\"}" | jq -r .claim_token)"
-          test -n "$CLAIM" && test "$CLAIM" != null
+          [ -n "$CLAIM" ] && [ "$CLAIM" != null ] || { echo "no claim token"; exit 1; }
           echo "assertion OK: the printed token bought a setup claim"
 
           curl -fsS -X POST "${BRIDGE_URL}/api/setup/operator" \
@@ -456,8 +458,11 @@ jobs:
             exec -T engine python -m robothor.cli run --agent main --print "say pong" \
             2>&1 | tee "$RUNNER_TEMP/run.txt"
           grep -qi pong "$RUNNER_TEMP/run.txt"
-          ! grep -q "Safety limit reached" "$RUNNER_TEMP/run.txt"
-          echo 'assertion OK: genus run --agent main "say pong" answered in one turn'
+          # One tool round trip, not two hundred — see the local job.
+          if grep -q "Safety limit reached" "$RUNNER_TEMP/run.txt"; then
+            echo "the run reached the iteration ceiling instead of settling"; exit 1
+          fi
+          echo 'assertion OK: genus run --agent main "say pong" settled after one tool round trip'
 
       - name: Assert the setup wizard is reachable, claimable, then closed
         run: |
@@ -476,7 +481,7 @@ jobs:
           CLAIM="$(curl -fsS -X POST "${BRIDGE_URL}/api/setup/claim" \
             -H 'content-type: application/json' \
             -d "{\"token\":\"${TOKEN}\"}" | jq -r .claim_token)"
-          test -n "$CLAIM" && test "$CLAIM" != null
+          [ -n "$CLAIM" ] && [ "$CLAIM" != null ] || { echo "no claim token"; exit 1; }
           echo "assertion OK: the printed token bought a setup claim"
 
           curl -fsS -X POST "${BRIDGE_URL}/api/setup/operator" \

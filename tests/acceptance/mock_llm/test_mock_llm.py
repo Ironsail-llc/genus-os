@@ -189,3 +189,96 @@ def test_models_endpoint_lists_the_chat_model(served: str) -> None:
     body = httpx.get(f"{served}/v1/models", timeout=30).json()
 
     assert CHAT_MODEL in [entry["id"] for entry in body["data"]]
+
+
+def test_a_tool_result_in_the_conversation_ends_the_turn(served: str) -> None:
+    """The second tools-bearing request must settle, or the engine loops to its ceiling.
+
+    The engine calls the model again with the tool's result appended and tools
+    still attached. A mock that answers every tools-bearing request with a call
+    never lets it stop: `genus run` then prints its answer only after 200
+    iterations, which is exactly what the gate's ceiling guard exists to catch.
+    """
+    body = httpx.post(
+        f"{served}/v1/chat/completions",
+        json={
+            "model": CHAT_MODEL,
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_noop",
+                            "type": "function",
+                            "function": {"name": "noop", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_noop", "content": "{}"},
+            ],
+            "tools": [{"type": "function", "function": {"name": "noop", "parameters": {}}}],
+        },
+        timeout=30,
+    ).json()
+
+    choice = body["choices"][0]
+    assert choice["message"]["content"] == REPLY
+    assert not choice["message"].get("tool_calls")
+    assert choice["finish_reason"] == "stop"
+
+
+def test_streaming_settles_once_a_tool_result_is_in_the_conversation(served: str) -> None:
+    with httpx.stream(
+        "POST",
+        f"{served}/v1/chat/completions",
+        json={
+            "model": CHAT_MODEL,
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "tool", "tool_call_id": "call_noop", "content": "{}"},
+            ],
+            "tools": [{"type": "function", "function": {"name": "noop", "parameters": {}}}],
+            "stream": True,
+        },
+        timeout=30,
+    ) as response:
+        chunks = [line for line in response.iter_lines() if line.startswith("data: ")]
+
+    assert chunks[-1] == "data: [DONE]"
+    assert REPLY in chunks[0]
+    assert "tool_calls" not in "".join(chunks)
+    assert '"finish_reason": "stop"' in chunks[-2]
+
+
+def test_the_engine_loop_terminates_against_the_mock() -> None:
+    """One round trip, not two hundred: replay the engine's own loop shape.
+
+    Tools stay attached on every call, a `tool` message is appended after each
+    call, and the loop must stop on its own well inside the engine's ceiling.
+    """
+    from fastapi.testclient import TestClient
+
+    from tests.acceptance.mock_llm.app import app as mock_app
+
+    tools = [{"type": "function", "function": {"name": "noop", "parameters": {}}}]
+    messages: list[dict[str, object]] = [{"role": "user", "content": "say pong"}]
+    client = TestClient(mock_app)
+
+    for iteration in range(1, 11):
+        choice = client.post(
+            "/v1/chat/completions",
+            json={"model": CHAT_MODEL, "messages": messages, "tools": tools},
+        ).json()["choices"][0]
+        calls = choice["message"].get("tool_calls") or []
+        if not calls:
+            assert choice["message"]["content"] == REPLY
+            assert iteration == 2, "the gate wants exactly one tool round trip"
+            break
+        messages.append(choice["message"])
+        messages.extend(
+            {"role": "tool", "tool_call_id": call["id"], "content": "{}"} for call in calls
+        )
+    else:
+        pytest.fail("the mock never stopped calling tools")

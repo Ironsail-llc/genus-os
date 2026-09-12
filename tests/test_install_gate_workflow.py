@@ -295,3 +295,69 @@ def test_the_compose_job_puts_the_shim_on_path_for_exactly_one_step(
     assert len(using) == 1, "the shim must be on PATH for the block replay and nothing else"
     assert "--block compose" in str(using[0]["run"])
     assert using[0].get("env", {}).get("INSTALL_GATE_REPO")
+
+
+# --------------------------------------------------------------------------
+# guards that can actually fail
+# --------------------------------------------------------------------------
+#
+# `set -e` exempts two shapes that read like assertions and are not: a command
+# whose status is inverted with `!`, and a non-final command in an `&&` list.
+# Both shipped here, and the ceiling guard spent a whole green run asserting
+# the opposite of what its own log said. Every guard in this workflow has to
+# exit on its own.
+
+#: The ceiling check, as an `if ...; then ... fi` block whose body must exit.
+CEILING_GUARD = re.compile(
+    r'if grep -q "Safety limit reached" [^\n]+; then\n(?P<body>(?:[^\n]*\n)*?)\s*fi(?:\s|$)'
+)
+
+#: The claim-token check, as something that exits when the token is empty.
+CLAIM_GUARD = re.compile(r'\[ -n "\$CLAIM" \][^\n]*\|\|[^\n]*exit 1')
+
+
+def _run_blocks(workflow: dict[str, Any]) -> list[tuple[str, str]]:
+    return [
+        (f"{job_name}: {step.get('name', '<unnamed>')}", str(step["run"]))
+        for job_name, job in workflow["jobs"].items()
+        for step in job["steps"]
+        if step.get("run")
+    ]
+
+
+def test_no_guard_is_a_negated_command(workflow: dict[str, Any]) -> None:
+    """`! cmd` is exempt from `set -e`, so it can never fail a step."""
+    for label, script in _run_blocks(workflow):
+        for line in script.splitlines():
+            assert not line.strip().startswith("! "), (
+                f"{label}: `{line.strip()}` cannot fail the step -- `set -e` exempts `!`"
+            )
+
+
+def test_the_iteration_ceiling_guard_exits(workflow: dict[str, Any]) -> None:
+    """One tool round trip, not two hundred -- and the check has to say so."""
+    guarded = [
+        (label, script)
+        for label, script in _run_blocks(workflow)
+        if "Safety limit reached" in script
+    ]
+
+    assert len(guarded) == 2, "both substrates must check the iteration ceiling"
+    for label, script in guarded:
+        match = CEILING_GUARD.search(script)
+        assert match, f"{label}: the ceiling check is not an `if ...; then ... fi` block"
+        assert "exit 1" in match.group("body"), f"{label}: the ceiling check does not exit"
+
+
+def test_the_claim_token_guard_exits(workflow: dict[str, Any]) -> None:
+    """An empty claim token must fail here, not confusingly one curl later."""
+    claiming = [
+        (label, script) for label, script in _run_blocks(workflow) if "/api/setup/claim" in script
+    ]
+
+    assert len(claiming) == 2, "both substrates must claim the wizard"
+    for label, script in claiming:
+        assert 'test -n "$CLAIM" &&' not in script, (
+            f"{label}: a failing `&&` list does not exit under `set -e`"
+        )
+        assert CLAIM_GUARD.search(script), f"{label}: an empty claim token does not fail the step"
