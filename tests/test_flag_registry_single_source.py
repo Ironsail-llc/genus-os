@@ -68,6 +68,10 @@ MANIFEST_ONLY_FLAGS: dict[str, str] = {
         "read by robothor/plugins/manifest.py straight from os.environ; route it "
         "through feature_flags first, then govern it"
     ),
+    "ROBOTHOR_MANIFEST_SCHEMA_MODE": (
+        "read by robothor/engine/manifest_schema.py straight from os.environ; "
+        "route it through feature_flags first, then govern it"
+    ),
 }
 
 
