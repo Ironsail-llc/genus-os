@@ -43,7 +43,7 @@ FIXTURE_TOKEN_UNUSED = "not-the-printed-token"
 FIXTURE_API_KEY = "sk-test-1111111111111111111111111"
 FIXTURE_BOT_TOKEN = "1234567890:test-bot-token-value-aaaaaaaaaa"
 FIXTURE_PASSWORD = "correct-horse-battery-staple"
-OPERATOR_EMAIL = "alice@example.test"
+OPERATOR_EMAIL = "alice@example.com"
 
 SETUP_ROUTES = [
     ("GET", "/api/setup/status"),
@@ -605,7 +605,7 @@ class TestOperator:
         one moment before the insert."""
         import routers.setup as setup_router
 
-        fake_accounts.owner = {"id": "x", "tenant_id": "default", "email": "bob@example.test"}
+        fake_accounts.owner = {"id": "x", "tenant_id": "default", "email": "bob@example.com"}
         monkeypatch.setattr(setup_router, "setup_complete", lambda *a, **k: False)
 
         response = await test_client.post(
@@ -637,7 +637,7 @@ class TestOperator:
         """A half-finished earlier run must not silently create the account
         under an identity the operator did not just type."""
         owner_home.write_text(
-            "tenant_id: default\nfirst_name: Bob\nlast_name: Other\nemail: bob@example.test\n"
+            "tenant_id: default\nfirst_name: Bob\nlast_name: Other\nemail: bob@example.com\n"
         )
 
         response = await test_client.post(
@@ -704,7 +704,7 @@ class TestOperator:
         from robothor.owner_config import load_owner_config
         from robothor.settings import reset_settings
 
-        monkeypatch.setenv("ROBOTHOR_OWNER_EMAIL", "someone-else@example.test")
+        monkeypatch.setenv("ROBOTHOR_OWNER_EMAIL", "someone-else@example.com")
         monkeypatch.setenv("ROBOTHOR_OWNER_NAME", "Someone Else")
         reset_settings()
 

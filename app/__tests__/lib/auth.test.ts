@@ -361,7 +361,7 @@ describe("the local provider asks the bridge, not the environment", () => {
     const authorize = await localAuthorize();
 
     const result = await authorize(
-      { email: "alice@example.test", password: "correct-horse-battery-staple" },
+      { email: "alice@example.com", password: "correct-horse-battery-staple" },
       undefined,
     );
 
@@ -382,7 +382,7 @@ describe("the local provider asks the bridge, not the environment", () => {
           refresh_token: "refresh-token-value",
           user: {
             id: "user-1",
-            email: "alice@example.test",
+            email: "alice@example.com",
             display_name: "Alice",
             role: "owner",
             tenant_id: "default",
@@ -393,11 +393,11 @@ describe("the local provider asks the bridge, not the environment", () => {
     const authorize = await localAuthorize();
 
     const result = (await authorize(
-      { email: "alice@example.test", password: "correct-horse-battery-staple" },
+      { email: "alice@example.com", password: "correct-horse-battery-staple" },
       undefined,
     )) as { email?: string } | null;
 
-    expect(result?.email).toBe("alice@example.test");
+    expect(result?.email).toBe("alice@example.com");
   });
 
   it("refuses when the bridge cannot be reached", async () => {
@@ -412,7 +412,7 @@ describe("the local provider asks the bridge, not the environment", () => {
     await expect(
       authorize(
         {
-          email: "alice@example.test",
+          email: "alice@example.com",
           password: "correct-horse-battery-staple",
         },
         undefined,

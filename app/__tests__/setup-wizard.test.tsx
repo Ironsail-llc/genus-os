@@ -121,7 +121,7 @@ async function start() {
 
 async function createOperator() {
   fill("Full name", "Alice Example");
-  fill("Email", "alice@example.test");
+  fill("Email", "alice@example.com");
   fill("Password", FIXTURE_PASSWORD);
   fill("Confirm password", FIXTURE_PASSWORD);
   click("Create account");
@@ -227,7 +227,7 @@ describe("the first-run wizard", () => {
 
     await start();
     fill("Full name", "Alice Example");
-    fill("Email", "alice@example.test");
+    fill("Email", "alice@example.com");
     fill("Password", FIXTURE_PASSWORD);
     fill("Confirm password", "something-else-entirely");
     click("Create account");
@@ -242,7 +242,7 @@ describe("the first-run wizard", () => {
 
     await start();
     fill("Full name", "Alice Example");
-    fill("Email", "alice@example.test");
+    fill("Email", "alice@example.com");
     fill("Password", "short");
     fill("Confirm password", "short");
     click("Create account");
