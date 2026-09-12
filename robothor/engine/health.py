@@ -128,6 +128,8 @@ def _mount_subsystem_routers(app: Any, config: EngineConfig, runner: AgentRunner
     from robothor.engine.admin_providers import register as register_admin_providers
 
     register_admin_providers(app)
+
+
 async def _fleet_readiness(config: EngineConfig, details: dict[str, Any]) -> str:
     """Readiness for the agent fleet. Broken and absent are different answers.
 
