@@ -391,6 +391,30 @@ def reset_config() -> None:
     _config = None
 
 
+def required_env_checks() -> list[tuple[str, bool, str]]:
+    """Environment variables an instance cannot run without.
+
+    Telegram is NOT among them. The engine has always started without a bot
+    token -- agents configured with ``delivery: none`` communicate through CRM
+    tasks and notifications, and that is the documented headless deploy -- but
+    this list demanded one, so every Telegram-free instance failed two checks
+    it could never pass, and an operator learned that red output here is
+    normal. ``genus config validate`` checks Telegram as what it is: optional,
+    and an error only when it is configured wrongly.
+    """
+    required_env = {
+        "OPENROUTER_API_KEY": "OpenRouter LLM access",
+    }
+    results: list[tuple[str, bool, str]] = []
+    for var, purpose in required_env.items():
+        val = os.environ.get(var, "")
+        if val:
+            results.append((f"env:{var}", True, purpose))
+        else:
+            results.append((f"env:{var}", False, f"{purpose} — not set"))
+    return results
+
+
 def validate() -> list[tuple[str, bool, str]]:
     """Validate system configuration and connectivity.
 
@@ -402,17 +426,7 @@ def validate() -> list[tuple[str, bool, str]]:
     results: list[tuple[str, bool, str]] = []
 
     # 1. Required env vars
-    required_env = {
-        "OPENROUTER_API_KEY": "OpenRouter LLM access",
-        "ROBOTHOR_TELEGRAM_BOT_TOKEN": "Telegram bot",
-        "ROBOTHOR_TELEGRAM_CHAT_ID": "Telegram delivery",
-    }
-    for var, purpose in required_env.items():
-        val = os.environ.get(var, "")
-        if val:
-            results.append((f"env:{var}", True, purpose))
-        else:
-            results.append((f"env:{var}", False, f"{purpose} — not set"))
+    results.extend(required_env_checks())
 
     # 2. Port checks — "in use" means service is running (good), "available" means not running (warning)
     for name, port in [

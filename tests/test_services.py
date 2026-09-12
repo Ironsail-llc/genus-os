@@ -143,3 +143,55 @@ class TestNoManifest:
         monkeypatch.chdir(tmp_path)  # Prevent cwd fallback finding real manifest
         services = list_services()
         assert services == {}
+
+
+class TestOllamaUrlOverrideName:
+    """`ROBOTHOR_OLLAMA_URL` is the platform's name for the Ollama endpoint.
+
+    The service registry read a bare `OLLAMA_URL`, which is Ollama's own
+    variable and belongs to whatever else on the box speaks to it -- so an
+    operator who set the documented `ROBOTHOR_OLLAMA_URL` got the manifest
+    default and no indication why.
+    """
+
+    def test_canonical_name_overrides_the_manifest(self, monkeypatch):
+        from robothor.services import registry
+
+        monkeypatch.delenv("OLLAMA_URL", raising=False)
+        monkeypatch.setenv("ROBOTHOR_OLLAMA_URL", "http://gpu-box:11434")
+        assert registry.get_service_url("ollama") == "http://gpu-box:11434"
+
+    def test_deprecated_name_still_works(self, monkeypatch):
+        from robothor.services import registry
+
+        monkeypatch.delenv("ROBOTHOR_OLLAMA_URL", raising=False)
+        monkeypatch.setenv("OLLAMA_URL", "http://old-box:11434")
+        assert registry.get_service_url("ollama") == "http://old-box:11434"
+
+    def test_canonical_name_wins_when_both_are_set(self, monkeypatch):
+        from robothor.services import registry
+
+        monkeypatch.setenv("ROBOTHOR_OLLAMA_URL", "http://gpu-box:11434")
+        monkeypatch.setenv("OLLAMA_URL", "http://old-box:11434")
+        assert registry.get_service_url("ollama") == "http://gpu-box:11434"
+
+    def test_the_url_is_read_through_the_settings_layer(self, monkeypatch, tmp_path):
+        """config.yaml configures the endpoint, not just the environment.
+
+        The registry kept its own precedence tuple over `os.environ`, so the
+        `settings:` block -- which is a supported source for every other
+        setting, and the one `genus config set` writes -- did nothing here.
+        An operator who set the endpoint with `genus config set` got the
+        manifest default and no indication why.
+        """
+        from robothor.services import registry
+        from robothor.settings import reset_settings
+
+        config = tmp_path / ".robothor" / "config.yaml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("settings:\n  ollama:\n    url: http://file-box:11434\n")
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        monkeypatch.delenv("ROBOTHOR_OLLAMA_URL", raising=False)
+        monkeypatch.delenv("OLLAMA_URL", raising=False)
+        reset_settings()
+        assert registry.get_service_url("ollama") == "http://file-box:11434"

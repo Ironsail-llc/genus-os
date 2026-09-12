@@ -36,6 +36,19 @@ def _extra(field: FieldInfo) -> dict[str, Any]:
     return dict(extra) if isinstance(extra, dict) else {}
 
 
+def _units(extra: dict[str, Any]) -> tuple[str, ...] | None:
+    """The units a change to this field waits on, or None if undeclared.
+
+    None is not "restart nothing" -- it is "nobody said", which is the state
+    the ``genus config`` commands must be able to tell apart from an empty
+    tuple (a setting read fresh on every invocation, like the ops scripts).
+    ``SettingsGroup`` stamps every field with its group's units, so None only
+    survives a model that bypassed :func:`robothor.settings.model.declare`.
+    """
+    declared = extra.get("restart_units")
+    return None if declared is None else tuple(str(unit) for unit in declared)
+
+
 @lru_cache(maxsize=1)
 def groups() -> tuple[str, ...]:
     """Group names, in declaration order."""
@@ -50,7 +63,8 @@ def field_index() -> dict[str, dict[str, Any]]:
     record, so a lookup works whichever name an operator actually set. The
     record carries: ``group``, ``field`` (the Python attribute path),
     ``env`` (the primary name), ``aliases``, ``default``, ``type``,
-    ``description``, ``restart_required``, ``secret``, ``since``, ``governed``.
+    ``description``, ``restart_required``, ``restart_units``, ``secret``,
+    ``since``, ``governed``.
 
     Raises:
         ValueError: if two fields claim the same primary environment name.
@@ -83,6 +97,7 @@ def field_index() -> dict[str, dict[str, Any]]:
                 "type": getattr(annotation, "__name__", str(annotation)),
                 "description": field.description or "",
                 "restart_required": bool(extra.get("restart_required", True)),
+                "restart_units": _units(extra),
                 "secret": bool(extra.get("secret", False)),
                 "since": extra.get("since") or "legacy",
                 "governed": bool(extra.get("governed", False)),

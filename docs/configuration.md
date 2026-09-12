@@ -10,6 +10,81 @@ All configuration is via environment variables with sensible defaults. No config
     (not published on this site), and `genus config schema` prints the same
     information as JSON Schema.
 
+## Reading and changing settings
+
+You should not have to grep `/etc` to answer "what is this set to?", and you
+should not have to guess what a change needs restarting. `genus config` reads
+the same typed registry this page is generated from.
+
+```bash
+genus config get ROBOTHOR_MAX_CONCURRENT_AGENTS   # value + where it came from
+genus config explain ROBOTHOR_RBAC_MODE           # everything declared about it
+genus config list --group engine --changed        # what is off its default
+genus config set ROBOTHOR_MAX_CONCURRENT_AGENTS 6
+genus config validate                             # --json for machines
+genus config schema                               # JSON Schema, for tooling
+```
+
+| Command | What it does |
+|---------|--------------|
+| `get NAME` | The effective value and its provenance: `runtime` (an operator-set `feature_flags` row), `env`, `config.yaml`, or `default`. |
+| `set NAME VALUE` | Routes by the setting's own metadata — see below. |
+| `explain NAME` | Description, group, type, default, deprecated aliases, secret/governed/restart flags, current provenance. |
+| `list [--group G] [--changed]` | Every setting, or one group, or only what is not on its default. |
+| `validate [--json]` | Connectivity checks, plus unknown keys, deprecated names in use, and settings the running process disagrees with. Exit 1 only for errors — see below. |
+
+`validate` separates what is broken from what is merely worth knowing:
+
+- **errors** (exit 1) — a key nothing reads, a connectivity check that failed,
+  a Telegram credential that is not shaped like one. Something is wrong.
+- **warnings** (exit 0) — a deprecated name still set, and a `settings:` value
+  the environment is overriding. The second is documented precedence, not a
+  fault: a variable in `/etc/robothor/robothor.env` beats the file, so the
+  file's value applies once you clear the variable and restart the units
+  named. `--json` lists those settings separately under `pending_restart`,
+  alongside `errors`.
+
+**`set` routes by what the setting is**, not by what you typed:
+
+- a **governed flag** (`ROBOTHOR_RBAC_MODE` and the rest of `infra/flags.yaml`)
+  goes to the flag store and is live within seconds — no restart, no file edit;
+- a **secret** is refused, naming `genus vault set`. Writing a credential into
+  a config file is not a shortcut worth having;
+- **everything else** is written into the `settings:` block of
+  `$ROBOTHOR_WORKSPACE/.robothor/config.yaml`, atomically and without
+  disturbing your comments, and the reply is either `applied` or
+  `restart required: robothor-engine`.
+
+A secret is never printed. `get` and `list` show `<set, sha256:ab12cd34>` —
+enough to tell two boxes apart without putting the value on your screen.
+
+### config.yaml and unknown keys
+
+`config.yaml` sits below the environment and above the defaults: a variable in
+the environment still wins. Its `settings:` block mirrors the groups in the
+generated reference (`docs/reference/configuration.md` in the repository):
+
+```yaml
+settings:
+  engine:
+    max_concurrent_agents: 6
+  flags:
+    config_strict_mode: enforce
+```
+
+A key nothing reads is the quietest failure a config file has — the setting
+simply never applies, and you read the default as your value.
+`ROBOTHOR_CONFIG_STRICT_MODE` decides what happens to one:
+
+| Rung | Behaviour |
+|------|-----------|
+| `off` | The key is ignored silently. |
+| `observe` | **Default.** The key is ignored and logged once, naming it. What every existing install gets on upgrade. |
+| `enforce` | Resolving settings fails, naming the key. Recommended for new installs, and for any box where `genus config validate` reports no unknown keys. |
+
+The rung can be set in the environment or in the file it governs (as above), so
+a new install can ship `enforce` without an environment file.
+
 ## Loading
 
 ```python
@@ -320,7 +395,7 @@ The service registry supports environment variable overrides for any service:
 | `BRIDGE_URL` | Bridge base URL |
 | `ORCHESTRATOR_URL` | API server base URL |
 | `VISION_URL` | Vision service base URL |
-| `OLLAMA_URL` | Ollama base URL |
+| `ROBOTHOR_OLLAMA_URL` | Ollama base URL (`OLLAMA_URL` still works, deprecated) |
 | `SEARXNG_URL` | SearXNG search URL |
 
 These take precedence over `robothor-services.json` values.

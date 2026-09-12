@@ -206,3 +206,57 @@ def load_owner_config(path: Path | None = None) -> OwnerConfig | None:
     if yaml_exists:
         return None
     return _from_env()
+
+
+def write_owner_config(
+    full_name: str,
+    email: str,
+    *,
+    tenant_id: str = DEFAULT_TENANT,
+    path: Path | None = None,
+) -> bool:
+    """Create ``owner.yaml`` from the identity the setup wizard collected.
+
+    Returns True when a file was written, False when there was nothing complete
+    enough to write, or an identity already exists.
+
+    ``genus init`` used to put ``ROBOTHOR_OWNER_NAME`` and
+    ``ROBOTHOR_OWNER_EMAIL`` into the workspace ``.env``, which is the wrong
+    place twice over: those variables are deprecated in favour of this file,
+    and the identity belongs to the operator rather than to a workspace, so two
+    workspaces on one account could disagree about who the operator was.
+    Writing the file the platform actually reads makes ``genus init`` and
+    :func:`load_owner_config` agree by construction.
+
+    An existing file is never overwritten. Re-running init is routine; silently
+    renaming the operator -- and orphaning the ``person_id`` link that
+    ``bootstrap_owner_person_links`` wrote against the old identity -- is not.
+    """
+    name = (full_name or "").strip()
+    address = (email or "").strip().lower()
+    if not name or not address:
+        return False
+
+    target = path or owner_config_path()
+    if target.exists():
+        logger.info("owner.yaml already exists at %s; leaving it alone", target)
+        return False
+
+    first, _, last = name.partition(" ")
+    document = {
+        "tenant_id": tenant_id,
+        "first_name": first,
+        "last_name": last.strip(),
+        "email": address,
+    }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "# Operator identity for this Genus OS instance.\n"
+        "# Written by `genus init`; templates/owner.yaml.example documents every\n"
+        "# field, including nicknames and additional_emails.\n"
+        + yaml.safe_dump(document, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    # The file names a person and is read by one daemon; nobody else needs it.
+    target.chmod(0o600)
+    return True

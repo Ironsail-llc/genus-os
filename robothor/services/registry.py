@@ -25,17 +25,28 @@ from robothor.config import get_config
 
 logger = logging.getLogger(__name__)
 
-# Environment variable overrides: SERVICE_NAME_URL -> full URL override
-_ENV_OVERRIDES = {
-    "bridge": "BRIDGE_URL",
-    "orchestrator": "ORCHESTRATOR_URL",
-    "vision": "VISION_URL",
-    "ollama": "OLLAMA_URL",
-    "redis": "REDIS_URL",
-    "searxng": "SEARXNG_URL",
-    "helm": "HELM_URL",
-    "mediamtx": "RTSP_URL",
+# Environment variable overrides: service name -> the names that override its
+# manifest entry, in precedence order.
+#
+# Ollama is NOT here. Its endpoint is a declared setting, so it resolves
+# through robothor.settings.get_settings() instead -- see _settings_url(). A
+# second precedence list beside the settings package is how the two stop
+# agreeing: this module read only the bare `OLLAMA_URL`, so an operator who
+# set the documented `ROBOTHOR_OLLAMA_URL` got the manifest default and
+# nothing to explain why, and neither name could be set in config.yaml at all.
+_ENV_OVERRIDES: dict[str, tuple[str, ...]] = {
+    "bridge": ("BRIDGE_URL",),
+    "orchestrator": ("ORCHESTRATOR_URL",),
+    "vision": ("VISION_URL",),
+    "redis": ("REDIS_URL",),
+    "searxng": ("SEARXNG_URL",),
+    "helm": ("HELM_URL",),
+    "mediamtx": ("RTSP_URL",),
 }
+
+#: Services whose endpoint the settings registry declares. The value is the
+#: dotted path of the field that holds the full base URL.
+_SETTINGS_URLS: dict[str, tuple[str, str]] = {"ollama": ("ollama", "url")}
 
 # Cache
 _manifest: dict[str, Any] | None = None
@@ -106,14 +117,44 @@ def get_service(name: str) -> dict[str, Any] | None:
     return result
 
 
+def _settings_url(name: str) -> str:
+    """The endpoint the settings registry resolves for ``name``, or "".
+
+    Routed through ``get_settings()`` rather than read from ``os.environ``
+    here, which buys three things this module used to lack: config.yaml works
+    as a source (so ``genus config set ROBOTHOR_OLLAMA_URL`` takes effect),
+    the deprecated bare ``OLLAMA_URL`` warns once naming its replacement
+    instead of being silently preferred, and the precedence between the two
+    names is described in one place instead of two that can disagree.
+
+    The import is local: ``robothor.services`` is imported by scripts that
+    never resolve a setting, and pydantic-settings is not a cheap import.
+    """
+    field = _SETTINGS_URLS.get(name)
+    if field is None:
+        return ""
+    from robothor.settings import get_settings
+
+    group, attribute = field
+    try:
+        return str(getattr(getattr(get_settings(), group), attribute) or "")
+    except Exception:  # a settings failure must not take the manifest with it
+        logger.debug("settings lookup for %s failed; falling back", name, exc_info=True)
+        return ""
+
+
 def get_service_url(name: str, path: str = "") -> str | None:
     """Get the base URL for a service, optionally with a path appended.
 
-    Environment variable overrides take precedence over manifest values.
+    A declared setting wins, then an environment override, then the manifest.
     Returns None if service is unknown.
     """
-    env_key = _ENV_OVERRIDES.get(name)
-    if env_key:
+    configured = _settings_url(name)
+    if configured:
+        base = configured.rstrip("/")
+        return f"{base}{path}" if path else base
+
+    for env_key in _ENV_OVERRIDES.get(name, ()):
         env_val = os.environ.get(env_key)
         if env_val:
             base = env_val.rstrip("/")

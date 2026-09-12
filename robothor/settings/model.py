@@ -31,7 +31,7 @@ Declaring a setting here does NOT yet change who reads it. Every existing
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -46,6 +46,7 @@ def declare(
     *,
     aliases: tuple[str, ...] = (),
     restart_required: bool = True,
+    restart_units: tuple[str, ...] | None = None,
     secret: bool = False,
     since: str = "legacy",
     governed: bool = False,
@@ -65,6 +66,13 @@ def declare(
         restart_required: True when a change only takes effect on restart.
             False marks the hot-reloadable settings (log level, cost caps,
             concurrency) that a later ``genus config set`` applies live.
+        restart_units: the systemd units that have to be restarted for a
+            change to this setting to take effect. Left unset, the field
+            inherits its group's :attr:`SettingsGroup.restart_units` -- the
+            usual case, because a group exists precisely because one service
+            reads it. Name the units on the field when a setting is read by a
+            service its neighbours are not: naming too few is how a change
+            reports applied and is not.
         secret: True for credentials -- redacted by the CLI and the doc
             generator, and never given a default.
         since: the release that introduced the setting, or ``"legacy"`` for
@@ -79,6 +87,7 @@ def declare(
         json_schema_extra={
             "env": env,
             "restart_required": restart_required,
+            "restart_units": None if restart_units is None else list(restart_units),
             "secret": secret,
             "since": since,
             "aliases": list(aliases),
@@ -94,9 +103,33 @@ class SettingsGroup(BaseModel):
     naming the key instead of a setting that silently never applies.
     ``populate_by_name`` lets the sources address fields by their Python name
     while ``validation_alias`` stays pure declaration.
+
+    ``restart_units`` is the group's answer to "what do I restart?", stamped
+    onto every field that did not name its own. It lives here rather than in a
+    table beside the CLI because a table keyed on group names silently gives
+    its default to the next group somebody adds, and the default -- restart
+    everything -- is the one answer that is never wrong and never useful.
     """
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    #: Restarted for any ``restart_required`` field in this group. Overridden
+    #: per group below; the base value is the conservative answer for a group
+    #: whose reader is not pinned down.
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine", "robothor-bridge")
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
+        """Give every field of this group its units, once the fields exist.
+
+        pydantic calls this after the model is built, so ``model_fields`` is
+        populated; ``__init_subclass__`` runs too early to see them.
+        """
+        super().__pydantic_init_subclass__(**kwargs)
+        for field in cls.model_fields.values():
+            extra = field.json_schema_extra
+            if isinstance(extra, dict) and extra.get("restart_units") is None:
+                extra["restart_units"] = list(cls.restart_units)
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +336,6 @@ class DatabaseSettings(SettingsGroup):
         "Bind every connection to a tenant so PostgreSQL row-level security "
         "applies. Inert unless the DB user is a non-superuser; federation "
         "refuses to activate a link while it is off.",
-        governed=True,
     )
     tenant_id: str = declare(
         "",
@@ -396,6 +428,8 @@ class RedisSettings(SettingsGroup):
 class OllamaSettings(SettingsGroup):
     """The local Ollama endpoint and the models served from it."""
 
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
+
     url: str = declare(
         "",
         "ROBOTHOR_OLLAMA_URL",
@@ -465,6 +499,8 @@ class OllamaSettings(SettingsGroup):
 
 class ProviderSettings(SettingsGroup):
     """Cloud model routing, budgets and the failure controls around them."""
+
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
 
     last_resort_model: str = declare(
         "",
@@ -567,6 +603,8 @@ class ProviderSettings(SettingsGroup):
 
 class EngineSettings(SettingsGroup):
     """The agent execution layer: bind address, concurrency, pacing, sandbox."""
+
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
 
     host: str = declare(
         "127.0.0.1",
@@ -701,7 +739,6 @@ class EngineSettings(SettingsGroup):
         "ROBOTHOR_RESUME_IN_FLIGHT",
         "Resume runs that were in flight when the engine restarted. Verify it "
         "from a recovered run, never from the log line it prints itself.",
-        governed=True,
     )
     daemon_start_ts: str = declare(
         "",
@@ -856,6 +893,8 @@ class EngineSettings(SettingsGroup):
 class ChannelSettings(SettingsGroup):
     """How the instance reaches people, and who it says it is."""
 
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
+
     telegram_bot_token: str = declare(
         "",
         "ROBOTHOR_TELEGRAM_BOT_TOKEN",
@@ -957,6 +996,8 @@ class ChannelSettings(SettingsGroup):
 class AuthSettings(SettingsGroup):
     """Who may reach the bridge and the dashboard, and how that is proven."""
 
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-bridge", "robothor-app")
+
     environment: str = declare(
         "",
         "GENUS_ENVIRONMENT",
@@ -969,7 +1010,6 @@ class AuthSettings(SettingsGroup):
         "GENUS_AUTH_ENFORCE",
         "One-way compatibility switch that turns identity checks on. It never "
         "relaxes the existing role_permissions policy.",
-        governed=True,
     )
     insecure_dev_mode: bool = declare(
         False,
@@ -1019,22 +1059,35 @@ class AuthSettings(SettingsGroup):
 class FlagSettings(SettingsGroup):
     """Guardrails and feature gates, most on an off/observe/enforce ladder.
 
-    Governed flags are inventoried in ``infra/flags.yaml`` with an owner, a
-    current mode and a promotion date.
+    ``governed=True`` means two things at once, and both must hold:
+
+    * the flag is inventoried in ``infra/flags.yaml`` with an owner, a current
+      production mode and a promotion date, and
+    * it resolves through ``robothor.flags.store`` -- operator DB row first,
+      then the environment -- so the Controls dashboard and ``genus config
+      set`` can move it without an edit to ``/etc`` and a restart.
+
+    ``robothor.flags.store.GOVERNED_FLAGS`` derives from exactly this metadata
+    (see ``tests/test_flag_registry_single_source.py``), which is why a feature
+    gate the platform reads straight from ``os.environ`` is NOT marked
+    governed, however important it is: marking it would hand an operator a
+    switch that writes a row nothing reads, and an inert control is worse than
+    an absent one. Route the reader through
+    ``robothor.engine.feature_flags`` first, then mark it.
     """
+
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
 
     accretion_enabled: bool = declare(
         False,
         "ROBOTHOR_ACCRETION_ENABLED",
         "Let agents accrete durable notes from their runs into the workspace.",
-        governed=True,
     )
     admission_enabled: bool = declare(
         False,
         "ROBOTHOR_ADMISSION_ENABLED",
         "Run the admission check that refuses work an agent is not equipped "
         "to do rather than letting it fail late.",
-        governed=True,
     )
     admission_mode: str = declare(
         "observe",
@@ -1047,13 +1100,11 @@ class FlagSettings(SettingsGroup):
         "ROBOTHOR_CURATOR_APPLY",
         "Let the memory curator write its proposed edits. Off, it only "
         "proposes — the prompt-trust boundary for accreted content.",
-        governed=True,
     )
     deliverable_contract_enabled: bool = declare(
         False,
         "ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED",
         "Hold a run to the deliverable it promised, so 'done' means the artefact exists.",
-        governed=True,
     )
     deliverable_contract_mode: str = declare(
         "observe",
@@ -1072,7 +1123,6 @@ class FlagSettings(SettingsGroup):
         "ROBOTHOR_DISABLE_ALL_GUARDRAILS",
         "Master off switch for every guardrail. A break-glass control: an "
         "instance running with this set has no safety checks at all.",
-        governed=True,
     )
     dnc_mode: str = declare(
         "observe",
@@ -1099,34 +1149,29 @@ class FlagSettings(SettingsGroup):
         "Agent-manifest schema ladder position: observe logs and counts what "
         "enforcement would refuse, enforce refuses the manifest and reports "
         "the agent broken. off skips validation entirely.",
-        governed=True,
     )
     planner_enabled: bool = declare(
         True,
         "ROBOTHOR_PLANNER_ENABLED",
         "Let the forward planner turn a thread into structured CRM tasks. "
         "Set 0 to fall back to stage-3 behaviour.",
-        governed=True,
     )
     plugin_manifest_enabled: bool = declare(
         True,
         "ROBOTHOR_PLUGIN_MANIFEST_ENABLED",
         "Validate plugin manifests before a plugin is allowed to load.",
-        governed=True,
     )
     plugin_manifest_mode: str = declare(
         "observe",
         "ROBOTHOR_PLUGIN_MANIFEST_MODE",
         "Plugin-manifest ladder position: observe logs violations, enforce "
         "refuses to load the plugin.",
-        governed=True,
     )
     sandbox_enforce_overrides_manifest: bool = declare(
         False,
         "ROBOTHOR_SANDBOX_ENFORCE_OVERRIDES_MANIFEST",
         "Make sandbox 'enforce' outrank a manifest's per-agent opt-out. "
         "Without it an agent can decline the sandbox it is enforced under.",
-        governed=True,
     )
     todo_escalate_enabled: bool = declare(
         True,
@@ -1138,7 +1183,6 @@ class FlagSettings(SettingsGroup):
         False,
         "ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED",
         "Promote a todo's subtasks into their own CRM tasks.",
-        governed=True,
     )
     web_search_browser_fallback: str = declare(
         "",
@@ -1146,7 +1190,6 @@ class FlagSettings(SettingsGroup):
         "'on' lets web_search fall back to a real browser when the scraped "
         "engines block the host IP — the failure mode behind a whole day of "
         "'can't even web search'.",
-        governed=True,
     )
     federation_allow_inert_rls: bool = declare(
         False,
@@ -1154,6 +1197,211 @@ class FlagSettings(SettingsGroup):
         "Let a federation link activate while row-level security is inert. A "
         "deliberate escape hatch: the gate exists because a child could "
         "otherwise reach its parent's data.",
+    )
+    config_strict_mode: str = declare(
+        "observe",
+        "ROBOTHOR_CONFIG_STRICT_MODE",
+        "What an unknown key in the settings: block of config.yaml does. "
+        "'off' ignores it, 'observe' (default for existing installs) logs one "
+        "warning naming the key and carries on, 'enforce' refuses to start. "
+        "Inventoried in infra/flags.yaml but deliberately NOT governed: it is "
+        "read while settings are being resolved, which happens before and "
+        "without a database.",
+        since="1.66",
+    )
+
+    # --- Guardrail ladders ------------------------------------------------
+    #
+    # Each is an *_ENABLED switch plus a *_MODE rung (see
+    # robothor.engine.feature_flags._enforcement_mode): the subsystem does
+    # nothing at all until the switch is on, and then the rung decides whether
+    # it observes, alerts or acts. Both halves were read by the engine for a
+    # year and declared nowhere -- they reach os.environ through a variable
+    # name, so the AST scan behind test_every_env_read_is_declared could not
+    # see them, and an operator asking "what can I configure?" was told they
+    # did not exist. The *_MODE halves are the governed ones: they are what
+    # the flag manifest tracks and what an operator promotes.
+
+    rbac_enabled: bool = declare(
+        False,
+        "ROBOTHOR_RBAC_ENABLED",
+        "Switch for role-based access control over system, cron and hook runs. "
+        "Off, every run may call every tool its manifest allows.",
+    )
+    rbac_mode: str = declare(
+        "observe",
+        "ROBOTHOR_RBAC_MODE",
+        "RBAC ladder position: observe records the denials it would have made, "
+        "alert also notifies, enforce denies.",
+        governed=True,
+    )
+    injection_scan_enabled: bool = declare(
+        False,
+        "ROBOTHOR_INJECTION_SCAN_ENABLED",
+        "Switch for prompt-injection scanning of assembled system-run prompts.",
+    )
+    injection_scan_mode: str = declare(
+        "observe",
+        "ROBOTHOR_INJECTION_SCAN_MODE",
+        "Injection-scan ladder position: observe logs a suspect prompt, enforce refuses to run it.",
+        governed=True,
+    )
+    exec_allowlist_strict_enabled: bool = declare(
+        False,
+        "ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED",
+        "Switch for rejecting shell-chaining metacharacters in an allowlisted "
+        "exec command, so an allowlisted binary cannot carry a second one.",
+    )
+    exec_allowlist_strict_mode: str = declare(
+        "observe",
+        "ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE",
+        "Exec-allowlist ladder position: observe logs the chained command, enforce refuses it.",
+        governed=True,
+    )
+    approval_failclosed_enabled: bool = declare(
+        False,
+        "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED",
+        "Switch for fail-closed human approval: a tool an agent must ask about "
+        "is denied when the operator does not answer in time.",
+    )
+    approval_mode: str = declare(
+        "observe",
+        "ROBOTHOR_APPROVAL_MODE",
+        "Human-approval ladder position: observe records what would have been "
+        "escalated, enforce actually asks and denies on timeout.",
+        governed=True,
+    )
+    completion_contracts_enabled: bool = declare(
+        False,
+        "ROBOTHOR_COMPLETION_CONTRACTS_ENABLED",
+        "Switch for evidence-based completion contracts: a run claiming "
+        "success must show the tool trace that produced it.",
+    )
+    completion_contracts_mode: str = declare(
+        "observe",
+        "ROBOTHOR_COMPLETION_CONTRACTS_MODE",
+        "Completion-contract ladder position: observe records unevidenced "
+        "claims, enforce fails the run that makes one.",
+        governed=True,
+    )
+    run_verification_enabled: bool = declare(
+        False,
+        "ROBOTHOR_RUN_VERIFICATION_ENABLED",
+        "Switch for verifying a finished run's claims against its tool trace.",
+    )
+    run_verification_mode: str = declare(
+        "observe",
+        "ROBOTHOR_RUN_VERIFICATION_MODE",
+        "Run-verification ladder position: observe records the verdict, "
+        "enforce marks the run failed when its claims are unsupported.",
+        governed=True,
+    )
+    tool_verify_enabled: bool = declare(
+        False,
+        "ROBOTHOR_TOOL_VERIFY_ENABLED",
+        "Switch for tool-level post-condition checks -- did the write the tool "
+        "reported actually land?",
+    )
+    tool_verify_mode: str = declare(
+        "observe",
+        "ROBOTHOR_TOOL_VERIFY_MODE",
+        "Tool-verification ladder position: observe records a failed "
+        "post-condition, enforce reports the tool call as failed.",
+        governed=True,
+    )
+    benchmark_decontamination_enabled: bool = declare(
+        False,
+        "ROBOTHOR_BENCHMARK_DECONTAMINATION_ENABLED",
+        "Switch for separating benchmark-harness traffic from production "
+        "metrics, so a nightly suite does not read as fleet activity.",
+    )
+    benchmark_decontamination_mode: str = declare(
+        "observe",
+        "ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE",
+        "Decontamination ladder position: observe reports benchmark runs and "
+        "cost separately, enforce excludes them from production surfaces.",
+        governed=True,
+    )
+    benchmark_sandbox_enabled: bool = declare(
+        False,
+        "ROBOTHOR_BENCHMARK_SANDBOX_ENABLED",
+        "Switch for seeded benchmark fixtures and sandboxed CRM writes, so a "
+        "graded task can act instead of only reading.",
+    )
+    benchmark_sandbox_mode: str = declare(
+        "observe",
+        "ROBOTHOR_BENCHMARK_SANDBOX_MODE",
+        "Benchmark-sandbox ladder position: observe seeds fixtures and records "
+        "read-backs without grading them, enforce folds them into the score.",
+        governed=True,
+    )
+    honesty_suite_mode: str = declare(
+        "observe",
+        "ROBOTHOR_HONESTY_SUITE_MODE",
+        "Honesty cases in every benchmark suite: 'off' omits them, 'observe' "
+        "(default) runs and reports them outside the weighted aggregate, "
+        "'enforce' counts them toward the grade. A grader, not a guardrail, so "
+        "it has no 'alert' rung and no separate enabled switch.",
+        governed=True,
+    )
+    judge_enabled: bool = declare(
+        False,
+        "ROBOTHOR_JUDGE_ENABLED",
+        "Let the goal-judge grade recent runs against real outcome signals and "
+        "write the agent_reviews rows the achievement score is built on.",
+        governed=True,
+    )
+    disable_all_rips: bool = declare(
+        False,
+        "ROBOTHOR_DISABLE_ALL_RIPS",
+        "Panic switch: forces every rip and every ladder above to 'off' "
+        "regardless of its own flag. An instance left with this set runs with "
+        "none of the controls it appears to have.",
+    )
+    rip_1_enabled: bool = declare(
+        False,
+        "ROBOTHOR_RIP_1_ENABLED",
+        "Rip 1: per-agent memory scoping, so an agent reads the blocks it owns "
+        "rather than the whole workspace.",
+        governed=True,
+    )
+    rip_4_enabled: bool = declare(
+        False,
+        "ROBOTHOR_RIP_4_ENABLED",
+        "Rip 4: structured tool-result envelopes the runner can check instead "
+        "of prose it can only quote.",
+        governed=True,
+    )
+    rip_5_enabled: bool = declare(
+        False,
+        "ROBOTHOR_RIP_5_ENABLED",
+        "Rip 5: the destructive LLM skill-consolidation curator pass. The "
+        "non-destructive lifecycle runs either way.",
+        governed=True,
+    )
+    rip_7_enabled: bool = declare(
+        False,
+        "ROBOTHOR_RIP_7_ENABLED",
+        "Rip 7: the drift detector over memory_facts.",
+    )
+    rip_7_mode: str = declare(
+        "observe",
+        "ROBOTHOR_RIP_7_MODE",
+        "Rip 7 ladder position: observe logs a drifting write, alert also "
+        "notifies, enforce snapshots and refuses it.",
+        governed=True,
+    )
+    rip_13_enabled: bool = declare(
+        False,
+        "ROBOTHOR_RIP_13_ENABLED",
+        "Rip 13: symbolic compaction of tool logs into a symbol graph.",
+    )
+    rip_13_mode: str = declare(
+        "observe",
+        "ROBOTHOR_RIP_13_MODE",
+        "Rip 13 ladder position: observe logs the tokens compaction would have "
+        "saved, enforce injects the compact graph instead of raw tool output. "
+        "Two rungs only -- there is nothing to alert about.",
         governed=True,
     )
 
@@ -1165,6 +1413,8 @@ class FlagSettings(SettingsGroup):
 
 class ServiceSettings(SettingsGroup):
     """Side services the instance runs: ports, endpoints and their knobs."""
+
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-bridge", "robothor-app")
 
     api_port: int = declare(9099, "ROBOTHOR_API_PORT", "RAG orchestrator / API server port.")
     orchestrator_port: int = declare(
@@ -1533,6 +1783,10 @@ class OpsSettings(SettingsGroup):
     ``scripts/guardrail_watch.py``. Each variable is declared exactly once, in
     the group matching the reader that actually consumes it.
     """
+
+    #: Nothing holds these: a timer or a shell script reads them when it runs,
+    #: so the next invocation picks a change up without a restart.
+    restart_units: ClassVar[tuple[str, ...]] = ()
 
     # --- PATH and interpreter plumbing ------------------------------------
     extra_path: str = declare(

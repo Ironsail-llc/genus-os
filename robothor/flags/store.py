@@ -12,39 +12,50 @@ from __future__ import annotations
 import os
 import threading
 import time
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any
 
 from robothor.db.connection import get_connection
 
-GOVERNED_FLAGS: frozenset[str] = frozenset(
-    {
-        "ROBOTHOR_RBAC_MODE",
-        "ROBOTHOR_INJECTION_SCAN_MODE",
-        "ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE",
-        "ROBOTHOR_APPROVAL_MODE",
-        "ROBOTHOR_SANDBOX_DEFAULT_MODE",
-        "ROBOTHOR_ADMISSION_MODE",
-        "ROBOTHOR_COMPLETION_CONTRACTS_MODE",
-        "ROBOTHOR_RIP_7_MODE",
-        "ROBOTHOR_RIP_13_MODE",
-        "ROBOTHOR_RIP_1_ENABLED",
-        "ROBOTHOR_RIP_4_ENABLED",
-        "ROBOTHOR_RIP_5_ENABLED",
-        "ROBOTHOR_JUDGE_ENABLED",
-        # Six controls that shipped with a full observe->alert->enforce ladder
-        # but were never added here, so the Controls API (crm/bridge/routers/
-        # controls.py, which iterates exactly this set) could neither show nor
-        # set them: the dashboard listed 13 flags while the engine read 19.
-        # An operator flipping one had to edit /etc and restart the engine,
-        # which is how three of them came to live only in the env file.
-        "ROBOTHOR_RUN_VERIFICATION_MODE",
-        "ROBOTHOR_TOOL_VERIFY_MODE",
-        "ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE",
-        "ROBOTHOR_DELIVERABLE_CONTRACT_MODE",
-        "ROBOTHOR_HONESTY_SUITE_MODE",
-        "ROBOTHOR_BENCHMARK_SANDBOX_MODE",
-        "ROBOTHOR_DNC_MODE",
-    }
-)
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    #: Declared for type checkers; supplied at runtime by ``__getattr__``.
+    GOVERNED_FLAGS: frozenset[str]
+
+
+@lru_cache(maxsize=1)
+def governed_flags() -> frozenset[str]:
+    """Every flag an operator may govern, derived from the settings registry.
+
+    A flag is governed when its field declares ``governed=True`` in
+    ``robothor.settings.model`` -- which also means it is inventoried in
+    ``infra/flags.yaml`` and read through this store. That was a hand-written
+    set here until 1.66, and it had drifted: sixteen of its twenty names were
+    declared in no settings field at all (they reach ``os.environ`` through a
+    variable, so the registry's guard test could not see them), while fourteen
+    fields marked ``governed=True`` were in neither this set nor the manifest.
+    Deriving it means the three lists cannot disagree again; the reconciliation
+    is pinned in ``tests/test_flag_registry_single_source.py``.
+
+    Lazy on purpose. This module sits on the engine's hot path and is imported
+    by the bridge; the settings model pulls all of pydantic-settings, and no
+    process should pay that just to resolve a flag it may never read.
+    """
+    from robothor.settings.registry import field_index
+
+    return frozenset(record["env"] for record in field_index().values() if record["governed"])
+
+
+def __getattr__(name: str) -> Any:
+    """Keep ``store.GOVERNED_FLAGS`` working as the module constant it was.
+
+    Both spellings callers already use -- ``from robothor.flags.store import
+    GOVERNED_FLAGS`` and ``store.GOVERNED_FLAGS`` -- route through here, so the
+    derivation stays lazy without a single call site changing.
+    """
+    if name == "GOVERNED_FLAGS":
+        return governed_flags()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 _MODE_VALUES: tuple[str, ...] = ("off", "observe", "alert", "enforce")
 _RIP_13_VALUES: tuple[str, ...] = ("observe", "enforce")
@@ -131,7 +142,7 @@ def resolve(name: str) -> str | None:
 
 
 def set_flag(name: str, value: str, actor: str, reason: str) -> None:
-    if name not in GOVERNED_FLAGS:
+    if name not in governed_flags():
         raise ValueError(f"{name} is not a governed flag")
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT value FROM feature_flags WHERE name = %s", (name,))

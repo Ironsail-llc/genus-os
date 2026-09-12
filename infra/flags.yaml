@@ -602,3 +602,25 @@ flags:
       instance that did NOT write the schema. Flipping on the evidence of the
       box the schema was authored against proves only that the author agreed
       with themselves.
+  - name: ROBOTHOR_CONFIG_STRICT_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-11-01"
+    soak: >
+      Decides what an unknown key in the `settings:` block of
+      `<workspace>/.robothor/config.yaml` does: `off` ignores it, `observe`
+      (the default, and what every existing install gets) logs one warning
+      naming the key, `enforce` refuses to start. A typo in a config file is
+      otherwise the quietest failure there is — the setting simply never
+      applies, and the operator reads the default as their value.
+
+      Inventoried here but NOT in GOVERNED_FLAGS, and that is deliberate: this
+      flag is read while settings are being resolved, which happens before a
+      database connection exists and in processes that never open one. Putting
+      it in the DB store would give the Controls dashboard a switch that writes
+      a row nothing reads. See tests/test_flag_registry_single_source.py,
+      MANIFEST_ONLY_FLAGS.
+
+      BLOCKER: a box upgrading into enforce must first have zero unknown keys.
+      `genus config validate` reports them; promote once it is clean here and
+      `genus init` has been writing config.yaml for a full release.

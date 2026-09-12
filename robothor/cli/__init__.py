@@ -291,10 +291,35 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     snapshot_prune.add_argument("--confirm", action="store_true", help="Delete selected snapshots")
 
-    # config
-    config_parser = subparsers.add_parser("config", help="Configuration management")
+    # config — read and change settings; see robothor/cli/config_cmd.py
+    config_parser = subparsers.add_parser("config", help="Read and change settings")
     config_sub = config_parser.add_subparsers(dest="config_command")
-    config_sub.add_parser("validate", help="Validate system configuration and connectivity")
+
+    config_get = config_sub.add_parser("get", help="Print one setting and where it came from")
+    config_get.add_argument("name", help="Environment variable name, e.g. ROBOTHOR_ENGINE_PORT")
+    config_get.add_argument("--json", action="store_true", help="Machine-readable output")
+
+    config_set = config_sub.add_parser("set", help="Change one setting")
+    config_set.add_argument("name", help="Environment variable name")
+    config_set.add_argument("value", help="New value; validated against the declared type")
+    config_set.add_argument("--json", action="store_true", help="Machine-readable output")
+
+    config_explain = config_sub.add_parser("explain", help="Everything declared about a setting")
+    config_explain.add_argument("name", help="Environment variable name")
+    config_explain.add_argument("--json", action="store_true", help="Machine-readable output")
+
+    config_list = config_sub.add_parser("list", help="List settings with their sources")
+    config_list.add_argument("--group", default=None, help="Only this group (e.g. engine)")
+    config_list.add_argument(
+        "--changed", action="store_true", help="Only settings that are not on their default"
+    )
+    config_list.add_argument("--json", action="store_true", help="Machine-readable output")
+
+    config_validate = config_sub.add_parser(
+        "validate", help="Validate system configuration and connectivity"
+    )
+    config_validate.add_argument("--json", action="store_true", help="Machine-readable output")
+
     config_sub.add_parser("schema", help="Print the JSON Schema of every declared setting")
 
     # serve
@@ -962,7 +987,7 @@ def main(argv: list[str] | None = None) -> int:
 
         return cmd_engine(args)
     if args.command == "config":
-        from robothor.cli.admin import cmd_config
+        from robothor.cli.config_cmd import cmd_config
 
         return cmd_config(args)
     if args.command == "tui":
