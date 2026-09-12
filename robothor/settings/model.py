@@ -1063,6 +1063,17 @@ class AuthSettings(SettingsGroup):
         "Empty trusts nobody, loopback included; the real peer address is used.",
         since="1.69.0",
     )
+    dashboard_trusted_proxies: str = declare(
+        "",
+        "GENUS_DASHBOARD_TRUSTED_PROXIES",
+        "Comma-separated addresses or CIDR ranges the DASHBOARD treats as its "
+        "own edge when reading X-Forwarded-For. It walks that list from the "
+        "right and forwards the first hop that is not one of these as "
+        "X-Client-IP. Empty trusts no hop and sends no header at all, so the "
+        "bridge falls back to its peer address; prefer a /32 over a pod CIDR, "
+        "which would cover every workload in the namespace.",
+        since="1.69.0",
+    )
     cf_access_team_domain: str = declare(
         "",
         "CF_ACCESS_TEAM_DOMAIN",

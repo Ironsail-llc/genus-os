@@ -9,6 +9,7 @@
       "GENUS_ENVIRONMENT" .Values.global.environment
       "GENUS_AUTH_ENFORCE" (toString .Values.global.authEnforce)
       "GENUS_LOCAL_LOGIN" (toString (.Values.global.localLogin | default false))
+      "GENUS_DASHBOARD_TRUSTED_PROXIES" (.Values.global.dashboardTrustedProxies | default "")
     -}}
 {{- $dashboardEnv := mergeOverwrite $serviceEnv ($cv.env | default dict) -}}
 apiVersion: apps/v1

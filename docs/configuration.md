@@ -317,6 +317,7 @@ alongside it.
 | `GENUS_LOCAL_LOGIN` | `false` | Exactly `true` enables local email+password sign-in. Off by default: a password endpoint must be opted into, never appear on upgrade. Set it on **both** the Bridge (serves `/api/auth/login`) and the dashboard (registers the provider that calls it) |
 | `GENUS_OWNER_MFA_REQUIRED` | `true` | Tell an owner account with no second factor to enrol one while local login is on. `false` gives up the only compensating control for a public password endpoint — one password then *is* the authentication for the instance and its stored credentials |
 | `GENUS_TRUSTED_PROXIES` | *(empty)* | Comma-separated addresses or CIDR ranges allowed to set `X-Client-IP` on a Bridge request. **Loopback is not trusted implicitly** — list it (`127.0.0.1/32`) if the dashboard shares the host. Empty trusts nobody and the Bridge uses the peer address, so the sign-in limiter sees one address for every user |
+| `GENUS_DASHBOARD_TRUSTED_PROXIES` | *(empty)* | Comma-separated addresses or CIDR ranges the **dashboard** treats as its own edge. It walks `X-Forwarded-For` from the right and forwards the first hop that is not one of these as `X-Client-IP`. Empty sends no header at all. Set it to the ingress/proxy in front of the dashboard, as narrowly as possible |
 | `CF_ACCESS_TEAM_DOMAIN` / `CF_ACCESS_AUD` | *(empty)* | Sign in through a fronting Cloudflare Access policy |
 | `GENUS_INSECURE_DEV_MODE` | `false` | Loopback-only development escape hatch. Not a sign-in method; forbidden in production |
 
@@ -331,14 +332,28 @@ form (alongside the SSO button when both are configured) and the Bridge serves
   account — answers the same `invalid credentials`. The only distinguishable
   state is `mfa_required`, and only after a correct password.
 - Ten consecutive failures freeze the account for 15 minutes; five attempts per
-  (email, IP) per minute are allowed before a 429. The dashboard forwards the
-  browser's address as `X-Client-IP`, which the Bridge honours only from a
-  peer named in `GENUS_TRUSTED_PROXIES` — otherwise every sign-in shares one
-  bucket. Loopback is **not** implicitly trusted: a tunnel on the same host
+  (email, IP) per minute are allowed before a 429. On top of that, a coarse
+  ceiling that nothing in the request can change: 30 credential attempts per
+  minute per connecting peer and 300 per minute for the whole Bridge process,
+  checked before any account is loaded, so a spray of fabricated addresses
+  cannot spend one 64 MiB argon2 hash per request. A credential body over
+  8 KiB is refused with 413 before it is parsed.
+- **The forwarded client address needs two allowlists to agree.** The dashboard
+  reads `X-Forwarded-For`, walks it from the **right**, and forwards the first
+  hop not named in `GENUS_DASHBOARD_TRUSTED_PROXIES` as `X-Client-IP`; the
+  Bridge honours that header only from a peer named in `GENUS_TRUSTED_PROXIES`.
+  Either one empty means no forwarded address, and the Bridge uses its peer.
+  The left-most `X-Forwarded-For` entry is the one a client can write — every
+  appending proxy produces `<what the client sent>, <the real client>` — so
+  reading it would let a caller choose its own limiter key and write its own
+  address into the audit trail and `user_sessions.ip`.
+  Loopback is **not** implicitly trusted: a tunnel on the same host
   (cloudflared, a reverse proxy, an SSH forward) makes every remote client a
-  loopback peer, so trusting it by default would let any of them pick their
-  own limiter key. Set `GENUS_TRUSTED_PROXIES=127.0.0.1/32` when the dashboard
-  and the Bridge share a host.
+  loopback peer. `GENUS_TRUSTED_PROXIES=127.0.0.1/32` when the dashboard and
+  the Bridge share a host — but only when nothing else can reach that loopback
+  port, because that one line grants every client behind such a tunnel the
+  `X-Client-IP` assertion. Prefer a `/32` over a pod CIDR, which covers every
+  workload in the namespace.
 - TOTP codes are single-use: the accepted time step is recorded, so a code
   cannot be replayed inside the verifier's ±1 step window (RFC 6238 §5.2).
 - Changing a password revokes every other refresh session, keeping only the

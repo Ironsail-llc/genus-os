@@ -40,7 +40,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-350 settings in 13 groups.
+351 settings in 13 groups.
 
 ## paths
 
@@ -239,6 +239,7 @@ Who may reach the bridge and the dashboard, and how that is proven.
 | `GENUS_AUTH_ENFORCE` | bool | `false` | `robothor-bridge`, `robothor-app` | no | legacy | One-way compatibility switch that turns identity checks on. It never relaxes the existing role_permissions policy. |
 | `GENUS_AUTH_SIGNING_KEY` | str | _(unset)_ | `robothor-bridge`, `robothor-app` | yes | legacy | Key session tokens are signed with; at least 32 bytes. Required in production, where startup fails without it. |
 | `GENUS_BRIDGE_SSO_SECRET` | str | _(unset)_ | `robothor-bridge`, `robothor-app` | yes | legacy | Shared secret the dashboard and bridge exchange SSO assertions with. The two must match or every sign-in is refused. |
+| `GENUS_DASHBOARD_TRUSTED_PROXIES` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Comma-separated addresses or CIDR ranges the DASHBOARD treats as its own edge when reading X-Forwarded-For. It walks that list from the right and forwards the first hop that is not one of these as X-Client-IP. Empty trusts no hop and sends no header at all, so the bridge falls back to its peer address; prefer a /32 over a pod CIDR, which would cover every workload in the namespace. |
 | `GENUS_ENVIRONMENT` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Deployment environment. 'production' makes the auth preconditions hard requirements instead of warnings. Also read from `ROBOTHOR_ENVIRONMENT`. |
 | `GENUS_INSECURE_DEV_MODE` | bool | `false` | `robothor-bridge`, `robothor-app` | no | legacy | Skip authentication for local development. Rejected outright in a production environment or on any non-loopback bind address. |
 | `GENUS_LOCAL_LOGIN` | bool | `false` | `robothor-bridge`, `robothor-app` | no | 1.69.0 | Offer local email + password sign-in (bridge routes and the dashboard form). Off by default: a fresh instance must opt in. Owner MFA becomes mandatory when this is the only sign-in method. |

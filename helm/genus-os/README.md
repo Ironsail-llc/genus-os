@@ -131,11 +131,14 @@ Private ingress is not the application authentication mechanism:
   mandatory for as long as it is on — `global.ownerMfaRequired: false` is the
   explicit opt-out, and nothing else turns the policy off, because the Bridge's
   issuer allowlist and the dashboard-only `CF_ACCESS_*` secrets cannot tell it
-  whether a human has another way in. Set
-  `global.trustedProxies` to the dashboard's pod CIDR so the Bridge's per-IP
-  sign-in limiter sees real client addresses; loopback is not trusted
-  implicitly, so a same-host tunnel cannot let clients choose their own
-  limiter key.
+  whether a human has another way in. For the Bridge's per-IP sign-in limiter to
+  see real client addresses, set `global.trustedProxies` to the dashboard pod's
+  address (a `/32`, or a range a NetworkPolicy already fences off — a whole pod
+  CIDR would grant every workload in the cluster the right to assert someone
+  else's address) and `global.dashboardTrustedProxies` to the edge in front of
+  the dashboard. Either left empty means no address is forwarded at all, which
+  is the safe default; loopback is never trusted implicitly, so a same-host
+  tunnel cannot let clients choose their own limiter key.
 - Bridge verifies signed audience/expiry/tenant/role/scope claims and enforces
   route-specific scopes and tenant restrictions.
 - Engine independently verifies signed, same-tenant `engine:*` authority for

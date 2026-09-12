@@ -116,3 +116,27 @@ tests:
             name: GENUS_OWNER_MFA_REQUIRED
             value: "false"
         documentIndex: 0
+
+  # The dashboard side of the same decision. Without it the dashboard forwards
+  # the LEFT-most X-Forwarded-For entry, which is the one position in that
+  # header a client can write — so the bridge's limiter key and audit subject
+  # were chosen by the caller.
+  - it: the dashboard is told which hops it may believe
+    template: dashboard/deployment.yaml
+    set:
+      global.dashboardTrustedProxies: "10.42.0.7/32"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_DASHBOARD_TRUSTED_PROXIES
+            value: "10.42.0.7/32"
+
+  - it: the dashboard trusts no hop by default and forwards no address
+    template: dashboard/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENUS_DASHBOARD_TRUSTED_PROXIES
+            value: ""

@@ -43,9 +43,23 @@ global:
   #
   # LOOPBACK IS NOT TRUSTED IMPLICITLY, and empty trusts nobody. A tunnel on
   # the same host makes every remote client a loopback peer, so an implicit
-  # trust would let all of them pick their own limiter key. Set this to the
-  # dashboard's pod CIDR (or "127.0.0.1/32" when they share a host).
+  # trust would let all of them pick their own limiter key.
+  #
+  # Prefer the dashboard pod's own address as a /32, or a range no wider than a
+  # NetworkPolicy already fences off. A whole pod CIDR grants every workload in
+  # the cluster the right to assert someone else's client address. Use
+  # "127.0.0.1/32" when the two share a host.
   trustedProxies: ""
+
+  # The other half of the same decision, on the DASHBOARD side: which hops it
+  # believes when it reads X-Forwarded-For to work out the browser's address.
+  # It walks that list from the right and forwards the first hop that is NOT
+  # listed here, because the LEFT-most entry is the one a client can write
+  # (every appending proxy produces "<what the client sent>, <the real
+  # client>"). Empty — the default — forwards no address at all, and the bridge
+  # then uses its peer address. Set it to the ingress controller / edge, not to
+  # the dashboard itself.
+  dashboardTrustedProxies: ""
 
   # Image registry. Single GHCR org, two image names beneath it.
   registry: ghcr.io/ironsail-llc/genus-os

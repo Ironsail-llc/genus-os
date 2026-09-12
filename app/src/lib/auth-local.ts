@@ -18,13 +18,20 @@ export type LocalLoginResult = {
 };
 
 /**
- * Exactly `"true"`, never a general truthiness test: a password endpoint that
- * switches on for anyone who set `GENUS_LOCAL_LOGIN=0` is a surprise attack
- * surface. Mirrors `robothor/auth/runtime.py::local_login_enabled` closely
- * enough for the strict opt-in, deliberately stricter for the rest.
+ * The set of strings pydantic v2 reads as booleans, which is what the bridge
+ * parses `GENUS_LOCAL_LOGIN` with (`AuthSettings.local_login`).
+ *
+ * This used to require exactly `"true"`. The two sides then disagreed on `1`,
+ * `yes`, `on`, `t`, `y` and `TRUE`: the bridge published the public password
+ * endpoint while the dashboard registered no provider and rendered no form —
+ * the surface without the UI, which is the wrong half to fail open. Anything
+ * outside both sets stays off here (the bridge raises instead, which is also a
+ * refusal, and nothing in between is treated as consent).
  */
+const TRUTHY = new Set(["1", "on", "t", "true", "y", "yes"]);
+
 export function localLoginEnabled(): boolean {
-  return process.env.GENUS_LOCAL_LOGIN === "true";
+  return TRUTHY.has((process.env.GENUS_LOCAL_LOGIN || "").trim().toLowerCase());
 }
 
 /**
@@ -40,18 +47,138 @@ export function looksLikeIpAddress(value: string): boolean {
 }
 
 /**
- * The end user's address, from the headers the edge set on THIS request.
+ * Hops this dashboard will believe, from `GENUS_DASHBOARD_TRUSTED_PROXIES`.
  *
- * `x-forwarded-for` is a list and its left-most entry is the original client.
- * Returns null unless the value parses, so a header full of junk is forwarded
- * as nothing rather than as a limiter key of the sender's choosing.
+ * Same syntax as the bridge's `GENUS_TRUSTED_PROXIES`: comma-separated
+ * addresses or CIDR ranges. Empty — the default — trusts nothing, and then no
+ * `X-Client-IP` is asserted at all and the bridge falls back to its peer
+ * address. A deployment that has not thought about its edge must not be
+ * quietly asserting an address it cannot vouch for.
+ */
+export function dashboardTrustedProxies(): string[] {
+  return (process.env.GENUS_DASHBOARD_TRUSTED_PROXIES || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function ipv4Bytes(value: string): number[] | null {
+  const parts = value.split(".");
+  if (parts.length !== 4) return null;
+  const bytes: number[] = [];
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const octet = Number(part);
+    if (octet > 255) return null;
+    bytes.push(octet);
+  }
+  return bytes;
+}
+
+/** An address as its bytes (4 for IPv4, 16 for IPv6), or null if it is not one. */
+function ipBytes(value: string): number[] | null {
+  if (!value.includes(":")) return ipv4Bytes(value);
+  const halves = value.split("::");
+  if (halves.length > 2) return null;
+  const expand = (half: string | undefined): number[] | null => {
+    if (!half) return [];
+    const groups = half.split(":");
+    const bytes: number[] = [];
+    for (let i = 0; i < groups.length; i += 1) {
+      const group = groups[i];
+      if (group.includes(".")) {
+        // The IPv4-mapped tail, which is only legal last.
+        if (i !== groups.length - 1) return null;
+        const mapped = ipv4Bytes(group);
+        if (!mapped) return null;
+        bytes.push(...mapped);
+        continue;
+      }
+      if (!/^[0-9a-fA-F]{1,4}$/.test(group)) return null;
+      const word = parseInt(group, 16);
+      bytes.push(word >> 8, word & 0xff);
+    }
+    return bytes;
+  };
+  const left = expand(halves[0]);
+  if (!left) return null;
+  if (halves.length === 1) return left.length === 16 ? left : null;
+  const right = expand(halves[1]);
+  if (!right) return null;
+  const zeros = 16 - left.length - right.length;
+  if (zeros < 0) return null;
+  return [...left, ...new Array<number>(zeros).fill(0), ...right];
+}
+
+function inNetwork(address: number[], entry: string): boolean {
+  const [rawNetwork, rawPrefix] = entry.split("/");
+  const network = ipBytes(rawNetwork.trim());
+  if (!network || network.length !== address.length) return false;
+  let bits = network.length * 8;
+  if (rawPrefix !== undefined) {
+    // An empty or non-numeric prefix must not read as /0, which would match
+    // every address in the world.
+    if (!/^\d{1,3}$/.test(rawPrefix.trim())) return false;
+    bits = Number(rawPrefix.trim());
+    if (bits > network.length * 8) return false;
+  }
+  for (let i = 0; i < network.length && bits > 0; i += 1) {
+    const take = Math.min(8, bits);
+    const mask = (0xff << (8 - take)) & 0xff;
+    if ((address[i] & mask) !== (network[i] & mask)) return false;
+    bits -= take;
+  }
+  return true;
+}
+
+/** Whether *value* is one of the hops this deployment trusts. */
+export function isTrustedProxy(value: string, entries = dashboardTrustedProxies()): boolean {
+  const address = ipBytes(value);
+  if (!address) return false;
+  return entries.some((entry) => inNetwork(address, entry));
+}
+
+/**
+ * The end user's address, for the bridge's limiter and audit trail.
+ *
+ * `x-forwarded-for` is a list, and its LEFT-most entry is the one position in
+ * the header a client can write: every appending proxy — nginx with
+ * `proxy_add_x_forwarded_for`, ingress-nginx with `use-forwarded-headers`,
+ * Cloudflare — produces `<whatever the client sent>, <the real client>`. Taking
+ * `[0]`, as this did, handed the attacker the limiter key and the audit
+ * subject: a fresh fabricated address per request is a fresh quota, and
+ * `user_sessions.ip` plus every `auth.login` row then records an address of the
+ * attacker's choosing, which can be pointed at an innocent third party.
+ *
+ * So: walk the list from the RIGHT and return the first hop that is NOT a
+ * trusted proxy — uvicorn's own `ProxyHeadersMiddleware` algorithm, and the
+ * mirror image of the bridge's `_peer_is_trusted`. With no trusted proxies
+ * configured nothing is asserted at all; if every hop is trusted the list
+ * carries no client to report; and junk to the right of the client means the
+ * edge is not what this deployment thinks it is, so nothing is asserted then
+ * either.
  */
 export function clientIpFromRequest(request: Request | undefined): string | null {
   const headers = request?.headers;
   if (!headers) return null;
-  const forwarded = headers.get("x-forwarded-for") || "";
-  const candidate = (forwarded.split(",")[0] || headers.get("x-real-ip") || "").trim();
-  return looksLikeIpAddress(candidate) ? candidate : null;
+  const trusted = dashboardTrustedProxies();
+  if (trusted.length === 0) return null;
+
+  const hops = (headers.get("x-forwarded-for") || "")
+    .split(",")
+    .map((hop) => hop.trim())
+    .filter(Boolean);
+  for (let i = hops.length - 1; i >= 0; i -= 1) {
+    const hop = hops[i];
+    if (!looksLikeIpAddress(hop)) return null;
+    if (!isTrustedProxy(hop, trusted)) return hop;
+  }
+  if (hops.length > 0) return null;
+
+  // No forwarded list at all: a single-valued `x-real-ip` from the same edge
+  // the operator just declared they trust.
+  const real = (headers.get("x-real-ip") || "").trim();
+  return looksLikeIpAddress(real) ? real : null;
 }
 
 export function isLocalLoginResult(value: unknown): value is LocalLoginResult {
@@ -100,8 +227,12 @@ export async function bridgeLocalLogin(
   // SERVER-side, so request.client.host there is the dashboard pod for every
   // sign-in on the planet — one global bucket, in which five attempts from
   // anywhere lock every user of an address out, and a distributed spray is
-  // not slowed at all. The bridge honours this header ONLY from a loopback
-  // peer or one named in GENUS_TRUSTED_PROXIES.
+  // not slowed at all. Two allowlists have to agree before the value is
+  // believed: the bridge honours the header only from a peer named in
+  // GENUS_TRUSTED_PROXIES (loopback included, never implicit), and
+  // `clientIpFromRequest` only produces one at all when this deployment names
+  // its own edge in GENUS_DASHBOARD_TRUSTED_PROXIES. Unset, nothing is sent
+  // and the bridge uses its peer address.
   if (clientIp) headers["X-Client-IP"] = clientIp;
 
   let res: Response;
