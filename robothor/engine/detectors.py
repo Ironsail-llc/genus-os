@@ -182,7 +182,7 @@ async def repeat_error_detector(tenant_id: str = DEFAULT_TENANT) -> int:
     except Exception as e:
         logger.debug("repeat_error_detector query failed: %s", e)
         return 0
-    from robothor.engine.alerts import alert
+    from robothor.engine.alerts import alert_about_run
 
     for c in clusters:
         agent = str(c.get("agent_id") or "unknown")
@@ -198,7 +198,7 @@ async def repeat_error_detector(tenant_id: str = DEFAULT_TENANT) -> int:
             f"last: {c.get('last_occurrence', '?')}\n"
             f"sample: {sample_text}"
         )
-        if not await alert("warning", f"Repeat errors: {agent}", body):
+        if not await alert_about_run("warning", f"Repeat errors: {agent}", body):
             logger.warning("Alert delivery failed for %s", fingerprint)
         fired += 1
     return fired
@@ -266,7 +266,7 @@ async def tool_degradation_detector() -> int:
     except Exception as e:
         logger.debug("tool_degradation_detector query failed: %s", e)
         return 0
-    from robothor.engine.alerts import alert
+    from robothor.engine.alerts import alert_about_run
 
     vision_disabled: bool | None = None  # lazy — one stat() per tick at most
     for t in bad_tools:
@@ -288,7 +288,7 @@ async def tool_degradation_detector() -> int:
             f"{name}: {t['failures']}/{t['total']} failed in last hour "
             f"(rate {t['failure_rate'] * 100:.0f}%)"
         )
-        if not await alert("warning", f"Tool degradation: {name}", body):
+        if not await alert_about_run("warning", f"Tool degradation: {name}", body):
             logger.warning("Alert delivery failed for %s", fingerprint)
         fired += 1
     return fired
@@ -313,7 +313,7 @@ def check_runaway_burn(
         cur.execute(
             """
             SELECT id, agent_id, model_used, input_tokens, output_tokens,
-                   started_at,
+                   started_at, trigger_detail,
                    EXTRACT(EPOCH FROM (NOW() - started_at))::int AS elapsed_s
             FROM agent_runs
             WHERE status = 'running'
@@ -335,7 +335,7 @@ async def runaway_burn_detector() -> int:
     except Exception as e:
         logger.debug("runaway_burn_detector query failed: %s", e)
         return 0
-    from robothor.engine.alerts import alert
+    from robothor.engine.alerts import alert_about_run
 
     for r in hot_runs:
         run_id = str(r["id"])
@@ -347,7 +347,12 @@ async def runaway_burn_detector() -> int:
             f"agent={r.get('agent_id')} model={r.get('model_used')} "
             f"tokens={total:,} elapsed={r.get('elapsed_s')}s run_id={run_id}"
         )
-        if not await alert("warning", "Runaway-burn (out-of-band)", body):
+        if not await alert_about_run(
+            "warning",
+            "Runaway-burn (out-of-band)",
+            body,
+            trigger_detail=r.get("trigger_detail"),
+        ):
             logger.warning("Alert delivery failed for %s", fingerprint)
         fired += 1
     return fired
@@ -373,7 +378,7 @@ def check_zombie_runners(
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             """
-            SELECT r.id, r.agent_id, r.started_at,
+            SELECT r.id, r.agent_id, r.started_at, r.trigger_detail,
                    EXTRACT(EPOCH FROM (NOW() - r.started_at))::int AS age_s,
                    (SELECT MAX(created_at) FROM agent_run_steps s
                       WHERE s.run_id = r.id) AS last_step_at
@@ -402,7 +407,7 @@ async def zombie_runner_detector() -> int:
     except Exception as e:
         logger.debug("zombie_runner_detector query failed: %s", e)
         return 0
-    from robothor.engine.alerts import alert
+    from robothor.engine.alerts import alert_about_run
 
     for z in zombies:
         run_id = str(z["id"])
@@ -413,7 +418,12 @@ async def zombie_runner_detector() -> int:
             f"agent={z.get('agent_id')} run_id={run_id} "
             f"age={z.get('age_s')}s last_step_at={z.get('last_step_at')}"
         )
-        if not await alert("warning", "Zombie runner (no recent steps)", body):
+        if not await alert_about_run(
+            "warning",
+            "Zombie runner (no recent steps)",
+            body,
+            trigger_detail=z.get("trigger_detail"),
+        ):
             logger.warning("Alert delivery failed for %s", fingerprint)
         fired += 1
     return fired
@@ -463,7 +473,7 @@ async def stuck_workflow_detector() -> int:
     except Exception as e:
         logger.debug("stuck_workflow_detector query failed: %s", e)
         return 0
-    from robothor.engine.alerts import alert
+    from robothor.engine.alerts import alert_about_run
 
     for s in stuck:
         run_id = str(s["id"])
@@ -474,7 +484,7 @@ async def stuck_workflow_detector() -> int:
             f"workflow={s.get('workflow_id')} run_id={run_id} "
             f"age={s.get('age_s')}s started_at={s.get('started_at')}"
         )
-        await alert("warning", "Stuck workflow run", body)
+        await alert_about_run("warning", "Stuck workflow run", body)
         fired += 1
     return fired
 
@@ -598,7 +608,7 @@ async def workflow_failure_streak_detector() -> int:
     except Exception as e:
         logger.debug("workflow_failure_streak_detector query failed: %s", e)
         return 0
-    from robothor.engine.alerts import alert
+    from robothor.engine.alerts import alert_about_run
 
     for s in streaks:
         workflow_id = str(s.get("workflow_id") or "unknown")
@@ -607,7 +617,7 @@ async def workflow_failure_streak_detector() -> int:
             continue
         last_error = str(s.get("last_error") or "")[:300]
         body = f"last {s.get('streak')} runs all failed/timed out.\nlast error: {last_error}"
-        await alert("warning", f"Workflow failing repeatedly: {workflow_id}", body)
+        await alert_about_run("warning", f"Workflow failing repeatedly: {workflow_id}", body)
         fired += 1
     return fired
 
@@ -736,7 +746,7 @@ async def tool_outage_detector() -> int:
     except Exception as e:
         logger.debug("tool_outage_detector query failed: %s", e)
         return 0
-    from robothor.engine.alerts import alert
+    from robothor.engine.alerts import alert_about_run
 
     declared = declared_tool_outages()
     for t in outages:
@@ -764,7 +774,7 @@ async def tool_outage_detector() -> int:
         title = f"Tool outage: {name}"
         if severity == "critical":
             title = f"Tool dead {t['outage_days']:.0f}d: {name}"
-        if not await alert(severity, title, body):
+        if not await alert_about_run(severity, title, body):
             logger.warning("Alert delivery failed for tool_outage:%s", name)
         fired += 1
     return fired
@@ -980,7 +990,7 @@ async def primary_model_unreached_detector(tenant_id: str = DEFAULT_TENANT) -> i
     except Exception as e:
         logger.debug("primary_model_unreached_detector query failed: %s", e)
         return 0
-    from robothor.engine.alerts import alert
+    from robothor.engine.alerts import alert_about_run
 
     window_days = _MODEL_WINDOW_HOURS // 24
     for a in affected:
@@ -995,7 +1005,7 @@ async def primary_model_unreached_detector(tenant_id: str = DEFAULT_TENANT) -> i
             f"in the last {window_days}d.\n"
             f"served by: {served}"
         )
-        if not await alert("warning", f"Primary model unreached: {agent_id}", body):
+        if not await alert_about_run("warning", f"Primary model unreached: {agent_id}", body):
             logger.warning("Alert delivery failed for model_unreached:%s", agent_id)
         fired += 1
     return fired

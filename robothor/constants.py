@@ -22,6 +22,16 @@ SANDBOX_DENIAL_PREFIX = "benchmark sandbox:"
 #: and detectors.py (which excludes it) so the label can't drift between them.
 SANDBOX_DENIED_ERROR_TYPE = "sandbox_denied"
 
+#: crm_agent_notifications.notification_type for an alert raised about (or
+#: inside) a benchmark run. Here for the same layering reason as
+#: SANDBOX_DENIAL_PREFIX: robothor/engine/alerts.py WRITES the type and
+#: robothor/crm/dal.py's get_agent_inbox must EXCLUDE it by default, and the
+#: DAL has to stay importable without the engine. Allowed by the CHECK
+#: constraint since migration 116 — an INSERT of a value not in that list is
+#: rejected and the row silently lost, which is what happened to alert_digest
+#: before migration 099.
+BENCHMARK_DIGEST_NOTIFICATION_TYPE = "benchmark_digest"
+
 
 def tenant_env_conflict() -> str | None:
     """Describe a disagreement between the two tenant env vars, or None.

@@ -335,7 +335,17 @@ def _send_soft_runaway_alert(
     global _soft_runaway_window_started_at, _soft_runaway_pending
 
     from robothor.engine.alerts import alert as _alert
+    from robothor.engine.alerts import note_benchmark_runaway
+    from robothor.engine.run_context import in_benchmark_run
     from robothor.engine.task_registry import get_task_registry
+
+    # A graded child never joins the batch below and never opens its window:
+    # `_soft_runaway_pending` is module-global and flushed by whichever run
+    # crosses next IN THAT RUN'S CONTEXT, so a benchmark child flushing a
+    # production batch would relabel a real page `benchmark_digest` and lose it.
+    if in_benchmark_run():
+        note_benchmark_runaway(agent_id, run_id, tokens, model_used)
+        return
 
     now = _runaway_alert_clock()
     window_active = (
