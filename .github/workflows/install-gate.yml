@@ -379,10 +379,19 @@ jobs:
             echo "ROBOTHOR_OLLAMA_URL=\"http://${GATEWAY}:${MOCK_PORT}\""
           } >> genus.env
           "${COMPOSE[@]}" up -d
-          for _ in $(seq 1 60); do
-            curl -fsS "${ENGINE_URL}/ready" >/dev/null 2>&1 && break
-            sleep 3
+
+          # Recreating the containers restarts all four, and the dashboard
+          # waits on the other three. Poll every one of them, the way the
+          # wizard's own `wait` step does, so the readiness assertion below
+          # fails on a service that is broken rather than on one still booting.
+          for url in "${ENGINE_URL}/ready" "${BRIDGE_URL}/ready" \
+                     "${ORCHESTRATOR_URL}/ready" "${DASHBOARD_URL}/api/ready"; do
+            for _ in $(seq 1 60); do
+              curl -fsS "$url" >/dev/null 2>&1 && break
+              sleep 3
+            done
           done
+          "${COMPOSE[@]}" ps
 
       - name: Assert every service answers /ready
         run: |
