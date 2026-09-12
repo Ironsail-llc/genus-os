@@ -51,6 +51,13 @@ class TestDockerProvidesTheDatabaseItIsAskedFor:
         assert result.ok is True
         assert "docker" in result.detail.lower()
 
+    def test_a_socket_connection_reads_as_one_not_as_an_empty_row(self, tmp_path):
+        target = DatabaseStep._target(
+            {"user": "", "host": "", "port": 5432, "dbname": "robothor_memory"}
+        )
+
+        assert target == "(this account)@(unix socket):5432/robothor_memory"
+
     def test_without_docker_an_unreachable_database_still_blocks(self, tmp_path):
         def dead() -> Any:
             raise RuntimeError("connection refused")

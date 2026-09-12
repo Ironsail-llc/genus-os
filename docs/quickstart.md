@@ -49,8 +49,8 @@ checks all of it before writing anything:
     + ack         genus init writes an operator identity to ~/.robothor/owner.yaml ...
     + prereqs     5 present
     + provider    will test openrouter/openai/gpt-5.4 with a 1-token completion
-    + identity    will write /home/you/.robothor/owner.yaml
-    - models      skipped (the chosen provider is not Ollama)
+    + identity    will write ~/.robothor/owner.yaml
+    - models      skipped (Ollama is not reachable, so memory search has no embeddings)
     ...
 ```
 

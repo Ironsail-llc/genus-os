@@ -626,6 +626,19 @@ class DatabaseStep(BaseStep):
     )
 
     @staticmethod
+    def _target(config: dict[str, Any]) -> str:
+        """The connection, as a line an operator can check against reality.
+
+        An empty host means a Unix socket and an empty user means "whoever is
+        running this" -- both are normal, and both rendered as `@:5432/db`,
+        which reads like a bug in the wizard rather than a peer-auth
+        connection.
+        """
+        user = str(config.get("user") or "") or "(this account)"
+        host = str(config.get("host") or "") or "(unix socket)"
+        return f"{user}@{host}:{config['port']}/{config['dbname']}"
+
+    @staticmethod
     def _connect(ctx: InitContext) -> str:
         """Connect and close. Returns "" on success, else the error text.
 
@@ -645,7 +658,7 @@ class DatabaseStep(BaseStep):
         if ctx.answers.get("skip_db"):
             return CheckResult(True, detail="skipped (--skip-db)", action="skip")
         config = ctx.db_config()
-        target = f"{config['user']}@{config['host']}:{config['port']}/{config['dbname']}"
+        target = self._target(config)
 
         if ctx.answers.get("docker"):
             # The containers do not exist yet -- the prereqs step creates them
