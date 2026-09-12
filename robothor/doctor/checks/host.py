@@ -87,8 +87,13 @@ async def _unit_drift(ctx: DoctorContext) -> list[Result]:
     recommended rather than required.
 
     Skipped where there is no systemd -- a container, a Helm pod -- because
-    there is no host to compare.
+    there is no host to compare, and under ``--offline``, which the bridge's
+    polled route uses: the script walks every unit and drop-in on the box and
+    shells out per file, and forking that on a dashboard refresh is the same
+    class of expense as an upstream call.
     """
+    if ctx.offline:
+        return [skip("--offline: the host script was not run")]
     if not await ctx.run_blocking(running_under_systemd):
         return [skip("not running under systemd (container or Helm); no host units to compare")]
 

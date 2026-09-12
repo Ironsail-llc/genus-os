@@ -152,14 +152,20 @@ def select(
     return selected
 
 
-async def _call(check: Check, ctx: DoctorContext) -> list[Result]:
-    """Run one check inside its time box, never raising."""
+async def _call(check: Check, ctx: DoctorContext, budget: float | None = None) -> list[Result]:
+    """Run one check inside its time box, never raising.
+
+    ``budget`` is the per-check budget narrowed by whatever is left of the
+    run's total budget, so the last check before the deadline cannot overshoot
+    it by a whole ``timeout_s``.
+    """
+    allowed = ctx.timeout_s if budget is None else budget
     try:
-        async with asyncio.timeout(ctx.timeout_s):
+        async with asyncio.timeout(allowed):
             answer = await check.run(ctx)
     except TimeoutError:
-        logger.warning("doctor: check %s timed out after %ss", check.id, ctx.timeout_s)
-        return [Result(status="fail", detail=f"timed out after {ctx.timeout_s:g}s")]
+        logger.warning("doctor: check %s timed out after %ss", check.id, allowed)
+        return [Result(status="fail", detail=f"timed out after {allowed:g}s")]
     except Exception as exc:  # noqa: BLE001 - a check's dependency failing is normal here
         logger.warning("doctor: check %s raised %s", check.id, type(exc).__name__)
         return [Result(status="fail", detail=f"{type(exc).__name__}: {exc}")]
@@ -216,8 +222,10 @@ async def _repair(check: Check, ctx: DoctorContext, result: Result) -> Result:
     )
 
 
-async def _run_one(check: Check, ctx: DoctorContext) -> list[CheckResult]:
-    results = await _call(check, ctx)
+async def _run_one(
+    check: Check, ctx: DoctorContext, budget: float | None = None
+) -> list[CheckResult]:
+    results = await _call(check, ctx, budget)
     if ctx.fix:
         results = [
             await _repair(check, ctx, item) if item.status == "fail" and item.fixable else item
@@ -250,8 +258,16 @@ async def run(
     Checks run SEQUENTIALLY. They compete for one database pool, one Ollama
     server and one LLM budget, and a doctor that opened ten connections to a
     PostgreSQL already refusing them would be adding to the incident it was
-    called to explain. The per-check time box is what keeps a serial run
-    bounded: worst case is ``len(checks) * timeout_s``.
+    called to explain.
+
+    Two budgets, because one is not enough. The per-check box bounds any single
+    hanging dependency; without a TOTAL box the worst case is still
+    ``len(checks) * timeout_s`` -- over two minutes on the current check set,
+    which is tolerable for an operator watching a terminal and not tolerable
+    for an HTTP handler holding a worker thread that other routes need.
+    ``ctx.total_timeout_s`` sets that second box: once it is spent the
+    remaining checks are reported as not run, and the check straddling the
+    deadline gets only what is left rather than a fresh ``timeout_s``.
     """
     ctx = ctx or DoctorContext()
     try:
@@ -264,9 +280,39 @@ async def run(
         return DoctorReport(errored=True, error_detail=f"{type(exc).__name__}: {exc}")
 
     rows: list[CheckResult] = []
+    deadline: float | None = None
+    if ctx.total_timeout_s is not None:
+        deadline = asyncio.get_running_loop().time() + ctx.total_timeout_s
+
     for check in selected:
-        rows.extend(await _run_one(check, ctx))
+        budget: float | None = None
+        if deadline is not None:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                # NOT a skip. A skip says "this could not be checked and here
+                # is why", and reads as benign; a budget that ran out means
+                # nobody knows, and "nobody knows" must not present as health
+                # on the surface an operator is asking for a verdict from.
+                rows.append(_not_run(check, ctx.total_timeout_s))
+                continue
+            budget = min(ctx.timeout_s, remaining)
+        rows.extend(await _run_one(check, ctx, budget))
     return DoctorReport(results=rows)
+
+
+def _not_run(check: Check, total: float | None) -> CheckResult:
+    return CheckResult(
+        id=check.id,
+        title=check.title,
+        category=check.category,
+        severity=check.severity,
+        status="fail",
+        detail=(
+            f"not run: the run's total budget of {total:g}s was exhausted — "
+            "raise it with --timeout, or narrow the run with --only/--category"
+        ),
+        fixable=False,
+    )
 
 
 def _default_checks() -> Sequence[Check]:

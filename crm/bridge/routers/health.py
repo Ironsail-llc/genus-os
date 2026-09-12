@@ -24,6 +24,14 @@ router = APIRouter(tags=["health", "audit"])
 #: produced under a different time box would not be comparable with either.
 DOCTOR_TIMEOUT_S = 5.0
 
+#: A budget for the WHOLE run. The per-check box alone leaves a worst case of
+#: 26 checks x 5s, over two minutes, held on one of asyncio's default-executor
+#: workers (min(32, cpu+4) of them) -- a handful of concurrent operator
+#: requests would starve every other to_thread route in the bridge, and the
+#: tunnel in front of it gives up at 100s regardless. Checks the budget does
+#: not reach are reported as not run, never as passing.
+DOCTOR_TOTAL_TIMEOUT_S = 30.0
+
 
 @router.get("/health")
 async def health():
@@ -118,14 +126,28 @@ async def api_doctor(request: Request):
 
     Never repairs. A GET that could seed a role or apply a migration would
     make a page refresh a write.
+
+    Runs OFFLINE. This is what a Health panel polls, and the online doctor
+    makes a real completion through the fleet's default model, a getMe against
+    Telegram and a fork of the host script: two operator tabs refreshing every
+    30 seconds would be 5,760 paid provider calls a day caused by a dashboard.
+    The checks that cost money, leave the box or fork a process report
+    themselves skipped with the reason, which is honest; the CLI is where a
+    full run belongs, because someone asked for it.
     """
     require_operator(request)
 
     def _run() -> DoctorReport:
         # In a worker thread: the checks are synchronous underneath (psycopg2,
-        # urllib, a subprocess) and run_sync opens its own event loop, which it
-        # cannot do on the one serving this request.
-        return run_sync(DoctorContext(timeout_s=DOCTOR_TIMEOUT_S))
+        # urllib) and run_sync opens its own event loop, which it cannot do on
+        # the one serving this request.
+        return run_sync(
+            DoctorContext(
+                timeout_s=DOCTOR_TIMEOUT_S,
+                total_timeout_s=DOCTOR_TOTAL_TIMEOUT_S,
+                offline=True,
+            )
+        )
 
     try:
         report = await asyncio.to_thread(_run)

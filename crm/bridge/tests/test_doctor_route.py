@@ -149,6 +149,27 @@ def test_the_route_uses_the_same_five_second_per_check_budget(
     assert healthy.call_args.args[0].timeout_s == 5.0
 
 
+def test_the_route_runs_offline_so_a_dashboard_poll_costs_nothing(
+    controls_client_as_operator, healthy
+) -> None:
+    """This is what the Helm's Health view polls. Online, every refresh would
+    make a paid completion through the fleet's default model, a getMe against
+    Telegram and a fork of the host script -- two operator tabs at 30s is
+    5,760 paid calls a day from a dashboard refresh."""
+    controls_client_as_operator.get("/api/doctor")
+    assert healthy.call_args.args[0].offline is True
+
+
+def test_the_whole_run_is_bounded_not_just_each_check(controls_client_as_operator, healthy) -> None:
+    """26 checks x 5s is over two minutes on one of asyncio's default-executor
+    workers, and the tunnel in front of the bridge gives up at 100s. A handful
+    of concurrent operator requests would starve every other to_thread route."""
+    controls_client_as_operator.get("/api/doctor")
+    total = healthy.call_args.args[0].total_timeout_s
+    assert total is not None
+    assert total <= 60.0
+
+
 def test_a_doctor_that_could_not_run_is_reported_rather_than_a_500(
     controls_client_as_operator,
 ) -> None:

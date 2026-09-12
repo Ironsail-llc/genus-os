@@ -68,14 +68,23 @@ class DoctorContext:
             fetch and the host script, so a blocking dependency cannot outlive
             the check that started it by much.
         dry_run: report what ``--fix`` would do and change nothing.
-        offline: make no upstream network call. ``provider.completion`` skips;
-            local probes (services on loopback, Ollama) still run, because
-            "offline" here means "do not spend money or leave the box", which
-            is what an install gate and a CI run need.
+        offline: do not spend money, leave the box, or start an external
+            process. ``provider.completion`` and the Telegram ``getMe`` skip,
+            and so does the host-unit script -- forking a walk of every unit
+            and drop-in is the same class of expense for a polled endpoint as
+            an upstream call. Local probes (loopback services, Ollama, the
+            database) still run, which is what an install gate, a CI run and
+            the bridge's ``GET /api/doctor`` need.
+        total_timeout_s: a budget for the WHOLE run, on top of the per-check
+            one. Without it the worst case is ``len(checks) * timeout_s`` --
+            over two minutes here -- which is fine for an operator at a
+            terminal and not fine for an HTTP handler holding a worker thread.
+            None means only the per-check budget applies.
         fix: run the repair for failed fixable checks.
     """
 
     timeout_s: float = DEFAULT_TIMEOUT_S
+    total_timeout_s: float | None = None
     dry_run: bool = False
     offline: bool = False
     fix: bool = False
