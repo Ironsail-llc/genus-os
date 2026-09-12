@@ -558,3 +558,50 @@ def test_every_service_is_probed_on_the_port_the_settings_declare(settings) -> N
     urls = service_checks._urls(make_ctx())
     assert urls["bridge"].endswith(":9200")
     assert "19000" in urls["engine"] or urls["engine"].endswith(":19000")
+
+
+def test_a_crashed_service_on_a_compose_host_is_a_required_failure(monkeypatch, settings) -> None:
+    """A compose host has no systemd units -- its services are containers -- so
+    "no unit" must not read as "nothing was meant to be running". Before this,
+    a compose box whose bridge had crashed got a skip that also told the
+    operator to run `genus serve`, which is not how that instance starts."""
+    monkeypatch.setattr(service_checks, "_probe", lambda url, _t: (False, f"{url}: refused"))
+    monkeypatch.setattr(service_checks, "_units_installed", lambda: False)
+    settings(ROBOTHOR_INIT_SUBSTRATE="compose")
+
+    rows = _run(service_checks.CHECKS, "service.bridge", make_ctx())
+
+    assert rows[0].status == "fail"
+
+
+def test_a_wheel_install_whose_siblings_answer_expects_them_all(monkeypatch, settings) -> None:
+    """The documented happy path: the operator ran the two commands the wizard
+    printed, and one of the services later died. Nothing on that box carries a
+    unit, so the only evidence it was meant to be serving is that its siblings
+    are."""
+    settings(ROBOTHOR_INIT_SUBSTRATE="local")
+    monkeypatch.setattr(service_checks, "_units_installed", lambda: False)
+    monkeypatch.setattr(
+        service_checks,
+        "_probe",
+        lambda url, _t: (
+            (False, f"{url}: refused") if "9100" in url else (True, f"{url}/ready → 200")
+        ),
+    )
+
+    rows = _run(service_checks.CHECKS, "service.bridge", make_ctx())
+
+    assert rows[0].status == "fail"
+
+
+def test_a_box_with_nothing_running_at_all_still_skips(monkeypatch, settings) -> None:
+    """The case the skip exists for: `genus init --yes` without `--start`
+    started no daemons, so none of them answering is not a fault."""
+    settings(ROBOTHOR_INIT_SUBSTRATE="local")
+    monkeypatch.setattr(service_checks, "_units_installed", lambda: False)
+    monkeypatch.setattr(service_checks, "_probe", lambda url, _t: (False, f"{url}: refused"))
+
+    rows = _run(service_checks.CHECKS, "service.bridge", make_ctx())
+
+    assert rows[0].status == "skip"
+    assert "not started" in rows[0].detail
