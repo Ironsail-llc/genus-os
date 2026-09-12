@@ -409,8 +409,8 @@ class ComposeRenderStep(BaseStep):
             "# Written by `genus init --substrate compose`. Mode 0600 — it holds",
             "# every credential this instance has. Compose reads it twice: as",
             "# --env-file (the ${GENUS_*} variables) and as each service's",
-            "# env_file (the ROBOTHOR_* ones). `set -a; . ./genus.env` gives the",
-            "# same values to `genus doctor` on the host.",
+            "# env_file (the ROBOTHOR_* ones). `genus doctor` reads it too, from",
+            "# the workspace, and refuses it if this file stops being 0600.",
             "",
             _env_line("GENUS_IMAGE_TAG", image_tag(ctx)),
             # The HOST path compose bind-mounts. ROBOTHOR_WORKSPACE is
@@ -482,7 +482,6 @@ class ComposeRenderStep(BaseStep):
         SSO secret would leave the dashboard and the bridge disagreeing until
         both restarted. An operator who exported one means it.
         """
-        import os as _os
         import secrets as _secrets
 
         from robothor.secrets.env_file import parse_env_file
@@ -492,7 +491,7 @@ class ComposeRenderStep(BaseStep):
             existing = parse_env_file(path.read_text(encoding="utf-8")).get(name, "").strip()
             if existing:
                 return existing
-        return (_os.environ.get(name) or "").strip() or _secrets.token_urlsafe(SECRET_BYTES)
+        return (os.environ.get(name) or "").strip() or _secrets.token_urlsafe(SECRET_BYTES)
 
     @staticmethod
     def _provider_credential(provider_id: str) -> tuple[str, str] | None:
