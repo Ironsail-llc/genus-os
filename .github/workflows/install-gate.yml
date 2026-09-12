@@ -208,8 +208,12 @@ jobs:
     timeout-minutes: 25
     env:
       GENUS_IMAGE_TAG: pr-gate
-      ROBOTHOR_OLLAMA_URL: http://127.0.0.1:11434
-      OPENROUTER_API_BASE: http://127.0.0.1:11434/v1
+      # NOT 11434: the compose stack publishes its own Ollama container there,
+      # and two processes cannot bind one port. The host therefore reaches the
+      # real Ollama container for the model steps, and only the cloud-provider
+      # half of the mock is used here.
+      MOCK_PORT: "18080"
+      OPENROUTER_API_BASE: http://127.0.0.1:18080/v1
       ENGINE_URL: http://127.0.0.1:18800
       BRIDGE_URL: http://127.0.0.1:9100
       ORCHESTRATOR_URL: http://127.0.0.1:9099
