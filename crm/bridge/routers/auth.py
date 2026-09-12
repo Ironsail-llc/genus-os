@@ -439,8 +439,22 @@ _CLIENT_IP_HEADER = "X-Client-IP"
 
 
 def _peer_ip(request: Request) -> str | None:
-    """The address the TCP connection actually came from."""
-    return request.client.host if request.client else None
+    """The address the TCP connection actually came from, or None.
+
+    Only a parseable IP is returned: the value keys the flood limiter, names
+    the audit subject and lands in an INET column, so an unparseable peer
+    (a unix socket, a test harness, a misconfigured front) is "unknown", never
+    a string that flows through.
+    """
+    if not request.client or not request.client.host:
+        return None
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(request.client.host)
+    except ValueError:
+        return None
+    return request.client.host
 
 
 def _trusted_proxies() -> set[str]:
@@ -567,7 +581,8 @@ def local_login_route(body: _LoginBody, request: Request) -> dict[str, Any] | JS
         return _NOT_FOUND
     # The aggregate ceiling, keyed on the TCP peer and on this process — the
     # only two quantities on this route that a caller cannot choose. Ahead of
-    # the body, the per-(email, IP) window, the account load and argon2.
+    # the per-(email, IP) window, the account load and argon2 (the body
+    # dependency has already read at most CREDENTIAL_BODY_MAX_BYTES).
     if local_login.flood_limited(_peer_ip(request)):
         return _THROTTLED
     if isinstance(body, BodyTooLarge):
@@ -665,7 +680,8 @@ def change_password_route(body: _PasswordBody, request: Request) -> dict[str, An
         return _NOT_FOUND
     # The aggregate ceiling, keyed on the TCP peer and on this process — the
     # only two quantities on this route that a caller cannot choose. Ahead of
-    # the body, the per-(email, IP) window, the account load and argon2.
+    # the per-(email, IP) window, the account load and argon2 (the body
+    # dependency has already read at most CREDENTIAL_BODY_MAX_BYTES).
     if local_login.flood_limited(_peer_ip(request)):
         return _THROTTLED
     if _caller_is_service(request):
@@ -730,7 +746,8 @@ def mfa_enroll_route(body: _MfaEnrollBody, request: Request) -> dict[str, Any] |
         return _NOT_FOUND
     # The aggregate ceiling, keyed on the TCP peer and on this process — the
     # only two quantities on this route that a caller cannot choose. Ahead of
-    # the body, the per-(email, IP) window, the account load and argon2.
+    # the per-(email, IP) window, the account load and argon2 (the body
+    # dependency has already read at most CREDENTIAL_BODY_MAX_BYTES).
     if local_login.flood_limited(_peer_ip(request)):
         return _THROTTLED
     if _caller_is_service(request):
@@ -765,7 +782,8 @@ def mfa_confirm_route(body: _MfaCodeBody, request: Request) -> dict[str, Any] | 
         return _NOT_FOUND
     # The aggregate ceiling, keyed on the TCP peer and on this process — the
     # only two quantities on this route that a caller cannot choose. Ahead of
-    # the body, the per-(email, IP) window, the account load and argon2.
+    # the per-(email, IP) window, the account load and argon2 (the body
+    # dependency has already read at most CREDENTIAL_BODY_MAX_BYTES).
     if local_login.flood_limited(_peer_ip(request)):
         return _THROTTLED
     if _caller_is_service(request):
@@ -798,7 +816,8 @@ def mfa_disable_route(body: _MfaDisableBody, request: Request) -> dict[str, Any]
         return _NOT_FOUND
     # The aggregate ceiling, keyed on the TCP peer and on this process — the
     # only two quantities on this route that a caller cannot choose. Ahead of
-    # the body, the per-(email, IP) window, the account load and argon2.
+    # the per-(email, IP) window, the account load and argon2 (the body
+    # dependency has already read at most CREDENTIAL_BODY_MAX_BYTES).
     if local_login.flood_limited(_peer_ip(request)):
         return _THROTTLED
     if _caller_is_service(request):

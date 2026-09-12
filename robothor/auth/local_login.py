@@ -281,19 +281,22 @@ def flood_limited(peer: str | None) -> bool:
             if alarm:
                 _flood_alarm_at = now
             scope = "one peer" if over_peer else "this process"
-            if alarm:
-                # No peer address, no email, no body: identifiers only, and the
-                # scope is one of two literals.
-                logger.warning(
-                    "local login: credential requests from %s are over the aggregate "
-                    "limit and are being refused with 429",
-                    scope,
-                )
-            return True
+        else:
+            window.append(now)
+            _GLOBAL_ATTEMPTS.append(now)
+            return False
 
-        window.append(now)
-        _GLOBAL_ATTEMPTS.append(now)
-        return False
+    # Decided under the lock, logged outside it: every credential route
+    # serialises on _FLOOD_LOCK, and a slow log handler must not hold them all.
+    if alarm:
+        # No peer address, no email, no body: identifiers only, and the scope
+        # is one of two literals.
+        logger.warning(
+            "local login: credential requests from %s are over the aggregate "
+            "limit and are being refused with 429",
+            scope,
+        )
+    return True
 
 
 def _prune_peers(cutoff: float) -> None:

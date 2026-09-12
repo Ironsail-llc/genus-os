@@ -71,7 +71,16 @@ describe("local credentials provider registration", () => {
   // public password endpoint with no form in front of it: the surface without
   // the UI, which is the wrong half to fail open.
   it("registers for every spelling the bridge accepts", async () => {
-    for (const value of ["true", "TRUE", "1", "yes", "on", "t", "y", " True "]) {
+    for (const value of [
+      "true",
+      "TRUE",
+      "1",
+      "yes",
+      "on",
+      "t",
+      "y",
+      " True ",
+    ]) {
       vi.resetModules();
       vi.stubEnv("GENUS_LOCAL_LOGIN", value);
       expect(await localProvider(), value).toBeDefined();
@@ -96,7 +105,9 @@ describe("local credentials provider registration", () => {
     vi.resetModules();
     vi.stubEnv("GENUS_LOCAL_LOGIN", "true");
     const provider = await localProvider();
-    expect(provider?.options?.name ?? provider?.name).toBe("Email and password");
+    expect(provider?.options?.name ?? provider?.name).toBe(
+      "Email and password",
+    );
   });
 });
 
@@ -123,7 +134,10 @@ describe("local authorize()", () => {
     })) as { localTokens?: typeof loginResult; email?: string };
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
     expect(url).toContain("/api/auth/login");
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({
@@ -139,8 +153,15 @@ describe("local authorize()", () => {
     const fetchMock = vi.fn(async () => response(200, loginResult));
     vi.stubGlobal("fetch", fetchMock);
     const provider = await localProvider();
-    await authorizeOf(provider)({ email: "alice@example.com", password: "x".repeat(12), code: "" });
-    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    await authorizeOf(provider)({
+      email: "alice@example.com",
+      password: "x".repeat(12),
+      code: "",
+    });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
     expect(JSON.parse(init.body as string)).toEqual({
       email: "alice@example.com",
       password: "x".repeat(12),
@@ -148,26 +169,44 @@ describe("local authorize()", () => {
   });
 
   it("throws a signin error whose code is mfa_required", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => response(401, { error: "mfa_required" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(401, { error: "mfa_required" })),
+    );
     const provider = await localProvider();
     await expect(
-      authorizeOf(provider)({ email: "alice@example.com", password: "x".repeat(12) }),
+      authorizeOf(provider)({
+        email: "alice@example.com",
+        password: "x".repeat(12),
+      }),
     ).rejects.toMatchObject({ code: "mfa_required" });
   });
 
   it("returns null on a generic failure so Auth.js reports CredentialsSignin", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => response(401, { error: "invalid credentials" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(401, { error: "invalid credentials" })),
+    );
     const provider = await localProvider();
     await expect(
-      authorizeOf(provider)({ email: "alice@example.com", password: "x".repeat(12) }),
+      authorizeOf(provider)({
+        email: "alice@example.com",
+        password: "x".repeat(12),
+      }),
     ).resolves.toBeNull();
   });
 
   it("returns null when the bridge throttles or is unreachable", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => response(429, { error: "too many attempts" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(429, { error: "too many attempts" })),
+    );
     const provider = await localProvider();
     await expect(
-      authorizeOf(provider)({ email: "alice@example.com", password: "x".repeat(12) }),
+      authorizeOf(provider)({
+        email: "alice@example.com",
+        password: "x".repeat(12),
+      }),
     ).resolves.toBeNull();
 
     vi.stubGlobal(
@@ -177,15 +216,24 @@ describe("local authorize()", () => {
       }),
     );
     await expect(
-      authorizeOf(provider)({ email: "alice@example.com", password: "x".repeat(12) }),
+      authorizeOf(provider)({
+        email: "alice@example.com",
+        password: "x".repeat(12),
+      }),
     ).resolves.toBeNull();
   });
 
   it("rejects a malformed bridge response instead of half-creating a session", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => response(200, { access_token: "a" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(200, { access_token: "a" })),
+    );
     const provider = await localProvider();
     await expect(
-      authorizeOf(provider)({ email: "alice@example.com", password: "x".repeat(12) }),
+      authorizeOf(provider)({
+        email: "alice@example.com",
+        password: "x".repeat(12),
+      }),
     ).resolves.toBeNull();
   });
 });
@@ -210,7 +258,9 @@ describe("local branch of the session callbacks", () => {
         user: { id: "user-1", localTokens: loginResult },
       }),
     ).toBe(true);
-    expect(signInAllowed({ account: { provider: "local" }, user: { id: "user-1" } })).toBe(false);
+    expect(
+      signInAllowed({ account: { provider: "local" }, user: { id: "user-1" } }),
+    ).toBe(false);
   });
 
   it("applies the tokens directly, with no second SSO exchange", async () => {
@@ -289,14 +339,19 @@ describe("forwarding the browser's address to the bridge", () => {
       { email: "alice@example.com", password: "x".repeat(12) },
       requestWith(headers),
     );
-    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const [, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
     return (init.headers as Record<string, string>)["X-Client-IP"];
   }
 
   it("sends nothing at all when no proxy is trusted", async () => {
     // The fail-safe default: a deployment that has not declared its edge cannot
     // vouch for an address, and the bridge then uses its own peer address.
-    expect(await headerFor({ "x-forwarded-for": "203.0.113.7, 70.41.3.18" })).toBeUndefined();
+    expect(
+      await headerFor({ "x-forwarded-for": "203.0.113.7, 70.41.3.18" }),
+    ).toBeUndefined();
   });
 
   it("takes the right-most untrusted hop, not the client-writable left-most one", async () => {
@@ -304,38 +359,56 @@ describe("forwarding the browser's address to the bridge", () => {
     // so the list reads `<whatever the client sent>, <the real client>`. Taking
     // [0] let an attacker choose the limiter key and the audit subject.
     vi.stubEnv("GENUS_DASHBOARD_TRUSTED_PROXIES", "70.41.3.0/24");
-    expect(await headerFor({ "x-forwarded-for": "1.2.3.4, 203.0.113.7, 70.41.3.18" })).toBe(
-      "203.0.113.7",
-    );
+    expect(
+      await headerFor({
+        "x-forwarded-for": "1.2.3.4, 203.0.113.7, 70.41.3.18",
+      }),
+    ).toBe("203.0.113.7");
   });
 
   it("ignores an address the client injected on the left", async () => {
     vi.stubEnv("GENUS_DASHBOARD_TRUSTED_PROXIES", "70.41.3.18");
-    expect(await headerFor({ "x-forwarded-for": "198.51.100.66, 70.41.3.18" })).toBe(
-      "198.51.100.66",
-    );
+    expect(
+      await headerFor({ "x-forwarded-for": "198.51.100.66, 70.41.3.18" }),
+    ).toBe("198.51.100.66");
     // ...and the forged entry is not what is sent.
-    expect(await headerFor({ "x-forwarded-for": "198.51.100.66, 70.41.3.18" })).not.toBe(
-      "198.51.100.66, 70.41.3.18",
-    );
+    expect(
+      await headerFor({ "x-forwarded-for": "198.51.100.66, 70.41.3.18" }),
+    ).not.toBe("198.51.100.66, 70.41.3.18");
   });
 
   it("sends nothing when every hop in the list is a trusted proxy", async () => {
     vi.stubEnv("GENUS_DASHBOARD_TRUSTED_PROXIES", "70.41.3.0/24");
-    expect(await headerFor({ "x-forwarded-for": "70.41.3.9, 70.41.3.18" })).toBeUndefined();
+    expect(
+      await headerFor({ "x-forwarded-for": "70.41.3.9, 70.41.3.18" }),
+    ).toBeUndefined();
   });
 
-  it("falls back to x-real-ip only when a proxy is trusted", async () => {
+  it("never vouches for x-real-ip, trusted proxy or not", async () => {
     expect(await headerFor({ "x-real-ip": "198.51.100.9" })).toBeUndefined();
     vi.stubEnv("GENUS_DASHBOARD_TRUSTED_PROXIES", "70.41.3.18");
-    expect(await headerFor({ "x-real-ip": "198.51.100.9" })).toBe("198.51.100.9");
+    expect(await headerFor({ "x-real-ip": "198.51.100.9" })).toBeUndefined();
     expect(await headerFor({})).toBeUndefined();
+  });
+
+  it("never forwards an address-shaped value the bridge would reject", async () => {
+    vi.stubEnv("GENUS_DASHBOARD_TRUSTED_PROXIES", "70.41.3.18");
+    expect(
+      await headerFor({ "x-forwarded-for": "203.0.113.7:443, 70.41.3.18" }),
+    ).toBeUndefined();
+    expect(
+      await headerFor({ "x-forwarded-for": "010.042.000.007, 70.41.3.18" }),
+    ).toBeUndefined();
   });
 
   it("never forwards a header value that is not an address", async () => {
     vi.stubEnv("GENUS_DASHBOARD_TRUSTED_PROXIES", "70.41.3.18");
-    expect(await headerFor({ "x-forwarded-for": "not an address" })).toBeUndefined();
-    expect(await headerFor({ "x-forwarded-for": "1.2.3.4, junk, 70.41.3.18" })).toBeUndefined();
+    expect(
+      await headerFor({ "x-forwarded-for": "not an address" }),
+    ).toBeUndefined();
+    expect(
+      await headerFor({ "x-forwarded-for": "1.2.3.4, junk, 70.41.3.18" }),
+    ).toBeUndefined();
   });
 });
 
@@ -362,21 +435,32 @@ describe("the dashboard's trusted-proxy allowlist", () => {
   it("refuses a malformed entry rather than matching everything", async () => {
     const { isTrustedProxy } = await import("@/lib/auth-local");
     // An empty or non-numeric prefix must never read as /0.
-    for (const entry of ["10.0.0.0/", "10.0.0.0/abc", "10.0.0.0/999", "", "nonsense"]) {
+    for (const entry of [
+      "10.0.0.0/",
+      "10.0.0.0/abc",
+      "10.0.0.0/999",
+      "",
+      "nonsense",
+    ]) {
       expect(isTrustedProxy("198.51.100.7", [entry]), entry).toBe(false);
     }
   });
 
   it("reads the allowlist from GENUS_DASHBOARD_TRUSTED_PROXIES", async () => {
-    vi.stubEnv("GENUS_DASHBOARD_TRUSTED_PROXIES", " 10.42.0.0/16 , 70.41.3.18 ");
-    const { dashboardTrustedProxies, isTrustedProxy } = await import("@/lib/auth-local");
+    vi.stubEnv(
+      "GENUS_DASHBOARD_TRUSTED_PROXIES",
+      " 10.42.0.0/16 , 70.41.3.18 ",
+    );
+    const { dashboardTrustedProxies, isTrustedProxy } =
+      await import("@/lib/auth-local");
     expect(dashboardTrustedProxies()).toEqual(["10.42.0.0/16", "70.41.3.18"]);
     expect(isTrustedProxy("10.42.1.1")).toBe(true);
     expect(isTrustedProxy("203.0.113.7")).toBe(false);
   });
 
   it("trusts nobody when the variable is unset", async () => {
-    const { dashboardTrustedProxies, isTrustedProxy } = await import("@/lib/auth-local");
+    const { dashboardTrustedProxies, isTrustedProxy } =
+      await import("@/lib/auth-local");
     expect(dashboardTrustedProxies()).toEqual([]);
     expect(isTrustedProxy("127.0.0.1")).toBe(false);
   });
@@ -389,7 +473,8 @@ describe("the server-only session facade", () => {
   });
 
   it("exposes the refresh token to server callers but never to the browser", async () => {
-    const { bridgeSessionCallback, publicBridgeSessionCallback } = await import("@/lib/auth");
+    const { bridgeSessionCallback, publicBridgeSessionCallback } =
+      await import("@/lib/auth");
     const token = {
       bridgeAccess: "bridge-access-token",
       bridgeRefresh: "bridge-refresh-token",

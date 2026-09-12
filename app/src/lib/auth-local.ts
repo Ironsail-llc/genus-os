@@ -14,7 +14,13 @@ export type LocalLoginResult = {
   access_token: string;
   refresh_token: string;
   mfa_setup_required?: boolean;
-  user: { id: string; email: string; display_name: string; role: string; tenant_id: string };
+  user: {
+    id: string;
+    email: string;
+    display_name: string;
+    role: string;
+    tenant_id: string;
+  };
 };
 
 /**
@@ -43,7 +49,12 @@ export function looksLikeIpAddress(value: string): boolean {
   if (!value || /\s/.test(value)) return false;
   if (value.includes(":")) return /^[0-9a-fA-F:.]+$/.test(value);
   const parts = value.split(".");
-  return parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
+  // Canonical dotted quad only: a leading zero is rejected by the bridge's
+  // parser (and read as octal by some), so it is not an address here either.
+  return (
+    parts.length === 4 &&
+    parts.every((p) => /^(0|[1-9]\d{0,2})$/.test(p) && Number(p) <= 255)
+  );
 }
 
 /**
@@ -132,7 +143,10 @@ function inNetwork(address: number[], entry: string): boolean {
 }
 
 /** Whether *value* is one of the hops this deployment trusts. */
-export function isTrustedProxy(value: string, entries = dashboardTrustedProxies()): boolean {
+export function isTrustedProxy(
+  value: string,
+  entries = dashboardTrustedProxies(),
+): boolean {
   const address = ipBytes(value);
   if (!address) return false;
   return entries.some((entry) => inNetwork(address, entry));
@@ -158,7 +172,9 @@ export function isTrustedProxy(value: string, entries = dashboardTrustedProxies(
  * edge is not what this deployment thinks it is, so nothing is asserted then
  * either.
  */
-export function clientIpFromRequest(request: Request | undefined): string | null {
+export function clientIpFromRequest(
+  request: Request | undefined,
+): string | null {
   const headers = request?.headers;
   if (!headers) return null;
   const trusted = dashboardTrustedProxies();
@@ -170,15 +186,17 @@ export function clientIpFromRequest(request: Request | undefined): string | null
     .filter(Boolean);
   for (let i = hops.length - 1; i >= 0; i -= 1) {
     const hop = hops[i];
-    if (!looksLikeIpAddress(hop)) return null;
+    // The hop must be a real address, not merely address-shaped: what is
+    // returned here is forwarded verbatim, and the bridge discards anything
+    // its parser rejects, which would silently degrade the limiter.
+    if (!looksLikeIpAddress(hop) || ipBytes(hop) === null) return null;
     if (!isTrustedProxy(hop, trusted)) return hop;
   }
-  if (hops.length > 0) return null;
-
-  // No forwarded list at all: a single-valued `x-real-ip` from the same edge
-  // the operator just declared they trust.
-  const real = (headers.get("x-real-ip") || "").trim();
-  return looksLikeIpAddress(real) ? real : null;
+  // Every hop was a trusted proxy, or there was no forwarded list at all.
+  // There is no header the dashboard can verify on its own in either case
+  // (`x-real-ip` says nothing about who wrote it), so vouch for nothing and
+  // let the bridge use its peer address.
+  return null;
 }
 
 export function isLocalLoginResult(value: unknown): value is LocalLoginResult {
@@ -222,7 +240,9 @@ export async function bridgeLocalLogin(
   // on a user who simply has not been asked for it yet.
   if (credentials.code) body.code = credentials.code;
 
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
   // The bridge's per-IP limiter is otherwise inert: this call is made
   // SERVER-side, so request.client.host there is the dashboard pod for every
   // sign-in on the planet — one global bucket, in which five attempts from
