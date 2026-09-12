@@ -265,6 +265,103 @@ ollama pull Qwen3-Reranker-0.6B:F16
 - [ ] Set up monitoring (health endpoints return JSON)
 - [ ] Back up PostgreSQL daily (`pg_dump robothor_memory`)
 
+## Diagnostics (`genus doctor`)
+
+`genus doctor` is the single answer to "is this instance actually working?".
+It replaces `genus config validate`, which still works and now prints a
+deprecation note and runs `genus doctor --offline` — the free checks only, so a
+runbook that still types it does not start spending provider budget. Its
+`--json` shape is the doctor's; see
+[Configuration](configuration.md#validate-is-now-an-alias-for-genus-doctor).
+
+```bash
+genus doctor                        # everything, as a table
+genus doctor --json                 # the same report, machine-readable
+genus doctor --only db.migrations   # one check
+genus doctor --category secrets     # one category
+genus doctor --offline              # nothing that costs money, leaves the box, or forks
+genus doctor --fix                  # repair what can be repaired
+genus doctor --fix --dry-run        # say what --fix would repair
+```
+
+### What it checks
+
+| Category | Checks |
+|----------|--------|
+| `config` | settings resolve; no unknown keys in `config.yaml`; no deprecated names in use; nothing waiting on a restart |
+| `database` | PostgreSQL reachable; migrations applied and undrifted; the `service` RBAC role is seeded |
+| `redis` | Redis answers a PING |
+| `models` | a provider credential resolves; the fleet's default model answers a one-token completion; Ollama is reachable |
+| `channels` | Telegram is configured consistently (and `getMe` answers); a Slack bot token, if set, is shaped like one |
+| `services` | engine, bridge, orchestrator and vision answer a health endpoint |
+| `manifests` | every agent manifest satisfies the schema; none is present-but-unreadable |
+| `identity` | an operator is configured in `owner.yaml`; an owner account exists so somebody can sign in |
+| `secrets` | the secrets backend is usable; the JWT signing key resolves; the bridge SSO secret is set where auth is enforced |
+| `host` | the installed systemd units match the repo (wraps `scripts/instance_doctor.sh`) |
+
+Installed plugins may add their own checks through the `genus.doctor`
+entry-point group. A plugin's check ids must be prefixed with its distribution
+name and may not shadow a built-in; a plugin that breaks either rule has all of
+its checks skipped and the refusal logged.
+
+### Severities
+
+| Severity | Meaning |
+|----------|---------|
+| `required` | the instance does not work. Exit code 1 |
+| `recommended` | it works, but something an operator would want is missing or drifting. Reported, never fatal |
+| `info` | recorded for the record; not a verdict |
+
+A check that could not run — no credential, no systemd, Ollama not configured —
+is reported as `skip` with the reason. A skip is never a pass.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | no required check failed |
+| 1 | a required check failed |
+| 2 | the doctor itself could not run (an unknown `--only` id, a registry that would not import) |
+
+2 is deliberately separate from 1: "nothing is wrong" and "nothing was checked"
+must never share an exit code, or a typo in a CI gate becomes a permanently
+green build.
+
+### What `--fix` covers
+
+Two repairs, both idempotent, both re-run their own check afterwards and report
+what the re-run found rather than what the repair claimed:
+
+- `db.migrations` — applies pending migrations (the same work as
+  `genus migrate`). Drift and a ledger row this checkout does not ship are
+  **not** repairable; they need a human.
+- `db.rbac_service_role` — executes migration `107_seed_service_role.sql`.
+
+Everything else reports the command to run. `identity.owner_account` is
+deliberately not auto-fixable: minting a privileged account from a diagnostic
+that can run on a timer would be a privilege-escalation path, not a repair.
+
+Each check is time-boxed to five seconds (`--timeout S`); one that exceeds it is
+reported as a failure and the run continues.
+
+### From the dashboard
+
+`GET /api/doctor` on the bridge serves the same report as `--json --offline`,
+gated on the operator role. Its `status` and `checks` keys mirror the readiness
+contract so the Helm's Health view renders either payload.
+
+It runs **offline**, under a 30-second budget for the whole run on top of the
+per-check five seconds, and its report is **memoised for 30 seconds behind a
+single-flight lock** — concurrent polls share one run, and a poll inside the
+window reuses the last report rather than running the doctor again. Use the CLI
+when you need an answer taken just now. This is what a Health panel polls: online, every
+refresh would make a paid completion through the fleet's default model, a call
+to Telegram and a fork of the host script, so two operator tabs at 30-second
+intervals would be thousands of provider calls a day caused by a dashboard.
+The three checks that cost money, leave the box or fork report themselves
+`skip` with the reason; run the CLI for those. Checks the total budget does not
+reach are reported as **not run**, never as passing.
+
 ## Health Endpoints
 
 | Service | Endpoint | Expected |

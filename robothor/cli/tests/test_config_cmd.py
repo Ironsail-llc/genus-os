@@ -313,77 +313,13 @@ def test_list_rejects_an_unknown_group(capsys) -> None:
     assert "engine" in capsys.readouterr().err
 
 
-# ── validate ─────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def _no_connectivity_checks(monkeypatch):
-    """Validate composes the existing connectivity probes; don't run them here."""
-    monkeypatch.setattr("robothor.config.validate", lambda: [])
-
-
-def test_validate_passes_with_no_telegram_configured(
-    _no_connectivity_checks, monkeypatch, capsys
-) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
-    assert cmd_config(_args(config_command="validate")) == 0
-    out = capsys.readouterr().out
-    assert "telegram" in out.lower()
-    assert "delivery=none" in out
-
-
-def test_validate_probes_the_shape_of_a_configured_bot_token(
-    _no_connectivity_checks, monkeypatch, capsys
-) -> None:
-    monkeypatch.setenv("ROBOTHOR_TELEGRAM_BOT_TOKEN", "not-a-token")
-    monkeypatch.setenv("ROBOTHOR_TELEGRAM_CHAT_ID", "12345")
-    assert cmd_config(_args(config_command="validate")) == 1
-    out = capsys.readouterr().out
-    assert "not-a-token" not in out  # a malformed token is still a credential
-    assert "telegram" in out.lower()
-
-
-def test_validate_flags_an_unknown_key(_no_connectivity_checks, tmp_path, capsys) -> None:
-    _write_config(tmp_path, "settings:\n  engine:\n    max_concurent_agents: 7\n")
-    assert cmd_config(_args(config_command="validate")) == 1
-    assert "max_concurent_agents" in capsys.readouterr().out
-
-
-def test_validate_flags_a_deprecated_alias_and_names_the_replacement(
-    _no_connectivity_checks, monkeypatch, capsys
-) -> None:
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "12345")
-    assert cmd_config(_args(config_command="validate")) in (0, 1)
-    out = capsys.readouterr().out
-    assert "TELEGRAM_CHAT_ID" in out
-    assert "ROBOTHOR_TELEGRAM_CHAT_ID" in out
-
-
-def test_validate_reports_a_pending_restart(
-    _no_connectivity_checks, tmp_path, monkeypatch, capsys
-) -> None:
-    """config.yaml says one thing, the process was started with another."""
-    _write_config(tmp_path, "settings:\n  engine:\n    port: 18801\n")
-    monkeypatch.setenv("ROBOTHOR_ENGINE_PORT", "18800")
-    assert cmd_config(_args(config_command="validate")) == 0
-    out = capsys.readouterr().out
-    assert "ROBOTHOR_ENGINE_PORT" in out
-    assert "restart" in out.lower()
-
-
-def test_validate_json_shape(_no_connectivity_checks, tmp_path, capsys) -> None:
-    _write_config(tmp_path, "settings:\n  engine:\n    max_concurent_agents: 7\n")
-    assert cmd_config(_args(config_command="validate", json=True)) == 1
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["errors"]
-    assert any("max_concurent_agents" in str(error) for error in payload["errors"])
-    assert isinstance(payload["checks"], list)
-
-
-def test_validate_never_prints_a_secret(_no_connectivity_checks, monkeypatch, capsys) -> None:
-    monkeypatch.setenv("ROBOTHOR_DB_PASSWORD", "hunter2-the-real-one")
-    cmd_config(_args(config_command="validate"))
-    assert "hunter2-the-real-one" not in capsys.readouterr().out
+# ── validate is now an alias for `genus doctor` ──────────────────────────────
+#
+# Everything this section used to assert -- Telegram treated as optional, an
+# unknown key named, a deprecated alias pointed at its replacement, a file that
+# disagrees with the running process -- moved WITH the code it tests, into
+# `robothor/doctor/tests/test_checks_config.py` and `test_checks_channels.py`.
+# The alias itself is covered by `robothor/cli/tests/test_doctor_cli.py`.
 
 
 # ── schema ───────────────────────────────────────────────────────────────────
@@ -403,20 +339,12 @@ def test_no_subcommand_prints_usage(capsys) -> None:
 # ── the shared connectivity checks ───────────────────────────────────────────
 
 
-def test_required_env_no_longer_demands_telegram(monkeypatch) -> None:
-    """A Telegram-free deploy is supported, so it must not fail a check.
-
-    The daemon has always started without a bot token -- agents with
-    ``delivery: none`` talk through CRM tasks -- but validate() demanded one,
-    so every such instance failed two checks it could never pass. Telegram is
-    checked by ``_telegram_checks``: absent is information, misconfigured is an
-    error.
-    """
-    from robothor.config import required_env_checks
-
-    names = {name for name, _ok, _detail in required_env_checks()}
-    assert not [name for name in names if "TELEGRAM" in name]
-    assert "env:OPENROUTER_API_KEY" in names
+# ``required_env_checks`` is gone with the rest of ``robothor.config.validate``'s
+# probe body. What its test held down -- a Telegram-free deploy must not fail a
+# check it can never pass, and a missing provider key must fail one -- is now
+# ``robothor/doctor/tests/test_checks_runtime.py``:
+# ``test_telegram_absent_is_a_skip_not_a_failure`` and
+# ``test_provider_keys_fails_with_nothing_configured``.
 
 
 def test_explain_a_governed_flag_does_not_ask_for_a_restart(capsys) -> None:
@@ -455,160 +383,3 @@ def test_set_does_not_mistake_a_hash_in_a_value_for_a_comment(tmp_path) -> None:
 
     document = yaml.safe_load(_config_path(tmp_path).read_text())
     assert document["settings"]["channels"]["ai_name"] == "Ada"
-
-
-# ── a file and an environment that agree ─────────────────────────────────────
-
-
-@pytest.mark.parametrize("spelling", ["true", "True", "yes", "on", "1"])
-def test_validate_does_not_report_a_restart_when_the_two_agree(
-    _no_connectivity_checks, tmp_path, monkeypatch, capsys, spelling
-) -> None:
-    """A YAML `true` and an environment `true` are the same value.
-
-    The file is typed and the environment is text, so comparing them as
-    strings makes every boolean disagree with itself -- `True` is not
-    `"true"` -- and `validate` reported a pending restart on a box where
-    nothing was wrong. Both sides go through the field before comparison.
-    """
-    _write_config(tmp_path, "settings:\n  database:\n    rls_enabled: true\n")
-    monkeypatch.setenv("ROBOTHOR_RLS_ENABLED", spelling)
-    assert cmd_config(_args(config_command="validate", json=True)) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["pending_restart"] == []
-    assert not [c for c in payload["checks"] if c["name"].startswith("pending restart")]
-
-
-def test_validate_still_reports_a_boolean_that_really_disagrees(
-    _no_connectivity_checks, tmp_path, monkeypatch, capsys
-) -> None:
-    _write_config(tmp_path, "settings:\n  database:\n    rls_enabled: true\n")
-    monkeypatch.setenv("ROBOTHOR_RLS_ENABLED", "0")
-    cmd_config(_args(config_command="validate", json=True))
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["pending_restart"] == ["ROBOTHOR_RLS_ENABLED"]
-
-
-def test_a_pending_restart_is_a_warning_not_an_error(
-    _no_connectivity_checks, tmp_path, monkeypatch, capsys
-) -> None:
-    """The environment winning over the file is documented precedence.
-
-    It is worth reporting -- an operator who edited config.yaml and saw
-    nothing change needs to be told why -- but it is not a broken instance,
-    and exiting 1 for it makes `genus config validate` useless as a gate for
-    what IS broken: a key nothing reads.
-    """
-    _write_config(tmp_path, "settings:\n  engine:\n    port: 18801\n")
-    monkeypatch.setenv("ROBOTHOR_ENGINE_PORT", "18800")
-    assert cmd_config(_args(config_command="validate", json=True)) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["pending_restart"] == ["ROBOTHOR_ENGINE_PORT"]
-    assert payload["errors"] == []
-    statuses = {c["status"] for c in payload["checks"] if c["name"].startswith("pending restart")}
-    assert statuses == {"warn"}
-
-
-# ── the file this command rewrites ───────────────────────────────────────────
-
-
-def test_set_preserves_the_mode_of_an_existing_file(tmp_path) -> None:
-    """A rewrite must not widen (or narrow) who can read config.yaml.
-
-    The file can name hosts and ports an operator chose to keep private, and
-    a temp file created under the process umask and renamed over it silently
-    replaces whatever mode the operator set.
-    """
-    import stat
-
-    path = _write_config(tmp_path, "settings:\n  engine:\n    max_concurrent_agents: 7\n")
-    path.chmod(0o640)
-    assert (
-        cmd_config(_args(config_command="set", name="ROBOTHOR_MAX_CONCURRENT_AGENTS", value="2"))
-        == 0
-    )
-    assert stat.S_IMODE(path.stat().st_mode) == 0o640
-
-
-def test_set_creates_a_new_config_file_private_to_its_owner(tmp_path) -> None:
-    import stat
-
-    assert (
-        cmd_config(_args(config_command="set", name="ROBOTHOR_MAX_CONCURRENT_AGENTS", value="2"))
-        == 0
-    )
-    assert stat.S_IMODE(_config_path(tmp_path).stat().st_mode) == 0o600
-
-
-@pytest.mark.skipif(os.geteuid() != 0, reason="only root can give a file away")
-def test_set_preserves_the_owner_when_run_as_root(tmp_path) -> None:
-    """`sudo genus config set` must not leave the engine's file root-owned."""
-    nobody = 65534
-    path = _write_config(tmp_path, "settings:\n  engine:\n    max_concurrent_agents: 7\n")
-    os.chown(path, nobody, nobody)
-    assert (
-        cmd_config(_args(config_command="set", name="ROBOTHOR_MAX_CONCURRENT_AGENTS", value="2"))
-        == 0
-    )
-    assert path.stat().st_uid == nobody
-    assert path.stat().st_gid == nobody
-
-
-def test_set_keeps_a_comment_that_follows_a_quoted_value(tmp_path) -> None:
-    """A quoted value and a trailing comment are two different things."""
-    _write_config(tmp_path, 'settings:\n  channels:\n    ai_name: "Ada"  # the boss\n')
-    assert cmd_config(_args(config_command="set", name="ROBOTHOR_AI_NAME", value="Bob")) == 0
-
-    import yaml
-
-    text = _config_path(tmp_path).read_text()
-    assert "# the boss" in text
-    assert yaml.safe_load(text)["settings"]["channels"]["ai_name"] == "Bob"
-
-
-# ── an empty environment variable ────────────────────────────────────────────
-
-
-def test_an_empty_string_variable_is_a_value(tmp_path, monkeypatch, capsys) -> None:
-    """`ROBOTHOR_AI_DOMAIN=` is how an operator blanks a string.
-
-    The sources honour it; provenance has to say the same thing, or `get`
-    reports config.yaml while the platform reads the empty value.
-    """
-    _write_config(tmp_path, "settings:\n  channels:\n    ai_domain: example.com\n")
-    monkeypatch.setenv("ROBOTHOR_AI_DOMAIN", "")
-    assert cmd_config(_args(config_command="get", name="ROBOTHOR_AI_DOMAIN", json=True)) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["source"] == "env"
-    assert payload["value"] == ""
-
-
-def test_an_empty_numeric_variable_is_still_unset(tmp_path, monkeypatch, capsys) -> None:
-    _write_config(tmp_path, "settings:\n  engine:\n    max_concurrent_agents: 7\n")
-    monkeypatch.setenv("ROBOTHOR_MAX_CONCURRENT_AGENTS", "")
-    assert (
-        cmd_config(_args(config_command="get", name="ROBOTHOR_MAX_CONCURRENT_AGENTS", json=True))
-        == 0
-    )
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["source"] == "config.yaml"
-    assert payload["value"] == 7
-
-
-# ── which units a restart means ──────────────────────────────────────────────
-
-
-def test_explain_names_the_units_declared_on_the_field(capsys) -> None:
-    """The units come from the field, not from a table keyed on its group."""
-    assert cmd_config(_args(config_command="explain", name="ROBOTHOR_BRIDGE_PORT", json=True)) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["restart_units"] == ["robothor-bridge", "robothor-app"]
-
-
-def test_set_names_the_units_declared_on_the_field(tmp_path, capsys) -> None:
-    rc = cmd_config(
-        _args(config_command="set", name="ROBOTHOR_BRIDGE_PORT", value="9101", json=True)
-    )
-    assert rc == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["pending_restart"] == ["robothor-bridge", "robothor-app"]

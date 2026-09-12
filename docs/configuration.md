@@ -21,8 +21,8 @@ genus config get ROBOTHOR_MAX_CONCURRENT_AGENTS   # value + where it came from
 genus config explain ROBOTHOR_RBAC_MODE           # everything declared about it
 genus config list --group engine --changed        # what is off its default
 genus config set ROBOTHOR_MAX_CONCURRENT_AGENTS 6
-genus config validate                             # --json for machines
 genus config schema                               # JSON Schema, for tooling
+genus doctor                                      # is this instance working?
 ```
 
 | Command | What it does |
@@ -31,18 +31,34 @@ genus config schema                               # JSON Schema, for tooling
 | `set NAME VALUE` | Routes by the setting's own metadata — see below. |
 | `explain NAME` | Description, group, type, default, deprecated aliases, secret/governed/restart flags, current provenance. |
 | `list [--group G] [--changed]` | Every setting, or one group, or only what is not on its default. |
-| `validate [--json]` | Connectivity checks, plus unknown keys, deprecated names in use, and settings the running process disagrees with. Exit 1 only for errors — see below. |
+| `validate [--json]` | **Deprecated.** Runs [`genus doctor --offline`](deployment.md#diagnostics-genus-doctor) and says so on stderr. |
 
-`validate` separates what is broken from what is merely worth knowing:
+### `validate` is now an alias for `genus doctor`
 
-- **errors** (exit 1) — a key nothing reads, a connectivity check that failed,
-  a Telegram credential that is not shaped like one. Something is wrong.
-- **warnings** (exit 0) — a deprecated name still set, and a `settings:` value
-  the environment is overriding. The second is documented precedence, not a
-  fault: a variable in `/etc/robothor/robothor.env` beats the file, so the
-  file's value applies once you clear the variable and restart the units
-  named. `--json` lists those settings separately under `pending_restart`,
-  alongside `errors`.
+Every question it used to ask is a doctor check — unknown keys, deprecated
+names, a `settings:` value the running process disagrees with, a Telegram
+credential that is not shaped like one — and the doctor asks a dozen more that
+a fresh install actually fails on. Two things changed, and a script that reads
+this command's output has to know both:
+
+- **`--json` emits the doctor's payload**: `{status, summary, checks}`. The old
+  document's `errors` and `pending_restart` keys are gone, so
+  `genus config validate --json | jq '.errors'` now yields `null` — which reads
+  as healthy and is not. Use `.summary.required_failed`, or the per-row
+  `.checks[] | select(.status=="fail")`.
+- **exit 1 means a *required* check failed.** A key nothing reads is a
+  *recommended* finding and exits 0 while `ROBOTHOR_CONFIG_STRICT_MODE` is
+  `observe` — under `enforce` the same key stops settings resolving at all and
+  `config.settings_load` fails, which is required, so it exits 1 there. A
+  deprecated name still set and a setting waiting on a restart are likewise
+  recommended: the environment beating the file is documented precedence, not a
+  fault, and exiting non-zero for it would make the command useless as a gate
+  for what *is* broken.
+
+The alias runs `--offline`: no model call, no Telegram round trip, no host
+script. The command it replaces made no upstream call either, and a deprecation
+is the last thing that should get more expensive. Run `genus doctor` for the
+full report, including a live one-token model call.
 
 **`set` routes by what the setting is**, not by what you typed:
 
@@ -80,7 +96,7 @@ simply never applies, and you read the default as your value.
 |------|-----------|
 | `off` | The key is ignored silently. |
 | `observe` | **Default.** The key is ignored and logged once, naming it. What every existing install gets on upgrade. |
-| `enforce` | Resolving settings fails, naming the key. Recommended for new installs, and for any box where `genus config validate` reports no unknown keys. |
+| `enforce` | Resolving settings fails, naming the key. Recommended for new installs, and for any box where `genus doctor --only config.unknown_keys` reports none. |
 
 The rung can be set in the environment or in the file it governs (as above), so
 a new install can ship `enforce` without an environment file.
