@@ -30,6 +30,7 @@ The rules, and why each one is here:
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -164,10 +165,28 @@ def mfa_setup_required_for(account_row: dict[str, Any]) -> bool:
 
 _ATTEMPTS: dict[tuple[str, str], deque[float]] = {}
 
+# The bridge's credential handlers are sync ``def`` ON PURPOSE, so FastAPI runs
+# them in its worker threadpool (40 threads by default) where argon2 and
+# psycopg2 belong. That makes every function below re-entrant from many threads
+# at once, and ``_ATTEMPTS`` is shared mutable state.
+#
+# Unlocked, ``_prune`` iterated the live dict while other threads inserted into
+# it and raised ``RuntimeError: dictionary changed size during iteration`` out
+# of the sign-in route — a 500 on POST /api/auth/login under exactly the flood
+# the key cap exists to survive. ``sorted(_ATTEMPTS)`` had the same problem,
+# plus a KeyError if another thread popped the key and an IndexError on a deque
+# another thread had just emptied.
+#
+# One lock held across the whole of ``_rate_limited`` (so it also covers
+# ``_prune``). The critical section is a handful of dict and deque operations;
+# contention is irrelevant next to the ~50 ms argon2 verification that follows.
+_ATTEMPTS_LOCK = threading.Lock()
+
 
 def reset_rate_limiter() -> None:
     """Forget every recorded attempt. For tests; production never calls it."""
-    _ATTEMPTS.clear()
+    with _ATTEMPTS_LOCK:
+        _ATTEMPTS.clear()
 
 
 def throttled(key: str, ip: str | None) -> bool:
@@ -183,33 +202,54 @@ def throttled(key: str, ip: str | None) -> bool:
 
 
 def _rate_limited(email: str, ip: str | None) -> bool:
-    """Record an attempt and return whether this one is over the limit."""
+    """Record an attempt and return whether this one is over the limit.
+
+    The whole body runs under ``_ATTEMPTS_LOCK``: the map and the deque inside
+    it are shared across the bridge's worker threads, and read-modify-write on
+    either is not atomic.
+    """
     key = (email, ip or "-")
     now = time.monotonic()
     cutoff = now - RATE_LIMIT_WINDOW_SECONDS
 
-    window = _ATTEMPTS.get(key)
-    if window is None:
-        if len(_ATTEMPTS) >= RATE_LIMIT_MAX_KEYS:
-            _prune(cutoff)
-        window = _ATTEMPTS.setdefault(key, deque())
-    while window and window[0] < cutoff:
-        window.popleft()
+    with _ATTEMPTS_LOCK:
+        window = _ATTEMPTS.get(key)
+        if window is None:
+            if len(_ATTEMPTS) >= RATE_LIMIT_MAX_KEYS:
+                _prune(cutoff)
+            window = _ATTEMPTS.setdefault(key, deque())
+        while window and window[0] < cutoff:
+            window.popleft()
 
-    if len(window) >= RATE_LIMIT_ATTEMPTS:
-        return True
-    window.append(now)
-    return False
+        if len(window) >= RATE_LIMIT_ATTEMPTS:
+            return True
+        window.append(now)
+        return False
 
 
 def _prune(cutoff: float) -> None:
     """Drop keys with no attempt inside the window; then, if the map is still
-    at its cap, drop the oldest keys outright so it can never grow past it."""
-    for key in [k for k, w in _ATTEMPTS.items() if not w or w[-1] < cutoff]:
-        _ATTEMPTS.pop(key, None)
-    if len(_ATTEMPTS) >= RATE_LIMIT_MAX_KEYS:
-        for key in sorted(_ATTEMPTS, key=lambda k: _ATTEMPTS[k][-1])[: RATE_LIMIT_MAX_KEYS // 10]:
+    at its cap, drop the oldest keys outright so it can never grow past it.
+
+    Called with ``_ATTEMPTS_LOCK`` held. Both passes take a SNAPSHOT
+    (``list(...)``) rather than iterating the live map, and the sort key uses
+    ``.get()`` with an emptiness guard: even under the lock, a snapshot is the
+    shape that cannot raise if this is ever called from somewhere else.
+    """
+    for key, window in list(_ATTEMPTS.items()):
+        if not window or window[-1] < cutoff:
             _ATTEMPTS.pop(key, None)
+    if len(_ATTEMPTS) >= RATE_LIMIT_MAX_KEYS:
+        snapshot = list(_ATTEMPTS)
+        snapshot.sort(key=_last_attempt)
+        for key in snapshot[: RATE_LIMIT_MAX_KEYS // 10]:
+            _ATTEMPTS.pop(key, None)
+
+
+def _last_attempt(key: tuple[str, str]) -> float:
+    """Sort key: the most recent attempt on *key*, or "infinitely old"."""
+    window = _ATTEMPTS.get(key)
+    return window[-1] if window else float("-inf")
 
 
 # ── DAL ──────────────────────────────────────────────────────────────

@@ -14,20 +14,34 @@ value, and a password-spraying attacker can hold the counter at 1 forever
 while the lockout never fires. A plain column reference
 (``failed_login_count + 1``) IS re-evaluated, which is the fix.
 
-Skipped when no test database is reachable.
+The database-backed tests are marked ``integration`` and skipped when no test
+database is reachable. The last section needs neither: it races the in-process
+rate limiter, whose shared dict is mutated from the bridge's worker threadpool.
 """
 
 from __future__ import annotations
 
 import os
 import threading
+import time
 import uuid
 
 import pytest
 
-psycopg2 = pytest.importorskip("psycopg2")
+from robothor.auth import local_login
 
-pytestmark = pytest.mark.integration
+
+def _psycopg2():
+    """The driver, or skip this test.
+
+    Imported lazily, and the ``integration`` marker is applied per test rather
+    than to the module, because the rate-limiter races at the bottom of this
+    file need neither a driver nor a database. A module-level
+    ``importorskip`` + ``pytestmark`` hid them from the unit lane, which is the
+    only lane that would have caught the limiter's missing lock.
+    """
+    return pytest.importorskip("psycopg2")
+
 
 # Same convention as tests/conftest_integration.py and crm/bridge/tests/test_audit.py
 # — a *_test database, never a production name.
@@ -41,7 +55,7 @@ WRITERS = 8
 
 def _connect():
     try:
-        return psycopg2.connect(PG_DSN)
+        return _psycopg2().connect(PG_DSN)
     except Exception as exc:  # pragma: no cover - environment-dependent
         pytest.skip(f"no test database reachable at ROBOTHOR_TEST_DB_DSN: {exc}")
 
@@ -84,7 +98,7 @@ def _run_concurrently(sql: str, row_id: str, writers: int = WRITERS) -> None:
     errors: list[BaseException] = []
 
     def one() -> None:
-        conn = psycopg2.connect(PG_DSN)
+        conn = _psycopg2().connect(PG_DSN)
         try:
             cur = conn.cursor()
             barrier.wait(timeout=10)
@@ -104,6 +118,7 @@ def _run_concurrently(sql: str, row_id: str, writers: int = WRITERS) -> None:
     assert not errors, errors
 
 
+@pytest.mark.integration
 def test_the_shipped_statement_counts_every_concurrent_failure(counter_table) -> None:
     from robothor.auth.local_login import FAILURE_UPDATE_SQL
 
@@ -122,6 +137,7 @@ def test_the_shipped_statement_counts_every_concurrent_failure(counter_table) ->
     )
 
 
+@pytest.mark.integration
 @pytest.mark.xfail(
     strict=False,
     reason=(
@@ -159,7 +175,7 @@ def test_the_cte_form_that_shipped_first_loses_updates(counter_table) -> None:
     barrier = threading.Barrier(WRITERS)
 
     def one() -> None:
-        conn = psycopg2.connect(PG_DSN)
+        conn = _psycopg2().connect(PG_DSN)
         try:
             cur = conn.cursor()
             barrier.wait(timeout=10)
@@ -214,6 +230,7 @@ def mfa_table():
         conn.close()
 
 
+@pytest.mark.integration
 def test_only_one_of_two_simultaneous_uses_of_a_code_wins(mfa_table) -> None:
     """The watermark used to be check-then-write across two connections: both
     requests read "no step used", both verified the code, both signed in. A
@@ -226,7 +243,7 @@ def test_only_one_of_two_simultaneous_uses_of_a_code_wins(mfa_table) -> None:
     wins: list[int] = []
 
     def one() -> None:
-        conn = psycopg2.connect(PG_DSN)
+        conn = _psycopg2().connect(PG_DSN)
         try:
             cur = conn.cursor()
             barrier.wait(timeout=10)
@@ -248,6 +265,7 @@ def test_only_one_of_two_simultaneous_uses_of_a_code_wins(mfa_table) -> None:
     )
 
 
+@pytest.mark.integration
 def test_the_same_step_is_refused_the_second_time(mfa_table) -> None:
     from robothor.auth.local_login import BURN_STEP_SQL
 
@@ -267,6 +285,7 @@ def test_the_same_step_is_refused_the_second_time(mfa_table) -> None:
     conn.close()
 
 
+@pytest.mark.integration
 def test_the_lock_engages_at_the_threshold_under_concurrency(counter_table) -> None:
     from robothor.auth.local_login import FAILURE_UPDATE_SQL, LOCKOUT_THRESHOLD
 
@@ -285,6 +304,7 @@ def test_the_lock_engages_at_the_threshold_under_concurrency(counter_table) -> N
 # ── Python and PostgreSQL must agree on what "the same address" means ──
 
 
+@pytest.mark.integration
 def test_python_and_postgres_fold_case_identically(mfa_table) -> None:
     """`canonical_email` is `lower()`, and migration 114 lower-cases with SQL
     `lower()`. If the two ever disagreed, a row written by one would be
@@ -311,6 +331,7 @@ def test_python_and_postgres_fold_case_identically(mfa_table) -> None:
     conn.close()
 
 
+@pytest.mark.integration
 def test_citext_agrees_with_canonical_email(mfa_table) -> None:
     """The stored column is CITEXT, so its own comparison must also match."""
     from robothor.auth.accounts import canonical_email
@@ -327,3 +348,104 @@ def test_citext_agrees_with_canonical_email(mfa_table) -> None:
     (collided,) = cur.fetchone()
     assert collided is False, "CITEXT must not conflate ß with ss either"
     conn.close()
+
+
+# ── the in-process rate limiter, from many threads ───────────────────
+#
+# No database, no driver: the defect is a shared dict mutated without a lock.
+# The bridge's credential handlers are deliberately sync ``def`` so argon2 and
+# psycopg2 run in FastAPI's worker threadpool (40 threads by default), which is
+# exactly where ``_rate_limited`` is called from — concurrently.
+
+
+@pytest.fixture
+def _limiter():
+    local_login.reset_rate_limiter()
+    yield
+    local_login.reset_rate_limiter()
+
+
+def _hammer(work, threads: int = 16) -> list[BaseException]:
+    """Run *work(worker_index)* on *threads* threads, all released together."""
+    barrier = threading.Barrier(threads)
+    errors: list[BaseException] = []
+
+    def one(index: int) -> None:
+        try:
+            barrier.wait(timeout=10)
+            work(index)
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the assertion
+            errors.append(exc)
+
+    workers = [threading.Thread(target=one, args=(i,)) for i in range(threads)]
+    for t in workers:
+        t.start()
+    for t in workers:
+        t.join(timeout=60)
+    return errors
+
+
+def test_the_limiter_survives_sixteen_threads_of_fresh_keys(monkeypatch, _limiter) -> None:
+    """Distinct keys from every thread must not raise out of the sign-in route.
+
+    ``_prune`` iterated the live dict (``_ATTEMPTS.items()``, then ``sorted``)
+    while other threads inserted into it, so it raised ``RuntimeError:
+    dictionary changed size during iteration`` — a 500 from
+    ``POST /api/auth/login`` under exactly the flood the key cap exists to
+    survive. The cap is lowered here so ``_prune`` is reached in a second
+    rather than in ten thousand keys; the code path is identical at 10,000.
+    """
+    monkeypatch.setattr(local_login, "RATE_LIMIT_MAX_KEYS", 200)
+    deadline = time.monotonic() + 1.5
+
+    def work(worker: int) -> None:
+        n = 0
+        while time.monotonic() < deadline:
+            local_login._rate_limited(
+                f"login:u{worker}-{n}@example.com", f"10.{worker}.0.{n % 256}"
+            )
+            n += 1
+
+    errors = _hammer(work)
+    assert not errors, errors
+    assert len(local_login._ATTEMPTS) <= local_login.RATE_LIMIT_MAX_KEYS
+
+
+def test_only_one_thread_is_ever_inside_the_limiter(monkeypatch, _limiter) -> None:
+    """The critical section must be mutually exclusive, not merely lucky.
+
+    The hammer above is a race, and a race can pass by accident. This one
+    proves the invariant directly: ``_prune`` is made slow, so without a lock
+    held across ``_rate_limited`` several threads observe themselves inside it
+    at once. With the lock, the observed depth can only ever be 1.
+    """
+    monkeypatch.setattr(local_login, "RATE_LIMIT_MAX_KEYS", 4)
+    real_prune = local_login._prune
+    depth = 0
+    max_depth = 0
+    counter_lock = threading.Lock()
+
+    def slow_prune(cutoff: float) -> None:
+        nonlocal depth, max_depth
+        with counter_lock:
+            depth += 1
+            max_depth = max(max_depth, depth)
+        time.sleep(0.002)
+        try:
+            real_prune(cutoff)
+        finally:
+            with counter_lock:
+                depth -= 1
+
+    monkeypatch.setattr(local_login, "_prune", slow_prune)
+
+    def work(worker: int) -> None:
+        for n in range(10):
+            local_login._rate_limited(f"login:u{worker}-{n}@example.com", f"10.{worker}.0.{n}")
+
+    errors = _hammer(work)
+    assert not errors, errors
+    assert max_depth == 1, (
+        f"{max_depth} threads were inside the limiter's critical section at once; "
+        "_prune iterates the shared map and must not overlap an insert"
+    )
