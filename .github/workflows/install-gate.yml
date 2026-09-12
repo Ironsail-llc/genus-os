@@ -32,6 +32,14 @@ on:
       - "crm/bridge/routers/setup.py"
       - "tests/acceptance/**"
       - ".github/workflows/install-gate.yml"
+      # Where the defects this gate found actually live. Without these four a
+      # regression in the wizard's model resolution, the orchestrator's
+      # readiness, the Ollama endpoint resolver or an agent template would
+      # wait for the nightly instead of failing its own pull request.
+      - "templates/agents/**"
+      - "robothor/api/orchestrator.py"
+      - "robothor/engine/config.py"
+      - "robothor/llm/ollama.py"
 
 concurrency:
   group: install-gate-${{ github.ref }}
@@ -171,7 +179,12 @@ jobs:
         run: |
           genus run --agent main --print "say pong" 2>&1 | tee "$RUNNER_TEMP/run.txt"
           grep -qi pong "$RUNNER_TEMP/run.txt"
-          echo 'assertion OK: genus run --agent main "say pong" printed pong'
+          # One turn, not two hundred. The mock answers every tools-bearing
+          # request with a fixed `noop` call, so a regression that stops the
+          # engine settling would still print `pong` — after running the loop
+          # to its ceiling.
+          ! grep -q "Safety limit reached" "$RUNNER_TEMP/run.txt"
+          echo 'assertion OK: genus run --agent main "say pong" answered in one turn'
 
       # The quickstart says so itself, next to the command it prints:
       # `genus serve` "needs: pip install genusos[api]". The api extra carries
@@ -222,8 +235,12 @@ jobs:
           test -n "$TOKEN" || { echo "genus init printed no first-run link"; exit 1; }
 
           curl -fsS "${BRIDGE_URL}/api/setup/status" | tee "$RUNNER_TEMP/setup-status.json"
-          jq -e '.complete == false' "$RUNNER_TEMP/setup-status.json"
-          echo "assertion OK: a fresh instance reports setup incomplete"
+          # The 200 is the assertion: the gate 404s every first-run route the
+          # moment an owner row exists, so reaching this route at all is what
+          # proves the wizard is still open. (`.complete` is a literal in the
+          # handler and proves nothing on its own.)
+          jq -e '.steps.operator == false' "$RUNNER_TEMP/setup-status.json"
+          echo "assertion OK: /api/setup/status answers 200 with no operator yet"
 
           CLAIM="$(curl -fsS -X POST "${BRIDGE_URL}/api/setup/claim" \
             -H 'content-type: application/json' \
@@ -351,7 +368,8 @@ jobs:
           PIP_FIND_LINKS: ${{ github.workspace }}/wheelhouse
           INSTALL_GATE_REPO: ${{ github.workspace }}
         run: |
-          chmod +x .github/install-gate/curl
+          # Committed executable; tests/test_install_gate_workflow.py pins that,
+          # so a chmod here would only hide a shim PATH had skipped.
           export PATH="$GITHUB_WORKSPACE/.github/install-gate:$PATH"
           python scripts/extract_doc_commands.py \
             --file docs/quickstart.md --block compose | tee "$RUNNER_TEMP/compose-block.sh"
@@ -438,7 +456,8 @@ jobs:
             exec -T engine python -m robothor.cli run --agent main --print "say pong" \
             2>&1 | tee "$RUNNER_TEMP/run.txt"
           grep -qi pong "$RUNNER_TEMP/run.txt"
-          echo 'assertion OK: genus run --agent main "say pong" printed pong'
+          ! grep -q "Safety limit reached" "$RUNNER_TEMP/run.txt"
+          echo 'assertion OK: genus run --agent main "say pong" answered in one turn'
 
       - name: Assert the setup wizard is reachable, claimable, then closed
         run: |
@@ -447,8 +466,12 @@ jobs:
           test -n "$TOKEN" || { echo "genus init printed no first-run link"; exit 1; }
 
           curl -fsS "${BRIDGE_URL}/api/setup/status" | tee "$RUNNER_TEMP/setup-status.json"
-          jq -e '.complete == false' "$RUNNER_TEMP/setup-status.json"
-          echo "assertion OK: a fresh instance reports setup incomplete"
+          # The 200 is the assertion: the gate 404s every first-run route the
+          # moment an owner row exists, so reaching this route at all is what
+          # proves the wizard is still open. (`.complete` is a literal in the
+          # handler and proves nothing on its own.)
+          jq -e '.steps.operator == false' "$RUNNER_TEMP/setup-status.json"
+          echo "assertion OK: /api/setup/status answers 200 with no operator yet"
 
           CLAIM="$(curl -fsS -X POST "${BRIDGE_URL}/api/setup/claim" \
             -H 'content-type: application/json' \

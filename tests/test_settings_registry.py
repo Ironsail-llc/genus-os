@@ -51,7 +51,15 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: for the other seven. A name left the raw-read path without a call site
 #: leaving it, which is the ratchet being honest rather than flattering -- it
 #: counts sites, and this move did not remove one.
-ENV_READ_SITE_BASELINE = 495
+#:
+#: 495 -> 489 on 2026-09-12. Six of those had already gone on `main` and the
+#: constant had not followed -- the assertion is `<=`, so a stale baseline
+#: passes silently while carrying that much slack. It was found by a change
+#: that added one raw read (`ROBOTHOR_LAST_RESORT_MODEL` in
+#: `engine/config.fleet_model_chain`) and would have ridden the gap unnoticed;
+#: that read now resolves through `get_settings().providers.last_resort_model`.
+#: Lower this whenever the count drops, or the ratchet stops ratcheting.
+ENV_READ_SITE_BASELINE = 489
 
 
 def _discovery():

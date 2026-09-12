@@ -36,6 +36,14 @@ WATCHED_PATHS = frozenset(
         "crm/bridge/routers/setup.py",
         "tests/acceptance/**",
         ".github/workflows/install-gate.yml",
+        # Where the fixes this gate found actually live. Without these four a
+        # regression in the wizard's model resolution, the orchestrator's
+        # readiness, the Ollama endpoint resolver or an agent template would
+        # wait for the nightly instead of failing its own pull request.
+        "templates/agents/**",
+        "robothor/api/orchestrator.py",
+        "robothor/engine/config.py",
+        "robothor/llm/ollama.py",
     }
 )
 
@@ -186,3 +194,104 @@ def test_the_gate_needs_no_secrets(raw: str) -> None:
 def test_fixtures_use_the_example_domain_only(raw: str) -> None:
     for address in re.findall(r"[\w.+-]+@[\w.-]+\.\w+", raw):
         assert address.endswith("@example.com"), f"{address} is not an example.com fixture"
+
+
+# --------------------------------------------------------------------------
+# the curl shim
+# --------------------------------------------------------------------------
+#
+# The compose block fetches its compose files from main. On a pull request that
+# would test main's copy while claiming to test the branch, so one step runs
+# with a shim on PATH that answers those two URLs from the checkout. A fixture
+# with that much reach has to be pinned: a shim that quietly became a plain
+# pass-through would put the gate back to testing main, green.
+
+SHIM = REPO_ROOT / ".github" / "install-gate" / "curl"
+
+
+def test_the_shim_exists_and_is_executable() -> None:
+    import os
+
+    assert SHIM.is_file()
+    assert os.access(SHIM, os.X_OK), f"{SHIM} is not executable, so PATH would skip it"
+
+
+@pytest.mark.parametrize("name", ["docker-compose.yml", "docker-compose.apps.yml"])
+def test_it_serves_the_compose_files_from_the_checkout(tmp_path: Path, name: str) -> None:
+    import subprocess
+
+    checkout = tmp_path / "checkout" / "infra"
+    checkout.mkdir(parents=True)
+    (checkout / name).write_text(f"# the branch's {name}\n", encoding="utf-8")
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    result = subprocess.run(
+        [
+            str(SHIM),
+            "-fsSLO",
+            f"https://raw.githubusercontent.com/Ironsail-llc/genus-os/main/infra/{name}",
+        ],
+        cwd=workdir,
+        env={"PATH": "/usr/bin:/bin", "INSTALL_GATE_REPO": str(tmp_path / "checkout")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (workdir / name).read_text(encoding="utf-8") == f"# the branch's {name}\n"
+
+
+def test_it_refuses_rather_than_guessing_when_the_checkout_is_not_named(tmp_path: Path) -> None:
+    import subprocess
+
+    result = subprocess.run(
+        [
+            str(SHIM),
+            "-fsSLO",
+            "https://raw.githubusercontent.com/Ironsail-llc/genus-os/main/infra/docker-compose.yml",
+        ],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "INSTALL_GATE_REPO" in result.stderr
+
+
+def test_every_other_url_reaches_the_real_curl(tmp_path: Path) -> None:
+    """It must not become a pass-through for the compose files, and it must not
+    become a wall for anything else -- the same step later curls /ready."""
+    import shutil
+    import subprocess
+
+    real = shutil.which("curl")
+    if real is None:  # pragma: no cover - curl is present on CI and on the box
+        pytest.skip("curl is not installed")
+
+    result = subprocess.run(
+        [str(SHIM), "--version"],
+        cwd=tmp_path,
+        env={"PATH": "/usr/bin:/bin", "INSTALL_GATE_REPO": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.lower().startswith("curl ")
+
+
+def test_the_compose_job_puts_the_shim_on_path_for_exactly_one_step(
+    workflow: dict[str, Any],
+) -> None:
+    steps = workflow["jobs"]["compose"]["steps"]
+    using = [step for step in steps if ".github/install-gate" in str(step.get("run", ""))]
+
+    assert len(using) == 1, "the shim must be on PATH for the block replay and nothing else"
+    assert "--block compose" in str(using[0]["run"])
+    assert using[0].get("env", {}).get("INSTALL_GATE_REPO")

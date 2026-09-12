@@ -790,7 +790,12 @@ def fleet_model_chain(manifest_dir: Path | str | None = None) -> list[str]:
     block = (_load_defaults(Path(directory)).get("model") or {}) if directory else {}
     chain = [block.get("primary"), *(block.get("fallbacks") or [])]
     models = [str(model) for model in chain if model]
-    last_resort = os.environ.get("ROBOTHOR_LAST_RESORT_MODEL", "").strip()
+    # Through the settings registry, not os.environ: this is a declared name
+    # (ProviderSettings.last_resort_model), and a fresh raw read here would be
+    # a new site on a ratchet this same change set is trying to lower.
+    from robothor.settings import get_settings
+
+    last_resort = str(get_settings().providers.last_resort_model or "").strip()
     if last_resort and last_resort not in models:
         models.append(last_resort)
     return models
