@@ -72,8 +72,8 @@ def test_telegram_is_not_in_the_required_set():
 
 def _run_decrypt(tmp_path: Path, payload: dict[str, str]):
     root = tmp_path / "root"
-    (root / "etc" / "robothor").mkdir(parents=True)
-    (root / "run").mkdir(parents=True)
+    (root / "etc" / "robothor").mkdir(parents=True, exist_ok=True)
+    (root / "run").mkdir(parents=True, exist_ok=True)
     (root / "etc" / "robothor" / "secrets.enc.json").write_text("{}")
     (root / "etc" / "robothor" / "age.key").write_text("AGE-SECRET-KEY-STUB")
 
@@ -134,3 +134,28 @@ def test_a_missing_spare_warns_but_still_boots(tmp_path: Path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "OPENROUTER_API_KEY_2" in result.stderr
     assert "no spare" in result.stderr
+
+
+def test_missing_pager_credentials_warn_by_name_but_still_boot(tmp_path: Path):
+    """Telegram is optional, but a boot that will never page must say so."""
+    result, out = _run_decrypt(tmp_path, {"OPENROUTER_API_KEY": "k1", "OPENROUTER_API_KEY_2": "k2"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ROBOTHOR_TELEGRAM_BOT_TOKEN" in result.stderr
+    assert "ROBOTHOR_TELEGRAM_CHAT_ID" in result.stderr
+    assert "k1" not in result.stdout + result.stderr
+
+
+def test_decrypt_replaces_a_planted_symlink_at_the_output(tmp_path: Path):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not touch\n")
+    root = tmp_path / "root"
+    (root / "run" / "robothor").mkdir(parents=True)
+    (root / "run" / "robothor" / "secrets.env").symlink_to(victim)
+    result, out = _run_decrypt(
+        tmp_path, {"OPENROUTER_API_KEY": "sentinel-k1", "OPENROUTER_API_KEY_2": "k2"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert victim.read_text() == "do not touch\n", (
+        "decrypted secrets were written through the symlink"
+    )
+    assert not out.is_symlink() and out.is_file() and "sentinel-k1" in out.read_text()

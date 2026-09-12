@@ -74,7 +74,9 @@ die() {
 
 # ── Which backend ────────────────────────────────────────────────────────────
 BACKEND="${ROBOTHOR_SECRETS_BACKEND:-}"
+AUTO=0
 if [[ -z "$BACKEND" ]]; then
+    AUTO=1
     if [[ -f "$SOPS_FILE" ]]; then
         BACKEND="sops"
     elif [[ -f "$PLAIN_FILE" ]]; then
@@ -111,6 +113,20 @@ mkdir -p "$OUTPUT_DIR" 2>/dev/null || true
 # before a backend change) would keep supplying stale credentials that nothing
 # in the instance's configuration claims exist any more.
 if [[ "$BACKEND" == "env" ]]; then
+    # Auto-detected env means "no secrets file was found". If the tmpfs copy is
+    # populated, that is an encrypted or plaintext file that has gone missing
+    # since the last boot — not an instance that keeps its credentials in the
+    # unit environment. Blanking it and exiting 0 would start four services
+    # with no credentials behind an `active (exited)` unit; refuse instead, and
+    # name the override for the operator who really did move to env.
+    if [[ "$AUTO" == "1" && -s "$OUTPUT_FILE" ]]; then
+        die "no secrets file found (${SOPS_FILE} or ${PLAIN_FILE}) but ${OUTPUT_FILE} is populated from an earlier boot — refusing to blank it; restore the file, or set ROBOTHOR_SECRETS_BACKEND=env if the credentials really are in the unit environment"
+    fi
+    # Remove before writing: ${OUTPUT_DIR} is writable by the service account,
+    # so a symlink planted there would turn this into a truncate of whatever it
+    # points at. `rm -f --` unlinks the link itself; the write below then
+    # creates a regular file.
+    rm -f -- "$OUTPUT_FILE"
     : > "$OUTPUT_FILE"
     chmod 600 "$OUTPUT_FILE"
     log "wrote an empty ${OUTPUT_FILE}; secrets are expected in the unit environment"

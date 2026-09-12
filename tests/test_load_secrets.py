@@ -369,3 +369,80 @@ def test_the_decrypt_script_is_still_shipped_as_the_sops_implementation():
         "load-secrets.sh delegates the sops backend to decrypt-secrets.sh; "
         "removing it would break every existing SOPS instance"
     )
+
+
+# ── the output path is never written through a symlink ──────────────────────
+
+
+def _plant_symlink(root: Path, tmp_path: Path) -> tuple[Path, Path]:
+    """A symlink at the output path pointing at a file the service must not touch."""
+    target = tmp_path / "victim.txt"
+    target.write_text("do not touch\n")
+    out = _output(root)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.symlink_to(target)
+    return out, target
+
+
+def test_env_backend_replaces_a_planted_symlink(tmp_path: Path):
+    root = _root(tmp_path)
+    out, target = _plant_symlink(root, tmp_path)
+    result = _run(root, ROBOTHOR_SECRETS_BACKEND="env")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert target.read_text() == "do not touch\n", "the env backend wrote through the symlink"
+    assert not out.is_symlink() and out.is_file() and out.read_text() == ""
+    assert _mode(out) == 0o600
+
+
+def test_sops_backend_replaces_a_planted_symlink(tmp_path: Path):
+    """The whole decrypted credential set must land in a regular file, not wherever a link points."""
+    root = _root(tmp_path)
+    out, target = _plant_symlink(root, tmp_path)
+    env = _sops_instance(tmp_path, root, FULL_PAYLOAD)
+    result = _run(root, **env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert SENTINEL not in target.read_text(), "decrypted secrets were written through the symlink"
+    assert not out.is_symlink() and out.is_file() and SENTINEL in out.read_text()
+
+
+def test_file_backend_replaces_a_planted_symlink(tmp_path: Path):
+    root = _root(tmp_path)
+    out, target = _plant_symlink(root, tmp_path)
+    _write_plain_secrets(root)
+    result = _run(root)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert SENTINEL not in target.read_text()
+    assert not out.is_symlink() and out.is_file() and SENTINEL in out.read_text()
+
+
+# ── auto never blanks a populated tmpfs file ─────────────────────────────────
+
+
+def test_auto_env_refuses_to_blank_a_populated_output(tmp_path: Path):
+    """A missing secrets file plus a populated tmpfs copy is an outage, not an env box."""
+    root = _root(tmp_path)
+    out = _output(root)
+    out.parent.mkdir(parents=True)
+    out.write_text(f'OPENROUTER_API_KEY="{SENTINEL}"\n')
+    result = _run(root)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "refusing to blank" in result.stderr and "ROBOTHOR_SECRETS_BACKEND=env" in result.stderr
+    assert SENTINEL not in result.stdout + result.stderr
+    assert out.read_text() == f'OPENROUTER_API_KEY="{SENTINEL}"\n', "the populated file was blanked"
+
+
+def test_explicit_env_still_blanks_a_populated_output(tmp_path: Path):
+    root = _root(tmp_path)
+    out = _output(root)
+    out.parent.mkdir(parents=True)
+    out.write_text(f'OPENROUTER_API_KEY="{SENTINEL}"\n')
+    result = _run(root, ROBOTHOR_SECRETS_BACKEND="env")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert out.read_text() == ""
+
+
+def test_auto_env_on_a_fresh_box_writes_the_empty_file(tmp_path: Path):
+    root = _root(tmp_path)
+    result = _run(root)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _output(root).read_text() == ""

@@ -47,6 +47,11 @@ export SOPS_AGE_KEY_FILE="$AGE_KEY"
 # Decrypt JSON and convert to KEY=VALUE format for systemd EnvironmentFile
 # Double-quoted values: systemd treats # as comment inside single quotes but not double quotes.
 # Double quotes also work with bash source (no $ chars in secret values).
+# Remove before writing: the output directory is writable by the service
+# account, and a symlink planted at the output path would send the whole
+# decrypted credential set to wherever it points. Unlink the path itself
+# first so the redirect below always creates a regular file.
+rm -f -- "$OUTPUT_FILE"
 sops -d "$SOPS_FILE" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
@@ -80,6 +85,14 @@ ADVISORY_KEYS=(
     "OPENROUTER_API_KEY_2"
 )
 
+# Also advisory: the pager's own credentials. Telegram is an optional channel,
+# so a boot without them is a valid instance — but this is the only boot-time
+# place that can say "nothing will page you", so it says so, by name only.
+PAGER_KEYS=(
+    "ROBOTHOR_TELEGRAM_BOT_TOKEN"
+    "ROBOTHOR_TELEGRAM_CHAT_ID"
+)
+
 missing=()
 for key in "${REQUIRED_KEYS[@]}"; do
     if ! grep -q "^${key}=" "$OUTPUT_FILE"; then
@@ -92,6 +105,12 @@ for key in "${ADVISORY_KEYS[@]}"; do
         echo "WARNING: $key is not set — this credential pool has no spare." >&2
         echo "         One capped or revoked key will take the whole fleet down." >&2
         echo "         Add it with: sops $SOPS_FILE" >&2
+    fi
+done
+
+for key in "${PAGER_KEYS[@]}"; do
+    if ! grep -q "^${key}=" "$OUTPUT_FILE"; then
+        echo "WARNING: $key is not set — the Telegram pager cannot deliver alerts without it." >&2
     fi
 done
 
