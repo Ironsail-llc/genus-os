@@ -1128,7 +1128,15 @@ class VerifyStep(BaseStep):
         # must not be the thing that first spends money on an instance, and
         # `provider.completion` is the only check that would.
         offline = not bool(ctx.answers.get("provider_probed"))
-        context = DoctorContext(offline=offline)
+        # `genus init` is the one caller that KNOWS whether anything was asked
+        # to start: without `--start` the services step deliberately prints the
+        # commands instead of running them. Leaving the doctor to guess made a
+        # documented `genus init --yes` end in exit 1 on a complete instance,
+        # naming two daemons it had just chosen not to launch.
+        context = DoctorContext(
+            offline=offline,
+            services_expected=bool(ctx.answers.get("start")),
+        )
 
         note = ""
         if ctx.answers.get("skip_db"):

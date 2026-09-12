@@ -89,6 +89,14 @@ class DoctorContext:
     dry_run: bool = False
     offline: bool = False
     fix: bool = False
+    #: Whether this instance is supposed to have its long-running services up.
+    #: ``None`` -- the default, and what the CLI passes -- means "ask the box":
+    #: a host carrying the systemd units is meant to be serving, a bare wheel
+    #: install is not. ``genus init`` sets it explicitly, because it is the one
+    #: caller that KNOWS: without ``--start`` it deliberately starts nothing,
+    #: and failing the install on daemons it chose not to launch is how the
+    #: documented quickstart came to exit 1 on a complete, working instance.
+    services_expected: bool | None = None
     db_factory: Callable[[], Any] | None = None
     http_fetch: Callable[[str, float], HttpResponse] | None = None
     _settings: Any = field(default=None, repr=False)

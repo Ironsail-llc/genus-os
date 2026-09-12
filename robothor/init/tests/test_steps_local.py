@@ -432,6 +432,23 @@ class TestVerifyIsTheGate:
         VerifyStep(doctor=fake_doctor).apply(_ctx(tmp_path, answers={"provider_probed": True}))
         assert seen["offline"] is False
 
+    def test_it_tells_the_doctor_whether_anything_was_asked_to_start(self, tmp_path):
+        """Without `--start` the wizard launches no daemons, so requiring them
+        would fail the install on a state it deliberately did not create."""
+        seen: dict[str, Any] = {}
+
+        def fake_doctor(doctor_ctx: Any) -> Any:
+            from robothor.doctor.runner import DoctorReport
+
+            seen["services_expected"] = doctor_ctx.services_expected
+            return DoctorReport(results=[])
+
+        VerifyStep(doctor=fake_doctor).apply(_ctx(tmp_path))
+        assert seen["services_expected"] is False
+
+        VerifyStep(doctor=fake_doctor).apply(_ctx(tmp_path, answers={"start": True}))
+        assert seen["services_expected"] is True
+
 
 class TestServicesStep:
     def test_without_start_it_prints_the_two_commands_and_starts_nothing(self, tmp_path, capsys):
