@@ -1,60 +1,131 @@
-# Application services (engine, bridge, orchestrator, dashboard).
-# Layered on top of docker-compose.yml.
+# Genus OS application services — the RELEASE file.
+# ============================================================================
+# Released images from GHCR, no source checkout, no build step. Layered on top
+# of docker-compose.yml (postgres, redis, ollama):
 #
-# Usage:
-#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.apps.yml up -d --build
+#   docker compose --env-file ./genus.env \
+#     -f infra/docker-compose.yml -f infra/docker-compose.apps.yml up -d
 #
-# Secrets and instance-specific settings live in infra/.env. Container DNS,
-# bind addresses, and workspace paths are explicit here so a host-oriented
-# .env cannot silently point a container back at itself.
+# `genus init --substrate compose` writes the env file, picks the overlays and
+# runs that command. Two overlays exist:
+#
+#   docker-compose.dev.yml   source bind mounts + local builds (dev loop only)
+#   docker-compose.gpu.yml   Ollama's NVIDIA reservation (only where it works)
+#
+# Three variables, and none of them is a platform setting — they configure the
+# COMPOSE FILE, not the instance:
+#
+#   GENUS_IMAGE_TAG   the release to run. Required: the build publishes
+#                     vX.Y.Z, vX.Y, vX and sha-<short> and deliberately no
+#                     `latest`, so there is no floating tag to default to.
+#   GENUS_WORKSPACE   host path holding this instance's brain/, docs/agents/
+#                     and .robothor/. Mounted at /workspace.
+#   GENUS_ENV_FILE    the 0600 env file carrying every credential.
+#
+# Container DNS, bind addresses and workspace paths are set explicitly per
+# service and therefore OUTRANK the env file: a host-oriented variable
+# (ROBOTHOR_DB_HOST=127.0.0.1, ROBOTHOR_WORKSPACE=/home/…) must never point a
+# container back at itself.
+#
+# The workspace mount must be writable by uid 1000 — the `app` user the
+# released image runs as.
+# ============================================================================
+
+# `required: false` is not laziness. env_file lists MERGE by append, so no
+# overlay can downgrade a required entry, and the default path resolves against
+# the PROJECT directory (infra/) -- which no checkout has -- so `required: true`
+# broke `-f docker-compose.dev.yml` before it built anything. The release path
+# keeps its guard elsewhere: docker-compose.yml interpolates
+# ${ROBOTHOR_DB_PASSWORD:?...}, so a stack started with no credentials is
+# refused by name rather than started blind.
+x-genus-env-file: &genus-env-file
+  - path: ${GENUS_ENV_FILE:-./genus.env}
+    required: false
+
+x-genus-workspace: &genus-workspace
+  - ${GENUS_WORKSPACE:-./workspace}:/workspace
+
+# Shared by every Python service. ROBOTHOR_SECRETS_BACKEND is `env` because a
+# container has no /run/robothor/secrets.env: load-secrets.sh and the systemd
+# ExecStartPre that fills it are the host path, and a container waiting on that
+# file waits forever.
+x-genus-python-env: &genus-python-env
+  ROBOTHOR_WORKSPACE: /workspace
+  # A uid with no /etc/passwd entry -- which is what `user:` below produces on
+  # any box whose operator is not uid 1000 -- has no home directory, and
+  # `Path.home()` raises for it. /workspace both exists and belongs to that
+  # account, and `~/.robothor` then lands beside the identity we already put
+  # there.
+  HOME: /workspace
+  ROBOTHOR_MANIFEST_DIR: /workspace/docs/agents
+  ROBOTHOR_OWNER_CONFIG: /workspace/.robothor/owner.yaml
+  ROBOTHOR_SECRETS_BACKEND: env
+  ROBOTHOR_DB_HOST: postgres
+  ROBOTHOR_DB_SSLMODE: prefer
+  ROBOTHOR_REDIS_HOST: redis
+  ROBOTHOR_OLLAMA_HOST: ollama
 
 services:
+  # ── Schema, once, before anything reads it ────────────────────────────────
+  #
+  # The one-shot equivalent of the chart's `wait-for-migrations` init container
+  # (helm/genus-os/templates/_python_workload.tpl). Without it a fresh box came
+  # up with an empty schema and three services that 503 on /ready forever.
+  #
+  # `restart: "no"` is load-bearing: a restarting migration container never
+  # reaches the exited-0 state `service_completed_successfully` waits for, so
+  # every service behind it would wait forever instead of failing.
+  migrate:
+    image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
+    container_name: robothor-migrate
+    # The account that ran `genus init`, because everything it wrote into
+    # the bind-mounted workspace -- owner.yaml, setup_token.yaml, the vault
+    # key -- is 0600 and owned by that account. The image's own uid is 1000;
+    # on a box whose operator is not uid 1000 the bridge could not read
+    # setup_token.yaml, and that file is the only door into a fresh instance.
+    user: "${GENUS_UID:-1000}:${GENUS_GID:-1000}"
+    restart: "no"
+    command: ["python", "-m", "robothor.cli", "migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: *genus-env-file
+    environment: *genus-python-env
+    volumes: *genus-workspace
+
   engine:
-    build:
-      context: ..
-      dockerfile: Dockerfile.python
-      target: dev
-    image: genusos/python:dev
+    image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
     container_name: robothor-engine
+    # The account that ran `genus init`, because everything it wrote into
+    # the bind-mounted workspace -- owner.yaml, setup_token.yaml, the vault
+    # key -- is 0600 and owned by that account. The image's own uid is 1000;
+    # on a box whose operator is not uid 1000 the bridge could not read
+    # setup_token.yaml, and that file is the only door into a fresh instance.
+    user: "${GENUS_UID:-1000}:${GENUS_GID:-1000}"
     restart: always
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       ollama:
         condition: service_started
-    env_file:
-      - path: .env
-        required: false
+    env_file: *genus-env-file
     environment:
+      <<: *genus-python-env
       ROBOTHOR_ENGINE_HOST: 0.0.0.0
-      ROBOTHOR_WORKSPACE: /workspace
-      ROBOTHOR_MANIFEST_DIR: /workspace/docs/agents
       ROBOTHOR_ALLOW_EMPTY_FLEET: "false"
       ROBOTHOR_MIN_AGENT_COUNT: "1"
       ROBOTHOR_REQUIRED_AGENT_IDS: main
-      ROBOTHOR_DB_HOST: postgres
-      ROBOTHOR_DB_SSLMODE: prefer
-      ROBOTHOR_REDIS_HOST: redis
-      ROBOTHOR_OLLAMA_HOST: ollama
       BRIDGE_URL: http://bridge:9100
       ORCHESTRATOR_URL: http://orchestrator:9099
-    # NOTE: HEAD's robothor.engine.daemon instantiates TelegramBot
-    # unconditionally (aiogram crashes on empty token). To run without
-    # Telegram, comment out ROBOTHOR_TELEGRAM_BOT_TOKEN in infra/.env or
-    # apply the daemon guard from this session's stash.
     ports:
       - "127.0.0.1:18800:18800"
     volumes:
-      - ../robothor:/app/robothor
-      - ../crm:/app/crm
-      - robothor_workspace:/workspace
-      - ../brain:/workspace/brain
-      - ../docs:/workspace/docs
-      - ../agents:/workspace/agents:ro
+      - ${GENUS_WORKSPACE:-./workspace}:/workspace
       - robothor_logs:/var/log/robothor
-      - ${USERPROFILE:-${HOME}}/.robothor:/root/.robothor:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:18800/ready"]
       interval: 15s
@@ -63,36 +134,33 @@ services:
       start_period: 60s
 
   bridge:
-    image: genusos/python:dev
+    image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
     container_name: robothor-bridge
+    # The account that ran `genus init`, because everything it wrote into
+    # the bind-mounted workspace -- owner.yaml, setup_token.yaml, the vault
+    # key -- is 0600 and owned by that account. The image's own uid is 1000;
+    # on a box whose operator is not uid 1000 the bridge could not read
+    # setup_token.yaml, and that file is the only door into a fresh instance.
+    user: "${GENUS_UID:-1000}:${GENUS_GID:-1000}"
     restart: always
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       engine:
         condition: service_started
       orchestrator:
         condition: service_healthy
     working_dir: /app/crm/bridge
     command: ["python", "bridge_service.py"]
-    env_file:
-      - path: .env
-        required: false
+    env_file: *genus-env-file
     environment:
+      <<: *genus-python-env
       ROBOTHOR_BRIDGE_HOST: 0.0.0.0
-      ROBOTHOR_WORKSPACE: /workspace
-      ROBOTHOR_MANIFEST_DIR: /workspace/docs/agents
-      ROBOTHOR_DB_HOST: postgres
-      ROBOTHOR_DB_SSLMODE: prefer
-      ROBOTHOR_REDIS_HOST: redis
       MEMORY_URL: http://orchestrator:9099
+      ROBOTHOR_ENGINE_URL: http://engine:18800
     ports:
       - "127.0.0.1:9100:9100"
-    volumes:
-      - ../robothor:/app/robothor
-      - ../crm:/app/crm
-      - robothor_workspace:/workspace
-      - ../brain:/workspace/brain
-      - ../docs:/workspace/docs
-      - ../agents:/workspace/agents:ro
+    volumes: *genus-workspace
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:9100/ready"]
       interval: 60s
@@ -101,27 +169,29 @@ services:
       start_period: 60s
 
   orchestrator:
-    image: genusos/python:dev
+    image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
     container_name: robothor-orchestrator
+    # The account that ran `genus init`, because everything it wrote into
+    # the bind-mounted workspace -- owner.yaml, setup_token.yaml, the vault
+    # key -- is 0600 and owned by that account. The image's own uid is 1000;
+    # on a box whose operator is not uid 1000 the bridge could not read
+    # setup_token.yaml, and that file is the only door into a fresh instance.
+    user: "${GENUS_UID:-1000}:${GENUS_GID:-1000}"
     restart: always
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       ollama:
         condition: service_started
-    command: ["uvicorn", "robothor.api.orchestrator:app", "--host", "0.0.0.0", "--port", "9099"]
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      ROBOTHOR_DB_HOST: postgres
-      ROBOTHOR_DB_SSLMODE: prefer
-      ROBOTHOR_OLLAMA_HOST: ollama
+    command:
+      ["uvicorn", "robothor.api.orchestrator:app", "--host", "0.0.0.0", "--port", "9099"]
+    env_file: *genus-env-file
+    environment: *genus-python-env
     ports:
       - "127.0.0.1:9099:9099"
-    volumes:
-      - ../robothor:/app/robothor
-      - ../crm:/app/crm
+    volumes: *genus-workspace
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:9099/ready"]
       interval: 60s
@@ -129,12 +199,14 @@ services:
       retries: 5
       start_period: 60s
 
+  # ── The Helm dashboard, on the port every printed link names ──────────────
+  #
+  # PORT=3004 rather than the image default 3000: `services.helm_port` is 3004,
+  # `genus init` prints http://127.0.0.1:3004/setup?token=… and `genus doctor`
+  # probes 3004. A container on 3000 published as 3004 would work by accident
+  # until anything inside the stack dialled the dashboard by name.
   dashboard:
-    build:
-      context: ..
-      dockerfile: Dockerfile.app
-      target: dev
-    image: genusos/dashboard:dev
+    image: "ghcr.io/ironsail-llc/genus-os/app:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
     container_name: robothor-dashboard
     restart: always
     depends_on:
@@ -144,39 +216,24 @@ services:
         condition: service_healthy
       engine:
         condition: service_healthy
-    env_file:
-      - path: .env
-        required: false
+    env_file: *genus-env-file
     environment:
+      PORT: "3004"
+      HOSTNAME: 0.0.0.0
       BRIDGE_URL: http://bridge:9100
       ORCHESTRATOR_URL: http://orchestrator:9099
       ROBOTHOR_ENGINE_URL: http://engine:18800
       # Browser traffic stays same-origin and is forwarded by the dashboard.
       NEXT_PUBLIC_BRIDGE_URL: /api/bridge
     ports:
-      - "127.0.0.1:3000:3000"
-    volumes:
-      - ../app:/app
-      # NOTE: node_modules and .next are intentionally NOT persistent
-      # volumes. Both Turbopack's incremental cache and pnpm's installed
-      # tree drifted out of sync with the freshly built image across
-      # restarts — symptoms were stale 404s on existing routes and
-      # "Next.js package not found" Turbopack panics. Each container
-      # start now does a clean install + recompile (~30s slower) but
-      # is always correct.
-      - /app/node_modules
-      - /app/.next
+      - "127.0.0.1:3004:3004"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/ready >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3004/api/ready >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 90s
 
 volumes:
-  robothor_workspace:
-    driver: local
   robothor_logs:
-    driver: local
-  dashboard_node_modules:
     driver: local

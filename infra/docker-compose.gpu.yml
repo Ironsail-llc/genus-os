@@ -1,0 +1,27 @@
+# Ollama on the NVIDIA runtime.
+# ============================================================================
+# An overlay rather than part of docker-compose.yml, because a
+# `deploy.resources.reservations.devices` block fails the WHOLE stack on a box
+# without the NVIDIA container runtime — "could not select device driver" — and
+# most enterprise pilot boxes are that box. The base file therefore reserves
+# nothing and this file is added only where GPUs actually work:
+#
+#   docker compose \
+#     -f infra/docker-compose.yml \
+#     -f infra/docker-compose.apps.yml \
+#     -f infra/docker-compose.gpu.yml up -d
+#
+# `genus init --substrate compose` adds it when `nvidia-smi` succeeds and says
+# so in its plan; a box without it runs Ollama on the CPU, which is slower for
+# embeddings and otherwise identical.
+# ============================================================================
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

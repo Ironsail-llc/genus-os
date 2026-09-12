@@ -163,7 +163,23 @@ def _build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument(
         "--substrate",
         type=str,
-        help="Where the instance runs: local (compose, systemd and helm are not yet selectable)",
+        help="Where the instance runs: local or compose (systemd and helm are not yet selectable)",
+    )
+    init_parser.add_argument(
+        "--wait-timeout",
+        type=int,
+        default=180,
+        metavar="SECONDS",
+        help="How long --substrate compose waits for the stack to answer /ready (default: 180)",
+    )
+    init_parser.add_argument(
+        "--image-tag",
+        type=str,
+        metavar="TAG",
+        help=(
+            "Released image tag --substrate compose runs "
+            "(default: v<this CLI's version>; there is no floating `latest`)"
+        ),
     )
     init_parser.add_argument(
         "--dry-run",

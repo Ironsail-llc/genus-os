@@ -132,14 +132,28 @@ installs your first agents, and leaves you in the chat. Lost the link, or set
 the box up headless? `genus auth setup-link` mints another. Once setup is done
 `/setup` answers 404 for good.
 
-Or with Docker for dependencies:
+Two substrates are selectable. `--substrate local` (the default, above) runs the
+platform on this machine against a local PostgreSQL. `--substrate compose` runs
+the whole thing in containers from released GHCR images — a one-shot migration
+the services wait on, and a dashboard on `http://127.0.0.1:3004`:
+
+```bash
+mkdir -p ~/genus && cd ~/genus
+# fetch infra/docker-compose.yml and infra/docker-compose.apps.yml first --
+# see docs/quickstart.md for the exact two curl lines
+genus init --substrate compose --yes --workspace .
+```
+
+Or just the dependencies in Docker, with the platform on the host:
 
 ```bash
 robothor init --docker   # PostgreSQL+pgvector, Redis, Ollama in containers
 robothor serve
 ```
 
-For a full Docker Compose stack instead, see [`examples/full-stack/`](examples/full-stack/).
+`systemd` and `helm` are designed but not yet selectable; `genus init` says so
+rather than pretending they do not exist. Deployment details, including the
+dev and GPU overlays, are in [`docs/deployment.md`](docs/deployment.md).
 
 Engine and TUI commands:
 

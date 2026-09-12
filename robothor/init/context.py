@@ -29,16 +29,66 @@ from typing import TYPE_CHECKING, Any, TextIO
 from robothor.doctor.context import HttpResponse
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from robothor.settings.model import GenusSettings
 
-__all__ = ["HttpResponse", "InitContext"]
+__all__ = ["CommandResult", "HttpResponse", "InitContext"]
 
 #: Seconds any one probe the wizard makes may take. Short on purpose: phase 1
 #: runs every check before it writes anything, and an operator waiting on a
 #: plan is waiting on the slowest check in it.
 DEFAULT_HTTP_TIMEOUT_S = 5.0
+
+#: Seconds a command the wizard shells out to may take. Enough for a version
+#: probe and nowhere near enough for an image pull, which passes its own.
+DEFAULT_COMMAND_TIMEOUT_S = 30.0
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    """What one external command did. A failure is data, never an exception.
+
+    Every step that runs a binary is inside a ``check()`` that turns what it
+    learns into a plan row, or an ``apply()`` that turns it into a sentence for
+    the operator. A runner that raised ``FileNotFoundError`` for "docker is not
+    installed" would make the single most common finding on a fresh box arrive
+    as a traceback.
+    """
+
+    code: int
+    out: str = ""
+    err: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.code == 0
+
+    @property
+    def text(self) -> str:
+        """Stdout and stderr as one line, for a plan row or a step error."""
+        return " ".join(f"{self.out}\n{self.err}".split())
+
+
+def _default_run(argv: Sequence[str], timeout: float) -> CommandResult:
+    """Run a command. Never raises: a missing binary is an exit code."""
+    import subprocess  # noqa: PLC0415 - lazy, like every other dependency here
+
+    try:
+        completed = subprocess.run(  # noqa: S603 - argv is built by the caller, never a shell
+            list(argv),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        return CommandResult(127, err=f"{argv[0]}: not found")
+    except subprocess.TimeoutExpired:
+        return CommandResult(124, err=f"{argv[0]}: timed out after {timeout:.0f}s")
+    except OSError as exc:  # a binary that cannot be executed at all
+        return CommandResult(126, err=f"{argv[0]}: {exc}")
+    return CommandResult(completed.returncode, completed.stdout or "", completed.stderr or "")
 
 
 def _default_fetch(
@@ -72,6 +122,10 @@ class InitContext:
         prompt: the question seam. ``None`` with ``yes=False`` reads stdin.
         http_fetch: the HTTP seam, replaced wholesale in tests.
         settings_factory: the settings seam. Defaults to ``get_settings``.
+        runner: the external-command seam -- ``docker``, ``nvidia-smi``.
+            Replaced wholesale in tests, because this suite runs on the machine
+            that hosts the appliance and a real ``docker compose up`` here
+            restarts the operator's instance.
     """
 
     workspace: Path
@@ -85,11 +139,15 @@ class InitContext:
     http_fetch: Callable[[str, str, dict[str, Any] | None, float], HttpResponse] | None = None
     settings_factory: Callable[[], Any] | None = None
     db_factory: Callable[[], Any] | None = None
+    runner: Callable[[Sequence[str], float], CommandResult] | None = None
     stream: TextIO | None = None
 
     #: Detail each applied step wants in the report, by step id. A step sets
     #: it through :meth:`detail`; the runner reads it when the step returns.
     details: dict[str, str] = field(default_factory=dict)
+    #: Substrate-specific facts for the ``--json`` document, by top-level key
+    #: (``compose``, today). Never a credential: this object is serialised.
+    report: dict[str, Any] = field(default_factory=dict)
     #: The URL the ``link`` step minted, if it ran.
     first_run_url: str = ""
 
@@ -169,6 +227,17 @@ class InitContext:
         """One HTTP round trip that never raises and never blocks for long."""
         fetch = self.http_fetch or _default_fetch
         return fetch(method.upper(), url, body, timeout or DEFAULT_HTTP_TIMEOUT_S)
+
+    # -- external commands ------------------------------------------------
+
+    def run(self, argv: Sequence[str], *, timeout: float | None = None) -> CommandResult:
+        """Run one command through the seam. Never raises, never uses a shell.
+
+        ``argv`` is a list, so nothing an operator typed is ever interpreted by
+        ``/bin/sh``: a workspace path with a space in it is an argument, not two.
+        """
+        run = self.runner or _default_run
+        return run(list(argv), timeout or DEFAULT_COMMAND_TIMEOUT_S)
 
     # -- database ---------------------------------------------------------
 

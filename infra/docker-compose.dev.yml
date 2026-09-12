@@ -1,0 +1,72 @@
+# The dev loop, restored on top of the release file.
+# ============================================================================
+# docker-compose.apps.yml runs published GHCR images so a fresh box needs no
+# source checkout. This overlay puts back exactly what that removed — local
+# builds and the source bind mounts — so editing a file still changes what the
+# containers run:
+#
+#   docker compose \
+#     -f infra/docker-compose.yml \
+#     -f infra/docker-compose.apps.yml \
+#     -f infra/docker-compose.dev.yml up -d --build
+#
+# GENUS_IMAGE_TAG is still required to PARSE the release file (the variable is
+# read before this overlay replaces the image), so export any value — the tag
+# is never pulled once `image:` here names a locally built one.
+#
+# Nothing in this file carries a credential: the env file the release file
+# names is still the only source of those.
+# ============================================================================
+
+services:
+  migrate:
+    image: genusos/python:dev
+    volumes:
+      - ../robothor:/app/robothor
+      - ../crm:/app/crm
+
+  engine:
+    build:
+      context: ..
+      dockerfile: Dockerfile.python
+      target: dev
+    image: genusos/python:dev
+    volumes:
+      - ../robothor:/app/robothor
+      - ../crm:/app/crm
+      # The workspace scaffold, straight out of the checkout, so a manifest or
+      # a brain file edited in the repo is the one the engine loads.
+      - ../brain:/workspace/brain
+      - ../docs:/workspace/docs
+      - ../agents:/workspace/agents:ro
+
+  bridge:
+    image: genusos/python:dev
+    volumes:
+      - ../robothor:/app/robothor
+      - ../crm:/app/crm
+      - ../brain:/workspace/brain
+      - ../docs:/workspace/docs
+      - ../agents:/workspace/agents:ro
+
+  orchestrator:
+    image: genusos/python:dev
+    volumes:
+      - ../robothor:/app/robothor
+      - ../crm:/app/crm
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: Dockerfile.app
+      target: dev
+    image: genusos/dashboard:dev
+    volumes:
+      - ../app:/app
+      # node_modules and .next are anonymous volumes ON PURPOSE. Both
+      # Turbopack's incremental cache and pnpm's installed tree drifted out of
+      # sync with the freshly built image across restarts — stale 404s on
+      # existing routes, and "Next.js package not found" Turbopack panics. A
+      # clean install and recompile each start costs ~30s and is always right.
+      - /app/node_modules
+      - /app/.next

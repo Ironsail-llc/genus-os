@@ -5,9 +5,9 @@ database has a host, agents come from a preset. Three things are not, and they
 are exactly what a substrate owns — which prerequisites are REQUIRED, how
 services are started, and what the first-run URL looks like.
 
-Only ``local`` is selectable in this release. The other three are present as
-stubs that say where they land rather than as absent names, because a wizard
-that silently does not offer compose is indistinguishable from one that has
+``local`` and ``compose`` are selectable. The other two are present as stubs
+that say where they land rather than as absent names, because a wizard that
+silently does not offer systemd is indistinguishable from one that has
 forgotten it exists.
 """
 
@@ -31,10 +31,10 @@ __all__ = [
 ]
 
 #: What ``--substrate`` accepts today.
-AVAILABLE_SUBSTRATES: tuple[str, ...] = ("local",)
+AVAILABLE_SUBSTRATES: tuple[str, ...] = ("local", "compose")
 
-#: Every substrate the design names, including the three still to land. Listed
-#: so ``--substrate compose`` gets "lands in A10" rather than "unknown value".
+#: Every substrate the design names, including the two still to land. Listed
+#: so ``--substrate systemd`` gets "lands in A11" rather than "unknown value".
 ALL_SUBSTRATES: tuple[str, ...] = ("local", "compose", "systemd", "helm")
 
 
@@ -65,6 +65,10 @@ def get_substrate(name: str) -> Substrate:
         from robothor.init.substrates.local import LocalSubstrate
 
         return LocalSubstrate()
+    if chosen == "compose":
+        from robothor.init.substrates.compose import ComposeSubstrate
+
+        return ComposeSubstrate()
     if chosen in ALL_SUBSTRATES:
         from robothor.init import substrates
 

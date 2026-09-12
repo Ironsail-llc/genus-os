@@ -359,7 +359,7 @@ class TestRunInitIsTwoPhase:
         assert "Genus OS Setup" not in captured.out
 
     def test_a_substrate_that_is_not_built_yet_says_where_it_lands(self, tmp_path, capsys):
-        rc = run_init(_init_args(tmp_path / "workspace", substrate="compose"))
+        rc = run_init(_init_args(tmp_path / "workspace", substrate="systemd"))
 
         assert rc == 1
         assert "A10/A11/A12" in capsys.readouterr().out

@@ -60,10 +60,10 @@ class TestTheStepOrderIsTheSpecOrder:
             "link",
         ]
 
-    def test_only_local_is_offered_in_this_release(self):
-        assert AVAILABLE_SUBSTRATES == ("local",)
+    def test_local_and_compose_are_offered_in_this_release(self):
+        assert AVAILABLE_SUBSTRATES == ("local", "compose")
 
-    @pytest.mark.parametrize("name", ["compose", "systemd", "helm"])
+    @pytest.mark.parametrize("name", ["systemd", "helm"])
     def test_the_later_substrates_are_seams_that_say_where_they_land(self, name):
         with pytest.raises(NotImplementedError) as exc:
             get_substrate(name)
