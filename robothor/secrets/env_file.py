@@ -41,6 +41,7 @@ __all__ = [
     "REQUIRED_MODE",
     "SECRET_BYTES",
     "EnvFileLoad",
+    "apply_instance_env",
     "env_line",
     "instance_env_path",
     "keep_or_mint",
@@ -222,3 +223,39 @@ def load_instance_env(
         target[name] = value
         added.append(name)
     return EnvFileLoad(path=path, present=True, names=tuple(added))
+
+
+def apply_instance_env(workspace: Path | str) -> EnvFileLoad:
+    """Load ``genus.env`` AND drop every cache resolved without it.
+
+    :func:`load_instance_env` only touches ``os.environ``. By the time anyone
+    calls it, three other things have usually been built from that environment
+    already, and each one keeps its answer:
+
+    * ``robothor.settings`` — the typed settings object;
+    * ``robothor.config`` — a separate singleton, and the one the database
+      layer actually reads;
+    * ``robothor.db.connection`` — the connection pool built from that config.
+
+    Refreshing only the first is what a compose install did, and the result was
+    five required doctor checks failing against a database that was answering
+    perfectly well: the pool went on dialling the host that was configured
+    while ``ROBOTHOR_DB_HOST`` was still unset — a Unix socket, on a box that
+    has none.
+
+    Nothing is dropped when the file is absent or refused. Every substrate but
+    compose may have no such file, and closing a live pool for nothing is a
+    stall, not a refresh.
+    """
+    result = load_instance_env(workspace)
+    if not result.loaded:
+        return result
+
+    from robothor.config import reset_config
+    from robothor.db.connection import close_pool
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    reset_config()
+    close_pool()
+    return result

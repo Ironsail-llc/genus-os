@@ -279,3 +279,38 @@ class TestItReadsTheInstanceEnvFileFirst:
         assert str(path) in captured.err
         assert "chmod 600" in captured.err
         assert str(path) not in captured.out
+
+
+class TestTheEnvFileRefreshesEveryCacheItFeeds:
+    """`genus doctor` on a compose host reads genus.env for the database
+    password and host. Resetting only the settings left `robothor.config` --
+    the singleton the database layer actually reads -- holding the environment
+    as it was before the file was loaded, so five required checks failed
+    against a database answering on its published port.
+    """
+
+    def test_loading_the_file_drops_the_config_singleton_and_the_pool(self, tmp_path, monkeypatch):
+        from robothor.secrets.env_file import apply_instance_env, env_line, write_private
+
+        dropped: list[str] = []
+        monkeypatch.setattr("robothor.settings.reset_settings", lambda: dropped.append("settings"))
+        monkeypatch.setattr("robothor.config.reset_config", lambda: dropped.append("config"))
+        monkeypatch.setattr("robothor.db.connection.close_pool", lambda: dropped.append("pool"))
+        monkeypatch.delenv("ROBOTHOR_DB_HOST", raising=False)
+
+        write_private(tmp_path / "genus.env", env_line("ROBOTHOR_DB_HOST", "127.0.0.1") + "\n")
+
+        result = apply_instance_env(tmp_path)
+
+        assert result.loaded
+        assert dropped == ["settings", "config", "pool"]
+
+    def test_an_absent_file_drops_nothing(self, tmp_path, monkeypatch):
+        from robothor.secrets.env_file import apply_instance_env
+
+        dropped: list[str] = []
+        monkeypatch.setattr("robothor.config.reset_config", lambda: dropped.append("config"))
+        monkeypatch.setattr("robothor.db.connection.close_pool", lambda: dropped.append("pool"))
+
+        assert apply_instance_env(tmp_path).loaded is False
+        assert dropped == []

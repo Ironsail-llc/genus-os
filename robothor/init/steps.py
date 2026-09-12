@@ -1079,32 +1079,11 @@ class VerifyStep(BaseStep):
         refusal is said: permissions that have slipped on the file holding the
         provider key are a finding, not a detail.
         """
-        from robothor.secrets.env_file import load_instance_env
+        from robothor.secrets.env_file import apply_instance_env
 
-        result = load_instance_env(ctx.workspace)
+        result = apply_instance_env(ctx.workspace)
         if result.refused:
             ctx.say(f"  ! {result.refused}")
-            return
-        if result.loaded:
-            from robothor.settings import reset_settings
-
-            # Settings were resolved before these existed.
-            reset_settings()
-
-            # And so was everything else built from the environment. The
-            # doctor's database path does not go through `get_settings()`: it
-            # goes through `robothor.config`, a singleton resolved from
-            # os.environ the first time anything asks — which on the compose
-            # substrate is long before this runs. Refreshing only the settings
-            # left the connection pool dialling the host that was configured
-            # when ROBOTHOR_DB_HOST was still unset (a Unix socket, on a box
-            # that has none), and five required checks failed against a
-            # database that was answering perfectly well on its published port.
-            from robothor.config import reset_config
-            from robothor.db.connection import close_pool
-
-            reset_config()
-            close_pool()
 
     def apply(self, ctx: InitContext) -> None:
         from robothor.doctor.context import DoctorContext
