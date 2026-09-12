@@ -345,8 +345,8 @@ def test_required_env_no_longer_demands_telegram(monkeypatch) -> None:
     The daemon has always started without a bot token -- agents with
     ``delivery: none`` talk through CRM tasks -- but validate() demanded one,
     so every such instance failed two checks it could never pass. Telegram is
-    checked by ``_telegram_checks``: absent is information, misconfigured is an
-    error.
+    checked by the doctor's ``telegram.token``: absent is information,
+    misconfigured is an error.
     """
     from robothor.config import required_env_checks
 

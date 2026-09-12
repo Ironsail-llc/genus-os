@@ -54,6 +54,12 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("DELETE", "/api/providers/{provider_id}/keys/{position}"),
         ("POST", "/api/providers/{provider_id}/test"),
         ("PATCH", "/api/providers/defaults"),
+        # The doctor route awaits asyncio.to_thread and nothing else. Every
+        # check underneath it is synchronous -- psycopg2, urllib, a subprocess
+        # -- and run_sync opens its own event loop, which it cannot do on the
+        # one serving the request. Async here is what keeps the whole run OFF
+        # the loop; a def route would block it for the length of the report.
+        ("GET", "/api/doctor"),
     }
 
 
