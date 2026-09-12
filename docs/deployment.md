@@ -279,6 +279,27 @@ Then open the printed link on your own machine. `genus init` prints this line
 for you whenever it is not running on a terminal, or the dashboard is not on
 loopback.
 
+### Rate limiting the setup link
+
+`POST /api/setup/claim` allows five attempts a minute per client address, and
+the dashboard calls the bridge server-side — so unless the deployment says which
+hop is its own edge, every claim on the appliance shares one bucket keyed on the
+dashboard. Anyone who can reach `/setup` could then spend that quota
+continuously and keep the real operator's claim answering 429 for the life of
+their token.
+
+Two allowlists have to agree before an address is believed, exactly as for
+`POST /api/auth/login`:
+
+```bash
+GENUS_DASHBOARD_TRUSTED_PROXIES=10.42.0.7/32   # what the dashboard will vouch for
+GENUS_TRUSTED_PROXIES=10.42.0.7/32             # whose X-Client-IP the bridge honours
+```
+
+Prefer a `/32` over a pod CIDR, which would cover every workload in the
+namespace. With either unset nothing is asserted and the bridge falls back to
+its own peer address — safe, but the limiter is then appliance-wide.
+
 Once the wizard finishes — that is, the moment an operator account exists —
 `/setup` and every route behind it answer 404, and `genus auth setup-link`
 refuses to mint another. The completion signal is the owner row in the

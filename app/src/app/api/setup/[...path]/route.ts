@@ -24,6 +24,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 
+import { clientIpFromRequest } from "@/lib/auth-local";
 import { getServiceUrl } from "@/lib/services/registry";
 
 const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
@@ -64,6 +65,24 @@ async function forward(
   const authorization = req.headers.get("authorization") || "";
   if (/^Bearer\s+\S+$/i.test(authorization))
     headers.Authorization = authorization;
+
+  // The end user's address, or the bridge's claim limiter is inert in the
+  // deployment this ships in. This call is made SERVER-side, so
+  // `request.client.host` on the bridge is the dashboard pod for every claim
+  // attempt on Earth: one bucket, five attempts a minute, which anyone who can
+  // reach `/setup` could spend continuously to keep the real operator's claim
+  // answering 429 for the life of their 30-minute token. On a fresh appliance
+  // the wizard is the only way in, so that is an availability attack on first
+  // run itself.
+  //
+  // Same mechanism as the local sign-in path, and two allowlists have to agree
+  // before the value counts: `clientIpFromRequest` produces one only when this
+  // deployment names its own edge in GENUS_DASHBOARD_TRUSTED_PROXIES, and the
+  // bridge honours the header only from a peer in GENUS_TRUSTED_PROXIES
+  // (loopback included, never implicit). Unset on either side, nothing is sent
+  // and the bridge falls back to its own peer address.
+  const clientIp = clientIpFromRequest(req);
+  if (clientIp) headers["X-Client-IP"] = clientIp;
 
   let body: string | undefined;
   if (["POST", "PUT", "PATCH"].includes(req.method)) {
