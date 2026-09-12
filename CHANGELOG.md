@@ -1,3 +1,26 @@
+## [1.69.0](https://github.com/Ironsail-llc/genus-os/compare/v1.68.0...v1.69.0) (2026-09-12)
+
+### Features
+
+* **auth:** local email and password login with owner MFA ([#499](https://github.com/Ironsail-llc/genus-os/issues/499)) ([b109999](https://github.com/Ironsail-llc/genus-os/commit/b109999eceade99c1e2515759cf1e6192d51d9ef))
+* **config:** genus config get/set/explain/validate; telegram optional ([#498](https://github.com/Ironsail-llc/genus-os/issues/498)) ([7cef08a](https://github.com/Ironsail-llc/genus-os/commit/7cef08a2fe2538f018e6d29fc08dd0a72fd6d66c)), closes [#492](https://github.com/Ironsail-llc/genus-os/issues/492)
+* **doctor:** genus doctor with a pluggable check registry and --fix ([#503](https://github.com/Ironsail-llc/genus-os/issues/503)) ([e00b579](https://github.com/Ironsail-llc/genus-os/commit/e00b57908b4575bf6bc1d9e26df51e081c953c55))
+* **engine:** provider keys and models API with a real test connection ([#494](https://github.com/Ironsail-llc/genus-os/issues/494)) ([fd11992](https://github.com/Ironsail-llc/genus-os/commit/fd119926400e647484c1b811f3fb82842769e538))
+* **helm:** first-run setup wizard and setup token ([#505](https://github.com/Ironsail-llc/genus-os/issues/505)) ([861aae7](https://github.com/Ironsail-llc/genus-os/commit/861aae7d7bca840b82c8a4f6796524f386dfff59))
+* **init:** compose substrate with a migrate service, ready gate and first-run link ([#508](https://github.com/Ironsail-llc/genus-os/issues/508)) ([b9482eb](https://github.com/Ironsail-llc/genus-os/commit/b9482ebadfb80df1cd733469deab43e10532b364))
+* **init:** two-phase init wizard with a real provider probe and a first-run link ([#507](https://github.com/Ironsail-llc/genus-os/issues/507)) ([4b9f932](https://github.com/Ironsail-llc/genus-os/commit/4b9f932072c22a79f76bf4dcfaf2882094f33874))
+* **manifests:** one schema validator, enforced behind a mode ladder ([#496](https://github.com/Ironsail-llc/genus-os/issues/496)) ([1c4230a](https://github.com/Ironsail-llc/genus-os/commit/1c4230ac22ef72cf8f4e2776769d7196b58dd533)), closes [#495](https://github.com/Ironsail-llc/genus-os/issues/495)
+* **models:** add DeepSeek V4.1 Flash and GLM 5.3 Flash to the picker ([#495](https://github.com/Ironsail-llc/genus-os/issues/495)) ([8756d5d](https://github.com/Ironsail-llc/genus-os/commit/8756d5dbf3ea2a5153fd679b090ded7888872087))
+* **secrets:** env-file, vault and sops backends behind one accessor ([#502](https://github.com/Ironsail-llc/genus-os/issues/502)) ([bb4bed7](https://github.com/Ironsail-llc/genus-os/commit/bb4bed76fab2cfae17698e9e989f4c1184eb5ce4))
+
+### Bug Fixes
+
+* **benchmark:** benchmark runs never write into a production tenant ([#506](https://github.com/Ironsail-llc/genus-os/issues/506)) ([9786cbd](https://github.com/Ironsail-llc/genus-os/commit/9786cbdb2c7bd81e18e218e4078c9d0e5fb85359))
+* **config:** validate probes /ready before the auth-gated /health ([#500](https://github.com/Ironsail-llc/genus-os/issues/500)) ([11ed46d](https://github.com/Ironsail-llc/genus-os/commit/11ed46d9779d968207bf34d82df3340df8b908ae))
+* **engine:** chat turns carry no alert-triage block ([#504](https://github.com/Ironsail-llc/genus-os/issues/504)) ([1c358e7](https://github.com/Ironsail-llc/genus-os/commit/1c358e74da93d24370060a150cb6f0d51a4cbf26))
+* **systemd:** the bridge unit runs the workspace venv, not a nested one ([#501](https://github.com/Ironsail-llc/genus-os/issues/501)) ([fdf5971](https://github.com/Ironsail-llc/genus-os/commit/fdf5971f191a63214225a3d87058de39bf978d02)), closes [#499](https://github.com/Ironsail-llc/genus-os/issues/499)
+* **tests:** owner config never leaks the instance into platform tests ([#497](https://github.com/Ironsail-llc/genus-os/issues/497)) ([f6fac2e](https://github.com/Ironsail-llc/genus-os/commit/f6fac2e03429d9c53815c2a779833c35bcb67983))
+
 ## [1.68.0](https://github.com/Ironsail-llc/genus-os/compare/v1.67.0...v1.68.0) (2026-09-11)
 
 ### Features
