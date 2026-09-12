@@ -446,3 +446,23 @@ def test_auto_env_on_a_fresh_box_writes_the_empty_file(tmp_path: Path):
     result = _run(root)
     assert result.returncode == 0, result.stdout + result.stderr
     assert _output(root).read_text() == ""
+
+
+def test_auto_env_treats_a_planted_symlink_as_unpopulated(tmp_path: Path):
+    """A link to a non-empty file must not wedge the auto env branch, nor be followed."""
+    root = _root(tmp_path)
+    out, target = _plant_symlink(root, tmp_path)
+    result = _run(root)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert target.read_text() == "do not touch\n"
+    assert not out.is_symlink() and out.is_file() and out.read_text() == ""
+    assert _mode(out) == 0o600
+
+
+def test_no_temp_file_is_left_behind(tmp_path: Path):
+    root = _root(tmp_path)
+    _run(root, ROBOTHOR_SECRETS_BACKEND="env")
+    _write_plain_secrets(root)
+    _run(root)
+    leftovers = [p.name for p in (root / "run" / "robothor").iterdir() if p.name != "secrets.env"]
+    assert leftovers == [], leftovers

@@ -47,20 +47,21 @@ export SOPS_AGE_KEY_FILE="$AGE_KEY"
 # Decrypt JSON and convert to KEY=VALUE format for systemd EnvironmentFile
 # Double-quoted values: systemd treats # as comment inside single quotes but not double quotes.
 # Double quotes also work with bash source (no $ chars in secret values).
-# Remove before writing: the output directory is writable by the service
-# account, and a symlink planted at the output path would send the whole
-# decrypted credential set to wherever it points. Unlink the path itself
-# first so the redirect below always creates a regular file.
-rm -f -- "$OUTPUT_FILE"
+# Decrypt into a fresh 0600 temp file and move it over the path with -T: the
+# output directory is writable by the service account, and a symlink planted
+# at the output path would otherwise send the whole decrypted credential set
+# to wherever it points. mktemp creates the file 0600, so no umask window.
+TMP_OUTPUT="$(mktemp "${OUTPUT_DIR}/.secrets.env.XXXXXX")"
 sops -d "$SOPS_FILE" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 for k, v in data.items():
     escaped = v.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"')
     print(f'{k}=\"{escaped}\"')
-" > "$OUTPUT_FILE"
+" > "$TMP_OUTPUT"
 
-chmod 600 "$OUTPUT_FILE"
+chmod 600 "$TMP_OUTPUT"
+mv -T -f -- "$TMP_OUTPUT" "$OUTPUT_FILE"
 
 # ── Validate required keys ──────────────────────────────────────────
 # REQUIRED means "the instance cannot function without it", and nothing else.

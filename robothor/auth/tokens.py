@@ -39,6 +39,15 @@ _ENV_NAME = "GENUS_AUTH_SIGNING_KEY"
 _VAULT_KEY = "auth/jwt_signing_key"
 _signing_key_cache: str | None = None
 
+#: Monotonic deadline until which an "unavailable" verdict stands without
+#: re-probing the vault. ``live=True`` below skips the accessor's cooldown so
+#: that a generate decision is never made on a stale answer — but the same
+#: bypass would otherwise turn every token mint or check during a vault outage
+#: into a synchronous database connect (up to connect_timeout) on the bridge's
+#: event loop. So the REFUSAL is cached here for the accessor's cooldown, and
+#: only the first call per window pays for the probe.
+_signing_key_unavailable_until: float | None = None
+
 
 class TokenError(Exception):
     """Token is missing, malformed, expired, or fails signature verification."""
@@ -57,13 +66,20 @@ def signing_key() -> str:
     already had one, invalidating every live session and every MFA secret
     (``robothor.auth.mfa_secrets`` derives its AES key from this one).
     """
-    global _signing_key_cache
+    global _signing_key_cache, _signing_key_unavailable_until
     if _signing_key_cache:
         return _signing_key_cache
 
     # Lazy import: robothor.secrets pulls the vault in only if it has to, so
     # token encode/decode stays usable on a box with no vault at all.
-    from robothor.secrets import resolve_secret
+    from robothor.secrets import VAULT_RETRY_SECONDS, resolve_secret
+
+    now = time.monotonic()
+    if _signing_key_unavailable_until is not None and now < _signing_key_unavailable_until:
+        raise TokenError(
+            f"no signing key: {_ENV_NAME} is unset and the vault could not be read "
+            "(cached verdict; the vault is re-probed once per cooldown)"
+        )
 
     # live=True: the generate branch below acts on "missing", so the verdict
     # must come from the vault NOW, not from a cooldown that may be sitting out
@@ -80,6 +96,7 @@ def signing_key() -> str:
         return resolved.value
 
     if resolved.source == "unavailable":
+        _signing_key_unavailable_until = now + VAULT_RETRY_SECONDS
         # Unreadable is not empty. vault.set is an UPSERT: generating here on a
         # vault whose read failed but whose write works would overwrite the
         # stored key, killing every session and every MFA secret derived from
@@ -101,9 +118,10 @@ def signing_key() -> str:
 
 
 def reset_signing_key_cache() -> None:
-    """Test hook — forget the cached key so the next call re-resolves."""
-    global _signing_key_cache
+    """Test hook — forget the cached key (and verdict) so the next call re-resolves."""
+    global _signing_key_cache, _signing_key_unavailable_until
     _signing_key_cache = None
+    _signing_key_unavailable_until = None
 
 
 def issue_access_token(

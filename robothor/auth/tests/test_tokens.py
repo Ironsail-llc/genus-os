@@ -254,3 +254,32 @@ def test_a_cooling_down_vault_is_probed_before_a_key_is_generated(monkeypatch):
     tokens.reset_signing_key_cache()
     assert tokens.signing_key() == LONG_ENOUGH
     secrets_module.reset_vault_availability()
+
+
+def test_an_unavailable_vault_is_probed_once_per_cooldown(monkeypatch):
+    """The refusal is cached: a vault outage must not cost a database connect per token."""
+    from robothor import secrets as secrets_module
+    from robothor import vault
+
+    probes: list[int] = []
+
+    def boom(*a, **kw):
+        probes.append(1)
+        raise ConnectionError("vault database down")
+
+    monkeypatch.delenv("GENUS_AUTH_SIGNING_KEY", raising=False)
+    monkeypatch.setattr(vault, "get", boom)
+    monkeypatch.setattr(vault, "export_env", boom)
+    monkeypatch.setattr(vault, "set", lambda *a, **kw: pytest.fail("a key was generated"))
+    secrets_module.reset_vault_availability()
+    tokens.reset_signing_key_cache()
+    for _ in range(5):
+        with pytest.raises(TokenError):
+            tokens.signing_key()
+    assert len(probes) == 1, f"{len(probes)} vault probes for 5 calls inside one cooldown"
+
+    # The cooldown expires: the next call probes again (and finds the key).
+    monkeypatch.setattr(tokens.time, "monotonic", lambda: tokens._signing_key_unavailable_until + 1)
+    monkeypatch.setattr(vault, "get", lambda key, **kw: LONG_ENOUGH)
+    assert tokens.signing_key() == LONG_ENOUGH
+    tokens.reset_signing_key_cache()

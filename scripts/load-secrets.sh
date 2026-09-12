@@ -119,16 +119,18 @@ if [[ "$BACKEND" == "env" ]]; then
     # unit environment. Blanking it and exiting 0 would start four services
     # with no credentials behind an `active (exited)` unit; refuse instead, and
     # name the override for the operator who really did move to env.
-    if [[ "$AUTO" == "1" && -s "$OUTPUT_FILE" ]]; then
+    # `-L` first: `-s` follows a symlink, and a planted link to any non-empty
+    # file must not be able to wedge this branch. A link is never "populated".
+    if [[ "$AUTO" == "1" && ! -L "$OUTPUT_FILE" && -s "$OUTPUT_FILE" ]]; then
         die "no secrets file found (${SOPS_FILE} or ${PLAIN_FILE}) but ${OUTPUT_FILE} is populated from an earlier boot — refusing to blank it; restore the file, or set ROBOTHOR_SECRETS_BACKEND=env if the credentials really are in the unit environment"
     fi
-    # Remove before writing: ${OUTPUT_DIR} is writable by the service account,
-    # so a symlink planted there would turn this into a truncate of whatever it
-    # points at. `rm -f --` unlinks the link itself; the write below then
-    # creates a regular file.
-    rm -f -- "$OUTPUT_FILE"
-    : > "$OUTPUT_FILE"
-    chmod 600 "$OUTPUT_FILE"
+    # Write a fresh 0600 temp file (mktemp creates it that way, so there is no
+    # umask window) and move it over the path with -T, which replaces a
+    # planted symlink instead of following it. ${OUTPUT_DIR} is writable by
+    # the service account, so the destination is never trusted.
+    TMP="$(mktemp "${OUTPUT_DIR}/.secrets.env.XXXXXX")"
+    chmod 600 "$TMP"
+    mv -T -f -- "$TMP" "$OUTPUT_FILE"
     log "wrote an empty ${OUTPUT_FILE}; secrets are expected in the unit environment"
     exit 0
 fi
