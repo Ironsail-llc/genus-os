@@ -116,6 +116,52 @@ class TestTheShapeIsStable:
         assert set(body["checks"]) == names
 
 
+class TestDetails:
+    """Extra payload fields a check can contribute.
+
+    A check may only return a string, and some answers need more than one:
+    "the fleet has 1 broken agent" is a status, "bob" is something the operator
+    can act on. `details` is read AFTER the checks run, so a caller can hand in
+    a mutable dict that a check writes into.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_novel_key_is_merged(self):
+        details: dict[str, object] = {}
+
+        async def check() -> str:
+            details["broken_agents"] = ["bob"]
+            return "error:broken:1"
+
+        body, code = await readiness_response("genus", "1.0", {"fleet": check}, details)
+
+        assert body["broken_agents"] == ["bob"]
+        assert body["checks"]["fleet"] == "error:broken:1"
+        assert code == 503
+
+    @pytest.mark.asyncio
+    async def test_a_reserved_key_is_dropped(self):
+        """A check must not be able to rewrite `status`.
+
+        Every caller of /ready decides on that field. A details dict that could
+        overwrite it would let one misbehaving check report a degraded service
+        as healthy — the readiness probe lying in the one direction that
+        matters.
+        """
+        body, code = await readiness_response(
+            "genus",
+            "1.0",
+            {"db": _bad},
+            {"status": "ok", "checks": {}, "service": "impostor", "extra": 1},
+        )
+
+        assert body["status"] == "degraded"
+        assert body["checks"] == {"db": "error:down"}
+        assert body["service"] == "genus"
+        assert body["extra"] == 1
+        assert code == 503
+
+
 class TestWaitForReady:
     """Startup gating: the daemon waits on this before declaring itself up."""
 

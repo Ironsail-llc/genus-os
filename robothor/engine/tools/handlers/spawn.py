@@ -204,7 +204,7 @@ async def _handle_spawn_agent(
     memory + skill CRUD only. The whitelist is async-safe — it
     applies only to the spawned task and any tasks it inherits from.
     """
-    from robothor.engine.config import load_agent_config
+    from robothor.engine.config import load_agent_config_or_reason
     from robothor.engine.models import TriggerType
 
     # Support both ToolContext and direct agent_id kwarg
@@ -241,10 +241,14 @@ async def _handle_spawn_agent(
             )
         }
 
-    # Load child agent config
-    child_config = load_agent_config(child_agent_id, runner.config.manifest_dir)
+    # Load child agent config. `_or_reason`: a child whose manifest the schema
+    # refuses is an error the PARENT can read and act on, not a raise inside
+    # the parent's tool dispatch.
+    child_config, reason = load_agent_config_or_reason(
+        child_agent_id, runner.config.manifest_dir, "spawn"
+    )
     if child_config is None:
-        return {"error": f"Agent config not found: {child_agent_id}"}
+        return {"error": reason}
 
     _narrow_child_config(child_config, args, spawn_ctx, child_depth)
 

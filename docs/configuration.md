@@ -187,6 +187,37 @@ convention, which would print real key material.
 | `ROBOTHOR_WORKSPACE` | `~/robothor` | Base directory for runtime data |
 | `ROBOTHOR_LOG_DIR` | `/var/log/robothor` | Log directory |
 
+## Agent manifests
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ROBOTHOR_MANIFEST_SCHEMA_MODE` | `observe` | Validate each manifest against `robothor/engine/schema/agent_manifest.yaml` at load. `off` skips validation; `observe` logs each error with the agent, path and code and counts it in `robothor_manifest_schema_would_reject_total`; `enforce` refuses the manifest and reports the agent **broken** (never absent), so the scheduler will not prune its schedules. |
+
+Only `error`-severity findings block under `enforce`. Advisory findings — a
+model that is not in the registry, an unknown guardrail name, a key sitting in
+the wrong block — stay warnings on every rung, because each describes a
+manifest that loads and runs.
+
+Validation runs on the **merged** manifest: the file plus `_defaults.yaml` —
+exactly the layers a run merges. A typo in the fleet defaults therefore marks
+every agent that inherits it broken, rather than passing a per-file check and
+failing at run time.
+
+Under `enforce`, `/ready` returns `503` with `checks.fleet: "error:broken:<n>"`
+and a `broken_agents` list of ids, and the scheduler refuses to prune any
+schedule while a manifest is broken. An agent reported **broken** needs its
+manifest fixed; an agent reported **missing** needs re-creating. The two are
+never collapsed.
+
+Unknown keys are a warning at load and an error only under `strict`. Nothing in
+the engine runs `strict`; the repo's own template test does, against every
+bundle under `templates/agents/`. A live instance may legitimately carry a field
+a plugin reads; a template shipped from this repo may not.
+
+`observe` counts every occurrence in `robothor_manifest_schema_would_reject_total`
+(labelled by agent) and logs each distinct agent/path/code once — `/metrics` is
+how the count leaves the process today.
+
 ## Event Bus
 
 | Variable | Default | Description |

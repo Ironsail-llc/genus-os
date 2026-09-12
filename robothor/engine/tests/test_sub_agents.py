@@ -547,7 +547,12 @@ class TestSpawnAgentsTool:
         set_runner(mock_runner)
         _current_spawn_context.set(spawn_context)
 
-        def _load_config(agent_id, _dir):
+        # `load_agent_config` has always taken (agent_id, manifest_dir,
+        # workspace=None, trigger_type=None); this fake only ever accepted two
+        # because the one caller it stood in for happened to pass two. A fake
+        # narrower than the thing it replaces breaks on the next caller that
+        # uses the full signature, which is what happened here.
+        def _load_config(agent_id, _dir, *_args, **_kwargs):
             if agent_id == "nonexistent":
                 return None
             return child_agent_config

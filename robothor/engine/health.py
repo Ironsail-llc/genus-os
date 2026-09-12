@@ -21,6 +21,30 @@ if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
 
+# `Request` has to be a MODULE global, and importing it must not require the
+# optional `api` extra.
+#
+# This file sets `from __future__ import annotations`, so every annotation in
+# it is a string, and FastAPI resolves a handler's annotations against its
+# module globals. `Request` was imported inside `create_health_app`, so the
+# string never resolved, and FastAPI's fallback for an unrecognised annotation
+# is "treat it as a query parameter" — which made `request` a REQUIRED query
+# field and rejected the call before the handler ran. Three POST routes
+# answered 422 to every caller: /api/agents/{id}/trigger (the in-engine "fire
+# now" the benchmark-runner flow was built for), /api/runs/{id}/resume and
+# /api/workflows/{id}/execute. Nothing noticed because the tests for them
+# called the handler functions directly, where annotations are never resolved.
+#
+# The try/except is not defensive noise: `fastapi` lives in the optional `api`
+# extra, and `daemon.py` imports this module unconditionally. A base install
+# must still be able to import health.py. It can never REACH a route with the
+# fallback bound, because `create_health_app` imports FastAPI itself and would
+# raise first.
+try:
+    from fastapi import Request
+except ImportError:  # pragma: no cover - only without the `api` extra
+    Request = Any  # type: ignore[assignment,misc]
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,11 +130,51 @@ def _mount_subsystem_routers(app: Any, config: EngineConfig, runner: AgentRunner
     register_admin_providers(app)
 
 
+async def _fleet_readiness(config: EngineConfig, details: dict[str, Any]) -> str:
+    """Readiness for the agent fleet. Broken and absent are different answers.
+
+    This used to build its id set from ``load_all_manifests``, which drops
+    every failure bucket identically — so a manifest the schema refused read as
+    "agent missing", and the operator was told to re-create an agent whose file
+    is sitting right there with a typo in it. The scan knows the difference;
+    readiness has to say it.
+
+    ``details`` is the caller's mutable payload extras. A check may only return
+    a string, and "1 broken" is a status where "bob" is something to act on.
+    """
+    import asyncio
+    from pathlib import Path
+
+    from robothor.engine.config import load_manifest_dir
+
+    scan = await asyncio.to_thread(load_manifest_dir, config.manifest_dir)
+    broken = [f.agent_id or Path(f.filename).stem for f in scan.failures]
+    if broken:
+        details["broken_agents"] = sorted(broken)
+        return f"error:broken:{len(broken)}"
+
+    manifests = list(scan.manifests)
+    if not manifests and config.allow_empty_fleet:
+        return "ok"
+
+    agent_ids = {str(manifest["id"]) for manifest in manifests}
+    if len(agent_ids) < config.min_agent_count:
+        raise RuntimeError(
+            f"valid agent fleet has {len(agent_ids)} agents; "
+            f"requires at least {config.min_agent_count}"
+        )
+
+    missing = set(config.required_agent_ids) - agent_ids
+    if missing:
+        raise RuntimeError(f"required agents missing: {', '.join(sorted(missing))}")
+    return "ok"
+
+
 def create_health_app(
     config: EngineConfig, runner: AgentRunner | None = None, workflow_engine: Any = None
 ) -> Any:
     """Create a lightweight FastAPI health app."""
-    from fastapi import FastAPI, HTTPException, Request
+    from fastapi import FastAPI, HTTPException
     from fastapi.responses import JSONResponse
 
     app = FastAPI(title="Genus OS Agent Engine", docs_url=None, redoc_url=None)
@@ -814,6 +878,11 @@ def create_health_app(
 
         from robothor.health_contract import readiness_response
 
+        # Filled in by check_fleet and merged into the payload after the checks
+        # run. A check can only return a string; "which agents" needs a list,
+        # and an id the operator can act on beats a count they cannot.
+        readiness_details: dict[str, Any] = {}
+
         async def check_db() -> str:
             import asyncio
 
@@ -859,25 +928,7 @@ def create_health_app(
             return "ok"
 
         async def check_fleet() -> str:
-            import asyncio
-
-            from robothor.engine.config import load_all_manifests
-
-            manifests = await asyncio.to_thread(load_all_manifests, config.manifest_dir)
-            if not manifests and config.allow_empty_fleet:
-                return "ok"
-
-            agent_ids = {str(manifest["id"]) for manifest in manifests}
-            if len(agent_ids) < config.min_agent_count:
-                raise RuntimeError(
-                    f"valid agent fleet has {len(agent_ids)} agents; "
-                    f"requires at least {config.min_agent_count}"
-                )
-
-            missing = set(config.required_agent_ids) - agent_ids
-            if missing:
-                raise RuntimeError(f"required agents missing: {', '.join(sorted(missing))}")
-            return "ok"
+            return await _fleet_readiness(config, readiness_details)
 
         async def check_federation() -> str:
             """Federation is ready when every link that says it is running,
@@ -914,7 +965,9 @@ def create_health_app(
                 "fleet": check_fleet,
                 "federation": check_federation,
             }
-            body, status = await readiness_response("engine", __version__, checks)
+            body, status = await readiness_response(
+                "engine", __version__, checks, details=readiness_details
+            )
             return JSONResponse(body, status_code=status)
         except Exception:
             logger.exception("Readiness check failed")
@@ -1456,9 +1509,19 @@ def create_health_app(
         if not runner:
             return {"error": "Runner not available"}
         from robothor.engine.config import load_agent_config
+        from robothor.engine.manifest_schema import ManifestSchemaError
         from robothor.engine.models import TriggerType
 
-        agent_config = load_agent_config(agent_id, config.manifest_dir)
+        try:
+            agent_config = load_agent_config(agent_id, config.manifest_dir)
+        except ManifestSchemaError as e:
+            # Broken, not absent, and the caller must be able to tell: the fix
+            # for one is editing a manifest, for the other creating an agent.
+            # An unguarded raise here was a 500 with a traceback.
+            logger.error(
+                "Trigger refused: %s manifest failed the schema: %s", agent_id, e.summary()
+            )
+            return {"error": f"Agent manifest refused by the schema (SchemaError): {agent_id}"}
         if not agent_config:
             return {"error": f"Agent not found: {agent_id}"}
 

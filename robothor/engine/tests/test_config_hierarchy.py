@@ -177,9 +177,19 @@ class TestMergeLifecycleHooks:
 
 class TestValidateManifest:
     def test_validate_manifest_valid(self):
-        """Valid manifest returns empty warnings list."""
+        """Valid manifest returns empty warnings list.
+
+        Carries all five required fields since the validator started reading
+        ``schema.yaml`` — `name`, `description`, `version` and `department`
+        were always required by the schema, and this fixture omitting them was
+        exactly the silence the schema validator exists to end.
+        """
         data = {
             "id": "test-agent",
+            "name": "Test Agent",
+            "description": "A fixture",
+            "version": "2026-09-11",
+            "department": "operations",
             "schedule": {"max_iterations": 20, "timeout_seconds": 600},
             "delivery": {"mode": "none"},
             "v2": {"safety_cap": 200},

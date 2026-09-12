@@ -542,3 +542,63 @@ flags:
       Enforced on outbound email (gws_gmail_send, gws_gmail_reply) and
       calendar invitations (gws_calendar_create). Telegram, SMS and chat are
       NOT enforced — see docs/CRM_DATA_FABRIC.md.
+
+  - name: ROBOTHOR_MANIFEST_SCHEMA_MODE
+    owner: platform
+    mode: observe
+    planned_promotion: "2026-09-25"
+    soak: |
+      Validates every agent manifest against ONE schema
+      (robothor/engine/schema/agent_manifest.yaml) at load time. Before this,
+      docs/agents/schema.yaml was read only by a repo script, the engine's
+      checks were a separate hand-written list that had never seen it, and
+      README claimed startup enforcement that did not exist. A key that was a
+      typo of a real key was accepted, did nothing, and looked deliberate.
+
+      observe logs and counts what enforce would refuse
+      (robothor_manifest_schema_would_reject_total, labelled by agent). enforce
+      turns it into a ManifestFailure("SchemaError"), which makes the manifest
+      scan dirty — so reconcile refuses to prune ANY schedule and the agent is
+      reported broken rather than silently absent. That is the 2026-08-23
+      contract, and test_manifest_schema_modes.py pins both directions,
+      including the counter-case where a genuinely deleted agent IS pruned.
+
+      Only `error` severity blocks. Every semantic finding that used to live in
+      config_schema (unknown guardrail, model not in the registry, misplaced
+      key) stays a warning, because each one describes a manifest that loads
+      and runs; promoting them would make enforce refuse manifests that are
+      fine today, which is how a ladder gets turned off and left off.
+
+      Evidence, measured 2026-09-11 against this instance's 22 agent manifests
+      with the shipped validator. Measured on the MERGED document — file plus
+      _defaults.yaml plus project and env overrides — because that is what the
+      ladder judges, and a defect that only appears after the merge breaks
+      every agent that inherits it:
+
+        enforce:  load_manifest_dir() -> 22 live agents, 0 failures,
+                  scan.clean = True. The fleet _defaults.yaml is clean.
+        strict (unknown_key = error): 4 errors across 4 of the 22 —
+          schedule.enabled x2, schedule.stagger_ms x1, can_spawn_agents x1
+          (that last one belongs under v2: and has been doing nothing)
+
+      So enforce is already a no-op on this box, and the strict findings are
+      precisely the silent-no-op class the validator was built to surface.
+
+      Know the blast radius before flipping. Validation runs on the MERGED
+      document, so a single typo in docs/agents/_defaults.yaml marks the WHOLE
+      FLEET broken: every agent inherits that file, every one of them becomes a
+      ManifestFailure("SchemaError"), /ready goes 503 and the scheduler prunes
+      nothing until it is fixed. That is the design, not a bug — a defect in
+      the file every agent reads IS a fleet-wide outage, and the old behaviour
+      was to run anyway and fail per-agent at dispatch. But it means one
+      careless edit to a shared file stops everything, where today it degrades
+      one agent.
+
+      BLOCKER: the measurement above is one instance. enforce refuses a
+      manifest, and the blast radius of getting the schema wrong is an agent
+      that will not load — a whole fleet of them, if the mistake is in
+      _defaults.yaml — so the gate is a full upgrade cycle in observe with
+      robothor_manifest_schema_would_reject_total staying at zero, on an
+      instance that did NOT write the schema. Flipping on the evidence of the
+      box the schema was authored against proves only that the author agreed
+      with themselves.

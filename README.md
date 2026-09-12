@@ -238,10 +238,27 @@ Agents are built against two strict contracts:
 
 | Contract | File | Enforced by |
 |----------|------|-------------|
-| Manifest schema | `docs/agents/schema.yaml` | `validate_agents.py`, pre-commit hook, engine startup |
+| Manifest schema | `robothor/engine/schema/agent_manifest.yaml` (mirrored to `docs/agents/schema.yaml`) | `validate_agents.py`, pre-commit hook, and the engine at manifest load — see below |
 | Instruction format | `docs/agents/INSTRUCTION_CONTRACT.md` | Convention (AI-readable) |
 
 Required manifest fields: `id` (kebab-case), `name`, `description`, `version` (YYYY-MM-DD), `department`.
+
+The engine reads that schema every time it loads a manifest, on a ladder set by
+`ROBOTHOR_MANIFEST_SCHEMA_MODE`:
+
+| Mode | Behaviour |
+|------|-----------|
+| `off` | No validation. |
+| `observe` *(default)* | Each error is logged with the agent, path and code, and counted in `robothor_manifest_schema_would_reject_total`. The agent still loads. |
+| `enforce` | The manifest is refused and the agent is reported **broken** — never absent. `/ready` returns 503 with `broken_agents: [ids]`, and the scheduler will not prune its schedules. |
+
+Validation runs on the merged manifest — the file plus `_defaults.yaml`, the
+layers a run merges — so a typo in the fleet defaults is reported against every
+agent that inherits it.
+
+`observe` is the default deliberately: it makes the promotion to `enforce` a
+decision taken on a count from your own fleet rather than on nerve. See
+[Configuration](docs/configuration.md#agent-manifests).
 
 ### Manifest Fields
 
