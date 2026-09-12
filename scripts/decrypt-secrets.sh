@@ -1,12 +1,11 @@
 #!/bin/bash
 # Decrypt SOPS secrets to a temporary environment file for systemd EnvironmentFile.
-# Called by ExecStartPre in systemd services.
 # Output: /run/robothor/secrets.env (tmpfs, not persisted across reboots)
 #
-# Usage in systemd service:
-#   [Service]
-#   ExecStartPre=$ROBOTHOR_WORKSPACE/scripts/decrypt-secrets.sh
-#   EnvironmentFile=/run/robothor/secrets.env
+# This is the implementation of the `sops` secrets backend. Units do not run it
+# directly any more — scripts/load-secrets.sh dispatches to it — because SOPS
+# is one backend of three rather than a precondition for starting the platform.
+# Invoked by hand it still works exactly as it always did.
 
 set -euo pipefail
 
@@ -27,9 +26,18 @@ set -euo pipefail
 # See infra/systemd/README.md.
 export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-SOPS_FILE="/etc/robothor/secrets.enc.json"
-AGE_KEY="/etc/robothor/age.key"
-OUTPUT_DIR="/run/robothor"
+# ROBOTHOR_SECRETS_ROOT prefixes /etc/robothor and /run/robothor, the same seam
+# scripts/load-secrets.sh honours (and the same idea as install-units.sh
+# --root). Empty — the default, and the only value any unit ever supplies —
+# means the real paths, so nothing about a live box changes. It is what lets
+# tests/test_decrypt_secrets_required_keys.py run the real script against a
+# fixture instead of asserting on its source text.
+SECRETS_ROOT="${ROBOTHOR_SECRETS_ROOT:-}"
+SECRETS_ROOT="${SECRETS_ROOT%/}"
+
+SOPS_FILE="${SECRETS_ROOT}/etc/robothor/secrets.enc.json"
+AGE_KEY="${SECRETS_ROOT}/etc/robothor/age.key"
+OUTPUT_DIR="${SECRETS_ROOT}/run/robothor"
 OUTPUT_FILE="${OUTPUT_DIR}/secrets.env"
 
 mkdir -p "$OUTPUT_DIR" 2>/dev/null || true
@@ -50,10 +58,16 @@ for k, v in data.items():
 chmod 600 "$OUTPUT_FILE"
 
 # ── Validate required keys ──────────────────────────────────────────
+# REQUIRED means "the instance cannot function without it", and nothing else.
+# ROBOTHOR_TELEGRAM_BOT_TOKEN and ROBOTHOR_TELEGRAM_CHAT_ID were on this list
+# until 2026-09-12 and belonged to neither category: Telegram became an optional
+# channel in #498, the daemon has been Telegram-optional for longer than that,
+# and this script now runs as a backend of robothor-secrets.service, which
+# orders four services. So a fresh install with no bot token did not merely
+# lack a channel — it failed the boot, and took engine, bridge, app and
+# orchestrator into `dependency failed` with no Restart= that could clear it.
 REQUIRED_KEYS=(
     "OPENROUTER_API_KEY"
-    "ROBOTHOR_TELEGRAM_BOT_TOKEN"
-    "ROBOTHOR_TELEGRAM_CHAT_ID"
 )
 
 # Advisory, never required: a missing spare must warn, not block a boot.
