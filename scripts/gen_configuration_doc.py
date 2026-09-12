@@ -76,8 +76,11 @@ Settings resolve from four places, lowest priority first:
 
 Column meanings:
 
-- **Restart** — `yes` means a change only takes effect when the service
-  restarts; `no` means it is picked up without one.
+- **Restart** — what a change waits on. `no` means it is picked up without a
+  restart; `next run` means the next invocation of the script or timer that
+  reads it; anything else names the systemd units to restart. The units are
+  declared on the setting itself, so `genus config set` prints the same
+  answer this table does.
 - **Secret** — holds a credential. These never have a default and are redacted
   by `genus config`.
 - **Since** — the release that introduced the setting. `legacy` predates this
@@ -104,6 +107,14 @@ def _default_cell(record: dict) -> str:
     if isinstance(default, bool):
         return f"`{str(default).lower()}`"
     return f"`{default}`"
+
+
+def _restart_cell(record: dict) -> str:
+    """What a change to this setting waits on, from its own declaration."""
+    if not record["restart_required"]:
+        return "no"
+    units = record["restart_units"] or ()
+    return ", ".join(f"`{unit}`" for unit in units) if units else "next run"
 
 
 def _escape(text: str) -> str:
@@ -146,7 +157,7 @@ def render() -> str:
                     env=record["env"],
                     type=record["type"],
                     default=_default_cell(record),
-                    restart="yes" if record["restart_required"] else "no",
+                    restart=_restart_cell(record),
                     secret="yes" if record["secret"] else "no",
                     since=record["since"],
                     desc=description,

@@ -31,6 +31,7 @@ import difflib
 import hashlib
 import json
 import os
+import re
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -46,24 +47,11 @@ from robothor.settings.provenance import (
 
 __all__ = ["cmd_config"]
 
-#: What to restart for a change to a given group's ``restart_required`` field.
-#: The engine reads almost everything; the bridge and the dashboard read who
-#: may talk to them and where the side services are. A group missing here gets
-#: :data:`DEFAULT_UNITS` — the honest answer for a setting whose reader is not
-#: pinned down, since naming too few units is how a change appears to apply and
-#: does not.
-GROUP_UNITS: dict[str, tuple[str, ...]] = {
-    "engine": ("robothor-engine",),
-    "flags": ("robothor-engine",),
-    "providers": ("robothor-engine",),
-    "ollama": ("robothor-engine",),
-    "channels": ("robothor-engine",),
-    "auth": ("robothor-bridge", "robothor-app"),
-    "services": ("robothor-bridge", "robothor-app"),
-    # Read by shell scripts and timers when they run, so there is nothing
-    # holding a stale copy: the next invocation picks the new value up.
-    "ops": (),
-}
+#: What a setting whose declaration names no units falls back to. It should
+#: never be reached -- ``SettingsGroup`` stamps every field with its group's
+#: units and ``tests/test_settings_registry.py`` fails if one is missing -- but
+#: naming too FEW units is how a change reports applied and is not, so the
+#: fallback is the conservative pair rather than nothing.
 DEFAULT_UNITS: tuple[str, ...] = ("robothor-engine", "robothor-bridge")
 
 # ── shared helpers ───────────────────────────────────────────────────────────
@@ -172,7 +160,9 @@ def _resolve(record: dict[str, Any]) -> tuple[Any, str, str]:
 
 
 def _units_for(record: dict[str, Any]) -> tuple[str, ...]:
-    return GROUP_UNITS.get(record["group"], DEFAULT_UNITS)
+    """The units declared on the field itself (see ``declare()``)."""
+    declared = record["restart_units"]
+    return DEFAULT_UNITS if declared is None else tuple(declared)
 
 
 # ── get / explain / list ─────────────────────────────────────────────────────
@@ -308,12 +298,15 @@ def _cmd_list(args: argparse.Namespace) -> int:
 # ── set ──────────────────────────────────────────────────────────────────────
 
 
-def _coerce(record: dict[str, Any], raw: str) -> Any:
+def _coerce(record: dict[str, Any], raw: Any) -> Any:
     """Validate ``raw`` against the field's own type, returning the value.
 
     The model does the coercing, so ``genus config set`` cannot write a value
     that would fail on the next start -- which is the failure this command
-    exists to prevent, not to relocate.
+    exists to prevent, not to relocate. ``validate`` uses it for a second
+    reason: a value from a YAML file is already typed and one from the
+    environment is always text, so the only honest comparison of the two is
+    the one made after both have been through the field.
     """
     from robothor.settings.model import GenusSettings
 
@@ -348,18 +341,54 @@ def _indent_of(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
 
+def _comment_at(text: str) -> int:
+    """Index of the ``#`` that starts a YAML comment in ``text``, or -1.
+
+    A ``#`` only opens a comment at the start of the scanned text or after
+    whitespace: ``tag: a#b`` is the three-character value ``a#b``.
+    """
+    match = re.search(r"(?:^|\s)#", text)
+    return -1 if match is None else match.end() - 1
+
+
 def _inline_comment(stripped: str) -> str:
     """Any trailing ``# ...`` on a key line, as text to re-append.
 
-    Empty when the line's value is quoted: a ``#`` inside a quoted string is
-    part of the value, and treating it as a comment would move half the old
-    value into a comment on the new line. Not worth a YAML parser -- worth not
-    guessing either.
+    A ``#`` inside a quoted value is part of the value, and a comment can
+    still follow the closing quote -- ``ai_name: "Ada"  # the boss`` is both
+    at once. Treating the whole line as uncommentable dropped the operator's
+    comment; treating the first ``#`` as the comment would have moved half
+    their value into one. So a quoted value is scanned to its closing quote
+    and only what follows is searched.
+
+    An unterminated quote (a line a YAML parser would reject anyway) yields no
+    comment: the write is going to replace the value, and inventing a comment
+    boundary inside a broken string is the one outcome worse than losing it.
     """
     _key, _, value = stripped.partition(":")
-    if "#" not in value or '"' in value or "'" in value:
+    rest = value.lstrip()
+    if rest[:1] not in {'"', "'"}:
+        found = _comment_at(rest)
+        return "" if found < 0 else "  " + rest[found:].rstrip()
+
+    quote = rest[0]
+    index = 1
+    while index < len(rest):
+        char = rest[index]
+        if quote == '"' and char == "\\":
+            index += 2
+            continue
+        if char == quote:
+            if quote == "'" and rest[index + 1 : index + 2] == "'":
+                index += 2  # '' is an escaped single quote, not the end
+                continue
+            break
+        index += 1
+    else:
         return ""
-    return "  " + value[value.index("#") :].rstrip()
+    tail = rest[index + 1 :]
+    found = _comment_at(tail)
+    return "" if found < 0 else "  " + tail[found:].rstrip()
 
 
 def _splice(text: str, group: str, field: str, rendered: str, names: tuple[str, ...] = ()) -> str:
@@ -450,16 +479,34 @@ def _splice(text: str, group: str, field: str, rendered: str, names: tuple[str, 
     return "\n".join([*lines[:insert], f"{' ' * field_indent}{line}", *lines[insert:]]) + "\n"
 
 
+#: Mode for a config.yaml this command creates. The file records how the
+#: instance is wired -- ports, hosts, endpoints -- and nothing else on the box
+#: needs to read it, so a new one starts private to the operator.
+NEW_FILE_MODE = 0o600
+
+
 def _write_atomically(path: Path, text: str) -> None:
     """Replace ``path`` with ``text`` in one step, or not at all.
 
     A half-written config.yaml is a box that will not start, and the write can
     be interrupted (a full disk, a reboot, a Ctrl-C). Same directory, so the
     rename cannot cross a filesystem boundary and stop being atomic.
+
+    Rename replaces the file's identity, not just its contents, so the mode and
+    the owner have to be carried across deliberately: a temp file takes the
+    process umask and the process's own uid, and ``sudo genus config set``
+    would otherwise hand the engine's config file to root and leave the service
+    unable to write it again. An existing file keeps exactly the mode and
+    owner it had; a new one is created private (:data:`NEW_FILE_MODE`).
     """
     import tempfile
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing: os.stat_result | None = path.stat()
+    except OSError:
+        existing = None
+
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".config.yaml.", suffix=".tmp")
     tmp = Path(tmp_name)
     try:
@@ -467,6 +514,10 @@ def _write_atomically(path: Path, text: str) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
+        tmp.chmod(NEW_FILE_MODE if existing is None else existing.st_mode & 0o7777)
+        if existing is not None and os.geteuid() == 0:
+            # Only root can give a file away; anyone else already owns it.
+            os.chown(tmp, existing.st_uid, existing.st_gid)
         tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -684,6 +735,17 @@ def _pending_restart_checks() -> list[tuple[str, str, str]]:
     what a service was started from -- so a value edited into config.yaml after
     the engine came up, or one being overridden by a stale variable in
     ``/etc/robothor/robothor.env``, shows up here instead of looking applied.
+
+    Both sides go through the field first. The file's value is whatever YAML
+    parsed -- a real ``True``, a real ``7`` -- and the environment is always
+    text, so comparing them as strings made ``rls_enabled: true`` disagree with
+    ``ROBOTHOR_RLS_ENABLED=true`` on every box that set both, and ``validate``
+    failed where nothing was wrong.
+
+    These are warnings, not errors. The environment winning over the file is
+    documented precedence, not a broken instance; exiting non-zero for it would
+    make the command useless as a gate for what IS broken -- a key nothing
+    reads. The JSON output carries them in their own ``pending_restart`` list.
     """
     from robothor.settings.registry import field_index
 
@@ -700,20 +762,33 @@ def _pending_restart_checks() -> list[tuple[str, str, str]]:
         if env_name is None:
             continue
         running = provenance.running_env_value(env_name) or ""
-        if str(raw) == running:
+        if _agree(record, raw, running):
             continue
         shown_file = "<set>" if record["secret"] else repr(raw)
         shown_env = "<set, differing>" if record["secret"] else repr(running)
         checks.append(
             (
                 f"pending restart:{record['env']}",
-                "error",
+                "warn",
                 f"config.yaml says {shown_file}, this process reads {shown_env} from "
-                f"{env_name} -- restart {', '.join(_units_for(record)) or 'the reader'} "
-                "after clearing the variable",
+                f"{env_name} (the environment wins) -- clear the variable and restart "
+                f"{', '.join(_units_for(record)) or 'the reader'} to apply the file",
             )
         )
     return checks
+
+
+def _agree(record: dict[str, Any], file_value: Any, env_value: str) -> bool:
+    """Do a typed file value and a raw environment string mean the same thing?
+
+    Falls back to comparing the text when either side will not coerce: a value
+    the field cannot hold is a real disagreement worth reporting, and it is
+    reported by the same line as any other.
+    """
+    try:
+        return bool(_coerce(record, file_value) == _coerce(record, env_value))
+    except Exception:
+        return str(file_value) == env_value
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:

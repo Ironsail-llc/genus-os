@@ -77,10 +77,22 @@ def env_name_in_use(record: dict[str, Any]) -> str | None:
     Same order the environment source reads: the declared name first, then each
     alias, so a mid-migration box that sets both is reported under the name
     that wins rather than the one it still has lying around.
+
+    An empty value follows the same rule as the source it mirrors: empty is
+    "unset" only for the numeric and boolean types, where it would otherwise
+    be a crash. ``ROBOTHOR_AI_DOMAIN=`` is how an operator blanks a string,
+    the source honours it, and provenance saying "config.yaml" for a value the
+    platform reads from the environment is exactly the confusion this module
+    exists to remove.
     """
+    from robothor.settings.sources import _EMPTY_IS_UNSET
+
+    empty_is_unset = {kind.__name__ for kind in _EMPTY_IS_UNSET}
     for name in (record["env"], *record["aliases"]):
-        if os.environ.get(name, "") != "":
-            return str(name)
+        raw = os.environ.get(name)
+        if raw is None or (raw == "" and record["type"] in empty_is_unset):
+            continue
+        return str(name)
     return None
 
 

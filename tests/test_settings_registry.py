@@ -45,6 +45,12 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: (``ROBOTHOR_TELEGRAM_CHAT_ID or TELEGRAM_CHAT_ID``, copy-pasted across four
 #: builders) now resolve through ``get_settings().channels``, where the old
 #: name is a declared alias that warns once instead of a silent fallback.
+#: Still 495 after the Ollama endpoint in ``robothor/services/registry.py``
+#: moved behind ``get_settings()``: that reader was one ``os.environ.get(key)``
+#: inside a loop over every service's override names, and the loop still runs
+#: for the other seven. A name left the raw-read path without a call site
+#: leaving it, which is the ratchet being honest rather than flattering -- it
+#: counts sites, and this move did not remove one.
 ENV_READ_SITE_BASELINE = 495
 
 
@@ -406,3 +412,60 @@ def test_config_schema_command_prints_json(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["title"] == "GenusSettings"
     assert "engine" in payload["properties"]
+
+
+def test_every_field_declares_which_units_a_restart_means() -> None:
+    """The units are field metadata, not a table the CLI keeps beside them.
+
+    `genus config set` has to answer "what do I restart?", and it used to
+    answer from a dict keyed on the group name, defaulting to "the engine and
+    the bridge" for anything it had not heard of. A group added to the model
+    then got that default silently, which is how a change reports applied and
+    is not. Declaring the units on the field puts the answer where the rest of
+    the declaration is, and this test is what keeps it there.
+    """
+    from robothor.settings.registry import field_index
+
+    missing = sorted(
+        record["env"]
+        for record in field_index().values()
+        if record["restart_required"] and record["restart_units"] is None
+    )
+    assert not missing, (
+        "these settings need a restart but declare no units to restart:\n  " + "\n  ".join(missing)
+    )
+
+
+def test_restart_units_are_named_service_units() -> None:
+    """A unit name has to be something an operator can pass to systemctl."""
+    from robothor.settings.registry import field_index
+
+    known = {"robothor-engine", "robothor-bridge", "robothor-app"}
+    for record in field_index().values():
+        for unit in record["restart_units"] or ():
+            assert unit in known, f"{record['env']} names an unknown unit {unit!r}"
+
+
+def test_an_empty_string_variable_is_env_provenance_for_a_string_field(monkeypatch) -> None:
+    """Provenance applies the same empty-is-unset rule as the sources.
+
+    `ROBOTHOR_AI_DOMAIN=` in an env file is how an operator blanks a string,
+    and the environment source honours it; provenance treating every empty
+    value as unset made `genus config get` name config.yaml (or the default)
+    for a value the platform was reading from the environment.
+    """
+    from robothor.settings import provenance
+    from robothor.settings.registry import field_index
+
+    record = field_index()["ROBOTHOR_AI_DOMAIN"]
+    monkeypatch.setenv("ROBOTHOR_AI_DOMAIN", "")
+    assert provenance.env_name_in_use(record) == "ROBOTHOR_AI_DOMAIN"
+
+
+def test_an_empty_numeric_variable_is_unset_for_provenance_too(monkeypatch) -> None:
+    from robothor.settings import provenance
+    from robothor.settings.registry import field_index
+
+    record = field_index()["ROBOTHOR_MAX_CONCURRENT_AGENTS"]
+    monkeypatch.setenv("ROBOTHOR_MAX_CONCURRENT_AGENTS", "")
+    assert provenance.env_name_in_use(record) is None

@@ -31,7 +31,18 @@ genus config schema                               # JSON Schema, for tooling
 | `set NAME VALUE` | Routes by the setting's own metadata — see below. |
 | `explain NAME` | Description, group, type, default, deprecated aliases, secret/governed/restart flags, current provenance. |
 | `list [--group G] [--changed]` | Every setting, or one group, or only what is not on its default. |
-| `validate [--json]` | Connectivity checks, plus unknown keys, deprecated names in use, and settings the running process disagrees with. Exit 1 if anything is wrong. |
+| `validate [--json]` | Connectivity checks, plus unknown keys, deprecated names in use, and settings the running process disagrees with. Exit 1 only for errors — see below. |
+
+`validate` separates what is broken from what is merely worth knowing:
+
+- **errors** (exit 1) — a key nothing reads, a connectivity check that failed,
+  a Telegram credential that is not shaped like one. Something is wrong.
+- **warnings** (exit 0) — a deprecated name still set, and a `settings:` value
+  the environment is overriding. The second is documented precedence, not a
+  fault: a variable in `/etc/robothor/robothor.env` beats the file, so the
+  file's value applies once you clear the variable and restart the units
+  named. `--json` lists those settings separately under `pending_restart`,
+  alongside `errors`.
 
 **`set` routes by what the setting is**, not by what you typed:
 

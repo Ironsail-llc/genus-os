@@ -31,7 +31,7 @@ Declaring a setting here does NOT yet change who reads it. Every existing
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -46,6 +46,7 @@ def declare(
     *,
     aliases: tuple[str, ...] = (),
     restart_required: bool = True,
+    restart_units: tuple[str, ...] | None = None,
     secret: bool = False,
     since: str = "legacy",
     governed: bool = False,
@@ -65,6 +66,13 @@ def declare(
         restart_required: True when a change only takes effect on restart.
             False marks the hot-reloadable settings (log level, cost caps,
             concurrency) that a later ``genus config set`` applies live.
+        restart_units: the systemd units that have to be restarted for a
+            change to this setting to take effect. Left unset, the field
+            inherits its group's :attr:`SettingsGroup.restart_units` -- the
+            usual case, because a group exists precisely because one service
+            reads it. Name the units on the field when a setting is read by a
+            service its neighbours are not: naming too few is how a change
+            reports applied and is not.
         secret: True for credentials -- redacted by the CLI and the doc
             generator, and never given a default.
         since: the release that introduced the setting, or ``"legacy"`` for
@@ -79,6 +87,7 @@ def declare(
         json_schema_extra={
             "env": env,
             "restart_required": restart_required,
+            "restart_units": None if restart_units is None else list(restart_units),
             "secret": secret,
             "since": since,
             "aliases": list(aliases),
@@ -94,9 +103,33 @@ class SettingsGroup(BaseModel):
     naming the key instead of a setting that silently never applies.
     ``populate_by_name`` lets the sources address fields by their Python name
     while ``validation_alias`` stays pure declaration.
+
+    ``restart_units`` is the group's answer to "what do I restart?", stamped
+    onto every field that did not name its own. It lives here rather than in a
+    table beside the CLI because a table keyed on group names silently gives
+    its default to the next group somebody adds, and the default -- restart
+    everything -- is the one answer that is never wrong and never useful.
     """
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    #: Restarted for any ``restart_required`` field in this group. Overridden
+    #: per group below; the base value is the conservative answer for a group
+    #: whose reader is not pinned down.
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine", "robothor-bridge")
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
+        """Give every field of this group its units, once the fields exist.
+
+        pydantic calls this after the model is built, so ``model_fields`` is
+        populated; ``__init_subclass__`` runs too early to see them.
+        """
+        super().__pydantic_init_subclass__(**kwargs)
+        for field in cls.model_fields.values():
+            extra = field.json_schema_extra
+            if isinstance(extra, dict) and extra.get("restart_units") is None:
+                extra["restart_units"] = list(cls.restart_units)
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +428,8 @@ class RedisSettings(SettingsGroup):
 class OllamaSettings(SettingsGroup):
     """The local Ollama endpoint and the models served from it."""
 
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
+
     url: str = declare(
         "",
         "ROBOTHOR_OLLAMA_URL",
@@ -464,6 +499,8 @@ class OllamaSettings(SettingsGroup):
 
 class ProviderSettings(SettingsGroup):
     """Cloud model routing, budgets and the failure controls around them."""
+
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
 
     last_resort_model: str = declare(
         "",
@@ -566,6 +603,8 @@ class ProviderSettings(SettingsGroup):
 
 class EngineSettings(SettingsGroup):
     """The agent execution layer: bind address, concurrency, pacing, sandbox."""
+
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
 
     host: str = declare(
         "127.0.0.1",
@@ -854,6 +893,8 @@ class EngineSettings(SettingsGroup):
 class ChannelSettings(SettingsGroup):
     """How the instance reaches people, and who it says it is."""
 
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
+
     telegram_bot_token: str = declare(
         "",
         "ROBOTHOR_TELEGRAM_BOT_TOKEN",
@@ -955,6 +996,8 @@ class ChannelSettings(SettingsGroup):
 class AuthSettings(SettingsGroup):
     """Who may reach the bridge and the dashboard, and how that is proven."""
 
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-bridge", "robothor-app")
+
     environment: str = declare(
         "",
         "GENUS_ENVIRONMENT",
@@ -1032,6 +1075,8 @@ class FlagSettings(SettingsGroup):
     an absent one. Route the reader through
     ``robothor.engine.feature_flags`` first, then mark it.
     """
+
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
 
     accretion_enabled: bool = declare(
         False,
@@ -1369,6 +1414,8 @@ class FlagSettings(SettingsGroup):
 
 class ServiceSettings(SettingsGroup):
     """Side services the instance runs: ports, endpoints and their knobs."""
+
+    restart_units: ClassVar[tuple[str, ...]] = ("robothor-bridge", "robothor-app")
 
     api_port: int = declare(9099, "ROBOTHOR_API_PORT", "RAG orchestrator / API server port.")
     orchestrator_port: int = declare(
@@ -1737,6 +1784,10 @@ class OpsSettings(SettingsGroup):
     ``scripts/guardrail_watch.py``. Each variable is declared exactly once, in
     the group matching the reader that actually consumes it.
     """
+
+    #: Nothing holds these: a timer or a shell script reads them when it runs,
+    #: so the next invocation picks a change up without a restart.
+    restart_units: ClassVar[tuple[str, ...]] = ()
 
     # --- PATH and interpreter plumbing ------------------------------------
     extra_path: str = declare(

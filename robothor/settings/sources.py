@@ -161,9 +161,15 @@ def unknown_config_keys() -> list[str]:
     """Dotted paths in the instance's config.yaml that no field declares.
 
     ``genus config validate`` reports these; it needs the list itself, not a
-    log line it would have to parse back out of the journal. An unreadable or
-    malformed file yields an empty list -- resolving settings is where that is
-    reported, with the filename.
+    log line it would have to parse back out of the journal. A missing or
+    unreadable file yields an empty list -- there is nothing to be wrong in a
+    file that is not there.
+
+    Raises:
+        ValueError: naming the file, when it exists but is not valid YAML or
+            not the shape it has to be. ``validate`` catches it and reports it
+            as the check it is: a file nothing can read is a worse finding
+            than any key inside it.
     """
     from robothor.settings.model import GenusSettings
 
