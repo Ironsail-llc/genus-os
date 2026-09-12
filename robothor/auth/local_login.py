@@ -586,11 +586,20 @@ def _set_mfa_enabled(user_id: str, enabled: bool) -> None:
 
 
 def _clear_mfa(user_id: str) -> None:
+    """Remove the factor, the secret AND the replay watermark.
+
+    The watermark is "the last step spent by the factor that no longer exists".
+    Leaving it behind is safe in direction — it can only ever refuse a code — but
+    it refuses the WRONG code: after a disable or an operator `mfa-reset`, the
+    next enrolment's confirming code looks like a replay for up to one 30-second
+    step, and nothing tells the operator why their authenticator is being
+    rejected.
+    """
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
             "UPDATE user_accounts SET mfa_enabled = FALSE, mfa_secret_enc = NULL, "
-            "updated_at = NOW() WHERE id = %s",
+            "mfa_last_used_step = NULL, updated_at = NOW() WHERE id = %s",
             (user_id,),
         )
         conn.commit()
@@ -890,7 +899,11 @@ def confirm_enrollment(user_id: str, code: str) -> bool:
     the factor cannot immediately be replayed at the sign-in page.
     """
     account_row = _load_account_by_id(user_id)
-    if not account_row:
+    # Status is checked here as it is in authenticate, change_password and
+    # begin_enrollment: an access token minted before a suspension stays valid
+    # for its 15-minute TTL, and a suspended account must not be able to arm a
+    # factor with it.
+    if not account_row or account_row.get("status") != "active":
         return False
     secret = mfa_secrets.decrypt_secret(account_row.get("mfa_secret_enc"), user_id=user_id)
     step = _fresh_step(account_row, secret, code)

@@ -178,6 +178,13 @@ function applyBridgeTokens(token: JWT, result: SsoResult): JWT {
   token.role = result.user.role;
   token.tenantId = result.user.tenant_id;
   token.accessExpiresAt = Date.now() + ACCESS_SKEW_MS;
+  // Refreshed, or dropped. Left untouched, the hint set at local sign-in
+  // survived every refresh for the life of the Auth.js cookie and could end up
+  // contradicting `/api/auth/me`, which is the authoritative answer the banner
+  // and the security panel actually render from.
+  const reported = (result as { mfa_setup_required?: unknown }).mfa_setup_required;
+  if (typeof reported === "boolean") token.mfaSetupRequired = reported;
+  else delete token.mfaSetupRequired;
   delete token.bridgeAuthError;
   return token;
 }

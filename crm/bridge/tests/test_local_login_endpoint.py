@@ -1009,3 +1009,29 @@ async def test_a_body_inside_the_cap_still_works(test_client):
             "/api/auth/login", json={"email": "alice@example.com", "password": "x" * 12}
         )
     assert r.status_code == 401
+
+
+# ── the 422 on the OLDER auth routes must not echo a token either ────
+
+
+@pytest.mark.asyncio
+async def test_a_mistyped_refresh_field_does_not_echo_the_token(test_client):
+    """`/api/auth/refresh` still uses a pydantic model with an unbounded
+    `refresh_token: str`, and FastAPI serialises the offending body into the 422
+    as `input` — so a single typo bounced a live refresh token back out of the
+    appliance, into the browser, the access log and every proxy between them.
+    The new credential routes hand-parse their bodies for exactly this reason;
+    the prefix list has to cover the older ones too.
+    """
+    from robothor.credential_errors import carries_credentials
+
+    assert carries_credentials("/api/auth/refresh")
+    assert carries_credentials("/api/auth")
+    # ...and the rule is prefix-anchored, not a blanket.
+    assert not carries_credentials("/api/authorized-somewhere-else")
+
+    r = await test_client.post(
+        "/api/auth/refresh", json={"refresh_tokenn": "live-refresh-token-value"}
+    )
+    assert r.status_code == 422
+    assert "live-refresh-token-value" not in r.text

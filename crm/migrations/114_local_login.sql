@@ -164,4 +164,5 @@ COMMIT;
 --       DROP COLUMN IF EXISTS mfa_secret_enc,
 --       DROP COLUMN IF EXISTS failed_login_count,
 --       DROP COLUMN IF EXISTS locked_until,
---       DROP COLUMN IF EXISTS password_updated_at;
+--       DROP COLUMN IF EXISTS password_updated_at,
+--       DROP COLUMN IF EXISTS mfa_last_used_step;

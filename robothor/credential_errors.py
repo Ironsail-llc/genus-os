@@ -38,6 +38,13 @@ CREDENTIAL_BODY_PATHS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^/api/admin(?:/|$)"),
     re.compile(r"^/api/providers(?:/|$)"),
     re.compile(r"^/api/vault(?:/|$)"),
+    # The whole auth surface. `POST /api/auth/refresh` and `/logout` still use
+    # pydantic models with an unbounded `refresh_token`, so `{"refresh_tokenn":
+    # "<token>"}` answered with a LIVE refresh token in the 422 body — into the
+    # browser, the access log and every proxy between them. The local-login
+    # routes hand-parse their bodies precisely because of that echo; this covers
+    # the older ones, and anything added under the prefix later.
+    re.compile(r"^/api/auth(?:/|$)"),
 )
 
 #: Validation-error members that can hold a fragment of the request.

@@ -817,3 +817,74 @@ def test_the_peer_map_does_not_grow_without_bound(monkeypatch) -> None:
     for n in range(300):
         local_login.flood_limited(f"10.2.{n // 256}.{n % 256}")
     assert len(local_login._PEER_ATTEMPTS) <= 200
+
+
+# ── clearing a factor clears the watermark with it ───────────────────
+
+
+def _captured_sql(fn, *args, **kwargs):
+    """Run *fn* with the DB mocked and return the SQL it issued."""
+    cur = MagicMock()
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    conn.cursor.return_value = cur
+    cur.fetchone.return_value = None
+    cur.rowcount = 1
+    with patch("robothor.auth.local_login.get_connection", return_value=conn):
+        fn(*args, **kwargs)
+    return " ".join(str(call[0][0]) for call in cur.execute.call_args_list)
+
+
+def test_clearing_mfa_also_clears_the_used_step_watermark() -> None:
+    """Otherwise a fresh enrolment's first confirming code can be refused.
+
+    The watermark is "the last step spent by the factor that was just deleted",
+    so leaving it at "now" makes the next enrolment's confirming code look like a
+    replay for up to one 30-second step — with nothing to tell the operator why.
+    """
+    sql = _captured_sql(local_login._clear_mfa, USER_ID)
+    assert "mfa_secret_enc = NULL" in sql
+    assert "mfa_last_used_step = NULL" in sql
+
+
+def test_the_operator_reset_path_clears_it_too() -> None:
+    with patch.object(local_login, "_clear_mfa") as clear:
+        local_login.reset_mfa(USER_ID)
+    clear.assert_called_once_with(USER_ID)
+
+
+# ── enrolment is refused on an account that is not active ────────────
+
+
+def _pending_enrollment(secret: str, **overrides):
+    """A row mid-enrolment: the secret is stored, the factor is not yet on."""
+    return account(
+        mfa_enabled=False,
+        mfa_secret_enc=mfa_secrets.encrypt_secret(secret, user_id=USER_ID),
+        **overrides,
+    )
+
+
+def test_confirm_enrollment_refuses_a_suspended_account() -> None:
+    """An access token minted before the suspension stays valid for its 15-minute
+    TTL, so without this a just-suspended account can still arm a factor —
+    unlike authenticate(), change_password() and begin_enrollment(), which all
+    check."""
+    secret = totp.new_secret()
+    row = _pending_enrollment(secret, status="suspended")
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=row),
+        patch.object(local_login, "_confirm_enrollment_atomically") as confirm,
+    ):
+        assert local_login.confirm_enrollment(USER_ID, totp.generate(secret)) is False
+    confirm.assert_not_called()
+
+
+def test_confirm_enrollment_still_works_on_an_active_account() -> None:
+    secret = totp.new_secret()
+    row = _pending_enrollment(secret)
+    with (
+        patch.object(local_login, "_load_account_by_id", return_value=row),
+        patch.object(local_login, "_confirm_enrollment_atomically", return_value=True),
+    ):
+        assert local_login.confirm_enrollment(USER_ID, totp.generate(secret)) is True
