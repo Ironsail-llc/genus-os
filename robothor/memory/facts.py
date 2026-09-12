@@ -364,7 +364,14 @@ async def store_fact(
         The database ID of the stored fact, or 0 if the quality gate refused it
         in enforce mode.
     """
+    from robothor.engine.run_context import benchmark_write_refused
     from robothor.memory.quality import quality_mode, record_shadow_rejection, score_fact
+
+    # A benchmark run may only write the sandbox tenant (incident 2026-09-12).
+    # Checked before the quality gate and the embedding: a fact we will not keep
+    # should cost neither.
+    if benchmark_write_refused(tenant_id or DEFAULT_TENANT, what="store_fact"):
+        return 0
 
     _mode = quality_mode()
     _verdict = None
@@ -439,6 +446,15 @@ async def store_facts_batch(
         List of database IDs for the stored facts.
     """
     if not facts:
+        return []
+
+    from robothor.engine.run_context import benchmark_write_refused
+
+    # The boundary, not a call site. ``MEMORY_ASYNC_WRITE`` is off by default,
+    # so ``store_memory`` reaches the database through here rather than through
+    # the write-job queue — guarding only the queue would have left the path
+    # that caused incident 2026-09-12 open.
+    if benchmark_write_refused(tenant_id or DEFAULT_TENANT, what="store_facts_batch"):
         return []
 
     texts = [f["fact_text"] for f in facts]

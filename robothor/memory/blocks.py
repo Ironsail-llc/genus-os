@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from robothor.constants import DEFAULT_TENANT
+from robothor.constants import DEFAULT_TENANT, SANDBOX_DENIAL_PREFIX
 from robothor.db import get_connection
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,18 @@ def write_block(block_name: str, content: str, tenant_id: str = DEFAULT_TENANT) 
     if not block_name:
         return {"error": "block_name is required"}
 
+    from robothor.engine.run_context import benchmark_write_refused
     from robothor.memory.block_budget import budget_mode, check_budget
+
+    # A benchmark run may only write the sandbox tenant (incident 2026-09-12).
+    # Blocks are the always-loaded memory tier, so a fixture sentence written
+    # here is read by every subsequent production turn of that agent.
+    if benchmark_write_refused(tenant_id, what="write_block"):
+        return {
+            "error": f"{SANDBOX_DENIAL_PREFIX} memory block writes are disabled",
+            "block_name": block_name,
+            "guard": "is_benchmark",
+        }
 
     mode = budget_mode()
     verdict = None

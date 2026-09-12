@@ -89,6 +89,7 @@ from robothor.engine.run_budget import (
 from robothor.engine.run_budget import (
     proactive_compaction_threshold as proactive_compaction_threshold,
 )
+from robothor.engine.run_context import mark_benchmark_run
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import resolve_run_identity
 from robothor.engine.run_lifecycle import RunLifecycleMixin
@@ -629,12 +630,12 @@ class AgentRunner(
         session.run.user_id = effective_user_id
         session.run.user_role = effective_user_role
 
-        # Benchmark sandbox marker — when the parent (typically benchmark-runner
-        # via _benchmark_run) stamps the child_config with is_benchmark=True,
-        # propagate onto the AgentRun so side-effect tool wrappers (gws CLI
-        # bypass, etc.) can short-circuit. Belt to the L1 allow-list
-        # suspenders in robothor/engine/tools/handlers/benchmark.py.
-        session.run.is_benchmark = bool(getattr(agent_config, "is_benchmark", False))
+        # Benchmark sandbox marker — stamps the AgentRun (read by the tool
+        # wrappers) and the task-local run context (read by the memory write
+        # boundary; incident 2026-09-12: a write reaching the DAL passes no tool
+        # wrapper at all). Belt to the L1 allow-list suspenders in
+        # robothor/engine/tools/handlers/benchmark.py. See run_context.py.
+        mark_benchmark_run(session, agent_config, agent_id)
 
         # Sub-agent: link to parent run + inherit user identity. An empty
         # parent_run_id means the parent's own row was never recorded
