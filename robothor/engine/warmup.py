@@ -495,9 +495,13 @@ def _build_unread_alerts_section(
     rows = rows[:limit]
 
     header = f"{ALERT_SECTION_HEADER} ({len(rows)}) ---"
+    # These rows are marked acknowledged the moment their text is delivered
+    # (see ``_ack_surfaced_alerts``), so the agent must NOT be told to clear
+    # them: an instruction to ack already-acked rows produced a loop of
+    # ``success:false`` ack calls that consumed whole runs.
     hint = (
-        "Warning/info alerts that did NOT page. Act on them, then clear each "
-        "with ack_notification(notificationId=...)."
+        "Warning/info alerts that did NOT page; already marked read. Mention "
+        "or act on one only if it needs the operator's judgment."
     )
     lines = [header, hint]
     chars_used = len(header) + len(hint) + 1
@@ -736,18 +740,13 @@ def build_interactive_preamble(
     sections: list[str] = []
     exclude_name = sender_name
 
-    # Unread alert digest — FIRST, deliberately. These are the alerts that did
-    # not page, and the preamble is hard-truncated at MAX_WARMTH_CHARS; memory
-    # blocks and entity recall alone can exhaust that budget, so anything added
-    # after them is not reliably delivered. Capped at MAX_ALERT_SECTION_CHARS.
+    # No alert digest here, deliberately. An interactive turn is a human
+    # talking; the heartbeat (``build_warmth_preamble``) is the alert reader.
+    # When this preamble carried the digest, a one-word greeting turned into a
+    # six-minute alert-triage run that answered with a report the operator
+    # never asked for (2026-09-12). ``_surfaced_alert_ids`` stays so the
+    # ack-on-surface step below is a no-op rather than a divergence.
     _surfaced_alert_ids: list[str] = []
-    if agent_id == OPERATOR_INBOX_AGENT_ID:
-        try:
-            alerts_section, _surfaced_alert_ids = _build_unread_alerts_section(tenant_id)
-            if alerts_section:
-                sections.append(alerts_section)
-        except Exception as e:
-            logger.debug("Interactive warmup unread-alerts section failed: %s", e)
 
     # "Own data + shared" row scoping (Task 5 / final-review Fix 1) — a
     # restricted (non-privileged) identity's FIRST message has no prior tool

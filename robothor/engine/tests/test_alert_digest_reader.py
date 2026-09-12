@@ -98,8 +98,25 @@ def no_context_hooks():
         _CONTEXT_HOOKS[:] = saved
 
 
+def _cron(agent_id: str = OPERATOR_INBOX_AGENT_ID, tmp_path: Path | None = None) -> str:
+    """Build the heartbeat (cron) preamble -- the alert digest's reader."""
+    import tempfile
+    from pathlib import Path as _Path
+
+    workspace = tmp_path or _Path(tempfile.mkdtemp())
+    config = AgentConfig(id=agent_id, name=agent_id)
+    with (
+        patch(TRACKING_PATCH, return_value=None),
+        patch(BLOCK_PATCH, return_value=None),
+        patch("robothor.crm.dal.list_tasks", return_value=[]),
+        patch("robothor.engine.warmup._recent_fleet_surfaces", return_value=""),
+    ):
+        result, _ = build_warmth_preamble(config, workspace)
+    return result
+
+
 def _interactive(agent_id: str = OPERATOR_INBOX_AGENT_ID, **kwargs: Any) -> str:
-    """Build an interactive preamble with every non-alert section muted."""
+    """Build an interactive (chat) preamble with every non-alert section muted."""
     with (
         patch(BLOCK_PATCH, return_value=None),
         patch("robothor.crm.dal.list_tasks", return_value=[]),
@@ -127,7 +144,7 @@ class TestUnreadAlertsSection:
             patch(INBOX_PATCH, side_effect=_inbox(rows)) as inbox,
             patch(ACK_PATCH, return_value=True),
         ):
-            result = _interactive()
+            result = _cron()
 
         assert inbox.called, "warmup never read crm_agent_notifications at all"
         assert ALERT_SECTION_HEADER in result, (
@@ -144,7 +161,7 @@ class TestUnreadAlertsSection:
             patch(INBOX_PATCH, side_effect=_inbox([])),
             patch(ACK_PATCH, return_value=True) as ack,
         ):
-            result = _interactive()
+            result = _cron()
 
         assert ALERT_SECTION_HEADER not in result
         assert not ack.called
@@ -155,7 +172,7 @@ class TestUnreadAlertsSection:
             patch(INBOX_PATCH, side_effect=_inbox(rows)),
             patch(ACK_PATCH, return_value=True),
         ):
-            result = _interactive()
+            result = _cron()
 
         assert ALERT_SECTION_HEADER in result
         start = result.index(ALERT_SECTION_HEADER)
@@ -173,7 +190,7 @@ class TestUnreadAlertsSection:
             patch(INBOX_PATCH, side_effect=_inbox([_digest_row("[warning] boom")])) as inbox,
             patch(ACK_PATCH, return_value=True),
         ):
-            result = _interactive(agent_id="email-classifier")
+            result = _cron(agent_id="email-classifier")
 
         assert ALERT_SECTION_HEADER not in result
         assert not inbox.called
@@ -188,7 +205,7 @@ class TestAcknowledgeOnlyWhatWasDelivered:
             patch(INBOX_PATCH, side_effect=_inbox(rows)),
             patch(ACK_PATCH, return_value=True) as ack,
         ):
-            result = _interactive()
+            result = _cron()
 
         assert ALERT_SECTION_HEADER in result
         acked = {
@@ -209,46 +226,59 @@ class TestAcknowledgeOnlyWhatWasDelivered:
         assert acked == 1
         assert [c.args[0] for c in ack.call_args_list] == [shown]
 
-    def test_rows_truncated_out_of_the_preamble_are_not_acknowledged(
-        self, no_context_hooks, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_rows_cut_by_the_section_cap_are_not_acknowledged(self, no_context_hooks) -> None:
         """PROBE, don't trust silence.
 
-        ``build_interactive_preamble`` hard-truncates at ``MAX_WARMTH_CHARS``
-        *after* assembling sections. A row whose line was cut off reached
+        A row whose line did not fit under ``MAX_ALERT_SECTION_CHARS`` reached
         nobody, so acking it would be the same "assume it sent" bug that hid
-        the Telegram arity failure. Shrinking the budget puts the cut inside
-        the alert section itself, which is where it can actually bite.
+        the Telegram arity failure. The builder reports only the ids it
+        rendered, and the heartbeat acks only those.
         """
-        monkeypatch.setattr("robothor.engine.warmup.MAX_WARMTH_CHARS", 200)
+        from robothor.engine.warmup import _build_unread_alerts_section
+
         rows = [_digest_row(f"[warning] alert number {i}") for i in range(MAX_ALERT_ROWS)]
-        with (
-            patch(INBOX_PATCH, side_effect=_inbox(rows)) as inbox,
-            patch(ACK_PATCH, return_value=True) as ack,
-        ):
-            result = _interactive()
+        with patch(INBOX_PATCH, side_effect=_inbox(rows)) as inbox:
+            text, rendered = _build_unread_alerts_section("default", max_chars=400)
 
-        # Not a vacuous pass: the section really was built, then partly cut.
         assert inbox.called
-        assert "[warmup truncated]" in result
-        surfaced = {r["id"] for r in rows if r["id"] in result}
-        cut = {r["id"] for r in rows} - surfaced
-        assert cut, "test did not actually truncate any alert line"
-
-        acked = {c.args[0] for c in ack.call_args_list}
-        assert acked == surfaced, (
-            "a digest row that was truncated out of the delivered preamble was "
-            "marked acknowledged anyway — that is 'assume it sent' all over again"
-        )
+        assert rendered, "the cap cut every row -- the test did not exercise a partial section"
+        assert len(rendered) < len(rows), "the cap did not cut any row -- nothing to prove"
+        for row in rows:
+            assert (row["id"] in text) == (row["id"] in rendered), (
+                "a row's id is reported as rendered without its line being in the text"
+            )
 
     def test_ack_failure_never_breaks_warmup(self, no_context_hooks) -> None:
         with (
             patch(INBOX_PATCH, side_effect=_inbox([_digest_row("[warning] boom")])),
             patch(ACK_PATCH, side_effect=RuntimeError("db down")),
         ):
-            result = _interactive()
+            result = _cron()
 
         assert ALERT_SECTION_HEADER in result
+
+
+class TestInteractiveTurnCarriesNoAlerts:
+    """A human turn is about the human's message.
+
+    On 2026-09-12 the operator said "Hello" and the interactive preamble
+    handed the model dozens of alert rows with "act on them, then clear
+    each"; the run spent six minutes acking already-acked ids and answered
+    with a triage report. The heartbeat is the reader. The chat is not.
+    """
+
+    def test_interactive_turn_never_carries_the_alert_section(self, no_context_hooks) -> None:
+        rows = [_digest_row("[warning] Zombie runner"), _digest_row("[warning] Tool degradation")]
+        with (
+            patch(INBOX_PATCH, side_effect=_inbox(rows)) as inbox,
+            patch(ACK_PATCH, return_value=True) as ack,
+        ):
+            result = _interactive()
+
+        assert ALERT_SECTION_HEADER not in result
+        assert "Zombie runner" not in result
+        assert not inbox.called, "a chat turn must not even pay for the inbox query"
+        assert not ack.called, "a chat turn must not acknowledge alerts it did not show"
 
 
 class TestHeartbeatWarmupSurfacesAlerts:
@@ -318,15 +348,20 @@ class TestNotificationToolRegistrationParity:
             assert name in handlers, f"{name} has a schema but no handler — it would error"
             assert name in schemas, f"{name} has a handler but no schema — it is unreachable"
 
-    def test_ack_tool_is_named_in_the_surfaced_section(self, no_context_hooks) -> None:
-        """The section must tell the agent how to clear a row it acts on."""
+    def test_surfaced_section_does_not_instruct_acking(self, no_context_hooks) -> None:
+        """Surfaced rows are acked on delivery, so the text must not tell the
+        agent to ack them: that instruction produced runs that spent every
+        iteration calling ``ack_notification`` on already-acked ids and
+        reading ``success:false`` as work left to do."""
         with (
             patch(INBOX_PATCH, side_effect=_inbox([_digest_row("[warning] boom")])),
             patch(ACK_PATCH, return_value=True),
         ):
-            result = _interactive()
+            result = _cron()
 
-        assert "ack_notification" in result
+        assert ALERT_SECTION_HEADER in result
+        assert "ack_notification" not in result
+        assert "already marked read" in result
 
 
 class TestEndToEndDigestRoundTrip:
@@ -384,7 +419,7 @@ class TestEndToEndDigestRoundTrip:
         assert await alert("warning", "Disk 91% full", "/ has 8GB free") is True
         assert store and store[0]["notificationType"] == "alert_digest"
 
-        first = _interactive()
+        first = _cron()
         assert ALERT_SECTION_HEADER in first
         assert "Disk 91% full" in first, (
             "a warning alert was written to crm_agent_notifications and the "
@@ -393,7 +428,7 @@ class TestEndToEndDigestRoundTrip:
 
         # Acked on surface — the next turn must not repeat it.
         assert store[0]["acknowledgedAt"] is not None
-        second = _interactive()
+        second = _cron()
         assert ALERT_SECTION_HEADER not in second
         assert "Disk 91% full" not in second
 
@@ -413,7 +448,7 @@ class TestEndToEndDigestRoundTrip:
         assert delivered is False
         assert store[0]["notificationType"] == "alert_fallback"
 
-        result = _interactive()
+        result = _cron()
         assert ALERT_SECTION_HEADER in result
         assert "PostgreSQL down" in result, (
             "a critical page that failed to deliver left an alert_fallback row "
