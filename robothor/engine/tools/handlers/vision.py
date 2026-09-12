@@ -22,8 +22,9 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
+from robothor.constants import SANDBOX_DENIAL_PREFIX
 from robothor.engine.tools.dispatch import ToolContext, _cfg
 from robothor.engine.tools.service_client import bridge_headers, call_service
 
@@ -34,10 +35,45 @@ logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {}
 
+# Vision tools that write durable state — refused when ctx.is_benchmark, the
+# same way handlers/crm.py, handlers/memory.py and handlers/gws.py refuse
+# theirs. ``log_interaction`` is the one that mattered on 2026-09-12: it posts
+# a contact interaction to the bridge, which lands in the CRM timeline against
+# a real person, and it had no handler-level guard at all — only a place on the
+# harness deny-list, which is computed once per suite from the agent's
+# ``tools_allowed`` and is empty for an agent that declares none. Reads
+# (``look``, ``who_is_here``) stay allowed.
+_VISION_MUTATING_TOOLS: frozenset[str] = frozenset(
+    {
+        "log_interaction",
+        "enroll_face",
+        "enroll_face_from_image",
+        "unenroll_face",
+        "set_vision_mode",
+    }
+)
+
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        HANDLERS[name] = fn
+        if name in _VISION_MUTATING_TOOLS:
+
+            async def gated(
+                args: dict[str, Any],
+                ctx: ToolContext,
+                _fn: Callable[..., Any] = fn,
+                _name: str = name,
+            ) -> dict[str, Any]:
+                if ctx.is_benchmark:
+                    return {
+                        "error": f"{SANDBOX_DENIAL_PREFIX} {_name} writes are disabled",
+                        "guard": "is_benchmark",
+                    }
+                return cast("dict[str, Any]", await _fn(args, ctx))
+
+            HANDLERS[name] = gated
+        else:
+            HANDLERS[name] = fn
         return fn
 
     return decorator

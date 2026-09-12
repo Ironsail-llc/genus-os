@@ -384,9 +384,84 @@ def _benchmark_tools_denied(
     from robothor.engine.benchmark_sandbox import benchmark_allowed_tools
 
     allowed = benchmark_allowed_tools(sandbox=sandbox)
-    denied = set(agent_tools_allowed or []) - allowed
+    denied = set(agent_tools_allowed or _every_registered_tool()) - allowed
     denied |= GOAL_TOOLS - allowed
+    # Adapter/MCP tools leave this process, so they are external side effects by
+    # nature and are denied whatever the manifest says. Unioned AFTER the
+    # intersection above because this is the one family a graded agent may not
+    # keep by having asked for it: `dispatch._execute_tool` routes an adapter
+    # tool to its MCP session BEFORE `ToolContext` is constructed, so no
+    # `ctx.is_benchmark` gate can ever see the call and the memory boundary is
+    # in another process. The deny-list is the only place it can be stopped.
+    denied |= _adapter_tools()
     return sorted(denied)
+
+
+def _static_deny_floor() -> set[str]:
+    """Every tool a deny-list can name without asking the registry anything."""
+    from robothor.engine.benchmark_sandbox import (
+        EXTERNAL_SIDE_EFFECT_TOOLS,
+        MEMORY_WRITE_TOOLS,
+        SANDBOX_WRITE_TOOLS,
+    )
+
+    return set(
+        EXTERNAL_SIDE_EFFECT_TOOLS
+        | MEMORY_WRITE_TOOLS
+        | SANDBOX_WRITE_TOOLS
+        | _BENCHMARK_EXCLUDED_TOOLS
+        | GOAL_TOOLS
+    )
+
+
+def _adapter_tools() -> set[str]:
+    """Adapter/MCP tool names, or the whole registry if that cannot be read."""
+    try:
+        from robothor.engine.tools import get_registry
+
+        return get_registry().adapter_tool_names()
+    except Exception:  # noqa: BLE001 - see _every_registered_tool
+        logger.warning("benchmark: could not enumerate adapter tools for the deny-list")
+        return set()
+
+
+def _every_registered_tool() -> set[str]:
+    """Every tool name this instance can dispatch, adapter tools included.
+
+    The fallback when the graded agent's manifest lists no ``tools_allowed`` —
+    which means "everything", not "nothing". Subtracting the allow-list from an
+    EMPTY list produced an EMPTY deny-list, so the agents that restrict
+    themselves least were the ones the harness restricted least: a benchmark
+    child of such an agent was handed ``store_memory`` and every other write
+    the allow-list exists to withhold. Only the handler guards stood between a
+    graded run and production, and on 2026-09-12 one of the tools had no
+    handler guard.
+
+    Reads the LIVE registry, not the static schema modules: an adapter tool is
+    registered at runtime from a server's ``tools/list`` and appears in neither
+    ``robothor.api.mcp.get_tool_definitions()`` nor ``get_engine_schemas()``,
+    which is how the first version of this function could claim to name "every
+    tool this instance registers" and miss every tool that leaves the process.
+
+    **Fails closed.** An exception here used to return an empty set, which put
+    the deny-list back at two entries with ``exec`` and ``invoke_skill``
+    allowed — the remedy re-opening the defect through its own error path,
+    behind one WARNING nothing gates on. The floor is now everything the static
+    sets can name, which needs no registry at all.
+    """
+    floor = _static_deny_floor()
+    try:
+        from robothor.engine.tools import get_registry
+
+        return get_registry().registered_tool_names() | floor
+    except Exception:  # noqa: BLE001 - a suite is not worth an open deny-list
+        logger.warning(
+            "benchmark: could not enumerate registered tools; falling back to the "
+            "static deny floor (%d names). Adapter and plugin tools cannot be named "
+            "this way — treat any suite run in this state as unvalidated.",
+            len(floor),
+        )
+        return floor
 
 
 def _resolve_model_tier(model_primary: str) -> str:
@@ -1314,35 +1389,50 @@ async def _execute_task_run(
 ) -> Any:
     """Run one benchmark task, tenant-scoped to the sandbox when seeded.
 
-    Two layers, because one is not enough. ``runner.execute(tenant_id=…)`` is
-    what the CRM DAL reads for its WHERE clauses; ``tenant_scope`` binds
+    Three layers, because two were not enough. ``runner.execute(tenant_id=…)``
+    is what the CRM DAL reads for its WHERE clauses; ``tenant_scope`` binds
     ``app.tenant_id`` on every connection taken inside the block, which is what
     row-level security enforces at the database. Without the second, a
     sandbox-tenant INSERT is refused by the RLS ``WITH CHECK`` clause the moment
     ``ROBOTHOR_RLS_ENABLED`` is on.
+
+    The third is ``benchmark_run_scope``, and it is the one that covers the
+    ``seeded is None`` branch — the branch that runs under the AGENT's own
+    tenant whenever the sandbox is off or the suite declares no fixtures.
+    Nothing bound that branch to anything before 2026-09-12, which is how a
+    fixture person reached production memory. The scope makes every durable
+    memory write inside the child refuse any tenant but the sandbox, and it
+    restores the previous marker on the way out so the benchmark runner's own
+    writes are unaffected.
     """
-    if seeded is None:
-        return await runner.execute(
-            agent_id=agent_id,
-            message=prompt,
-            trigger_type=TriggerType.SUB_AGENT,
-            trigger_detail=trigger_detail,
-            agent_config=child_config,
-            spawn_context=spawn_context,
-        )
+    from robothor.engine.run_context import benchmark_run_scope
 
-    from robothor.db.connection import tenant_scope
+    # run_id is left empty here and refined by the runner the moment the child's
+    # row exists; the marker has to be bound before `execute` is entered, and
+    # the id does not exist until it has been.
+    with benchmark_run_scope(True, agent_id=agent_id):
+        if seeded is None:
+            return await runner.execute(
+                agent_id=agent_id,
+                message=prompt,
+                trigger_type=TriggerType.SUB_AGENT,
+                trigger_detail=trigger_detail,
+                agent_config=child_config,
+                spawn_context=spawn_context,
+            )
 
-    with tenant_scope(seeded.tenant_id):
-        return await runner.execute(
-            agent_id=agent_id,
-            message=prompt,
-            trigger_type=TriggerType.SUB_AGENT,
-            trigger_detail=trigger_detail,
-            agent_config=child_config,
-            spawn_context=spawn_context,
-            tenant_id=seeded.tenant_id,
-        )
+        from robothor.db.connection import tenant_scope
+
+        with tenant_scope(seeded.tenant_id):
+            return await runner.execute(
+                agent_id=agent_id,
+                message=prompt,
+                trigger_type=TriggerType.SUB_AGENT,
+                trigger_detail=trigger_detail,
+                agent_config=child_config,
+                spawn_context=spawn_context,
+                tenant_id=seeded.tenant_id,
+            )
 
 
 def _run_task_state_checks(

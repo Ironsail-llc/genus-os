@@ -14,9 +14,9 @@ this module is where that logic lives.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from robothor.doctor.model import Check, Result, fail, ok
+from robothor.doctor.model import Check, Result, fail, ok, skip
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.doctor.context import DoctorContext
@@ -145,6 +145,92 @@ async def _pending_restart(ctx: DoctorContext) -> list[Result]:
     return [fail(detail, sub_id=name) for name, detail in rows]
 
 
+def _benchmark_tool_names() -> set[str]:
+    """Tool names that RUN the benchmark harness, read off the harness module.
+
+    Derived, not typed out: a hand-written list of agent ids ("benchmark-runner"
+    and whatever the operator called theirs) is the drift that produced three
+    separate hardcoded-name defects on this instance. An agent that can call
+    ``benchmark_run_fleet`` schedules benchmarks, whatever it is named.
+    """
+    from robothor.engine.tools.handlers.benchmark import HANDLERS
+
+    return set(HANDLERS)
+
+
+def _agent_schedules_benchmarks(manifest: dict[str, Any]) -> bool:
+    if manifest.get("is_benchmark"):
+        return True
+    allowed = manifest.get("tools_allowed") or []
+    return bool(set(map(str, allowed)) & _benchmark_tool_names())
+
+
+async def _benchmark_isolation(ctx: DoctorContext) -> Result:
+    """A scheduled benchmark runs against this instance's own tenant.
+
+    ``ROBOTHOR_BENCHMARK_SANDBOX_MODE=off`` means benchmark sub-runs are never
+    scoped to the dedicated ``benchmark-sandbox`` tenant: the harness executes
+    each graded task as a child run under the GRADED AGENT's tenant, which on a
+    single-tenant instance is the operator's own. Every durable write from such
+    a child is refused at the boundary since 2026-09-12 -- and "refused at the
+    boundary" is one control, deliberately the last one, not a design.
+
+    The combination this reports is a schedule plus an off sandbox. Recommended
+    rather than required because the instance works: what it does not do is
+    give the graded agent a real place to act, so every rubric that grades an
+    action can only be satisfied by narrating one.
+    """
+
+    def _scan() -> tuple[str, list[str]]:
+        from robothor.engine.feature_flags import benchmark_sandbox_mode
+
+        mode = str(benchmark_sandbox_mode())
+        if mode != "off":
+            return mode, []
+
+        with ctx.db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT agent_id FROM agent_schedules WHERE enabled")
+            scheduled = [str(row[0]) for row in cursor.fetchall()]
+
+        import yaml
+
+        from robothor.engine.config import EngineConfig
+
+        manifest_dir = EngineConfig.from_env().manifest_dir
+        graders: list[str] = []
+        for agent_id in sorted(scheduled):
+            path = manifest_dir / f"{agent_id}.yaml"
+            if not path.is_file():
+                # A schedule outliving its manifest is manifests.missing's
+                # finding, not evidence that this instance benchmarks.
+                continue
+            try:
+                manifest = yaml.safe_load(path.read_text()) or {}
+            except Exception:  # noqa: BLE001 - manifests.broken owns unreadable files
+                continue
+            if isinstance(manifest, dict) and _agent_schedules_benchmarks(manifest):
+                graders.append(agent_id)
+        return mode, graders
+
+    try:
+        mode, graders = await ctx.run_blocking(_scan)
+    except Exception as exc:  # noqa: BLE001 - an unreachable database is not a verdict
+        return skip(f"cannot read agent_schedules: {type(exc).__name__}: {exc}")
+
+    if mode != "off":
+        return ok(f"benchmark sandbox mode={mode}; graded runs are scoped to the sandbox tenant")
+    if not graders:
+        return ok("benchmark sandbox is off, and no enabled schedule runs the benchmark harness")
+    return fail(
+        f"{', '.join(graders)} {'is' if len(graders) == 1 else 'are'} scheduled to run "
+        "benchmarks while ROBOTHOR_BENCHMARK_SANDBOX_MODE is off, so graded sub-runs "
+        "execute under this instance's own tenant. Set "
+        "ROBOTHOR_BENCHMARK_SANDBOX_ENABLED=1 and ROBOTHOR_BENCHMARK_SANDBOX_MODE=observe, "
+        "or disable the schedule. See docs/runbooks/BENCHMARK_SANDBOX.md."
+    )
+
+
 CHECKS: tuple[Check, ...] = (
     Check(
         id="config.settings_load",
@@ -173,5 +259,12 @@ CHECKS: tuple[Check, ...] = (
         category="config",
         severity="recommended",
         run=_pending_restart,
+    ),
+    Check(
+        id="benchmark.isolation",
+        title="No benchmark is scheduled against this instance's own tenant",
+        category="config",
+        severity="recommended",
+        run=_benchmark_isolation,
     ),
 )

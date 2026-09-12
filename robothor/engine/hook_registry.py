@@ -11,6 +11,7 @@ handler types.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import fnmatch
 import importlib
 import json
@@ -385,9 +386,31 @@ class HookRegistry:
         if asyncio.iscoroutinefunction(handler):
             result = await handler(context)
         else:
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(self._sync_executor, handler, context)
+            result = await self._run_in_executor(handler, context)
         return result if isinstance(result, HookResult) else HookResult()
+
+    async def _run_in_executor(self, handler: Any, *args: Any) -> Any:
+        """Run a sync handler off the loop **with this task's context**.
+
+        ``loop.run_in_executor`` does not copy the context — unlike
+        ``asyncio.to_thread``, which every DAL and tool hop uses — so anything
+        a handler reads from a ``ContextVar`` comes back unset. Measured:
+        ``asyncio.to_thread`` True, ``run_in_executor`` False.
+
+        That matters because ``buddy_hooks._on_agent_end`` is a sync handler
+        registered globally on ``AGENT_END``, so it takes this hop on every
+        run including a graded one, and because the benchmark write boundary
+        (:mod:`robothor.engine.run_context`) is a ContextVar. A hook that
+        cannot see the marker is a hook that writes to production from inside a
+        benchmark run.
+
+        Shell hooks (``_run_command``) are a separate process and are outside
+        the boundary by construction; that is documented in the runbook rather
+        than papered over here.
+        """
+        loop = asyncio.get_running_loop()
+        ctx = contextvars.copy_context()
+        return await loop.run_in_executor(self._sync_executor, lambda: ctx.run(handler, *args))
 
     async def _run_command(self, hook: LifecycleHook, context: HookContext) -> HookResult:
         """Run shell command. Exit 0 = allow, 1 = block."""

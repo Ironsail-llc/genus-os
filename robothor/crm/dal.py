@@ -30,8 +30,8 @@ if TYPE_CHECKING:
 
     from robothor.identity.scope import DataScope
 
+from robothor.constants import BENCHMARK_DIGEST_NOTIFICATION_TYPE, SANDBOX_DENIAL_PREFIX
 from robothor.constants import DEFAULT_TENANT as DEFAULT_TENANT
-from robothor.constants import SANDBOX_DENIAL_PREFIX
 from robothor.crm import hooks
 from robothor.crm.models import (
     company_to_dict,
@@ -3254,7 +3254,16 @@ def get_agent_inbox(
     limit: int = 50,
     tenant_id: str = DEFAULT_TENANT,
 ) -> list[dict[str, Any]]:
-    """Get notifications for an agent, ordered by newest first."""
+    """Get notifications for an agent, ordered by newest first.
+
+    ``benchmark_digest`` rows are excluded unless asked for by name. They are
+    alerts about agents being GRADED, addressed to the operator's agent like
+    everything else here, and nothing acknowledges them — so an unfiltered read
+    returned a pile that only grows (~230/day at the rate that made this
+    necessary). Excluded, not hidden: pass ``type_filter="benchmark_digest"``
+    and they come back, which is what makes them a queryable record of what the
+    benchmark did rather than an inbox item nobody can clear.
+    """
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         conditions = ["to_agent = %s", "tenant_id = %s"]
@@ -3264,6 +3273,9 @@ def get_agent_inbox(
         if type_filter:
             conditions.append("notification_type = %s")
             params.append(type_filter)
+        else:
+            conditions.append("notification_type <> %s")
+            params.append(BENCHMARK_DIGEST_NOTIFICATION_TYPE)
         params.append(limit)
         cur.execute(
             f"""SELECT * FROM crm_agent_notifications

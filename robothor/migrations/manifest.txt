@@ -118,3 +118,4 @@ crm/112_federation_principals.sql
 crm/113_add_do_not_contact.sql
 crm/114_local_login.sql
 crm/115_backfill_sandbox_denied_error_type.sql
+crm/116_benchmark_digest_notification_type.sql

@@ -1038,7 +1038,9 @@ class RunFinalizationMixin:
             status = getattr(run, "verified_status", None)
             verification = getattr(run, "verification", None)
 
-            if mode == "enforce" and is_benchmark_run(run.trigger_detail):
+            if mode == "enforce" and is_benchmark_run(
+                run.trigger_detail, is_benchmark=bool(getattr(run, "is_benchmark", False))
+            ):
                 logger.info(
                     "benchmark run %s left task %s open (benchmark work is not production work)",
                     _sanitize(run.id),

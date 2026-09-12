@@ -67,6 +67,121 @@ defect being fixed. What it does not change is how the run is **graded**.
 `state_checks` is not scoped to the sandbox tenant at all and behaves exactly
 as it does today, reads included. Only suites that opt in move.
 
+## What a benchmark run may touch
+
+Read this before changing anything in the harness. The one-line rule:
+
+> **A benchmark run may write exactly one tenant — `benchmark-sandbox` — and
+> writes nothing at all when the sandbox is off.**
+
+That is now true by construction rather than by convention, and it is enforced
+at three depths. Each one alone has already failed in production:
+
+| Depth | What it is | What it catches |
+|-------|-----------|-----------------|
+| Tool allow-list | `benchmark_allowed_tools()` intersected into the child's `tools_denied` | the graded agent never sees the tool |
+| Handler guard | `ctx.is_benchmark` in `handlers/crm.py`, `memory.py`, `gws.py`, `vision.py` | a tool reached some other way — a skill, a force-added tool |
+| Write boundary | `run_context.benchmark_write_refused()` in `memory/facts.py`, `memory/blocks.py`, `memory/write_jobs.py`, `memory/outcomes.py` | a write that never passes a tool at all |
+
+Two rules that are easy to get wrong when editing any of the three:
+
+* **The deny-list fails closed.** If the registry cannot be enumerated,
+  `_every_registered_tool()` falls back to every name the static sets know —
+  never to the empty set. An empty deny-list is the original defect, and the
+  first version of this remedy could reach it through its own error path.
+* **Adapter / MCP tools are always denied.** They are dispatched to their MCP
+  session *before* `ToolContext` exists, so no handler guard can ever see the
+  call and the write boundary is in another process. The deny-list is the only
+  place they can be stopped, so they are denied whatever the manifest grants.
+
+### A read tool that writes
+
+`search_memory` stays available to a graded child — the suites need it — and it
+writes one `fact_access_log` row per consulted fact. Those rows are the only
+input to `fact_access_rollup` and hence to the memory decay scorer, so a
+benchmark run was quietly steering fact retention for eleven days. The tool
+keeps its place; `memory/outcomes.py` asks the boundary instead. Such tools are
+listed explicitly in `BOUNDARY_GUARDED_TOOLS`, which the derivation test
+subtracts — adding a name there re-opens a write path, so nothing belongs in it
+without a test proving its guard.
+
+### What is still outside the boundary
+
+* **Shell hooks** (`hook_registry._run_command`) are a separate process. Sync
+  Python hooks *are* covered: `_run_in_executor` copies the context, because
+  `loop.run_in_executor` — unlike `asyncio.to_thread` — does not.
+* **Out-of-process MCP callers** reaching `robothor/api/mcp.py` directly. They
+  carry no run context, so the boundary cannot see them.
+
+### Incident 2026-09-12 — why the third depth exists
+
+With the sandbox `off` this instance ran ~220 graded child runs over eleven
+days under its own tenant. The CRM deny-set held. The memory path did not: a
+suite fixture's fictional person became 25 `memory_facts` rows, a real agent
+recalled them as established fact, and from them created a production person
+record and eight production tasks. The operator found fictional people in his
+CRM.
+
+Three things were true at once, and all three are fixed:
+
+1. the allow-list is computed as `agent.tools_allowed - allowed`, and an agent
+   whose manifest lists no `tools_allowed` has an **empty** deny-list — so the
+   least restricted agents were restricted least as benchmark children;
+2. `log_interaction`, `leave_breadcrumb`, `record_procedure` and
+   `report_procedure_outcome` had no handler guard at all;
+3. nothing below the tools asked whose tenant it was writing.
+
+### The two settings
+
+| Setting | Effect |
+|---------|--------|
+| `ROBOTHOR_BENCHMARK_SANDBOX_ENABLED` | `0`/unset pins the mode to `off` whatever the mode says |
+| `ROBOTHOR_BENCHMARK_SANDBOX_MODE` | `off` → `observe` → `alert` → `enforce` |
+
+**With the sandbox off, a benchmark is read-only by construction.** The child
+still runs under the graded agent's tenant — that has not changed — but every
+durable write is refused: a structured `benchmark sandbox: <tool> writes are
+disabled` result from the handler, or a dropped write and one content-free
+WARNING from the boundary. A refused tool is a tool *result*, so the run
+completes and is graded on what it did with the refusal.
+
+**With the sandbox on**, the CRM writes in `SANDBOX_WRITE_TOOLS` are re-allowed
+and only inside the sandbox tenant. Memory writes are **not** re-allowed in any
+mode (`MEMORY_WRITE_TOOLS` ⊂ `EXTERNAL_SIDE_EFFECT_TOOLS`): teardown sweeps CRM
+tables, so a fact written under the sandbox tenant would outlive the task and
+be recalled by the next night's run — the same self-reinforcing fiction with a
+smaller blast radius rather than a fixed one. No suite grades a memory write.
+
+### Alerts from a benchmark child
+
+They do not page, and they do not enter the operator's inbox. `alerts.alert()`
+routes anything raised inside a graded run to a `benchmark_digest` notification
+row with `[benchmark]` on the subject; the heartbeat's alert reader
+(`warmup.ALERT_DIGEST_TYPES`) does not read that type, and `get_agent_inbox`
+excludes it unless asked for by name. The rows are still written — a suite that
+trips the runaway-token guard nightly is a real finding about the suite, just
+not an interrupt. Read them with
+`get_inbox(typeFilter="benchmark_digest")`.
+
+Two cases need more than the current task's context:
+
+* **Out-of-band detectors** (`detectors.py`) run on the daemon's loop and alert
+  *about* a run they are not inside, so `in_benchmark_run()` is False there
+  however benchmark the subject is. They call `alerts.alert_about_run(...)` and
+  pass the subject run's `trigger_detail`, so the routing follows the subject.
+  A test fails the build if any detector calls `alert()` directly again.
+* **The soft-runaway batch** (`runner._soft_runaway_pending`) is module-global
+  and flushed by whichever run crosses next. A benchmark child flushing a batch
+  of *production* crossings would have relabelled the whole summary
+  `benchmark_digest` and lost a real page, so graded runs never enter the batch
+  at all — they report immediately, into their own digest.
+
+### Checking an instance
+
+`genus doctor` runs `benchmark.isolation`: it fails when an enabled schedule
+belongs to an agent that can call the benchmark tools while the sandbox mode is
+`off`.
+
 ## Promotion evidence (required before `enforce`)
 
 1. One full fleet night with `state_checks` recorded on `crm-hygiene`'s task
@@ -82,7 +197,7 @@ as it does today, reads included. Only suites that opt in move.
    SELECT 'tasks',  count(*) FROM crm_tasks  WHERE tenant_id = 'benchmark-sandbox';
    ```
 3. Zero rows written to any other tenant by a benchmark run — check
-   `agent_runs` for `is_benchmark = true` and confirm the CRM audit log shows no
+   `agent_runs` rows whose `trigger_detail` starts with `benchmark:` (there is no `is_benchmark` column; the flag lives on the run object only) and confirm the CRM audit log shows no
    mutation outside `benchmark-sandbox`.
 
 ## Rollback

@@ -30,11 +30,31 @@ import html
 import logging
 from typing import Any
 
+from robothor.constants import BENCHMARK_DIGEST_NOTIFICATION_TYPE
+
 logger = logging.getLogger(__name__)
 
 # Alert levels that page Telegram immediately. Everything else goes to the
 # digest so the operator is only interrupted for things that need them.
 _PAGE_LEVELS = frozenset({"critical"})
+
+#: Where an alert raised INSIDE a benchmark child goes. A separate notification
+#: type rather than a tag on ``alert_digest``, because the heartbeat's alert
+#: reader selects by type (``warmup.ALERT_DIGEST_TYPES``) and a tag it does not
+#: read is a tag it cannot act on. On 2026-09-11 the graded runs produced 135
+#: digest rows in fourteen hours and the operator's "Hello" became a six-minute
+#: triage of alerts about agents that were being TESTED, not failing.
+#:
+#: The rows are still written, and deliberately: a benchmark suite that trips
+#: the runaway-token guard every night is a real finding about the suite. It is
+#: simply not an interrupt.
+#: Canonical value lives in :mod:`robothor.constants` because ``crm/dal.py``
+#: must exclude it from ``get_agent_inbox`` without importing the engine.
+BENCHMARK_DIGEST_TYPE = BENCHMARK_DIGEST_NOTIFICATION_TYPE
+
+#: Prefix on the subject of such a row, so a human reading the table directly
+#: can tell at a glance.
+BENCHMARK_SUBJECT_TAG = "[benchmark]"
 
 
 async def alert(
@@ -60,6 +80,21 @@ async def alert(
         True if the alert was verifiably delivered (Telegram send returned
         sent messages, or the digest/fallback notification row was written).
     """
+    from robothor.engine.run_context import in_benchmark_run
+
+    if in_benchmark_run():
+        # A graded child is not production. Whatever the level, whatever the
+        # channel: no page, no webhook, and a row in a type the operator's
+        # heartbeat does not read. Checked before the channel switch so a
+        # future channel cannot be added past it.
+        return await _write_notification(
+            BENCHMARK_DIGEST_TYPE,
+            level,
+            f"{BENCHMARK_SUBJECT_TAG} {title}",
+            body,
+            metadata,
+        )
+
     if channel == "telegram":
         if level in _PAGE_LEVELS:
             return await _send_telegram(level, title, body)
@@ -69,6 +104,76 @@ async def alert(
     else:
         logger.warning("Unknown alert channel: %s", channel)
         return False
+
+
+async def alert_about_run(
+    level: str,
+    title: str,
+    body: str,
+    *,
+    trigger_detail: str | None = None,
+    is_benchmark: bool = False,
+    channel: str = "telegram",
+    metadata: dict[str, Any] | None = None,
+) -> bool:
+    """Alert ABOUT a run, routed by whether that run is benchmark traffic.
+
+    :func:`alert` routes on the CURRENT task's context, which is right for
+    anything raised inside the run. The out-of-band detectors
+    (:mod:`robothor.engine.detectors`) are the other case: they run on the
+    daemon's periodic loop, select ``agent_runs`` rows, and alert about a run
+    they are not inside — so ``in_benchmark_run()`` is False there however
+    benchmark the subject is, and 135 digests about agents that were being
+    GRADED reached the operator's heartbeat exactly as before.
+
+    Pass the subject run's ``trigger_detail`` (and its ``is_benchmark`` flag
+    where the row carries one) and the routing follows the subject rather than
+    the caller. With neither, this is plain :func:`alert` — so a detector that
+    genuinely has no run row (a workflow, a tool, a model) keeps today's
+    behaviour by calling the same helper.
+    """
+    from robothor.engine.analytics import is_benchmark_run
+
+    if is_benchmark_run(trigger_detail, is_benchmark=is_benchmark):
+        return await _write_notification(
+            BENCHMARK_DIGEST_TYPE,
+            level,
+            f"{BENCHMARK_SUBJECT_TAG} {title}",
+            body,
+            metadata,
+        )
+    return await alert(level, title, body, channel=channel, metadata=metadata)
+
+
+def note_benchmark_runaway(agent_id: str, run_id: str, tokens: int, model_used: str | None) -> None:
+    """Record a soft runaway-token crossing from a GRADED run, unbatched.
+
+    The production path batches soft crossings so six catch-up runs do not
+    become six pages. That batch is module-global state in the runner, flushed
+    by whichever run crosses next and in that run's context — so a benchmark
+    child must not join it: flushing a batch of production crossings from
+    inside a graded run would write the whole summary as ``benchmark_digest``,
+    which the heartbeat does not read and nothing acknowledges, and a genuine
+    runaway page would be silently lost.
+
+    A graded crossing is therefore reported immediately and on its own.
+    :func:`alert` sees the marker and files it as ``benchmark_digest``, so it
+    is recorded and interrupts nobody. The per-run ``logger.warning`` at the
+    call site and the hard cap are unaffected — only the page is decided here.
+
+    Sync and fire-and-forget, mirroring ``_send_soft_runaway_alert``: it is
+    called from the run loop, which must not await an alert.
+    """
+    from robothor.engine.task_registry import get_task_registry
+
+    get_task_registry().spawn(
+        alert(
+            "warning",
+            f"Runaway-token alert: {agent_id}",
+            f"run_id={run_id} tokens={tokens:,} model={model_used} (benchmark run)",
+        ),
+        name=f"runaway-alert-benchmark:{agent_id}",
+    )
 
 
 async def _send_telegram(level: str, title: str, body: str) -> bool:

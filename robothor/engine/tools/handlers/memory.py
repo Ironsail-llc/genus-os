@@ -27,6 +27,14 @@ _MEMORY_MUTATING_TOOLS: frozenset[str] = frozenset(
         "append_to_block",
         "memory_block_write",
         "record_resolution",
+        # Procedures and breadcrumbs are durable agent state read back by the
+        # next real run's warmup, exactly like a block. They were on the
+        # harness deny-list and nowhere else until 2026-09-12, and that list is
+        # computed from the graded agent's `tools_allowed` — which is empty for
+        # an agent that restricts nothing, leaving the deny-list empty too.
+        "record_procedure",
+        "report_procedure_outcome",
+        "leave_breadcrumb",
     }
 )
 
@@ -285,6 +293,14 @@ async def _store_memory(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         agent_id=getattr(ctx, "agent_id", None),
         run_id=getattr(ctx, "run_id", None),
     )
+    if job_id is None:
+        # Refused at the boundary — a benchmark run writing outside the sandbox
+        # tenant. Nothing was queued, so there is no job to poll and reporting
+        # "queued" would promise a write that will never happen.
+        return {
+            "error": f"{SANDBOX_DENIAL_PREFIX} store_memory writes are disabled",
+            "guard": "is_benchmark",
+        }
 
     from robothor.engine.task_registry import get_task_registry
 

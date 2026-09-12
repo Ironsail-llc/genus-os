@@ -101,7 +101,7 @@ def decontamination_enforced() -> bool:
     return benchmark_decontamination_mode() == "enforce"
 
 
-def is_benchmark_run(trigger_detail: str | None) -> bool:
+def is_benchmark_run(trigger_detail: str | None, *, is_benchmark: bool = False) -> bool:
     """True when a run row is benchmark-harness traffic.
 
     The Python-row twin of :func:`benchmark_run_filter`, sharing the one
@@ -111,12 +111,23 @@ def is_benchmark_run(trigger_detail: str | None) -> bool:
     ``startswith("benchmark:")`` is precisely how the twelve copies of the
     production-run predicate drifted apart in the first place.
 
+    Two signals, because the label is a convention and the flag is a fact. The
+    in-tree harness always writes ``benchmark:<suite>:<task>``, and a detached
+    script that drove the runner directly invented its own prefix (``p1m1:…``)
+    — 200-odd runs that every consumer counted as production while the runs
+    themselves carried ``is_benchmark=True`` all along.
+
     Args:
         trigger_detail: the run's ``agent_runs.trigger_detail`` (may be None).
+        is_benchmark: the run object's ``is_benchmark`` flag (there is no such
+            column on ``agent_runs``; SQL consumers filter on the trigger prefix).
+            Authoritative on its own.
 
     Returns:
-        True when the run was spawned by the benchmark harness.
+        True when the run was spawned to be graded rather than to act.
     """
+    if is_benchmark:
+        return True
     return bool(trigger_detail) and str(trigger_detail).startswith(BENCHMARK_TRIGGER_PREFIX)
 
 

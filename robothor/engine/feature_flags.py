@@ -600,9 +600,12 @@ def benchmark_sandbox_mode() -> EnforcementMode:
     """Rollout mode for seeded benchmark fixtures + sandbox CRM writes.
 
     Gated on ``ROBOTHOR_BENCHMARK_SANDBOX_ENABLED`` +
-    ``ROBOTHOR_BENCHMARK_SANDBOX_MODE``. ``off`` (default) is today's harness
-    exactly: benchmark sub-runs stay read-only, no fixtures are seeded, and no
-    state check runs. ``observe`` seeds each task's fixtures into the dedicated
+    ``ROBOTHOR_BENCHMARK_SANDBOX_MODE``. ``off`` (default) seeds no fixtures and
+    runs no state check, and the sub-run executes under the GRADED AGENT's own
+    tenant rather than the sandbox one. "Read-only" is what this docstring used
+    to claim; it became true only on 2026-09-12, and by enforcement rather than
+    by that sentence — see ``robothor.engine.run_context``. ``observe`` seeds
+    each task's fixtures into the dedicated
     ``benchmark-sandbox`` tenant, scopes the sub-run to it, re-allows the
     sandbox-safe CRM writes (see ``robothor.engine.benchmark_sandbox``) and
     RECORDS every read-back on the task result without folding it into the

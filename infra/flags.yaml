@@ -432,11 +432,29 @@ flags:
       teardown; (3) zero rows written to any other tenant by a benchmark run.
       Full ladder, evidence and rollback: docs/runbooks/BENCHMARK_SANDBOX.md.
 
+      Incident 2026-09-12 — read before touching this flag. `off` was
+      documented as "sub-runs stay read-only" and was not: with the sandbox
+      off the harness runs each graded child under the GRADED AGENT's tenant,
+      and ~220 such runs over eleven days put a suite fixture's fictional
+      person into production memory, from which a real agent created a
+      production person record and eight production tasks. The CRM deny-set
+      held; the memory path had no guard below the tool layer, and the
+      allow-list is computed as `agent.tools_allowed - allowed`, which is
+      EMPTY for an agent whose manifest restricts nothing. Fixed by a write
+      boundary (robothor/engine/run_context.py) plus handler guards; `off` is
+      now read-only by construction rather than by convention, and `genus
+      doctor` reports the schedule-plus-off combination as
+      `benchmark.isolation`. None of that makes `off` the right setting: a
+      graded agent still has no place to act, so every rubric that grades an
+      action can only be satisfied by narrating one.
+
       BLOCKER: the three pieces of promotion evidence above have not been
       collected — no fleet night with state_checks hand-compared against
       transcripts, no teardown row-count check, no cross-tenant write
       audit. Collect them per docs/runbooks/BENCHMARK_SANDBOX.md, then
-      flip.
+      flip. Evidence (3) is now cheap to gather: a cross-tenant write from a
+      benchmark run logs one WARNING "benchmark isolation: refused …", so an
+      empty grep over a fleet night is a real answer rather than a silence.
 
   - name: ROBOTHOR_PLUGIN_MANIFEST_MODE
     owner: platform

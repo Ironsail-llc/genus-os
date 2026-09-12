@@ -89,6 +89,7 @@ from robothor.engine.run_budget import (
 from robothor.engine.run_budget import (
     proactive_compaction_threshold as proactive_compaction_threshold,
 )
+from robothor.engine.run_context import mark_benchmark_run
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import resolve_run_identity
 from robothor.engine.run_lifecycle import RunLifecycleMixin
@@ -334,7 +335,17 @@ def _send_soft_runaway_alert(
     global _soft_runaway_window_started_at, _soft_runaway_pending
 
     from robothor.engine.alerts import alert as _alert
+    from robothor.engine.alerts import note_benchmark_runaway
+    from robothor.engine.run_context import in_benchmark_run
     from robothor.engine.task_registry import get_task_registry
+
+    # A graded child never joins the batch below and never opens its window:
+    # `_soft_runaway_pending` is module-global and flushed by whichever run
+    # crosses next IN THAT RUN'S CONTEXT, so a benchmark child flushing a
+    # production batch would relabel a real page `benchmark_digest` and lose it.
+    if in_benchmark_run():
+        note_benchmark_runaway(agent_id, run_id, tokens, model_used)
+        return
 
     now = _runaway_alert_clock()
     window_active = (
@@ -629,12 +640,12 @@ class AgentRunner(
         session.run.user_id = effective_user_id
         session.run.user_role = effective_user_role
 
-        # Benchmark sandbox marker — when the parent (typically benchmark-runner
-        # via _benchmark_run) stamps the child_config with is_benchmark=True,
-        # propagate onto the AgentRun so side-effect tool wrappers (gws CLI
-        # bypass, etc.) can short-circuit. Belt to the L1 allow-list
-        # suspenders in robothor/engine/tools/handlers/benchmark.py.
-        session.run.is_benchmark = bool(getattr(agent_config, "is_benchmark", False))
+        # Benchmark sandbox marker — stamps the AgentRun (read by the tool
+        # wrappers) and the task-local run context (read by the memory write
+        # boundary; incident 2026-09-12: a write reaching the DAL passes no tool
+        # wrapper at all). Belt to the L1 allow-list suspenders in
+        # robothor/engine/tools/handlers/benchmark.py. See run_context.py.
+        mark_benchmark_run(session, agent_config, agent_id)
 
         # Sub-agent: link to parent run + inherit user identity. An empty
         # parent_run_id means the parent's own row was never recorded

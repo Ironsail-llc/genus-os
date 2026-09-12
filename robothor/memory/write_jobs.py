@@ -57,14 +57,23 @@ async def enqueue_write(
     tenant_id: str = "",
     agent_id: str | None = None,
     run_id: str | None = None,
-) -> int:
-    """Record the promise. Returns the job id.
+) -> int | None:
+    """Record the promise. Returns the job id, or None when it was refused.
 
     Deliberately synchronous against the database and deliberately first: if the
     row were written after extraction, a crash during extraction would leave no
     evidence a write had been promised.
+
+    ``None`` means a benchmark run tried to promise a write into a tenant that
+    is not the benchmark sandbox (incident 2026-09-12). Nothing is queued, so
+    there is no promise to keep — callers must treat it as a refusal, not as a
+    job they can poll.
     """
+    from robothor.engine.run_context import benchmark_write_refused
+
     tid = tenant_id or DEFAULT_TENANT
+    if benchmark_write_refused(tid, what="memory write job"):
+        return None
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
