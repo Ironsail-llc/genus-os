@@ -1633,6 +1633,25 @@ class SecretSettings(SettingsGroup):
 class SubstrateSettings(SettingsGroup):
     """Where and how the instance runs: host accounts, federation, backups."""
 
+    init_substrate: str = declare(
+        "local",
+        "ROBOTHOR_INIT_SUBSTRATE",
+        "Substrate `genus init` sets up when --substrate is not given: `local` "
+        "(this machine). `compose`, `systemd` and `helm` are designed but not "
+        "yet selectable.",
+        restart_required=False,
+        restart_units=(),
+        since="1.71.0",
+    )
+    init_preset: str = declare(
+        "standard",
+        "ROBOTHOR_INIT_PRESET",
+        "Agent catalogue preset `genus init` installs when --preset is not "
+        "given. `genus agent catalog` lists the presets this build carries.",
+        restart_required=False,
+        restart_units=(),
+        since="1.71.0",
+    )
     service_user: str = declare(
         "robothor",
         "ROBOTHOR_SERVICE_USER",

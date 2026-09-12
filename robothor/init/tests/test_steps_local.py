@@ -1,0 +1,497 @@
+"""The steps of the `local` substrate, each held to what it promises.
+
+These are the steps that touch the machine, so the seams matter: the migrator,
+the preset installer, the doctor and the HTTP client are all constructor
+arguments, and the tests replace them wholesale. Nothing here starts a
+service, dials a provider or migrates a database.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from robothor.doctor.context import HttpResponse
+from robothor.init.context import InitContext
+from robothor.init.steps import (
+    AgentsStep,
+    ChannelsStep,
+    DatabaseStep,
+    MigrateStep,
+    ModelsStep,
+    PrereqsStep,
+    ProviderStep,
+    SecretsStep,
+    StepError,
+    SubstrateStep,
+    VerifyStep,
+)
+from robothor.init.substrate import AVAILABLE_SUBSTRATES, build_plan, get_substrate
+from robothor.init.substrates.local import LocalLinkStep, LocalServicesStep, LocalSubstrate
+
+
+def _ctx(tmp_path, **kwargs: Any) -> InitContext:
+    kwargs.setdefault("yes", True)
+    return InitContext(workspace=tmp_path / "workspace", **kwargs)
+
+
+class TestTheStepOrderIsTheSpecOrder:
+    def test_local_runs_the_seventeen_steps_in_order(self):
+        ids = [step.id for step in LocalSubstrate().steps()]
+
+        assert ids == [
+            "ack",
+            "substrate",
+            "prereqs",
+            "detect",
+            "provider",
+            "identity",
+            "workspace",
+            "database",
+            "migrate",
+            "models",
+            "agents",
+            "operator",
+            "channels",
+            "secrets",
+            "services",
+            "verify",
+            "link",
+        ]
+
+    def test_only_local_is_offered_in_this_release(self):
+        assert AVAILABLE_SUBSTRATES == ("local",)
+
+    @pytest.mark.parametrize("name", ["compose", "systemd", "helm"])
+    def test_the_later_substrates_are_seams_that_say_where_they_land(self, name):
+        with pytest.raises(NotImplementedError) as exc:
+            get_substrate(name)
+
+        assert "A10/A11/A12" in str(exc.value)
+
+    def test_an_unknown_substrate_names_the_ones_that_exist(self):
+        with pytest.raises(ValueError) as exc:
+            get_substrate("kubernetes")
+
+        assert "local" in str(exc.value)
+
+    def test_build_plan_uses_the_context_substrate(self, tmp_path):
+        plan = build_plan(_ctx(tmp_path))
+
+        assert plan.substrate_name == "local"
+        assert plan.steps[0].id == "ack"
+
+
+class TestPrereqsArePerSubstrate:
+    def test_local_requires_postgres_and_redis(self, tmp_path):
+        asked: dict[str, Any] = {}
+
+        def fake_prereqs(**kwargs: Any) -> list[dict[str, Any]]:
+            asked.update(kwargs)
+            return [
+                {"name": "Python", "found": True, "detail": "3.12", "required": True, "hint": ""},
+                {
+                    "name": "PostgreSQL (psql)",
+                    "found": True,
+                    "detail": "found",
+                    "required": True,
+                    "hint": "",
+                },
+            ]
+
+        step = PrereqsStep(
+            required=("PostgreSQL (psql)", "Redis (redis-cli)"), prereqs=fake_prereqs
+        )
+        result = step.check(_ctx(tmp_path))
+
+        assert result.ok is True
+        assert asked["required"] == ("PostgreSQL (psql)", "Redis (redis-cli)")
+
+    def test_a_missing_required_prereq_blocks_with_its_install_hint(self, tmp_path):
+        def fake_prereqs(**kwargs: Any) -> list[dict[str, Any]]:
+            return [
+                {
+                    "name": "Redis (redis-cli)",
+                    "found": False,
+                    "detail": "not found",
+                    "required": True,
+                    "hint": "apt install redis-server",
+                }
+            ]
+
+        step = PrereqsStep(required=("Redis (redis-cli)",), prereqs=fake_prereqs)
+        result = step.check(_ctx(tmp_path))
+
+        assert result.ok is False
+        assert "Redis" in result.detail
+        assert "apt install redis-server" in result.fix_hint
+
+    def test_an_optional_prereq_that_is_absent_does_not_block(self, tmp_path):
+        def fake_prereqs(**kwargs: Any) -> list[dict[str, Any]]:
+            return [
+                {
+                    "name": "Ollama",
+                    "found": False,
+                    "detail": "not reachable",
+                    "required": False,
+                    "hint": "",
+                }
+            ]
+
+        step = PrereqsStep(required=(), prereqs=fake_prereqs)
+
+        assert step.check(_ctx(tmp_path)).ok is True
+
+
+class TestSubstrateStep:
+    def test_an_unavailable_substrate_blocks_before_anything_is_written(self, tmp_path):
+        result = SubstrateStep().check(_ctx(tmp_path, substrate_name="helm"))
+
+        assert result.ok is False
+        assert "local" in result.fix_hint
+
+
+class TestMigrateUsesTheCanonicalMigrator:
+    def test_apply_calls_db_migrate_apply_with_a_connection(self, tmp_path):
+        seen: dict[str, Any] = {}
+        connection = object()
+
+        def fake_migrator(*, connection: Any) -> None:
+            seen["connection"] = connection
+
+        ctx = _ctx(tmp_path, db_factory=lambda: connection)
+        MigrateStep(migrator=fake_migrator).apply(ctx)
+
+        assert seen["connection"] is connection
+
+    def test_a_migration_refusal_becomes_a_step_error_with_its_own_remedy(self, tmp_path):
+        from robothor.db.migrate import MigrationError
+
+        def fake_migrator(*, connection: Any) -> None:
+            raise MigrationError("run with --adopt-baseline 001_init")
+
+        ctx = _ctx(tmp_path, db_factory=lambda: object())
+
+        with pytest.raises(StepError) as exc:
+            MigrateStep(migrator=fake_migrator).apply(ctx)
+
+        assert "--adopt-baseline 001_init" in str(exc.value)
+
+    def test_skip_db_skips_the_step_rather_than_failing_it(self, tmp_path):
+        ctx = _ctx(tmp_path, answers={"skip_db": True})
+
+        assert MigrateStep().check(ctx).action == "skip"
+
+
+class TestDatabaseStep:
+    def test_an_unreachable_database_blocks_with_a_fix_hint(self, tmp_path):
+        def boom() -> Any:
+            raise RuntimeError("could not connect to server")
+
+        result = DatabaseStep().check(_ctx(tmp_path, db_factory=boom))
+
+        assert result.ok is False
+        assert "could not connect" in result.detail
+        assert "ROBOTHOR_DB_" in result.fix_hint
+
+
+class TestAgentsPreset:
+    def test_the_installer_is_called_with_the_chosen_preset(self, tmp_path):
+        seen: dict[str, Any] = {}
+
+        def fake_install(preset: str, **kwargs: Any) -> dict[str, Any]:
+            seen["preset"] = preset
+            return {
+                "unknown_preset": False,
+                "available": ["minimal", "standard", "full"],
+                "requested": 3,
+                "installed": ["main", "scout", "scribe"],
+                "failed": {},
+                "missing": [],
+            }
+
+        ctx = _ctx(tmp_path, answers={"preset": "full"})
+        AgentsStep(installer=fake_install).apply(ctx)
+
+        assert seen["preset"] == "full"
+        assert "3" in ctx.details["agents"]
+
+    def test_an_unknown_preset_names_the_ones_that_exist(self, tmp_path):
+        def fake_install(preset: str, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "unknown_preset": True,
+                "available": ["minimal", "standard", "full"],
+                "requested": 0,
+                "installed": [],
+                "failed": {},
+                "missing": [],
+            }
+
+        ctx = _ctx(tmp_path, answers={"preset": "enormous"})
+
+        with pytest.raises(StepError) as exc:
+            AgentsStep(installer=fake_install).apply(ctx)
+
+        assert "minimal" in str(exc.value)
+
+    def test_a_partly_failed_install_reports_which_agents_failed(self, tmp_path):
+        def fake_install(preset: str, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "unknown_preset": False,
+                "available": ["standard"],
+                "requested": 2,
+                "installed": ["main"],
+                "failed": {"scout": "ValueError: bad template"},
+                "missing": [],
+            }
+
+        ctx = _ctx(tmp_path, answers={"preset": "standard"})
+        AgentsStep(installer=fake_install).apply(ctx)
+
+        assert "scout" in ctx.details["agents"]
+
+
+class TestModelsOnlyWhenOllamaWasChosen:
+    def test_a_cloud_provider_skips_the_pull(self, tmp_path):
+        ctx = _ctx(tmp_path, answers={"provider_id": "openrouter"})
+
+        assert ModelsStep().check(ctx).action == "skip"
+
+    def test_ollama_pulls_the_required_models(self, tmp_path):
+        pulled: list[list[str]] = []
+        ctx = _ctx(tmp_path, answers={"provider_id": "ollama"})
+        step = ModelsStep(puller=lambda base, models: pulled.append(list(models)))
+
+        assert step.check(ctx).action == "create"
+        step.apply(ctx)
+        assert pulled and "qwen3-embedding:0.6b" in pulled[0]
+
+    def test_skip_models_wins_over_the_provider_choice(self, tmp_path):
+        ctx = _ctx(tmp_path, answers={"provider_id": "ollama", "skip_models": True})
+
+        assert ModelsStep().check(ctx).action == "skip"
+
+
+class TestChannelsAreOptional:
+    def test_no_token_means_the_step_is_skipped_not_failed(self, tmp_path):
+        result = ChannelsStep().check(_ctx(tmp_path))
+
+        assert result.ok is True
+        assert result.action == "skip"
+
+    def test_a_token_is_verified_with_get_me(self, tmp_path):
+        seen: list[str] = []
+
+        def fetch(method, url, body, timeout):
+            seen.append(url)
+            return HttpResponse(status=200, body='{"ok": true, "result": {"username": "a_bot"}}')
+
+        ctx = _ctx(tmp_path, answers={"telegram_token": "123:abc"}, http_fetch=fetch)
+        result = ChannelsStep().check(ctx)
+
+        assert result.ok is True
+        assert "a_bot" in result.detail
+        assert seen and seen[0].endswith("/getMe")
+
+    def test_a_rejected_token_warns_and_never_reaches_a_report(self, tmp_path):
+        def fetch(method, url, body, timeout):
+            return HttpResponse(status=401, body='{"ok": false, "description": "Unauthorized"}')
+
+        ctx = _ctx(tmp_path, answers={"telegram_token": "123:abc"}, http_fetch=fetch)
+        result = ChannelsStep().check(ctx)
+
+        assert result.ok is False
+        assert "123:abc" not in result.detail
+        assert "123:abc" not in result.fix_hint
+
+    def test_offline_skips_the_probe_rather_than_failing_it(self, tmp_path):
+        def fetch(method, url, body, timeout):  # pragma: no cover - must not run
+            raise AssertionError("offline must not leave the box")
+
+        ctx = _ctx(tmp_path, answers={"telegram_token": "123:abc"}, http_fetch=fetch, offline=True)
+
+        assert ChannelsStep().check(ctx).action == "skip"
+
+
+class TestSecretsBackend:
+    def test_local_defaults_to_the_env_backend(self, tmp_path):
+        ctx = _ctx(tmp_path)
+        result = SecretsStep().check(ctx)
+
+        assert result.ok is True
+        assert "env" in result.detail
+
+    def test_an_unknown_backend_blocks_with_the_three_that_exist(self, tmp_path):
+        ctx = _ctx(tmp_path, answers={"secrets_backend": "kms"})
+        result = SecretsStep().check(ctx)
+
+        assert result.ok is False
+        assert "sops" in result.fix_hint
+
+
+class TestVerifyIsTheGate:
+    def test_zero_required_failures_passes(self, tmp_path):
+        from robothor.doctor.runner import CheckResult as DoctorResult
+        from robothor.doctor.runner import DoctorReport
+
+        report = DoctorReport(
+            results=[
+                DoctorResult(
+                    "db.migrations", "Migrations", "database", "required", "pass", "", False
+                ),
+                DoctorResult(
+                    "channels.slack", "Slack", "channels", "recommended", "fail", "no token", False
+                ),
+            ]
+        )
+        ctx = _ctx(tmp_path)
+        VerifyStep(doctor=lambda ctx_: report).apply(ctx)
+
+        assert "0 required" in ctx.details["verify"]
+
+    def test_a_required_failure_names_the_check(self, tmp_path):
+        from robothor.doctor.runner import CheckResult as DoctorResult
+        from robothor.doctor.runner import DoctorReport
+
+        report = DoctorReport(
+            results=[
+                DoctorResult(
+                    "db.rbac_service_role",
+                    "Service role",
+                    "database",
+                    "required",
+                    "fail",
+                    "role not seeded",
+                    True,
+                )
+            ]
+        )
+
+        with pytest.raises(StepError) as exc:
+            VerifyStep(doctor=lambda ctx_: report).apply(_ctx(tmp_path))
+
+        assert "db.rbac_service_role" in str(exc.value)
+        assert "role not seeded" in str(exc.value)
+
+    def test_it_stays_offline_unless_the_provider_was_probed(self, tmp_path):
+        seen: dict[str, Any] = {}
+
+        def fake_doctor(doctor_ctx: Any) -> Any:
+            from robothor.doctor.runner import DoctorReport
+
+            seen["offline"] = doctor_ctx.offline
+            return DoctorReport(results=[])
+
+        VerifyStep(doctor=fake_doctor).apply(_ctx(tmp_path))
+        assert seen["offline"] is True
+
+        VerifyStep(doctor=fake_doctor).apply(_ctx(tmp_path, answers={"provider_probed": True}))
+        assert seen["offline"] is False
+
+
+class TestServicesStep:
+    def test_without_start_it_prints_the_two_commands_and_starts_nothing(self, tmp_path, capsys):
+        ctx = _ctx(tmp_path)
+        LocalServicesStep(starter=lambda: pytest.fail("must not start")).apply(ctx)
+
+        printed = capsys.readouterr().out
+        assert "engine" in printed
+        assert "bridge" in printed
+
+    def test_start_runs_the_existing_start_command(self, tmp_path):
+        started: list[str] = []
+        ctx = _ctx(tmp_path, answers={"start": True})
+
+        LocalServicesStep(starter=lambda: started.append("started")).apply(ctx)
+
+        assert started == ["started"]
+
+
+class TestTheFirstRunLink:
+    def test_the_url_is_a_single_use_setup_link(self, tmp_path, capsys):
+        ctx = _ctx(tmp_path)
+        ctx.workspace.mkdir(parents=True)
+
+        LocalLinkStep(is_a_terminal=lambda: True).apply(ctx)
+
+        assert "/setup?token=" in ctx.first_run_url
+        printed = capsys.readouterr().out
+        assert "/setup?token=" in printed
+
+    def test_a_headless_box_also_gets_the_port_forward_line(self, tmp_path, capsys):
+        ctx = _ctx(tmp_path)
+        ctx.workspace.mkdir(parents=True)
+
+        LocalLinkStep(is_a_terminal=lambda: False).apply(ctx)
+
+        printed = capsys.readouterr().out
+        assert "ssh -L" in printed
+
+    def test_a_terminal_gets_no_port_forward_noise(self, tmp_path, capsys):
+        ctx = _ctx(tmp_path)
+        ctx.workspace.mkdir(parents=True)
+
+        LocalLinkStep(is_a_terminal=lambda: True).apply(ctx)
+
+        assert "ssh -L" not in capsys.readouterr().out
+
+    def test_a_link_that_cannot_be_minted_does_not_fail_the_install(self, tmp_path):
+        """Ten minutes of work must not be thrown away over a token file."""
+
+        class _NoLink(LocalSubstrate):
+            def first_run_url(self, ctx: InitContext) -> str:
+                raise OSError("read-only file system")
+
+        ctx = _ctx(tmp_path)
+        ctx.workspace.mkdir(parents=True)
+
+        LocalLinkStep(substrate=_NoLink(), is_a_terminal=lambda: True).apply(ctx)
+
+        assert ctx.first_run_url == ""
+        assert "genus auth setup-link" in ctx.details["link"]
+
+
+class TestProviderStep:
+    def test_no_credential_and_no_local_model_blocks_the_run(self, tmp_path):
+        ctx = _ctx(tmp_path)
+        result = ProviderStep().check(ctx)
+
+        assert result.ok is False
+        assert "OPENROUTER_API_KEY" in result.fix_hint
+
+    def test_a_failed_probe_blocks_rather_than_writing_a_provider(self, tmp_path):
+        from robothor.init.provider_probe import ProbeResult
+
+        ctx = _ctx(
+            tmp_path,
+            answers={
+                "provider_id": "openrouter",
+                "provider_model": "openrouter/openai/gpt-5.4",
+                "provider_key": "sk-bad",
+            },
+        )
+        step = ProviderStep(
+            probe=lambda *a, **k: ProbeResult(False, "openrouter", "m", "401 Unauthorized", True)
+        )
+
+        with pytest.raises(StepError) as exc:
+            step.apply(ctx)
+
+        assert "401 Unauthorized" in str(exc.value)
+        assert "sk-bad" not in str(exc.value)
+
+    def test_offline_records_the_choice_without_dialling(self, tmp_path):
+        def never(*args: Any, **kwargs: Any) -> Any:  # pragma: no cover - must not run
+            raise AssertionError("offline must not dial a provider")
+
+        ctx = _ctx(
+            tmp_path,
+            offline=True,
+            answers={"provider_id": "openrouter", "provider_model": "openrouter/openai/gpt-5.4"},
+        )
+        ctx.workspace.mkdir(parents=True)
+        ProviderStep(probe=never).apply(ctx)
+
+        assert ctx.answers["provider_probed"] is False
+        assert "--offline" in ctx.details["provider"]

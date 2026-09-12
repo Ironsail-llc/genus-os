@@ -29,13 +29,16 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import yaml
 
 from robothor import setup_token
 from robothor.config import DatabaseConfig, OllamaConfig, RedisConfig
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Sequence
 
 # Models required for the RAG pipeline
 REQUIRED_MODELS = ["qwen3-embedding:0.6b", "Qwen3-Reranker-0.6B:F16"]
@@ -258,7 +261,7 @@ def run_init(args: Any) -> int:
         if init_state.get("db_validate") != "completed":
             print("  Validating database ...", end=" ", flush=True)
             try:
-                import psycopg2
+                import psycopg2  # type: ignore[import-untyped]
 
                 conn = psycopg2.connect(**db_config.dict, connect_timeout=5)
                 with conn.cursor() as cur:
@@ -384,11 +387,26 @@ def run_init(args: Any) -> int:
     return 0
 
 
-def check_prerequisites(*, docker_required: bool = False) -> list[dict[str, Any]]:
+def check_prerequisites(
+    *,
+    docker_required: bool = False,
+    required: Sequence[str] = (),
+) -> list[dict[str, Any]]:
     """Check for required and optional tools.
 
     Returns a list of dicts: {name, found, detail, required, hint}.
+
+    ``required`` names the tools THIS substrate cannot run without, by the
+    ``name`` field below. Every prerequisite used to be optional on every
+    install, which is why a box with no PostgreSQL passed this check and then
+    failed at the migration, four steps and one operator identity later.
+    Python stays required unconditionally; nothing runs without it.
     """
+    wanted = set(required)
+
+    def _required(name: str, *, always: bool = False) -> bool:
+        return always or name in wanted
+
     results = []
 
     # Python (always present)
@@ -409,7 +427,7 @@ def check_prerequisites(*, docker_required: bool = False) -> list[dict[str, Any]
             "name": "PostgreSQL (psql)",
             "found": psql is not None,
             "detail": "found" if psql else "not found",
-            "required": False,
+            "required": _required("PostgreSQL (psql)"),
             "hint": _install_hint("postgresql-client", "postgresql"),
         }
     )
@@ -421,7 +439,7 @@ def check_prerequisites(*, docker_required: bool = False) -> list[dict[str, Any]
             "name": "Redis (redis-cli)",
             "found": redis_cli is not None,
             "detail": "found" if redis_cli else "not found",
-            "required": False,
+            "required": _required("Redis (redis-cli)"),
             "hint": _install_hint("redis-server", "redis"),
         }
     )
@@ -444,7 +462,7 @@ def check_prerequisites(*, docker_required: bool = False) -> list[dict[str, Any]
             "name": "Ollama",
             "found": ollama_found,
             "detail": ollama_detail,
-            "required": False,
+            "required": _required("Ollama"),
             "hint": "curl -fsSL https://ollama.com/install.sh | sh",
         }
     )
@@ -456,7 +474,7 @@ def check_prerequisites(*, docker_required: bool = False) -> list[dict[str, Any]
             "name": "Docker",
             "found": docker_bin is not None,
             "detail": "found" if docker_bin else "not found",
-            "required": docker_required,
+            "required": _required("Docker", always=docker_required),
             "hint": "https://docs.docker.com/engine/install/",
         }
     )
@@ -594,6 +612,52 @@ def create_workspace(path: Path) -> None:
             state_data = yaml.safe_load(state_file.read_text()) or {}
         state_data["template_hashes"] = _snapshot_template_hashes()
         _save_state(state_data)
+
+
+#: Scaffold files that carry ``{{...}}`` placeholders the wizard fills in.
+TEMPLATED_FILES: tuple[str, ...] = (
+    "CLAUDE.md",
+    "AGENT_BUILDER.md",
+    "brain/CLAUDE.md",
+    "brain/SOUL.md",
+    "brain/IDENTITY.md",
+    "brain/USER.md",
+)
+
+
+def resolve_workspace_templates(
+    workspace: Path,
+    *,
+    ai_name: str = "",
+    ai_email: str = "",
+    owner_name: str = "",
+    owner_email: str = "",
+) -> list[Path]:
+    """Replace the scaffold's ``{{placeholders}}``. Returns what it rewrote.
+
+    Extracted from the old ``run_init`` body so the wizard's workspace step can
+    call it and a test can assert on it. Idempotent: a file with no ``{{`` left
+    in it is not rewritten, so a re-run cannot undo an operator's edits.
+    """
+    replacements = {
+        "{{ai_name}}": ai_name,
+        "{{owner_name}}": owner_name,
+        "{{ai_email}}": ai_email,
+        "{{owner_email}}": owner_email,
+    }
+    rewritten: list[Path] = []
+    for relative in TEMPLATED_FILES:
+        path = workspace / relative
+        if not path.exists():
+            continue
+        content = path.read_text()
+        if "{{" not in content:
+            continue
+        for token, value in replacements.items():
+            content = content.replace(token, value)
+        path.write_text(content)
+        rewritten.append(path)
+    return rewritten
 
 
 def _find_template_dir(package_dir: Path | None = None) -> Path | None:

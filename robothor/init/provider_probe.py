@@ -31,6 +31,7 @@ __all__ = [
     "detect_codex_login",
     "detect_ollama_tool_models",
     "detect_provider_keys",
+    "models_for_provider",
     "probe_model",
     "record_unprobed",
 ]
@@ -86,6 +87,29 @@ def _provider_for_model(model: str) -> str:
         if model.startswith(spec.model_prefix):
             return spec.id
     return ""
+
+
+def models_for_provider(provider_id: str) -> list[str]:
+    """Models the engine already knows limits and pricing for, for this provider.
+
+    From ``model_registry._MODEL_REGISTRY`` rather than a list typed into the
+    wizard: a model offered here that the registry does not carry gets a
+    guessed context window and no price, and the operator's first surprise is
+    a truncated conversation or an uncapped bill.
+    """
+    from robothor.engine.key_pool import provider_by_id
+    from robothor.engine.model_registry import _MODEL_REGISTRY
+
+    spec = provider_by_id(provider_id)
+    if spec is None:
+        return []
+    known = sorted(name for name in _MODEL_REGISTRY if name.startswith(spec.model_prefix))
+    if spec.default_model in known:
+        known.remove(spec.default_model)
+        known.insert(0, spec.default_model)
+    elif spec.default_model:
+        known.insert(0, spec.default_model)
+    return known
 
 
 def _redact(text: str, secret: str | None) -> str:

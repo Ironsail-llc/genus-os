@@ -84,6 +84,7 @@ class InitContext:
     prompt: Callable[[str, str], str] | None = None
     http_fetch: Callable[[str, str, dict[str, Any] | None, float], HttpResponse] | None = None
     settings_factory: Callable[[], Any] | None = None
+    db_factory: Callable[[], Any] | None = None
     stream: TextIO | None = None
 
     #: Detail each applied step wants in the report, by step id. A step sets
@@ -168,6 +169,84 @@ class InitContext:
         """One HTTP round trip that never raises and never blocks for long."""
         fetch = self.http_fetch or _default_fetch
         return fetch(method.upper(), url, body, timeout or DEFAULT_HTTP_TIMEOUT_S)
+
+    # -- database ---------------------------------------------------------
+
+    def db_config(self) -> dict[str, Any]:
+        """The connection the wizard will use: answers first, settings behind.
+
+        Answers win because the operator has just typed them; settings fill in
+        everything they did not, so a box that already carries ``ROBOTHOR_DB_*``
+        needs no questions at all.
+        """
+        database = self.settings.database
+        answers = self.answers
+        return {
+            "host": str(answers.get("db_host") or database.host),
+            "port": int(answers.get("db_port") or database.port),
+            "dbname": str(answers.get("db_name") or database.name),
+            "user": str(answers.get("db_user") or database.user),
+            "password": str(answers.get("db_password") or database.password),
+        }
+
+    def db(self) -> Any:
+        """One psycopg2 connection, short-timeout. Raises if it cannot connect.
+
+        Raising is right here: every caller is inside a ``check()`` that turns
+        the exception into a plan row, or an ``apply()`` the runner already
+        catches. A connection helper that returned ``None`` would push a
+        ``NoneType has no attribute cursor`` into the operator's terminal.
+        """
+        if self.db_factory is not None:
+            return self.db_factory()
+        import psycopg2  # type: ignore[import-untyped]
+
+        config = self.db_config()
+        return psycopg2.connect(
+            **config, connect_timeout=int(self.settings.database.connect_timeout)
+        )
+
+    # -- settings the wizard writes ---------------------------------------
+
+    @property
+    def config_yaml_path(self) -> Path:
+        """This instance's config.yaml -- under the workspace being created.
+
+        Deliberately NOT ``settings.sources.config_yaml_path()``: that one
+        follows ``ROBOTHOR_WORKSPACE``, and ``genus init --workspace /tmp/x``
+        must write to the workspace it was told to create, not to the one this
+        shell happens to be pointed at.
+        """
+        return self.workspace / ".robothor" / "config.yaml"
+
+    def write_setting(self, env_name: str, value: Any) -> bool:
+        """Store one declared setting in config.yaml. False in a dry run.
+
+        Routed through the registry and ``settings.config_file.write_setting``,
+        the same writer ``genus config set`` uses. Two implementations of
+        "store a setting" would be two opinions about deprecated spellings and
+        indentation, and a wizard that reports "applied" while the service
+        reads something else.
+        """
+        if self.dry_run:
+            return False
+        from robothor.settings.config_file import write_setting
+        from robothor.settings.registry import field_index
+
+        record = field_index().get(env_name)
+        if record is None:
+            raise KeyError(f"{env_name} is not a declared setting")
+        group, field = str(record["field"]).split(".", 1)
+        path = self.config_yaml_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_setting(
+            group,
+            field,
+            value,
+            names=(record["env"], *record["aliases"]),
+            path=path,
+        )
+        return True
 
     # -- resumable state --------------------------------------------------
 
