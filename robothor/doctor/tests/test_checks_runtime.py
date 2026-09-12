@@ -121,11 +121,9 @@ def test_no_provider_credential_is_visible_to_a_test_in_this_tree() -> None:
     visible = [
         name
         for name in os.environ
-        if name.endswith(("_API_KEY", "_API_TOKEN"))
-        or key_pool.provider_for_var(name) is not None
+        if name.endswith(("_API_KEY", "_API_TOKEN")) or key_pool.provider_for_var(name) is not None
     ]
     assert visible == [], f"a provider credential reached a test from the host: {visible}"
-
 
 
 def _fake_slots(monkeypatch, slots_by_provider: dict[str, list]) -> None:
