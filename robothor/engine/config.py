@@ -64,7 +64,7 @@ def _telegram() -> Any:
 
 def _default_chat_id() -> str:
     """The chat every delivery falls back to when a manifest names none."""
-    return _telegram().telegram_chat_id
+    return str(_telegram().telegram_chat_id)
 
 
 @dataclass(frozen=True)
