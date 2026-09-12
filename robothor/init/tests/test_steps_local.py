@@ -749,3 +749,181 @@ class TestTheProviderTheOperatorChoseIsTheOneTheFleetDials:
         ids = [step.id for step in get_substrate(substrate).steps()]
 
         assert ids.index("provider") < ids.index("agents")
+
+
+class TestTheSignInStepNeverDestroysWhatItDidNotWrite:
+    """`genus.env` holds the only copy of a compose instance's database
+    password, and this step is `resumable = False` -- it runs on EVERY
+    `genus init`. Rebuilding the file from the three keys it knows about
+    deleted the rest: the database password, the provider key and the image
+    tag, silently, with no backup and no mention in the step's detail.
+
+    A re-run in a compose workspace without `--substrate compose` was the worst
+    of it -- `--substrate` used to default to `local` and forget what the
+    instance was -- leaving a live Postgres volume nobody could authenticate to
+    and a stack that could not start.
+    """
+
+    FOREIGN = {
+        "ROBOTHOR_DB_PASSWORD": "the-only-copy",
+        "OPENROUTER_API_KEY": "sk-not-a-real-key",
+        "GENUS_IMAGE_TAG": "v1.71.0",
+        "ROBOTHOR_DEFAULT_TENANT": "acme",
+        "ROBOTHOR_TELEGRAM_BOT_TOKEN": "1234567:not-a-real-token",
+    }
+
+    def _seed(self, ctx) -> None:
+        from robothor.secrets.env_file import env_line, instance_env_path, write_private
+
+        ctx.workspace.mkdir(parents=True, exist_ok=True)
+        body = "".join(f"{env_line(k, v)}\n" for k, v in self.FOREIGN.items())
+        write_private(instance_env_path(ctx.workspace), body)
+
+    def test_every_key_it_did_not_write_survives_a_re_run(self, tmp_path):
+        from robothor.secrets.env_file import instance_env_path, parse_env_file
+
+        ctx = _ctx(tmp_path)
+        self._seed(ctx)
+
+        LocalSignInStep().apply(ctx)
+        LocalSignInStep().apply(_ctx(tmp_path))
+
+        values = parse_env_file(instance_env_path(ctx.workspace).read_text(encoding="utf-8"))
+        for name, value in self.FOREIGN.items():
+            assert values[name] == value, f"{name} did not survive"
+        assert len(values["AUTH_SECRET"]) >= 32
+        assert len(values["GENUS_BRIDGE_SSO_SECRET"]) >= 32
+
+    def test_an_operator_who_turned_local_login_off_keeps_it_off(self, tmp_path):
+        """An environment file beats config.yaml, so re-asserting this on every
+        run would turn a security setting back on behind the operator's back."""
+        from robothor.secrets.env_file import (
+            env_line,
+            instance_env_path,
+            parse_env_file,
+            write_private,
+        )
+
+        ctx = _ctx(tmp_path)
+        ctx.workspace.mkdir(parents=True, exist_ok=True)
+        write_private(
+            instance_env_path(ctx.workspace), env_line("GENUS_LOCAL_LOGIN", "false") + "\n"
+        )
+
+        LocalSignInStep().apply(ctx)
+
+        values = parse_env_file(instance_env_path(ctx.workspace).read_text(encoding="utf-8"))
+        assert values["GENUS_LOCAL_LOGIN"] == "false"
+
+    def test_a_first_run_still_turns_local_login_on(self, tmp_path):
+        from robothor.secrets.env_file import instance_env_path, parse_env_file
+
+        ctx = _ctx(tmp_path)
+        ctx.workspace.mkdir(parents=True, exist_ok=True)
+
+        LocalSignInStep().apply(ctx)
+
+        values = parse_env_file(instance_env_path(ctx.workspace).read_text(encoding="utf-8"))
+        assert values["GENUS_LOCAL_LOGIN"] == "true"
+
+    def test_the_file_stays_readable_only_by_its_owner(self, tmp_path):
+        import stat
+
+        from robothor.secrets.env_file import instance_env_path
+
+        ctx = _ctx(tmp_path)
+        self._seed(ctx)
+        LocalSignInStep().apply(ctx)
+
+        mode = instance_env_path(ctx.workspace).stat().st_mode
+        assert stat.S_IMODE(mode) == 0o600
+
+
+class TestAReRunRemembersWhichSubstrateThisInstanceIs:
+    """`--substrate` defaulted to `local` and nothing read back what the
+    previous run chose, so a re-run in a compose workspace silently planned a
+    LOCAL install against it."""
+
+    def test_the_substrate_step_records_the_choice(self, tmp_path):
+        import yaml
+
+        ctx = _ctx(tmp_path, substrate_name="compose")
+        SubstrateStep().apply(ctx)
+
+        config = yaml.safe_load(ctx.config_yaml_path.read_text(encoding="utf-8"))
+        assert config["settings"]["substrate"]["init_substrate"] == "compose"
+
+    def test_a_re_run_without_the_flag_stays_compose(self, tmp_path, monkeypatch):
+        import argparse
+
+        from robothor.setup import build_init_context
+
+        monkeypatch.delenv("ROBOTHOR_INIT_SUBSTRATE", raising=False)
+        ctx = _ctx(tmp_path, substrate_name="compose")
+        SubstrateStep().apply(ctx)
+
+        args = argparse.Namespace(workspace=str(ctx.workspace), yes=True, substrate=None)
+        assert build_init_context(args).substrate_name == "compose"
+
+    def test_an_explicit_flag_still_wins(self, tmp_path, monkeypatch):
+        import argparse
+
+        from robothor.setup import build_init_context
+
+        monkeypatch.delenv("ROBOTHOR_INIT_SUBSTRATE", raising=False)
+        ctx = _ctx(tmp_path, substrate_name="compose")
+        SubstrateStep().apply(ctx)
+
+        args = argparse.Namespace(workspace=str(ctx.workspace), yes=True, substrate="local")
+        assert build_init_context(args).substrate_name == "local"
+
+    def test_a_fresh_workspace_is_local(self, tmp_path, monkeypatch):
+        import argparse
+
+        from robothor.setup import build_init_context
+
+        monkeypatch.delenv("ROBOTHOR_INIT_SUBSTRATE", raising=False)
+        args = argparse.Namespace(workspace=str(tmp_path / "fresh"), yes=True, substrate=None)
+
+        assert build_init_context(args).substrate_name == "local"
+
+
+class TestACuratedFallbackChainIsNotReset:
+    """`primary` moving is the point. Replacing the operator's own fallback
+    chain with the registry's first two entries on every re-run is not."""
+
+    @staticmethod
+    def _probe_ok(model, *, api_key=None, **_kwargs):
+        from robothor.init.provider_probe import ProbeResult
+
+        return ProbeResult(ok=True, provider="openrouter", model=model, detail="ok", probed=True)
+
+    def test_an_existing_chain_survives_a_provider_change(self, tmp_path):
+        import yaml
+
+        ctx = _ctx(tmp_path, answers={"provider_id": "openrouter", "provider_model": "new/model"})
+        manifests = ctx.workspace / "docs" / "agents"
+        manifests.mkdir(parents=True, exist_ok=True)
+        (manifests / "_defaults.yaml").write_text(
+            "model:\n  primary: old/model\n  fallbacks: [mine/one, mine/two]\n", encoding="utf-8"
+        )
+
+        ProviderStep(probe=self._probe_ok).apply(ctx)
+
+        defaults = yaml.safe_load((manifests / "_defaults.yaml").read_text(encoding="utf-8"))
+        assert defaults["model"]["primary"] == "new/model"
+        assert defaults["model"]["fallbacks"] == ["mine/one", "mine/two"]
+
+    def test_an_empty_chain_is_seeded(self, tmp_path):
+        import yaml
+
+        ctx = _ctx(
+            tmp_path,
+            answers={"provider_id": "openrouter", "provider_model": "openrouter/openai/gpt-5.4"},
+        )
+        ProviderStep(probe=self._probe_ok).apply(ctx)
+
+        defaults = yaml.safe_load(
+            (ctx.workspace / "docs" / "agents" / "_defaults.yaml").read_text(encoding="utf-8")
+        )
+        assert defaults["model"]["fallbacks"]

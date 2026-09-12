@@ -208,6 +208,16 @@ class SubstrateStep(BaseStep):
 
     def apply(self, ctx: InitContext) -> None:
         ctx.answers["substrate"] = ctx.substrate_name
+        # Recorded where a LATER run -- and the doctor -- can read it back.
+        # `--substrate` defaults to `local` and nothing remembered what this
+        # instance was, so a re-run in a compose workspace planned a local
+        # install against it. The doctor needs the same fact for a different
+        # reason: on a compose host the services are containers, so "no systemd
+        # unit" must not read as "nothing was meant to be running".
+        #
+        # config.yaml rather than init_state.yaml: that file is a flat
+        # step-id -> status ledger, and `substrate` is already a step id.
+        ctx.write_setting("ROBOTHOR_INIT_SUBSTRATE", ctx.substrate_name)
         ctx.detail(self.id, ctx.substrate_name)
 
 
@@ -493,7 +503,18 @@ class ProviderStep(BaseStep):
         block = document.get("model")
         document["model"] = {**block} if isinstance(block, dict) else {}
         document["model"]["primary"] = model
-        document["model"]["fallbacks"] = fallbacks
+
+        # `primary` moves because that is what the operator just chose. The
+        # fallback chain does NOT get reset on top of it: a curated chain is
+        # the operator's own work, and silently replacing it with the
+        # registry's first two entries is not an upgrade. Seeded only when
+        # there is nothing there.
+        existing = document["model"].get("fallbacks")
+        if isinstance(existing, list) and existing:
+            fallbacks = []
+        else:
+            document["model"]["fallbacks"] = fallbacks
+
         path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
         return fallbacks
 

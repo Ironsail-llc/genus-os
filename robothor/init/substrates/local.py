@@ -172,33 +172,50 @@ class LocalSignInStep(BaseStep):
 
     def apply(self, ctx: InitContext) -> None:
         from robothor.secrets.env_file import (
+            apply_instance_env,
             env_line,
             instance_env_path,
             keep_or_mint,
+            parse_env_file,
             write_private,
         )
 
         path = instance_env_path(ctx.workspace)
         path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [
+
+        # MERGED, never rebuilt. This step is not resumable, so it runs on
+        # every `genus init` -- and writing only the keys it knows about
+        # deleted the rest. On a compose workspace re-run that meant the only
+        # copy of ROBOTHOR_DB_PASSWORD, leaving a live Postgres volume nobody
+        # could authenticate to. The same rule the provider step states for
+        # the fleet defaults, for a file that is worth more.
+        values: dict[str, str] = {}
+        if path.is_file():
+            values.update(parse_env_file(path.read_text(encoding="utf-8")))
+
+        for name in SHARED_SIGNIN_SECRETS:
+            values[name] = keep_or_mint(path, name)
+        # setdefault, not assignment: an environment file beats config.yaml, so
+        # re-asserting this would turn password sign-in back on for an operator
+        # who deliberately turned it off.
+        values.setdefault("GENUS_LOCAL_LOGIN", self.LOCAL_LOGIN)
+
+        header = [
             "# Written by `genus init`. Mode 0600 — it holds this instance's",
-            "# shared sign-in secrets. `genus doctor` reads it from the",
-            "# workspace and refuses it if it stops being 0600.",
+            "# credentials. `genus doctor` reads it from the workspace and",
+            "# refuses it if it stops being 0600. Merged on every run: nothing",
+            "# you add here is removed.",
             "",
         ]
-        lines += [env_line(name, keep_or_mint(path, name)) for name in SHARED_SIGNIN_SECRETS]
-        lines.append(env_line("GENUS_LOCAL_LOGIN", self.LOCAL_LOGIN))
-        write_private(path, "\n".join(lines) + "\n")
+        body = header + [env_line(name, value) for name, value in values.items()]
+        write_private(path, "\n".join(body) + "\n")
 
         # Into THIS process too: `verify` runs the doctor in-process, and
-        # `secrets.bridge_sso` reads the environment, not the file.
-        from robothor.secrets.env_file import load_instance_env
-
-        load_instance_env(ctx.workspace)
-        from robothor.settings import reset_settings
-
-        reset_settings()
-        ctx.detail(self.id, f"{path} (0600); local email+password sign-in is on")
+        # `secrets.bridge_sso` reads the environment, not the file. Through the
+        # shared loader, so the settings, the config singleton and the pool are
+        # all dropped together.
+        apply_instance_env(ctx.workspace)
+        ctx.detail(self.id, f"{path} (0600), {len(values)} key(s); sign-in secrets present")
 
 
 class LocalLinkStep(BaseStep):
