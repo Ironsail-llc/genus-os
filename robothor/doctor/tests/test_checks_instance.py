@@ -171,7 +171,7 @@ def test_an_owner_yaml_without_an_email_fails(monkeypatch) -> None:
 
 def test_an_owner_account_that_exists_passes(monkeypatch) -> None:
     monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner())
-    ctx = make_ctx(db_factory=fake_db([("acme", 1)]))
+    ctx = make_ctx(db_factory=fake_db([(None,), ("acme", 1)]))
     row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)
     assert row[0].status == "pass"
     assert "acme" in row[0].detail
@@ -179,7 +179,7 @@ def test_an_owner_account_that_exists_passes(monkeypatch) -> None:
 
 def test_no_owner_account_anywhere_fails_and_names_the_command(monkeypatch) -> None:
     monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner())
-    ctx = make_ctx(db_factory=fake_db([]))
+    ctx = make_ctx(db_factory=fake_db([(None,)]))
     row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
     assert row.status == "fail"
     assert "genus user add --role owner" in row.detail
@@ -191,7 +191,7 @@ def test_a_tenant_mismatch_is_diagnosed_as_a_mismatch_not_as_no_owner(monkeypatc
     Reporting "nobody can sign in" there is false, and following the repair it
     used to print would mint a SECOND privileged account in the wrong tenant."""
     monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
-    ctx = make_ctx(db_factory=fake_db([("other-tenant", 2)]))
+    ctx = make_ctx(db_factory=fake_db([(None,), ("other-tenant", 2)]))
     row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
 
     assert row.status == "fail"
@@ -202,7 +202,7 @@ def test_a_tenant_mismatch_is_diagnosed_as_a_mismatch_not_as_no_owner(monkeypatc
 
 def test_a_tenant_mismatch_never_prescribes_creating_another_owner(monkeypatch) -> None:
     monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
-    ctx = make_ctx(db_factory=fake_db([("other-tenant", 1)]))
+    ctx = make_ctx(db_factory=fake_db([(None,), ("other-tenant", 1)]))
     row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
 
     assert "genus user add" not in row.detail
@@ -212,9 +212,73 @@ def test_a_tenant_mismatch_never_prescribes_creating_another_owner(monkeypatch) 
 def test_the_owner_tenant_winning_is_not_disturbed_by_owners_elsewhere(monkeypatch) -> None:
     """A multi-tenant instance is not broken because another tenant has owners."""
     monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
-    ctx = make_ctx(db_factory=fake_db([("acme", 1), ("other-tenant", 3)]))
+    ctx = make_ctx(db_factory=fake_db([(None,), ("acme", 1), ("other-tenant", 3)]))
     row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
     assert row.status == "pass"
+
+
+def test_a_scoped_connection_says_so_and_never_prescribes_user_add(monkeypatch) -> None:
+    """Migration 081 FORCEs row-level security on every tenant-scoped table and
+    `_apply_tenant_scope` binds `app.tenant_id` on every checkout, so on the
+    hardened posture the runbook prescribes, an "across every tenant" query
+    returns one tenant's rows. Claiming "no owner in ANY tenant" from a scoped
+    read is a claim the read cannot support -- and it carried the `genus user
+    add` prescription B2 deleted."""
+    monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
+    # current_setting answers first, then the (empty) GROUP BY.
+    ctx = make_ctx(db_factory=fake_db([("acme",)]))
+    row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
+
+    assert row.status == "fail"
+    assert "acme" in row.detail
+    assert "scope" in row.detail.lower()
+    assert "genus user add" not in row.detail
+
+
+def test_an_unscoped_connection_keeps_the_any_tenant_claim(monkeypatch) -> None:
+    """Superuser, or RLS off: the query really did see every tenant, so the
+    prescription is sound."""
+    monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
+    ctx = make_ctx(db_factory=fake_db([(None,)]))
+    row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
+
+    assert row.status == "fail"
+    assert "genus user add --role owner" in row.detail
+    assert "any tenant" in row.detail
+
+
+def test_an_empty_scope_setting_counts_as_unscoped(monkeypatch) -> None:
+    """`current_setting(..., true)` returns '' as well as NULL when unset."""
+    monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
+    ctx = make_ctx(db_factory=fake_db([("",)]))
+    row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
+    assert "genus user add --role owner" in row.detail
+
+
+def test_a_scoped_connection_that_can_see_the_owner_still_passes(monkeypatch) -> None:
+    monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
+    ctx = make_ctx(db_factory=fake_db([("acme",), ("acme", 1)]))
+    row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
+    assert row.status == "pass"
+
+
+def test_the_mismatch_detail_does_not_grow_with_the_tenant_count(monkeypatch) -> None:
+    """Uncapped, a many-tenant instance puts a multi-kilobyte detail into the
+    table and into the route's JSON. The bound is that the length is the SAME
+    for 20 tenants and 200 -- an absolute character count would only pin the
+    current wording."""
+    monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
+
+    def _detail(count: int) -> str:
+        rows = [(None,), *[(f"tenant-{n:03d}", 1) for n in range(count)]]
+        ctx = make_ctx(db_factory=fake_db(rows))
+        return _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0].detail
+
+    twenty, two_hundred = _detail(20), _detail(200)
+    assert len(twenty) == len(two_hundred) - len("1") * 1  # only the "N more" count differs
+    assert "and 12 more" in twenty
+    assert "and 192 more" in two_hundred
+    assert twenty.count("tenant-") == 8
 
 
 def test_the_owner_account_is_deliberately_not_auto_fixable() -> None:
