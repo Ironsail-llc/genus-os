@@ -80,8 +80,38 @@ at three depths. Each one alone has already failed in production:
 | Depth | What it is | What it catches |
 |-------|-----------|-----------------|
 | Tool allow-list | `benchmark_allowed_tools()` intersected into the child's `tools_denied` | the graded agent never sees the tool |
-| Handler guard | `ctx.is_benchmark` in `handlers/crm.py`, `memory.py`, `gws.py`, `vision.py` | a tool reached some other way — a skill, an adapter, a force-added tool |
-| Write boundary | `run_context.benchmark_write_refused()` in `memory/facts.py`, `memory/blocks.py`, `memory/write_jobs.py` | a write that never passes a tool at all |
+| Handler guard | `ctx.is_benchmark` in `handlers/crm.py`, `memory.py`, `gws.py`, `vision.py` | a tool reached some other way — a skill, a force-added tool |
+| Write boundary | `run_context.benchmark_write_refused()` in `memory/facts.py`, `memory/blocks.py`, `memory/write_jobs.py`, `memory/outcomes.py` | a write that never passes a tool at all |
+
+Two rules that are easy to get wrong when editing any of the three:
+
+* **The deny-list fails closed.** If the registry cannot be enumerated,
+  `_every_registered_tool()` falls back to every name the static sets know —
+  never to the empty set. An empty deny-list is the original defect, and the
+  first version of this remedy could reach it through its own error path.
+* **Adapter / MCP tools are always denied.** They are dispatched to their MCP
+  session *before* `ToolContext` exists, so no handler guard can ever see the
+  call and the write boundary is in another process. The deny-list is the only
+  place they can be stopped, so they are denied whatever the manifest grants.
+
+### A read tool that writes
+
+`search_memory` stays available to a graded child — the suites need it — and it
+writes one `fact_access_log` row per consulted fact. Those rows are the only
+input to `fact_access_rollup` and hence to the memory decay scorer, so a
+benchmark run was quietly steering fact retention for eleven days. The tool
+keeps its place; `memory/outcomes.py` asks the boundary instead. Such tools are
+listed explicitly in `BOUNDARY_GUARDED_TOOLS`, which the derivation test
+subtracts — adding a name there re-opens a write path, so nothing belongs in it
+without a test proving its guard.
+
+### What is still outside the boundary
+
+* **Shell hooks** (`hook_registry._run_command`) are a separate process. Sync
+  Python hooks *are* covered: `_run_in_executor` copies the context, because
+  `loop.run_in_executor` — unlike `asyncio.to_thread` — does not.
+* **Out-of-process MCP callers** reaching `robothor/api/mcp.py` directly. They
+  carry no run context, so the boundary cannot see them.
 
 ### Incident 2026-09-12 — why the third depth exists
 
@@ -127,9 +157,24 @@ smaller blast radius rather than a fixed one. No suite grades a memory write.
 They do not page, and they do not enter the operator's inbox. `alerts.alert()`
 routes anything raised inside a graded run to a `benchmark_digest` notification
 row with `[benchmark]` on the subject; the heartbeat's alert reader
-(`warmup.ALERT_DIGEST_TYPES`) does not read that type. The rows are still
-written — a suite that trips the runaway-token guard nightly is a real finding
-about the suite, just not an interrupt.
+(`warmup.ALERT_DIGEST_TYPES`) does not read that type, and `get_agent_inbox`
+excludes it unless asked for by name. The rows are still written — a suite that
+trips the runaway-token guard nightly is a real finding about the suite, just
+not an interrupt. Read them with
+`get_inbox(typeFilter="benchmark_digest")`.
+
+Two cases need more than the current task's context:
+
+* **Out-of-band detectors** (`detectors.py`) run on the daemon's loop and alert
+  *about* a run they are not inside, so `in_benchmark_run()` is False there
+  however benchmark the subject is. They call `alerts.alert_about_run(...)` and
+  pass the subject run's `trigger_detail`, so the routing follows the subject.
+  A test fails the build if any detector calls `alert()` directly again.
+* **The soft-runaway batch** (`runner._soft_runaway_pending`) is module-global
+  and flushed by whichever run crosses next. A benchmark child flushing a batch
+  of *production* crossings would have relabelled the whole summary
+  `benchmark_digest` and lost a real page, so graded runs never enter the batch
+  at all — they report immediately, into their own digest.
 
 ### Checking an instance
 
