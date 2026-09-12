@@ -262,10 +262,14 @@ class PrereqsStep(BaseStep):
 
         password = str(ctx.answers.get("db_password") or "")
         compose_path = generate_docker_compose(ctx.workspace, password)
-        started = wait_for_services(ctx.workspace, timeout=90)
+        # The same password the compose file just set. Polling with a different
+        # one waits out the whole timeout on a database that came up fine.
+        started = wait_for_services(ctx.workspace, timeout=90, password=password)
         ctx.detail(
             self.id,
-            f"{compose_path} " + ("is up" if started else "written; containers still starting"),
+            f"{compose_path} "
+            + ("is up" if started else "written; containers still starting")
+            + "; it holds the generated database password",
         )
 
 
@@ -516,6 +520,36 @@ class WorkspaceStep(BaseStep):
             return CheckResult(True, detail=f"{ctx.workspace} exists", action="exists")
         return CheckResult(True, detail=f"will create {ctx.workspace}")
 
+    @staticmethod
+    def _owner(ctx: InitContext) -> tuple[str, str]:
+        """The operator's name and email, from the answers or from owner.yaml.
+
+        Falling back to the FILE matters on a resumed install: when `identity`
+        was skipped as already completed, an empty name was baked into the
+        scaffold, and `resolve_workspace_templates` replaces `{{owner_name}}`
+        exactly once and irreversibly.
+        """
+        from robothor.init.identity import Identity
+
+        identity = ctx.answers.get("identity")
+        if isinstance(identity, Identity):
+            return identity.name, identity.email
+
+        name = str(ctx.answers.get("owner_name") or "")
+        email = str(ctx.answers.get("owner_email") or "")
+        if name and email:
+            return name, email
+        try:
+            from robothor.owner_config import load_owner_config
+
+            owner = load_owner_config()
+        except Exception:  # noqa: BLE001 - an unreadable identity is not fatal here
+            owner = None
+        if owner is None:
+            return name, email
+        full = " ".join(part for part in (owner.first_name, owner.last_name) if part)
+        return name or full, email or owner.email
+
     def apply(self, ctx: InitContext) -> None:
         from robothor.setup import (
             create_workspace,
@@ -525,15 +559,29 @@ class WorkspaceStep(BaseStep):
 
         create_workspace(ctx.workspace)
         write_workspace_pointer(ctx.workspace)
-        identity = ctx.answers.get("identity")
+
+        channels = ctx.settings.channels
+        ai_name = str(ctx.answers.get("ai_name") or channels.ai_name)
+        ai_email = str(ctx.answers.get("ai_email") or channels.ai_email)
+        timezone = str(ctx.answers.get("timezone") or ctx.settings.engine.timezone)
+        owner_name, owner_email = self._owner(ctx)
+
         resolve_workspace_templates(
             ctx.workspace,
-            ai_name=str(ctx.answers.get("ai_name") or ctx.settings.channels.ai_name),
-            ai_email=str(ctx.answers.get("ai_email") or ctx.settings.channels.ai_email),
-            owner_name=getattr(identity, "name", ""),
-            owner_email=getattr(identity, "email", ""),
+            ai_name=ai_name,
+            ai_email=ai_email,
+            owner_name=owner_name,
+            owner_email=owner_email,
         )
-        ctx.detail(self.id, str(ctx.workspace))
+
+        # Recorded, not just substituted into markdown. These are declared
+        # settings the old `.env` carried; the rewrite resolved them for the
+        # scaffold and wrote them nowhere, so nothing kept what the operator
+        # chose and `settings.channels.ai_name` reported the default forever.
+        ctx.write_setting("ROBOTHOR_AI_NAME", ai_name)
+        ctx.write_setting("ROBOTHOR_AI_EMAIL", ai_email)
+        ctx.write_setting("ROBOTHOR_TIMEZONE", timezone)
+        ctx.detail(self.id, f"{ctx.workspace} (AI name {ai_name}, timezone {timezone})")
 
 
 class DatabaseStep(BaseStep):
@@ -547,27 +595,71 @@ class DatabaseStep(BaseStep):
         "ROBOTHOR_DB_USER / ROBOTHOR_DB_PASSWORD, or pass --skip-db to configure it later"
     )
 
-    def check(self, ctx: InitContext) -> CheckResult:
-        if ctx.answers.get("skip_db"):
-            return CheckResult(True, detail="skipped (--skip-db)", action="skip")
+    @staticmethod
+    def _connect(ctx: InitContext) -> str:
+        """Connect and close. Returns "" on success, else the error text.
+
+        The message is collapsed to one line: a psycopg2 error carries embedded
+        newlines and tabs, and a plan is one row per step.
+        """
         try:
             connection = ctx.db()
         except Exception as exc:  # noqa: BLE001 - an unreachable DB is the finding
-            return CheckResult(False, detail=f"{exc}".strip(), fix_hint=self.FIX)
+            return " ".join(f"{exc}".split())
         close = getattr(connection, "close", None)
         if callable(close):
             close()
+        return ""
+
+    def check(self, ctx: InitContext) -> CheckResult:
+        if ctx.answers.get("skip_db"):
+            return CheckResult(True, detail="skipped (--skip-db)", action="skip")
         config = ctx.db_config()
-        return CheckResult(
-            True, detail=f"{config['user']}@{config['host']}:{config['port']}/{config['dbname']}"
-        )
+        target = f"{config['user']}@{config['host']}:{config['port']}/{config['dbname']}"
+
+        if ctx.answers.get("docker"):
+            # The containers do not exist yet -- the prereqs step creates them
+            # in phase 2, and every check runs before that. Connecting here made
+            # `--docker`, whose entire purpose is "you do not have PostgreSQL
+            # yet", refuse to run without PostgreSQL. The connection is proved
+            # in apply() instead, after the containers are up.
+            return CheckResult(True, detail=f"docker will start it, then {target}")
+
+        error = self._connect(ctx)
+        if error:
+            return CheckResult(False, detail=error, fix_hint=self.FIX)
+        return CheckResult(True, detail=target)
 
     def apply(self, ctx: InitContext) -> None:
         config = ctx.db_config()
+        if ctx.answers.get("docker"):
+            error = self._connect(ctx)
+            if error:
+                raise StepError(
+                    f"the containers started but PostgreSQL did not answer: {error}. "
+                    "Check `docker compose logs postgres` in the workspace."
+                )
+
         ctx.write_setting("ROBOTHOR_DB_HOST", config["host"])
         ctx.write_setting("ROBOTHOR_DB_PORT", config["port"])
         ctx.write_setting("ROBOTHOR_DB_NAME", config["dbname"])
         ctx.write_setting("ROBOTHOR_DB_USER", config["user"])
+
+        # The other two endpoints the old `.env` carried. They belong in
+        # config.yaml, which something actually reads: an instance whose Redis
+        # is on another host otherwise depends forever on the variable being in
+        # the unit environment, and `genus config get redis.host` reports the
+        # default.
+        redis = ctx.settings.redis
+        ollama = ctx.settings.ollama
+        ctx.write_setting("ROBOTHOR_REDIS_HOST", str(ctx.answers.get("redis_host") or redis.host))
+        ctx.write_setting("ROBOTHOR_REDIS_PORT", int(ctx.answers.get("redis_port") or redis.port))
+        ctx.write_setting(
+            "ROBOTHOR_OLLAMA_HOST", str(ctx.answers.get("ollama_host") or ollama.host)
+        )
+        ctx.write_setting(
+            "ROBOTHOR_OLLAMA_PORT", int(ctx.answers.get("ollama_port") or ollama.port)
+        )
         ctx.detail(self.id, f"{config['host']}:{config['port']}/{config['dbname']}")
 
 
