@@ -92,6 +92,12 @@ class DoctorContext:
     db_factory: Callable[[], Any] | None = None
     http_fetch: Callable[[str, float], HttpResponse] | None = None
     _settings: Any = field(default=None, repr=False)
+    #: The run's worker (``runner._Worker``), or None outside a run. Set by
+    #: :func:`robothor.doctor.runner.run` so that ``run_blocking`` can tell
+    #: whether it is already off the timing loop.
+    _worker: Any = field(default=None, repr=False)
+    #: The run's worker pool (``runner._WorkerPool``), or None outside a run.
+    _pool: Any = field(default=None, repr=False)
     #: Monotonic instant the whole run must be finished by. Set by
     #: :func:`robothor.doctor.runner.run` from ``total_timeout_s``; None when
     #: only the per-check budget applies. Kept here rather than threaded
@@ -157,13 +163,27 @@ class DoctorContext:
         return _urllib_fetch(url, self.timeout_s)
 
     async def run_blocking(self, fn: Callable[..., Any], *args: Any) -> Any:
-        """Run ``fn`` on a daemon thread and await its result.
+        """Run ``fn`` without letting it block the loop that is timing us.
 
-        Not ``asyncio.to_thread``: see the module docstring. If the runner's
-        timeout fires first, the future is cancelled, this coroutine unwinds,
-        and the thread is left to finish into a future nobody is holding --
-        which is exactly what "never a hang" costs.
+        Two implementations, and which one runs is decided by where the caller
+        already is.
+
+        **Inside a check**, the whole check body is already executing on the
+        run's private worker loop (see ``runner._Worker``), and the loop holding
+        the timeout is a different one. Blocking work can therefore run INLINE:
+        it blocks only the worker, the timeout still fires on time, and a check
+        that calls this five times costs no threads at all. The first version
+        spawned a thread per call, which is where "+2 threads per abandoned
+        check" came from.
+
+        **Anywhere else** -- a test invoking a check directly, or any caller
+        with no worker attached -- it falls back to a daemon thread, because
+        there the loop being blocked WOULD be the one holding the timeout.
         """
+        worker = self._worker
+        if worker is not None and worker.owns_current_loop():
+            return fn(*args)
+
         loop = asyncio.get_running_loop()
         future: asyncio.Future[Any] = loop.create_future()
 

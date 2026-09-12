@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import threading
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -44,6 +45,19 @@ __all__ = [
     "run_sync",
     "select",
 ]
+
+
+#: How many wedged workers one run may orphan before it stops starting checks.
+#: One: enough that a single hung dependency does not cost the rest of the
+#: report, few enough that the cost is a constant rather than one thread, one
+#: event loop and three descriptors per check.
+_MAX_REPLACEMENTS = 1
+
+#: How long :meth:`_Worker.close` waits for a healthy worker to stop. Short --
+#: it only has to process one ``loop.stop`` callback; anything longer is a
+#: worker that is wedged, and the pool has already decided what to do about
+#: those.
+_CLOSE_JOIN_SECONDS = 2.0
 
 
 class CheckSelectionError(RuntimeError):
@@ -165,38 +179,155 @@ def select(
     return selected
 
 
-def _resolve(body: Callable[[DoctorContext], Any], ctx: DoctorContext) -> Any:
-    """Call a check (or a fixer) to completion, on whatever thread we are on.
+class _Worker:
+    """One daemon thread with one private event loop, shared by a whole run.
 
-    A check may be a coroutine function or a plain one -- a plugin is entitled
-    to contribute either. A coroutine gets its OWN event loop here, which is
-    the whole point: this function runs on a daemon thread, so the loop serving
-    the run is free to hit its timeout while this one blocks.
+    Why a private loop at all: ``asyncio.timeout`` can only cancel at an await,
+    so a check that does its work synchronously -- a wedged ``stat()``, a DNS
+    lookup, an import -- has no await to be cancelled at, and awaiting it on the
+    run's own loop made both budgets advisory (measured: a 0.2s box took 2.0s
+    and the overrunning check reported success). Running the body on a different
+    loop leaves the timing loop free to fire.
+
+    Why ONE per run rather than one per check: a thread stuck in a blocking call
+    cannot be killed, a daemon thread is never joined, and a loop whose
+    ``asyncio.run`` was cancelled is never closed -- so the per-check version
+    leaked a thread, a loop and three descriptors for every abandoned check,
+    with nothing ever reclaimed. A CLI process exits and nobody notices. The
+    bridge does not, and the run that abandons checks is precisely the run taken
+    during an incident. Paying per run makes a healthy run cost nothing lasting
+    and a pathological one cost a constant.
     """
-    outcome = body(ctx)
-    if not inspect.isawaitable(outcome):
-        return outcome
 
-    async def _await() -> Any:
-        return await outcome
+    def __init__(self) -> None:
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self._serve, name="genus-doctor-worker", daemon=True)
+        self.thread.start()
 
-    return asyncio.run(_await())
+    def _serve(self) -> None:
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    def owns_current_loop(self) -> bool:
+        """Is the caller already running on this worker's loop?"""
+        try:
+            return asyncio.get_running_loop() is self.loop
+        except RuntimeError:
+            return False
+
+    async def call(self, body: Callable[[DoctorContext], Any], ctx: DoctorContext) -> Any:
+        """Run ``body`` on this worker and await its result from the caller's loop.
+
+        The body may be a coroutine function or a plain one -- a plugin is
+        entitled to contribute either. A coroutine is driven as a task on the
+        worker's loop; a plain callable is simply called, blocking the worker
+        and nothing else.
+        """
+        caller = asyncio.get_running_loop()
+        future: asyncio.Future[Any] = caller.create_future()
+
+        def _deliver(setter: Callable[[Any], None], value: Any) -> None:
+            if not future.done():
+                setter(value)
+
+        def _finish(task: asyncio.Task[Any]) -> None:
+            if task.cancelled():  # pragma: no cover - only on loop teardown
+                return
+            error = task.exception()
+            if error is not None:
+                caller.call_soon_threadsafe(_deliver, future.set_exception, error)
+            else:
+                caller.call_soon_threadsafe(_deliver, future.set_result, task.result())
+
+        def _start() -> None:
+            try:
+                outcome = body(ctx)
+            except BaseException as exc:  # noqa: BLE001 - relayed to the awaiter
+                caller.call_soon_threadsafe(_deliver, future.set_exception, exc)
+                return
+            if not inspect.isawaitable(outcome):
+                caller.call_soon_threadsafe(_deliver, future.set_result, outcome)
+                return
+            self.loop.create_task(_drive(outcome)).add_done_callback(_finish)
+
+        self.loop.call_soon_threadsafe(_start)
+        return await future
+
+    def close(self) -> None:
+        """Stop the loop and reclaim the thread. Best effort: a worker wedged in
+        a blocking call will not process the stop, which is why an abandoned one
+        is dropped by the pool rather than closed here."""
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self.thread.join(timeout=_CLOSE_JOIN_SECONDS)
+        if not self.thread.is_alive():
+            self.loop.close()
+
+
+async def _drive(awaitable: Any) -> Any:
+    return await awaitable
+
+
+class _WorkerPool:
+    """The run's worker, and the rule for replacing one that had to be abandoned.
+
+    A worker whose check was abandoned is unusable -- the blocking call still
+    owns it -- and unkillable, so continuing means orphaning it. The pool allows
+    exactly ``_MAX_REPLACEMENTS`` of those and then stops: the remaining checks
+    are reported as not run rather than each buying another orphan. One
+    replacement is what keeps the common incident useful (one wedged dependency,
+    every other check still answered) while making the cost a constant instead
+    of one orphan per check.
+    """
+
+    def __init__(self, ctx: DoctorContext) -> None:
+        self._ctx = ctx
+        self._worker: _Worker | None = None
+        self._replacements = 0
+        self._exhausted = False
+
+    @property
+    def exhausted(self) -> bool:
+        return self._exhausted
+
+    def worker(self) -> _Worker:
+        if self._worker is None:
+            self._worker = _Worker()
+            self._ctx._worker = self._worker
+        return self._worker
+
+    def abandon(self) -> None:
+        """The current worker is wedged. Drop it, and decide whether to continue."""
+        logger.warning(
+            "doctor: abandoning a wedged worker thread (replacement %d of %d)",
+            self._replacements + 1,
+            _MAX_REPLACEMENTS + 1,
+        )
+        self._worker = None
+        self._ctx._worker = None
+        if self._replacements >= _MAX_REPLACEMENTS:
+            self._exhausted = True
+        else:
+            self._replacements += 1
+
+    def close(self) -> None:
+        if self._worker is not None:
+            self._worker.close()
+            self._worker = None
+        self._ctx._worker = None
 
 
 async def _bounded(body: Callable[[DoctorContext], Any], ctx: DoctorContext) -> Any:
-    """Run ``body`` under the current budget, on a thread, or raise TimeoutError.
-
-    On a thread because ``asyncio.timeout`` can only cancel at an await, and a
-    check that does its work synchronously -- a wedged ``stat()``, a DNS
-    lookup, an import -- has no await to be cancelled at. Awaiting it directly
-    made both budgets advisory: measured, a 0.2s box took 2.0s and the
-    overrunning check reported success. Here the awaiting coroutine is only
-    waiting on a future, so the timeout fires on time and the daemon thread is
-    abandoned -- the same trade-off ``DoctorContext.run_blocking`` documents,
-    and the price of "the run always finishes".
-    """
-    async with asyncio.timeout(ctx.budget()):
-        return await ctx.run_blocking(_resolve, body, ctx)
+    """Run ``body`` on the run's worker under the current budget, or raise
+    TimeoutError -- and mark the worker abandoned when that happens, because it
+    is still holding whatever refused to return."""
+    pool: _WorkerPool = ctx._pool
+    worker = pool.worker()
+    try:
+        async with asyncio.timeout(ctx.budget()):
+            return await worker.call(body, ctx)
+    except TimeoutError:
+        pool.abandon()
+        raise
 
 
 async def _call(check: Check, ctx: DoctorContext) -> list[Result]:
@@ -325,30 +456,47 @@ async def run(
     rows: list[CheckResult] = []
     if ctx.total_timeout_s is not None:
         ctx._deadline = monotonic() + ctx.total_timeout_s
+    ctx._pool = pool = _WorkerPool(ctx)
 
-    for check in selected:
-        if ctx.expired():
-            # NOT a skip. A skip says "this could not be checked and here is
-            # why", and reads as benign; a budget that ran out means nobody
-            # knows, and "nobody knows" must not present as health on the
-            # surface an operator is asking for a verdict from.
-            rows.append(_not_run(check, ctx.total_timeout_s))
-            continue
-        rows.extend(await _run_one(check, ctx))
+    try:
+        for check in selected:
+            # Neither of these is a skip. A skip says "this could not be checked
+            # and here is why", and reads as benign; a budget that ran out or a
+            # worker that had to be abandoned means nobody knows, and
+            # "nobody knows" must not present as health on the surface an
+            # operator is asking for a verdict from.
+            if ctx.expired():
+                rows.append(_not_run(check, _BUDGET_EXHAUSTED.format(total=ctx.total_timeout_s)))
+                continue
+            if pool.exhausted:
+                rows.append(_not_run(check, _WORKERS_EXHAUSTED))
+                continue
+            rows.extend(await _run_one(check, ctx))
+    finally:
+        pool.close()
+        ctx._pool = None
     return DoctorReport(results=rows)
 
 
-def _not_run(check: Check, total: float | None) -> CheckResult:
+#: Why a check was not run. Both are failures, never skips.
+_BUDGET_EXHAUSTED = (
+    "not run: the run's total budget of {total:g}s was exhausted — raise it with "
+    "--timeout, or narrow the run with --only/--category"
+)
+_WORKERS_EXHAUSTED = (
+    "not run: an earlier check wedged this run's worker and its replacement, so no "
+    "further check could be started — the timed-out lines above name the dependency"
+)
+
+
+def _not_run(check: Check, detail: str) -> CheckResult:
     return CheckResult(
         id=check.id,
         title=check.title,
         category=check.category,
         severity=check.severity,
         status="fail",
-        detail=(
-            f"not run: the run's total budget of {total:g}s was exhausted — "
-            "raise it with --timeout, or narrow the run with --only/--category"
-        ),
+        detail=detail,
         fixable=False,
     )
 

@@ -141,6 +141,138 @@ def test_a_check_that_raises_is_a_failure_not_a_traceback() -> None:
     assert "RuntimeError" in report.results[0].detail
 
 
+# ── what a run COSTS (Important A, round 3) ──────────────────────────────────
+
+
+def _threads() -> int:
+    import threading
+
+    return threading.active_count()
+
+
+def _open_fds() -> int:
+    from pathlib import Path
+
+    return len(list(Path("/proc/self/fd").iterdir()))
+
+
+def _blocking_check(check_id: str) -> Check:
+    async def run(ctx: DoctorContext) -> Result:
+        """A stub that wedges the way a real one does: inside run_blocking."""
+        import time
+
+        await ctx.run_blocking(time.sleep, 30)
+        raise AssertionError("unreachable")
+
+    return _check(check_id, run=run)
+
+
+def test_a_healthy_run_of_many_checks_leaves_nothing_behind() -> None:
+    """One worker thread and one event loop per RUN, closed at the end.
+
+    The first version paid per CHECK -- a thread, a private loop and three file
+    descriptors each, none of them ever reclaimed, because a daemon thread is
+    never joined and `asyncio.run`'s finally never runs when the coroutine
+    awaiting it is cancelled. In a CLI process that is invisible; in the bridge,
+    which is the only door to the CRM and the Helm, it is monotonic growth per
+    poll.
+    """
+    before_threads, before_fds = _threads(), _open_fds()
+    checks = [_check(f"a.{n}") for n in range(12)]
+    report = run_sync(_ctx(), checks=checks)
+
+    assert len(report.results) == 12
+    assert all(row.status == "pass" for row in report.results)
+    assert _threads() <= before_threads, "a healthy run must leave no thread behind"
+    assert _open_fds() <= before_fds + 1, "a healthy run must leave no descriptor behind"
+
+
+def test_many_abandoned_checks_cost_a_bounded_number_of_orphans() -> None:
+    """A wedged dependency cannot be cleaned up -- a thread stuck in a blocking
+    call cannot be killed -- so the cost is bounded instead: the run's worker is
+    replaced ONCE, and a second abandonment ends the checking phase with the
+    remainder reported as not run. Ten wedged checks therefore cost two orphans,
+    not ten, and the number does not grow with the check count.
+    """
+    before_threads, before_fds = _threads(), _open_fds()
+    checks = [_blocking_check(f"wedged.{n}") for n in range(10)]
+    report = run_sync(_ctx(timeout_s=0.05), checks=checks)
+
+    assert len(report.results) == 10
+    assert all(row.status == "fail" for row in report.results)
+    assert _threads() - before_threads <= 2, "at most one replacement worker may be orphaned"
+    assert _open_fds() - before_fds <= 8, "each orphaned loop keeps its epoll and self-pipe"
+
+
+def test_the_checks_after_an_abandonment_still_get_real_verdicts() -> None:
+    """Bounding the cost must not cost the report. One wedged dependency is the
+    normal incident shape, and redis has nothing to do with a hung ollama."""
+    checks = [_blocking_check("wedged.one"), _check("a.one"), _check("b.one")]
+    report = run_sync(_ctx(timeout_s=0.05), checks=checks)
+
+    statuses = {row.id: row.status for row in report.results}
+    assert statuses == {"wedged.one": "fail", "a.one": "pass", "b.one": "pass"}
+
+
+def test_the_remainder_after_two_abandonments_is_reported_not_run() -> None:
+    checks = [_blocking_check(f"wedged.{n}") for n in range(4)]
+    report = run_sync(_ctx(timeout_s=0.05), checks=checks)
+
+    details = [row.detail for row in report.results]
+    assert "timed out" in details[0]
+    assert "timed out" in details[1]
+    assert all("not run" in detail for detail in details[2:])
+    assert all(row.status == "fail" for row in report.results)
+
+
+# ── the total budget bounds the per-check budget (Minor C) ───────────────────
+
+
+def test_the_budget_a_check_receives_is_narrowed_by_what_is_left() -> None:
+    """The one mutant that survived round 2: replacing the deadline arithmetic
+    with `return self.timeout_s` left the suite green, because `run()` still
+    stopped at the deadline. So the NARROWING -- the thing that makes the bound
+    `total` rather than `total + timeout_s` -- was unguarded, and the route's
+    real worst case was 35s, not 30s."""
+    seen: list[float] = []
+
+    async def record(ctx: DoctorContext) -> Result:
+        """A stub."""
+        seen.append(ctx.budget())
+        return Result(status="pass", detail="ok")
+
+    checks = [_check("a.one", run=record), _check("a.two", run=record)]
+    run_sync(_ctx(timeout_s=5.0, total_timeout_s=0.5), checks=checks)
+
+    assert seen, "the checks did not run"
+    assert all(budget <= 0.5 for budget in seen), f"budgets were not narrowed: {seen}"
+    assert seen[1] < seen[0], "the second check must see less budget than the first"
+
+
+def test_a_total_budget_bounds_the_whole_run_not_total_plus_one_check() -> None:
+    import time
+
+    async def half_a_second(_ctx: DoctorContext) -> Result:
+        """A stub."""
+        await asyncio.sleep(0.5)
+        return Result(status="pass", detail="slow but fine")
+
+    checks = [_check(f"a.{n}", run=half_a_second) for n in range(10)]
+    started = time.monotonic()
+    report = run_sync(_ctx(timeout_s=0.5, total_timeout_s=1.0), checks=checks)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.6, f"a 1.0s total budget took {elapsed:.2f}s"
+    assert len(report.results) == 10
+
+
+def test_budget_never_goes_negative() -> None:
+    ctx = _ctx(timeout_s=5.0, total_timeout_s=0.0)
+    ctx._deadline = 0.0  # long past
+    assert ctx.budget() == 0.0
+    assert ctx.expired() is True
+
+
 # ── filtering ────────────────────────────────────────────────────────────────
 
 
