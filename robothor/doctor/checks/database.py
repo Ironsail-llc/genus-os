@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from robothor.doctor.model import Check, FixResult, Result, fail, ok, skip
+from robothor.doctor.model import Check, FixResult, Result, fail, ok
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.doctor.context import DoctorContext
@@ -75,10 +75,80 @@ async def _connect(ctx: DoctorContext) -> Result:
     return ok(f"connected to {name}")
 
 
-def _migration_rows() -> list[dict[str, Any]]:
+class LedgerNotInitialisedError(RuntimeError):
+    """The ledger table does not exist, so nothing has ever been recorded."""
+
+
+def _readonly_rows(ctx: DoctorContext) -> list[dict[str, Any]]:
+    """The same verdicts as ``migrate.status()``, using SELECT only.
+
+    ``status()`` calls ``_prepare_history()``, which issues ``CREATE TABLE IF
+    NOT EXISTS`` and takes an advisory lock. The deployment this platform
+    recommends runs its services as a role that deliberately cannot do either,
+    with migrations applied by a separate account -- so on precisely the
+    correctly configured instance, the privileged path raises. Answering
+    "skipped" there made the check unable to fail anywhere it mattered.
+
+    What this path CANNOT do, and why it is a fallback rather than the
+    implementation: it does not reconcile the legacy numeric ledger and does
+    not notice an unadopted baseline. Both need writes. Where ``status()``
+    works it stays the authority.
+    """
     from robothor.db import migrate
 
-    return migrate.status()
+    migrations = migrate._discover()
+    with ctx.db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT to_regclass(%s)", (migrate._HISTORY_TABLE,))
+        found = cursor.fetchone()
+        if not found or found[0] is None:
+            raise LedgerNotInitialisedError(migrate._HISTORY_TABLE)
+        cursor.execute(  # noqa: S608 - the table name is a module constant
+            f"SELECT migration_id, version, filename, source, checksum, applied_at "  # noqa: S608
+            f"FROM {migrate._HISTORY_TABLE}"
+        )
+        applied = {str(row[0]): row for row in cursor.fetchall()}
+
+    rows: list[dict[str, Any]] = []
+    discovered: set[str] = set()
+    for migration in migrations:
+        discovered.add(migration.migration_id)
+        record = applied.get(migration.migration_id)
+        if record is None:
+            rows.append({"migration_id": migration.migration_id, "status": "pending"})
+            continue
+        drifted = (
+            record[1] != migration.version
+            or record[2] != migration.filename
+            or record[3] != migration.source
+            or record[4] != migration.checksum
+        )
+        rows.append(
+            {
+                "migration_id": migration.migration_id,
+                "status": "DRIFT" if drifted else "applied",
+            }
+        )
+    rows.extend(
+        {"migration_id": migration_id, "status": "MISSING"}
+        for migration_id in applied
+        if migration_id not in discovered
+    )
+    return rows
+
+
+def _migration_rows(ctx: DoctorContext) -> list[dict[str, Any]]:
+    """The ledger, through the migrator where it is allowed and by SELECT
+    where it is not. A role's privileges decide HOW the question is asked,
+    never WHETHER it is answered."""
+    from robothor.db import migrate
+
+    try:
+        return migrate.status()
+    except Exception as exc:
+        if getattr(exc, "pgcode", "") != _INSUFFICIENT_PRIVILEGE:
+            raise
+    return _readonly_rows(ctx)
 
 
 async def _migrations(ctx: DoctorContext) -> Result:
@@ -91,22 +161,29 @@ async def _migrations(ctx: DoctorContext) -> Result:
     install does not ship: neither can be repaired by applying anything, and
     both need a human. Only pending is fixable, and only with ``--fix``.
 
-    A least-privilege deployment is SKIPPED, not failed. The migrator creates
-    its ledger table if it is absent, so reading status needs CREATE on the
-    schema -- and a correctly configured instance runs its services as a role
-    that deliberately does not have it, with migrations applied by a different
-    account. Reporting that as a required failure would leave `genus doctor`
-    permanently exiting 1 on a healthy box, which is precisely how an operator
-    learns that red output here is normal.
+    A least-privilege role gets the same verdict by a different route rather
+    than a shrug. ``migrate.status()`` needs CREATE on the schema (it creates
+    the ledger table if absent); the account the services run as deliberately
+    has neither that nor the advisory lock, so this falls back to a read-only
+    SELECT against the ledger. The earlier version reported ``skip`` there,
+    which made the check inert on exactly the deployment it was written for:
+    it could not have failed on any correctly configured instance.
+
+    A ledger table that does not EXIST is a required failure, not a skip. On a
+    database that already holds data it is the most serious version of this
+    finding -- no migration has ever been recorded -- and it must never read as
+    "not applicable".
     """
     try:
-        rows = await ctx.run_blocking(_migration_rows)
+        rows = await ctx.run_blocking(_migration_rows, ctx)
+    except LedgerNotInitialisedError:
+        return fail(
+            "the migration ledger has never been initialised, so no migration is "
+            "recorded as applied — run 'genus migrate' (as the account that owns the "
+            "schema), or 'genus migrate --adopt-baseline' if this database was created "
+            "from a snapshot"
+        )
     except Exception as exc:  # noqa: BLE001 - a ledger that will not read is a result
-        if getattr(exc, "pgcode", "") == _INSUFFICIENT_PRIVILEGE:
-            return skip(
-                "this database role may not read the migration ledger — run "
-                "'genus migrate --status' as the account that applies migrations"
-            )
         return fail(f"cannot read the migration ledger: {type(exc).__name__}")
 
     pending = [row["migration_id"] for row in rows if row["status"] == "pending"]

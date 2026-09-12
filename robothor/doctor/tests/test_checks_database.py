@@ -51,7 +51,7 @@ def test_connect_fails_without_leaking_the_dsn() -> None:
 
 
 def _status_rows(monkeypatch, rows):
-    monkeypatch.setattr(db_checks, "_migration_rows", lambda: rows)
+    monkeypatch.setattr(db_checks, "_migration_rows", lambda _ctx: rows)
 
 
 def test_migrations_pass_when_everything_is_applied(monkeypatch) -> None:
@@ -93,29 +93,137 @@ def test_a_ledger_row_this_checkout_does_not_ship_fails(monkeypatch) -> None:
     assert result.fixable is False
 
 
-def test_a_role_that_may_not_read_the_ledger_is_a_skip(monkeypatch) -> None:
-    """A least-privilege deployment applies migrations as one account and runs
-    the services as another. Failing here would leave `genus doctor` exiting 1
-    forever on a correctly configured box, which is how an operator learns to
-    ignore red output."""
+class DeniedError(RuntimeError):
+    """What psycopg2 raises when the role may not CREATE TABLE."""
 
-    class DeniedError(RuntimeError):
-        pgcode = "42501"
+    pgcode = "42501"
 
-    def _raise():
+
+def _deny_status(monkeypatch) -> None:
+    """`migrate.status()` creates its ledger table if absent and takes an
+    advisory lock, so the least-privilege service role cannot call it."""
+
+    def _raise(*_args, **_kwargs):
         raise DeniedError("permission denied for schema public")
 
-    monkeypatch.setattr(db_checks, "_migration_rows", _raise)
-    result = _run("db.migrations", make_ctx())
-    assert result.status == "skip"
-    assert "genus migrate --status" in result.detail
+    monkeypatch.setattr("robothor.db.migrate.status", _raise)
+
+
+def _ledger(applied: list[tuple], *, table: str = "schema_migrations_v2"):
+    """A fake ledger: to_regclass answers first, then the applied rows."""
+    return fake_db([(table,), *applied])
+
+
+def _discovered(monkeypatch, *migrations) -> None:
+    monkeypatch.setattr("robothor.db.migrate._discover", lambda *_a, **_k: list(migrations))
+
+
+class _Migration:
+    def __init__(self, mid, version="1", filename=None, source="crm", checksum="c" * 64):
+        self.migration_id = mid
+        self.version = version
+        self.filename = filename or f"{mid}.sql"
+        self.source = source
+        self.checksum = checksum
+
+
+def test_a_role_that_cannot_create_a_table_still_gets_a_real_verdict(monkeypatch) -> None:
+    """The whole point of the check. `status()` needs CREATE; the recommended
+    deployment runs the services as a role that deliberately lacks it, so a
+    skip there makes this check inert on exactly the instances it was written
+    for. A SELECT answers the same question."""
+    _deny_status(monkeypatch)
+    _discovered(monkeypatch, _Migration("114"))
+    ctx = make_ctx(db_factory=_ledger([]))
+
+    result = _run("db.migrations", ctx)
+    assert result.status == "fail"
+    assert result.fixable is True
+    assert "114" in result.detail
+
+
+def test_the_read_only_path_sees_an_applied_ledger_as_clean(monkeypatch) -> None:
+    _deny_status(monkeypatch)
+    _discovered(monkeypatch, _Migration("114"))
+    ctx = make_ctx(db_factory=_ledger([("114", "1", "114.sql", "crm", "c" * 64, None)]))
+
+    result = _run("db.migrations", ctx)
+    assert result.status == "pass"
+
+
+def test_the_read_only_path_detects_drift(monkeypatch) -> None:
+    _deny_status(monkeypatch)
+    _discovered(monkeypatch, _Migration("114", checksum="c" * 64))
+    ctx = make_ctx(db_factory=_ledger([("114", "1", "114.sql", "crm", "d" * 64, None)]))
+
+    result = _run("db.migrations", ctx)
+    assert result.status == "fail"
+    assert result.fixable is False
+    assert "DRIFT" in result.detail
+
+
+def test_the_read_only_path_detects_a_row_this_checkout_does_not_ship(monkeypatch) -> None:
+    _deny_status(monkeypatch)
+    _discovered(monkeypatch, _Migration("114"))
+    ctx = make_ctx(
+        db_factory=_ledger(
+            [
+                ("114", "1", "114.sql", "crm", "c" * 64, None),
+                ("999", "9", "999.sql", "crm", "e" * 64, None),
+            ]
+        )
+    )
+
+    result = _run("db.migrations", ctx)
+    assert result.status == "fail"
+    assert "999" in result.detail
+    assert result.fixable is False
+
+
+def test_an_uninitialised_ledger_is_a_required_failure_never_a_skip(monkeypatch) -> None:
+    """No ledger table means no migration has ever been recorded, which on a
+    database that holds data is the most serious version of this finding. It
+    must not read as 'not applicable'."""
+    _deny_status(monkeypatch)
+    _discovered(monkeypatch, _Migration("114"))
+    ctx = make_ctx(db_factory=fake_db([(None,)]))
+
+    result = _run("db.migrations", ctx)
+    assert result.status == "fail"
+    assert "never been initialised" in result.detail
+    assert "genus migrate" in result.detail
+
+
+def test_the_check_never_skips_for_lack_of_privilege(monkeypatch) -> None:
+    """A one-line regression guard for the finding this replaced: a skip here
+    made the check unable to fail on any correctly configured instance."""
+    _deny_status(monkeypatch)
+    _discovered(monkeypatch, _Migration("114"))
+    for factory in (_ledger([]), fake_db([(None,)])):
+        assert _run("db.migrations", make_ctx(db_factory=factory)).status != "skip"
+
+
+def test_a_privileged_role_still_uses_the_migrator_itself(monkeypatch) -> None:
+    """The read-only path is a FALLBACK. Where `status()` works it is the
+    authority: it also reconciles the legacy ledger and spots an unadopted
+    baseline, which a plain SELECT cannot."""
+    calls: list[str] = []
+
+    def _status(*_a, **_k):
+        calls.append("status")
+        return [{"migration_id": "114", "status": "applied"}]
+
+    monkeypatch.setattr("robothor.db.migrate.status", _status)
+    result = _run("db.migrations", make_ctx(db_factory=fake_db([(1,)])))
+    assert calls == ["status"]
+    assert result.status == "pass"
 
 
 def test_any_other_ledger_error_is_still_a_failure(monkeypatch) -> None:
-    def _raise():
+    def _raise(*_a, **_k):
         raise RuntimeError("the manifest is missing")
 
-    monkeypatch.setattr(db_checks, "_migration_rows", _raise)
+    monkeypatch.setattr("robothor.db.migrate.status", _raise)
     result = _run("db.migrations", make_ctx())
     assert result.status == "fail"
     assert "RuntimeError" in result.detail
@@ -126,7 +234,7 @@ def test_the_migration_fix_reruns_the_check_and_it_passes(monkeypatch) -> None:
 
     state = {"applied": False}
 
-    def _rows():
+    def _rows(_ctx):
         if state["applied"]:
             return [{"migration_id": "114", "status": "applied"}]
         return [{"migration_id": "114", "status": "pending"}]
