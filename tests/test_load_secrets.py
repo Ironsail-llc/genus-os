@@ -466,3 +466,25 @@ def test_no_temp_file_is_left_behind(tmp_path: Path):
     _run(root)
     leftovers = [p.name for p in (root / "run" / "robothor").iterdir() if p.name != "secrets.env"]
     assert leftovers == [], leftovers
+
+
+def test_a_failed_decrypt_leaves_no_temp_file(tmp_path: Path):
+    """One 0600 temp file per retry on tmpfs is still a leak."""
+    root = _root(tmp_path)
+    env = _sops_instance(tmp_path, root, '{"OPENROUTER_API_KEY_2": "spare-only"}')
+    result = _run(root, **env)
+    assert result.returncode != 0, "a store without the provider credential must be refused"
+    leftovers = sorted(p.name for p in (root / "run" / "robothor").iterdir())
+    assert leftovers == [], leftovers
+
+
+def test_a_refused_store_preserves_the_previous_boot(tmp_path: Path):
+    """Validation happens on the temp file: a partial store never replaces good credentials."""
+    root = _root(tmp_path)
+    out = _output(root)
+    out.parent.mkdir(parents=True)
+    out.write_text('OPENROUTER_API_KEY="from-last-boot"\n')
+    env = _sops_instance(tmp_path, root, '{"OPENROUTER_API_KEY_2": "spare-only"}')
+    result = _run(root, **env)
+    assert result.returncode != 0
+    assert out.read_text() == 'OPENROUTER_API_KEY="from-last-boot"\n'

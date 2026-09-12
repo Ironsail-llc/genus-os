@@ -121,7 +121,7 @@ if [[ "$BACKEND" == "env" ]]; then
     # name the override for the operator who really did move to env.
     # `-L` first: `-s` follows a symlink, and a planted link to any non-empty
     # file must not be able to wedge this branch. A link is never "populated".
-    if [[ "$AUTO" == "1" && ! -L "$OUTPUT_FILE" && -s "$OUTPUT_FILE" ]]; then
+    if [[ "$AUTO" == "1" && ! -L "$OUTPUT_FILE" && -f "$OUTPUT_FILE" && -s "$OUTPUT_FILE" ]]; then
         die "no secrets file found (${SOPS_FILE} or ${PLAIN_FILE}) but ${OUTPUT_FILE} is populated from an earlier boot — refusing to blank it; restore the file, or set ROBOTHOR_SECRETS_BACKEND=env if the credentials really are in the unit environment"
     fi
     # Write a fresh 0600 temp file (mktemp creates it that way, so there is no

@@ -52,6 +52,8 @@ export SOPS_AGE_KEY_FILE="$AGE_KEY"
 # at the output path would otherwise send the whole decrypted credential set
 # to wherever it points. mktemp creates the file 0600, so no umask window.
 TMP_OUTPUT="$(mktemp "${OUTPUT_DIR}/.secrets.env.XXXXXX")"
+# A failed decrypt must not leave a temp file per retry on tmpfs.
+trap 'rm -f -- "$TMP_OUTPUT"' EXIT
 sops -d "$SOPS_FILE" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
@@ -61,7 +63,8 @@ for k, v in data.items():
 " > "$TMP_OUTPUT"
 
 chmod 600 "$TMP_OUTPUT"
-mv -T -f -- "$TMP_OUTPUT" "$OUTPUT_FILE"
+# Validated below BEFORE it is moved into place: a store that fails the key
+# check must not replace the previous boot's credentials with a partial set.
 
 # ── Validate required keys ──────────────────────────────────────────
 # REQUIRED means "the instance cannot function without it", and nothing else.
@@ -96,13 +99,13 @@ PAGER_KEYS=(
 
 missing=()
 for key in "${REQUIRED_KEYS[@]}"; do
-    if ! grep -q "^${key}=" "$OUTPUT_FILE"; then
+    if ! grep -q "^${key}=" "$TMP_OUTPUT"; then
         missing+=("$key")
     fi
 done
 
 for key in "${ADVISORY_KEYS[@]}"; do
-    if ! grep -q "^${key}=" "$OUTPUT_FILE"; then
+    if ! grep -q "^${key}=" "$TMP_OUTPUT"; then
         echo "WARNING: $key is not set — this credential pool has no spare." >&2
         echo "         One capped or revoked key will take the whole fleet down." >&2
         echo "         Add it with: sops $SOPS_FILE" >&2
@@ -110,7 +113,7 @@ for key in "${ADVISORY_KEYS[@]}"; do
 done
 
 for key in "${PAGER_KEYS[@]}"; do
-    if ! grep -q "^${key}=" "$OUTPUT_FILE"; then
+    if ! grep -q "^${key}=" "$TMP_OUTPUT"; then
         echo "WARNING: $key is not set — the Telegram pager cannot deliver alerts without it." >&2
     fi
 done
@@ -123,3 +126,7 @@ if [ ${#missing[@]} -gt 0 ]; then
     echo "Add missing keys with: sops $SOPS_FILE" >&2
     exit 1
 fi
+
+# Every required key is present: publish atomically. mv -T replaces a planted
+# symlink at the destination instead of following it.
+mv -T -f -- "$TMP_OUTPUT" "$OUTPUT_FILE"
