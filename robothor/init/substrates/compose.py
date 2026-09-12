@@ -79,6 +79,7 @@ __all__ = [
     "image_tag",
     "ready_endpoints",
     "substrate",
+    "workspace_path",
 ]
 
 #: The stack, in the order ``docker compose -f`` must see it.
@@ -160,7 +161,11 @@ def compose_directory(ctx: InitContext) -> Path | None:
         ]
     for candidate in candidates:
         if (candidate / BASE_FILE).is_file() and (candidate / APPS_FILE).is_file():
-            return candidate
+            # Absolute, always. `genus init --workspace .` is a documented way
+            # to run this substrate, and a relative `-f ./docker-compose.yml`
+            # means something different to every later `docker compose` command
+            # the operator types from another directory.
+            return candidate.resolve()
     return None
 
 
@@ -181,8 +186,18 @@ def compose_files(ctx: InitContext) -> list[Path]:
 
 
 def env_file_path(ctx: InitContext) -> Path:
-    """The 0600 env file for this instance, inside its own workspace."""
-    return ctx.workspace / ENV_FILENAME
+    """The 0600 env file for this instance, inside its own workspace.
+
+    Absolute, for the same reason the compose files are: `--workspace .` is a
+    documented way to run this substrate, and `--env-file ./genus.env` resolves
+    against whatever directory the next command happens to run from.
+    """
+    return workspace_path(ctx) / ENV_FILENAME
+
+
+def workspace_path(ctx: InitContext) -> Path:
+    """The instance workspace as an absolute path."""
+    return Path(ctx.workspace).expanduser().resolve()
 
 
 def image_tag(ctx: InitContext) -> str:
@@ -290,7 +305,10 @@ class ComposePrereqsStep(BaseStep):
         if compose_directory(ctx) is None:
             return CheckResult(
                 False,
-                detail=f"neither {BASE_FILE} nor {APPS_FILE} is in {ctx.workspace}",
+                detail=(
+                    f"{BASE_FILE} and {APPS_FILE} are in neither {ctx.workspace}, "
+                    "the current directory, nor a checkout"
+                ),
                 fix_hint=FETCH_HINT,
             )
 
@@ -376,7 +394,7 @@ class ComposeRenderStep(BaseStep):
             # The HOST path compose bind-mounts. ROBOTHOR_WORKSPACE is
             # /workspace and is set by the compose file: a host path here would
             # point every container at a directory it does not have.
-            _env_line("GENUS_WORKSPACE", ctx.workspace),
+            _env_line("GENUS_WORKSPACE", workspace_path(ctx)),
             _env_line("GENUS_ENV_FILE", env_file_path(ctx)),
             "",
             _env_line("ROBOTHOR_DB_NAME", database["dbname"]),
@@ -451,7 +469,7 @@ class ComposeRenderStep(BaseStep):
         source = owner_config_override_path() or owner_config_path()
         if not source.is_file():
             return None
-        target = ctx.workspace / ".robothor" / "owner.yaml"
+        target = workspace_path(ctx) / ".robothor" / "owner.yaml"
         if target.resolve() == source.resolve():
             return target
         target.parent.mkdir(parents=True, exist_ok=True)

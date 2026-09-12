@@ -245,6 +245,20 @@ class TestPrereqsRefuseABoxDockerCannotRunOn:
 
 
 class TestTheOverlayListIsChosenNotAssumed:
+    def test_every_path_it_hands_docker_is_absolute(self, tmp_path, monkeypatch):
+        """``--workspace .`` is a documented way to run this substrate.
+
+        Compose resolves a relative ``-f`` or ``--env-file`` against ITS project
+        directory, not the operator's shell, so a relative path here means
+        something different to every later `docker compose` command.
+        """
+        ctx = _ctx(tmp_path)
+        monkeypatch.chdir(ctx.workspace)
+        ctx.workspace = Path()
+
+        assert env_file_path(ctx).is_absolute()
+        assert [path.is_absolute() for path in compose_files(ctx)] == [True, True]
+
     def test_the_base_and_release_files_are_always_used(self, tmp_path):
         ctx = _ctx(tmp_path)
 
@@ -332,7 +346,7 @@ class TestRenderWritesTheEnvFileAndNothingElseReadable:
         # is /workspace INSIDE the container and is set by the compose file. A
         # host path leaking into the env file points every container at a
         # directory that does not exist in it.
-        assert f'GENUS_WORKSPACE="{tmp_path / "instance"}"' in body
+        assert f'GENUS_WORKSPACE="{(tmp_path / "instance").resolve()}"' in body
         assert "ROBOTHOR_WORKSPACE=" not in body
 
     def test_the_identity_travels_into_the_workspace_the_containers_mount(
