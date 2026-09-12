@@ -290,3 +290,15 @@ def mock_services_healthy(mock_http_client):
 
     mock_http_client.get = AsyncMock(side_effect=route_get)
     return mock_http_client
+
+
+@pytest.fixture(autouse=True)
+def _fresh_settings_cache():
+    """The settings singleton is cached per process; a test that sets an env var
+    must see it, so the cache is cleared before and after every bridge test (the
+    root conftest does the same for the rest of the tree)."""
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    yield
+    reset_settings()

@@ -598,7 +598,9 @@ def _log_reasoning_replay_rejection(
     # rejection above must not go unlogged, because a history had a shape this
     # sketch could not walk.
     try:
-        logger.error("reasoning_replay_history %s", redacted_history_digest(messages, model))
+        logger.error(
+            "reasoning_replay_history %s", _sanitize(redacted_history_digest(messages, model))
+        )
     except Exception as digest_error:  # noqa: BLE001 — never lose the real error
         logger.warning("reasoning-replay history digest failed: %s", _sanitize(digest_error))
 
@@ -702,8 +704,8 @@ async def llm_call(
             if candidate != chain[-1]:
                 logger.warning(
                     "llm_call: %s failed (%s); trying the next model in the chain",
-                    candidate,
-                    exc,
+                    _sanitize(candidate),
+                    _sanitize(exc),
                 )
     assert last is not None  # the loop ran at least once
     raise last

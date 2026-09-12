@@ -15,7 +15,6 @@ credential more authority than it had.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -48,7 +47,10 @@ _ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 def engine_base_url() -> str:
     """Where the engine answers. Loopback unless deployment says otherwise."""
-    explicit = os.environ.get("ROBOTHOR_ENGINE_URL", "").strip()
+    from robothor.settings import get_settings
+
+    engine = get_settings().engine
+    explicit = (engine.url or "").strip()
     if explicit:
         parsed = urlsplit(explicit)
         if parsed.scheme not in _ALLOWED_SCHEMES or not parsed.netloc:
@@ -56,9 +58,7 @@ def engine_base_url() -> str:
                 f"ROBOTHOR_ENGINE_URL must be an http(s) URL with a host, got {explicit!r}"
             )
         return explicit.rstrip("/")
-    host = os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
-    port = os.environ.get("ROBOTHOR_ENGINE_PORT", "18800")
-    return f"http://{host}:{port}"
+    return f"http://{engine.host}:{engine.port}"
 
 
 def _engine_token() -> str:

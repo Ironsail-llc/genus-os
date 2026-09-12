@@ -31,6 +31,7 @@ which would print real key material.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import os
 import threading
@@ -38,6 +39,8 @@ import time
 from collections.abc import Callable  # noqa: TC003
 from dataclasses import dataclass
 from enum import StrEnum
+
+from robothor.settings.env import process_env_get, process_env_set, process_env_unset
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +187,9 @@ def provider_for_var(var: str) -> ProviderSpec | None:
     return _PROVIDERS_BY_VAR.get(var)
 
 
+_FINGERPRINT_KEY = b"genus-key-fingerprint"
+
+
 def key_fingerprint(key: str) -> str:
     """A short, stable, non-reversible name for a key, for API responses.
 
@@ -191,7 +197,11 @@ def key_fingerprint(key: str) -> str:
     digest and not a truncated credential — the last-four convention it
     replaces prints real key material.
     """
-    return "sha256:" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+    # Keyed (HMAC) so the digest cannot be matched against a table of leaked
+    # keys; still "sha256:" because that is the algorithm a reader sees.
+    return (
+        "sha256:" + hmac.new(_FINGERPRINT_KEY, key.encode("utf-8"), hashlib.sha256).hexdigest()[:8]
+    )
 
 
 # ── Vault-backed credentials ────────────────────────────────────────
@@ -377,7 +387,7 @@ def scan_slots(provider_id: str) -> list[ResolvedKey]:
         source = "vault"
         if not value:
             name = spec.env_var if index == 1 else f"{spec.env_var}_{index}"
-            value = os.environ.get(name, "").strip()
+            value = (process_env_get(name) or "").strip()
             source = "env"
         if value:
             found.append(ResolvedKey(position=index, key=value, source=source))
@@ -508,15 +518,15 @@ def reload_provider_keys() -> ReloadResult:
                 value = (exported.get(env_name(provider_key(spec.id, index))) or "").strip()
                 if value:
                     if var not in _env_displaced:
-                        _env_displaced[var] = os.environ.get(var)
-                    os.environ[var] = value
+                        _env_displaced[var] = process_env_get(var, None)
+                    process_env_set(var, value)
                     touched += 1
                 elif var in _env_displaced:
                     previous = _env_displaced.pop(var)
                     if previous is None:
-                        os.environ.pop(var, None)
+                        process_env_unset(var)
                     else:
-                        os.environ[var] = previous
+                        process_env_set(var, previous)
             if touched:
                 reloaded.append(spec.id)
                 slots += touched
@@ -549,7 +559,7 @@ def keys_from_env(var: str) -> list[str]:
     seen: set[str] = set()
     for index in range(1, _MAX_POOL_KEYS + 1):
         name = var if index == 1 else f"{var}_{index}"
-        value = os.environ.get(name, "").strip()
+        value = (process_env_get(name) or "").strip()
         if not value:
             break
         if value not in seen:
