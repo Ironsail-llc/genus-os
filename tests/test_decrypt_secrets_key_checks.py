@@ -92,6 +92,17 @@ def _run_decrypt(tmp_path: Path, payload: dict[str, str]):
             "PATH": os.environ["PATH"],
             "ROBOTHOR_SECRETS_ROOT": str(root),
             "ROBOTHOR_EXTRA_PATH": str(stub_bin),
+            # This script does not page, but it runs under the same PATH
+            # prelude as the ones that do, and tests/test_alert_never_pages
+            # _from_tests.py audits every subprocess call in a file that so
+            # much as names ROBOTHOR_TELEGRAM_BOT_TOKEN. Pin the sender's
+            # durable seams anyway: a page the suite spools is delivered for
+            # real by root's next liveness drain.
+            "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+            "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+            "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+            "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-state"),
+            "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-fallback"),
         },
     )
     return result, root / "run" / "robothor" / "secrets.env"
