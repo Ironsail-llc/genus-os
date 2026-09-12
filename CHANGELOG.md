@@ -1,3 +1,10 @@
+## [1.69.2](https://github.com/Ironsail-llc/genus-os/compare/v1.69.1...v1.69.2) (2026-09-12)
+
+### Bug Fixes
+
+* **deploy:** promote release values to 1.69.1 so the gate clears and images rebuild ([#515](https://github.com/Ironsail-llc/genus-os/issues/515)) ([cabd427](https://github.com/Ironsail-llc/genus-os/commit/cabd427ebe61c61bad5438c4697d9db92532842a)), closes [#513](https://github.com/Ironsail-llc/genus-os/issues/513)
+* **docker:** the python image applies debian security upgrades first ([#513](https://github.com/Ironsail-llc/genus-os/issues/513)) ([67eccbb](https://github.com/Ironsail-llc/genus-os/commit/67eccbb406bd66f10de2833b97773a9d562d444d)), closes [#511](https://github.com/Ironsail-llc/genus-os/issues/511)
+
 ## [1.69.1](https://github.com/Ironsail-llc/genus-os/compare/v1.69.0...v1.69.1) (2026-09-12)
 
 ### Bug Fixes
