@@ -46,12 +46,17 @@ def settings(monkeypatch):
 # ── redis ────────────────────────────────────────────────────────────────────
 
 
-def test_redis_passes_when_ping_answers(monkeypatch) -> None:
+REDIS_PASSWORD = "hunter2-redis"
+
+
+def _fake_redis(monkeypatch, *, ping_error: Exception | None = None) -> None:
     class FakeRedis:
         def __init__(self, **_kwargs):
             pass
 
         def ping(self):
+            if ping_error is not None:
+                raise ping_error
             return True
 
         def close(self):
@@ -64,56 +69,99 @@ def test_redis_passes_when_ping_answers(monkeypatch) -> None:
     module.Redis = FakeRedis  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "redis", module)
 
+
+def test_redis_passes_when_ping_answers(monkeypatch) -> None:
+    _fake_redis(monkeypatch)
     rows = _run(redis_checks.CHECKS, "redis.connect", make_ctx())
     assert rows[0].status == "pass"
     assert "6379" in rows[0].detail
 
 
+def test_the_redis_pass_line_does_not_print_the_password(monkeypatch, settings) -> None:
+    """The failure path was guarded and the PASS path was not, so appending
+    the password to the healthy line shipped green under mutation. A passing
+    detail is printed far more often than a failing one."""
+    settings(ROBOTHOR_REDIS_PASSWORD=REDIS_PASSWORD)
+    _fake_redis(monkeypatch)
+    rows = _run(redis_checks.CHECKS, "redis.connect", make_ctx())
+    assert rows[0].status == "pass"
+    assert REDIS_PASSWORD not in rows[0].detail
+
+
 def test_redis_failure_does_not_print_the_password(monkeypatch, settings) -> None:
-    settings(ROBOTHOR_REDIS_PASSWORD="hunter2-redis")
-
-    class FakeRedis:
-        def __init__(self, **_kwargs):
-            pass
-
-        def ping(self):
-            raise ConnectionError("auth failed for redis://:hunter2-redis@127.0.0.1:6379")
-
-        def close(self):
-            pass
-
-    import sys
-    import types
-
-    module = types.ModuleType("redis")
-    module.Redis = FakeRedis  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "redis", module)
-
+    settings(ROBOTHOR_REDIS_PASSWORD=REDIS_PASSWORD)
+    _fake_redis(
+        monkeypatch,
+        ping_error=ConnectionError(f"auth failed for redis://:{REDIS_PASSWORD}@127.0.0.1:6379"),
+    )
     rows = _run(redis_checks.CHECKS, "redis.connect", make_ctx())
     assert rows[0].status == "fail"
-    assert "hunter2-redis" not in rows[0].detail
+    assert REDIS_PASSWORD not in rows[0].detail
     assert "ConnectionError" in rows[0].detail
 
 
 # ── models ───────────────────────────────────────────────────────────────────
 
 
-def test_provider_keys_passes_and_reports_only_fingerprints(monkeypatch) -> None:
-    from robothor.engine.key_pool import SlotStatus
+FAKE_API_KEY = "sk-test-do-not-print-9999999999"
+
+
+def _fake_slots(monkeypatch, slots_by_provider: dict[str, list]) -> None:
+    """Fake `key_pool.provider_slots` and let the REAL `_configured` run.
+
+    Stubbing `_configured` itself left the only line that formats credential
+    state unexecuted by the suite, so changing it to emit key material shipped
+    green under mutation. The seam has to be one level lower than the code
+    whose output is the invariant.
+    """
+    from robothor.engine import key_pool
 
     monkeypatch.setattr(
-        model_checks,
-        "_configured",
-        lambda: [("openrouter", "OpenRouter", ["vault/active sha256:ab12cd34"])],
+        key_pool, "provider_slots", lambda provider_id: slots_by_provider.get(provider_id, [])
     )
+
+
+def test_provider_keys_passes_and_reports_only_fingerprints(monkeypatch) -> None:
+    from robothor.engine.key_pool import SlotStatus, key_fingerprint
+
+    slot = SlotStatus(
+        position=1, source="vault", fingerprint=key_fingerprint(FAKE_API_KEY), state="active"
+    )
+    _fake_slots(monkeypatch, {"openrouter": [slot]})
+
     rows = _run(model_checks.CHECKS, "provider.keys", make_ctx())
     assert rows[0].status == "pass"
-    assert "sha256:ab12cd34" in rows[0].detail
-    assert SlotStatus  # the shape the real implementation reports
+    assert slot.fingerprint in rows[0].detail
+    assert "OpenRouter" in rows[0].detail
+    assert "vault" in rows[0].detail
+
+
+def test_the_provider_keys_pass_line_never_carries_key_material(monkeypatch) -> None:
+    """The line that lists credentials is the one most likely to grow a value,
+    and it is printed on a healthy instance, into a terminal, a journal and
+    `GET /api/doctor`'s JSON.
+
+    The credential is put where a leak would find it -- the provider's real
+    environment variable -- so that reaching for the value rather than the
+    fingerprint fails here instead of shipping.
+    """
+    from robothor.engine.key_pool import SlotStatus, key_fingerprint
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", FAKE_API_KEY)
+    monkeypatch.setenv("OPENAI_API_KEY", FAKE_API_KEY)
+    slot = SlotStatus(
+        position=1, source="env", fingerprint=key_fingerprint(FAKE_API_KEY), state="active"
+    )
+    _fake_slots(monkeypatch, {"openrouter": [slot], "openai": [slot]})
+
+    rows = _run(model_checks.CHECKS, "provider.keys", make_ctx())
+    assert rows[0].status == "pass"
+    assert FAKE_API_KEY not in rows[0].detail
+    assert rows[0].detail.count("sha256:") == 2
 
 
 def test_provider_keys_fails_with_nothing_configured(monkeypatch) -> None:
-    monkeypatch.setattr(model_checks, "_configured", lambda: [])
+    _fake_slots(monkeypatch, {})
     rows = _run(model_checks.CHECKS, "provider.keys", make_ctx())
     assert rows[0].status == "fail"
     assert "genus config set" in rows[0].detail
@@ -207,6 +255,21 @@ def test_a_live_token_is_proved_by_get_me(settings) -> None:
     rows = _run(channel_checks.CHECKS, "telegram.token", make_ctx(http_fetch=fetch))
     assert [row.status for row in rows] == ["pass", "pass"]
     assert "1234567" in rows[0].detail
+
+
+def test_the_telegram_pass_line_never_carries_the_token(settings) -> None:
+    """`"1234567" in detail` is satisfied by the FULL token too, so asserting
+    the public bot id is present does not prove the secret half is absent --
+    and only the 401 branch checked. A regression here puts the live bot token
+    in the CLI table, the journal and the bridge's JSON."""
+    settings(ROBOTHOR_TELEGRAM_BOT_TOKEN=FAKE_TOKEN, ROBOTHOR_TELEGRAM_CHAT_ID="12345")
+    fetch = fake_http({f"https://api.telegram.org/bot{FAKE_TOKEN}/getMe": HttpResponse(status=200)})
+    rows = _run(channel_checks.CHECKS, "telegram.token", make_ctx(http_fetch=fetch))
+
+    assert rows[0].status == "pass"
+    joined = " ".join(row.detail for row in rows)
+    assert FAKE_TOKEN not in joined
+    assert FAKE_TOKEN.partition(":")[2] not in joined
 
 
 def test_the_token_and_the_chat_id_never_share_a_row_id(settings) -> None:
