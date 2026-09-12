@@ -93,6 +93,7 @@ jobs:
       ROBOTHOR_OLLAMA_URL: http://127.0.0.1:11434
       OPENROUTER_API_BASE: http://127.0.0.1:11434/v1
       BRIDGE_URL: http://127.0.0.1:9100
+      ORCHESTRATOR_URL: http://127.0.0.1:9099
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -162,16 +163,27 @@ jobs:
           PIP_FIND_LINKS: ${{ github.workspace }}/wheelhouse
         run: python -m pip install "genusos[api]"
 
-      - name: Start the bridge
+      # The two the quickstart prints under "Start the services", plus the
+      # bridge they front. The bridge's own /ready includes a `memory` check
+      # against the orchestrator, so starting it alone answers 503 forever.
+      - name: Start the services the quickstart tells the operator to start
         run: |
+          nohup genus serve --host 127.0.0.1 --port 9099 \
+            > "$RUNNER_TEMP/orchestrator.log" 2>&1 &
           cd crm/bridge
           nohup python bridge_service.py > "$RUNNER_TEMP/bridge.log" 2>&1 &
+          cd -
+          for _ in $(seq 1 90); do
+            curl -fsS "${ORCHESTRATOR_URL}/ready" >/dev/null 2>&1 && break
+            sleep 2
+          done
+          curl -f "${ORCHESTRATOR_URL}/ready"
           for _ in $(seq 1 90); do
             curl -fsS "${BRIDGE_URL}/ready" >/dev/null 2>&1 && break
             sleep 2
           done
           curl -f "${BRIDGE_URL}/ready"
-          echo "assertion OK: bridge /ready answered"
+          echo "assertion OK: orchestrator and bridge /ready answered"
 
       - name: Assert the setup wizard is reachable, claimable, then closed
         run: |

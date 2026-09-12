@@ -826,3 +826,44 @@ class TestTheHostCanReachTheDatabaseTheStackPublishes:
         )
 
         assert rendered.get("ROBOTHOR_DB_HOST") == "postgres"
+
+
+class TestLoadingTheEnvFileInvalidatesEveryCacheItFeeds:
+    """`reset_settings()` was not enough, and the gap was invisible until a
+    compose install ran end to end.
+
+    The doctor's database path goes through `robothor.config`, a singleton
+    built from os.environ the first time anything asks -- which on this
+    substrate is long before `verify` loads genus.env. So the wizard read
+    ROBOTHOR_DB_HOST from the file, the settings object learned it, and the
+    connection pool went on using the config resolved when the variable was
+    still unset: a Unix socket, on a box that has none. Five required checks
+    failed against a database that had just answered on its published port.
+    """
+
+    def test_the_config_singleton_and_the_pool_are_both_dropped(self, tmp_path, monkeypatch):
+        from robothor.init.steps import VerifyStep
+
+        dropped: list[str] = []
+        monkeypatch.setattr("robothor.config.reset_config", lambda: dropped.append("config"))
+        monkeypatch.setattr("robothor.db.connection.close_pool", lambda: dropped.append("pool"))
+
+        ctx = _ctx(tmp_path, docker=FakeDocker())
+        ComposeRenderStep().apply(ctx)
+
+        VerifyStep._load_instance_env(ctx)
+
+        assert dropped == ["config", "pool"]
+
+    def test_nothing_is_dropped_when_there_is_no_env_file(self, tmp_path, monkeypatch):
+        """Every substrate but compose has no such file, and this runs
+        unconditionally: dropping a live pool for nothing would be a stall."""
+        from robothor.init.steps import VerifyStep
+
+        dropped: list[str] = []
+        monkeypatch.setattr("robothor.config.reset_config", lambda: dropped.append("config"))
+        monkeypatch.setattr("robothor.db.connection.close_pool", lambda: dropped.append("pool"))
+
+        VerifyStep._load_instance_env(_ctx(tmp_path / "empty"))
+
+        assert dropped == []

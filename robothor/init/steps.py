@@ -1091,6 +1091,21 @@ class VerifyStep(BaseStep):
             # Settings were resolved before these existed.
             reset_settings()
 
+            # And so was everything else built from the environment. The
+            # doctor's database path does not go through `get_settings()`: it
+            # goes through `robothor.config`, a singleton resolved from
+            # os.environ the first time anything asks — which on the compose
+            # substrate is long before this runs. Refreshing only the settings
+            # left the connection pool dialling the host that was configured
+            # when ROBOTHOR_DB_HOST was still unset (a Unix socket, on a box
+            # that has none), and five required checks failed against a
+            # database that was answering perfectly well on its published port.
+            from robothor.config import reset_config
+            from robothor.db.connection import close_pool
+
+            reset_config()
+            close_pool()
+
     def apply(self, ctx: InitContext) -> None:
         from robothor.doctor.context import DoctorContext
 
