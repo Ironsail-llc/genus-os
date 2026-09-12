@@ -133,6 +133,33 @@ mocked one. Add `and not integration` (`pytest -m "not slow and not llm and
 not e2e and not integration"`) to stay off the operator's cluster entirely, or
 run `pytest -m integration` on its own to include only those tests.
 
+### Fresh-install gate
+
+Every install defect this project has shipped was invisible on a developer's
+box and real on a clean one. So `.github/workflows/install-gate.yml` runs the
+`<!-- install-gate: ... -->` blocks of `docs/quickstart.md` — the literal text
+a new user copies, pulled out by `scripts/extract_doc_commands.py` and piped
+into `bash` — on a fresh runner every night, once per substrate (`local` and
+`compose`). It then asserts the things a green `genus doctor` does not prove
+on its own: every `/ready` endpoint answers, an agent returns a real
+completion, and the setup wizard is reachable, claimable, and closed for good
+afterwards. Editing either block edits the test.
+
+No credentials are involved: `tests/acceptance/mock_llm/` stands in for both
+the cloud provider and Ollama, deterministically. Run it locally the same way
+CI does:
+
+```bash
+python -m tests.acceptance.mock_llm --port 11434 &
+export ROBOTHOR_OLLAMA_URL=http://127.0.0.1:11434
+export OPENROUTER_API_BASE=http://127.0.0.1:11434/v1
+export OPENROUTER_API_KEY=mock
+python scripts/extract_doc_commands.py --file docs/quickstart.md --block local
+```
+
+Run those commands in a throwaway `ROBOTHOR_WORKSPACE`, never your own — the
+block installs an instance.
+
 ## Pull Request Process
 
 1. **Fork** the repo and create your branch from `main`

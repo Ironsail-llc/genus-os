@@ -43,6 +43,8 @@ genus doctor --json
 ```
 <!-- /install-gate -->
 
+CI replays this block on a fresh machine every night.
+
 `genus doctor` runs on the HOST, where nothing has handed it the database
 password — so it reads `genus.env` itself, from the workspace, the same file
 the containers get through `env_file`. It refuses to read that file unless it
@@ -107,6 +109,8 @@ genus init --yes --owner-name "Ada Lovelace" --owner-email ada@example.com
 genus doctor --json
 ```
 <!-- /install-gate -->
+
+CI replays this block on a fresh machine every night.
 
 `genus init` runs in two phases. The first prints a plan — every step, and
 whether it will create something, find it already there, or skip it — and
