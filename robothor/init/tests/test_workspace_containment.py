@@ -172,6 +172,69 @@ class TestDryRunAppliesNothingAnywhere:
         assert result.steps[0].status == "planned"
 
 
+class TestTheConftestGuardIsOn:
+    """The fixture is autouse, so nothing here opts in. That is the point.
+
+    These assert the guard is ACTIVE rather than merely present: a redirect
+    nobody checks is a comment, and the incident happened in a package whose
+    one test fixture pinned HOME and not ROBOTHOR_WORKSPACE.
+    """
+
+    def test_the_environment_workspace_is_a_temporary_directory(self):
+        from tests.conftest_workspace_containment import assert_contained
+
+        assert_contained()
+
+    def test_home_is_redirected_too(self):
+        import os
+
+        assert "contained-workspace" in os.environ["HOME"]
+
+    def test_the_owner_config_is_redirected(self):
+        import os
+
+        assert "contained-workspace" in os.environ["ROBOTHOR_OWNER_CONFIG"]
+
+    def test_a_helper_that_resolves_its_own_workspace_lands_in_the_sentinel_tree(
+        self, env_workspace
+    ):
+        """What a careless caller does, and where it ends up.
+
+        `default_workspace_root` is the resolver the outage went through. Here
+        it answers with the throwaway directory, so the write the sentinel check
+        then catches is a test's mistake rather than an operator's loss.
+        """
+        from robothor.templates.safety import default_workspace_root
+
+        assert default_workspace_root().resolve() == env_workspace.resolve()
+
+    def test_the_sentinel_starts_intact(self, env_workspace):
+        from tests.conftest_workspace_containment import SENTINEL_BODY, SENTINEL_RELATIVE
+
+        assert (env_workspace / SENTINEL_RELATIVE).read_text() == SENTINEL_BODY
+
+    def test_a_real_preset_install_with_no_workspace_hits_the_throwaway(self, env_workspace):
+        """The exact call that caused the outage, and where it goes now.
+
+        `install_preset` with no `workspace=` still resolves the environment --
+        that fallback is the CLI's -- so this writes the sentinel tree. The
+        conftest's post-test check would fail on it, which is why the file is
+        restored here: the assertion under test is WHERE it landed.
+        """
+        from tests.conftest_workspace_containment import SENTINEL_BODY, SENTINEL_RELATIVE
+
+        sentinel = env_workspace / SENTINEL_RELATIVE
+        try:
+            from robothor.cli.agent import install_preset
+
+            install_preset("minimal", auto_yes=True)
+            landed = sorted(p.name for p in (env_workspace / "docs" / "agents").glob("*.yaml"))
+            assert landed, "the install went somewhere other than the contained workspace"
+            assert "main.yaml" in landed
+        finally:
+            sentinel.write_text(SENTINEL_BODY, encoding="utf-8")
+
+
 class TestNoStepResolvesAWorkspaceOfItsOwn:
     """A tripwire, cheaper than the end-to-end test above and earlier.
 

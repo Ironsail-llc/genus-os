@@ -57,8 +57,14 @@ def render_outcome(outcome: StepOutcome, width: int = 0) -> str:
     return f"    {outcome.id.ljust(width)}  {verb}{outcome.detail}".rstrip()
 
 
-def render_summary(result: InitResult, *, workspace: str) -> list[str]:
-    """The last few lines: what happened, and what to do next."""
+def render_summary(result: InitResult, *, workspace: str, json_mode: bool = False) -> list[str]:
+    """The last few lines: what happened, and what to do next.
+
+    ``json_mode`` changes only the wording about the link: the link step prints
+    nothing to a stream in json mode (the URL would be a live single-use
+    credential in the log half), so "open the link above" would point at
+    nothing.
+    """
     if result.exit_code and result.blocked:
         named = ", ".join(result.blocked)
         return [
@@ -70,7 +76,12 @@ def render_summary(result: InitResult, *, workspace: str) -> list[str]:
         failed = [row for row in result.steps if row.status == "failed"]
         detail = failed[0].detail if failed else "a step failed"
         step_id = failed[0].id if failed else "?"
-        applied = [row.id for row in result.steps if row.status == "applied"]
+        # Only what ran BEFORE the failure. The link step is deliberately run
+        # afterwards (`run_on_failure`), and listing it as "applied before it"
+        # told the operator the opposite of what happened.
+        failed_at = next((index for index, row in enumerate(result.steps) if row.id == step_id), 0)
+        applied = [row.id for row in result.steps[:failed_at] if row.status == "applied"]
+        after = [row.id for row in result.steps[failed_at + 1 :] if row.status == "applied"]
         lines = [
             "",
             f"  Stopped at `{step_id}`: {detail}",
@@ -80,19 +91,30 @@ def render_summary(result: InitResult, *, workspace: str) -> list[str]:
             # operator has to know the instance is part-built before deciding
             # whether to fix forward or start over.
             lines.append(f"  Applied before it: {', '.join(applied)}.")
+        if after:
+            lines.append(f"  Run anyway, so you are not locked out: {', '.join(after)}.")
         lines.append("  Everything applied was recorded — `genus init` resumes where it stopped.")
-        if result.first_run_url:
-            lines.append("  The first-run link above still works; use it to finish in the browser.")
-        else:
-            lines.append("  Need a way in? `genus auth setup-link` mints a fresh /setup link.")
+        lines.append(_link_line(result, json_mode))
         return lines
     planned = any(row.status == "planned" for row in result.steps)
     if planned:
         return ["", "  Dry run: nothing was written."]
     lines = ["", "  Genus OS is initialized.", f"    Workspace: {workspace}"]
     if result.first_run_url:
-        lines.append("    Open the link above to finish setup in the browser.")
+        lines.append(f"    {_link_line(result, json_mode).strip()}")
     return lines
+
+
+def _link_line(result: InitResult, json_mode: bool) -> str:
+    """How to get into the instance, worded for the stream the reader has."""
+    if not result.first_run_url:
+        return "  Need a way in? `genus auth setup-link` mints a fresh /setup link."
+    if json_mode:
+        # The URL was never printed: it is in `first_run_url` and nowhere else,
+        # which is what keeps a live single-use credential out of the log half
+        # of `genus init --json > x.json 2> x.log`.
+        return "  The first-run link is in this run's JSON, under `first_run_url`."
+    return "  The first-run link above still works; use it to finish in the browser."
 
 
 def render_json(result: InitResult) -> str:

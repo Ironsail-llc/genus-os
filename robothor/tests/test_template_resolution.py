@@ -123,7 +123,14 @@ class TestCreateWorkspace:
         assert (workspace / "brain" / "CLAUDE.md").is_file()  # from brain-CLAUDE.md
         assert (workspace / "CLAUDE.md").is_file()
         assert (workspace / "AGENT_BUILDER.md").is_file()
-        assert (workspace / "docs" / "agents" / "agent-manifest.yaml").is_file()
+        # `.yaml.example`, not `.yaml`: the engine's load_manifest_dir and the
+        # template installer's cross-reference both glob `*.yaml` here, and the
+        # example's `id: {AGENT_ID}` placeholder parses as a mapping — so under
+        # the old name it was an agent to one and an unhashable key to the
+        # other, and every preset install failed while init reported success.
+        assert (workspace / "docs" / "agents" / "agent-manifest.yaml.example").is_file()
+        assert not (workspace / "docs" / "agents" / "agent-manifest.yaml").exists()
+        assert list((workspace / "docs" / "agents").glob("*.yaml")) == []
 
     def test_warns_on_missing_scaffold_file(self, tmp_path, monkeypatch, capsys):
         partial = tmp_path / "partial-templates"

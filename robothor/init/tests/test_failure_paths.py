@@ -113,6 +113,40 @@ class TestTheLinkSurvivesAFailure:
         assert "Applied before it: agents" in text
         assert "first-run link above still works" in text
 
+    def test_the_link_is_not_listed_as_having_run_before_the_failure(self):
+        """It runs AFTER, which is the whole point of run_on_failure; listing
+        it under "applied before it" told the operator the opposite."""
+        from robothor.init.plan import InitResult, StepOutcome
+
+        result = InitResult(
+            steps=[
+                StepOutcome("agents", "applied", "3 agents"),
+                StepOutcome("verify", "failed", "db.connect refused"),
+                StepOutcome("link", "applied", "a link was printed"),
+            ],
+            first_run_url="http://127.0.0.1:3004/setup?token=x",
+            exit_code=1,
+        )
+
+        text = "\n".join(render_summary(result, workspace="/tmp/ws"))
+
+        assert "Applied before it: agents." in text
+        assert "Run anyway, so you are not locked out: link." in text
+
+    def test_json_mode_points_at_the_payload_not_at_a_line_it_never_printed(self):
+        from robothor.init.plan import InitResult, StepOutcome
+
+        result = InitResult(
+            steps=[StepOutcome("link", "applied", "")],
+            first_run_url="http://127.0.0.1:3004/setup?token=x",
+            exit_code=0,
+        )
+
+        text = "\n".join(render_summary(result, workspace="/tmp/ws", json_mode=True))
+
+        assert "first_run_url" in text
+        assert "link above" not in text
+
     def test_the_summary_names_setup_link_when_there_is_no_url(self):
         from robothor.init.plan import InitResult, StepOutcome
 

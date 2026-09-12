@@ -300,7 +300,7 @@ def _drive_init(args: Any) -> tuple[Any, int]:
 
     result = run_plan(ctx, plan, on_plan=show_plan, on_step=show_step)
 
-    for line in render_summary(result, workspace=str(ctx.workspace)):
+    for line in render_summary(result, workspace=str(ctx.workspace), json_mode=bool(ctx.json_mode)):
         ctx.say(line)
     code = int(result.exit_code)
     return result, code
@@ -423,7 +423,18 @@ BRAIN_SCAFFOLD_FILES = {
     "BOOTSTRAP.md": "BOOTSTRAP.md",
     "brain-CLAUDE.md": "CLAUDE.md",
 }
-DOCS_SCAFFOLD_FILES = ("agent-manifest.yaml", "agent-instructions.md")
+#: Scaffold files copied into ``docs/agents/``, as {source name: destination}.
+#:
+#: The manifest example lands as ``.yaml.example``, NOT ``.yaml``. Both the
+#: engine's ``load_manifest_dir`` and the template installer's cross-reference
+#: glob ``*.yaml`` in this directory, and the example's placeholder line
+#: ``id: {AGENT_ID}`` parses as a mapping -- so as a ``.yaml`` it was an agent
+#: to the engine and an unhashable dictionary key to the installer, which made
+#: every preset install fail while the wizard reported success.
+DOCS_SCAFFOLD_FILES = {
+    "agent-manifest.yaml": "agent-manifest.yaml.example",
+    "agent-instructions.md": "agent-instructions.md",
+}
 ROOT_SCAFFOLD_FILES = ("CLAUDE.md", "AGENT_BUILDER.md", "ONBOARDING.md")
 EXPECTED_SCAFFOLD_FILES: tuple[str, ...] = (
     *BRAIN_SCAFFOLD_FILES,
@@ -471,8 +482,8 @@ def create_workspace(path: Path) -> None:
             _copy_scaffold_file(template_dir, src_name, brain / dst_name)
 
         # Copy agent manifest template to docs/agents/
-        for name in DOCS_SCAFFOLD_FILES:
-            _copy_scaffold_file(template_dir, name, docs / "agents" / name)
+        for src_name, dst_name in DOCS_SCAFFOLD_FILES.items():
+            _copy_scaffold_file(template_dir, src_name, docs / "agents" / dst_name)
 
         # Copy CLAUDE.md files to workspace root
         for fname in ROOT_SCAFFOLD_FILES:
@@ -748,10 +759,17 @@ def write_env_file(
 
 
 def generate_docker_compose(workspace: Path, db_password: str) -> Path:
-    """Generate a docker-compose.yml in the workspace directory."""
+    """Generate a docker-compose.yml in the workspace directory.
+
+    Mode 0600, like ``config.yaml`` and ``owner.yaml``: this file carries
+    ``POSTGRES_PASSWORD`` in plaintext, and with ``--docker`` that is a
+    credential the wizard itself minted. It was landing world-readable on a box
+    that may have other users.
+    """
     compose_path = workspace / "docker-compose.yml"
     content = DOCKER_COMPOSE_TEMPLATE.format(db_password=db_password)
     compose_path.write_text(content)
+    compose_path.chmod(0o600)
     return compose_path
 
 

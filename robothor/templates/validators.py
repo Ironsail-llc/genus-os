@@ -199,7 +199,14 @@ def validate_post_install(
     for f in sorted(manifest_dir.glob("*.yaml")):
         with f.open() as fh:
             data = yaml.safe_load(fh)
-        if data and isinstance(data, dict) and "id" in data:
+        # The id must be a STRING to be a dictionary key. A scaffold
+        # placeholder writes `id: {AGENT_ID}`, which YAML parses as a mapping,
+        # and indexing by it raised `TypeError: unhashable type: 'dict'` --
+        # caught by the preset installer per agent, so installing ten agents
+        # reported ten failures and an overall success. A manifest we cannot
+        # index is one we cannot cross-reference against; skipping it is right,
+        # and failing every install because of it is not.
+        if isinstance(data, dict) and isinstance(data.get("id"), str):
             all_manifests[data["id"]] = data
 
     # Try to get registered tools
@@ -242,7 +249,14 @@ def validate_chain_post_install(
     for f in sorted(manifest_dir.glob("*.yaml")):
         with f.open() as fh:
             data = yaml.safe_load(fh)
-        if data and isinstance(data, dict) and "id" in data:
+        # The id must be a STRING to be a dictionary key. A scaffold
+        # placeholder writes `id: {AGENT_ID}`, which YAML parses as a mapping,
+        # and indexing by it raised `TypeError: unhashable type: 'dict'` --
+        # caught by the preset installer per agent, so installing ten agents
+        # reported ten failures and an overall success. A manifest we cannot
+        # index is one we cannot cross-reference against; skipping it is right,
+        # and failing every install because of it is not.
+        if isinstance(data, dict) and isinstance(data.get("id"), str):
             all_manifests[data["id"]] = data
 
     results = validate_chain(manifest, all_manifests, repo_root=repo_root)

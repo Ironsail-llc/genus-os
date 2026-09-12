@@ -124,6 +124,18 @@ class TestDockerProvidesTheDatabaseItIsAskedFor:
         assert f"POSTGRES_USER: {config['user']}" in DOCKER_COMPOSE_TEMPLATE
         assert f"POSTGRES_DB: {config['dbname']}" in DOCKER_COMPOSE_TEMPLATE
 
+    def test_the_compose_file_is_not_world_readable(self, tmp_path):
+        """It carries POSTGRES_PASSWORD in plaintext, and with --docker that is
+        a credential this wizard minted."""
+        from robothor.setup import generate_docker_compose
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir(parents=True)
+        path = generate_docker_compose(workspace, "generated-password")
+
+        assert path.stat().st_mode & 0o077 == 0
+        assert "generated-password" in path.read_text()
+
     def test_the_container_wait_uses_the_generated_password(self, tmp_path, monkeypatch):
         import robothor.setup as setup_mod
 
@@ -221,7 +233,9 @@ class TestTheSettingsTheEnvFileUsedToHold:
         assert settings["channels"]["ai_email"] == "jarvis@example.com"
         assert settings["engine"]["timezone"] == "Europe/Lisbon"
 
-    def test_the_database_step_records_the_redis_and_ollama_endpoints(self, tmp_path):
+    def test_the_workspace_step_records_the_redis_and_ollama_endpoints(self, tmp_path):
+        """Not the database step: Redis and Ollama have nothing to do with the
+        database, and putting them there meant `--skip-db` dropped both."""
         ctx = _ctx(
             tmp_path,
             answers={
@@ -230,15 +244,28 @@ class TestTheSettingsTheEnvFileUsedToHold:
                 "ollama_host": "gpu.internal.test",
                 "ollama_port": 11435,
             },
-            db_factory=lambda: SimpleNamespace(close=lambda: None),
         )
-        DatabaseStep().apply(ctx)
+        WorkspaceStep().apply(ctx)
 
         settings = _settings(tmp_path)
         assert settings["redis"]["host"] == "redis.internal.test"
         assert settings["redis"]["port"] == 6380
         assert settings["ollama"]["host"] == "gpu.internal.test"
         assert settings["ollama"]["port"] == 11435
+
+    def test_skip_db_keeps_the_endpoints_it_has_nothing_to_do_with(self, tmp_path):
+        from robothor.init.plan import InitPlan, run_plan
+        from robothor.init.steps import DatabaseStep as _Db
+
+        ctx = _ctx(
+            tmp_path,
+            answers={"skip_db": True, "redis_host": "redis.internal.test"},
+        )
+        run_plan(ctx, InitPlan("local", [WorkspaceStep(), _Db()]))
+
+        settings = _settings(tmp_path)
+        assert settings["redis"]["host"] == "redis.internal.test"
+        assert "database" not in settings
 
     def test_a_timezone_from_the_environment_reaches_the_answers(self, tmp_path, monkeypatch):
         from robothor.setup import build_init_context

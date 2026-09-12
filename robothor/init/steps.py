@@ -611,6 +611,21 @@ class WorkspaceStep(BaseStep):
         ctx.write_setting("ROBOTHOR_AI_NAME", ai_name)
         ctx.write_setting("ROBOTHOR_AI_EMAIL", ai_email)
         ctx.write_setting("ROBOTHOR_TIMEZONE", timezone)
+
+        # Redis and Ollama live here, not in the database step. They have
+        # nothing to do with the database, and putting them there meant
+        # `--skip-db` -- which skips it -- dropped both endpoints from
+        # config.yaml along with it.
+        redis = ctx.settings.redis
+        ollama = ctx.settings.ollama
+        ctx.write_setting("ROBOTHOR_REDIS_HOST", str(ctx.answers.get("redis_host") or redis.host))
+        ctx.write_setting("ROBOTHOR_REDIS_PORT", int(ctx.answers.get("redis_port") or redis.port))
+        ctx.write_setting(
+            "ROBOTHOR_OLLAMA_HOST", str(ctx.answers.get("ollama_host") or ollama.host)
+        )
+        ctx.write_setting(
+            "ROBOTHOR_OLLAMA_PORT", int(ctx.answers.get("ollama_port") or ollama.port)
+        )
         ctx.detail(self.id, f"{ctx.workspace} (AI name {ai_name}, timezone {timezone})")
 
 
@@ -687,22 +702,6 @@ class DatabaseStep(BaseStep):
         ctx.write_setting("ROBOTHOR_DB_PORT", config["port"])
         ctx.write_setting("ROBOTHOR_DB_NAME", config["dbname"])
         ctx.write_setting("ROBOTHOR_DB_USER", config["user"])
-
-        # The other two endpoints the old `.env` carried. They belong in
-        # config.yaml, which something actually reads: an instance whose Redis
-        # is on another host otherwise depends forever on the variable being in
-        # the unit environment, and `genus config get redis.host` reports the
-        # default.
-        redis = ctx.settings.redis
-        ollama = ctx.settings.ollama
-        ctx.write_setting("ROBOTHOR_REDIS_HOST", str(ctx.answers.get("redis_host") or redis.host))
-        ctx.write_setting("ROBOTHOR_REDIS_PORT", int(ctx.answers.get("redis_port") or redis.port))
-        ctx.write_setting(
-            "ROBOTHOR_OLLAMA_HOST", str(ctx.answers.get("ollama_host") or ollama.host)
-        )
-        ctx.write_setting(
-            "ROBOTHOR_OLLAMA_PORT", int(ctx.answers.get("ollama_port") or ollama.port)
-        )
         ctx.detail(self.id, f"{config['host']}:{config['port']}/{config['dbname']}")
 
 
@@ -839,13 +838,27 @@ class AgentsStep(BaseStep):
             raise StepError(f"no preset named {preset!r}; the presets are {available}")
 
         installed = outcome.get("installed") or []
-        detail = f"{len(installed)} of {outcome.get('requested', 0)} agents installed"
+        requested = int(outcome.get("requested", 0) or 0)
         failed = outcome.get("failed") or {}
         missing = outcome.get("missing") or []
+
+        detail = f"{len(installed)} of {requested} agents installed"
         if failed:
             detail += "; failed: " + ", ".join(sorted(failed))
         if missing:
             detail += "; no template for: " + ", ".join(sorted(missing))
+
+        if requested and not installed:
+            # None of them. A step that installs zero of the agents it was
+            # asked for must not report `applied` -- that is the shape this
+            # codebase keeps paying for, and it shipped an instance with no
+            # fleet under the words "Genus OS is initialized". A PARTIAL
+            # install is different: seven agents and a named problem is still
+            # an instance, and the operator needs it either way.
+            reasons = "; ".join(f"{name}: {why}" for name, why in sorted(failed.items()))
+            raise StepError(
+                f"{detail}. The instance has no fleet, so nothing can run. " + (reasons or "")
+            )
         ctx.detail(self.id, detail)
 
 
