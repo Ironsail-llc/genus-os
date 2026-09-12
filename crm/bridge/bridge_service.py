@@ -50,11 +50,14 @@ from routers.memory import router as memory_router
 from routers.notes_tasks import router as notes_tasks_router
 from routers.notifications import router as notifications_router
 from routers.people import router as people_router
+from routers.providers import router as providers_router
 from routers.routines import router as routines_router
 from routers.runs import router as runs_router
 from routers.system_health import router as system_health_router
 from routers.tenants import router as tenants_router
 from routers.workflows import router as workflows_router
+
+from robothor.credential_errors import install_credential_safe_validation
 
 # ─── Configuration ───────────────────────────────────────────────────────
 
@@ -149,6 +152,7 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(agents_router)
 app.include_router(people_router)
+app.include_router(providers_router)
 app.include_router(conversations_router)
 app.include_router(notes_tasks_router)
 app.include_router(memory_router)
@@ -163,6 +167,10 @@ app.include_router(fleet_router)
 app.include_router(runs_router)
 app.include_router(system_health_router)
 app.include_router(workflows_router)
+
+# A 422 on the provider/vault routes must not reflect the request body:
+# on those routes the body is a credential.
+install_credential_safe_validation(app)
 
 
 if __name__ == "__main__":

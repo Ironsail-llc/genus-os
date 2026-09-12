@@ -82,6 +82,36 @@ def get_secret(
         conn.close()
 
 
+def get_secrets_updated_at(
+    keys: list[str],
+    *,
+    tenant_id: str = DEFAULT_TENANT,
+) -> dict[str, datetime]:
+    """When each of these secrets was last written, without decrypting any.
+
+    Bulk rather than per key, and separate from ``get_secret``, for two
+    different reasons. Separate, because a status page wants to say "set three
+    days ago" and has no business holding the plaintext to do it — no master
+    key is needed to answer. Bulk, because the caller is a provider listing
+    with up to five providers times sixteen slots, and one connection per slot
+    is how a status page becomes a database incident.
+
+    Keys with no row are simply absent from the result.
+    """
+    if not keys:
+        return {}
+    conn = _get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT key, updated_at FROM vault_secrets WHERE tenant_id = %s AND key = ANY(%s)",
+                (tenant_id, list(keys)),
+            )
+            return {row[0]: row[1] for row in cur.fetchall() if row[1] is not None}
+    finally:
+        conn.close()
+
+
 def delete_secret(key: str, *, tenant_id: str = DEFAULT_TENANT) -> bool:
     """Delete a secret. Returns True if a row was deleted."""
     conn = _get_conn()

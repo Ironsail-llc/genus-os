@@ -34,6 +34,11 @@ BRIDGE_AUDIENCE = "genus-bridge"
 PROBE_PATHS = frozenset({"/live", "/liveness", "/ready", "/health/startup"})
 
 _CONTROL_PATHS = (
+    # The whole /api/admin surface, reads included: it enumerates which
+    # credentials exist and dials them. A read-scoped dashboard token is the
+    # wrong identity for that, and a route added under this prefix later must
+    # inherit the requirement rather than have to remember it.
+    re.compile(r"^/api/admin(?:/.*)?$"),
     re.compile(r"^/api/extensions/reload$"),
     re.compile(r"^/api/runs/active$"),
     re.compile(r"^/api/runs/[^/]+/(?:resume|steer|interrupt)$"),

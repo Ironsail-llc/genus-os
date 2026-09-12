@@ -598,7 +598,9 @@ def _log_reasoning_replay_rejection(
     # rejection above must not go unlogged, because a history had a shape this
     # sketch could not walk.
     try:
-        logger.error("reasoning_replay_history %s", redacted_history_digest(messages, model))
+        logger.error(
+            "reasoning_replay_history %s", _sanitize(redacted_history_digest(messages, model))
+        )
     except Exception as digest_error:  # noqa: BLE001 — never lose the real error
         logger.warning("reasoning-replay history digest failed: %s", _sanitize(digest_error))
 
@@ -612,6 +614,7 @@ async def llm_call(
     timeout: int | float = 120,
     max_retries: int = 1,
     max_tokens: int | None = None,
+    api_key: str | None = None,
 ) -> Any:
     """Single-model LLM call with timeout and optional retry.
 
@@ -626,6 +629,11 @@ async def llm_call(
         timeout: Per-attempt timeout in seconds.
         max_retries: Total attempts (1 = no retry, 2 = one retry, etc.).
         max_tokens: Optional max output tokens.
+        api_key: Credential for THIS call only. Without it litellm resolves the
+            process environment, which is correct for every normal caller and
+            wrong for the one that has to validate a key the operator has just
+            typed and not yet stored — putting that key in ``os.environ`` would
+            hand it to every thread and subprocess for the life of the process.
 
     Returns:
         The ``litellm.ModelResponse`` object.
@@ -648,6 +656,8 @@ async def llm_call(
         kwargs["response_format"] = {"type": "json_object"}
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
+    if api_key is not None:
+        kwargs["api_key"] = api_key
 
     async def _attempt() -> Any:
         model = kwargs["model"]
@@ -694,8 +704,8 @@ async def llm_call(
             if candidate != chain[-1]:
                 logger.warning(
                     "llm_call: %s failed (%s); trying the next model in the chain",
-                    candidate,
-                    exc,
+                    _sanitize(candidate),
+                    _sanitize(exc),
                 )
     assert last is not None  # the loop ran at least once
     raise last
@@ -855,12 +865,16 @@ class LLMClient:
         # pool would mean reporting it "exhausted" and skipping every model on
         # it, when the correct behaviour is the one every deployment has
         # today — let litellm resolve the environment itself.
-        from robothor.engine.key_pool import shared_pool
+        from robothor.engine.key_pool import provider_for_var, resolve_keys, shared_pool
         from robothor.engine.provider_alerts import exhaustion_hook
 
-        return shared_pool(
-            var, on_exhausted=exhaustion_hook(var, pool_size=len(keys_from_env(var)))
-        )
+        # Counted the way the pool is BUILT, not the way it used to be: a
+        # vault-only provider has no numbered env siblings at all, so
+        # keys_from_env reported a pool of zero and the exhaustion page said
+        # "0 of 0 credentials" for an outage of four real keys.
+        spec = provider_for_var(var)
+        size = len(resolve_keys(spec.id)) if spec is not None else len(keys_from_env(var))
+        return shared_pool(var, on_exhausted=exhaustion_hook(var, pool_size=size))
 
     # ─── Cost ────────────────────────────────────────────────────────
 

@@ -78,6 +78,49 @@ responses are retried up to 3 attempts with jittered exponential backoff
 timeouts and network errors get one retry; other errors fall back to local
 immediately.
 
+### Provider keys
+
+Five providers can hold credentials: `openrouter`, `anthropic`, `openai`,
+`gemini`, `deepseek`. Each resolves **vault-first, then environment**, slot by
+slot — a key written from the Settings page or the setup wizard wins the slot
+it was written to, while a spare left in the shell keeps working.
+
+| Slot | Vault key | Environment variable |
+|------|-----------|----------------------|
+| 1 (primary) | `providers/<id>/api_key` | `<PROVIDER>_API_KEY` |
+| 2+ (spare) | `providers/<id>/api_key_<N>` | `<PROVIDER>_API_KEY_<N>` |
+
+From a terminal:
+
+```
+genus vault set providers/openrouter/api_key sk-or-v1-primary
+genus vault set providers/openrouter/api_key_2 sk-or-v1-spare
+```
+
+**Spares must be contiguous.** The pool walks slots from 1 and stops at the
+first empty one, so a key in slot 3 with slot 2 empty would be stored and never
+dialled. `PUT /api/providers/{id}/keys/{n}` refuses that with a 409 naming the
+slot to fill first, and `GET /api/providers` reports any pre-existing stranded
+row as `state: "orphaned"`.
+
+**When the engine reads the vault.** Once at startup (before any subsystem
+runs, so direct-`os.environ` consumers like memory generation see the key on
+the first turn), and again on `POST /api/admin/secrets/reload` — what the
+Settings page calls after a save — or on `SIGHUP`. Neither cancels in-flight
+work, so no restart is needed. Between refreshes the values are served from an
+in-memory snapshot: credential resolution sits on the LLM hot path and must not
+open a database connection per call.
+
+An instance whose vault has no master key resolves from the environment only
+and says so once at INFO — the credential store is optional, and an engine that
+could not make an LLM call because it is empty would be worse than no vault at
+all.
+
+Secrets are write-only end to end. `GET /api/providers` reports
+`{configured, source, fingerprint, state, updated_at}` per slot and never a
+value, and the test connection's error text is scrubbed of every credential
+the provider might have echoed back.
+
 ### Credential pools
 
 Every model in a fallback chain authenticates with the same provider key, so

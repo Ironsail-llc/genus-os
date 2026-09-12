@@ -622,23 +622,41 @@ def _with_last_resort(primary: str, fallbacks: list[str]) -> list[str]:
     return [*fallbacks, last_resort]
 
 
-# Cache for _defaults.yaml: (mtime, parsed_dict)
-_defaults_cache: tuple[float, dict[str, Any]] = (0.0, {})
+# Cache for _defaults.yaml: {resolved directory: (mtime, parsed_dict)}.
+#
+# Keyed by DIRECTORY as well as mtime. Keyed on mtime alone, a second manifest
+# directory whose `_defaults.yaml` happened to carry the same timestamp was
+# served the first one's model block — and that is not a hypothetical: an
+# atomic write is `os.replace` of a temp file, which inherits whatever
+# timestamp the temp file had, and a test fixture or a restored backup can
+# easily produce two equal mtimes.
+_defaults_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def reset_defaults_cache() -> None:
+    """Forget every parsed ``_defaults.yaml``.
+
+    The mtime check catches an ordinary edit, but not a write that preserved
+    the timestamp — so the admin reload route drops the cache outright rather
+    than trusting it to notice.
+    """
+    _defaults_cache.clear()
 
 
 def _load_defaults(manifest_dir: Path) -> dict[str, Any]:
-    """Load fleet-wide defaults from _defaults.yaml (cached by mtime)."""
-    global _defaults_cache  # noqa: PLW0603
+    """Load fleet-wide defaults from _defaults.yaml (cached per dir by mtime)."""
     defaults_path = manifest_dir / "_defaults.yaml"
     if not defaults_path.exists():
         return {}
+    cache_key = str(Path(manifest_dir).resolve())
     mtime = defaults_path.stat().st_mtime
-    if _defaults_cache[0] == mtime:
-        return _defaults_cache[1]
+    cached = _defaults_cache.get(cache_key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
     try:
         with defaults_path.open() as f:
             data = yaml.safe_load(f) or {}
-        _defaults_cache = (mtime, data)
+        _defaults_cache[cache_key] = (mtime, data)
         return data
     except Exception as e:
         logger.warning("Failed to load _defaults.yaml: %s", e)

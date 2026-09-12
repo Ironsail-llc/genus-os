@@ -34,7 +34,10 @@ MAX_NEW_FUNCTION_LINES = 200
 #: down with it. Delete an entry when its function drops under the threshold.
 KNOWN_LARGE: dict[str, int] = {
     "tools/schemas.py::get_engine_schemas": 3520,
-    "health.py::create_health_app": 1477,  # +1: execution_mode block in /health
+    # -29: every subsystem router mount extracted to _mount_subsystem_routers,
+    # which is what made room for the /api/admin registration rather than
+    # raising this number for it.
+    "health.py::create_health_app": 1448,
     "runner.py::execute": 990,  # +7: task_id propagated onto the run at INSERT time
     "runner.py::_run_loop": 775,
     # +12: run/tenant threaded onto the signature, and the do-not-contact
@@ -45,7 +48,11 @@ KNOWN_LARGE: dict[str, int] = {
     # Five irreducible lines (normalise the list, call, branch, return) plus
     # three of comment; the guard itself is still in _dnc_refusal.
     "tools/handlers/gws.py::_handle_gws_tool": 473,
-    "daemon.py::main": 397,  # -14: fleet capacity init extracted to _init_fleet_capacity
+    # -14: fleet capacity init extracted to _init_fleet_capacity;
+    # -26: structlog wiring extracted to _configure_structured_logging, which
+    # is what made room for the startup provider-secrets load rather than
+    # raising this number for it.
+    "daemon.py::main": 371,
     "telegram.py::_run_interactive": 384,
     "tools/handlers/benchmark.py::_benchmark_run": 370,
     "analytics.py::get_agent_stats": 343,

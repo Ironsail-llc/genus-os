@@ -43,6 +43,17 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("GET", "/api/memory/entity/{name}"),
         ("POST", "/api/memory/search"),
         ("POST", "/api/memory/store"),
+        # The provider routes await the engine over HTTP — that is the whole
+        # of what they do, so the event loop is where they belong. The
+        # blocking parts they still own (the psycopg2 vault write, the
+        # _defaults.yaml read-modify-write) go through asyncio.to_thread
+        # inside the handler rather than making the route synchronous.
+        ("GET", "/api/providers"),
+        ("GET", "/api/models"),
+        ("PUT", "/api/providers/{provider_id}/keys/{position}"),
+        ("DELETE", "/api/providers/{provider_id}/keys/{position}"),
+        ("POST", "/api/providers/{provider_id}/test"),
+        ("PATCH", "/api/providers/defaults"),
     }
 
 
