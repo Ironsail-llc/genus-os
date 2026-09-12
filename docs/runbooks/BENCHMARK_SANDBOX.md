@@ -197,7 +197,7 @@ belongs to an agent that can call the benchmark tools while the sandbox mode is
    SELECT 'tasks',  count(*) FROM crm_tasks  WHERE tenant_id = 'benchmark-sandbox';
    ```
 3. Zero rows written to any other tenant by a benchmark run — check
-   `agent_runs` for `is_benchmark = true` and confirm the CRM audit log shows no
+   `agent_runs` rows whose `trigger_detail` starts with `benchmark:` (there is no `is_benchmark` column; the flag lives on the run object only) and confirm the CRM audit log shows no
    mutation outside `benchmark-sandbox`.
 
 ## Rollback

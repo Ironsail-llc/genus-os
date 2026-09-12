@@ -119,8 +119,9 @@ def is_benchmark_run(trigger_detail: str | None, *, is_benchmark: bool = False) 
 
     Args:
         trigger_detail: the run's ``agent_runs.trigger_detail`` (may be None).
-        is_benchmark: the run's own ``agent_runs.is_benchmark`` flag, when the
-            caller holds the row. Authoritative on its own.
+        is_benchmark: the run object's ``is_benchmark`` flag (there is no such
+            column on ``agent_runs``; SQL consumers filter on the trigger prefix).
+            Authoritative on its own.
 
     Returns:
         True when the run was spawned to be graded rather than to act.
