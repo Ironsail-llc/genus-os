@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# A `curl` that serves THIS checkout's compose files instead of main's.
+#
+# The quickstart's compose block fetches the two compose files from
+# raw.githubusercontent.com/.../main/infra/. That is right for a reader and
+# wrong for a gate running on a pull request: it would test main's compose
+# files while claiming to test the branch, so a PR that breaks
+# docker-compose.apps.yml would go green.
+#
+# So this shim, on PATH only for the step that replays the block, answers the
+# two known URLs from the working tree and execs the real curl for everything
+# else. INSTALL_GATE_REPO must point at the checkout.
+set -euo pipefail
+
+real_curl="$(PATH="$(echo "$PATH" | tr ':' '\n' | grep -v "$(dirname "$0")" | paste -sd:)" command -v curl)"
+
+for arg in "$@"; do
+  case "$arg" in
+    https://raw.githubusercontent.com/*/infra/docker-compose*.yml)
+      name="$(basename "$arg")"
+      source="${INSTALL_GATE_REPO:?INSTALL_GATE_REPO is not set}/infra/${name}"
+      echo "install-gate: serving ${name} from the checkout, not from main" >&2
+      cp "$source" "./${name}"
+      exit 0
+      ;;
+  esac
+done
+
+exec "$real_curl" "$@"

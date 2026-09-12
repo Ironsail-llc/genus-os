@@ -40,7 +40,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-357 settings in 13 groups.
+359 settings in 13 groups.
 
 ## paths
 
@@ -133,6 +133,7 @@ Cloud model routing, budgets and the failure controls around them.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `OPENROUTER_API_BASE` | str | _(empty)_ | no | no | 1.71.0 | OpenAI-compatible endpoint every `openrouter/*` model is dialled at, instead of https://openrouter.ai/api/v1. Point it at a corporate gateway, a recording proxy, or the acceptance gate's mock server. Declared here so the knob is documented and inventoried, but litellm reads the ENVIRONMENT VARIABLE itself -- setting this key in config.yaml alone changes nothing. |
 | `ROBOTHOR_COMPACTION_TRIGGER_TOKENS` | int | `80000` | no | no | legacy | Absolute prompt-token budget above which a run compacts its context. |
 | `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` | int | `40` | no | no | legacy | Number of tools above which schemas are deferred behind tool search rather than sent in full on every request. |
 | `ROBOTHOR_EAGER_TOOL_COMPRESSION` | bool | `false` | `robothor-engine` | no | legacy | Fleet default for compressing tool results as soon as they land rather than at the next compaction. A manifest setting wins over it. |
@@ -355,6 +356,7 @@ Where and how the instance runs: host accounts, federation, backups.
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `GENUS_ALLOW_DEPLOYMENT_LAG` | bool | `false` | `robothor-engine`, `robothor-bridge` | no | legacy | Let the version-consistency check pass while the deployed version trails the released one. An escape hatch for a deliberate hold, not a way to stop noticing that a promotion was lost. |
+| `GENUS_IMAGE_TAG` | str | _(empty)_ | no | no | 1.71.0 | Released image tag infra/docker-compose.apps.yml runs, for every container in the compose substrate. It has no default in the compose file on purpose -- the release build publishes no `latest`, so an unset tag must refuse to start rather than pull something that does not exist. `genus init --substrate compose` writes `v<this CLI's version>` into genus.env and deliberately does NOT read this from the environment; `--image-tag` is the override. |
 | `GENUS_OS_DEPLOYED_AT` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Timestamp the Helm chart stamps onto every pod, so a running container can say when it was deployed rather than when it booted. |
 | `GENUS_OS_DEPLOYED_FROM_PR` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | PR number a staging deployment came from, stamped by the Helm chart. Empty on a production release, which comes from a tag. |
 | `GENUS_OS_IMAGE_TAG` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Container image tag the Helm chart stamped onto the pod. Production pins an exact vX.Y.Z; staging pins pr-N-sha-<short>. |
