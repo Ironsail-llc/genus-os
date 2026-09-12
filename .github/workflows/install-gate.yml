@@ -113,7 +113,7 @@ jobs:
       - name: Build a wheelhouse so the block's pip install is THIS branch
         run: |
           python -m pip install --upgrade pip wheel
-          python -m pip wheel . -w "$GITHUB_WORKSPACE/wheelhouse"
+          python -m pip wheel ".[api]" -w "$GITHUB_WORKSPACE/wheelhouse"
           python -m pip install fastapi uvicorn httpx
 
       - name: Start the mock model server
@@ -150,6 +150,17 @@ jobs:
           genus run --agent main --print "say pong" 2>&1 | tee "$RUNNER_TEMP/run.txt"
           grep -qi pong "$RUNNER_TEMP/run.txt"
           echo 'assertion OK: genus run --agent main "say pong" printed pong'
+
+      # The quickstart says so itself, next to the command it prints:
+      # `genus serve` "needs: pip install genusos[api]". The api extra carries
+      # fastapi, uvicorn, pyjwt and argon2-cffi -- without the last one the
+      # bridge cannot even import its auth router. Resolved from the same
+      # wheelhouse, so this is still the branch's code.
+      - name: Install what the bridge needs to run
+        env:
+          PIP_NO_INDEX: "1"
+          PIP_FIND_LINKS: ${{ github.workspace }}/wheelhouse
+        run: python -m pip install "genusos[api]"
 
       - name: Start the bridge
         run: |
