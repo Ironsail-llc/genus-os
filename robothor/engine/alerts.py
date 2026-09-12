@@ -36,6 +36,22 @@ logger = logging.getLogger(__name__)
 # digest so the operator is only interrupted for things that need them.
 _PAGE_LEVELS = frozenset({"critical"})
 
+#: Where an alert raised INSIDE a benchmark child goes. A separate notification
+#: type rather than a tag on ``alert_digest``, because the heartbeat's alert
+#: reader selects by type (``warmup.ALERT_DIGEST_TYPES``) and a tag it does not
+#: read is a tag it cannot act on. On 2026-09-11 the graded runs produced 135
+#: digest rows in fourteen hours and the operator's "Hello" became a six-minute
+#: triage of alerts about agents that were being TESTED, not failing.
+#:
+#: The rows are still written, and deliberately: a benchmark suite that trips
+#: the runaway-token guard every night is a real finding about the suite. It is
+#: simply not an interrupt.
+BENCHMARK_DIGEST_TYPE = "benchmark_digest"
+
+#: Prefix on the subject of such a row, so a human reading the table directly
+#: can tell at a glance.
+BENCHMARK_SUBJECT_TAG = "[benchmark]"
+
 
 async def alert(
     level: str,
@@ -60,6 +76,21 @@ async def alert(
         True if the alert was verifiably delivered (Telegram send returned
         sent messages, or the digest/fallback notification row was written).
     """
+    from robothor.engine.run_context import in_benchmark_run
+
+    if in_benchmark_run():
+        # A graded child is not production. Whatever the level, whatever the
+        # channel: no page, no webhook, and a row in a type the operator's
+        # heartbeat does not read. Checked before the channel switch so a
+        # future channel cannot be added past it.
+        return await _write_notification(
+            BENCHMARK_DIGEST_TYPE,
+            level,
+            f"{BENCHMARK_SUBJECT_TAG} {title}",
+            body,
+            metadata,
+        )
+
     if channel == "telegram":
         if level in _PAGE_LEVELS:
             return await _send_telegram(level, title, body)
