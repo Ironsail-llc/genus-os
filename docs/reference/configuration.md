@@ -37,7 +37,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-314 settings in 13 groups.
+315 settings in 13 groups.
 
 ## paths
 
@@ -258,6 +258,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_FEDERATION_ALLOW_INERT_RLS` | bool | `false` | yes | no | legacy | **governed.** Let a federation link activate while row-level security is inert. A deliberate escape hatch: the gate exists because a child could otherwise reach its parent's data. |
 | `ROBOTHOR_HA_DEDUP_ENABLED` | bool | `false` | yes | no | legacy | Deduplicate work across engine replicas through Redis instead of in-process only. Off is the correct single-node default. |
 | `ROBOTHOR_HA_LEADER_ENABLED` | bool | `false` | yes | no | legacy | Elect a leader among engine replicas so scheduled work runs once. Unset means single-node, where every process is the leader. |
+| `ROBOTHOR_MANIFEST_SCHEMA_MODE` | str | `observe` | yes | no | legacy | **governed.** Agent-manifest schema ladder position: observe logs and counts what enforcement would refuse, enforce refuses the manifest and reports the agent broken. off skips validation entirely. |
 | `ROBOTHOR_PLANNER_ENABLED` | bool | `true` | yes | no | legacy | **governed.** Let the forward planner turn a thread into structured CRM tasks. Set 0 to fall back to stage-3 behaviour. |
 | `ROBOTHOR_PLUGIN_MANIFEST_ENABLED` | bool | `true` | yes | no | legacy | **governed.** Validate plugin manifests before a plugin is allowed to load. |
 | `ROBOTHOR_PLUGIN_MANIFEST_MODE` | str | `observe` | yes | no | legacy | **governed.** Plugin-manifest ladder position: observe logs violations, enforce refuses to load the plugin. |

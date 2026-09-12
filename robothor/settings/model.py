@@ -1082,6 +1082,14 @@ class FlagSettings(SettingsGroup):
         "Elect a leader among engine replicas so scheduled work runs once. "
         "Unset means single-node, where every process is the leader.",
     )
+    manifest_schema_mode: str = declare(
+        "observe",
+        "ROBOTHOR_MANIFEST_SCHEMA_MODE",
+        "Agent-manifest schema ladder position: observe logs and counts what "
+        "enforcement would refuse, enforce refuses the manifest and reports "
+        "the agent broken. off skips validation entirely.",
+        governed=True,
+    )
     planner_enabled: bool = declare(
         True,
         "ROBOTHOR_PLANNER_ENABLED",

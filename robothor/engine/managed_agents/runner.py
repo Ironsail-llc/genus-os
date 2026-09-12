@@ -186,7 +186,7 @@ async def run_on_managed_agents(
     accumulated: list[str] = []
     t_start = time.monotonic()
 
-    workspace = str(Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))))
+    workspace = str(_workspace())
 
     try:
         async for event in client.stream_session(session_id):
@@ -353,6 +353,17 @@ async def _handle_custom_tool(
         await on_tool({"name": tool_name, "status": "done"})
 
 
+def _workspace() -> Path:
+    """The instance workspace, read in ONE place in this module.
+
+    Three functions here resolved ``ROBOTHOR_WORKSPACE`` with the same
+    expression, so a change of default had three places to miss. One reader
+    also means one line to move behind ``robothor.settings.get_settings()``
+    when the flag readers migrate.
+    """
+    return Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+
+
 def _build_tools(
     agent_id: str,
     tool_names: list[str] | None,
@@ -374,11 +385,7 @@ def _build_tools(
     try:
         from robothor.engine.config import load_agent_config_or_broken
 
-        manifest_dir = (
-            Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
-            / "docs"
-            / "agents"
-        )
+        manifest_dir = _workspace() / "docs" / "agents"
         # `_or_broken` inside the broad except, not instead of it: a refused
         # manifest is specific and actionable and must be NAMED, while the
         # except still covers whatever else goes wrong. "Could not load agent
@@ -408,7 +415,7 @@ def _load_system_prompt(agent_id: str) -> str:
     try:
         from robothor.engine.config import build_system_prompt, load_agent_config_or_broken
 
-        workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
+        workspace = _workspace()
         manifest_dir = workspace / "docs" / "agents"
         config = load_agent_config_or_broken(agent_id, manifest_dir, "managed-agent prompt")
         if config is None:
