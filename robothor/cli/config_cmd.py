@@ -14,9 +14,9 @@ commands route by that metadata instead of asking the operator to know:
               (live), a secret refused (``genus vault set`` owns those), and
               everything else to the ``settings:`` block of config.yaml.
 ``list``      every setting, or one group, or only what is configured.
-``validate``  the connectivity checks plus the three ways a config file lies:
-              keys nothing reads, names that moved, and a file that disagrees
-              with the running process.
+``validate``  an alias for ``genus doctor``, which asks everything this
+              command used to ask and a dozen more. Kept so existing runbooks
+              and scripts keep working.
 ``schema``    the JSON Schema, for tooling.
 
 A secret is never printed by any of them. ``get`` and ``list`` show
@@ -617,165 +617,13 @@ def _cmd_set(args: argparse.Namespace) -> int:
     return _set_result(True, units, [], as_json)
 
 
-# ── validate ─────────────────────────────────────────────────────────────────
+# ── validate (an alias for `genus doctor`) ───────────────────────────────────
 
-#: A Telegram bot token is ``<digits>:<secret>``. Checking the shape is the
-#: most that can be done without calling the API with the operator's token.
-_TOKEN_PREFIX_DIGITS = 5
-
-
-def _telegram_checks() -> list[tuple[str, str, str]]:
-    """Telegram is optional. Configured badly is an error; absent is not.
-
-    The daemon has always run without it -- agents with ``delivery: none``
-    communicate through CRM tasks and notifications -- but validate demanded a
-    bot token and a chat id, so every Telegram-free deploy failed a check it
-    could never pass, and the operator learned to ignore the output.
-    """
-    from robothor.settings import get_settings
-
-    channels = get_settings().channels
-    token = channels.telegram_bot_token
-    chat = channels.telegram_chat_id
-    if not token and not chat:
-        return [("telegram", "info", "not configured, delivery=none")]
-
-    checks: list[tuple[str, str, str]] = []
-    head, _, tail = token.partition(":")
-    if not token:
-        checks.append(
-            ("telegram:token", "error", "a chat id is set but ROBOTHOR_TELEGRAM_BOT_TOKEN is not")
-        )
-    elif not (head.isdigit() and len(head) >= _TOKEN_PREFIX_DIGITS and tail):
-        # The value itself is a credential even when it is malformed.
-        checks.append(
-            (
-                "telegram:token",
-                "error",
-                "ROBOTHOR_TELEGRAM_BOT_TOKEN is not shaped like a bot token "
-                "(expected <digits>:<secret>)",
-            )
-        )
-    else:
-        # The digits before the colon are the bot's public id -- they are in
-        # every getMe response and identify WHICH bot delivers, which is what
-        # an operator with two instances needs. The half after the colon is
-        # the credential and is never printed.
-        checks.append(("telegram:token", "pass", f"bot {head}"))
-
-    if not chat:
-        checks.append(
-            ("telegram:chat", "error", "a bot token is set but ROBOTHOR_TELEGRAM_CHAT_ID is not")
-        )
-    elif chat.startswith("@") or chat.lstrip("-").isdigit():
-        checks.append(("telegram:chat", "pass", chat))
-    else:
-        checks.append(
-            (
-                "telegram:chat",
-                "error",
-                f"ROBOTHOR_TELEGRAM_CHAT_ID={chat!r} is neither a numeric id nor an @name",
-            )
-        )
-    return checks
-
-
-def _unknown_key_checks() -> list[tuple[str, str, str]]:
-    from robothor.settings.sources import config_yaml_path, strict_mode, unknown_config_keys
-
-    try:
-        unknown = unknown_config_keys()
-    except ValueError as exc:  # malformed file: name it and stop there
-        return [("config.yaml", "error", str(exc))]
-    if not unknown:
-        return [("config.yaml:keys", "pass", f"no unknown keys ({config_yaml_path()})")]
-    mode = strict_mode()
-    return [
-        (
-            f"config.yaml:{key}",
-            "error",
-            f"unknown setting {key!r} -- nothing reads it"
-            + (
-                " and ROBOTHOR_CONFIG_STRICT_MODE=enforce will refuse to start"
-                if mode == "enforce"
-                else ""
-            ),
-        )
-        for key in unknown
-    ]
-
-
-def _alias_checks() -> list[tuple[str, str, str]]:
-    from robothor.settings.aliases import DEPRECATED_ALIASES
-
-    checks = [
-        (f"deprecated:{old}", "warn", f"{old} is deprecated and still set; use {new}")
-        for old, new in provenance.deprecated_names_in_use()
-    ]
-    for group, values in provenance.settings_block().items():
-        if not isinstance(values, dict):
-            continue
-        checks.extend(
-            (
-                f"deprecated:{group}.{key}",
-                "warn",
-                f"{key} in config.yaml is deprecated; use {DEPRECATED_ALIASES[key]}",
-            )
-            for key in values
-            if key in DEPRECATED_ALIASES
-        )
-    return checks
-
-
-def _pending_restart_checks() -> list[tuple[str, str, str]]:
-    """Settings whose file value is not what this process was started with.
-
-    Only ``restart_required`` fields can be in this state: a hot field is read
-    again on the next use. The comparison is against the environment, which is
-    what a service was started from -- so a value edited into config.yaml after
-    the engine came up, or one being overridden by a stale variable in
-    ``/etc/robothor/robothor.env``, shows up here instead of looking applied.
-
-    Both sides go through the field first. The file's value is whatever YAML
-    parsed -- a real ``True``, a real ``7`` -- and the environment is always
-    text, so comparing them as strings made ``rls_enabled: true`` disagree with
-    ``ROBOTHOR_RLS_ENABLED=true`` on every box that set both, and ``validate``
-    failed where nothing was wrong.
-
-    These are warnings, not errors. The environment winning over the file is
-    documented precedence, not a broken instance; exiting non-zero for it would
-    make the command useless as a gate for what IS broken -- a key nothing
-    reads. The JSON output carries them in their own ``pending_restart`` list.
-    """
-    from robothor.settings.registry import field_index
-
-    checks = []
-    seen: set[str] = set()
-    for record in field_index().values():
-        if record["env"] in seen or not record["restart_required"]:
-            continue
-        seen.add(record["env"])
-        present, raw = provenance.file_value(record)
-        if not present:
-            continue
-        env_name = provenance.env_name_in_use(record)
-        if env_name is None:
-            continue
-        running = provenance.running_env_value(env_name) or ""
-        if _agree(record, raw, running):
-            continue
-        shown_file = "<set>" if record["secret"] else repr(raw)
-        shown_env = "<set, differing>" if record["secret"] else repr(running)
-        checks.append(
-            (
-                f"pending restart:{record['env']}",
-                "warn",
-                f"config.yaml says {shown_file}, this process reads {shown_env} from "
-                f"{env_name} (the environment wins) -- clear the variable and restart "
-                f"{', '.join(_units_for(record)) or 'the reader'} to apply the file",
-            )
-        )
-    return checks
+#: Helpers the doctor's own checks call. ``_agree`` and ``_units_for`` stay
+#: here because ``set`` and ``explain`` use them too; the checks that used to
+#: live in this section moved to ``robothor/doctor/checks/`` whole, so that
+#: `genus doctor`, the bridge's ``/api/doctor`` and this command all ask the
+#: same questions rather than three similar ones.
 
 
 def _agree(record: dict[str, Any], file_value: Any, env_value: str) -> bool:
@@ -792,45 +640,37 @@ def _agree(record: dict[str, Any], file_value: Any, env_value: str) -> bool:
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
-    from robothor.config import validate as connectivity_checks
+    """Run `genus doctor`, and say that this is what it now is.
 
-    checks: list[tuple[str, str, str]] = []
-    checks.extend(_telegram_checks())
-    checks.extend(_unknown_key_checks())
-    checks.extend(_alias_checks())
-    checks.extend(_pending_restart_checks())
-    checks.extend(
-        (name, "pass" if ok else "error", detail) for name, ok, detail in connectivity_checks()
+    Every question this command used to ask is a doctor check, and the doctor
+    asks a dozen more that a fresh install actually fails on -- an unseeded
+    ``service`` role, a drifted migration ledger, a provider that cannot make a
+    completion. Keeping two commands would have meant two answers to "is this
+    instance working", which is how the platform ended up with three partial
+    ones in the first place.
+
+    The exit codes are unchanged: 0 when nothing required failed, 1 when
+    something did. The note goes to stderr so that
+    ``genus config validate --json | jq`` keeps working.
+    """
+    from robothor.cli.doctor_cmd import cmd_doctor
+
+    print(
+        "genus config validate is deprecated; it now runs 'genus doctor', which checks "
+        "more and can repair some of it.",
+        file=sys.stderr,
     )
-
-    errors = [f"{name}: {detail}" for name, status, detail in checks if status == "error"]
-    pending = [
-        name.split(":", 1)[1] for name, _s, _d in checks if name.startswith("pending restart:")
-    ]
-
-    if getattr(args, "json", False):
-        print(
-            json.dumps(
-                {
-                    "checks": [
-                        {"name": name, "status": status, "detail": detail}
-                        for name, status, detail in checks
-                    ],
-                    "errors": errors,
-                    "pending_restart": pending,
-                },
-                indent=2,
-                sort_keys=True,
-            )
+    return cmd_doctor(
+        argparse.Namespace(
+            json=getattr(args, "json", False),
+            fix=False,
+            dry_run=False,
+            offline=False,
+            timeout=5.0,
+            only=None,
+            category=None,
         )
-        return 1 if errors else 0
-
-    icons = {"pass": "\033[32m✓\033[0m", "error": "\033[31m✗\033[0m", "warn": "!", "info": "·"}
-    for name, status, detail in checks:
-        print(f"  {icons.get(status, '?')} {name}: {detail}")
-    passed = sum(1 for _n, status, _d in checks if status == "pass")
-    print(f"\n{passed} passed, {len(errors)} failed")
-    return 1 if errors else 0
+    )
 
 
 # ── schema ───────────────────────────────────────────────────────────────────

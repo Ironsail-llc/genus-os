@@ -1,0 +1,207 @@
+"""``genus doctor`` from the command line.
+
+The CLI half is thin on purpose -- the runner does the work -- so what is
+pinned here is the surface an operator and a CI gate depend on: the flags
+parse, ``--json`` is machine-readable, the exit code is the runner's, and
+``genus config validate`` still answers on the same exit codes it always did
+while saying it has moved.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+
+import pytest
+
+from robothor.cli import _build_parser
+from robothor.cli.doctor_cmd import cmd_doctor
+from robothor.doctor.model import Check, Result
+from robothor.doctor.runner import DoctorReport
+
+
+def _check(check_id: str, status: str = "pass", severity: str = "required") -> Check:
+    async def run(_ctx) -> Result:
+        """A stub."""
+        return Result(status=status, detail="stubbed")
+
+    return Check(
+        id=check_id,
+        title=check_id,
+        category=check_id.split(".")[0],
+        severity=severity,  # type: ignore[arg-type]
+        run=run,
+    )
+
+
+@pytest.fixture
+def stub_checks(monkeypatch):
+    """Replace the real registry: the CLI test must not touch this box."""
+    holder: list[Check] = [_check("a.one")]
+
+    def _all_checks(*_args, **_kwargs):
+        return tuple(holder)
+
+    monkeypatch.setattr("robothor.doctor.registry.all_checks", _all_checks)
+    monkeypatch.setattr("robothor.doctor.runner._default_checks", _all_checks)
+    return holder
+
+
+# ── the parser ───────────────────────────────────────────────────────────────
+
+
+def test_doctor_is_a_subcommand_with_every_documented_flag() -> None:
+    args = _build_parser().parse_args(
+        ["doctor", "--fix", "--json", "--only", "db.connect", "--offline", "--timeout", "9"]
+    )
+    assert args.command == "doctor"
+    assert args.fix is True
+    assert args.json is True
+    assert args.only == "db.connect"
+    assert args.offline is True
+    assert args.timeout == 9.0
+
+
+def test_doctor_defaults_are_a_five_second_budget_and_no_repair() -> None:
+    args = _build_parser().parse_args(["doctor"])
+    assert args.fix is False
+    assert args.dry_run is False
+    assert args.timeout == 5.0
+    assert args.only is None
+    assert args.category is None
+
+
+def test_category_is_accepted() -> None:
+    assert _build_parser().parse_args(["doctor", "--category", "database"]).category == "database"
+
+
+# ── running it ───────────────────────────────────────────────────────────────
+
+
+def _args(**kwargs) -> argparse.Namespace:
+    defaults = {
+        "json": False,
+        "fix": False,
+        "dry_run": False,
+        "offline": False,
+        "timeout": 1.0,
+        "only": None,
+        "category": None,
+    }
+    defaults.update(kwargs)
+    return argparse.Namespace(**defaults)
+
+
+def test_json_output_parses_and_carries_the_documented_keys(stub_checks, capsys) -> None:
+    assert cmd_doctor(_args(json=True)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ok"
+    assert set(payload["summary"]) == {
+        "required_failed",
+        "recommended_failed",
+        "passed",
+        "skipped",
+    }
+    assert set(payload["checks"][0]) == {
+        "id",
+        "title",
+        "category",
+        "severity",
+        "status",
+        "detail",
+        "fixable",
+    }
+
+
+def test_a_required_failure_exits_one(stub_checks, capsys) -> None:
+    stub_checks[:] = [_check("a.one", status="fail")]
+    assert cmd_doctor(_args(json=True)) == 1
+    assert json.loads(capsys.readouterr().out)["status"] == "degraded"
+
+
+def test_an_unknown_only_id_exits_two(stub_checks, capsys) -> None:
+    assert cmd_doctor(_args(only="nope.nope")) == 2
+    assert "nope.nope" in capsys.readouterr().out
+
+
+def test_the_human_table_names_every_check(stub_checks, capsys) -> None:
+    stub_checks[:] = [_check("a.one"), _check("b.one", status="fail")]
+    assert cmd_doctor(_args()) == 1
+    out = capsys.readouterr().out
+    assert "a.one" in out
+    assert "b.one" in out
+    assert "failed" in out
+
+
+def test_offline_and_timeout_reach_the_context(monkeypatch, stub_checks) -> None:
+    seen = {}
+
+    def _fake_run_sync(ctx, **kwargs):
+        seen["offline"] = ctx.offline
+        seen["timeout"] = ctx.timeout_s
+        seen["fix"] = ctx.fix
+        seen["dry_run"] = ctx.dry_run
+        return DoctorReport()
+
+    monkeypatch.setattr("robothor.cli.doctor_cmd.run_sync", _fake_run_sync)
+    cmd_doctor(_args(offline=True, timeout=2.5, fix=True, dry_run=True))
+    assert seen == {"offline": True, "timeout": 2.5, "fix": True, "dry_run": True}
+
+
+# ── the alias ────────────────────────────────────────────────────────────────
+
+
+def test_config_validate_says_it_moved_and_returns_the_doctor_exit_code(
+    monkeypatch, capsys
+) -> None:
+    from robothor.cli.config_cmd import cmd_config
+
+    monkeypatch.setattr(
+        "robothor.cli.doctor_cmd.run_sync",
+        lambda ctx, **kwargs: DoctorReport(),
+    )
+    assert cmd_config(argparse.Namespace(config_command="validate", json=False)) == 0
+    err = capsys.readouterr().err
+    assert "genus doctor" in err
+    assert "deprecated" in err.lower()
+
+
+def test_config_validate_exits_one_when_a_required_check_failed(monkeypatch, capsys) -> None:
+    from robothor.cli.config_cmd import cmd_config
+    from robothor.doctor.runner import CheckResult
+
+    failed = CheckResult(
+        id="db.connect",
+        title="t",
+        category="database",
+        severity="required",
+        status="fail",
+        detail="nope",
+        fixable=False,
+    )
+    monkeypatch.setattr(
+        "robothor.cli.doctor_cmd.run_sync",
+        lambda ctx, **kwargs: DoctorReport(results=[failed]),
+    )
+    assert cmd_config(argparse.Namespace(config_command="validate", json=False)) == 1
+
+
+def test_config_validate_deprecation_note_is_not_on_stdout(monkeypatch, capsys) -> None:
+    """``genus config validate --json | jq`` must keep working."""
+    from robothor.cli.config_cmd import cmd_config
+
+    monkeypatch.setattr(
+        "robothor.cli.doctor_cmd.run_sync",
+        lambda ctx, **kwargs: DoctorReport(),
+    )
+    cmd_config(argparse.Namespace(config_command="validate", json=True))
+    captured = capsys.readouterr()
+    json.loads(captured.out)
+    assert "deprecated" in captured.err.lower()
+
+
+def test_config_usage_still_lists_validate(capsys) -> None:
+    from robothor.cli.config_cmd import cmd_config
+
+    cmd_config(argparse.Namespace(config_command=None, json=False))
+    assert "validate" in capsys.readouterr().out

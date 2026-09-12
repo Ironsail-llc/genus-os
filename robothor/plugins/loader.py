@@ -61,6 +61,12 @@ _GROUPS = {
     # of four published models; its design rule is the one worth copying —
     # providers run ALONGSIDE built-in memory and never replace it.
     "genus.memory": "providers",
+    # Diagnostics. `genus doctor` asks a fixed set of questions about the host,
+    # and a plugin that adds a capability can also add the question that tells
+    # an operator whether it is configured -- which core cannot know. The
+    # doctor's registry adds two rules on top of this group: an id must carry
+    # the contributing distribution's name, and may not shadow a built-in.
+    "genus.doctor": "checks",
 }
 
 
@@ -87,6 +93,7 @@ class PluginSet:
     commands: dict[str, Any] = field(default_factory=dict)
     sandboxes: dict[str, Any] = field(default_factory=dict)
     memory: dict[str, Any] = field(default_factory=dict)
+    checks: dict[str, Any] = field(default_factory=dict)
     #: Tool names the providing plugin declared read-only. Absent means
     #: WRITE, which is the safe default and today's behaviour: a plugin
     #: that says nothing must never be assumed harmless.
@@ -106,6 +113,7 @@ class PluginSet:
             "genus.commands": self.commands,
             "genus.sandboxes": self.sandboxes,
             "genus.memory": self.memory,
+            "genus.doctor": self.checks,
         }[group]
 
 

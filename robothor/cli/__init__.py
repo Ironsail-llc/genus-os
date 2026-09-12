@@ -322,6 +322,32 @@ def _build_parser() -> argparse.ArgumentParser:
 
     config_sub.add_parser("schema", help="Print the JSON Schema of every declared setting")
 
+    # doctor — one verdict on whether this instance works; see robothor/doctor/
+    doctor_parser = subparsers.add_parser(
+        "doctor", help="Diagnose this instance and optionally repair what can be repaired"
+    )
+    doctor_parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="Repair the failures that declare themselves repairable (migrations, RBAC seed)",
+    )
+    doctor_parser.add_argument(
+        "--dry-run", action="store_true", help="With --fix, report what would be repaired"
+    )
+    doctor_parser.add_argument("--json", action="store_true", help="Machine-readable output")
+    doctor_parser.add_argument("--only", default=None, metavar="ID", help="Run one check by id")
+    doctor_parser.add_argument(
+        "--category", default=None, metavar="C", help="Run one category, e.g. database"
+    )
+    doctor_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Make no upstream call; the provider completion check is skipped",
+    )
+    doctor_parser.add_argument(
+        "--timeout", type=float, default=5.0, metavar="S", help="Per-check budget in seconds"
+    )
+
     # serve
     serve_parser = subparsers.add_parser("serve", help="Start the API server")
     serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
@@ -1012,6 +1038,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.config_cmd import cmd_config
 
         return cmd_config(args)
+    if args.command == "doctor":
+        from robothor.cli.doctor_cmd import cmd_doctor
+
+        return cmd_doctor(args)
     if args.command == "tui":
         return _cmd_tui(args)
     if args.command is None:

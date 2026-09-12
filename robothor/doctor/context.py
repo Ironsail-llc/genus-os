@@ -1,0 +1,179 @@
+"""Everything a check is allowed to reach, and the seams the suite replaces.
+
+Three rules shape this object.
+
+**Every dependency is lazy.** The doctor's whole job is to run on an instance
+that does not work, so importing it must not need a database, a vault, an
+engine or a settings file that parses. Nothing here connects, imports psycopg2
+or resolves settings until a check asks.
+
+**Blocking work runs on a DAEMON thread.** The runner time-boxes each check
+with :func:`asyncio.timeout`, which can only cancel a coroutine -- it cannot
+interrupt a blocking ``psycopg2.connect`` or a ``urlopen`` already in flight.
+Handed to ``asyncio.to_thread``, such a call keeps its worker alive, and the
+default executor is joined at interpreter exit: the timeout would report the
+failure and the process would then hang on the very call that timed out. So
+:meth:`DoctorContext.run_blocking` spawns its own daemon thread, which the
+interpreter abandons at exit. Every blocking call ALSO carries its own timeout;
+the thread is the backstop, not the plan.
+
+**The seams are constructor arguments.** ``db_factory`` and ``http_fetch``
+default to the real thing and are replaced wholesale in tests, so no check has
+to know whether it is talking to PostgreSQL or to a dictionary.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import threading
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Callable
+
+    from robothor.settings.model import GenusSettings
+
+__all__ = ["DoctorContext", "HttpResponse"]
+
+#: Seconds a single check may take before the runner calls it failed.
+DEFAULT_TIMEOUT_S = 5.0
+
+
+@dataclass(frozen=True)
+class HttpResponse:
+    """The little a check needs to know about an HTTP answer.
+
+    ``status`` is 0 when the request never completed; ``error`` then names the
+    exception type and message. No check inspects headers, and none should:
+    every HTTP question here is "is it up, and did it say yes".
+    """
+
+    status: int
+    body: str = ""
+    error: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status < 300
+
+
+@dataclass
+class DoctorContext:
+    """What a check may reach, and how long it has to do it.
+
+    Args:
+        timeout_s: per-check budget. Also handed to the DB connect, the HTTP
+            fetch and the host script, so a blocking dependency cannot outlive
+            the check that started it by much.
+        dry_run: report what ``--fix`` would do and change nothing.
+        offline: make no upstream network call. ``provider.completion`` skips;
+            local probes (services on loopback, Ollama) still run, because
+            "offline" here means "do not spend money or leave the box", which
+            is what an install gate and a CI run need.
+        fix: run the repair for failed fixable checks.
+    """
+
+    timeout_s: float = DEFAULT_TIMEOUT_S
+    dry_run: bool = False
+    offline: bool = False
+    fix: bool = False
+    db_factory: Callable[[], Any] | None = None
+    http_fetch: Callable[[str, float], HttpResponse] | None = None
+    _settings: Any = field(default=None, repr=False)
+
+    @property
+    def settings(self) -> GenusSettings:
+        """The instance's typed settings, resolved once.
+
+        Raises whatever :func:`robothor.settings.get_settings` raises -- a
+        config.yaml that does not parse, a key nothing declares. That is not
+        caught here: ``config.settings_load`` is the check whose job is to
+        report it, and every other check is entitled to assume settings exist.
+        """
+        if self._settings is None:
+            from robothor.settings import get_settings
+
+            self._settings = get_settings()
+        return self._settings
+
+    @property
+    def workspace(self) -> Path:
+        """The instance's workspace directory, as the settings declare it."""
+        return Path(self.settings.paths.workspace)
+
+    def db(self) -> Any:
+        """A context manager yielding a database connection.
+
+        Defaults to the platform pool. A check must use it as
+        ``with ctx.db() as conn:`` and must run it through
+        :meth:`run_blocking` -- psycopg2 is synchronous, and a connect to a
+        host that is dropping packets blocks for the OS timeout, not ours.
+        """
+        if self.db_factory is not None:
+            return self.db_factory()
+        from robothor.db.connection import get_connection
+
+        return get_connection()
+
+    def fetch(self, url: str) -> HttpResponse:
+        """GET ``url`` with this run's timeout. Blocking; call via
+        :meth:`run_blocking`."""
+        if self.http_fetch is not None:
+            return self.http_fetch(url, self.timeout_s)
+        return _urllib_fetch(url, self.timeout_s)
+
+    async def run_blocking(self, fn: Callable[..., Any], *args: Any) -> Any:
+        """Run ``fn`` on a daemon thread and await its result.
+
+        Not ``asyncio.to_thread``: see the module docstring. If the runner's
+        timeout fires first, the future is cancelled, this coroutine unwinds,
+        and the thread is left to finish into a future nobody is holding --
+        which is exactly what "never a hang" costs.
+        """
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[Any] = loop.create_future()
+
+        def _deliver(setter: Callable[[Any], None], value: Any) -> None:
+            if not future.done():
+                setter(value)
+
+        def _worker() -> None:
+            try:
+                value = fn(*args)
+            except BaseException as exc:  # noqa: BLE001 - relayed to the awaiter
+                loop.call_soon_threadsafe(_deliver, future.set_exception, exc)
+            else:
+                loop.call_soon_threadsafe(_deliver, future.set_result, value)
+
+        threading.Thread(target=_worker, name="genus-doctor-check", daemon=True).start()
+        return await future
+
+
+def _urllib_fetch(url: str, timeout: float) -> HttpResponse:
+    """One GET, with urllib rather than httpx.
+
+    stdlib on purpose: the doctor must import and run inside a broken
+    installation, and httpx is a dependency of the engine, not of the CLI.
+    An HTTP error status is an ANSWER, not an exception -- a 401 from an
+    auth-gated endpoint proves the service is up, which is the whole point of
+    ``robothor.config.probe_service``.
+    """
+    import urllib.error
+    import urllib.request
+
+    try:
+        request = urllib.request.Request(url, method="GET")  # noqa: S310 - caller builds the URL
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            body = response.read(4096).decode("utf-8", "replace")
+            return HttpResponse(status=response.status, body=body)
+    except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read(4096).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 - the status is what matters
+            body = ""
+        return HttpResponse(status=exc.code, body=body)
+    except Exception as exc:  # noqa: BLE001 - unreachable is a result, not a crash
+        return HttpResponse(status=0, error=f"{type(exc).__name__}: {exc}")
