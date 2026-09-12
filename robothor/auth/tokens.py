@@ -16,7 +16,6 @@ which mints tokens after SSO, shares the key via the same secret channel.
 from __future__ import annotations
 
 import hashlib
-import os
 import secrets
 import time
 from typing import TYPE_CHECKING, Any
@@ -36,8 +35,18 @@ DEFAULT_AUDIENCE = "genus-bridge"
 _HUMAN_ROLES = frozenset({"owner", "admin", "member", "user", "viewer", "auditor"})
 _TOKEN_TYPES = frozenset({"user", "service"})
 
+_ENV_NAME = "GENUS_AUTH_SIGNING_KEY"
 _VAULT_KEY = "auth/jwt_signing_key"
 _signing_key_cache: str | None = None
+
+#: Monotonic deadline until which an "unavailable" verdict stands without
+#: re-probing the vault. ``live=True`` below skips the accessor's cooldown so
+#: that a generate decision is never made on a stale answer — but the same
+#: bypass would otherwise turn every token mint or check during a vault outage
+#: into a synchronous database connect (up to connect_timeout) on the bridge's
+#: event loop. So the REFUSAL is cached here for the accessor's cooldown, and
+#: only the first call per window pays for the probe.
+_signing_key_unavailable_until: float | None = None
 
 
 class TokenError(Exception):
@@ -45,36 +54,74 @@ class TokenError(Exception):
 
 
 def signing_key() -> str:
-    """Resolve the HS256 signing key (cached). Generates + stores on first boot."""
-    global _signing_key_cache
+    """Resolve the HS256 signing key (cached). Generates + stores on first boot.
+
+    The environment and vault halves go through :mod:`robothor.secrets`, the one
+    accessor, so that "where does this instance keep its signing key?" has the
+    same answer here as it does for every other credential — and so that an
+    unreadable vault degrades to "unset" instead of raising out of a token
+    mint. ``_VAULT_KEY`` is passed explicitly because the row predates the
+    environment convention: a name derived from ``GENUS_AUTH_SIGNING_KEY``
+    would miss ``auth/jwt_signing_key`` and generate a SECOND key on a box that
+    already had one, invalidating every live session and every MFA secret
+    (``robothor.auth.mfa_secrets`` derives its AES key from this one).
+    """
+    global _signing_key_cache, _signing_key_unavailable_until
     if _signing_key_cache:
         return _signing_key_cache
 
-    env = os.environ.get("GENUS_AUTH_SIGNING_KEY")
-    if env:
-        if len(env.encode("utf-8")) < 32:
-            raise TokenError("GENUS_AUTH_SIGNING_KEY must contain at least 32 bytes")
-        _signing_key_cache = env
-        return env
+    # Lazy import: robothor.secrets pulls the vault in only if it has to, so
+    # token encode/decode stays usable on a box with no vault at all.
+    from robothor.secrets import VAULT_RETRY_SECONDS, resolve_secret
 
-    # Lazy import: keep token encode/decode usable without the vault when a key
-    # is provided via env (tests, edge cases).
+    now = time.monotonic()
+    if _signing_key_unavailable_until is not None and now < _signing_key_unavailable_until:
+        raise TokenError(
+            f"no signing key: {_ENV_NAME} is unset and the vault could not be read "
+            "(cached verdict; the vault is re-probed once per cooldown)"
+        )
+
+    # live=True: the generate branch below acts on "missing", so the verdict
+    # must come from the vault NOW, not from a cooldown that may be sitting out
+    # a vault that has since recovered.
+    resolved = resolve_secret(_ENV_NAME, vault_key=_VAULT_KEY, live=True)
+    if resolved.value is not None:
+        if len(resolved.value.encode("utf-8")) < 32:
+            raise TokenError(
+                f"{_ENV_NAME} must contain at least 32 bytes"
+                if resolved.source == "env"
+                else "resolved signing key must contain at least 32 bytes"
+            )
+        _signing_key_cache = resolved.value
+        return resolved.value
+
+    if resolved.source == "unavailable":
+        _signing_key_unavailable_until = now + VAULT_RETRY_SECONDS
+        # Unreadable is not empty. vault.set is an UPSERT: generating here on a
+        # vault whose read failed but whose write works would overwrite the
+        # stored key, killing every session and every MFA secret derived from
+        # it. Refusing to mint is an outage the operator can see; a silent
+        # rotation is one they cannot.
+        raise TokenError(
+            f"no signing key: {_ENV_NAME} is unset and the vault cannot be read, "
+            "so a key cannot be resolved or safely generated"
+        )
+
+    # First boot: nothing holds a key, so mint one and keep it. A key that is
+    # not stored is a new key on every restart, and every session dies with it.
     from robothor import vault
 
-    key = vault.get(_VAULT_KEY)
-    if not key:
-        key = secrets.token_urlsafe(48)
-        vault.set(_VAULT_KEY, key, category="auth")
-    if len(key.encode("utf-8")) < 32:
-        raise TokenError("resolved signing key must contain at least 32 bytes")
+    key = secrets.token_urlsafe(48)
+    vault.set(_VAULT_KEY, key, category="auth")
     _signing_key_cache = key
     return key
 
 
 def reset_signing_key_cache() -> None:
-    """Test hook — forget the cached key so the next call re-resolves."""
-    global _signing_key_cache
+    """Test hook — forget the cached key (and verdict) so the next call re-resolves."""
+    global _signing_key_cache, _signing_key_unavailable_until
     _signing_key_cache = None
+    _signing_key_unavailable_until = None
 
 
 def issue_access_token(

@@ -437,10 +437,22 @@ def test_every_field_declares_which_units_a_restart_means() -> None:
 
 
 def test_restart_units_are_named_service_units() -> None:
-    """A unit name has to be something an operator can pass to systemctl."""
+    """A unit name has to be something an operator can pass to systemctl.
+
+    Derived from the shipped templates in ``infra/systemd/``, not hand-listed.
+    A hardcoded trio (engine, bridge, app) is a name list that drifts from what
+    the platform installs -- the failure mode #329/#330/#331 all turned out to
+    be -- and it also makes a field unable to name the unit that actually reads
+    it: ``ROBOTHOR_SECRETS_BACKEND`` is read by ``robothor-secrets.service``,
+    which the old list did not contain.
+    """
     from robothor.settings.registry import field_index
 
-    known = {"robothor-engine", "robothor-bridge", "robothor-app"}
+    unit_dir = REPO_ROOT / "infra" / "systemd"
+    known = {path.stem for path in unit_dir.glob("robothor-*.service")}
+    assert {"robothor-engine", "robothor-bridge", "robothor-app"} <= known, (
+        f"the derivation found no shipped units in {unit_dir}"
+    )
     for record in field_index().values():
         for unit in record["restart_units"] or ():
             assert unit in known, f"{record['env']} names an unknown unit {unit!r}"

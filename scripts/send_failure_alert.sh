@@ -286,14 +286,17 @@ source_secrets() {
     # real — the same class of accident as the benchmark runner that sent actual
     # emails.
     local secrets="${ROBOTHOR_SECRETS_FILE:-$DEFAULT_SECRETS}"
-    # The decrypt fallback only ever writes the default path, so invoking it
-    # for an overridden ROBOTHOR_SECRETS_FILE would be pointless (and would let
-    # a test run touch the real secrets machinery).
+    # The loader only ever writes the default path, so invoking it for an
+    # overridden ROBOTHOR_SECRETS_FILE would be pointless (and would let a test
+    # run touch the real secrets machinery). load-secrets.sh rather than
+    # decrypt-secrets.sh: it dispatches on the instance's backend, so the pager
+    # recovers its token on a box that holds secrets in a plaintext file as well
+    # as on one that holds them in SOPS.
     if [[ ! -r "$secrets" && "$secrets" == "$DEFAULT_SECRETS" ]]; then
-        local decrypt
-        decrypt="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/decrypt-secrets.sh"
-        if [[ -x "$decrypt" ]]; then
-            "$decrypt" >/dev/null 2>&1 || true
+        local loader
+        loader="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/load-secrets.sh"
+        if [[ -x "$loader" ]]; then
+            "$loader" >/dev/null 2>&1 || true
         fi
     fi
     if [[ -r "$secrets" ]]; then

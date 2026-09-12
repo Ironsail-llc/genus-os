@@ -632,12 +632,13 @@ def test_execstart_never_relies_on_bare_env_lookup():
 # refusing every SSO login with 403 because GENUS_BRIDGE_SSO_SECRET was simply
 # not in its environment.
 #
-# The fix is an ordering point, not a retry: a oneshot that decrypts, and the
-# long-running consumers requiring it. `Requires=` and not `Wants=` on purpose —
-# a bridge with no secrets cannot complete a login, so failing to start is more
-# honest than starting broken. An instance with no SOPS file is unaffected: the
-# oneshot's ConditionPathExists makes it a SKIP, and a skipped dependency
-# satisfies Requires=.
+# The fix is an ordering point, not a retry: a oneshot that loads the secrets,
+# and the long-running consumers requiring it. `Requires=` and not `Wants=` on
+# purpose — a bridge with no secrets cannot complete a login, so failing to
+# start is more honest than starting broken. An instance with no SOPS file is
+# unaffected because the loader's `env` backend succeeds with an empty file; it
+# used to be unaffected because a ConditionPathExists SKIPPED the unit, which
+# also skipped it on instances that DID have secrets, just not encrypted ones.
 
 SECRETS_UNIT = "robothor-secrets.service"
 
@@ -652,24 +653,38 @@ SECRETS_CONSUMERS = [
 ]
 
 
-def test_secrets_unit_exists_and_runs_the_decrypt_script():
+def test_secrets_unit_exists_and_runs_the_secrets_loader():
     unit = UNIT_DIR / SECRETS_UNIT
     assert unit.exists(), f"{SECRETS_UNIT} is the ordering point — it must exist"
     text = directives(unit.read_text())
     assert "Type=oneshot" in text
     assert "RemainAfterExit=yes" in text, (
         "without RemainAfterExit the unit is inactive the moment it finishes, "
-        "and Requires= on it would restart the decrypt for every consumer"
+        "and Requires= on it would re-run the load for every consumer"
     )
-    assert "ExecStart=/opt/robothor/scripts/decrypt-secrets.sh" in text, (
-        "the oneshot must run the SAME script the engine's ExecStartPre runs"
+    # Derived from the engine rather than hardcoded: the invariant is that the
+    # oneshot and the consumers run the SAME script, so that a consumer
+    # restarted on its own after a rotation gets exactly what the boot did.
+    engine_pre = [
+        line
+        for line in directives((UNIT_DIR / "robothor-engine.service").read_text()).splitlines()
+        if line.startswith("ExecStartPre=") and "secrets" in line
+    ]
+    assert len(engine_pre) == 1, f"expected one secrets ExecStartPre on the engine, got {engine_pre}"
+    loader = engine_pre[0].split("=", 1)[1]
+    assert f"ExecStart={loader}" in text, (
+        f"the oneshot must run the SAME script the engine's ExecStartPre runs ({loader})"
     )
-    assert "ConditionPathExists=" in text, (
-        "an instance with no SOPS secrets file must SKIP this unit, not fail it "
-        "— a failed Requires= dependency would block every consumer from starting"
+    assert "ConditionPathExists=" not in text, (
+        "this unit must not condition itself on a secrets file. It did, on "
+        "/etc/robothor/secrets.enc.json, which SKIPPED the only unit that "
+        "populates secrets.env on every instance that does not use SOPS — i.e. "
+        "on exactly the instances the file and env backends exist for. What "
+        "keeps it from FAILING there is the loader's env backend, which writes "
+        "an empty file (tests/test_load_secrets.py)."
     )
     assert "OnFailure=robothor-alert@%n.service" in text, (
-        "a failed decrypt now leaves FOUR services in 'dependency failed' with "
+        "a failed load now leaves FOUR services in 'dependency failed' with "
         "Restart=always never firing — nothing retries it, so it must page"
     )
 

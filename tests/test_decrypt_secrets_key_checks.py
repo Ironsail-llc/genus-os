@@ -13,7 +13,10 @@ meant to check something else.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import subprocess
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "decrypt-secrets.sh"
@@ -46,3 +49,113 @@ def test_the_credential_spare_is_reported_on():
 def test_the_spare_is_advisory_not_required():
     """A missing spare must warn, never block a boot."""
     assert "OPENROUTER_API_KEY_2" not in _array("REQUIRED_KEYS")
+
+
+def test_telegram_is_not_in_the_required_set():
+    """Telegram is an optional channel (#498), so it cannot gate a boot."""
+    keys = _array("REQUIRED_KEYS")
+    for name in ("ROBOTHOR_TELEGRAM_BOT_TOKEN", "ROBOTHOR_TELEGRAM_CHAT_ID"):
+        assert name not in keys, f"{name} blocks a boot, but Telegram is optional"
+
+
+# ── What the required set actually does to a boot ─────────────────────────────
+# Everything above reads the script's source. These RUN it: under
+# ``ROBOTHOR_SECRETS_ROOT``, with a stub ``sops`` on ``ROBOTHOR_EXTRA_PATH`` that
+# prints a fixture, so the validation is exercised rather than described.
+#
+# Telegram stayed in ``REQUIRED_KEYS`` long after it stopped being required
+# anywhere else. A required key nothing needs is not a safety net: it is a fresh
+# install that cannot boot because of a channel the operator never asked for —
+# and since ``robothor-secrets.service`` orders four services, that is a whole
+# instance in ``dependency failed`` with no ``Restart=`` to clear it.
+
+
+def _run_decrypt(tmp_path: Path, payload: dict[str, str]):
+    root = tmp_path / "root"
+    (root / "etc" / "robothor").mkdir(parents=True, exist_ok=True)
+    (root / "run").mkdir(parents=True, exist_ok=True)
+    (root / "etc" / "robothor" / "secrets.enc.json").write_text("{}")
+    (root / "etc" / "robothor" / "age.key").write_text("AGE-SECRET-KEY-STUB")
+
+    stub_bin = tmp_path / "stub-bin"
+    stub_bin.mkdir()
+    sops = stub_bin / "sops"
+    sops.write_text("#!/bin/bash\ncat <<'JSON'\n" + json.dumps(payload) + "\nJSON\n")
+    sops.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            "PATH": os.environ["PATH"],
+            "ROBOTHOR_SECRETS_ROOT": str(root),
+            "ROBOTHOR_EXTRA_PATH": str(stub_bin),
+            # This script does not page, but it runs under the same PATH
+            # prelude as the ones that do, and tests/test_alert_never_pages
+            # _from_tests.py audits every subprocess call in a file that so
+            # much as names ROBOTHOR_TELEGRAM_BOT_TOKEN. Pin the sender's
+            # durable seams anyway: a page the suite spools is delivered for
+            # real by root's next liveness drain.
+            "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
+            "ROBOTHOR_TELEGRAM_API_BASE": "http://127.0.0.1:1",
+            "ROBOTHOR_ALERT_SPOOL_DIR": str(tmp_path / "alert-spool"),
+            "ROBOTHOR_ALERT_STATE_DIR": str(tmp_path / "alert-state"),
+            "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(tmp_path / "alert-fallback"),
+        },
+    )
+    return result, root / "run" / "robothor" / "secrets.env"
+
+
+def test_a_store_without_telegram_credentials_boots(tmp_path: Path):
+    result, output = _run_decrypt(
+        tmp_path, {"OPENROUTER_API_KEY": "k", "OPENROUTER_API_KEY_2": "s"}
+    )
+    assert result.returncode == 0, (
+        "a store with no Telegram credentials was refused — a fresh install "
+        f"failing to boot for an optional channel\n{result.stdout}{result.stderr}"
+    )
+    assert 'OPENROUTER_API_KEY="k"' in output.read_text()
+
+
+def test_a_store_without_the_provider_credential_is_refused_by_name(tmp_path: Path):
+    """The one remaining required key is what the fleet cannot run without."""
+    result, _ = _run_decrypt(tmp_path, {"SOMETHING_ELSE": "x"})
+    assert result.returncode == 1, "a store with no provider credential was accepted"
+    assert "OPENROUTER_API_KEY" in result.stderr, (
+        "the refusal must name the missing key, or the operator cannot fix it"
+    )
+
+
+def test_a_missing_spare_warns_but_still_boots(tmp_path: Path):
+    """2026-08-27: the pool ran with one key for two days and no boot said so."""
+    result, _ = _run_decrypt(tmp_path, {"OPENROUTER_API_KEY": "k"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OPENROUTER_API_KEY_2" in result.stderr
+    assert "no spare" in result.stderr
+
+
+def test_missing_pager_credentials_warn_by_name_but_still_boot(tmp_path: Path):
+    """Telegram is optional, but a boot that will never page must say so."""
+    result, out = _run_decrypt(tmp_path, {"OPENROUTER_API_KEY": "k1", "OPENROUTER_API_KEY_2": "k2"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ROBOTHOR_TELEGRAM_BOT_TOKEN" in result.stderr
+    assert "ROBOTHOR_TELEGRAM_CHAT_ID" in result.stderr
+    assert "k1" not in result.stdout + result.stderr
+
+
+def test_decrypt_replaces_a_planted_symlink_at_the_output(tmp_path: Path):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not touch\n")
+    root = tmp_path / "root"
+    (root / "run" / "robothor").mkdir(parents=True)
+    (root / "run" / "robothor" / "secrets.env").symlink_to(victim)
+    result, out = _run_decrypt(
+        tmp_path, {"OPENROUTER_API_KEY": "sentinel-k1", "OPENROUTER_API_KEY_2": "k2"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert victim.read_text() == "do not touch\n", (
+        "decrypted secrets were written through the symlink"
+    )
+    assert not out.is_symlink() and out.is_file() and "sentinel-k1" in out.read_text()

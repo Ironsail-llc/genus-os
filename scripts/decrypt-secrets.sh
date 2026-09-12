@@ -1,12 +1,11 @@
 #!/bin/bash
 # Decrypt SOPS secrets to a temporary environment file for systemd EnvironmentFile.
-# Called by ExecStartPre in systemd services.
 # Output: /run/robothor/secrets.env (tmpfs, not persisted across reboots)
 #
-# Usage in systemd service:
-#   [Service]
-#   ExecStartPre=$ROBOTHOR_WORKSPACE/scripts/decrypt-secrets.sh
-#   EnvironmentFile=/run/robothor/secrets.env
+# This is the implementation of the `sops` secrets backend. Units do not run it
+# directly any more — scripts/load-secrets.sh dispatches to it — because SOPS
+# is one backend of three rather than a precondition for starting the platform.
+# Invoked by hand it still works exactly as it always did.
 
 set -euo pipefail
 
@@ -27,9 +26,18 @@ set -euo pipefail
 # See infra/systemd/README.md.
 export PATH="${ROBOTHOR_EXTRA_PATH:+$ROBOTHOR_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-SOPS_FILE="/etc/robothor/secrets.enc.json"
-AGE_KEY="/etc/robothor/age.key"
-OUTPUT_DIR="/run/robothor"
+# ROBOTHOR_SECRETS_ROOT prefixes /etc/robothor and /run/robothor, the same seam
+# scripts/load-secrets.sh honours (and the same idea as install-units.sh
+# --root). Empty — the default, and the only value any unit ever supplies —
+# means the real paths, so nothing about a live box changes. It is what lets
+# tests/test_decrypt_secrets_required_keys.py run the real script against a
+# fixture instead of asserting on its source text.
+SECRETS_ROOT="${ROBOTHOR_SECRETS_ROOT:-}"
+SECRETS_ROOT="${SECRETS_ROOT%/}"
+
+SOPS_FILE="${SECRETS_ROOT}/etc/robothor/secrets.enc.json"
+AGE_KEY="${SECRETS_ROOT}/etc/robothor/age.key"
+OUTPUT_DIR="${SECRETS_ROOT}/run/robothor"
 OUTPUT_FILE="${OUTPUT_DIR}/secrets.env"
 
 mkdir -p "$OUTPUT_DIR" 2>/dev/null || true
@@ -39,21 +47,36 @@ export SOPS_AGE_KEY_FILE="$AGE_KEY"
 # Decrypt JSON and convert to KEY=VALUE format for systemd EnvironmentFile
 # Double-quoted values: systemd treats # as comment inside single quotes but not double quotes.
 # Double quotes also work with bash source (no $ chars in secret values).
+# Decrypt into a fresh 0600 temp file and move it over the path with -T: the
+# output directory is writable by the service account, and a symlink planted
+# at the output path would otherwise send the whole decrypted credential set
+# to wherever it points. mktemp creates the file 0600, so no umask window.
+TMP_OUTPUT="$(mktemp "${OUTPUT_DIR}/.secrets.env.XXXXXX")"
+# A failed decrypt must not leave a temp file per retry on tmpfs.
+trap 'rm -f -- "$TMP_OUTPUT"' EXIT
 sops -d "$SOPS_FILE" | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 for k, v in data.items():
     escaped = v.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"')
     print(f'{k}=\"{escaped}\"')
-" > "$OUTPUT_FILE"
+" > "$TMP_OUTPUT"
 
-chmod 600 "$OUTPUT_FILE"
+chmod 600 "$TMP_OUTPUT"
+# Validated below BEFORE it is moved into place: a store that fails the key
+# check must not replace the previous boot's credentials with a partial set.
 
 # ── Validate required keys ──────────────────────────────────────────
+# REQUIRED means "the instance cannot function without it", and nothing else.
+# ROBOTHOR_TELEGRAM_BOT_TOKEN and ROBOTHOR_TELEGRAM_CHAT_ID were on this list
+# until 2026-09-12 and belonged to neither category: Telegram became an optional
+# channel in #498, the daemon has been Telegram-optional for longer than that,
+# and this script now runs as a backend of robothor-secrets.service, which
+# orders four services. So a fresh install with no bot token did not merely
+# lack a channel — it failed the boot, and took engine, bridge, app and
+# orchestrator into `dependency failed` with no Restart= that could clear it.
 REQUIRED_KEYS=(
     "OPENROUTER_API_KEY"
-    "ROBOTHOR_TELEGRAM_BOT_TOKEN"
-    "ROBOTHOR_TELEGRAM_CHAT_ID"
 )
 
 # Advisory, never required: a missing spare must warn, not block a boot.
@@ -66,18 +89,32 @@ ADVISORY_KEYS=(
     "OPENROUTER_API_KEY_2"
 )
 
+# Also advisory: the pager's own credentials. Telegram is an optional channel,
+# so a boot without them is a valid instance — but this is the only boot-time
+# place that can say "nothing will page you", so it says so, by name only.
+PAGER_KEYS=(
+    "ROBOTHOR_TELEGRAM_BOT_TOKEN"
+    "ROBOTHOR_TELEGRAM_CHAT_ID"
+)
+
 missing=()
 for key in "${REQUIRED_KEYS[@]}"; do
-    if ! grep -q "^${key}=" "$OUTPUT_FILE"; then
+    if ! grep -q "^${key}=" "$TMP_OUTPUT"; then
         missing+=("$key")
     fi
 done
 
 for key in "${ADVISORY_KEYS[@]}"; do
-    if ! grep -q "^${key}=" "$OUTPUT_FILE"; then
+    if ! grep -q "^${key}=" "$TMP_OUTPUT"; then
         echo "WARNING: $key is not set — this credential pool has no spare." >&2
         echo "         One capped or revoked key will take the whole fleet down." >&2
         echo "         Add it with: sops $SOPS_FILE" >&2
+    fi
+done
+
+for key in "${PAGER_KEYS[@]}"; do
+    if ! grep -q "^${key}=" "$TMP_OUTPUT"; then
+        echo "WARNING: $key is not set — the Telegram pager cannot deliver alerts without it." >&2
     fi
 done
 
@@ -89,3 +126,7 @@ if [ ${#missing[@]} -gt 0 ]; then
     echo "Add missing keys with: sops $SOPS_FILE" >&2
     exit 1
 fi
+
+# Every required key is present: publish atomically. mv -T replaces a planted
+# symlink at the destination instead of following it.
+mv -T -f -- "$TMP_OUTPUT" "$OUTPUT_FILE"

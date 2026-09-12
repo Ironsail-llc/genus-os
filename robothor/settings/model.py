@@ -1566,6 +1566,54 @@ class SecretSettings(SettingsGroup):
         "The EnvironmentFile systemd loads secrets from. It is instance data, "
         "never in git; the path is what the platform declares.",
     )
+    backend: str = declare(
+        "",
+        "ROBOTHOR_SECRETS_BACKEND",
+        "Where scripts/load-secrets.sh gets this instance's credentials: "
+        "`sops` (decrypt /etc/robothor/secrets.enc.json with the age key), "
+        "`file` (a plaintext file the operator manages, mode 0600 or 0400), or "
+        "`env` (they are already in the unit environment, so an empty "
+        "secrets.env is written). Empty means auto-detect: sops if an "
+        "encrypted store exists, else file if one exists, else env. SOPS is "
+        "therefore opt-in rather than a precondition for starting.",
+        restart_units=(
+            "robothor-secrets",
+            "robothor-engine",
+            "robothor-bridge",
+            "robothor-app",
+            "robothor-orchestrator",
+        ),
+        since="1.70.0",
+    )
+    backend_file: str = declare(
+        "/etc/robothor/secrets.env",
+        "ROBOTHOR_SECRETS_BACKEND_FILE",
+        "Plaintext KEY=VALUE file the `file` backend reads and copies to "
+        "/run/robothor/secrets.env. Refused unless it is a regular file of "
+        "mode 0600 or 0400 owned by root or by the service account. Distinct "
+        "from ROBOTHOR_SECRETS_FILE, which names the tmpfs file every "
+        "consumer READS -- one is the input, the other the output.",
+        restart_units=(
+            "robothor-secrets",
+            "robothor-engine",
+            "robothor-bridge",
+            "robothor-app",
+            "robothor-orchestrator",
+        ),
+        since="1.70.0",
+    )
+    backend_root: str = declare(
+        "",
+        "ROBOTHOR_SECRETS_ROOT",
+        "Filesystem prefix load-secrets.sh and decrypt-secrets.sh apply to "
+        "/etc/robothor and /run/robothor. A test seam, the same idea as "
+        "install-units.sh --root: it lets the suite exercise every backend for "
+        "real without root. Empty -- the only value a unit ever supplies -- "
+        "means the real paths.",
+        restart_required=False,
+        restart_units=(),
+        since="1.70.0",
+    )
 
 
 # ---------------------------------------------------------------------------

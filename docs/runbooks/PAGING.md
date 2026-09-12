@@ -375,7 +375,7 @@ them was a page anybody needed to act on.
   answered. Now the status matters:
 - `http_status=401` or `403` — the bot token is wrong or revoked. Check
   `ROBOTHOR_TELEGRAM_BOT_TOKEN` in `/run/robothor/secrets.env`, rotate it with
-  BotFather, re-encrypt, `scripts/decrypt-secrets.sh`, then
+  BotFather, re-encrypt (or rewrite the plaintext file), `scripts/load-secrets.sh`, then
   `sudo scripts/send_failure_alert.sh --drain`. The marker clears itself on
   the first delivered page.
 - `http_status=400` on page after page — the pages themselves are being
