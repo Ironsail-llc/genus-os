@@ -32,6 +32,7 @@ import pytest
 
 from robothor.init.context import InitContext
 from robothor.init.plan import InitPlan, run_plan
+from robothor.init.provider_probe import DetectedProvider
 from robothor.init.substrates.local import LocalSubstrate
 
 SENTINEL = "# DO NOT TOUCH: this manifest belongs to another instance\nagent_id: main\n"
@@ -75,15 +76,49 @@ def other_instance(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def _no_doctor(monkeypatch):
-    """The verify step's runner, stubbed: it is read-only and slow."""
+def _no_host(monkeypatch):
+    """Cut the plan's ties to host binaries, a database and the network.
+
+    What these tests are about is WHERE the writing steps write, so every step
+    that writes runs for real; what they must not be about is whether this
+    machine has ``redis-cli``. CI has no PostgreSQL client and no Redis client,
+    so the real ``prereqs`` step blocked phase 1 and the assertions about the
+    target workspace never got the chance to fail honestly.
+
+    Three seams, each the one the production code already offers:
+
+    * ``robothor.setup.check_prerequisites`` — the step imports it lazily, so
+      the module attribute is the seam. Reports the substrate's required tools
+      present; ``test_steps_local.py`` is where prerequisite behaviour itself is
+      tested, with its own injected prober.
+    * ``run_sync`` — the doctor is read-only, slow, and not what is under test.
+    * ``provider_slots`` — resolving a credential reaches the vault, and the
+      vault reaches a database.
+
+    The HTTP seam is handed to the context in :func:`_ctx`.
+    """
     from robothor.doctor.runner import DoctorReport
 
+    def present(*, required=(), docker_required=False, **_: Any) -> list[dict[str, Any]]:
+        return [
+            {"name": name, "found": True, "detail": "stubbed", "required": True, "hint": ""}
+            for name in ("Python", *required)
+        ]
+
+    monkeypatch.setattr("robothor.setup.check_prerequisites", present)
     monkeypatch.setattr("robothor.doctor.runner.run_sync", lambda *a, **k: DoctorReport(results=[]))
+    monkeypatch.setattr("robothor.engine.key_pool.provider_slots", lambda provider_id: [])
+
+
+def _offline_http(method, url, body, timeout):
+    """Every probe answers "nothing here", without leaving the machine."""
+    from robothor.doctor.context import HttpResponse
+
+    return HttpResponse(status=0, error="ConnectError: stubbed, no network in this test")
 
 
 def _ctx(workspace: Path, **kwargs: Any) -> InitContext:
-    answers = {
+    answers: dict[str, Any] = {
         "skip_db": True,
         "skip_models": True,
         "provider_id": "openrouter",
@@ -91,14 +126,26 @@ def _ctx(workspace: Path, **kwargs: Any) -> InitContext:
         "owner_name": "Alice Example",
         "owner_email": "alice@example.com",
         "preset": "minimal",
+        # Pre-seeded so the provider step does not go looking for credentials,
+        # which means the vault, which means a database.
+        "detected_providers": [
+            DetectedProvider(
+                id="openrouter",
+                label="OpenRouter",
+                env_var="OPENROUTER_API_KEY",
+                default_model="openrouter/openai/gpt-5.4",
+                slots=("sha256:stub",),
+            )
+        ],
     }
     answers.update(kwargs.pop("answers", {}))
     kwargs.setdefault("yes", True)
     kwargs.setdefault("offline", True)
+    kwargs.setdefault("http_fetch", _offline_http)
     return InitContext(workspace=workspace, answers=answers, **kwargs)
 
 
-@pytest.mark.usefixtures("_no_doctor")
+@pytest.mark.usefixtures("_no_host")
 class TestARealRunStaysInsideItsWorkspace:
     def test_the_other_instance_is_byte_identical_afterwards(self, tmp_path, other_instance):
         target = tmp_path / "target"
@@ -136,7 +183,7 @@ class TestARealRunStaysInsideItsWorkspace:
         assert not (other_instance / ".robothor").exists()
 
 
-@pytest.mark.usefixtures("_no_doctor")
+@pytest.mark.usefixtures("_no_host")
 class TestDryRunAppliesNothingAnywhere:
     def test_neither_workspace_changes(self, tmp_path, other_instance):
         target = tmp_path / "target"
