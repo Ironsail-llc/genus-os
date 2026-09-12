@@ -157,7 +157,7 @@ def cmd_vault_audit() -> int:
                 available_keys.add(key)
         print(f"Secrets file: {len(available_keys)} keys loaded from {secrets_file}")
     else:
-        print(f"WARNING: {secrets_file} not found. Run decrypt-secrets.sh first.")
+        print(f"WARNING: {secrets_file} not found. Run scripts/load-secrets.sh first.")
         print("Checking codebase references only.\n")
 
     # 2. Grep codebase for secret references

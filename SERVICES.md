@@ -177,10 +177,16 @@ All camera/vision ports (`8554`, `8889`, `8890`, `8600`) are bound to `127.0.0.1
 
 ## Credentials
 
-All services that need credentials use SOPS+age decryption:
-- `ExecStartPre=$ROBOTHOR_WORKSPACE/scripts/decrypt-secrets.sh` decrypts secrets to `/run/robothor/secrets.env`
-- `EnvironmentFile=/run/robothor/secrets.env` loads them into the service environment
-- Services with SOPS injection: robothor-vision, robothor-orchestrator, robothor-bridge, robothor-engine, robothor-voice
+All services that need credentials load them from one file, written by one script:
+- `ExecStartPre=$ROBOTHOR_WORKSPACE/scripts/load-secrets.sh` populates `/run/robothor/secrets.env`
+- `EnvironmentFile=-/run/robothor/secrets.env` loads them into the service environment
+- Services that load secrets: robothor-vision, robothor-orchestrator, robothor-bridge, robothor-engine, robothor-voice
+
+`ROBOTHOR_SECRETS_BACKEND` decides where the values come from — `sops` (the age-encrypted
+`/etc/robothor/secrets.enc.json`, via `scripts/decrypt-secrets.sh`), `file` (a plaintext
+0600 file you manage) or `env` (already in the unit environment). Unset means auto-detect.
+SOPS is opt-in; see `docs/deployment.md` § Secrets backends. In Python, read a credential
+through `robothor.secrets.get_secret()`.
 
 ## System Crontab
 

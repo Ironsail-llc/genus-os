@@ -68,13 +68,17 @@ never substituted.
 `robothor.env.example` is the template for `/etc/robothor/robothor.env`,
 which every service sources via `EnvironmentFile=`.
 
-## `robothor-secrets.service` is the ordering point for decrypted secrets
+## `robothor-secrets.service` is the ordering point for loaded secrets
 
-`/run/robothor/secrets.env` lives on tmpfs, so it has to be decrypted on every
+`/run/robothor/secrets.env` lives on tmpfs, so it has to be written on every
 boot, and every consumer loads it as **`EnvironmentFile=-`** — optional. That
-optionality is deliberate (an instance may run with no SOPS secrets at all) and
-it is also a trap: a service that starts *before* the file exists starts
-without its credentials and reports itself healthy.
+optionality is deliberate (an instance may hold its credentials in the unit
+environment) and it is also a trap: a service that starts *before* the file
+exists starts without its credentials and reports itself healthy.
+
+Which backend writes it is `ROBOTHOR_SECRETS_BACKEND`'s answer — `sops`, `file`
+or `env`, auto-detected when unset. `scripts/load-secrets.sh` dispatches; see
+`docs/deployment.md` § Secrets backends.
 
 Until this unit existed, the only thing that wrote that file at boot was the
 **engine's** `ExecStartPre`, and nothing ordered anyone else after the engine.
@@ -84,11 +88,11 @@ therefore had no `GENUS_BRIDGE_SSO_SECRET`, `_sso_secret_ok` returned False,
 and every `POST /api/auth/sso` was answered 403 — for eight days, until someone
 tried to sign in through Cloudflare Access and was bounced back to `/signin`.
 
-So the decrypt is now a unit of its own:
+So the secrets load is now a unit of its own:
 
 | | |
 |---|---|
-| `robothor-secrets.service` | `Type=oneshot`, `RemainAfterExit=yes`, `ExecStart=<workspace>/scripts/decrypt-secrets.sh` |
+| `robothor-secrets.service` | `Type=oneshot`, `RemainAfterExit=yes`, `ExecStart=<workspace>/scripts/load-secrets.sh` |
 | Consumers | `robothor-engine`, `robothor-bridge`, `robothor-app`, `robothor-orchestrator` declare `Requires=` **and** `After=robothor-secrets.service` |
 
 Four things about that are load-bearing:
@@ -98,24 +102,30 @@ Four things about that are load-bearing:
   is what makes the dependency visible in `systemctl status`.
 - **`After=` as well as `Requires=`.** `Requires=` alone is a pull-in, not an
   ordering: systemd would happily start both in parallel, which is the bug.
-- **`ConditionPathExists=/etc/robothor/secrets.enc.json`** on the oneshot. An
-  instance with no encrypted secrets file *skips* the unit, and systemd treats
-  a condition-skipped dependency as satisfied — so `Requires=` does not block
-  those instances. The `EnvironmentFile=-` optional semantics are untouched.
-- **The consumers keep their own `ExecStartPre` decrypt.** It is idempotent,
+- **No `ConditionPathExists=` on the oneshot.** It used to carry
+  `ConditionPathExists=/etc/robothor/secrets.enc.json`, so an instance with no
+  encrypted file *skipped* the unit and systemd treated the skip as a satisfied
+  dependency. Once SOPS became one backend of three, that condition skipped the
+  only unit that populates `secrets.env` on exactly the instances the `file` and
+  `env` backends exist for — the ordering point silently doing nothing. What
+  keeps the unit from *failing* there instead is the `env` backend, which writes
+  an empty file; the `EnvironmentFile=-` optional semantics are untouched.
+- **The consumers keep their own `ExecStartPre` load.** It is idempotent,
   and `RemainAfterExit=yes` means the oneshot will not re-run on its own — so
   removing the `ExecStartPre` would mean a `systemctl restart robothor-engine`
   after a secret rotation silently kept the old values. Keeping it is also the
   smaller diff and leaves existing restart behaviour unchanged.
 
-### What a failed decrypt now costs, and how to recover
+### What a failed load now costs, and how to recover
 
 This is the flip side of `Requires=`, and it is not free. A oneshot has **no
 `Restart=`**, and a unit whose dependency failed sits in `dependency failed` —
 a state in which its *own* `Restart=always` never fires. So if
-`decrypt-secrets.sh` exits non-zero (missing `/etc/robothor/age.key`, an
-unreadable `secrets.enc.json`, or one of its `REQUIRED_KEYS` absent), **engine,
-bridge, app and orchestrator all stay down and nothing retries them.**
+`load-secrets.sh` exits non-zero (an unknown backend name, a plaintext secrets
+file with the wrong mode or owner, or — under the `sops` backend — a missing
+`/etc/robothor/age.key`, an unreadable `secrets.enc.json`, or one of
+`decrypt-secrets.sh`'s `REQUIRED_KEYS` absent), **engine, bridge, app and
+orchestrator all stay down and nothing retries them.**
 
 That is why the unit carries `OnFailure=robothor-alert@%n.service`, with its own
 arm in `scripts/send_failure_alert.sh` naming the four services rather than the
@@ -125,8 +135,9 @@ Recovery:
 
 ```bash
 systemctl status robothor-secrets.service     # why it exited non-zero
-journalctl -u robothor-secrets.service -n 50  # decrypt-secrets.sh says which key
-# …repair the secret (sops /etc/robothor/secrets.enc.json), then:
+journalctl -u robothor-secrets.service -n 50  # names the backend and what it refused
+# …repair the secret (sops /etc/robothor/secrets.enc.json, or the mode on the
+# plaintext file), then:
 systemctl start robothor-secrets.service      # dependents start via Requires=
 ```
 

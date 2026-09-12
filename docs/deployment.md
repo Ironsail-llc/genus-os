@@ -102,6 +102,58 @@ Service features:
 
 View logs: `journalctl -u robothor-api -f`
 
+### Secrets backends
+
+`robothor-secrets.service` runs `scripts/load-secrets.sh` before the other
+services start, and every service that needs a credential loads the file it
+writes (`/run/robothor/secrets.env`, tmpfs, mode 0600). `ROBOTHOR_SECRETS_BACKEND`
+in `/etc/robothor/robothor.env` chooses where that file comes from:
+
+| Backend | Where the secrets live | What the loader does |
+|---|---|---|
+| `env` | `/etc/robothor/robothor.env`, a unit drop-in, or the container environment | writes an **empty** `secrets.env`, so each consumer's `EnvironmentFile=` resolves |
+| `file` | a plaintext `KEY=VALUE` file you manage (`ROBOTHOR_SECRETS_BACKEND_FILE`, default `/etc/robothor/secrets.env`) | validates it and copies it to `secrets.env` at mode 0600 |
+| `sops` | `/etc/robothor/secrets.enc.json`, encrypted to the age key at `/etc/robothor/age.key` | runs `scripts/decrypt-secrets.sh` |
+
+Leave `ROBOTHOR_SECRETS_BACKEND` unset and the loader **auto-detects**: `sops`
+if the encrypted store exists, otherwise `file` if the plaintext file exists,
+otherwise `env`. It prints the backend it chose on one line, so
+`journalctl -u robothor-secrets` says which path a boot took. Nothing about an
+existing SOPS instance changes.
+
+**SOPS is opt-in.** It used to be a prerequisite: the unit carried
+`ConditionPathExists=/etc/robothor/secrets.enc.json` and the engine's
+`ExecStartPre` ran the decrypt directly, so an operator without an age key could
+not start the platform at all.
+
+The `file` backend refuses anything it should not load, and says why in one
+line:
+
+- it must be a **regular file** at the configured path,
+- its mode must be **0600 or 0400** — anything group- or world-readable exposes
+  every credential the instance owns,
+- it must be owned by **root or the service account** — otherwise a third party
+  can rewrite what the platform loads into every service's environment.
+
+Failures reach a human rather than degrading quietly: the loader exits non-zero,
+`robothor-secrets.service` has `OnFailure=robothor-alert@%n.service`, and its
+four consumers `Requires=` it. Nothing retries a `oneshot`, so a failed load is
+a four-service outage that will not heal itself — see `infra/systemd/README.md`
+for the recovery.
+
+In Python, read a credential through the one accessor rather than `os.environ`:
+
+```python
+from robothor.secrets import get_secret, secret_source
+
+get_secret("OPENROUTER_API_KEY")      # value, or None
+secret_source("OPENROUTER_API_KEY")   # "env" | "vault" | "missing" — safe to print
+```
+
+It walks the process environment (whatever the backend put there) and then the
+encrypted vault (`genus vault set …`), and treats an unreadable vault as "not
+configured" rather than raising.
+
 ## Manual Setup
 
 ### PostgreSQL
