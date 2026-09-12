@@ -31,7 +31,13 @@ from pydantic_settings import PydanticBaseSettingsSource
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pydantic.fields import FieldInfo
 
-__all__ = ["ConfigYamlSource", "DeclaredEnvSource", "config_yaml_path", "workspace_path"]
+__all__ = [
+    "ConfigYamlSource",
+    "DeclaredEnvSource",
+    "config_yaml_path",
+    "owner_config_override_path",
+    "workspace_path",
+]
 
 #: Directory, relative to the workspace, holding instance configuration. The
 #: name is platform-hardcoded; everything inside it is instance data.
@@ -69,6 +75,26 @@ def config_yaml_path() -> Path | None:
     """Path of the instance config file, or None if no workspace resolves."""
     workspace = workspace_path()
     return None if workspace is None else workspace / CONFIG_DIRNAME / CONFIG_FILENAME
+
+
+def owner_config_override_path() -> Path | None:
+    """Explicit override for the operator identity file, or None.
+
+    ``robothor.owner_config.load_owner_config()`` otherwise always resolves to
+    the hardcoded ``~/.robothor/owner.yaml`` when called with no ``path``
+    argument -- correct in production, but it means any real owner.yaml on the
+    machine running the suite silently overrides a test's
+    ``ROBOTHOR_OWNER_EMAIL`` (platform tests must never read instance data;
+    see the root ``CLAUDE.md``). ``ROBOTHOR_OWNER_CONFIG`` lets a caller point
+    the loader at a different file -- primarily tests, pointing it at an empty
+    temp directory so the file genuinely does not exist there.
+
+    Mirrors :func:`workspace_path`'s pattern: read here (inside
+    ``robothor/settings/``, exempt from the raw-env-read-site ratchet in
+    ``tests/test_settings_registry.py``) rather than in ``owner_config.py``.
+    """
+    configured = os.environ.get("ROBOTHOR_OWNER_CONFIG", "").strip()
+    return Path(configured) if configured else None
 
 
 def _declared_names(field: FieldInfo) -> tuple[str, list[str]]:

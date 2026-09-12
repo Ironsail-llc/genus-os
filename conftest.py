@@ -160,6 +160,28 @@ def _isolate_shared_key_pools():
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_owner_config(monkeypatch, tmp_path):
+    """Never let this machine's real operator identity reach a platform test.
+
+    ``robothor.owner_config.load_owner_config()`` called with no explicit
+    ``path`` always resolves to the hardcoded ``~/.robothor/owner.yaml`` —
+    correct in production, but on any box that has one configured (as every
+    real Genus OS instance does) it is *authoritative*, silently overriding a
+    test's ``ROBOTHOR_OWNER_EMAIL``. That is instance data leaking into a
+    platform test (root CLAUDE.md rule 1), and it made
+    ``test_gws_tools.py::TestGwsCalendarCreate::test_create_event`` pass in CI
+    (no owner.yaml there) while failing on the production box in isolation.
+
+    ``ROBOTHOR_OWNER_CONFIG`` (read by
+    ``robothor.settings.sources.owner_config_override_path``) points the
+    loader at this test's own ``tmp_path`` instead, which holds no
+    ``owner.yaml`` unless the test writes one there itself. No cache to
+    reset: the loader re-reads the file on every call.
+    """
+    monkeypatch.setenv("ROBOTHOR_OWNER_CONFIG", str(tmp_path / "owner.yaml"))
+
+
+@pytest.fixture(autouse=True)
 def _reset_validation_warning_log():
     """Never let one test's config warnings suppress the next test's.
 

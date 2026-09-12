@@ -240,6 +240,17 @@ class PathsSettings(SettingsGroup):
         "ROBOTHOR_CODEX_BIN",
         "Name or path of the codex binary the codex provider executes.",
     )
+    owner_config_path: str = declare(
+        "",
+        "ROBOTHOR_OWNER_CONFIG",
+        "Explicit override for the operator identity file "
+        "robothor.owner_config.load_owner_config() reads when called with no "
+        "explicit path. Empty means the hardcoded ~/.robothor/owner.yaml. "
+        "Read directly in robothor/settings/sources.py "
+        "(owner_config_override_path()), not through this model -- declared "
+        "here only so the name is documented and the env-read-site ratchet "
+        "sees it as accounted for.",
+    )
 
 
 # ---------------------------------------------------------------------------
