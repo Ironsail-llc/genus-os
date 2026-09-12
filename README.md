@@ -117,6 +117,14 @@ robothor init       # Interactive setup: DB, Redis, Ollama, migrations
 robothor serve      # Start the orchestrator (engine runs separately: robothor engine start)
 ```
 
+Then open the link `init` printed — `http://127.0.0.1:3004/setup?token=…`. It is
+single-use, expires in 30 minutes, and is the only way into a fresh instance:
+there is no account yet, so the sign-in page has nothing to offer. The wizard
+creates your operator account, takes one provider key (and tests it for real),
+installs your first agents, and leaves you in the chat. Lost the link, or set
+the box up headless? `genus auth setup-link` mints another. Once setup is done
+`/setup` answers 404 for good.
+
 Or with Docker for dependencies:
 
 ```bash
@@ -710,7 +718,8 @@ robothor/
 
 | Command | Purpose |
 |---------|---------|
-| `robothor init` | Interactive setup wizard |
+| `robothor init` | Interactive setup wizard; prints the `/setup` link |
+| `genus auth setup-link` | Mint a fresh first-run `/setup` link (before an owner exists) |
 | `robothor serve` | Start the orchestrator (engine runs separately) |
 | `robothor status` | System health overview |
 | `genus doctor` | Diagnose the instance; `--fix` repairs what it can |

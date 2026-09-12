@@ -33,6 +33,39 @@ robothor serve
 
 The wizard checks prerequisites, prompts for database connection details, creates the workspace, runs migrations, and pulls Ollama models.
 
+## Open the link `genus init` printed
+
+`genus init` ends with a line like this:
+
+```
+  Open the setup wizard (the link works once, for 30 minutes):
+    http://127.0.0.1:3004/setup?token=...
+```
+
+Open it. That page is the only way into a fresh instance — there is no account
+yet, so the sign-in page has nothing to offer — and it walks you through the
+operator account, one provider API key (tested for real before it lets you
+past), an optional Telegram channel, and your first agents. It ends in the
+chat, signed in.
+
+Three things worth knowing:
+
+- **The link is single-use and expires in 30 minutes.** Lost it, or set the box
+  up headless? Run `genus auth setup-link` on the server for a fresh one.
+- **It stops working for good.** The moment an operator account exists, `/setup`
+  and every route behind it answer 404. Sign in at the dashboard from then on.
+- **Not sitting at that machine?** `127.0.0.1` is loopback on the *server*.
+  `genus init` prints an `ssh -L` line for that case; run it on your own
+  machine, then open the link there.
+
+You do not need to set `GENUS_LOCAL_LOGIN` yourself — the wizard turns email and
+password sign-in on for the instance when it creates your account, and the
+dashboard asks the bridge which methods are live rather than reading its own
+environment.
+
+Prefer a different lifetime for the link? `GENUS_SETUP_TOKEN_TTL_SECONDS`
+(default 1800) sets it — see the [configuration reference](reference/configuration.md).
+
 ### Non-interactive mode
 
 For CI or scripted installs, use `--yes` with environment variables:

@@ -159,11 +159,30 @@ class AuthMiddleware(BaseHTTPMiddleware):
         }
     )
 
+    #: First-run setup. Public AND exempt from token verification, which is one
+    #: step further than the routes above and needs its own justification.
+    #:
+    #: The wizard authenticates with a SETUP CLAIM token — ``typ: "setup"``,
+    #: audience ``genus-setup`` — and it carries it in ``Authorization:
+    #: Bearer``, the same header a session uses. ``verify_token`` rejects that
+    #: type by design, so without this exemption the middleware would answer
+    #: every wizard call with a 401 before the router ever saw the claim.
+    #:
+    #: The exemption is therefore not a hole: ``routers/setup.py`` verifies the
+    #: claim itself on every route but ``status`` and ``claim``, and the whole
+    #: router answers 404 once an owner account exists. Two tests keep it
+    #: honest -- one asserting nothing else is ever mounted under this prefix,
+    #: and one asserting an operator's own SESSION token is refused here.
+    _SETUP_PREFIX = "/api/setup/"
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         from robothor.auth.deps import token_from_request, verify_token
         from robothor.auth.tokens import TokenError
 
         request.state.auth = None
+        if request.url.path.startswith(self._SETUP_PREFIX):
+            return await call_next(request)
+
         token = token_from_request(request)
         if token:
             try:

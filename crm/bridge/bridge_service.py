@@ -53,6 +53,7 @@ from routers.people import router as people_router
 from routers.providers import router as providers_router
 from routers.routines import router as routines_router
 from routers.runs import router as runs_router
+from routers.setup import router as setup_router
 from routers.system_health import router as system_health_router
 from routers.tenants import router as tenants_router
 from routers.workflows import router as workflows_router
@@ -167,6 +168,12 @@ app.include_router(fleet_router)
 app.include_router(runs_router)
 app.include_router(system_health_router)
 app.include_router(workflows_router)
+# First-run setup. Every route here refuses with 404 once an owner account
+# exists, so on a claimed appliance this router is mounted and unreachable --
+# the gate is asked per request rather than at import, because "has an owner"
+# changes while the process runs and an import-time decision would keep the
+# wizard alive until the next restart.
+app.include_router(setup_router)
 
 # A 422 on the provider/vault routes must not reflect the request body:
 # on those routes the body is a credential.

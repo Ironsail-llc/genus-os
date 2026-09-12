@@ -41,6 +41,44 @@ export function localLoginEnabled(): boolean {
 }
 
 /**
+ * Whether the BRIDGE is currently offering email + password sign-in.
+ *
+ * `localLoginEnabled()` above reads this process's environment, and that answer
+ * is fixed when the dashboard boots. On a fresh appliance that is the wrong
+ * authority: the first-run wizard turns local login on for the instance —
+ * writing it to `config.yaml`, which the dashboard does not read — so a
+ * boot-time constant said "off" for the whole of first run, the `local`
+ * provider was never registered, and the wizard's sign-in hand-off failed
+ * until someone restarted the dashboard. A first-run flow whose documented
+ * happy path ends at a restart is not a first-run flow.
+ *
+ * So the enablement question is asked of the bridge, per attempt, on the two
+ * surfaces where it decides anything: `authorize()` and the sign-in page.
+ * `GET /api/auth/methods` is public (it returns names and booleans) and it is
+ * the same endpoint the sign-in page already exists to render.
+ *
+ * Unreachable reads as OFF. That direction costs nothing — the bridge 404s
+ * `POST /api/auth/login` whenever local login is off, so a form drawn over a
+ * dead endpoint helps nobody, and `bridgeLocalLogin` would return null anyway.
+ * This check is belt-and-braces in front of that, never the load-bearing part.
+ */
+export async function bridgeLocalLoginOffered(
+  bridgeUrl: string,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${bridgeUrl}/api/auth/methods`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (!res.ok) return false;
+    const payload: unknown = await res.json();
+    return (payload as { local?: unknown } | null)?.local === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * IPv4 dotted quad, or anything shaped like IPv6. Deliberately loose — the
  * bridge re-validates with a real parser before trusting the value; this only
  * has to stop junk and header-injection attempts from being forwarded at all.

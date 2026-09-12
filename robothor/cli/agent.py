@@ -242,6 +242,71 @@ def _cmd_agent_catalog(args: argparse.Namespace) -> int:
     return 0
 
 
+def install_preset(
+    preset: str,
+    *,
+    overrides: dict[str, str] | None = None,
+    auto_yes: bool = True,
+) -> dict[str, Any]:
+    """Install every agent in a catalogue preset. Returns what happened.
+
+    Extracted from ``_cmd_agent_install`` so the first-run wizard's agent step
+    installs agents the SAME way ``genus agent install --preset`` does. The
+    alternative was the bridge shelling out to the CLI — a subprocess with the
+    bridge's environment, running a Python entry point that re-imports the
+    world, whose only channel back is parsed stdout. Every failure mode there
+    (a different interpreter, a different workspace, a partial install reported
+    as success) is one this function does not have.
+
+    Nothing here prints: the CLI renders the result, and the bridge serialises
+    it. A function that printed would put agent ids into whichever stream the
+    caller happened to own.
+
+    Individual failures are COLLECTED, not raised. Installing ten agents and
+    having the eighth fail must leave seven installed and name the eighth --
+    the alternative is a half-installed fleet and an exception that says
+    nothing about which half.
+    """
+    from robothor.templates.catalog import Catalog
+    from robothor.templates.installer import install
+
+    catalog = Catalog()
+    agents = catalog.get_preset_agents(preset)
+    if not agents:
+        return {
+            "unknown_preset": True,
+            "available": sorted(catalog.presets.keys()),
+            "requested": 0,
+            "installed": [],
+            "failed": {},
+            "missing": [],
+        }
+
+    installed: list[str] = []
+    failed: dict[str, str] = {}
+    missing: list[str] = []
+    for agent_id in agents:
+        template_path = catalog.find_template(agent_id)
+        if not template_path:
+            missing.append(agent_id)
+            continue
+        try:
+            install(str(template_path), overrides=overrides or {}, auto_yes=auto_yes)
+        except Exception as exc:  # noqa: BLE001 - one bad template is not ten
+            failed[agent_id] = f"{type(exc).__name__}: {exc}"
+        else:
+            installed.append(agent_id)
+
+    return {
+        "unknown_preset": False,
+        "available": sorted(catalog.presets.keys()),
+        "requested": len(agents),
+        "installed": installed,
+        "failed": failed,
+        "missing": missing,
+    }
+
+
 def _cmd_agent_install(args: argparse.Namespace) -> int:
     """Install an agent from a template bundle or preset."""
     from robothor.templates.catalog import Catalog
@@ -259,27 +324,20 @@ def _cmd_agent_install(args: argparse.Namespace) -> int:
 
     # Preset mode: install multiple agents
     if preset:
-        catalog = Catalog()
-        agents = catalog.get_preset_agents(preset)
-        if not agents:
+        outcome = install_preset(preset, overrides=cli_overrides, auto_yes=auto_yes)
+        if outcome["unknown_preset"]:
             print(f"Unknown preset: {preset}")
-            print(f"Available: {', '.join(catalog.presets.keys())}")
+            print(f"Available: {', '.join(outcome['available'])}")
             return 1
 
-        print(f"Installing preset '{preset}': {len(agents)} agents")
-        installed = 0
-        for agent_id in agents:
-            template_path = catalog.find_template(agent_id)
-            if not template_path:
-                print(f"  {agent_id}: template not found, skipping")
-                continue
-            try:
-                result = install(str(template_path), overrides=cli_overrides, auto_yes=auto_yes)
-                print(f"  {agent_id}: installed (v{result['version']})")
-                installed += 1
-            except Exception as e:
-                print(f"  {agent_id}: FAILED -- {e}")
-        print(f"\n{installed}/{len(agents)} agents installed")
+        print(f"Installing preset '{preset}': {outcome['requested']} agents")
+        for agent_id in outcome["installed"]:
+            print(f"  {agent_id}: installed")
+        for agent_id, reason in outcome["failed"].items():
+            print(f"  {agent_id}: FAILED -- {reason}")
+        for agent_id in outcome["missing"]:
+            print(f"  {agent_id}: template not found, skipping")
+        print(f"\n{len(outcome['installed'])}/{outcome['requested']} agents installed")
         return 0
 
     # Single agent mode

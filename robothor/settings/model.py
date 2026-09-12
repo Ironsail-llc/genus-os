@@ -1055,6 +1055,15 @@ class AuthSettings(SettingsGroup):
         "credentials, and the operator is never prompted.",
         since="1.69.0",
     )
+    setup_token_ttl_seconds: int = declare(
+        1800,
+        "GENUS_SETUP_TOKEN_TTL_SECONDS",
+        "How long the first-run setup link printed by `genus init` stays "
+        "usable. The link reaches a page that creates the owner account, so a "
+        "long window turns a terminal scrollback into a standing credential; "
+        "raise it only for an install someone has to walk away from.",
+        since="1.69.0",
+    )
     trusted_proxies: str = declare(
         "",
         "GENUS_TRUSTED_PROXIES",

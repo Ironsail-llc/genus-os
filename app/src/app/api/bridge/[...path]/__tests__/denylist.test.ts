@@ -42,4 +42,27 @@ describe("bridge proxy denylist", () => {
       expect(isDeniedBridgePath(path)).toBe(false);
     }
   });
+
+  it("refuses the first-run setup routes, which must never carry a session", () => {
+    // This proxy attaches the browser's bridge token to everything it
+    // forwards. The setup routes create the owner account and authenticate
+    // with a short-lived claim token instead; reaching them with a session is
+    // precisely what that design refuses, so they do not come through here.
+    for (const path of [
+      "/api/setup",
+      "/api/setup/status",
+      "/api/setup/claim",
+      "/api/setup/operator",
+      "/setup/operator",
+      "/API/SETUP/COMPLETE",
+    ]) {
+      expect(isDeniedBridgePath(path)).toBe(true);
+    }
+  });
+
+  it("does not refuse a route that merely starts with the same letters", () => {
+    for (const path of ["/api/setups", "/api/setup-wizard", "/api/settings"]) {
+      expect(isDeniedBridgePath(path)).toBe(false);
+    }
+  });
 });

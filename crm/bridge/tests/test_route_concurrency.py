@@ -60,6 +60,24 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         # one serving the request. Async here is what keeps the whole run OFF
         # the loop; a def route would block it for the length of the report.
         ("GET", "/api/doctor"),
+        # First-run setup. Each of these awaits something genuinely
+        # asynchronous -- the engine over HTTP, api.telegram.org, or several
+        # asyncio.to_thread probes gathered in parallel -- and every blocking
+        # piece they own (the vault write, the argon2 hash, the account
+        # INSERT, the template install, the doctor run) is handed to
+        # asyncio.to_thread inside the handler.
+        #
+        # POST /api/setup/claim is the deliberate exception and is NOT here: it
+        # is a ``def`` handler for the same reason the sign-in routes are, so
+        # the file read and the constant-time compare run in the worker
+        # threadpool rather than on the loop that serves every other request.
+        ("GET", "/api/setup/status"),
+        ("GET", "/api/setup/detect"),
+        ("POST", "/api/setup/operator"),
+        ("POST", "/api/setup/provider"),
+        ("POST", "/api/setup/channel"),
+        ("POST", "/api/setup/agent"),
+        ("POST", "/api/setup/complete"),
     }
 
 
