@@ -168,11 +168,19 @@ jobs:
       # against the orchestrator, so starting it alone answers 503 forever.
       - name: Start the services the quickstart tells the operator to start
         run: |
+          # The sign-in secrets `genus init` minted live in the workspace's
+          # genus.env, and a service started by hand does not read it — which
+          # is exactly the `EnvironmentFile=` line docs/deployment.md tells a
+          # systemd install to add. Without it the bridge is up and refuses
+          # every SSO exchange, which is what /ready now reports.
+          set -a
+          . "$HOME/robothor/genus.env"
+          set +a
+
           nohup genus serve --host 127.0.0.1 --port 9099 \
             > "$RUNNER_TEMP/orchestrator.log" 2>&1 &
-          cd crm/bridge
-          nohup python bridge_service.py > "$RUNNER_TEMP/bridge.log" 2>&1 &
-          cd -
+          (cd crm/bridge && nohup python bridge_service.py > "$RUNNER_TEMP/bridge.log" 2>&1 &)
+
           for _ in $(seq 1 90); do
             curl -fsS "${ORCHESTRATOR_URL}/ready" >/dev/null 2>&1 && break
             sleep 2
@@ -182,7 +190,8 @@ jobs:
             curl -fsS "${BRIDGE_URL}/ready" >/dev/null 2>&1 && break
             sleep 2
           done
-          curl -f "${BRIDGE_URL}/ready"
+          curl -s "${BRIDGE_URL}/ready" | tee "$RUNNER_TEMP/bridge-ready.json" | jq .
+          curl -f "${BRIDGE_URL}/ready" >/dev/null
           echo "assertion OK: orchestrator and bridge /ready answered"
 
       - name: Assert the setup wizard is reachable, claimable, then closed
