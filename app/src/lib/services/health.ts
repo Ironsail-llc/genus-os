@@ -1,3 +1,5 @@
+import { localLoginEnabled } from "@/lib/auth-local";
+
 import { serviceEnvVar } from "./registry";
 
 export type ServiceStatus = "healthy" | "degraded" | "unhealthy" | "disabled";
@@ -180,10 +182,14 @@ export function checkDashboardAuthConfig(): ServiceHealth {
   // Local email+password is a sign-in provider like any other — on a
   // day-one install it is the ONLY one, and reporting that box unhealthy is
   // the same false `degraded` that taught everyone to ignore /api/ready.
-  // Exactly "true", mirroring localLoginEnabled() in @/lib/auth-local, which
-  // this file deliberately does not import (a readiness probe must not drag
-  // NextAuth in through auth.ts).
-  const localLogin = process.env.GENUS_LOCAL_LOGIN === "true";
+  // One truthiness test for the whole dashboard. This file used to keep its own
+  // copy requiring exactly "true" while the provider registered on the wider set
+  // the bridge's pydantic field accepts, so GENUS_LOCAL_LOGIN=1 reported "no
+  // sign-in provider configured" on a box that had one. Importing auth-local is
+  // safe — it is a leaf module with no NextAuth dependency, which is why it was
+  // split out of auth.ts in the first place; a readiness probe must not drag
+  // NextAuth in.
+  const localLogin = localLoginEnabled();
   const aProviderWorks = localLogin || oidcConfiguredLocally() || cfAccessConfiguredLocally();
   const configured = insecureDevelopment || (common && aProviderWorks);
 
