@@ -64,7 +64,10 @@ describe("dashboard OIDC and Bridge session binding", () => {
   it("rejects an OIDC identity without an explicitly verified email", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const profile = { ...verifiedProfile, email_verified: false } satisfies Profile;
+    const profile = {
+      ...verifiedProfile,
+      email_verified: false,
+    } satisfies Profile;
 
     expect(signInAllowed({ account, profile })).toBe(false);
     await expect(
@@ -128,7 +131,9 @@ describe("dashboard OIDC and Bridge session binding", () => {
     };
 
     const invalidated = await bridgeJwtCallback({ token });
-    expect(invalidated).toMatchObject({ bridgeAuthError: "BridgeRefreshFailed" });
+    expect(invalidated).toMatchObject({
+      bridgeAuthError: "BridgeRefreshFailed",
+    });
     expect(invalidated.bridgeAccess).toBeUndefined();
     expect(invalidated.bridgeRefresh).toBeUndefined();
     expect(invalidated.role).toBeUndefined();
@@ -138,7 +143,10 @@ describe("dashboard OIDC and Bridge session binding", () => {
       expires: "2099-01-01T00:00:00.000Z",
       user: { name: "Test Operator", email: "operator@example.com" },
     };
-    const exposed = await bridgeSessionCallback({ session, token: invalidated });
+    const exposed = await bridgeSessionCallback({
+      session,
+      token: invalidated,
+    });
     expect(exposed.user).toBeUndefined();
     expect(exposed.bridgeAccess).toBeUndefined();
     expect(exposed.role).toBeUndefined();
@@ -151,16 +159,22 @@ describe("dashboard OIDC and Bridge session binding", () => {
   });
 
   it("rejects a cloudflare-access sign-in without well-formed claims", () => {
-    expect(signInAllowed({ account: cfAccount, user: { ...cfUser, cfClaims: undefined } })).toBe(
-      false,
-    );
+    expect(
+      signInAllowed({
+        account: cfAccount,
+        user: { ...cfUser, cfClaims: undefined },
+      }),
+    ).toBe(false);
     expect(
       signInAllowed({
         account: cfAccount,
         user: { ...cfUser, cfClaims: { ...cfClaims, email: "" } },
       }),
     ).toBe(false);
-    const unverifiedClaims = { ...cfClaims, email_verified: false } as unknown as typeof cfClaims;
+    const unverifiedClaims = {
+      ...cfClaims,
+      email_verified: false,
+    } as unknown as typeof cfClaims;
     expect(
       signInAllowed({
         account: cfAccount,
@@ -170,8 +184,12 @@ describe("dashboard OIDC and Bridge session binding", () => {
   });
 
   it("rejects sign-ins from unknown providers", () => {
-    expect(signInAllowed({ account: { provider: "credentials" }, user: cfUser })).toBe(false);
-    expect(signInAllowed({ account: null, profile: verifiedProfile })).toBe(false);
+    expect(
+      signInAllowed({ account: { provider: "credentials" }, user: cfUser }),
+    ).toBe(false);
+    expect(signInAllowed({ account: null, profile: verifiedProfile })).toBe(
+      false,
+    );
   });
 
   it("exchanges cloudflare-access claims with the bridge on sign-in", async () => {
@@ -259,7 +277,9 @@ describe("conditional provider registration", () => {
   }
 
   it("omits the oidc provider when the client id is missing (no InvalidEndpoints noise)", async () => {
-    const ids = await providerIds({ AUTH_OIDC_ISSUER: "https://accounts.example.com" });
+    const ids = await providerIds({
+      AUTH_OIDC_ISSUER: "https://accounts.example.com",
+    });
     expect(ids).not.toContain("oidc");
   });
 
@@ -268,7 +288,21 @@ describe("conditional provider registration", () => {
       CF_ACCESS_TEAM_DOMAIN: "https://team.example.com",
       CF_ACCESS_AUD: "aud-tag-1",
     });
-    expect(ids).toEqual(["cloudflare-access"]);
+    expect(ids).toContain("cloudflare-access");
+    expect(ids).not.toContain("oidc");
+  });
+
+  it("registers the local provider even with GENUS_LOCAL_LOGIN unset", async () => {
+    // The first-run wizard turns local login on for the INSTANCE, in
+    // config.yaml, which this process does not read. A boot-time env check
+    // therefore said "off" for the whole of first run: the provider was never
+    // registered, `signIn("local", …)` threw CredentialsSignin, and the
+    // wizard's documented happy path ended at "restart the dashboard".
+    //
+    // Registering it is not enabling it — authorize() asks the bridge, and the
+    // bridge 404s its login route whenever local login is off.
+    const ids = await providerIds({ GENUS_LOCAL_LOGIN: "" });
+    expect(ids).toContain("local");
   });
 
   it("registers both providers when both are fully configured", async () => {
@@ -280,6 +314,110 @@ describe("conditional provider registration", () => {
     });
     expect(ids).toContain("oidc");
     expect(ids).toContain("cloudflare-access");
+  });
+});
+
+describe("the local provider asks the bridge, not the environment", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  type Authorize = (
+    credentials: Record<string, string>,
+    request: Request | undefined,
+  ) => Promise<unknown>;
+
+  async function localAuthorize(): Promise<Authorize> {
+    vi.resetModules();
+    vi.stubEnv("GENUS_LOCAL_LOGIN", "");
+    const { authConfig } = await import("@/lib/auth");
+    const provider = authConfig.providers.find((candidate) => {
+      const p = candidate as { id?: string; options?: { id?: string } };
+      return (p.options?.id ?? p.id) === "local";
+    }) as
+      | { options?: { authorize?: Authorize }; authorize?: Authorize }
+      | undefined;
+    const authorize = provider?.options?.authorize ?? provider?.authorize;
+    if (!authorize) throw new Error("the local provider was not registered");
+    return authorize;
+  }
+
+  function bridge(methods: { local: boolean }, login?: unknown) {
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/auth/methods")) {
+        return { ok: true, status: 200, json: async () => methods } as Response;
+      }
+      if (login === undefined) throw new Error(`unexpected call to ${url}`);
+      return { ok: true, status: 200, json: async () => login } as Response;
+    });
+  }
+
+  it("refuses when the bridge says local login is off", async () => {
+    const fetchMock = bridge({ local: false });
+    vi.stubGlobal("fetch", fetchMock);
+    const authorize = await localAuthorize();
+
+    const result = await authorize(
+      { email: "alice@example.test", password: "correct-horse-battery-staple" },
+      undefined,
+    );
+
+    expect(result).toBeNull();
+    // And it never spent a credential attempt on the bridge's login route.
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      expect.stringContaining("/api/auth/methods"),
+    ]);
+  });
+
+  it("signs in when the bridge says local login is on, with the env unset", async () => {
+    vi.stubGlobal(
+      "fetch",
+      bridge(
+        { local: true },
+        {
+          access_token: "access-token-value",
+          refresh_token: "refresh-token-value",
+          user: {
+            id: "user-1",
+            email: "alice@example.test",
+            display_name: "Alice",
+            role: "owner",
+            tenant_id: "default",
+          },
+        },
+      ),
+    );
+    const authorize = await localAuthorize();
+
+    const result = (await authorize(
+      { email: "alice@example.test", password: "correct-horse-battery-staple" },
+      undefined,
+    )) as { email?: string } | null;
+
+    expect(result?.email).toBe("alice@example.test");
+  });
+
+  it("refuses when the bridge cannot be reached", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("connection refused");
+      }),
+    );
+    const authorize = await localAuthorize();
+
+    await expect(
+      authorize(
+        {
+          email: "alice@example.test",
+          password: "correct-horse-battery-staple",
+        },
+        undefined,
+      ),
+    ).resolves.toBeNull();
   });
 });
 
@@ -307,7 +445,10 @@ describe("the mfa-setup hint across a token refresh", () => {
   // value set at local sign-in survived every refresh for the life of the
   // Auth.js cookie and could end up contradicting the panel.
   it("is cleared when the refresh response does not carry it", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(true, refreshed)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(response(true, refreshed)),
+    );
     const token = await bridgeJwtCallback({
       token: {
         bridgeAccess: "expired-access-token",
@@ -325,7 +466,11 @@ describe("the mfa-setup hint across a token refresh", () => {
   it("is refreshed from the response when the bridge does report it", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(response(true, { ...refreshed, mfa_setup_required: true })),
+      vi
+        .fn()
+        .mockResolvedValue(
+          response(true, { ...refreshed, mfa_setup_required: true }),
+        ),
     );
     const token = await bridgeJwtCallback({
       token: {

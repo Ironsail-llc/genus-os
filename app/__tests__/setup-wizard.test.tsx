@@ -397,7 +397,9 @@ describe("the first-run wizard", () => {
 
     // No session, so no enrolment panel — and an honest instruction instead.
     expect(screen.queryByTestId("mfa-panel")).not.toBeInTheDocument();
-    expect(screen.getByRole("alert").textContent).toContain("restart");
+    expect(screen.getByRole("alert").textContent).toContain(
+      "could not be signed in automatically",
+    );
 
     click("Finish setup");
     await waitFor(() =>

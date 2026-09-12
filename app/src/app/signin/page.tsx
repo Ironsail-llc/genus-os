@@ -2,9 +2,14 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { LocalSignInForm } from "@/components/local-signin-form";
-import { localLoginEnabled } from "@/lib/auth-local";
+import { bridgeLocalLoginOffered } from "@/lib/auth-local";
 import { oidcProviderConfigured, signIn } from "@/lib/auth";
-import { CF_JWT_HEADER, cfAccessEnabled, resolveSignInMode } from "@/lib/cf-access";
+import { getServiceUrl } from "@/lib/services/registry";
+import {
+  CF_JWT_HEADER,
+  cfAccessEnabled,
+  resolveSignInMode,
+} from "@/lib/cf-access";
 
 /**
  * Sign-in page. When the deployment trusts Cloudflare Access and the edge
@@ -30,7 +35,14 @@ export default async function SignInPage({
   const requestHeaders = await headers();
   const cfEnabled = cfAccessEnabled();
   const hasCfHeader = Boolean(requestHeaders.get(CF_JWT_HEADER));
-  const localEnabled = localLoginEnabled();
+  // Asked of the BRIDGE, not of this process's environment. The first-run
+  // wizard turns local login on for the instance in config.yaml, which the
+  // dashboard does not read, so the boot-time constant this used to read said
+  // "off" for the whole of first run — and an operator who had just created
+  // their account landed here with no form to use it in.
+  const localEnabled = await bridgeLocalLoginOffered(
+    getServiceUrl("bridge") || "http://localhost:9100",
+  );
 
   const mode = resolveSignInMode({
     hasCfHeader,
@@ -40,7 +52,9 @@ export default async function SignInPage({
   });
 
   if (mode === "cf-redirect") {
-    redirect(`/signin/cloudflare?callbackUrl=${encodeURIComponent(callbackUrl || "/")}`);
+    redirect(
+      `/signin/cloudflare?callbackUrl=${encodeURIComponent(callbackUrl || "/")}`,
+    );
   }
 
   async function doSignIn() {
@@ -77,7 +91,9 @@ export default async function SignInPage({
         {mode === "oidc-button" && localEnabled && (
           <div className="flex w-full items-center gap-3">
             <span className="h-px flex-1 bg-border" aria-hidden />
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">or</span>
+            <span className="text-xs uppercase tracking-wide text-muted-foreground">
+              or
+            </span>
             <span className="h-px flex-1 bg-border" aria-hidden />
           </div>
         )}

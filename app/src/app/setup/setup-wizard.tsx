@@ -698,9 +698,10 @@ export function SetupWizard({ initialToken }: { initialToken: string }) {
                 role="alert"
                 className="rounded-md bg-warning/10 p-3 text-sm text-warning-foreground"
               >
-                This browser is not signed in yet — the dashboard needs a
-                restart to offer the password form. Finish below, restart it,
-                then sign in and enrol a second factor from Account → Security.
+                This browser could not be signed in automatically. Your account
+                exists and the password you chose works — finish below, then
+                sign in at /signin and enrol a second factor from Account →
+                Security.
               </p>
             )}
             <div className="flex justify-end">

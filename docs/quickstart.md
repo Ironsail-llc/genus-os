@@ -58,6 +58,11 @@ Three things worth knowing:
   `genus init` prints an `ssh -L` line for that case; run it on your own
   machine, then open the link there.
 
+You do not need to set `GENUS_LOCAL_LOGIN` yourself — the wizard turns email and
+password sign-in on for the instance when it creates your account, and the
+dashboard asks the bridge which methods are live rather than reading its own
+environment.
+
 Prefer a different lifetime for the link? `GENUS_SETUP_TOKEN_TTL_SECONDS`
 (default 1800) sets it — see the [configuration reference](reference/configuration.md).
 

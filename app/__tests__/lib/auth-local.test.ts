@@ -22,6 +22,35 @@ function response(status: number, body: unknown = {}): Response {
   } as Response;
 }
 
+/**
+ * A bridge that answers both calls `authorize()` makes.
+ *
+ * `authorize()` asks `GET /api/auth/methods` before it spends a credential
+ * attempt, because the dashboard's own environment is no longer what decides
+ * whether local login is on — the first-run wizard turns it on for the
+ * INSTANCE, in config.yaml, which this process does not read.
+ */
+function stubBridge(login: Response | (() => Response | never), local = true) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).endsWith("/api/auth/methods")) {
+      return response(200, { local, oidc: [], cloudflare_access: false });
+    }
+    return typeof login === "function" ? login() : login;
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+/** The login call, skipping the `/methods` probe in front of it. */
+function loginCall(fetchMock: ReturnType<typeof stubBridge>) {
+  const call = fetchMock.mock.calls.find((entry) =>
+    String(entry[0]).includes("/api/auth/login"),
+  );
+  if (!call)
+    throw new Error("authorize() never reached the bridge's login route");
+  return call as unknown as [string, RequestInit];
+}
+
 async function localProvider() {
   const { authConfig } = await import("@/lib/auth");
   return authConfig.providers.find((provider) => {
@@ -58,19 +87,32 @@ describe("local credentials provider registration", () => {
     vi.resetModules();
   });
 
-  it("is absent unless GENUS_LOCAL_LOGIN is set to something the bridge reads as true", async () => {
-    for (const value of ["", "false", "off", "no", "0", "enabled", "sure"]) {
+  // Registration used to be `if (localLoginEnabled())`, evaluated once at
+  // module load from this process's environment — and the first-run wizard
+  // turns local login on for the INSTANCE, in config.yaml, which the dashboard
+  // does not read. So for the whole of first run the provider did not exist,
+  // `signIn("local", …)` threw CredentialsSignin, and the wizard's happy path
+  // ended at "restart the dashboard".
+  //
+  // Now it is always registered and `authorize()` asks the bridge per attempt.
+  // Registration is not authorisation: see "local authorize()" below, where a
+  // bridge that says local login is off gets a null and never sees a password.
+  it("is registered whatever this process's environment says", async () => {
+    for (const value of ["", "false", "off", "no", "0", "true", "1"]) {
       vi.resetModules();
       vi.stubEnv("GENUS_LOCAL_LOGIN", value);
-      expect(await localProvider()).toBeUndefined();
+      expect(await localProvider(), value).toBeDefined();
     }
   });
 
-  // The bridge parses this field with pydantic, which reads all of these as
-  // true. Requiring exactly "true" here meant GENUS_LOCAL_LOGIN=1 published the
-  // public password endpoint with no form in front of it: the surface without
-  // the UI, which is the wrong half to fail open.
-  it("registers for every spelling the bridge accepts", async () => {
+  // `localLoginEnabled` no longer gates the provider, but it is still read by
+  // the health view's status pill, and the bridge parses the same variable with
+  // pydantic — which reads all of these as true. Requiring exactly "true" once
+  // meant GENUS_LOCAL_LOGIN=1 published the public password endpoint with no
+  // form in front of it: the surface without the UI, the wrong half to fail
+  // open.
+  it("reads every spelling of the flag the bridge accepts", async () => {
+    const { localLoginEnabled } = await import("@/lib/auth-local");
     for (const value of [
       "true",
       "TRUE",
@@ -81,9 +123,12 @@ describe("local credentials provider registration", () => {
       "y",
       " True ",
     ]) {
-      vi.resetModules();
       vi.stubEnv("GENUS_LOCAL_LOGIN", value);
-      expect(await localProvider(), value).toBeDefined();
+      expect(localLoginEnabled(), value).toBe(true);
+    }
+    for (const value of ["", "false", "off", "no", "0", "enabled", "sure"]) {
+      vi.stubEnv("GENUS_LOCAL_LOGIN", value);
+      expect(localLoginEnabled(), value).toBe(false);
     }
   });
 
@@ -123,9 +168,29 @@ describe("local authorize()", () => {
     vi.resetModules();
   });
 
+  it("refuses without sending a password when the bridge says local login is off", async () => {
+    // The enablement question, asked of the authority that knows. It runs
+    // BEFORE the credentials leave this process, so a dashboard pointed at an
+    // instance with local login off never spends one of the bridge's five
+    // attempts a minute on it either.
+    const fetchMock = stubBridge(response(200, loginResult), false);
+    const provider = await localProvider();
+
+    await expect(
+      authorizeOf(provider)({
+        email: "alice@example.com",
+        password: "correct horse battery staple",
+      }),
+    ).resolves.toBeNull();
+    expect(
+      fetchMock.mock.calls.some((call) =>
+        String(call[0]).includes("/api/auth/login"),
+      ),
+    ).toBe(false);
+  });
+
   it("posts the credentials to the bridge and returns the issued tokens", async () => {
-    const fetchMock = vi.fn(async () => response(200, loginResult));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubBridge(response(200, loginResult));
     const provider = await localProvider();
     const user = (await authorizeOf(provider)({
       email: "alice@example.com",
@@ -133,11 +198,7 @@ describe("local authorize()", () => {
       code: "123456",
     })) as { localTokens?: typeof loginResult; email?: string };
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [
-      string,
-      RequestInit,
-    ];
+    const [url, init] = loginCall(fetchMock);
     expect(url).toContain("/api/auth/login");
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({
@@ -150,18 +211,14 @@ describe("local authorize()", () => {
   });
 
   it("omits an empty code rather than sending a blank one", async () => {
-    const fetchMock = vi.fn(async () => response(200, loginResult));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubBridge(response(200, loginResult));
     const provider = await localProvider();
     await authorizeOf(provider)({
       email: "alice@example.com",
       password: "x".repeat(12),
       code: "",
     });
-    const [, init] = fetchMock.mock.calls[0] as unknown as [
-      string,
-      RequestInit,
-    ];
+    const [, init] = loginCall(fetchMock);
     expect(JSON.parse(init.body as string)).toEqual({
       email: "alice@example.com",
       password: "x".repeat(12),
@@ -169,10 +226,7 @@ describe("local authorize()", () => {
   });
 
   it("throws a signin error whose code is mfa_required", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => response(401, { error: "mfa_required" })),
-    );
+    stubBridge(response(401, { error: "mfa_required" }));
     const provider = await localProvider();
     await expect(
       authorizeOf(provider)({
@@ -183,10 +237,7 @@ describe("local authorize()", () => {
   });
 
   it("returns null on a generic failure so Auth.js reports CredentialsSignin", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => response(401, { error: "invalid credentials" })),
-    );
+    stubBridge(response(401, { error: "invalid credentials" }));
     const provider = await localProvider();
     await expect(
       authorizeOf(provider)({
@@ -197,10 +248,7 @@ describe("local authorize()", () => {
   });
 
   it("returns null when the bridge throttles or is unreachable", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => response(429, { error: "too many attempts" })),
-    );
+    stubBridge(response(429, { error: "too many attempts" }));
     const provider = await localProvider();
     await expect(
       authorizeOf(provider)({
@@ -209,12 +257,9 @@ describe("local authorize()", () => {
       }),
     ).resolves.toBeNull();
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new Error("ECONNREFUSED");
-      }),
-    );
+    stubBridge(() => {
+      throw new Error("ECONNREFUSED");
+    });
     await expect(
       authorizeOf(provider)({
         email: "alice@example.com",
@@ -224,10 +269,7 @@ describe("local authorize()", () => {
   });
 
   it("rejects a malformed bridge response instead of half-creating a session", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => response(200, { access_token: "a" })),
-    );
+    stubBridge(response(200, { access_token: "a" }));
     const provider = await localProvider();
     await expect(
       authorizeOf(provider)({
@@ -332,17 +374,13 @@ describe("forwarding the browser's address to the bridge", () => {
     // authorize() runs SERVER-side, so without a forwarded address the bridge
     // sees the dashboard for every sign-in on the planet and its per-IP limiter
     // is one global bucket - five attempts from anywhere lock everyone out.
-    const fetchMock = vi.fn(async () => response(200, loginResult));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubBridge(response(200, loginResult));
     const provider = await localProvider();
     await authorizeOf(provider)(
       { email: "alice@example.com", password: "x".repeat(12) },
       requestWith(headers),
     );
-    const [, init] = fetchMock.mock.calls[0] as unknown as [
-      string,
-      RequestInit,
-    ];
+    const [, init] = loginCall(fetchMock);
     return (init.headers as Record<string, string>)["X-Client-IP"];
   }
 
