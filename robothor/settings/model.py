@@ -1036,6 +1036,37 @@ class AuthSettings(SettingsGroup):
         "GENUS_OIDC_ISSUERS",
         "Comma-separated OIDC issuer URLs whose tokens the bridge accepts.",
     )
+    local_login: bool = declare(
+        False,
+        "GENUS_LOCAL_LOGIN",
+        "Offer local email + password sign-in (bridge routes and the dashboard "
+        "form). Off by default: a fresh instance must opt in. Owner MFA becomes "
+        "mandatory when this is the only sign-in method.",
+        since="1.69.0",
+        restart_required=True,
+    )
+    trusted_proxies: str = declare(
+        "",
+        "GENUS_TRUSTED_PROXIES",
+        "Comma-separated peer addresses or CIDR ranges allowed to assert the end "
+        "user's address in X-Client-IP (the dashboard pod, a reverse proxy). "
+        "Empty trusts nobody, loopback included; the real peer address is used.",
+        since="1.69.0",
+    )
+    cf_access_team_domain: str = declare(
+        "",
+        "CF_ACCESS_TEAM_DOMAIN",
+        "Cloudflare Access team domain that fronts the dashboard; with the "
+        "audience, lets the bridge and dashboard treat Access as a sign-in method.",
+        since="legacy",
+    )
+    cf_access_aud: str = declare(
+        "",
+        "CF_ACCESS_AUD",
+        "Cloudflare Access application audience tag that the dashboard verifies "
+        "sign-in assertions against.",
+        since="legacy",
+    )
     bridge_host: str = declare(
         "127.0.0.1",
         "ROBOTHOR_BRIDGE_HOST",

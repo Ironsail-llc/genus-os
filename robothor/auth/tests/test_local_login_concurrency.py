@@ -317,7 +317,10 @@ def test_citext_agrees_with_canonical_email(mfa_table) -> None:
 
     conn = _connect()
     cur = conn.cursor()
-    cur.execute("SELECT %s::citext = %s::citext", ("Straße@example.com", canonical_email("Straße@Example.COM")))
+    cur.execute(
+        "SELECT %s::citext = %s::citext",
+        ("Straße@example.com", canonical_email("Straße@Example.COM")),
+    )
     (matched,) = cur.fetchone()
     assert matched is True
     cur.execute("SELECT %s::citext = %s::citext", ("Straße@example.com", "Strasse@example.com"))

@@ -387,11 +387,16 @@ def test_disable_mfa_requires_both_password_and_code() -> None:
 
 
 def test_local_login_is_off_unless_explicitly_enabled(monkeypatch) -> None:
+    from robothor.settings import reset_settings
+
     monkeypatch.delenv("GENUS_LOCAL_LOGIN", raising=False)
+    reset_settings()
     assert local_login.local_login_enabled() is False
     monkeypatch.setenv("GENUS_LOCAL_LOGIN", "false")
+    reset_settings()
     assert local_login.local_login_enabled() is False
     monkeypatch.setenv("GENUS_LOCAL_LOGIN", "true")
+    reset_settings()
     assert local_login.local_login_enabled() is True
 
 
@@ -656,8 +661,12 @@ def test_the_sign_in_lookup_uses_lower_not_casefold() -> None:
 
 
 def test_the_audit_subject_uses_lower_and_keeps_distinct_addresses_distinct() -> None:
-    assert local_login.audit_subject("Straße@Example.COM") == local_login.audit_subject("straße@example.com")
-    assert local_login.audit_subject("Straße@example.com") != local_login.audit_subject("strasse@example.com")
+    assert local_login.audit_subject("Straße@Example.COM") == local_login.audit_subject(
+        "straße@example.com"
+    )
+    assert local_login.audit_subject("Straße@example.com") != local_login.audit_subject(
+        "strasse@example.com"
+    )
 
 
 def test_the_audit_subject_is_an_hmac_under_a_derived_key() -> None:

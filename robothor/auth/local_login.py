@@ -30,7 +30,6 @@ The rules, and why each one is here:
 from __future__ import annotations
 
 import logging
-import os
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -140,12 +139,12 @@ def other_providers_configured() -> bool:
     the operator has another way back in and the appliance is not betting
     everything on one password.
     """
-    if any(item.strip() for item in os.environ.get("GENUS_OIDC_ISSUERS", "").split(",")):
+    from robothor.settings import get_settings
+
+    auth = get_settings().auth
+    if any(item.strip() for item in auth.oidc_issuers.split(",")):
         return True
-    return bool(
-        os.environ.get("CF_ACCESS_TEAM_DOMAIN", "").strip()
-        and os.environ.get("CF_ACCESS_AUD", "").strip()
-    )
+    return bool(auth.cf_access_team_domain.strip() and auth.cf_access_aud.strip())
 
 
 def mfa_setup_required_for(account_row: dict[str, Any]) -> bool:

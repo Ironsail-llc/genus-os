@@ -423,7 +423,9 @@ def test_two_addresses_that_casefold_alike_stay_distinct():
 
 
 def test_bootstrap_owner_account_uses_lower_too():
-    owner = MagicMock(email="Straße@Example.COM", tenant_id="default", first_name="Ann", last_name="Smith")
+    owner = MagicMock(
+        email="Straße@Example.COM", tenant_id="default", first_name="Ann", last_name="Smith"
+    )
     conn, cur = _mock_conn([{"id": "uid-1"}])
     with (
         patch("robothor.owner_config.load_owner_config", return_value=owner),

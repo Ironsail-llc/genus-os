@@ -87,7 +87,9 @@ def local_login_enabled() -> bool:
     that ``validate_auth_configuration`` can ask it without importing the
     database-backed login module.
     """
-    return _truthy(os.environ.get("GENUS_LOCAL_LOGIN"))
+    from robothor.settings import get_settings
+
+    return bool(get_settings().auth.local_login)
 
 
 def legacy_headers_allowed(*, bind_host: str = "127.0.0.1") -> bool:

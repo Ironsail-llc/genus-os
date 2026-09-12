@@ -16,6 +16,8 @@ import logging
 import os
 from typing import TYPE_CHECKING, Annotated, Any
 
+from robothor.settings import get_settings
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -393,11 +395,7 @@ def _peer_ip(request: Request) -> str | None:
 
 
 def _trusted_proxies() -> set[str]:
-    return {
-        item.strip()
-        for item in os.environ.get("GENUS_TRUSTED_PROXIES", "").split(",")
-        if item.strip()
-    }
+    return {item.strip() for item in get_settings().auth.trusted_proxies.split(",") if item.strip()}
 
 
 def _peer_is_trusted(peer: str | None) -> bool:
@@ -494,8 +492,8 @@ def auth_methods() -> dict[str, Any]:
         "local": local_login.local_login_enabled(),
         "oidc": _oidc_issuers(),
         "cloudflare_access": bool(
-            os.environ.get("CF_ACCESS_TEAM_DOMAIN", "").strip()
-            and os.environ.get("CF_ACCESS_AUD", "").strip()
+            get_settings().auth.cf_access_team_domain.strip()
+            and get_settings().auth.cf_access_aud.strip()
         ),
     }
 
