@@ -171,17 +171,50 @@ def test_an_owner_yaml_without_an_email_fails(monkeypatch) -> None:
 
 def test_an_owner_account_that_exists_passes(monkeypatch) -> None:
     monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner())
-    ctx = make_ctx(db_factory=fake_db([(1,)]))
+    ctx = make_ctx(db_factory=fake_db([("acme", 1)]))
     row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)
     assert row[0].status == "pass"
+    assert "acme" in row[0].detail
 
 
-def test_no_owner_account_fails_and_names_the_command(monkeypatch) -> None:
+def test_no_owner_account_anywhere_fails_and_names_the_command(monkeypatch) -> None:
     monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner())
-    ctx = make_ctx(db_factory=fake_db([(0,)]))
+    ctx = make_ctx(db_factory=fake_db([]))
     row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
     assert row.status == "fail"
     assert "genus user add --role owner" in row.detail
+
+
+def test_a_tenant_mismatch_is_diagnosed_as_a_mismatch_not_as_no_owner(monkeypatch) -> None:
+    """The live shape on the first instance: owner.yaml named one tenant and
+    the owner accounts were under another, and people signed in perfectly well.
+    Reporting "nobody can sign in" there is false, and following the repair it
+    used to print would mint a SECOND privileged account in the wrong tenant."""
+    monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
+    ctx = make_ctx(db_factory=fake_db([("other-tenant", 2)]))
+    row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
+
+    assert row.status == "fail"
+    assert "acme" in row.detail and "other-tenant" in row.detail
+    assert "2" in row.detail
+    assert "nobody can sign in" not in row.detail
+
+
+def test_a_tenant_mismatch_never_prescribes_creating_another_owner(monkeypatch) -> None:
+    monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
+    ctx = make_ctx(db_factory=fake_db([("other-tenant", 1)]))
+    row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
+
+    assert "genus user add" not in row.detail
+    assert "owner.yaml" in row.detail
+
+
+def test_the_owner_tenant_winning_is_not_disturbed_by_owners_elsewhere(monkeypatch) -> None:
+    """A multi-tenant instance is not broken because another tenant has owners."""
+    monkeypatch.setattr("robothor.owner_config.load_owner_config", lambda: _Owner(tenant_id="acme"))
+    ctx = make_ctx(db_factory=fake_db([("acme", 1), ("other-tenant", 3)]))
+    row = _run(identity_checks.CHECKS, "identity.owner_account", ctx)[0]
+    assert row.status == "pass"
 
 
 def test_the_owner_account_is_deliberately_not_auto_fixable() -> None:

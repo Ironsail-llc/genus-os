@@ -57,14 +57,28 @@ async def _owner_account(ctx: DoctorContext) -> Result:
 
     The bridge admits only ``owner`` and ``admin`` to every operator surface.
     An instance with no owner row has a dashboard nobody can enter and a
-    providers page nobody can configure. This is NOT repaired automatically:
-    creating a privileged account is an act an operator performs deliberately,
-    and a doctor that minted one on its own would be a privilege-escalation
-    path that runs from cron.
-    """
-    tenant = ""
+    providers page nobody can configure.
 
-    def _probe() -> tuple[str, int]:
+    Counted across EVERY tenant, not only the one ``owner.yaml`` names, because
+    those two disagreeing is a different fault with a different repair -- and
+    the first Genus OS instance had exactly that. ``owner.yaml`` said one
+    tenant, the live owner accounts were under another, people signed in every
+    day, and a doctor that asked only about the owner file's tenant reported
+    "nobody can sign in" and told the operator to run ``genus user add --role
+    owner``. Following that would have minted a SECOND privileged account, in
+    the wrong tenant, on a healthy instance. So a mismatch is reported as a
+    mismatch, names both tenant ids, and prescribes reconciling the file.
+
+    Tenant ids are configuration, not credentials, so they are safe to print --
+    and they are the whole content of the finding: without both of them the
+    operator cannot tell which side to change.
+
+    Never repaired automatically: creating a privileged account is an act an
+    operator performs deliberately, and a doctor that minted one on its own
+    would be a privilege-escalation path that runs from cron.
+    """
+
+    def _probe() -> tuple[str, dict[str, int]]:
         from robothor.constants import DEFAULT_TENANT
         from robothor.owner_config import load_owner_config
 
@@ -73,24 +87,35 @@ async def _owner_account(ctx: DoctorContext) -> Result:
         with ctx.db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT COUNT(*) FROM user_accounts "
-                "WHERE tenant_id = %s AND role = 'owner' AND status = 'active'",
-                (tenant_id,),
+                "SELECT tenant_id, COUNT(*) FROM user_accounts "
+                "WHERE role = 'owner' AND status = 'active' GROUP BY tenant_id"
             )
-            row = cursor.fetchone()
-        count = row[0] if not isinstance(row, dict) else next(iter(row.values()))
-        return tenant_id, int(count)
+            rows = cursor.fetchall()
+        counts = {str(row[0]): int(row[1]) for row in rows}
+        return tenant_id, counts
 
     try:
-        tenant, count = await ctx.run_blocking(_probe)
+        tenant, counts = await ctx.run_blocking(_probe)
     except Exception as exc:  # noqa: BLE001 - no table, no database: both are answers
         return fail(f"cannot read user_accounts: {type(exc).__name__}")
-    if count == 0:
+
+    here = counts.get(tenant, 0)
+    if here:
+        return ok(f"{here} active owner account(s) for tenant {tenant}")
+
+    elsewhere = {name: n for name, n in counts.items() if n}
+    if elsewhere:
+        where = ", ".join(f"{name} ({n})" for name, n in sorted(elsewhere.items()))
         return fail(
-            f"no active owner account for tenant {tenant} — nobody can sign in; "
-            "create one with 'genus user add --role owner'"
+            f"owner.yaml names tenant {tenant}, but every active owner account is under "
+            f"{where} — reconcile ~/.robothor/owner.yaml with ROBOTHOR_DEFAULT_TENANT "
+            "(the accounts are fine; do NOT create another owner)"
         )
-    return ok(f"{count} active owner account(s) for tenant {tenant}")
+
+    return fail(
+        f"no active owner account in any tenant (owner.yaml names {tenant}) — nobody can "
+        "sign in; create one with 'genus user add --role owner'"
+    )
 
 
 CHECKS: tuple[Check, ...] = (
