@@ -57,6 +57,17 @@ def degraded():
         yield stub
 
 
+@pytest.fixture(autouse=True)
+def _no_memoised_report():
+    """Each test starts with an empty cache. Without this, the first test to
+    run would answer every later one."""
+    from routers.health import reset_doctor_cache
+
+    reset_doctor_cache()
+    yield
+    reset_doctor_cache()
+
+
 @pytest.fixture
 def anonymous_client():
     """No Authorization header at all -- the shape a browser that has never
@@ -187,3 +198,99 @@ def test_a_doctor_that_raises_is_a_report_not_a_traceback(controls_client_as_ope
         response = controls_client_as_operator.get("/api/doctor")
     assert response.status_code == 200
     assert response.json()["status"] == "degraded"
+
+
+# ── one run per poll, not one run per request ────────────────────────────────
+
+
+def test_a_second_call_within_the_window_reuses_the_report(
+    controls_client_as_operator, healthy
+) -> None:
+    """This route exists to be polled by the Health view. Every poll running a
+    fresh 26-check doctor is how a dashboard refresh turns into load on the
+    database it is reporting on."""
+    first = controls_client_as_operator.get("/api/doctor").json()
+    second = controls_client_as_operator.get("/api/doctor").json()
+
+    assert healthy.call_count == 1
+    assert first == second
+
+
+def test_the_memo_window_is_advertised_and_bounded() -> None:
+    from routers.health import DOCTOR_CACHE_TTL_S
+
+    assert 5.0 <= DOCTOR_CACHE_TTL_S <= 60.0
+
+
+def test_an_expired_memo_runs_the_doctor_again(
+    monkeypatch, controls_client_as_operator, healthy
+) -> None:
+    import routers.health as health_module
+
+    clock = [1000.0]
+    monkeypatch.setattr(health_module, "_now", lambda: clock[0])
+
+    controls_client_as_operator.get("/api/doctor")
+    clock[0] += health_module.DOCTOR_CACHE_TTL_S + 1
+    controls_client_as_operator.get("/api/doctor")
+
+    assert healthy.call_count == 2
+
+
+def test_concurrent_requests_during_a_slow_run_produce_one_execution(
+    controls_client_as_operator,
+) -> None:
+    """Single flight. Ten operator tabs refreshing at once must not be ten
+    concurrent doctors competing for the same connection pool -- and must not
+    each orphan a worker if the run is the kind that abandons checks."""
+    import threading
+    import time
+    from unittest.mock import patch
+
+    runs: list[float] = []
+
+    def _slow_run(*_args, **_kwargs):
+        runs.append(time.monotonic())
+        time.sleep(0.3)
+        return ONE_PASS
+
+    bodies: list[dict] = []
+    errors: list[BaseException] = []
+
+    def _poll() -> None:
+        try:
+            bodies.append(controls_client_as_operator.get("/api/doctor").json())
+        except BaseException as exc:  # noqa: BLE001 - reported by the assertion
+            errors.append(exc)
+
+    with patch("routers.health.run_sync", side_effect=_slow_run):
+        threads = [threading.Thread(target=_poll) for _ in range(5)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+    assert errors == []
+    assert len(runs) == 1, f"the doctor ran {len(runs)} times for 5 concurrent polls"
+    assert len(bodies) == 5
+    assert all(body == bodies[0] for body in bodies)
+
+
+def test_a_degraded_report_is_memoised_too(controls_client_as_operator, degraded) -> None:
+    """Caching only the happy answer would make an incident the one case that
+    hammers the database."""
+    controls_client_as_operator.get("/api/doctor")
+    body = controls_client_as_operator.get("/api/doctor").json()
+    assert degraded.call_count == 1
+    assert body["status"] == "degraded"
+
+
+def test_a_doctor_that_raises_is_not_memoised(controls_client_as_operator) -> None:
+    """An error is not a report. Caching it would keep answering with it for
+    the whole window after the cause was fixed."""
+    from unittest.mock import patch
+
+    with patch("routers.health.run_sync", side_effect=RuntimeError("boom")) as stub:
+        controls_client_as_operator.get("/api/doctor")
+        controls_client_as_operator.get("/api/doctor")
+    assert stub.call_count == 2

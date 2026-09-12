@@ -350,8 +350,11 @@ reported as a failure and the run continues.
 gated on the operator role. Its `status` and `checks` keys mirror the readiness
 contract so the Helm's Health view renders either payload.
 
-It runs **offline** and under a 30-second budget for the whole run, on top of
-the per-check five seconds. This is what a Health panel polls: online, every
+It runs **offline**, under a 30-second budget for the whole run on top of the
+per-check five seconds, and its report is **memoised for 30 seconds behind a
+single-flight lock** — concurrent polls share one run, and a poll inside the
+window reuses the last report rather than running the doctor again. Use the CLI
+when you need an answer taken just now. This is what a Health panel polls: online, every
 refresh would make a paid completion through the fleet's default model, a call
 to Telegram and a fork of the host script, so two operator tabs at 30-second
 intervals would be thousands of provider calls a day caused by a dashboard.
