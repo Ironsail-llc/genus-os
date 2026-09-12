@@ -1476,3 +1476,20 @@ class TestMiddleware:
         }
 
         assert under_prefix == ours
+
+
+def test_telegram_getme_url_keeps_the_token_colon_but_no_path_characters():
+    """A bot token is ``<digits>:<secret>``; the Bot API wants the colon raw in
+    the path. Percent-encoding it made every channel verification fail while
+    blaming the operator's token. A stray ``/``, ``?`` or ``#`` must still be
+    encoded so it cannot change which method is called."""
+    from routers.setup import _telegram_getme_url
+
+    assert (
+        _telegram_getme_url("123456:ABC-def_ghi")
+        == "https://api.telegram.org/bot123456:ABC-def_ghi/getMe"
+    )
+    hardened = _telegram_getme_url("123:abc/../deleteWebhook?x#y")
+    assert hardened.startswith("https://api.telegram.org/bot123:abc")
+    assert "/../" not in hardened and "?" not in hardened and "#" not in hardened
+    assert hardened.endswith("/getMe")

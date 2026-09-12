@@ -947,15 +947,24 @@ async def _test_provider(provider_id: str, model: str) -> tuple[int, dict[str, A
     return status, result
 
 
+def _telegram_getme_url(token: str) -> str:
+    """The Bot API URL for ``getMe``.
+
+    Percent-encoded into the path. The host is a literal so there is no SSRF
+    here, but a bot token is operator-supplied text and a stray ``/``, ``?`` or
+    ``#`` would silently change which Bot API method is called. The colon in
+    ``<digits>:<secret>`` is a legal path character and the API expects it raw:
+    encoding it made every verification fail while blaming the token.
+    """
+    return f"https://api.telegram.org/bot{quote(token, safe=':')}/getMe"
+
+
 async def _verify_telegram_token(token: str) -> tuple[bool, str]:
     """``getMe``: the only Bot API call that costs nothing and proves the token
     is real, unrevoked, and belongs to the bot the operator thinks it does."""
     import httpx
 
-    # Percent-encoded into the path. The host is a literal so there is no SSRF
-    # here, but a bot token is operator-supplied text and a stray `/` or `?`
-    # would silently change which Bot API method is called.
-    url = f"https://api.telegram.org/bot{quote(token, safe='')}/getMe"
+    url = _telegram_getme_url(token)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(url)
