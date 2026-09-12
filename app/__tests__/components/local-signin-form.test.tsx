@@ -113,7 +113,7 @@ describe("LocalSignInForm", () => {
     "/./..//evil.example.com",
     "/a/../..//evil.example.com",
     "/%2e%2e//evil.example.com",
-    "/..//user:pass@evil.example.com",
+    "/..//user:pass@example.com",
     "/..//evil.example.com/path?a=1#b",
   ])("never navigates off-origin after sign-in (%s)", async (hostile) => {
     // `callbackUrl` arrives from the query string, so /signin?callbackUrl=...

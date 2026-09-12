@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import sys
 from getpass import getpass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from robothor.cli import _invoked_name
 
@@ -468,7 +468,7 @@ def _cmd_link_face(args: Namespace) -> int:
 # rather than reprinting a seed that a shell history would then keep.
 
 
-def _resolve_account(args: Namespace) -> dict | None:
+def _resolve_account(args: Namespace) -> dict[str, Any] | None:
     from robothor.auth import accounts
     from robothor.constants import DEFAULT_TENANT
 

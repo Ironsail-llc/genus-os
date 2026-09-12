@@ -651,13 +651,13 @@ def test_the_sign_in_lookup_uses_lower_not_casefold() -> None:
         patch.object(local_login, "_load_account", side_effect=_capture),
         patch.object(local_login, "_record_noop"),
     ):
-        local_login.authenticate("default", " Straße@X.DE ", "x", ip="10.0.0.1")
-    assert seen == ["straße@x.de"]
+        local_login.authenticate("default", " Straße@Example.COM ", "x", ip="10.0.0.1")
+    assert seen == ["straße@example.com"]
 
 
 def test_the_audit_subject_uses_lower_and_keeps_distinct_addresses_distinct() -> None:
-    assert local_login.audit_subject("Straße@X.DE") == local_login.audit_subject("straße@x.de")
-    assert local_login.audit_subject("Straße@x.de") != local_login.audit_subject("strasse@x.de")
+    assert local_login.audit_subject("Straße@Example.COM") == local_login.audit_subject("straße@example.com")
+    assert local_login.audit_subject("Straße@example.com") != local_login.audit_subject("strasse@example.com")
 
 
 def test_the_audit_subject_is_an_hmac_under_a_derived_key() -> None:

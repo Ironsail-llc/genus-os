@@ -27,7 +27,7 @@ def canonical_email(email: str | None) -> str:
 
     ``str.lower()``, NOT ``str.casefold()``. Casefold is for caseless
     *comparison* of arbitrary text and maps ß to ss, so
-    ``"Straße@x.de".casefold()`` is ``"strasse@x.de"`` — a different mailbox,
+    ``"Straße@example.com".casefold()`` is ``"strasse@example.com"`` — a different mailbox,
     quite possibly someone else's. ``lower()`` matches PostgreSQL's ``lower()``
     and CITEXT's comparison exactly, which is what the stored side and the
     migration use, so the Python and SQL sides can never disagree about which

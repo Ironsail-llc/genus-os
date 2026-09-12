@@ -434,7 +434,7 @@ async def test_a_junk_forwarded_value_falls_back_to_the_peer(test_client, monkey
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "email",
-    ["alice", "alice@", "@example.com", "alice@@example.com", "a@b@c.com", "alice@ "],
+    ["alice", "alice@", "@example.com", "alice@@example.com", "a@b@example.com", "alice@ "],
 )
 async def test_a_malformed_email_is_rejected_before_any_hashing(test_client, email):
     with patch("routers.auth.local_login.authenticate") as auth:
@@ -447,7 +447,7 @@ async def test_a_malformed_email_is_rejected_before_any_hashing(test_client, ema
 async def test_a_well_formed_email_still_gets_through(test_client):
     with patch("routers.auth.local_login.authenticate", return_value=LoginResult()) as auth:
         r = await test_client.post(
-            "/api/auth/login", json={"email": "a.b+tag@sub.example.com", "password": "x" * 12}
+            "/api/auth/login", json={"email": "a.b+tag@example.com", "password": "x" * 12}
         )
     assert r.status_code == 401
     auth.assert_called_once()

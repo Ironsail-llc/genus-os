@@ -289,14 +289,14 @@ def test_python_and_postgres_fold_case_identically(mfa_table) -> None:
     """`canonical_email` is `lower()`, and migration 114 lower-cases with SQL
     `lower()`. If the two ever disagreed, a row written by one would be
     invisible to the other — and the owner account is the one whose lockout has
-    no recovery path. `Straße@x.de` is the case that separates `lower()` from
-    Python's `casefold()`, which would have produced `strasse@x.de`: a
+    no recovery path. `Straße@example.com` is the case that separates `lower()` from
+    Python's `casefold()`, which would have produced `strasse@example.com`: a
     different mailbox."""
     from robothor.auth.accounts import canonical_email
 
     conn = _connect()
     cur = conn.cursor()
-    for address in ("Straße@X.DE", "ALICE@Example.COM", "Ünïcode@Exämple.test"):
+    for address in ("Straße@Example.COM", "ALICE@Example.COM", "Ünïcode@Example.COM"):
         cur.execute("SELECT lower(%s)", (address,))
         (postgres,) = cur.fetchone()
         assert canonical_email(address) == postgres, (
@@ -304,10 +304,10 @@ def test_python_and_postgres_fold_case_identically(mfa_table) -> None:
             f"{canonical_email(address)!r} vs {postgres!r}"
         )
     # And the trap: casefold would have folded these together.
-    cur.execute("SELECT lower(%s) = lower(%s)", ("Straße@x.de", "Strasse@x.de"))
+    cur.execute("SELECT lower(%s) = lower(%s)", ("Straße@example.com", "Strasse@example.com"))
     (same,) = cur.fetchone()
     assert same is False
-    assert canonical_email("Straße@x.de") != canonical_email("Strasse@x.de")
+    assert canonical_email("Straße@example.com") != canonical_email("Strasse@example.com")
     conn.close()
 
 
@@ -317,10 +317,10 @@ def test_citext_agrees_with_canonical_email(mfa_table) -> None:
 
     conn = _connect()
     cur = conn.cursor()
-    cur.execute("SELECT %s::citext = %s::citext", ("Straße@x.de", canonical_email("Straße@X.DE")))
+    cur.execute("SELECT %s::citext = %s::citext", ("Straße@example.com", canonical_email("Straße@Example.COM")))
     (matched,) = cur.fetchone()
     assert matched is True
-    cur.execute("SELECT %s::citext = %s::citext", ("Straße@x.de", "Strasse@x.de"))
+    cur.execute("SELECT %s::citext = %s::citext", ("Straße@example.com", "Strasse@example.com"))
     (collided,) = cur.fetchone()
     assert collided is False, "CITEXT must not conflate ß with ss either"
     conn.close()
