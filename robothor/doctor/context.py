@@ -28,6 +28,7 @@ import asyncio
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic as _monotonic
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -91,6 +92,27 @@ class DoctorContext:
     db_factory: Callable[[], Any] | None = None
     http_fetch: Callable[[str, float], HttpResponse] | None = None
     _settings: Any = field(default=None, repr=False)
+    #: Monotonic instant the whole run must be finished by. Set by
+    #: :func:`robothor.doctor.runner.run` from ``total_timeout_s``; None when
+    #: only the per-check budget applies. Kept here rather than threaded
+    #: through every call so that the per-check box, a repair and its re-run
+    #: all narrow against ONE number -- the version that passed a budget down
+    #: by argument let ``--fix`` overshoot the deadline by about twice
+    #: ``timeout_s``, because the fix and the recheck each got a fresh one.
+    _deadline: float | None = field(default=None, repr=False)
+
+    def budget(self) -> float:
+        """Seconds the next thing may take: the per-check box, narrowed by
+        whatever is left of the run. Never negative -- zero means the deadline
+        has passed and the caller should report, not start."""
+        if self._deadline is None:
+            return self.timeout_s
+        remaining = self._deadline - _monotonic()
+        return max(0.0, min(self.timeout_s, remaining))
+
+    def expired(self) -> bool:
+        """Has the run's total budget been spent?"""
+        return self._deadline is not None and _monotonic() >= self._deadline
 
     @property
     def settings(self) -> GenusSettings:

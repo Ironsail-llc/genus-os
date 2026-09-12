@@ -20,8 +20,10 @@ did not cause. Its contract, in order of how expensive getting it wrong is:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 
 from robothor.doctor.context import DoctorContext
@@ -163,17 +165,45 @@ def select(
     return selected
 
 
-async def _call(check: Check, ctx: DoctorContext, budget: float | None = None) -> list[Result]:
-    """Run one check inside its time box, never raising.
+def _resolve(body: Callable[[DoctorContext], Any], ctx: DoctorContext) -> Any:
+    """Call a check (or a fixer) to completion, on whatever thread we are on.
 
-    ``budget`` is the per-check budget narrowed by whatever is left of the
-    run's total budget, so the last check before the deadline cannot overshoot
-    it by a whole ``timeout_s``.
+    A check may be a coroutine function or a plain one -- a plugin is entitled
+    to contribute either. A coroutine gets its OWN event loop here, which is
+    the whole point: this function runs on a daemon thread, so the loop serving
+    the run is free to hit its timeout while this one blocks.
     """
-    allowed = ctx.timeout_s if budget is None else budget
+    outcome = body(ctx)
+    if not inspect.isawaitable(outcome):
+        return outcome
+
+    async def _await() -> Any:
+        return await outcome
+
+    return asyncio.run(_await())
+
+
+async def _bounded(body: Callable[[DoctorContext], Any], ctx: DoctorContext) -> Any:
+    """Run ``body`` under the current budget, on a thread, or raise TimeoutError.
+
+    On a thread because ``asyncio.timeout`` can only cancel at an await, and a
+    check that does its work synchronously -- a wedged ``stat()``, a DNS
+    lookup, an import -- has no await to be cancelled at. Awaiting it directly
+    made both budgets advisory: measured, a 0.2s box took 2.0s and the
+    overrunning check reported success. Here the awaiting coroutine is only
+    waiting on a future, so the timeout fires on time and the daemon thread is
+    abandoned -- the same trade-off ``DoctorContext.run_blocking`` documents,
+    and the price of "the run always finishes".
+    """
+    async with asyncio.timeout(ctx.budget()):
+        return await ctx.run_blocking(_resolve, body, ctx)
+
+
+async def _call(check: Check, ctx: DoctorContext) -> list[Result]:
+    """Run one check inside its time box, never raising."""
+    allowed = ctx.budget()
     try:
-        async with asyncio.timeout(allowed):
-            answer = await check.run(ctx)
+        answer = await _bounded(check.run, ctx)
     except TimeoutError:
         logger.warning("doctor: check %s timed out after %ss", check.id, allowed)
         return [Result(status="fail", detail=f"timed out after {allowed:g}s")]
@@ -203,13 +233,13 @@ async def _repair(check: Check, ctx: DoctorContext, result: Result) -> Result:
             fixable=True,
             sub_id=result.sub_id,
         )
+    allowed = ctx.budget()
     try:
-        async with asyncio.timeout(ctx.timeout_s):
-            outcome = await check.fix(ctx)
+        outcome = await _bounded(check.fix, ctx)
     except TimeoutError:
         return Result(
             status="fail",
-            detail=f"{result.detail}; the repair timed out after {ctx.timeout_s:g}s",
+            detail=f"{result.detail}; the repair timed out after {allowed:g}s",
             fixable=True,
             sub_id=result.sub_id,
         )
@@ -233,10 +263,8 @@ async def _repair(check: Check, ctx: DoctorContext, result: Result) -> Result:
     )
 
 
-async def _run_one(
-    check: Check, ctx: DoctorContext, budget: float | None = None
-) -> list[CheckResult]:
-    results = await _call(check, ctx, budget)
+async def _run_one(check: Check, ctx: DoctorContext) -> list[CheckResult]:
+    results = await _call(check, ctx)
     if ctx.fix:
         results = [
             await _repair(check, ctx, item) if item.status == "fail" and item.fixable else item
@@ -278,7 +306,11 @@ async def run(
     for an HTTP handler holding a worker thread that other routes need.
     ``ctx.total_timeout_s`` sets that second box: once it is spent the
     remaining checks are reported as not run, and the check straddling the
-    deadline gets only what is left rather than a fresh ``timeout_s``.
+    deadline gets only what is left rather than a fresh ``timeout_s``. Both
+    boxes are HARD -- every check body runs on a daemon thread, so a coroutine
+    that does its work synchronously cannot outrun them (see :func:`_bounded`),
+    and a repair and its re-check narrow against the same deadline rather than
+    each taking a fresh budget.
     """
     ctx = ctx or DoctorContext()
     try:
@@ -291,23 +323,18 @@ async def run(
         return DoctorReport(errored=True, error_detail=f"{type(exc).__name__}: {exc}")
 
     rows: list[CheckResult] = []
-    deadline: float | None = None
     if ctx.total_timeout_s is not None:
-        deadline = asyncio.get_running_loop().time() + ctx.total_timeout_s
+        ctx._deadline = monotonic() + ctx.total_timeout_s
 
     for check in selected:
-        budget: float | None = None
-        if deadline is not None:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                # NOT a skip. A skip says "this could not be checked and here
-                # is why", and reads as benign; a budget that ran out means
-                # nobody knows, and "nobody knows" must not present as health
-                # on the surface an operator is asking for a verdict from.
-                rows.append(_not_run(check, ctx.total_timeout_s))
-                continue
-            budget = min(ctx.timeout_s, remaining)
-        rows.extend(await _run_one(check, ctx, budget))
+        if ctx.expired():
+            # NOT a skip. A skip says "this could not be checked and here is
+            # why", and reads as benign; a budget that ran out means nobody
+            # knows, and "nobody knows" must not present as health on the
+            # surface an operator is asking for a verdict from.
+            rows.append(_not_run(check, ctx.total_timeout_s))
+            continue
+        rows.extend(await _run_one(check, ctx))
     return DoctorReport(results=rows)
 
 

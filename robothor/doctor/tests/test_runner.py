@@ -56,6 +56,81 @@ def test_a_check_that_hangs_is_a_failure_and_the_run_finishes() -> None:
     assert by_id["fast.one"].status == "pass"
 
 
+def test_a_check_that_blocks_synchronously_is_still_timed_out() -> None:
+    """asyncio.timeout can only cancel at an await. A coroutine that does its
+    work synchronously -- a wedged stat(), a DNS lookup, an import -- outran
+    both budgets and reported success, which made the 30s bound on the bridge's
+    worker thread a suggestion rather than a bound."""
+    import time
+
+    async def blocking(_ctx: DoctorContext) -> Result:
+        """A stub."""
+        time.sleep(5)
+        return Result(status="pass", detail="I ignored the budget")
+
+    started = time.monotonic()
+    report = run_sync(_ctx(timeout_s=0.2), checks=[_check("slow.sync", run=blocking)])
+    elapsed = time.monotonic() - started
+
+    assert report.results[0].status == "fail"
+    assert "timed out" in report.results[0].detail
+    assert elapsed < 2.0, f"the run took {elapsed:.2f}s despite a 0.2s budget"
+
+
+def test_the_total_budget_is_hard_even_for_synchronous_checks() -> None:
+    import time
+
+    async def blocking(_ctx: DoctorContext) -> Result:
+        """A stub."""
+        time.sleep(5)
+        raise AssertionError("unreachable")
+
+    checks = [_check(f"slow.{n}", run=blocking) for n in range(4)]
+    started = time.monotonic()
+    report = run_sync(_ctx(timeout_s=0.2, total_timeout_s=0.5), checks=checks)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2.0, f"the run took {elapsed:.2f}s despite a 0.5s total budget"
+    assert all(row.status == "fail" for row in report.results)
+
+
+def test_a_sync_callable_check_is_accepted(monkeypatch) -> None:
+    """A plugin may contribute a plain function. It must be run, and time-boxed
+    like everything else, not awaited into a TypeError."""
+
+    def plain(_ctx: DoctorContext) -> Result:
+        """A stub."""
+        return Result(status="pass", detail="synchronous and fine")
+
+    report = run_sync(_ctx(), checks=[_check("plain.one", run=plain)])
+    assert report.results[0].status == "pass"
+    assert report.results[0].detail == "synchronous and fine"
+
+
+def test_a_repair_cannot_overshoot_the_total_budget() -> None:
+    """`_repair` used the per-check budget and its re-run got a fresh one, so
+    --fix could overshoot the deadline by roughly twice timeout_s."""
+    import time
+
+    async def run(_ctx: DoctorContext) -> Result:
+        """A stub."""
+        return Result(status="fail", detail="broken", fixable=True)
+
+    async def fix(_ctx: DoctorContext) -> FixResult:
+        time.sleep(5)
+        raise AssertionError("unreachable")
+
+    check = Check(
+        id="db.thing", title="t", category="database", severity="required", run=run, fix=fix
+    )
+    started = time.monotonic()
+    report = run_sync(_ctx(timeout_s=0.2, total_timeout_s=0.4, fix=True), checks=[check])
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2.0, f"the repair took {elapsed:.2f}s past a 0.4s total budget"
+    assert report.results[0].status == "fail"
+
+
 def test_a_check_that_raises_is_a_failure_not_a_traceback() -> None:
     async def explode(_ctx: DoctorContext) -> Result:
         raise RuntimeError("psycopg2 is unhappy")
