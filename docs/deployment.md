@@ -248,6 +248,44 @@ ollama pull qwen3-embedding:0.6b
 ollama pull Qwen3-Reranker-0.6B:F16
 ```
 
+## First run on a headless box
+
+A fresh instance has no operator account, so the dashboard's sign-in page has
+nothing to render. The way in is the first-run wizard at `/setup`, reached with
+a single-use token.
+
+`genus init` prints that link at the end of an install. On a server you were not
+watching — a container, a provisioning script, someone else's terminal — mint a
+fresh one:
+
+```bash
+genus auth setup-link
+```
+
+It prints a URL carrying a token that is good once, for 30 minutes
+(`GENUS_SETUP_TOKEN_TTL_SECONDS`). `--ttl 2h` widens the window for an install
+you have to walk away from; `--json` is for a provisioning script. The command
+is deliberately local-only: minting requires shell access to the box, which is
+the one credential the wizard's gate can rely on before an account exists.
+
+The printed address is `127.0.0.1` because that is where the dashboard binds.
+That is loopback on the **server**, so forward the port rather than exposing it:
+
+```bash
+ssh -L 3004:127.0.0.1:3004 box.example.test
+```
+
+Then open the printed link on your own machine. `genus init` prints this line
+for you whenever it is not running on a terminal, or the dashboard is not on
+loopback.
+
+Once the wizard finishes — that is, the moment an operator account exists —
+`/setup` and every route behind it answer 404, and `genus auth setup-link`
+refuses to mint another. The completion signal is the owner row in the
+database, not a file, so deleting anything on disk does not reopen it. From
+then on the door is the sign-in page; a forgotten password is
+`genus user password <email>`.
+
 ## Production Checklist
 
 - [ ] Set a strong `ROBOTHOR_DB_PASSWORD`
