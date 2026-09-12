@@ -30,7 +30,11 @@ ENV PYTHONUNBUFFERED=1 \
     VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH"
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Security upgrades first: the slim base is a snapshot and its packages lag the
+# Debian security archive; the release scan blocks the push on any CRITICAL
+# CVE that has a fix, so every stage starts from a fully patched base.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
         curl ca-certificates libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
