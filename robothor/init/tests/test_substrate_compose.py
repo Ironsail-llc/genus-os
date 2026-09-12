@@ -40,6 +40,8 @@ from robothor.init.substrates.compose import (
     env_file_path,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
 PROVIDER_KEY = "sk-test-not-a-real-key-00000000"
 
 #: The dashboard half of the platform, for the readiness contract below.
@@ -790,3 +792,37 @@ class TestTheStackComesUpInAnOrderItCanSurvive:
         from robothor.init.substrates.compose import ComposeUpInfraStep
 
         assert "--no-start" in ComposeUpInfraStep().command(_ctx(tmp_path, dry_run=True))
+
+
+class TestTheHostCanReachTheDatabaseTheStackPublishes:
+    """`genus doctor` runs on the HOST, where ROBOTHOR_DB_HOST was never
+    written -- and its default means "a Unix socket with peer authentication",
+    which on a compose box does not exist. So db.connect, db.migrations,
+    db.rbac_service_role, identity.owner_account and secrets.signing_key all
+    failed, on a stack whose four services had just answered /ready.
+    """
+
+    def test_the_env_file_points_the_host_at_the_published_port(self, tmp_path):
+        from robothor.secrets.env_file import parse_env_file
+
+        ctx = _ctx(tmp_path, docker=FakeDocker())
+
+        values = parse_env_file(ComposeRenderStep().body(ctx))
+
+        assert values["ROBOTHOR_DB_HOST"] == "127.0.0.1"
+
+    def test_the_containers_still_reach_postgres_by_service_name(self):
+        """`environment:` beats `env_file:` in Compose, and the apps file sets
+        ROBOTHOR_DB_HOST=postgres there -- which is why writing a loopback
+        address into genus.env is safe rather than a regression."""
+        import yaml
+
+        apps = yaml.safe_load(
+            (REPO_ROOT / "infra" / "docker-compose.apps.yml").read_text(encoding="utf-8")
+        )
+        anchors = apps["services"]["engine"]["environment"]
+        rendered = (
+            anchors if isinstance(anchors, dict) else dict(item.split("=", 1) for item in anchors)
+        )
+
+        assert rendered.get("ROBOTHOR_DB_HOST") == "postgres"

@@ -113,6 +113,11 @@ READY_POLL_INTERVAL_S = 3.0
 #: readiness can depend on what is IN it -- is asked to be healthy.
 INFRA_SERVICES: tuple[str, ...] = ("postgres", "redis", "ollama")
 
+#: Where the HOST reaches the stack's PostgreSQL: the loopback address the
+#: base compose file publishes it on. The containers never use this -- their
+#: `environment:` block names the service instead, and it wins over env_file.
+HOST_DB_ADDRESS = "127.0.0.1"
+
 #: Polls of Ollama's /api/tags after the infrastructure is up. It has no
 #: healthcheck in the base compose file, so nothing else waits for it.
 OLLAMA_READY_ATTEMPTS = 20
@@ -433,6 +438,15 @@ class ComposeRenderStep(BaseStep):
             _env_line("GENUS_WORKSPACE", workspace_path(ctx)),
             _env_line("GENUS_ENV_FILE", env_file_path(ctx)),
             "",
+            # For the HOST, not for the containers. `genus doctor` runs here,
+            # and an unset ROBOTHOR_DB_HOST means "a Unix socket with peer
+            # authentication" -- which a compose box does not have, so five
+            # required checks failed against a database that was answering
+            # perfectly well on its published port. Safe because Compose's
+            # `environment:` beats `env_file:`, and the apps file sets
+            # ROBOTHOR_DB_HOST=postgres there: each container keeps the
+            # service name, and only the host gets the loopback address.
+            _env_line("ROBOTHOR_DB_HOST", HOST_DB_ADDRESS),
             _env_line("ROBOTHOR_DB_NAME", database["dbname"]),
             _env_line("ROBOTHOR_DB_USER", database["user"]),
             _env_line("ROBOTHOR_DB_PASSWORD", database["password"]),
@@ -632,7 +646,7 @@ class ComposeUpInfraStep(ComposeUpStep):
         ``pull_ollama_models`` swallows its own exceptions — and the instance
         would come up with no embeddings and no explanation.
         """
-        url = f"{str(ctx.settings.ollama.url).rstrip('/')}/api/tags"
+        url = f"{ctx.settings.ollama.base_url}/api/tags"
         for attempt in range(OLLAMA_READY_ATTEMPTS):
             if ctx.http("GET", url).ok:
                 return

@@ -280,7 +280,7 @@ def detect_ollama_tool_models(ctx: InitContext) -> list[str]:
     """
     import json
 
-    base = str(ctx.settings.ollama.url).rstrip("/")
+    base = ctx.settings.ollama.base_url
     tags = ctx.http("GET", f"{base}/api/tags")
     if not tags.ok:
         return []

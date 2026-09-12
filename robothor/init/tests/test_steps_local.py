@@ -623,3 +623,43 @@ class TestTheLocalInstallCanBeSignedIntoAtAll:
         ids = [step.id for step in LocalSubstrate().steps()]
 
         assert ids.index("signin") < ids.index("verify")
+
+
+class TestTheWizardDialsOllamaWhereItActuallyIs:
+    """`ollama.url` is EMPTY by default -- it "falls back to host and port", as
+    its own description says -- and three wizard sites read it raw. So the
+    model pull POSTed to a relative "/api/pull", `pull_ollama_models` swallowed
+    the failure, and the step reported "pulled qwen3-embedding:0.6b" on an
+    instance that had pulled nothing and would have no embeddings.
+    """
+
+    def test_the_models_step_falls_back_to_host_and_port(self, tmp_path):
+        pulled: dict[str, Any] = {}
+        ctx = _ctx(tmp_path, http_fetch=lambda *_a, **_k: HttpResponse(status=200))
+
+        ModelsStep(puller=lambda base, models: pulled.update(base=base)).apply(ctx)
+
+        assert pulled["base"] == "http://127.0.0.1:11434"
+
+    def test_an_explicit_url_still_wins(self, tmp_path, monkeypatch):
+        from robothor.settings import reset_settings
+
+        monkeypatch.setenv("ROBOTHOR_OLLAMA_URL", "http://ollama.example.test:11434/")
+        reset_settings()
+        pulled: dict[str, Any] = {}
+        ctx = _ctx(tmp_path, http_fetch=lambda *_a, **_k: HttpResponse(status=200))
+
+        ModelsStep(puller=lambda base, models: pulled.update(base=base)).apply(ctx)
+
+        assert pulled["base"] == "http://ollama.example.test:11434"
+
+    def test_the_settings_resolver_is_the_one_the_doctor_already_used(self, monkeypatch):
+        from robothor.settings import get_settings, reset_settings
+
+        reset_settings()
+        assert get_settings().ollama.base_url == "http://127.0.0.1:11434"
+
+        monkeypatch.setenv("ROBOTHOR_OLLAMA_HOST", "box.example.test")
+        monkeypatch.setenv("ROBOTHOR_OLLAMA_PORT", "1234")
+        reset_settings()
+        assert get_settings().ollama.base_url == "http://box.example.test:1234"

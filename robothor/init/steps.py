@@ -785,7 +785,7 @@ class ModelsStep(BaseStep):
 
     @staticmethod
     def _base_url(ctx: InitContext) -> str:
-        return str(ctx.settings.ollama.url).rstrip("/")
+        return ctx.settings.ollama.base_url
 
     def check(self, ctx: InitContext) -> CheckResult:
         if ctx.answers.get("skip_models"):

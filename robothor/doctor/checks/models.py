@@ -228,7 +228,7 @@ async def _ollama(ctx: DoctorContext) -> Result:
     using it anyway.
     """
     ollama = ctx.settings.ollama
-    base = ollama.url or f"http://{ollama.host}:{ollama.port}"
+    base = ollama.base_url
     in_use, why = await ctx.run_blocking(_ollama_in_use)
     if not in_use:
         return skip(f"{why} and no endpoint is configured — this instance does not use Ollama")

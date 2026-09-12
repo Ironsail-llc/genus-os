@@ -447,6 +447,19 @@ class OllamaSettings(SettingsGroup):
         "ROBOTHOR_OLLAMA_PORT",
         "Ollama port, used only when no full URL is set.",
     )
+
+    @property
+    def base_url(self) -> str:
+        """Where Ollama actually is, however this instance said it.
+
+        ``url`` is empty by default and means "fall back to host and port", but
+        three callers read it raw -- so `genus init` POSTed its model pull to a
+        relative ``/api/pull``, the puller swallowed the failure, and the step
+        reported success on an instance with no embedding model. One resolver,
+        so there is one answer.
+        """
+        return str(self.url).rstrip("/") or f"http://{self.host}:{self.port}"
+
     num_ctx: int = declare(
         0,
         "ROBOTHOR_OLLAMA_NUM_CTX",
