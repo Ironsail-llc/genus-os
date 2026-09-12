@@ -14,6 +14,8 @@ environment instead of from the context it was handed fails the run.
 
 from __future__ import annotations
 
+import os
+import re
 import stat
 from pathlib import Path
 from typing import Any
@@ -39,6 +41,29 @@ from robothor.init.substrates.compose import (
 )
 
 PROVIDER_KEY = "sk-test-not-a-real-key-00000000"
+
+#: The dashboard half of the platform, for the readiness contract below.
+APP = Path(__file__).resolve().parents[3] / "app" / "src" / "lib"
+
+
+def dashboard_readiness_keys() -> tuple[str, ...]:
+    """Every environment variable the dashboard's `/api/ready` demands.
+
+    Derived from `health.ts` and `auth-local.ts` rather than copied here. A
+    hardcoded list is a list that goes stale silently, and the failure it hides
+    is the one this test exists for: a `wait` step that can never go green
+    because nothing wrote a secret the dashboard requires.
+    """
+    health = (APP / "services" / "health.ts").read_text(encoding="utf-8")
+    common = re.search(r"const common = \[(.*?)\]", health, re.DOTALL)
+    assert common, "health.ts no longer declares `const common = [...]`; re-derive this list"
+    names = tuple(re.findall(r'"([A-Z0-9_]+)"', common.group(1)))
+    assert names, "no variable names in health.ts's `common` array"
+
+    local = (APP / "auth-local.ts").read_text(encoding="utf-8")
+    sign_in = re.search(r"process\.env\.([A-Z0-9_]+)", local)
+    assert sign_in, "auth-local.ts no longer reads a sign-in variable"
+    return (*names, sign_in.group(1))
 
 
 class FakeDocker:
@@ -118,6 +143,26 @@ def _ctx(tmp_path: Path, *, docker: FakeDocker | None = None, **kwargs: Any) -> 
 
 def _all_ready(_method: str, url: str, _body: Any, _timeout: float) -> HttpResponse:
     return HttpResponse(status=200, body="ready")
+
+
+class FakeTime:
+    """A clock the fake sleep advances.
+
+    The wait step's deadline is wall clock, so a test that stubs `sleep` alone
+    would spin against the real one for the whole timeout — `--wait-timeout 180`
+    would be a three-minute test.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.slept: list[float] = []
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+    def clock(self) -> float:
+        return self.now
 
 
 class TestTheStepsAreTheSubstrateContract:
@@ -220,6 +265,21 @@ class TestPrereqsRefuseABoxDockerCannotRunOn:
 
         assert ComposePrereqsStep().check(ctx).ok
         assert ctx.answers["gpu"] is True
+
+    def test_a_root_install_is_refused_before_anything_is_written(self, tmp_path, monkeypatch):
+        """Root would give the containers root, or files root owns.
+
+        The compose services run as the installing account (the workspace is a
+        bind mount of 0600 files), so a root install either runs every container
+        as root or leaves a workspace uid 1000 cannot read. Phase 1 is where
+        that has to be said -- after `render` the identity is already written.
+        """
+        monkeypatch.setattr(os, "getuid", lambda: 0)
+
+        result = ComposePrereqsStep().check(_ctx(tmp_path))
+
+        assert not result.ok
+        assert "root" in (result.detail + result.fix_hint).lower()
 
     def test_missing_compose_files_block_with_the_commands_that_fetch_them(self, tmp_path):
         empty = tmp_path / "no-compose-files"
@@ -365,6 +425,70 @@ class TestRenderWritesTheEnvFileAndNothingElseReadable:
         assert copied.exists()
         assert stat.S_IMODE(copied.stat().st_mode) == 0o600
 
+    def test_the_dashboard_is_given_what_it_needs_to_become_ready(self, tmp_path):
+        """`/api/ready` 503s until AUTH_SECRET, GENUS_BRIDGE_SSO_SECRET and one
+        sign-in method are in the dashboard's environment.
+
+        Nothing wrote them, so `wait` timed out on every fresh box, the `link`
+        step never ran, and the operator never got a /setup URL from an install
+        that had otherwise succeeded. The keys are derived from the dashboard's
+        own source, so this test fails if that contract moves.
+        """
+        _, path = self._render(tmp_path)
+        values = dict(
+            line.split("=", 1)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if "=" in line and not line.startswith("#")
+        )
+
+        for name in dashboard_readiness_keys():
+            assert name in values, f"genus.env carries no {name}; /api/ready can never pass"
+            assert values[name].strip('"'), f"{name} is empty"
+
+    def test_the_shared_secrets_are_real_secrets(self, tmp_path):
+        _, path = self._render(tmp_path)
+        values = dict(
+            line.split("=", 1)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if "=" in line and not line.startswith("#")
+        )
+        auth = values["AUTH_SECRET"].strip('"')
+        sso = values["GENUS_BRIDGE_SSO_SECRET"].strip('"')
+
+        assert len(auth) >= 32
+        assert len(sso) >= 32
+        assert auth != sso
+
+    def test_a_re_run_does_not_rotate_them(self, tmp_path):
+        """`render` is not resumable -- it runs on every `genus init`.
+
+        Minting a new AUTH_SECRET each time would sign every existing session
+        out, and a new SSO secret would leave the dashboard and the bridge
+        disagreeing until both restarted.
+        """
+        ctx, path = self._render(tmp_path)
+        first = path.read_text(encoding="utf-8")
+
+        ComposeRenderStep().apply(ctx)
+
+        assert path.read_text(encoding="utf-8") == first
+
+    def test_the_containers_run_as_the_account_that_installed(self, tmp_path, monkeypatch):
+        """The workspace is a bind mount full of 0600 files owned by this uid.
+
+        The image's own user is uid 1000; on a box whose operator is not 1000
+        the bridge cannot read setup_token.yaml -- the only door into a fresh
+        instance -- so the compose file takes the uid from here.
+        """
+        monkeypatch.setattr(os, "getuid", lambda: 4242)
+        monkeypatch.setattr(os, "getgid", lambda: 4343)
+
+        _, path = self._render(tmp_path)
+        body = path.read_text(encoding="utf-8")
+
+        assert 'GENUS_UID="4242"' in body
+        assert 'GENUS_GID="4343"' in body
+
     def test_it_reports_the_files_and_images_it_chose(self, tmp_path):
         ctx, _ = self._render(tmp_path)
         payload = ctx.report["compose"]
@@ -405,12 +529,17 @@ class TestUpRunsOneCommandAndSaysWhichOne:
         assert "--no-start" not in ComposeUpStep().command(_ctx(tmp_path / "wet"))
 
 
+@pytest.fixture
+def _clock() -> FakeTime:
+    return FakeTime()
+
+
 class TestWaitPollsUntilTheStackAnswers:
-    def test_it_reports_every_service_it_found_green(self, tmp_path, capsys):
+    def test_it_reports_every_service_it_found_green(self, tmp_path, capsys, _clock):
         ctx = _ctx(tmp_path, http_fetch=_all_ready)
         ctx.stream = None
 
-        ComposeWaitStep(sleep=lambda _seconds: None).apply(ctx)
+        ComposeWaitStep(sleep=_clock.sleep, clock=_clock.clock).apply(ctx)
 
         assert ctx.report["compose"]["ready"] == {
             "engine": True,
@@ -420,21 +549,23 @@ class TestWaitPollsUntilTheStackAnswers:
         }
         assert "engine" in capsys.readouterr().out
 
-    def test_it_polls_the_ports_the_settings_model_declares(self, tmp_path):
+    def test_it_polls_the_ports_the_settings_model_declares(self, tmp_path, _clock):
         asked: list[str] = []
 
         def fetch(method, url, body, timeout):
             asked.append(url)
             return HttpResponse(status=200)
 
-        ComposeWaitStep(sleep=lambda _s: None).apply(_ctx(tmp_path, http_fetch=fetch))
+        ComposeWaitStep(sleep=_clock.sleep, clock=_clock.clock).apply(
+            _ctx(tmp_path, http_fetch=fetch)
+        )
 
         assert "http://127.0.0.1:18800/ready" in asked
         assert "http://127.0.0.1:9100/ready" in asked
         assert "http://127.0.0.1:9099/ready" in asked
         assert "http://127.0.0.1:3004/api/ready" in asked
 
-    def test_a_service_that_never_answers_fails_the_step_by_name(self, tmp_path):
+    def test_a_service_that_never_answers_fails_the_step_by_name(self, tmp_path, _clock):
         def fetch(method, url, body, timeout):
             if "9100" in url:
                 return HttpResponse(status=0, error="ConnectError")
@@ -443,12 +574,78 @@ class TestWaitPollsUntilTheStackAnswers:
         ctx = _ctx(tmp_path, http_fetch=fetch, answers={"wait_timeout": 6})
 
         with pytest.raises(StepError) as exc:
-            ComposeWaitStep(sleep=lambda _s: None).apply(ctx)
+            ComposeWaitStep(sleep=_clock.sleep, clock=_clock.clock).apply(ctx)
 
         assert "bridge" in str(exc.value)
-        assert "docker compose logs" in str(exc.value)
+        assert "docker logs robothor-bridge" in str(exc.value)
         assert ctx.report["compose"]["ready"]["bridge"] is False
         assert ctx.report["compose"]["ready"]["engine"] is True
+
+    def test_the_timeout_is_wall_clock_not_a_poll_budget(self, tmp_path):
+        """Each round makes four HTTP calls that can each block for seconds.
+
+        Charging the timeout 3s per round while the round costs 20s of wall
+        clock turned a documented `--wait-timeout 180` into a twenty-minute
+        block against a stack whose ports accept and then hang.
+        """
+        now = [0.0]
+        rounds: list[float] = []
+
+        def fetch(method, url, body, timeout):
+            # One round of four calls costs 20s of wall clock -- four probes
+            # that connect and then hang for the context's 5s budget.
+            now[0] += 5.0
+            return HttpResponse(status=0, error="timed out")
+
+        def clock() -> float:
+            return now[0]
+
+        ctx = _ctx(tmp_path, http_fetch=fetch, answers={"wait_timeout": 60})
+        step = ComposeWaitStep(sleep=lambda seconds: rounds.append(seconds), clock=clock)
+
+        with pytest.raises(StepError):
+            step.apply(ctx)
+
+        # 60s of budget at 20s a round is three rounds, not the twenty a poll
+        # budget would have allowed.
+        assert len(rounds) <= 3, f"{len(rounds)} rounds: the deadline is not wall clock"
+
+    def test_a_404_from_something_else_on_that_port_is_not_readiness(self, tmp_path, _clock):
+        def fetch(method, url, body, timeout):
+            if "9100" in url:
+                return HttpResponse(status=404, body="Not Found")
+            return HttpResponse(status=200)
+
+        ctx = _ctx(tmp_path, http_fetch=fetch, answers={"wait_timeout": 3})
+
+        with pytest.raises(StepError) as exc:
+            ComposeWaitStep(sleep=_clock.sleep, clock=_clock.clock).apply(ctx)
+
+        assert "bridge" in str(exc.value)
+
+    def test_an_enforcing_service_counts_as_up(self, tmp_path, _clock):
+        # The bridge gates its health route behind auth in production, and a
+        # service refusing an unauthenticated probe is a service that started.
+        def fetch(method, url, body, timeout):
+            return HttpResponse(status=401 if "9100" in url else 200)
+
+        ComposeWaitStep(sleep=_clock.sleep, clock=_clock.clock).apply(
+            _ctx(tmp_path, http_fetch=fetch)
+        )
+
+    def test_the_remediation_line_is_runnable_as_printed(self, tmp_path, _clock):
+        """`docker compose logs bridge` is not: a bare `docker compose` in the
+        workspace sees only the base file and answers "no such service"."""
+
+        def fetch(method, url, body, timeout):
+            return HttpResponse(status=0) if "9100" in url else HttpResponse(status=200)
+
+        with pytest.raises(StepError) as exc:
+            ComposeWaitStep(sleep=_clock.sleep, clock=_clock.clock).apply(
+                _ctx(tmp_path, http_fetch=fetch, answers={"wait_timeout": 3})
+            )
+
+        assert "docker logs robothor-bridge" in str(exc.value)
 
     def test_it_stops_polling_the_moment_everything_is_green(self, tmp_path):
         slept: list[float] = []
@@ -457,6 +654,46 @@ class TestWaitPollsUntilTheStackAnswers:
         ComposeWaitStep(sleep=slept.append).apply(ctx)
 
         assert slept == []
+
+
+class TestVerifyCanReachTheDatabaseTheWizardCreated:
+    """The generated database password exists in exactly one place.
+
+    `DatabaseStep` connects from `ctx.answers`, but `VerifyStep` runs the doctor
+    IN PROCESS and the doctor resolves the connection from the environment --
+    where a password the wizard generated has never been. `db.connect` is a
+    required check, so the run ended in exit 1 after the stack was up and the
+    fleet was written.
+    """
+
+    def _verify(self, ctx) -> dict[str, str]:
+        from robothor.doctor.runner import DoctorReport
+        from robothor.init.steps import VerifyStep
+
+        seen: dict[str, str] = {}
+
+        def doctor(context, checks=None):
+            seen["password"] = os.environ.get("ROBOTHOR_DB_PASSWORD", "")
+            return DoctorReport(results=[])
+
+        VerifyStep(doctor=doctor).apply(ctx)
+        return seen
+
+    def test_it_loads_the_env_file_the_render_step_wrote(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_DB_PASSWORD", raising=False)
+        ctx = _ctx(tmp_path)
+        ComposeRenderStep().apply(ctx)
+
+        assert self._verify(ctx)["password"] == "generated-by-init"
+
+    def test_a_readable_env_file_is_refused_and_said_out_loud(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.delenv("ROBOTHOR_DB_PASSWORD", raising=False)
+        ctx = _ctx(tmp_path)
+        ComposeRenderStep().apply(ctx)
+        env_file_path(ctx).chmod(0o644)
+
+        assert self._verify(ctx)["password"] == ""
+        assert "chmod 600" in capsys.readouterr().out
 
 
 class TestADryRunTouchesNothing:

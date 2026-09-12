@@ -203,14 +203,27 @@ def build_init_context(args: Any) -> Any:
 
     if answers.get("docker") or substrate_name == "compose":
         # The containers ARE the database, so the connection is the one the
-        # compose file stands up -- not whatever this shell happens to point
-        # at. A password is generated when none was supplied: the old wizard
-        # did that and the rewrite dropped it, which left the compose file with
-        # an empty POSTGRES_PASSWORD.
+        # compose file stands up -- not whatever this shell happens to point at.
+        # A password is generated when none was supplied: the old wizard did
+        # that and the rewrite dropped it, which left the compose file with an
+        # empty POSTGRES_PASSWORD.
         answers["db_host"] = DOCKER_DB_HOST
-        answers["db_port"] = DOCKER_DB_PORT
-        answers["db_name"] = DOCKER_DB_NAME
-        answers["db_user"] = DOCKER_DB_USER
+        if answers.get("docker"):
+            # `--docker` writes its compose file from a TEMPLATE whose
+            # POSTGRES_USER and POSTGRES_DB are fixed, so an exported value here
+            # would describe a database that file does not create.
+            answers["db_port"] = DOCKER_DB_PORT
+            answers["db_name"] = DOCKER_DB_NAME
+            answers["db_user"] = DOCKER_DB_USER
+        else:
+            # The compose substrate interpolates ${ROBOTHOR_DB_PORT},
+            # ${ROBOTHOR_DB_NAME} and ${ROBOTHOR_DB_USER} out of the same env
+            # file `render` writes, so an exported value configures BOTH halves.
+            # Overwriting them meant a box whose 5432 was already taken could
+            # not move the published port at all.
+            answers.setdefault("db_port", DOCKER_DB_PORT)
+            answers.setdefault("db_name", DOCKER_DB_NAME)
+            answers.setdefault("db_user", DOCKER_DB_USER)
         if not answers.get("db_password"):
             answers["db_password"] = secrets.token_urlsafe(16)
 

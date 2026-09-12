@@ -21,11 +21,42 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = ["cmd_doctor", "run_doctor"]
 
 
+def _load_instance_env() -> None:
+    """Read ``<workspace>/genus.env`` before anything resolves settings.
+
+    A compose instance keeps its only copy of the database password there --
+    ``genus init`` generated it and the platform deliberately stores it nowhere
+    else -- so without this the doctor reports ``db.connect`` failing against a
+    database that is running perfectly well. The file is refused unless it is
+    0600, and the refusal goes to stderr: stdout is a JSON contract.
+
+    Never raises. This is the command an operator runs to diagnose a box whose
+    settings do not even parse.
+    """
+    from robothor.secrets.env_file import load_instance_env
+
+    try:
+        from robothor.settings import get_settings, reset_settings
+
+        workspace = get_settings().paths.workspace
+    except Exception:  # noqa: BLE001 - a box with no usable settings still gets checked
+        return
+
+    result = load_instance_env(workspace)
+    if result.refused:
+        print(f"genus doctor: {result.refused}", file=sys.stderr)
+        return
+    if result.loaded:
+        # The settings are cached by now and were resolved without these.
+        reset_settings()
+
+
 def run_doctor(args: argparse.Namespace) -> DoctorReport:
     """Build the context from parsed flags and run. Returns the report.
 
     Shared with ``genus config validate``, which is an alias for this command.
     """
+    _load_instance_env()
     ctx = DoctorContext(
         timeout_s=float(getattr(args, "timeout", 5.0) or 5.0),
         dry_run=bool(getattr(args, "dry_run", False)),

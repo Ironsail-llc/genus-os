@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 
 import pytest
 
@@ -235,3 +236,46 @@ def test_config_usage_still_lists_validate(capsys) -> None:
 
     cmd_config(argparse.Namespace(config_command=None, json=False))
     assert "validate" in capsys.readouterr().out
+
+
+class TestItReadsTheInstanceEnvFileFirst:
+    """A compose instance keeps its only copy of the database password in
+    ``<workspace>/genus.env``, because the platform deliberately stores it
+    nowhere else. Without this, `genus doctor` on the host reported
+    ``db.connect`` failing against a database that was running fine, and the
+    documented workaround was a `set -a; . ./genus.env` line an install gate
+    could silently drop.
+    """
+
+    def _env_file(self, workspace, body='ROBOTHOR_DB_PASSWORD="from-the-file"\n', mode=0o600):
+        workspace.mkdir(parents=True, exist_ok=True)
+        path = workspace / "genus.env"
+        path.write_text(body, encoding="utf-8")
+        path.chmod(mode)
+        return path
+
+    def test_the_workspace_env_file_reaches_the_checks(
+        self, stub_checks, env_workspace, monkeypatch, capsys
+    ) -> None:
+        monkeypatch.delenv("ROBOTHOR_DB_PASSWORD", raising=False)
+        self._env_file(env_workspace)
+
+        cmd_doctor(argparse.Namespace(json=True, timeout=5.0))
+
+        assert os.environ["ROBOTHOR_DB_PASSWORD"] == "from-the-file"
+
+    def test_a_readable_env_file_is_refused_out_loud(
+        self, stub_checks, env_workspace, monkeypatch, capsys
+    ) -> None:
+        monkeypatch.delenv("ROBOTHOR_DB_PASSWORD", raising=False)
+        path = self._env_file(env_workspace, mode=0o644)
+
+        cmd_doctor(argparse.Namespace(json=True, timeout=5.0))
+
+        assert "ROBOTHOR_DB_PASSWORD" not in os.environ
+        captured = capsys.readouterr()
+        # The refusal is a finding, so it is said -- on stderr, because stdout
+        # is a JSON contract.
+        assert str(path) in captured.err
+        assert "chmod 600" in captured.err
+        assert str(path) not in captured.out

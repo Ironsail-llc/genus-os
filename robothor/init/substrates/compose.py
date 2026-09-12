@@ -110,6 +110,14 @@ UP_TIMEOUT_S = 1800.0
 #: Seconds a version probe may take.
 PROBE_TIMEOUT_S = 15.0
 
+#: The uid the released image's own account has. The compose file takes the
+#: installing account's uid instead (``GENUS_UID``), because everything the
+#: wizard writes into the bind-mounted workspace is 0600 and owned by it.
+IMAGE_UID = 1000
+
+#: Bytes of entropy in each shared secret the dashboard and bridge need.
+SECRET_BYTES = 32
+
 #: Where the released images come from. There is no ``:latest`` — the build
 #: publishes vX.Y.Z, vX.Y, vX and sha-<short> — so the tag is chosen here, from
 #: the version of the CLI doing the installing, and written into the env file.
@@ -288,6 +296,20 @@ class ComposePrereqsStep(BaseStep):
                 fix_hint=self.DOCKER_HINT,
             )
 
+        if os.getuid() == 0:
+            # The services run as the account that installed (see `user:` in the
+            # release file), so root means either root containers or a workspace
+            # of root-owned 0600 files that uid 1000 cannot read. Said in phase
+            # 1, because by `render` the operator identity is already written.
+            return CheckResult(
+                False,
+                detail="genus init is running as root",
+                fix_hint=(
+                    "run it as the account that will own the instance — the compose "
+                    "services run as that account so they can read the workspace"
+                ),
+            )
+
         compose = ctx.run(["docker", "compose", "version"], timeout=PROBE_TIMEOUT_S)
         if not compose.ok:
             return CheckResult(
@@ -402,10 +424,30 @@ class ComposeRenderStep(BaseStep):
             _env_line("ROBOTHOR_DB_PASSWORD", database["password"]),
             _env_line("ROBOTHOR_DB_PORT", database["port"]),
             "",
+            # The account the containers run as. The workspace is a bind mount
+            # of 0600 files owned by whoever ran this, and the image's own user
+            # is uid 1000 -- on any other box the bridge could not read
+            # setup_token.yaml, which is the only door into a fresh instance.
+            _env_line("GENUS_UID", os.getuid()),
+            _env_line("GENUS_GID", os.getgid()),
+            "",
             # `env` rather than sops or file: a container has no
             # /run/robothor/secrets.env, and nothing fills one for it.
             _env_line("ROBOTHOR_SECRETS_BACKEND", "env"),
         ]
+
+        # What the DASHBOARD needs before /api/ready can return 200, and
+        # therefore before `wait` can finish and `link` can print a URL:
+        # app/src/lib/services/health.ts requires both shared secrets plus one
+        # sign-in method. Local email+password is the wizard's own day-one
+        # method -- the operator step creates exactly that account -- so it is
+        # the one enabled here. Nothing else in the platform generates these;
+        # before this, every compose install timed out at `wait` and the
+        # operator never received a /setup link.
+        lines += ["", "# Sign-in. The dashboard refuses to report ready without all three."]
+        for name in ("AUTH_SECRET", "GENUS_BRIDGE_SSO_SECRET"):
+            lines.append(_env_line(name, self._keep_or_mint(ctx, name)))
+        lines.append(_env_line("GENUS_LOCAL_LOGIN", "true"))
 
         tenant = str(ctx.answers.get("tenant_id") or "")
         if tenant:
@@ -430,6 +472,27 @@ class ComposeRenderStep(BaseStep):
             lines += ["", _env_line("ROBOTHOR_TELEGRAM_BOT_TOKEN", token)]
 
         return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _keep_or_mint(ctx: InitContext, name: str) -> str:
+        """An existing shared secret, or a new one. Never a rotation.
+
+        `render` is not resumable -- it runs on every `genus init` -- so minting
+        a fresh AUTH_SECRET each time would sign every session out, and a fresh
+        SSO secret would leave the dashboard and the bridge disagreeing until
+        both restarted. An operator who exported one means it.
+        """
+        import os as _os
+        import secrets as _secrets
+
+        from robothor.secrets.env_file import parse_env_file
+
+        path = env_file_path(ctx)
+        if path.is_file():
+            existing = parse_env_file(path.read_text(encoding="utf-8")).get(name, "").strip()
+            if existing:
+                return existing
+        return (_os.environ.get(name) or "").strip() or _secrets.token_urlsafe(SECRET_BYTES)
 
     @staticmethod
     def _provider_credential(provider_id: str) -> tuple[str, str] | None:
@@ -528,8 +591,14 @@ class ComposeWaitStep(BaseStep):
     title = "Wait for the stack"
     resumable = False
 
-    def __init__(self, *, sleep: Callable[[float], None] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        sleep: Callable[[float], None] | None = None,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
         self._sleep = sleep or time.sleep
+        self._clock = clock or time.monotonic
 
     @staticmethod
     def _timeout(ctx: InitContext) -> int:
@@ -545,33 +614,52 @@ class ComposeWaitStep(BaseStep):
     def apply(self, ctx: InitContext) -> None:
         endpoints = ready_endpoints(ctx)
         ready = dict.fromkeys(endpoints, False)
-        remaining = float(self._timeout(ctx))
+        timeout = self._timeout(ctx)
+        # A WALL CLOCK, not a poll budget. Each round makes up to four HTTP
+        # calls that can each block for the context's timeout, so charging the
+        # budget one poll interval per round turned `--wait-timeout 180` into a
+        # twenty-minute wait against a stack whose ports accept and then hang.
+        deadline = self._clock() + timeout
 
         while True:
             for name, url in endpoints.items():
                 if ready[name]:
                     continue
-                # A 401 or 403 is UP: the bridge gates its health route behind
-                # auth in production, and a service enforcing authentication is
-                # a service that started.
-                response = ctx.http("GET", url)
-                if response.status and response.status < 500:
+                if _reads_as_up(ctx.http("GET", url).status):
                     ready[name] = True
                     ctx.say(f"    {name}: ready")
-            if all(ready.values()) or remaining <= 0:
+            if all(ready.values()) or self._clock() >= deadline:
                 break
             self._sleep(READY_POLL_INTERVAL_S)
-            remaining -= READY_POLL_INTERVAL_S
 
         _report(ctx)["ready"] = dict(ready)
         down = [name for name, up in ready.items() if not up]
         if down:
+            # `docker logs <container>`, not `docker compose logs <service>`: a
+            # bare `docker compose` in the workspace sees only the base file and
+            # answers "no such service". The container names are fixed in the
+            # release file, so these lines run as printed.
+            logs = "; ".join(f"docker logs robothor-{name}" for name in down)
             raise StepError(
-                f"{', '.join(down)} did not answer /ready within {self._timeout(ctx)}s. "
-                "Check `docker compose logs " + " ".join(down) + "`; the containers are "
-                "running and `genus init` resumes where it stopped."
+                f"{', '.join(down)} did not answer /ready within {timeout}s. "
+                f"Check: {logs}. The containers are running and `genus init` "
+                "resumes where it stopped."
             )
         ctx.detail(self.id, f"{len(ready)} services ready")
+
+
+def _reads_as_up(status: int) -> bool:
+    """Whether an HTTP status from a ``/ready`` probe means "this is ours, and up".
+
+    A 401 or 403 counts: the bridge gates its health route behind auth in
+    production, and a service enforcing authentication is a service that
+    started. A 404 does NOT -- it is what a foreign process already holding
+    9100 or 3004 answers, and counting it as ready declares an install healthy
+    on the strength of somebody else's web server.
+    """
+    if status in (401, 403):
+        return True
+    return 200 <= status < 400
 
 
 class ComposeModelsStep(ModelsStep):
@@ -663,13 +751,29 @@ def _env_line(name: str, value: object) -> str:
 
 
 def _write_private(path: Path, body: str) -> None:
-    """Write a file only its owner can read, without a readable moment.
+    """Write a file only its owner can read, with no readable moment at all.
 
-    ``open()`` then ``chmod()`` leaves the content world-readable for as long
-    as it takes to run the second call; ``os.open`` with the mode does not.
+    Through a fresh 0600 temp file in the same directory and one ``os.replace``,
+    for two reasons a plain ``os.open`` on the destination could not give:
+
+    * ``O_CREAT``'s mode argument is IGNORED for a file that already exists, so
+      a re-run over a file whose permissions had been widened wrote the new
+      credentials into the wide file and only narrowed it afterwards;
+    * ``O_CREAT`` without ``O_EXCL``/``O_NOFOLLOW`` follows a symlink planted at
+      the destination, which is how a local account gets a copy of the
+      credentials it cannot otherwise read.
+
+    ``os.replace`` is atomic on the same filesystem, so a reader sees the old
+    file or the new one and never a half-written one.
     """
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(body)
-    # An existing file keeps its old mode through O_CREAT, so say it again.
-    path.chmod(0o600)
+    import secrets as _secrets
+
+    temporary = path.with_name(f".{path.name}.{_secrets.token_hex(4)}")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
