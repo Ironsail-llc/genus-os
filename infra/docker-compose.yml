@@ -2,6 +2,9 @@
 # ============================================================================
 # Usage:
 #   docker compose up -d                              # Core only (postgres, redis, ollama)
+#   -f docker-compose.apps.yml                        # + the platform services (release images)
+#   -f docker-compose.gpu.yml                         # + Ollama's NVIDIA reservation
+#   -f docker-compose.dev.yml                         # + source mounts and local builds
 #   docker compose --profile monitoring up -d         # Core + Uptime Kuma
 #   docker compose --profile tts up -d                # Core + Kokoro TTS
 #   docker compose --profile media up -d              # Core + MediaMTX
@@ -66,16 +69,11 @@ services:
       - ollama_data:/root/.ollama
     environment:
       OLLAMA_HOST: "0.0.0.0"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    # If no GPU is available, comment out the deploy.resources block above
-    # and uncomment the following line:
-    # deploy: {}
+    # No GPU reservation here. A `deploy.resources.devices` block fails the
+    # whole stack on a box without the NVIDIA container runtime, so the
+    # reservation lives in docker-compose.gpu.yml and is layered on where it
+    # works — `genus init --substrate compose` adds it when nvidia-smi answers:
+    #   docker compose -f infra/docker-compose.yml -f infra/docker-compose.gpu.yml up -d
 
   # ── Monitoring (Uptime Kuma) ──────────────────────────────────────────────
 
