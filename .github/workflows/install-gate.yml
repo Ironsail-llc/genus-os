@@ -338,6 +338,31 @@ jobs:
           bash -euxo pipefail "$RUNNER_TEMP/compose-block.sh" 2>&1 \
             | tee "$RUNNER_TEMP/compose-block.out"
 
+      # The containers reach the mock at their own network's gateway, and only
+      # genus.env can tell them: Compose's `environment:` block beats
+      # `env_file:`, and neither of these names appears there. Without it the
+      # engine dials the real openrouter.ai with the documented placeholder
+      # key, which is the one thing this gate must never depend on.
+      - name: Point the stack's model calls at the mock
+        run: |
+          cd ~/genus
+          COMPOSE=(docker compose --env-file genus.env
+                   -f docker-compose.yml -f docker-compose.apps.yml)
+          NETWORK="$("${COMPOSE[@]}" ps -q engine \
+            | xargs docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}')"
+          GATEWAY="$(docker network inspect "$NETWORK" -f '{{(index .IPAM.Config 0).Gateway}}')"
+          echo "the stack reaches this runner at ${GATEWAY}"
+          {
+            echo "OPENROUTER_API_BASE=\"http://${GATEWAY}:${MOCK_PORT}/v1\""
+            echo "OLLAMA_API_BASE=\"http://${GATEWAY}:${MOCK_PORT}\""
+            echo "ROBOTHOR_OLLAMA_URL=\"http://${GATEWAY}:${MOCK_PORT}\""
+          } >> genus.env
+          "${COMPOSE[@]}" up -d
+          for _ in $(seq 1 60); do
+            curl -fsS "${ENGINE_URL}/ready" >/dev/null 2>&1 && break
+            sleep 3
+          done
+
       - name: Assert every service answers /ready
         run: |
           curl -f "${ENGINE_URL}/ready"
