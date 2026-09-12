@@ -16,7 +16,6 @@ which mints tokens after SSO, shares the key via the same secret channel.
 from __future__ import annotations
 
 import hashlib
-import os
 import secrets
 import time
 from typing import TYPE_CHECKING, Any
@@ -36,6 +35,7 @@ DEFAULT_AUDIENCE = "genus-bridge"
 _HUMAN_ROLES = frozenset({"owner", "admin", "member", "user", "viewer", "auditor"})
 _TOKEN_TYPES = frozenset({"user", "service"})
 
+_ENV_NAME = "GENUS_AUTH_SIGNING_KEY"
 _VAULT_KEY = "auth/jwt_signing_key"
 _signing_key_cache: str | None = None
 
@@ -45,28 +45,43 @@ class TokenError(Exception):
 
 
 def signing_key() -> str:
-    """Resolve the HS256 signing key (cached). Generates + stores on first boot."""
+    """Resolve the HS256 signing key (cached). Generates + stores on first boot.
+
+    The environment and vault halves go through :mod:`robothor.secrets`, the one
+    accessor, so that "where does this instance keep its signing key?" has the
+    same answer here as it does for every other credential — and so that an
+    unreadable vault degrades to "unset" instead of raising out of a token
+    mint. ``_VAULT_KEY`` is passed explicitly because the row predates the
+    environment convention: a name derived from ``GENUS_AUTH_SIGNING_KEY``
+    would miss ``auth/jwt_signing_key`` and generate a SECOND key on a box that
+    already had one, invalidating every live session and every MFA secret
+    (``robothor.auth.mfa_secrets`` derives its AES key from this one).
+    """
     global _signing_key_cache
     if _signing_key_cache:
         return _signing_key_cache
 
-    env = os.environ.get("GENUS_AUTH_SIGNING_KEY")
-    if env:
-        if len(env.encode("utf-8")) < 32:
-            raise TokenError("GENUS_AUTH_SIGNING_KEY must contain at least 32 bytes")
-        _signing_key_cache = env
-        return env
+    # Lazy import: robothor.secrets pulls the vault in only if it has to, so
+    # token encode/decode stays usable on a box with no vault at all.
+    from robothor.secrets import resolve_secret
 
-    # Lazy import: keep token encode/decode usable without the vault when a key
-    # is provided via env (tests, edge cases).
+    resolved = resolve_secret(_ENV_NAME, vault_key=_VAULT_KEY)
+    if resolved.value is not None:
+        if len(resolved.value.encode("utf-8")) < 32:
+            raise TokenError(
+                f"{_ENV_NAME} must contain at least 32 bytes"
+                if resolved.source == "env"
+                else "resolved signing key must contain at least 32 bytes"
+            )
+        _signing_key_cache = resolved.value
+        return resolved.value
+
+    # First boot: nothing holds a key, so mint one and keep it. A key that is
+    # not stored is a new key on every restart, and every session dies with it.
     from robothor import vault
 
-    key = vault.get(_VAULT_KEY)
-    if not key:
-        key = secrets.token_urlsafe(48)
-        vault.set(_VAULT_KEY, key, category="auth")
-    if len(key.encode("utf-8")) < 32:
-        raise TokenError("resolved signing key must contain at least 32 bytes")
+    key = secrets.token_urlsafe(48)
+    vault.set(_VAULT_KEY, key, category="auth")
     _signing_key_cache = key
     return key
 

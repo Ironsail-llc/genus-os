@@ -114,3 +114,100 @@ def test_iat_exp_window():
     t = tokens.issue_access_token("u", "t", "member", ttl_seconds=900)
     claims = tokens.decode_token(t)
     assert 800 < (claims["exp"] - int(time.time())) <= 900
+
+
+# ── Signing-key resolution ───────────────────────────────────────────────────
+# env -> vault -> generate-and-store, and the env+vault half now runs through
+# robothor.secrets so that "where is this instance's signing key?" has the same
+# answer here as everywhere else. The vault row keeps its own name
+# (auth/jwt_signing_key): a lookup derived from GENUS_AUTH_SIGNING_KEY would
+# miss it and generate a SECOND key on a box that already had one, invalidating
+# every live session and every MFA secret derived from it
+# (robothor/auth/mfa_secrets.py derives its AES key from this one).
+
+VAULT_ROW = "auth/jwt_signing_key"
+LONG_ENOUGH = "vault-stored-signing-key-at-least-32-bytes"
+
+
+def test_signing_key_comes_from_the_environment(monkeypatch):
+    monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "env-signing-key-at-least-32-bytes-long-ok")
+    tokens.reset_signing_key_cache()
+    assert tokens.signing_key() == "env-signing-key-at-least-32-bytes-long-ok"
+
+
+def test_signing_key_comes_from_the_vault_row_when_the_environment_has_none(monkeypatch):
+    from robothor import vault
+
+    monkeypatch.delenv("GENUS_AUTH_SIGNING_KEY", raising=False)
+    asked: list[str] = []
+    monkeypatch.setattr(vault, "get", lambda key, **kw: (asked.append(key), LONG_ENOUGH)[1])
+    monkeypatch.setattr(
+        vault, "set", lambda *a, **kw: pytest.fail("an existing key was overwritten")
+    )
+    tokens.reset_signing_key_cache()
+    assert tokens.signing_key() == LONG_ENOUGH
+    assert asked == [VAULT_ROW], f"the accessor read {asked}, not the existing row"
+
+
+def test_signing_key_is_generated_and_stored_when_nothing_holds_one(monkeypatch):
+    from robothor import vault
+
+    monkeypatch.delenv("GENUS_AUTH_SIGNING_KEY", raising=False)
+    stored: dict[str, str] = {}
+    monkeypatch.setattr(vault, "get", lambda key, **kw: None)
+    monkeypatch.setattr(vault, "set", lambda key, value, **kw: stored.setdefault(key, value))
+    tokens.reset_signing_key_cache()
+    generated = tokens.signing_key()
+    assert len(generated.encode("utf-8")) >= 32
+    assert stored == {VAULT_ROW: generated}, (
+        "a generated key that is not stored is a new key on every restart, and "
+        "every session and MFA secret dies with each one"
+    )
+
+
+def test_a_blank_signing_key_variable_is_unset_not_a_three_byte_key(monkeypatch):
+    """``GENUS_AUTH_SIGNING_KEY=`` with spaces is an operator who commented the
+    value out, not a 3-byte signing key.
+
+    It used to raise "must contain at least 32 bytes" and leave the instance
+    unable to mint a single token while the vault held a perfectly good key.
+    Empty-is-unset is the rule the settings sources already apply to every other
+    variable, and the accessor applies it here.
+    """
+    from robothor import vault
+
+    monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "   ")
+    monkeypatch.setattr(vault, "get", lambda key, **kw: LONG_ENOUGH)
+    tokens.reset_signing_key_cache()
+    assert tokens.signing_key() == LONG_ENOUGH
+
+
+def test_a_short_key_in_the_vault_is_refused_rather_than_used(monkeypatch):
+    from robothor import vault
+
+    monkeypatch.delenv("GENUS_AUTH_SIGNING_KEY", raising=False)
+    monkeypatch.setattr(vault, "get", lambda key, **kw: "too-short")
+    tokens.reset_signing_key_cache()
+    with pytest.raises(TokenError, match="32 bytes"):
+        tokens.signing_key()
+
+
+def test_an_unreadable_vault_does_not_crash_the_resolution(monkeypatch):
+    """A box with no vault must still be able to mint tokens from its env key.
+
+    Before the accessor, ``vault.get`` raising propagated out of
+    ``signing_key()``; it is reached only when the environment has nothing, but
+    a caller that holds an env key must never pay for the vault at all.
+    """
+    from robothor import secrets as secrets_module
+    from robothor import vault
+
+    def boom(*a, **kw):
+        raise FileNotFoundError("no master key on this box")
+
+    monkeypatch.setattr(vault, "get", boom)
+    monkeypatch.setattr(vault, "export_env", boom)
+    monkeypatch.setenv("GENUS_AUTH_SIGNING_KEY", "env-signing-key-at-least-32-bytes-long-ok")
+    secrets_module.reset_vault_availability()
+    tokens.reset_signing_key_cache()
+    assert tokens.signing_key() == "env-signing-key-at-least-32-bytes-long-ok"
