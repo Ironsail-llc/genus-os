@@ -46,7 +46,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Lock files first — dep layer caches across source-only changes.
-COPY pyproject.toml uv.lock README.md ./
+# PYPI_README.md is not decoration: `project.readme` in pyproject names it, and
+# hatchling reads it while BUILDING the wheel inside this image. Without it the
+# production stage dies with "Readme file does not exist".
+COPY pyproject.toml uv.lock README.md PYPI_README.md ./
 
 # `uv sync --no-install-project` installs ONLY the extras' transitive deps,
 # not the project's `[project.dependencies]` block (the project itself is

@@ -98,6 +98,31 @@ def test_force_include_sources_are_copied_into_the_python_image():
         for s in _force_include_sources()
         if s.split("/")[0] not in copied and s.rstrip("/") not in copied
     ]
-    assert not missing, (
-        f"force-include sources never COPYied into the python image: {missing}"
+    assert not missing, f"force-include sources never COPYied into the python image: {missing}"
+
+
+def test_the_declared_readme_reaches_the_python_image():
+    """hatchling reads `project.readme` at BUILD time, not at publish time.
+
+    #476 renamed the readme to PYPI_README.md and left Dockerfile.python
+    copying README.md, so the production image stopped building with
+    `OSError: Readme file does not exist: PYPI_README.md`. Invisible on a
+    developer's box, fatal on every fresh compose install — the acceptance
+    gate is what finally executed the image build end to end.
+    """
+    with (REPO / "pyproject.toml").open("rb") as f:
+        readme = str(tomllib.load(f)["project"]["readme"])
+
+    assert not _dockerignored(readme), f"{readme} is excluded from the build context"
+
+    dockerfile = (REPO / "Dockerfile.python").read_text()
+    copied = {
+        part.rstrip("/")
+        for line in dockerfile.splitlines()
+        if line.startswith("COPY ") and "--from" not in line
+        for part in line.split()[1:-1]
+    }
+    assert readme in copied, (
+        f"pyproject declares readme = {readme!r} but Dockerfile.python never COPYs it — "
+        "the hatchling build inside the image fails"
     )
