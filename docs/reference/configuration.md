@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-361 settings in 13 groups.
+362 settings in 13 groups.
 
 ## paths
 
@@ -290,6 +290,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_INJECTION_SCAN_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Injection-scan ladder position: observe logs a suspect prompt, enforce refuses to run it. |
 | `ROBOTHOR_JUDGE_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | **governed.** Let the goal-judge grade recent runs against real outcome signals and write the agent_reviews rows the achievement score is built on. |
 | `ROBOTHOR_MANIFEST_SCHEMA_MODE` | str | `observe` | `robothor-engine` | no | legacy | Agent-manifest schema ladder position: observe logs and counts what enforcement would refuse, enforce refuses the manifest and reports the agent broken. off skips validation entirely. |
+| `ROBOTHOR_PER_USER_SESSIONS` | str | `enforce` | `robothor-engine` | no | 1.74.0 | **governed.** Webchat session isolation: enforce (the default) gives every non-owner member their own derived chat session, observe logs what it would derive and changes nothing, off shares one session between every caller — which also lets any same-tenant caller read any session_key. The tenant owner keeps agent:main:primary in every mode, preserving the operator's webchat<->Telegram continuity. |
 | `ROBOTHOR_PLANNER_ENABLED` | bool | `true` | `robothor-engine` | no | legacy | Let the forward planner turn a thread into structured CRM tasks. Set 0 to fall back to stage-3 behaviour. |
 | `ROBOTHOR_PLUGIN_MANIFEST_ENABLED` | bool | `true` | `robothor-engine` | no | legacy | Validate plugin manifests before a plugin is allowed to load. |
 | `ROBOTHOR_PLUGIN_MANIFEST_MODE` | str | `observe` | `robothor-engine` | no | legacy | Plugin-manifest ladder position: observe logs violations, enforce refuses to load the plugin. |

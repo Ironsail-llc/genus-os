@@ -257,7 +257,11 @@ def per_user_sessions_mode() -> PerUserSessionsMode:
 
     Unlike the two-var ``*_ENABLED`` + ``*_MODE`` ladders above, this is a
     single env var, ``ROBOTHOR_PER_USER_SESSIONS``, since there's no separate
-    subsystem-enabled gate to flip independently of rollout stage. Returns
+    subsystem-enabled gate to flip independently of rollout stage. It is
+    ``governed`` (``settings.model.FlagSettings.per_user_sessions``), so an
+    operator's DB row wins over the environment and the rung is movable from
+    Controls without an edit to ``/etc`` — which is what you want of the switch
+    that decides who can read whose conversation. Returns
     ``"enforce"`` (the DEFAULT since C9 — member callers are isolated onto
     their own derived session; owner and service callers are unaffected in
     every mode, see ``chat._effective_session_key``), ``"observe"`` (return

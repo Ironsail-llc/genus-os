@@ -114,6 +114,10 @@ class TestSend:
         assert writes.notifications[0]["to_agent"] == MEMBER
         assert writes.notifications[0]["notification_type"] == "info"
         assert writes.notifications[0]["metadata"]["kind"] == "webchat_delivery"
+        # The notification is the readable-by-operators half. It points at the
+        # chat row rather than naming the session that row belongs to.
+        assert "session_key" not in writes.notifications[0]["metadata"]
+        assert writes.notifications[0]["metadata"]["chat_message_id"] == "7"
         assert receipt.expected == 2
         assert receipt.acknowledged == 2
         assert receipt.complete is True
@@ -129,6 +133,21 @@ class TestSend:
         session = chat.get_shared_session(chat.derive_user_session_key("assistant", MEMBER))
         assert session.history[-1]["role"] == "assistant"
         assert "the briefing" in session.history[-1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_no_chat_row_means_no_turn_in_ram_either(self, writes):
+        """The in-memory session must not outrun the table behind it.
+
+        ``/chat/history`` reads RAM, and ``_restore_sessions`` refills RAM from
+        the DB at boot. A turn appended without a row would show in the Helm
+        until the next restart and then vanish — a message the member saw, then
+        did not, with nothing anywhere saying it was never stored.
+        """
+        writes.message_id = None
+        await WebchatChannel().send(MEMBER, "the briefing", config=_config(), run=_run())
+
+        key = chat.derive_user_session_key("assistant", MEMBER)
+        assert key not in chat._sessions or chat._sessions[key].history == []
 
     @pytest.mark.asyncio
     async def test_send_to_a_member_uses_the_derived_key(self, writes):
@@ -287,16 +306,31 @@ def _clean_status_sinks():
     run_status.reset_status_sinks()
 
 
+@pytest.fixture
+def listening():
+    """Register a status sink for ``run_id``, i.e. a browser reading the stream.
+
+    Every test below that expects the channel to WAIT arms one: with nobody
+    listening the channel refuses to wait at all (``NoListenerError``), because the
+    question would be on nobody's screen.
+    """
+    events: list[dict] = []
+
+    def _arm(run_id: str = "run-1") -> list[dict]:
+        async def sink(event):
+            events.append(event)
+
+        run_status.register_status_sink(run_id, sink)
+        return events
+
+    return _arm
+
+
 class TestAsk:
     @pytest.mark.asyncio
-    async def test_ask_emits_over_the_runs_status_sink_with_the_row_id(self, rows):
+    async def test_ask_emits_over_the_runs_status_sink_with_the_row_id(self, rows, listening):
         rows(["answered"])
-        seen: list[dict] = []
-
-        async def sink(event):
-            seen.append(event)
-
-        run_status.register_status_sink("run-1", sink)
+        seen = listening("run-1")
         answer = await WebchatChannel().ask(
             "Which vendor?",
             ["Acme", "Globex"],
@@ -312,35 +346,55 @@ class TestAsk:
         assert seen[0]["options"] == ["Acme", "Globex"]
 
     @pytest.mark.asyncio
-    async def test_ask_returns_a_late_answer_written_through_the_row(self, rows):
+    async def test_ask_returns_a_late_answer_written_through_the_row(self, rows, listening):
         """The browser answers through the bridge, which settles the row. The
         engine has no inbound webchat socket, so the row IS the return path."""
         store = rows(["pending", "answered"])
+        listening("run-1")
         answer = await WebchatChannel().ask(
-            "Which vendor?", ["Acme", "Globex"], timeout=5, target=MEMBER, question_id="q-1"
+            "Which vendor?",
+            ["Acme", "Globex"],
+            timeout=5,
+            target=MEMBER,
+            question_id="q-1",
+            run_id="run-1",
         )
 
         assert answer == "Globex"
         assert store.reads >= 2
 
     @pytest.mark.asyncio
-    async def test_ask_returns_none_on_expiry_and_never_an_option(self, rows):
+    async def test_ask_returns_none_on_expiry_and_never_an_option(self, rows, listening):
         rows(["expired"])
+        listening("run-1")
         answer = await WebchatChannel().ask(
-            "Which vendor?", ["Acme", "Globex"], timeout=5, target=MEMBER, question_id="q-1"
+            "Which vendor?",
+            ["Acme", "Globex"],
+            timeout=5,
+            target=MEMBER,
+            question_id="q-1",
+            run_id="run-1",
         )
         assert answer is None
 
     @pytest.mark.asyncio
-    async def test_ask_returns_none_when_the_clock_runs_out(self, rows):
+    async def test_ask_returns_none_when_the_clock_runs_out(self, rows, listening):
         rows(["pending"])
+        listening("run-1")
         answer = await WebchatChannel().ask(
-            "Which vendor?", ["Acme", "Globex"], timeout=0.05, target=MEMBER, question_id="q-1"
+            "Which vendor?",
+            ["Acme", "Globex"],
+            timeout=0.05,
+            target=MEMBER,
+            question_id="q-1",
+            run_id="run-1",
         )
         assert answer is None
 
     @pytest.mark.asyncio
-    async def test_the_wait_does_not_overshoot_its_budget_by_a_poll_interval(self, monkeypatch):
+    async def test_the_wait_does_not_overshoot_its_budget_by_a_poll_interval(
+        self, monkeypatch, listening
+    ):
         """``ask_user`` caps the wait strictly below the tool registry's own
         ``asyncio.timeout``. A poll loop that always slept a full interval before
         re-checking the deadline would spend that headroom and turn "nobody
@@ -355,15 +409,52 @@ class TestAsk:
             ),
         )
         monkeypatch.setattr(module, "POLL_INTERVAL_S", 10.0)
+        listening("run-1")
 
         started = asyncio.get_running_loop().time()
         answer = await WebchatChannel().ask(
-            "Which?", timeout=0.05, target=MEMBER, question_id="q-1"
+            "Which?", timeout=0.05, target=MEMBER, question_id="q-1", run_id="run-1"
         )
         elapsed = asyncio.get_running_loop().time() - started
 
         assert answer is None
         assert elapsed < 1.0, f"waited {elapsed:.2f}s on a 0.05s budget"
+
+    @pytest.mark.asyncio
+    async def test_ask_refuses_to_wait_when_nobody_is_listening(self, rows):
+        """``emit_status`` returns False when no sink took the event — i.e. the
+        browser is not reading this run's stream, so the question is on nobody's
+        screen.
+
+        Waiting anyway spends the whole tool budget and then reports "asked and
+        stayed silent", which is a claim about a prompt that was never displayed.
+        ``NoListenerError`` is the documented "there is no way to ask here" outcome, so
+        ``_ask_channel`` records ``delivered: false`` in the same tick.
+        """
+        from robothor.engine.channels.base import NoListenerError
+
+        store = rows(["pending"])
+        # No sink registered for this run — emit_status returns False.
+        with pytest.raises(NoListenerError):
+            await WebchatChannel().ask(
+                "Which vendor?",
+                ["Acme", "Globex"],
+                timeout=30,
+                target=MEMBER,
+                question_id="q-1",
+                run_id="run-nobody-home",
+            )
+        # One read to fetch the row, and then it gave up — it did not poll.
+        assert store.reads == 1
+
+    @pytest.mark.asyncio
+    async def test_a_no_listener_refusal_is_a_kind_of_not_implemented_error(self):
+        """Every existing caller catches ``NotImplementedError``
+        (``ask_user._ask_channel``, ``PermissionEscalationManager``), so the more
+        specific signal must not escape one that has not been taught about it."""
+        from robothor.engine.channels.base import NoListenerError
+
+        assert issubclass(NoListenerError, NotImplementedError)
 
     @pytest.mark.asyncio
     async def test_ask_without_a_question_id_raises_not_implemented(self):
@@ -390,11 +481,12 @@ class TestAsk:
         assert WebchatChannel.ask_wants_question_id is True
 
     @pytest.mark.asyncio
-    async def test_a_cancelled_wait_propagates_rather_than_answering(self, rows):
+    async def test_a_cancelled_wait_propagates_rather_than_answering(self, rows, listening):
         rows(["pending"])
+        listening("run-1")
         channel = WebchatChannel()
         task = asyncio.create_task(
-            channel.ask("Which?", timeout=30, target=MEMBER, question_id="q-1")
+            channel.ask("Which?", timeout=30, target=MEMBER, question_id="q-1", run_id="run-1")
         )
         await asyncio.sleep(0.02)
         task.cancel()

@@ -48,6 +48,15 @@ The emit is idempotent by row id — ``ask_user`` emits the same event before
 calling any channel, and the Helm keys its card on ``id`` — so a caller that has
 not already announced the question still reaches the browser, and one that has
 does not produce a second card.
+
+And the emit's RETURN VALUE decides whether to wait at all. ``emit_status`` is
+true only when a sink actually took the event, which for this channel is the only
+evidence that anybody could see the question. No sink means no screen, so
+:class:`~robothor.engine.channels.base.NoListenerError` is raised immediately instead
+of polling to the deadline and reporting that the person stayed silent — a claim
+about a prompt that was never displayed. That bool is also the signal that
+catches a Helm stream which forgot to render ``approval_required``, which is the
+shape of the one defect this channel shipped with.
 """
 
 from __future__ import annotations
@@ -58,7 +67,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine import agent_questions, chat, chat_store, run_status
-from robothor.engine.channels.base import SendReceipt
+from robothor.engine.channels.base import NoListenerError, SendReceipt
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
@@ -236,8 +245,13 @@ class WebchatChannel:
             subject=self._subject(name, text),
             body=text,
             metadata={
+                # No session key. The notification is the half of a delivery that
+                # a whole tenant's operators can read (`/api/notifications/inbox`
+                # admits owner/admin for any id), and a derived key names the
+                # session it belongs to. ``chat_message_id`` already points at
+                # the row that knows its session, so carrying the key here would
+                # widen the audience of an identifier for nothing.
                 "kind": "webchat_delivery",
-                "session_key": session_key,
                 "run_id": getattr(run, "id", None),
                 "chat_message_id": str(message_id) if message_id is not None else None,
             },
@@ -361,7 +375,7 @@ class WebchatChannel:
                 "for the webchat channel to wait on"
             )
 
-        await run_status.emit_status(
+        listened = await run_status.emit_status(
             run_id,
             {
                 "event": "approval_required",
@@ -377,6 +391,17 @@ class WebchatChannel:
                 ),
             },
         )
+        if not listened:
+            # The bool is the whole point of `emit_status` returning one: no sink
+            # took the event, so the question is on nobody's screen. Waiting
+            # anyway would spend the entire tool budget and then report "asked
+            # and stayed silent" — a claim about a prompt that was never
+            # displayed. This is also the signal that would have caught a Helm
+            # stream that forgot to render `approval_required` at all.
+            raise NoListenerError(
+                f"nothing is reading run {run_id or '(unnamed)'}'s status stream, so question "
+                f"{question_id} would be shown to nobody; it stands as a row for a later turn"
+            )
         return await self._await_answer(row, question_id, tenant_id, timeout)
 
     async def _await_answer(

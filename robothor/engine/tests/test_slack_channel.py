@@ -362,13 +362,17 @@ class TestTheOptionalSlots:
         question with no channel, and the operator answers it from the Helm."""
         from robothor.engine.tools.handlers.ask_user import _ask_channel
 
-        answer, delivered, _waited = await _ask_channel(
+        answer, delivered, _waited, reason = await _ask_channel(
             SlackChannel(), "Approve?", [], 5.0, CHANNEL_ID, USER_ID
         )
         assert answer is None
         # `delivered` False is the whole point: the run is told nobody could be
         # asked, not that it waited five seconds for a silent operator.
         assert delivered is False
+        # And WHY nobody was asked: Slack has no way to put the question, which
+        # is a different fact from a live surface nobody was watching
+        # (`no_listener`, which webchat can report).
+        assert reason == "cannot_ask"
 
 
 class TestHealth:

@@ -475,6 +475,31 @@ class TestAskUserTool:
         assert "q-1" in result["message"]
 
     @pytest.mark.asyncio
+    async def test_a_question_nobody_was_shown_says_so_rather_than_claiming_silence(
+        self, store, webchat_run
+    ):
+        """``NoListenerError`` is not "the person did not reply".
+
+        The webchat channel raises it when nothing is reading the run's status
+        stream, so the question reached no screen at all. Reporting that as
+        "asked and stayed silent" would be the fabricated ``delivered`` this
+        whole module is written against — and it is what made the missing
+        plan-execution branch in the Helm silent for a full tool budget.
+        """
+        from robothor.engine.channels.base import NoListenerError
+
+        channel = _RowIdChannel(raises=NoListenerError("nobody is reading this run's stream"))
+        with patch("robothor.engine.channels.get_channel", return_value=channel):
+            result = await _handler()({"question": "Which vendor?"}, _ctx())
+
+        assert result["answered"] is False
+        assert result["delivered"] is False
+        assert result["reason"] == "no_listener"
+        assert "nobody was connected to receive the question" in result["message"]
+        # The row is named so a later turn can still pick the answer up.
+        assert result["question_id"] == "q-1"
+
+    @pytest.mark.asyncio
     async def test_a_channel_that_cannot_ask_says_nobody_could_be_asked(self, store, telegram_run):
         """``NotImplementedError`` is a legitimate outcome, not a crash — and it
         happens in the same tick, so the answer must not claim a wait."""
@@ -561,8 +586,23 @@ class TestAskUserTool:
         assert channel.calls[0]["target"] == WEBCHAT_USER
         assert channel.calls[0]["addressee"] == WEBCHAT_USER
 
+    @pytest.mark.parametrize(
+        "detail_prefix",
+        [
+            # Every webchat entry point, from `chat.py`'s five endpoints. The
+            # first cut of this fallback matched only `webchat:`, so it was dead
+            # on the three plan shapes — including `plan-exec:`, the full-tools
+            # execution run where `ask_user` actually fires.
+            "webchat",
+            "plan",
+            "plan-exec",
+            "plan-revise",
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_a_webchat_target_falls_back_to_the_trigger_detail(self, store, monkeypatch):
+    async def test_a_webchat_target_falls_back_to_the_trigger_detail(
+        self, store, monkeypatch, detail_prefix
+    ):
         """An unverified or absent identity still has the session key, and the
         key carries the user segment the derivation put there."""
         from robothor.engine.tools.handlers import ask_user as module
@@ -570,13 +610,58 @@ class TestAskUserTool:
         monkeypatch.setattr(
             module.tracking,
             "get_run",
-            lambda run_id: _run_row("webchat", f"webchat:agent:main:user:{WEBCHAT_USER}"),
+            lambda run_id: _run_row("webchat", f"{detail_prefix}:agent:main:user:{WEBCHAT_USER}"),
         )
         channel = _RowIdChannel(answer=None)
         with patch("robothor.engine.channels.get_channel", return_value=channel):
             await _handler()({"question": "Which vendor?"}, _ctx())
 
         assert store.rows["q-1"].target == WEBCHAT_USER
+
+    @pytest.mark.asyncio
+    async def test_a_telegram_shaped_detail_is_not_read_as_a_webchat_target(
+        self, store, monkeypatch
+    ):
+        """``plan:`` is also a Telegram prefix, where the value is a chat id. The
+        `:user:` segment is what makes it a webchat session key; without it there
+        is no target rather than a chat id aimed at the wrong surface."""
+        from robothor.engine.tools.handlers import ask_user as module
+
+        monkeypatch.setattr(
+            module.tracking, "get_run", lambda run_id: _run_row("webchat", "plan:chat-1|sender:Op")
+        )
+        channel = _RowIdChannel(answer=None)
+        with patch("robothor.engine.channels.get_channel", return_value=channel):
+            await _handler()({"question": "Which vendor?"}, _ctx())
+
+        assert store.rows["q-1"].target == ""
+
+    @pytest.mark.asyncio
+    async def test_an_unverified_identity_is_not_used_as_the_target(self, store, monkeypatch):
+        """Same direction as ``_addressee``: an unproven identity binds nothing.
+
+        Without the ``verified`` check an unverified identity's ``user_account_id``
+        would silently become the address a delivery is written to — and the
+        channel writes into whatever session that id resolves to.
+        """
+        from robothor.engine.tools.handlers import ask_user as module
+
+        monkeypatch.setattr(
+            module.tracking, "get_run", lambda run_id: _run_row("webchat", "webchat:no-user-here")
+        )
+        unverified = SimpleNamespace(
+            channel="webchat",
+            identifier=WEBCHAT_USER,
+            verified=False,
+            role="member",
+            user_account_id=WEBCHAT_USER,
+        )
+        channel = _RowIdChannel(answer=None)
+        with patch("robothor.engine.channels.get_channel", return_value=channel):
+            await _handler()({"question": "Which vendor?"}, _ctx(identity=unverified))
+
+        assert store.rows["q-1"].target == ""
+        assert channel.calls[0]["addressee"] == ""
 
     @pytest.mark.asyncio
     async def test_the_owner_shared_session_leaves_the_target_empty(self, store, monkeypatch):

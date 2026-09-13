@@ -48,8 +48,19 @@ either can fail on its own:
 
 | Row | Table | Who sees it |
 |-----|-------|-------------|
-| The assistant turn | `chat_sessions` + `chat_messages` | Somebody with the Helm open — and the agent's next turn, as conversation history |
-| The notification | `crm_agent_notifications` (`notification_type: info`, `metadata.kind: webchat_delivery`) | Anybody, through the Helm's inbox, whether or not they were watching |
+| The assistant turn | `chat_sessions` + `chat_messages` | The member whose session it is, with the Helm open — and the agent's next turn, as conversation history |
+| The notification | `crm_agent_notifications` (`notification_type: info`, `metadata.kind: webchat_delivery`) | The same member, through their inbox, whether or not they were watching — plus owner/admin, who may read any inbox |
+
+**Who can read the inbox half.** `GET /api/notifications/inbox/{id}` is
+caller-scoped: owner and admin may read any inbox, and every other caller may
+read only the one whose id is their own (403 otherwise). Its sibling
+`GET /api/notifications` follows the same rule in the two shapes a query can
+take — a non-operator naming somebody else's `toAgent` is refused, and one naming
+nobody gets their own rather than the tenant's. Both arrived with this channel,
+because it is the first writer to put member-private chat content in a table
+whose reads had only ever been tenant-scoped. The notification carries no session
+key for the same reason — `metadata.chat_message_id` points at the row that knows
+its session instead.
 
 So a receipt expects 2, and `delivered` means both landed. The statuses:
 
@@ -98,6 +109,14 @@ moving on.
    `POST /api/approvals/question/{id}`, which settles the row.
 4. The channel polls that row (every ~2s) until it is answered, and returns the
    answer to the agent mid-run.
+
+**It waits only if somebody is listening.** Step 2 reports whether a sink
+actually took the event. If nothing is reading that run's stream — no browser on
+it — the channel refuses to wait at all and the tool answers `delivered: false`
+with `reason: no_listener` and the sentence *"nobody was connected to receive the
+question"*. Waiting the full tool budget on a prompt that reached no screen, and
+then telling the model the person stayed silent, is a claim about something that
+never happened; the row is still there for a later turn.
 
 The row is the single source of truth, which is why there is no engine endpoint
 for this: the CLI, Telegram and the Helm all settle the same row, and a second

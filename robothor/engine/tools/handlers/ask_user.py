@@ -35,6 +35,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine import agent_questions, run_status, tracking
+from robothor.engine.channels.base import NoListenerError
 
 if TYPE_CHECKING:
     from robothor.engine.tools.dispatch import ToolContext
@@ -87,6 +88,20 @@ _CHAT_DETAIL_PREFIXES = frozenset({"chat", "plan", "plan-exec", "plan-revise"})
 #: ``chat.derive_user_session_key``).
 _WEBCHAT_USER_SEGMENT = ":user:"
 
+#: ``trigger_detail`` prefixes a webchat run can carry, all of them followed by a
+#: session key: ``webchat:`` from ``/chat/send``, and the three plan shapes from
+#: ``/chat/plan/{start,approve,iterate}`` (``chat.py``'s ``plan:``,
+#: ``plan-exec:``, ``plan-revise:``). The first cut of this set had only
+#: ``webchat``, which left the fallback dead on three of the four — including
+#: ``plan-exec``, the full-tools run where ``ask_user`` actually fires.
+#:
+#: It overlaps ``_CHAT_DETAIL_PREFIXES`` on the ``plan`` shapes deliberately: a
+#: Telegram run writes the same prefixes with a CHAT ID after them. Which parser
+#: runs is decided by the resolved channel, and the ``:user:`` segment below is
+#: the second check — a chat id has none, so it yields no target rather than an
+#: address aimed at the wrong surface.
+_WEBCHAT_DETAIL_PREFIXES = frozenset({"webchat", "plan", "plan-exec", "plan-revise"})
+
 
 def bounded_timeout(requested: Any) -> float:
     """The wait this handler will actually do, in seconds.
@@ -119,6 +134,10 @@ def _webchat_target(ctx: ToolContext, trigger_detail: str) -> str:
     there. The owner's shared key (``agent:main:primary``) names no user, so it
     yields "": inventing one would aim a delivery at somebody who was never
     asked.
+
+    ``verified`` is load-bearing, in the same direction as :func:`_addressee`:
+    without it an unproven identity's ``user_account_id`` would become the
+    address a delivery is written to.
     """
     identity = getattr(ctx, "identity", None)
     if identity is not None and getattr(identity, "verified", False):
@@ -127,7 +146,7 @@ def _webchat_target(ctx: ToolContext, trigger_detail: str) -> str:
             return account
     head = (trigger_detail or "").split("|", 1)[0]
     prefix, _, key = head.partition(":")
-    if prefix != "webchat" or _WEBCHAT_USER_SEGMENT not in key:
+    if prefix not in _WEBCHAT_DETAIL_PREFIXES or _WEBCHAT_USER_SEGMENT not in key:
         return ""
     return key.rsplit(_WEBCHAT_USER_SEGMENT, 1)[1]
 
@@ -236,11 +255,11 @@ async def _handle_ask_user(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
         },
     )
 
-    answer, delivered, waited = await _ask_channel(
+    answer, delivered, waited, reason = await _ask_channel(
         channel, question, options, timeout, target, addressee, asked.id, run_id
     )
     if answer is None:
-        return _unanswered(asked.id, waited, delivered=delivered)
+        return _unanswered(asked.id, waited, delivered=delivered, reason=reason)
 
     try:
         await asyncio.to_thread(
@@ -268,8 +287,8 @@ async def _ask_channel(
     addressee: str,
     question_id: str = "",
     run_id: str = "",
-) -> tuple[str | None, bool, float]:
-    """Put the question to ``channel``. Returns ``(answer, delivered, waited)``.
+) -> tuple[str | None, bool, float, str]:
+    """Put the question to ``channel``. Returns ``(answer, delivered, waited, reason)``.
 
     Two facts the caller needs and one it must not invent.
 
@@ -279,6 +298,14 @@ async def _ask_channel(
     (``NotImplementedError``, a documented outcome and not a bug). Only the
     first is a question anybody could have answered.
 
+    ``reason`` names WHY nothing came back when ``delivered`` is False, because
+    "nobody was asked" has more than one cause and they are not equally the
+    agent's problem: ``no_channel`` (no surface for this trigger), ``cannot_ask``
+    (the surface exists and has no way to put a question), ``no_listener`` (the
+    surface is live but nothing was connected to receive it — see
+    :class:`~robothor.engine.channels.base.NoListenerError`), ``channel_error`` (it
+    broke). Empty when the question WAS delivered.
+
     ``waited`` is measured, not assumed. The first cut reported the *requested*
     timeout — "no answer within 300s" — on paths that returned in the same tick,
     which handed the model a fabricated elapsed-time claim on the one tool whose
@@ -287,7 +314,7 @@ async def _ask_channel(
     question on the wire.
     """
     if channel is None:
-        return None, False, 0.0
+        return None, False, 0.0, "no_channel"
     # A CAPABILITY PROBE, not an unconditional kwarg. The webchat channel has no
     # inbound socket, so its only return path is the durable row — it declares
     # ``ask_wants_question_id`` and is handed the row id and the run to emit on.
@@ -304,36 +331,65 @@ async def _ask_channel(
         answer = await channel.ask(
             question, options, timeout=timeout, target=target, addressee=addressee, **extra
         )
+    except NoListenerError:
+        # Distinct from "this surface cannot ask": it can, and nobody was there.
+        logger.info(
+            "Channel %s had nobody listening; the question stands as a row",
+            getattr(channel, "name", "?"),
+        )
+        return None, False, time.monotonic() - started, "no_listener"
     except NotImplementedError:
         logger.info(
             "Channel %s cannot ask; the question stands as a row", getattr(channel, "name", "?")
         )
-        return None, False, time.monotonic() - started
+        return None, False, time.monotonic() - started, "cannot_ask"
     except Exception:  # noqa: BLE001 — a broken surface is an unanswered question
         logger.exception("Channel ask failed; the question stands as a row")
-        return None, False, time.monotonic() - started
+        return None, False, time.monotonic() - started, "channel_error"
     waited = time.monotonic() - started
-    return (str(answer), True, waited) if answer is not None else (None, True, waited)
+    if answer is None:
+        return None, True, waited, ""
+    return str(answer), True, waited, ""
 
 
-def _unanswered(question_id: str, waited: float, *, delivered: bool) -> dict[str, Any]:
+def _unanswered(
+    question_id: str, waited: float, *, delivered: bool, reason: str = ""
+) -> dict[str, Any]:
     """What the agent is told when no answer came back.
 
     Names the row id on purpose: the question is still open, a late answer is
     still usable, and an agent that knows the id can say so to the operator
     instead of asking the same thing again on its next turn.
 
-    ``delivered`` picks between two honest sentences, and ``waited`` is the
-    measured elapsed time rather than the budget that was requested. Neither
-    sentence claims a wait that did not happen, and the un-delivered one says
-    plainly that the answer, if it comes, reaches a *later* turn — for a surface
-    with no in-run reply path (webchat today) the Helm answers through the
-    bridge endpoint long after this run has finished.
+    ``delivered`` picks between honest sentences, and ``waited`` is the measured
+    elapsed time rather than the budget that was requested. Neither sentence
+    claims a wait that did not happen, and the un-delivered ones say plainly that
+    the answer, if it comes, reaches a *later* turn.
+
+    ``reason`` splits the un-delivered case, because "nobody was connected to
+    receive it" is a different fact from "there is no way to ask here" — and the
+    first one is an instance problem the agent should not narrate as a person
+    ignoring it. It is returned as a field as well as a sentence so a caller and
+    a log can match on a token rather than on prose.
     """
     if not delivered:
+        if reason == "no_listener":
+            return {
+                "answered": False,
+                "delivered": False,
+                "reason": reason,
+                "question_id": question_id,
+                "message": (
+                    "nobody was connected to receive the question — the surface was live but "
+                    f"no one was watching this run, so it was shown to nobody. It is recorded "
+                    f"as {question_id} and can be answered later, which a following turn will "
+                    "see. Decide with what you have and say what you assumed."
+                ),
+            }
         return {
             "answered": False,
             "delivered": False,
+            "reason": reason or "no_channel",
             "question_id": question_id,
             "message": (
                 "no channel could deliver this question; it is recorded as "

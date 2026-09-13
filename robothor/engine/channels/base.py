@@ -76,10 +76,32 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = [
     "UNCONFIGURED_STEP",
     "Channel",
+    "NoListenerError",
     "SendReceipt",
     "acknowledged_messages",
     "receipt_from",
 ]
+
+
+class NoListenerError(NotImplementedError):
+    """Raised by :meth:`Channel.ask` when the question would reach no screen.
+
+    A subclass of ``NotImplementedError`` on purpose: that is already the
+    contract for "there is no way to ask here", and every caller catches it
+    (``ask_user._ask_channel``, ``PermissionEscalationManager``), so a channel can
+    raise the more specific signal without a caller that has not been taught
+    about it letting it escape.
+
+    The distinction it adds is between two things a plain ``None`` would flatten
+    into one: *the person did not reply* and **nobody was connected to receive
+    it**. A channel whose only path to the person is a live stream — webchat,
+    whose ``ask`` reaches the browser through the run's own SSE sink — can
+    actually tell the difference (``run_status.emit_status`` returns whether a
+    sink took the event), and throwing that away is how a run ends up waiting ten
+    minutes on a prompt that was never displayed and then reporting that the
+    person stayed silent.
+    """
+
 
 #: How a channel's optional ``verify()`` says "this instance never set me up",
 #: as opposed to "I tried and something is wrong": it returns exactly ONE step,
