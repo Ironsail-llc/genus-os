@@ -42,6 +42,7 @@ from routers.approvals import router as approvals_router
 from routers.audit import router as audit_router
 from routers.auth import router as auth_router
 from routers.auth import sso_secret_present
+from routers.channel_access import router as channel_access_router
 from routers.controls import router as controls_router
 from routers.conversations import router as conversations_router
 from routers.fleet import router as fleet_router
@@ -179,6 +180,11 @@ app.include_router(workflows_router)
 # ask_user question (a row) and a permission escalation (a proxy to the engine,
 # where the pending request actually lives).
 app.include_router(approvals_router)
+# Who may reach this instance over a channel. Beside approvals because both are
+# "a person has to decide something", and one of the decisions here is the only
+# way a pairing code is ever spent over the network -- the channel that issued
+# it can never spend it.
+app.include_router(channel_access_router)
 # First-run setup. Every route here refuses with 404 once an owner account
 # exists, so on a claimed appliance this router is mounted and unreachable --
 # the gate is asked per request rather than at import, because "has an owner"

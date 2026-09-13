@@ -33,9 +33,11 @@ the scopes it needed — those are Slack's own vocabulary, not the instance's.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.channels.base import UNCONFIGURED_STEP, SendReceipt, receipt_from
 from robothor.engine.channels.slack_credentials import (
     APP_TOKEN_ENV,
@@ -50,6 +52,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Callable, Sequence
 
     from robothor.engine.models import AgentConfig, AgentRun
+    from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
 
@@ -536,13 +539,22 @@ class SlackChannel:
             "and is answered through the bridge's /api/approvals endpoint"
         )
 
-    async def resolve_identity(self, native_id: str) -> Any:
-        """Not implemented — Slack identity resolution lands with pairing."""
-        raise NotImplementedError(
-            "identity resolution is not implemented for the Slack channel yet; "
-            "the inbound path in engine/slack.py still maps a user to "
-            "f'slack:{user_id}' without consulting the identity graph"
-        )
+    async def resolve_identity(
+        self, native_id: str, *, tenant_id: str = DEFAULT_TENANT
+    ) -> IdentityContext | None:
+        """Map a Slack user id onto a Genus identity, or None.
+
+        Slack has no table of its own and is not getting one: it resolves out of
+        ``user_channel_identities`` through the generic resolver, which is the
+        same row any other channel pairs into. Before this there was no
+        resolution at all — the inbound path ran every sender as the literal
+        string ``f"slack:{user_id}"`` with ``user_role="user"``, so an
+        authorization decision was being made about a string that matched no
+        row anywhere.
+        """
+        from robothor.identity.resolvers import resolve_identity
+
+        return await asyncio.to_thread(resolve_identity, self.name, native_id, tenant_id)
 
 
 def _build_client(token: str) -> Any:

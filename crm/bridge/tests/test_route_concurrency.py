@@ -54,6 +54,15 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("DELETE", "/api/providers/{provider_id}/keys/{position}"),
         ("POST", "/api/providers/{provider_id}/test"),
         ("PATCH", "/api/providers/defaults"),
+        # The three channel-access MUTATIONS await the engine after the write:
+        # the binding is a row this process owns, but the engine's belief about
+        # who a sender is lives in its own process for up to 300s, so a revoke
+        # that did not reach it would leave the revoked sender running. The
+        # psycopg2 half goes through asyncio.to_thread inside each handler. The
+        # two READS stay synchronous -- they await nothing.
+        ("POST", "/api/channels/{name}/pairings/{code}/approve"),
+        ("POST", "/api/channels/{name}/pairings/{code}/deny"),
+        ("DELETE", "/api/channels/{name}/identities/{identity_id}"),
         # The doctor route awaits asyncio.to_thread and nothing else. Every
         # check underneath it is synchronous -- psycopg2, urllib, a subprocess
         # -- and run_sync opens its own event loop, which it cannot do on the

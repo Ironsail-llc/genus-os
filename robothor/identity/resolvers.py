@@ -36,17 +36,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CACHE_TTL_SECONDS = 60
+_CACHE_TTL_SECONDS = 60.0
+
+#: Postgres regex for a UUID in its canonical text form. Guards the
+#: ``uci.user_id::UUID`` cast in ``_resolve_generic``: that column holds either a
+#: ``user_accounts.id`` or a ``tenant_users.user_id``, and casting the second
+#: kind would raise ``InvalidTextRepresentation`` for a perfectly valid row.
+_UUID_TEXT = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 _cache: dict[tuple[str, str, str], tuple[IdentityContext | None, float]] = {}
 
 
-def resolve_identity(channel: str, identifier: str, tenant_id: str) -> IdentityContext | None:
+def resolve_identity(
+    channel: str,
+    identifier: str,
+    tenant_id: str,
+    *,
+    negative_ttl_seconds: float | None = None,
+) -> IdentityContext | None:
     """Resolve a channel-native identifier to an ``IdentityContext``.
 
-    Returns ``None`` for an unrecognized channel, an identifier with no
-    matching account/user row, or if resolution fails for any reason —
-    never raises.
+    ``negative_ttl_seconds`` shortens how long a MISS is remembered, for the
+    caller that cares: the channel access gate. A sender waiting on a pairing
+    is by definition a miss, and caching that for the full 60 s means the
+    operator approves them and their next message is still refused — and, worse,
+    mints a second pending code that shows up as a second request. A hit keeps
+    the full TTL either way: the expensive thing to be wrong about is an
+    identity that no longer exists, and that is what
+    ``/api/admin/identities/reload`` is for.
+
+    Returns ``None`` for an identifier with no matching account/user/binding
+    row, or if resolution fails for any reason — never raises. A channel with
+    no dedicated resolver is no longer a special case: it falls to
+    :func:`_resolve_generic`, which answers out of ``user_channel_identities``
+    and returns ``None`` when there is nothing there.
     """
     cache_key = (channel, identifier, tenant_id)
     cached = _cache.get(cache_key)
@@ -56,17 +79,16 @@ def resolve_identity(channel: str, identifier: str, tenant_id: str) -> IdentityC
             return value
         del _cache[cache_key]
 
-    resolver = _RESOLVERS.get(channel)
-    if resolver is None:
+    try:
+        result = resolver_for(channel)(identifier, tenant_id)
+    except Exception:
+        logger.exception("resolve_identity: resolver for channel %r failed", channel)
         result = None
-    else:
-        try:
-            result = resolver(identifier, tenant_id)
-        except Exception:
-            logger.exception("resolve_identity: resolver for channel %r failed", channel)
-            result = None
 
-    _cache[cache_key] = (result, time.monotonic() + _CACHE_TTL_SECONDS)
+    ttl = _CACHE_TTL_SECONDS
+    if result is None and negative_ttl_seconds is not None:
+        ttl = min(ttl, max(0.0, negative_ttl_seconds))
+    _cache[cache_key] = (result, time.monotonic() + ttl)
     return result
 
 
@@ -208,8 +230,115 @@ def _resolve_vision(identifier: str, tenant_id: str) -> IdentityContext | None:
     )
 
 
+def _resolve_generic(channel: str) -> Callable[[str, str], IdentityContext | None]:
+    """A resolver for any channel whose identities live in ``user_channel_identities``.
+
+    A factory rather than one function taking the channel, because
+    ``_RESOLVERS`` maps a name to a ``(identifier, tenant_id)`` callable and
+    that shape is what ``resolve_identity`` caches against. Every channel that
+    is not Telegram (whose source of truth is still ``tenant_users``, see
+    ``_resolve_telegram``) and not webchat or vision resolves through here, so a
+    plugin channel gets identity resolution by having rows rather than by
+    shipping code.
+
+    ``role`` comes off the BINDING, not off a joined account. A binding may
+    legitimately name a user that neither ``user_accounts`` nor ``tenant_users``
+    has a row for, and answering that with a default role would be the platform
+    fabricating an authorization out of a query that returned nothing. The join
+    is only for the things it is safe to be missing: a display name, an email,
+    a ``person_id``.
+
+    ``verified`` is True: unlike a vision face match, a binding is a row an
+    operator wrote on purpose.
+    """
+
+    def _resolve(identifier: str, tenant_id: str) -> IdentityContext | None:
+        try:
+            with get_connection() as conn:
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur.execute("SELECT to_regclass('public.user_channel_identities') AS t")
+                probe = cur.fetchone()
+                if not probe or probe["t"] is None:
+                    return None
+                cur.execute(
+                    "SELECT uci.user_id, uci.role, "
+                    "COALESCE(NULLIF(uci.display_name, ''), "
+                    "         NULLIF(ua.display_name, ''), "
+                    "         NULLIF(tu.display_name, ''), '') AS display_name, "
+                    "ua.id::TEXT AS user_account_id, ua.email, "
+                    "COALESCE(ua.person_id::TEXT, tu.person_id::TEXT) AS person_id, "
+                    "tu.user_id AS tenant_user_id "
+                    "FROM user_channel_identities uci "
+                    # The cast goes on the TEXT side, not on `ua.id`:
+                    # `ua.id::TEXT = uci.user_id` casts an indexed UUID primary
+                    # key on every inbound resolve, which the index cannot
+                    # serve.
+                    #
+                    # It has to be a CASE and not `uci.user_id ~ %s AND
+                    # ua.id = uci.user_id::UUID`, because Postgres does not
+                    # promise to evaluate AND operands left to right -- and
+                    # `user_id` legitimately holds non-UUID values (a
+                    # `tenant_users.user_id`), so an eagerly-evaluated cast
+                    # would raise InvalidTextRepresentation on a valid row and
+                    # take the whole resolve down. CASE *is* documented to
+                    # short-circuit.
+                    "LEFT JOIN user_accounts ua "
+                    "  ON ua.tenant_id = uci.tenant_id "
+                    "  AND ua.id = (CASE WHEN uci.user_id ~ %s "
+                    "                    THEN uci.user_id END)::UUID "
+                    "LEFT JOIN tenant_users tu "
+                    "  ON tu.tenant_id = uci.tenant_id AND tu.user_id = uci.user_id "
+                    "WHERE uci.tenant_id = %s AND uci.channel = %s "
+                    "  AND uci.native_id = %s AND uci.revoked_at IS NULL "
+                    "LIMIT 1",
+                    (_UUID_TEXT, tenant_id, channel, identifier),
+                )
+                match = cur.fetchone()
+        except (psycopg2.errors.UndefinedTable, psycopg2.Error):
+            logger.debug(
+                "_resolve_generic: user_channel_identities unavailable for channel %r",
+                channel,
+                exc_info=True,
+            )
+            return None
+
+        if not match:
+            return None
+        return IdentityContext(
+            tenant_id=tenant_id,
+            channel=channel,
+            identifier=identifier,
+            verified=True,
+            display_name=match["display_name"] or "",
+            role=match["role"] or "",
+            tenant_user_id=match["tenant_user_id"],
+            user_account_id=match["user_account_id"],
+            person_id=match["person_id"],
+            email=match["email"],
+        )
+
+    return _resolve
+
+
 _RESOLVERS: dict[str, Callable[[str, str], IdentityContext | None]] = {
     "webchat": _resolve_webchat,
     "telegram": _resolve_telegram,
     "vision": _resolve_vision,
+    "slack": _resolve_generic("slack"),
 }
+
+
+def resolver_for(channel: str) -> Callable[[str, str], IdentityContext | None]:
+    """The resolver ``channel`` uses, registering a generic one if it has none.
+
+    ``_RESOLVERS`` was a closed set of three, so every channel outside it —
+    every plugin channel, and Slack until this release — resolved to ``None``
+    for the life of the process no matter how many identities had been paired
+    to it. A channel now earns resolution by having rows.
+    """
+    existing = _RESOLVERS.get(channel)
+    if existing is not None:
+        return existing
+    created = _resolve_generic(channel)
+    _RESOLVERS[channel] = created
+    return created

@@ -32,6 +32,7 @@ __all__ = [
     "effective_value",
     "env_name_in_use",
     "file_value",
+    "is_configured",
     "resolve",
     "running_env_value",
     "settings_block",
@@ -136,3 +137,37 @@ def resolve(record: dict[str, Any]) -> tuple[Any, str, str]:
 
         return effective_value(record), SOURCE_FILE, str(config_yaml_path())
     return effective_value(record), SOURCE_DEFAULT, "declared default"
+
+
+def is_configured(field_path: str) -> bool:
+    """Whether ``group.field`` was configured by somebody, or just defaulted.
+
+    "Was this value chosen?" is a different question from "what is this value?",
+    and a control that cannot tell them apart is a control that mistakes a
+    default for a decision. The case this exists for: a channel access mode of
+    ``pairing`` may be the operator naming it, or the declared default -- and a
+    compatibility clause that downgrades the declared default must not also
+    downgrade the explicit choice. Deciding that on the resolved *value* is how
+    an operator ends up with a surface open that they closed by name.
+
+    An empty string counts as NOT configured, unlike
+    :func:`env_name_in_use`, which treats ``NAME=`` as an operator deliberately
+    blanking a string (the right rule for ``ROBOTHOR_AI_DOMAIN``). For an
+    enumerated field, blank names no member of the enumeration, so it is the
+    absence of a choice rather than a choice of nothing.
+
+    Returns False for a field name that is not declared -- a caller asking about
+    a field that does not exist has not been told about a configured one.
+    """
+    from robothor.settings.registry import field_index
+
+    record = next(
+        (r for r in field_index().values() if r["field"] == field_path),
+        None,
+    )
+    if record is None:
+        return False
+    _value, source, _detail = resolve(record)
+    if source == SOURCE_DEFAULT:
+        return False
+    return str(effective_value(record) or "").strip() != ""

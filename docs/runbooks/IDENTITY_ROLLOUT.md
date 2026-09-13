@@ -189,6 +189,104 @@ robothor user link-face --label LABEL --person-id PERSON_ID
   NOT EXISTS`); no live behavior change until `robothor user link-face` is
   actually run.
 
+## Channel access policy and pairing (migration 118)
+
+The three flags above decide what a *resolved* identity may do. A fourth
+question sits in front of them — may an **unresolved** sender get a run at all —
+and it is not a flag ladder but a per-channel mode:
+`ROBOTHOR_TELEGRAM_ACCESS`, `ROBOTHOR_SLACK_ACCESS`, and
+`ROBOTHOR_CHANNEL_ACCESS_DEFAULT` for anything else, each one of
+`pairing | allowlist | open`.
+
+**Nothing about Telegram changes on upgrade.** `telegram_access` defaults to
+`open`, which is the compatibility default and is stated as such in the
+setting's own description: under `open` the `_resolve_user` ladder and the
+closed-onboarding refusal stay in charge byte-for-byte, including the
+default-chat `owner` fabrication and the group-chat `user` fabrication.
+`ROBOTHOR_TELEGRAM_ROLE_GATES` semantics are untouched, and
+`_sender_is_owner`/`_check_owner_gate` are not on this path at all.
+
+**What `ROBOTHOR_TELEGRAM_ACCESS=pairing` actually closes.** All three surfaces:
+a private chat, a group chat, and the operator's own `default_chat_id`. Only a
+sender with a `tenant_users` row runs. Both fabrications are skipped, because
+each of them hands an unregistered sender a working role — `user` maps to
+`("user", "*", "allow")`, i.e. every tool — and a setting that closed one surface
+of three while this runbook said it closed the channel would be worse than no
+setting.
+
+Two consequences to plan for:
+
+- **The owner escape hatch still applies.** `pairing` honours
+  `ROBOTHOR_ALLOW_UNREGISTERED_OWNER_FALLBACK=1` exactly as `role_gates=enforce`
+  does. On a fresh install with no owner row, that flag is what stops you closing
+  yourself out of your own bot. Register yourself (`robothor user add`) and then
+  remove it.
+- **Telegram group chats get chattier, not quieter.** An unregistered group
+  sender is answered with the ordinary "not open for self-registration"
+  sentence — never a code, since a code posted in a shared room is a code anyone
+  in the room can carry to you. Telegram replies rather than staying silent
+  because its handler sends whatever `_handle_unregistered_sender` returns and
+  `message.answer("")` is an API error; Slack, whose call site can simply not
+  call `say`, **is** silent in a room. The reply is rate-limited to three per
+  sender per hour, and the operator notification to one.
+
+**Slack does change, and the one compatibility clause is deliberate.**
+`slack_access` defaults to `pairing`, but an instance that has
+`ROBOTHOR_SLACK_ALLOWED_USERS`/`_CHANNELS` set and has *not* named a mode keeps
+running under `allowlist` and logs a warning saying so at start. Silently
+overriding a configured allowlist with `pairing` would lock out everyone on that
+list the moment this released — an availability regression delivered as a
+security improvement.
+
+The clause turns on whether `ROBOTHOR_SLACK_ACCESS` was **configured**, not on
+what it resolves to, so setting it explicitly always wins. That distinction is
+load-bearing and was wrong once: deciding it on the resolved value meant an
+operator who set `ROBOTHOR_SLACK_ACCESS=pairing` while a stale
+`ROBOTHOR_SLACK_ALLOWED_CHANNELS` was still exported got `allowlist` — and
+`_authorized` is user-**OR-channel**, so every unknown member of the workspace
+posting in that leftover channel drove the main agent. If you set the mode to
+`pairing`, the allowlist variables are ignored; delete them anyway, so the next
+person reading the unit file is not misled.
+
+Rollout order for a surface you want closed:
+
+1. Set the mode to `pairing` and restart the engine.
+2. Pair yourself first: message the bot from the account you use, then
+   `genus channel access approve <channel> <code> --user <your user id>`.
+   Confirm with `genus channel access list <channel>` before telling anyone
+   else to try it.
+3. A known identity short-circuits every mode, so people already bound are
+   never asked to re-pair. On Telegram "already bound" means a `tenant_users`
+   row, which is what `lookup_user` reads — a Telegram approval writes both
+   that row and the `user_channel_identities` mirror for exactly this reason,
+   and moves `tenant_users.user_id` when a native id is re-paired to a
+   different person.
+
+**Staleness after a decision.** Approve/deny/revoke write a row from whichever
+process ran the command, and the engine caches what it believes about a sender
+for 60 s (`identity.resolvers`) or **300 s** (`engine.users`, which is the one
+Telegram reads). Both the bridge routes and the CLI therefore finish by posting
+`/api/admin/identities/reload` to the engine, best effort — if the engine is
+down or restarting the decision still stands and the old window applies. When a
+revoke looks like it did not take, check the engine log for a refused reload
+before assuming the row is wrong.
+
+**Roles.** `viewer` is the default, and deliberately so: the seeded `member`
+policy is `("member", "*", "allow")` and migration 088 narrows it only for the
+`__default__` tenant, so a pairing capped at `member` granted every tool on any
+other tenant. Approve with `--role member` when you mean it, after checking
+`role_permissions` for your tenant.
+
+Migration 118 is additive (two new tables, `CREATE TABLE IF NOT EXISTS`, RLS in
+the permissive-when-unbound shape of 081/106). Nothing changes behaviour until a
+mode is set to `pairing`. Full rules: `docs/channels/access.md`.
+
+**The invariant to keep in mind when operating this:** a channel message can
+never approve a pairing. If someone messages the bot asking you to approve
+their pairing, that request tells you nothing — approve only after confirming
+out of band who they are, because the message and the code came from the same
+place.
+
 ## Architecture
 
 See `docs/SYSTEM_ARCHITECTURE.md` → "Cross-System Identity" for the short
