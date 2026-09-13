@@ -104,13 +104,23 @@ required check fails, nothing is written and it exits 1 naming the check, so
 `--dry-run` prints the plan alone; `--json` emits it, every step's result and
 the first-run URL as one document on stdout.
 
-Then open the link `init` printed — `http://127.0.0.1:3004/setup?token=…`. It is
-single-use, expires in 30 minutes, and is the only way into a fresh instance:
-there is no account yet, so the sign-in page has nothing to offer. The wizard
-creates your operator account, takes one provider key (and tests it for real),
-installs your first agents, and leaves you in the chat. Lost the link, or set
-the box up headless? `genus auth setup-link` mints another. Once setup is done
-`/setup` answers 404 for good.
+`genus init` ends by printing a single-use link —
+`http://127.0.0.1:3004/setup?token=…`, good once, for 30 minutes. It is the only
+way into a fresh instance: no account exists yet, so the sign-in page has
+nothing to offer. The wizard behind it creates your operator account, takes one
+provider key (and tests it for real), installs your first agents, and leaves you
+in the chat. `genus auth setup-link` mints another if you lose it, and once
+setup is done `/setup` answers 404 for good.
+
+**That link needs the dashboard, which the wheel does not carry.** The four
+lines above install the `robothor` package: the engine and the orchestrator, not
+the Next.js dashboard that serves `/setup` nor the bridge that serves the routes
+behind it. `genus init` also prints the two commands that start what it *did*
+install. For a browser wizard, use `--substrate compose` below — it brings all
+four services — or run from a checkout, where the systemd units serve the
+dashboard and the bridge from the source tree.
+[docs/quickstart.md](docs/quickstart.md#start-the-services) has the ports, the
+commands and the `genusos[api]` extra.
 
 Two substrates are selectable. `--substrate local` (the default, above) runs the
 platform on this machine against a local PostgreSQL. `--substrate compose` runs

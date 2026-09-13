@@ -122,8 +122,9 @@ There is no floating tag to chase, so an upgrade is a one-line edit and one
 `up -d`. Four steps, in this order:
 
 ```bash
-# 1. Name the release you are moving to. No `latest` exists to pull by accident.
-sed -i 's/^GENUS_IMAGE_TAG=.*/GENUS_IMAGE_TAG=v1.70.0/' genus.env  # the release you are moving TO
+# 1. Name the release you are moving to -- a real tag from the releases page.
+#    There is no `latest` to pull by accident.
+sed -i 's/^GENUS_IMAGE_TAG=.*/GENUS_IMAGE_TAG=vX.Y.Z/' genus.env
 
 # 2. Pull it before anything stops, so a bad tag fails while the old stack is up.
 docker compose --env-file ./genus.env \
@@ -258,9 +259,15 @@ the unit rather than assuming:
 | `EnvironmentFile=-/run/robothor/secrets.env` | yes | yes | yes | yes |
 | `Requires=robothor-secrets.service` | yes | yes | yes | yes |
 
-The orchestrator's two exceptions are deliberate and its own comments say why:
-`KillMode=mixed` sends `SIGTERM` to uvicorn itself rather than to the whole
-group, and `Restart=on-failure` keeps a clean shutdown from being restarted.
+The orchestrator's `KillMode=mixed` is the one exception the unit explains for
+itself: it sends `SIGTERM` to uvicorn directly rather than to the whole cgroup,
+because under the default mode every stop timed out. Its `Restart=on-failure`
+carries no rationale anywhere in the tree — the observable difference is simply
+that a **clean** exit is not restarted there, where the other three restart
+whatever the exit status. Its `restart-forever.conf` drop-in also sets
+`StartLimitIntervalSec=0`, so a crash loop is never rate-limited into a
+permanently stopped service.
+
 Every unit has the secrets dependency, which is the one that must never be
 optional — a bridge with no shared SSO secret is worse than a bridge that is
 not running.
@@ -635,9 +642,13 @@ calendar watch and briefings, `full` is the whole catalogue. `genus init
 - [ ] PostgreSQL: enable SSL for remote connections
 - [ ] Redis: set a password if exposed beyond localhost
 - [ ] Redis: set `maxmemory` and `appendonly yes` for durability
-- [ ] Ollama: confirm the models are there and the GPU is used — `ollama ps` after a
-      generation call (`ollama run qwen3:8b`); `ollama run` on an embedding model
-      generates nothing
+- [ ] Ollama: confirm the two required models are pulled — `ollama list` should show
+      `qwen3-embedding:0.6b` and `Qwen3-Reranker-0.6B:F16`, which are what
+      `genus init` installs and what memory search needs
+- [ ] Ollama: confirm work is landing where you expect — `ollama ps` lists what is
+      loaded and where it is running. `ollama run` on an embedding model generates
+      nothing, so use the generation model for that check *if* you pulled it (it is
+      an optional multi-gigabyte model, not one of the two above)
 - [ ] Run `genus doctor` and clear every `required` failure (exit 0)
 - [ ] Run `genus migrate --status` and confirm no drift and nothing pending
 - [ ] Set up log rotation for `/var/log/robothor/`
@@ -762,7 +773,8 @@ path below is wherever you pointed the workspace:
 
 ```
 /opt/robothor/                        # the workspace ($ROBOTHOR_WORKSPACE): brain/, docs/agents/, .robothor/
-/etc/robothor/robothor.env            # unit environment (mode 640)
+/etc/robothor/robothor.env            # unit environment; the install step above
+                                      # sets it 640, nothing enforces that
 /run/robothor/secrets.env             # tmpfs, 0600, written by robothor-secrets.service
 /run/robothor/restart-requests/       # 0700; the filename is the authorization
 /var/log/robothor/                    # logs

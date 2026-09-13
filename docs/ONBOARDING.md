@@ -12,10 +12,10 @@ Before speaking, check these signals:
 | Python 3.11+ | `python3 --version` | Runtime ready |
 | Docker | `docker --version` | Docker mode available |
 | Package installed | `python3 -c "import robothor"` | pip package present |
-| Workspace exists | `.env` in project root | `robothor init` has run |
-| Vault has secrets | `robothor vault list` | API keys stored |
-| OpenRouter key | vault contains `openrouter/api_key` | LLM access |
-| Telegram tokens | vault has `telegram/bot_token` + `chat_id` | Messaging ready |
+| Workspace exists | `.env` in the workspace | `genus init` has run |
+| Vault has secrets | `genus vault list` | API keys stored |
+| OpenRouter key | vault contains `providers/openrouter/api_key` | LLM access |
+| Telegram tokens | `ROBOTHOR_TELEGRAM_BOT_TOKEN` and `ROBOTHOR_TELEGRAM_CHAT_ID` in the engine's environment — **not** the vault, which nothing reads for this credential | Messaging ready |
 | Identity set | the instance's `brain/IDENTITY.md` is non-placeholder | AI named |
 | Agents installed | `docs/agents/*.yaml` count | Fleet configured |
 | Engine reachable | `curl -s localhost:18800/health` | System running |
