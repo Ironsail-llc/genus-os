@@ -217,9 +217,17 @@ starting the bridge alone answers 503 for ever. Start the orchestrator first.
 
 **The link `genus init` prints is on `:3004`, so it needs the dashboard.** That
 is the Next.js app in `app/` — the compose substrate publishes it, and
-`robothor-app.service` runs it from a checkout. A bare `pip install genusos`
-box has the engine and the API but no dashboard, so nothing answers that link:
-use `--substrate compose`, or run the dashboard from a checkout.
+`robothor-app.service` runs it from a checkout.
+
+The wheel carries the `robothor` package and nothing else: not `app/`, not
+`crm/bridge/`. So a box set up with `pip install genusos` alone has the engine
+and the orchestrator, and neither the dashboard that serves the `/setup` page
+nor the bridge that serves the routes behind it — nothing answers that link.
+Two ways to have a first-run wizard: `--substrate compose`, which brings all
+four services, or a checkout, where the units run the bridge and the dashboard
+from the source tree. (CI proves the wheel path by running the bridge from the
+checkout and walking `/api/setup/*` on `:9100` directly, which is the API the
+page drives — not a route to recommend to a human.)
 
 `systemd` and `helm` are not selectable from `--substrate`; `genus init` says so
 rather than pretending they do not exist. Installing the units on a box the
