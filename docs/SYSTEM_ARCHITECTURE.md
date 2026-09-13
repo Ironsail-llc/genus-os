@@ -991,6 +991,43 @@ an unrecorded delivery is worse than a recorded failure. Production's
 replacement that does not: **a replacement must stamp `run.delivery_status`**
 (the simplest way is to call the original it replaced).
 
+**A thin announce reply falls back to the note the run wrote.** An announce
+agent sometimes finishes its work, saves the result as a CRM note
+(`create_note`, a 1,000+ character body) and then ends the run with a
+meta-confirmation — `"Briefing delivered."`, 19 characters — so the operator
+received a header with nothing under it. `run_finalizer._assess_outcome` has
+always *flagged* that (`Thin announce output (N chars) — likely
+meta-confirmation instead of full content`); `deliver()` now recovers from it.
+When the mode is ANNOUNCE and the final text is thin by the same predicate
+(`is_thin_announce_output` in `robothor/engine/thin_announce.py`, one threshold
+shared with the finalizer — a module gate fails if any other engine file defines
+it), the run's own steps are searched for a `create_note` call whose `body` is
+itself substantial by that threshold, and that body is delivered in place of the
+stub, under the header the channel already adds. With no such note the stub is
+delivered as before and the finalizer's note stands.
+
+The scope is exactly `create_note` steps whose `run_id` **is this run's**: an
+unattributed step (an empty `run_id` on either side) and a note from another run
+are both refused, and another tool's `body` argument is never eligible —
+`gws_gmail_send` has one too, and an outbound email addressed to a third party is
+not the operator's briefing. Where a run wrote several qualifying notes the
+**most recently authored one wins** (the highest `step_number`, not the longest
+body), so an agent that files a long research note and then the short final
+briefing broadcasts the briefing. A `create_note` whose *save failed* still
+supplies its body: the content is agent-authored and addressed to the operator,
+and losing it is the defect this exists to fix.
+
+`delivery_status` is recorded from the receipt exactly as for any other send, and
+the substitution is written to `outcome_notes` **after** the send, from what was
+actually checked — `substituted note body (saved) — delivered`,
+`substituted note body (note save failed) — delivered`, or
+`substituted note body — send failed: <status>` for anything the channel did not
+fully acknowledge (`partial:…`, any `failed:…`). It never reads `delivered` on a
+receipt that did not. One such note is kept per run: a later `deliver()` of the
+same run replaces it rather than appending a second, contradicting one. The note
+is what explains why the delivered text differs from `agent_runs.output_text`,
+which keeps the stub as evidence.
+
 Consumers must treat *only* `delivered` as reach: `analytics.py` counts it for
 the delivery success rate, and `scheduler._maybe_emit_heartbeat_status_ping`
 fires a fallback ping for everything else, so a `partial:` or `failed:` beat

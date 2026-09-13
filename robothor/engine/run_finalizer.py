@@ -49,6 +49,16 @@ from robothor.engine.reasoning_replay import same_model
 # CodeQL py/log-injection: user-controlled values (model names, error
 # messages) must not inject newlines into log output.
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
+
+# The thin-announce threshold and predicate live in one module, which delivery
+# reads too: this file only DETECTS the meta-confirmation, and the recovery
+# (announce the note the run wrote instead) has to agree with it about which
+# runs are thin. Two constants would drift.
+from robothor.engine.thin_announce import (
+    ANNOUNCE_MIN_OUTPUT_CHARS,  # noqa: F401 — re-exported: this was its home
+    NOTE_SEPARATOR,
+    is_thin_announce_output,
+)
 from robothor.engine.tracking import create_step, create_steps_batch, update_run
 
 #: Tools whose work is several sub-agent runs, so the agent-level per-tool cap
@@ -162,11 +172,6 @@ def _resolve_tool_timeout(tool_name: str, configured: int) -> int:
         return max(configured, 600)
     return configured
 
-
-# Announce-mode runs that end with fewer characters than this are flagged
-# as "partial" — almost always a meta-confirmation ("briefing delivered")
-# rather than the real content the agent was supposed to broadcast.
-ANNOUNCE_MIN_OUTPUT_CHARS = 200
 
 # Init timeout: max seconds for agent setup before first LLM call.
 # Agents that hang during warmup, adapter loading, or tool registration
@@ -883,9 +888,8 @@ class RunFinalizationMixin:
             elif not run.output_text or len(run.output_text.strip()) < 10:
                 run.outcome_assessment = "partial"
                 run.outcome_notes = "Completed with minimal output"
-            elif (
-                run.delivery_mode == DeliveryMode.ANNOUNCE
-                and len(run.output_text.strip()) < ANNOUNCE_MIN_OUTPUT_CHARS
+            elif run.delivery_mode == DeliveryMode.ANNOUNCE and is_thin_announce_output(
+                run.output_text
             ):
                 run.outcome_assessment = "partial"
                 run.outcome_notes = (
@@ -912,7 +916,11 @@ class RunFinalizationMixin:
         kinds = payload.get("unsupported") or []
         label = "Unverified" if status == "unverified_claims" else "Failed verification for"
         note = f"{label} claims: {', '.join(str(k) for k in kinds) or 'unknown'}"
-        run.outcome_notes = f"{run.outcome_notes} | {note}" if run.outcome_notes else note
+        # One column, one separator: `loop_guards` and `thin_announce` both join
+        # with "; ", and a second convention here made the same field parse two
+        # ways depending on which writer ran.
+        joined = f"{run.outcome_notes}{NOTE_SEPARATOR}{note}"
+        run.outcome_notes = joined if run.outcome_notes else note
 
     def _persist_run_sync(self, run: AgentRun) -> None:
         """Synchronous DB persistence — update run + batch-insert steps + CRM task."""

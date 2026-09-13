@@ -58,6 +58,13 @@ CAPS = {
     "robothor/engine/telegram_handlers.py": 1293,
     "robothor/engine/telegram_plan_mode.py": 900,
     "robothor/engine/run_finalizer.py": 1100,
+    # 937 (2026-09-13): every module the delivery path runs through was capped
+    # except the one that decides delivery. It was uncapped when the
+    # thin-announce fallback landed, so nothing but review stood between that
+    # feature and a god-object — the same gap `deliver()` itself had, which is
+    # why the fallback and the send are both helpers now rather than more
+    # inline branches.
+    "robothor/engine/delivery.py": 950,
     "robothor/engine/run_lifecycle.py": 800,
     "robothor/engine/run_llm_calls.py": 450,
     "robothor/engine/tool_admission.py": 400,

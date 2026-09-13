@@ -156,11 +156,6 @@ def _resolve_tool_timeout(tool_name: str, configured: int) -> int:
     return configured
 
 
-# Announce-mode runs that end with fewer characters than this are flagged
-# as "partial" — almost always a meta-confirmation ("briefing delivered")
-# rather than the real content the agent was supposed to broadcast.
-ANNOUNCE_MIN_OUTPUT_CHARS = 200
-
 # Init timeout: max seconds for agent setup before first LLM call.
 # Agents that hang during warmup, adapter loading, or tool registration
 # are killed immediately.  Prevents the "stuck in initialization"
