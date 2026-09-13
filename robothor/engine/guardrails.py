@@ -180,10 +180,12 @@ _PLACEHOLDER_VALUES = frozenset(
 _ESCAPE_EDGE = re.compile(r"^(?:\\[nrt])+|(?:\\[nrt])+$")
 
 #: A value whose secret material has been ELIDED: `ghp_...`, `sk-***********`,
-#: `Field(...`, `token…`. Real credential formats are drawn from base64/base62
-#: alphabets, so a run of two or more dots or asterisks — or an ellipsis
-#: character — is the author saying "the value goes here", never the value.
-_ELIDED_VALUE = re.compile(r"\.{2,}|\*{2,}|…")
+#: `Field(...`, `token…`. THREE or more, not two: `*` is a standard symbol in
+#: a generated password and `..` occurs inside real key material, so a pair
+#: exempted secrets it had no business exempting (`P4ss**w0rd**X9K2`,
+#: `a9f3..b2c1d0e5f4a8b7`). Every elision an author actually writes is an
+#: ellipsis — three dots, a row of stars, or the character itself.
+_ELIDED_VALUE = re.compile(r"\.{3,}|\*{3,}|…")
 
 #: Type, schema and label words. An assignment whose right-hand side is one of
 #: these is a DECLARATION (`api_key: "SecretStr"`, `access-token:
@@ -241,18 +243,34 @@ _TYPE_AND_SCHEMA_WORDS = frozenset(
 
 #: `ACME_API_PASSWORD`, i.e. an env-var NAME. A `.env.example` or a docs
 #: listing is a column of these, and `str(payload)` turns the column into one
-#: line, so the name on the NEXT line becomes this one's "value". Segments are
-#: bounded at 24 characters so a long random token (a JWT segment is 36+)
-#: cannot pass as an identifier.
-_ENV_VAR_NAME = re.compile(r"^[A-Z][A-Z0-9]{0,23}(?:_[A-Z0-9]{1,23})+$")
+#: line, so the name on the NEXT line becomes this one's "value".
+#:
+#: What separates a name from uppercase KEY MATERIAL is where the digits sit:
+#: a real env-var name is words, optionally numbered at the end of a word
+#: (`OPENROUTER_API_KEY_2`, `S3_BUCKET`), while key material interleaves them
+#: (`X9K2M_4TQ7P_ZR31_WD8V`, `A7F3_B2C1_D0E5_F4A8`, `JBSWY3DPEHPK3PXP_…`). A
+#: length bound does not separate them — all of those fit inside any bound a
+#: name also fits inside — so the shape is what this matches.
+_ENV_VAR_NAME = re.compile(r"^[A-Z]+[0-9]{0,2}(?:_(?:[A-Z]+[0-9]{0,2}|[0-9]{1,3}))+$")
 
 #: `settings.db_password`, `config.get` — a reference to where the credential
 #: lives, which is exactly what an agent is supposed to be able to report.
-_ATTRIBUTE_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,23}(?:\.[A-Za-z_][A-Za-z0-9_]{0,23})+$")
+#:
+#: LOWERCASE only. Accepting mixed case here matched any unquoted value of two
+#: or more dot-separated chunks, which is also the shape of a JWT
+#: (`eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI5OSJ9.k3Qm…`) and of any random secret
+#: that happens to contain a dot (`Hj3k92mQx7.Zr41Tn8Pv`). An attribute path
+#: in the code an agent reads is snake_case.
+_ATTRIBUTE_PATH = re.compile(r"^[a-z_][a-z0-9_]{0,23}(?:\.[a-z_][a-z0-9_]{0,23})+$")
 
-#: `Field(`, `os.getenv(` — a call, with its arguments cut off by the value
-#: pattern's own `)` exclusion.
-_CALL_REFERENCE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,40}\($")
+#: `Field(`, `os.getenv(` — a call. No `$` anchor: the value pattern excludes
+#: `)` but not `(` or `=`, so a call WITH arguments arrives as
+#: `Field(repr=False` and an anchored pattern stopped one character short of
+#: recognising it. That miss was not merely a warning: the redactor rewrote
+#: `providerReference: SecretStr = Field(repr=False)` to
+#: `providerReference: SecretStr=[REDACTED: credential])`, handing an agent
+#: syntactically broken Python for a line holding no credential at all.
+_CALL_REFERENCE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,40}\(")
 
 #: A value with exactly one character class and no more characters than an
 #: ordinary English word is not key material — `required`, `undefined`,

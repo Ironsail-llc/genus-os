@@ -130,6 +130,11 @@ FALSE_POSITIVES: list[tuple[str, str, object]] = [
     ("name_reference", "read_file", _out("password = DB_PASSWORD_FILE")),
     ("name_reference", "read_file", _out("ACME_API_PASSWORD=\nACME_API_USER=\n")),
     ("name_reference", "read_file", _out("password = settings.db_password")),
+    # A call with arguments. The value pattern excludes `)` but not `(` or
+    # `=`, so the capture is `Field(repr=False` — a call reference that stops
+    # one character short of being recognised as one.
+    ("name_reference", "read_file", _out("providerReference: SecretStr = Field(repr=False)")),
+    ("name_reference", "read_file", _out("api_secret: str = Field(default=None)")),
 ]
 
 #: Shapes that already pass. Pinned so a future widening cannot reintroduce
@@ -200,25 +205,81 @@ class TestTheEscapedNewlineIsNotPartOfTheName:
 
 # ─────────────────────────── true positives ───────────────────────────
 
-TRUE_POSITIVES: list[tuple[str, object]] = [
-    ("github token in a file", _out(f"GITHUB_TOKEN={FAKE_GH_TOKEN}\n")),
-    ("openai key assigned", _out(f'api_key = "{FAKE_OPENAI_KEY}"')),
-    ("slack bot token", _out(f"SLACK_BOT_TOKEN={FAKE_SLACK_TOKEN}\n")),
-    ("aws access key", _out(f"aws_secret_access_key = {FAKE_AWS_KEY}\n")),
-    ("mixed-class password", _out("password=Tr0ub4dor3-staging-99x")),
-    ("mixed-class token", _out("access_token=9f8Ac21bD40eF7g8H1jK3mN5pQ7rS9tU")),
-    ("json credential", _out('{"db_password": "s3cr3t-staging-99"}')),
-    ("typed assignment", _out('password: "SecretStr" = "hunter2hunter2ab"')),
-    ("short but mixed", _out('client_password = "s3cr3tpw9"')),
+#: (label, payload, the value that must not survive). The third element is
+#: what makes the redaction assertion below generic: every row states its own
+#: secret rather than the test carrying a hand-maintained list that drifts
+#: away from the corpus it is supposed to cover.
+TRUE_POSITIVES: list[tuple[str, object, str]] = [
+    ("github token in a file", _out(f"GITHUB_TOKEN={FAKE_GH_TOKEN}\n"), FAKE_GH_TOKEN),
+    ("openai key assigned", _out(f'api_key = "{FAKE_OPENAI_KEY}"'), FAKE_OPENAI_KEY),
+    ("slack bot token", _out(f"SLACK_BOT_TOKEN={FAKE_SLACK_TOKEN}\n"), FAKE_SLACK_TOKEN),
+    ("aws access key", _out(f"aws_secret_access_key = {FAKE_AWS_KEY}\n"), FAKE_AWS_KEY),
+    ("mixed-class password", _out("password=Tr0ub4dor3-staging-99x"), "Tr0ub4dor3-staging-99x"),
+    (
+        "mixed-class token",
+        _out("access_token=9f8Ac21bD40eF7g8H1jK3mN5pQ7rS9tU"),
+        "9f8Ac21bD40eF7g8H1jK3mN5pQ7rS9tU",
+    ),
+    ("json credential", _out('{"db_password": "s3cr3t-staging-99"}'), "s3cr3t-staging-99"),
+    ("typed assignment", _out('password: "SecretStr" = "hunter2hunter2ab"'), "hunter2hunter2ab"),
+    ("short but mixed", _out('client_password = "s3cr3tpw9"'), "s3cr3tpw9"),
     # One character class, but far too long to be a schema word or a label:
     # the entropy rule is bounded at 12 characters for exactly this reason.
-    ("long passphrase", _out("password=correcthorsebatterystaple")),
-    ("private key", _out("-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n")),
+    (
+        "long passphrase",
+        _out("password=correcthorsebatterystaple"),
+        "correcthorsebatterystaple",
+    ),
+    (
+        "private key",
+        _out("-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n"),
+        "-----BEGIN RSA PRIVATE KEY-----",
+    ),
+    # ── The shapes the rejection rules sit next to. ──
+    #
+    # Every unquoted row above carries a mixed-class value that no rule even
+    # looks at, so the rules could be widened a long way and the corpus would
+    # stay green — the suite would be certifying the accepted losses by
+    # omission, which is this project's own recurring failure (a control with
+    # tests asserting its inert state was correct). These rows put a real
+    # secret INSIDE each rule's reach, so widening one reds a named test.
+    #
+    # Unquoted and all-caps — what `_ENV_VAR_NAME` must NOT swallow. Real
+    # env-var names put their digits at the end of a word (`..._KEY_2`); key
+    # material interleaves them.
+    ("uppercase key material", _out("password=X9K2M_4TQ7P_ZR31_WD8V"), "X9K2M_4TQ7P_ZR31_WD8V"),
+    ("grouped hex key", _out("api_key: A7F3_B2C1_D0E5_F4A8"), "A7F3_B2C1_D0E5_F4A8"),
+    ("base32 seed", _out("secret=JBSWY3DPEHPK3PXP_MZXW6YTB"), "JBSWY3DPEHPK3PXP_MZXW6YTB"),
+    (
+        "long uppercase secret",
+        _out("password=ABCDEFGHIJ_KLMNOPQRST_UVWXYZ0123"),
+        "ABCDEFGHIJ_KLMNOPQRST_UVWXYZ0123",
+    ),
+    # Unquoted and dotted — what `_ATTRIBUTE_PATH` must NOT swallow. An
+    # attribute path is lowercase snake_case; a JWT and a random secret that
+    # happens to contain a dot are not.
+    (
+        "jwt-shaped token",
+        _out("auth_token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI5OSJ9.k3Qm7Zt4Rv8Nw2Lp"),
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI5OSJ9.k3Qm7Zt4Rv8Nw2Lp",
+    ),
+    ("a secret containing a dot", _out("password: Hj3k92mQx7.Zr41Tn8Pv"), "Hj3k92mQx7.Zr41Tn8Pv"),
+    # Doubled punctuation inside a value — what `_ELIDED_VALUE` must NOT read
+    # as "the author elided the value". `*` is a standard generated-password
+    # symbol; an elision marker is three or more.
+    ("asterisks inside a password", _out("password=P4ss**w0rd**X9K2"), "P4ss**w0rd**X9K2"),
+    ("two dots inside a key", _out("password=a9f3..b2c1d0e5f4a8b7"), "a9f3..b2c1d0e5f4a8b7"),
+    (
+        "two dots inside a token",
+        _out("api_key: 9q2m..7zt4rv8nw3xk1bd"),
+        "9q2m..7zt4rv8nw3xk1bd",
+    ),
     # The same false-positive shapes with a REAL value in them: a placeholder
     # earlier in the text must not shield what comes after it.
     (
         "a real key below a placeholder",
         _out(f'api_key = "your-token"\nservice_api_key = "{FAKE_OPENAI_KEY}"\n'),
+        FAKE_OPENAI_KEY,
     ),
     (
         "a real key in a settings class",
@@ -227,21 +288,20 @@ TRUE_POSITIVES: list[tuple[str, object]] = [
             "    ACME_API_PASSWORD: SecretStr = Field(...)\n"
             f'    fallback_api_key: str = "{FAKE_OPENAI_KEY}"\n'
         ),
+        FAKE_OPENAI_KEY,
     ),
 ]
 
+_TP_IDS = [label for label, _p, _s in TRUE_POSITIVES]
+
 
 class TestRealCredentialsStillWarn:
-    @pytest.mark.parametrize(
-        ("label", "payload"), TRUE_POSITIVES, ids=[label for label, _p in TRUE_POSITIVES]
-    )
-    def test_the_warning_still_fires(self, label: str, payload: object) -> None:
+    @pytest.mark.parametrize(("label", "payload", "secret"), TRUE_POSITIVES, ids=_TP_IDS)
+    def test_the_warning_still_fires(self, label: str, payload: object, secret: str) -> None:
         assert _warned("read_file", payload), label
 
-    @pytest.mark.parametrize(
-        ("label", "payload"), TRUE_POSITIVES, ids=[label for label, _p in TRUE_POSITIVES]
-    )
-    def test_publication_is_still_blocked(self, label: str, payload: object) -> None:
+    @pytest.mark.parametrize(("label", "payload", "secret"), TRUE_POSITIVES, ids=_TP_IDS)
+    def test_publication_is_still_blocked(self, label: str, payload: object, secret: str) -> None:
         engine = GuardrailEngine(enabled_policies=["no_secret_publication"])
         r = engine.check_pre_execution(
             "exec",
@@ -251,15 +311,14 @@ class TestRealCredentialsStillWarn:
         )
         assert r.allowed is False, label
 
-    @pytest.mark.parametrize(
-        ("label", "payload"), TRUE_POSITIVES, ids=[label for label, _p in TRUE_POSITIVES]
-    )
-    def test_the_value_never_reaches_the_transcript(self, label: str, payload: object) -> None:
+    @pytest.mark.parametrize(("label", "payload", "secret"), TRUE_POSITIVES, ids=_TP_IDS)
+    def test_the_value_never_reaches_the_transcript(
+        self, label: str, payload: object, secret: str
+    ) -> None:
         """A guardrail that quotes the secret is the leak it exists to stop."""
         engine = GuardrailEngine(enabled_policies=["no_sensitive_data"])
         reason = engine.check_post_execution("read_file", payload).reason or ""
-        for secret in (FAKE_GH_TOKEN, FAKE_OPENAI_KEY, FAKE_SLACK_TOKEN, FAKE_AWS_KEY):
-            assert secret not in reason, label
+        assert secret not in reason, label
 
 
 # ─────────────────────── the redactor agrees ───────────────────────
@@ -293,22 +352,21 @@ class TestTheRedactorLeavesNonCredentialsAlone:
         text = "the runbook documents api_key=ghp_......... as the placeholder"
         assert redact_secrets(text) == text
 
-    @pytest.mark.parametrize(
-        ("label", "payload"), TRUE_POSITIVES, ids=[label for label, _p in TRUE_POSITIVES]
-    )
-    def test_a_real_credential_is_still_redacted(self, label: str, payload: object) -> None:
-        out = str(redact_secrets(payload))
-        for secret in (
-            FAKE_GH_TOKEN,
-            FAKE_OPENAI_KEY,
-            FAKE_SLACK_TOKEN,
-            FAKE_AWS_KEY,
-            "Tr0ub4dor3-staging-99x",
-            "9f8Ac21bD40eF7g8H1jK3mN5pQ7rS9tU",
-            "s3cr3t-staging-99",
-            "hunter2hunter2ab",
-            "s3cr3tpw9",
-            "correcthorsebatterystaple",
+    def test_redaction_never_produces_broken_source(self) -> None:
+        """`providerReference: SecretStr = Field(repr=False)` used to come back
+        as `providerReference: SecretStr=[REDACTED: credential])` — an agent
+        asked to read that module was handed syntactically broken Python, for
+        a line that holds no credential at all."""
+        for line in (
+            "providerReference: SecretStr = Field(repr=False)",
+            "api_secret: str = Field(default=None)",
+            "password: str = Field(default_factory=dict)",
         ):
-            if secret in str(payload):
-                assert secret not in out, f"{label}: {secret} survived redaction"
+            assert redact_secrets(line) == line, line
+
+    @pytest.mark.parametrize(("label", "payload", "secret"), TRUE_POSITIVES, ids=_TP_IDS)
+    def test_a_real_credential_is_still_redacted(
+        self, label: str, payload: object, secret: str
+    ) -> None:
+        out = str(redact_secrets(payload))
+        assert secret not in out, f"{label}: the value survived redaction"

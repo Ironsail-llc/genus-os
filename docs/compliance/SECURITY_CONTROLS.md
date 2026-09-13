@@ -146,31 +146,70 @@ Status meanings:
   output reaches the model.
 - **What does not count as a credential:** the assignment detector judges the
   VALUE, not the name, because a field named after a credential is not a
-  credential. It does not fire when the value is a placeholder (`changeme`,
-  `your-token`, `${VAR}`, `{{ var }}`, `<redacted>`, `***`), when the secret
-  material has been elided (`ghp_...`, `sk-***********`, `Field(...`), when
-  the value is a type or schema word (`str`, `SecretStr`, `string`, `bearer`,
-  `opaque-bearer`, `access-token`), when an unquoted value is an env-var NAME
-  or a reference to one (`DB_PASSWORD_FILE`, `settings.db_password`,
-  `os.getenv(`) — the shape a `.env.example` or a docs listing produces — or
-  when the value has a single character class and is no longer than twelve
-  characters (`required`, `undefined`). Real shapes still fire: a known key
-  format anywhere in the output, and any mixed-class literal of eight or more
-  characters bound to a credential identifier. A single-class value longer
-  than twelve characters is treated as a passphrase and still warns. This was
-  narrowed on 2026-09-13 after 46 warnings in 24 hours on ordinary CRM task
-  text (`list_tasks`, `list_my_tasks`, `read_file`, `search_records`) reached
-  the operator as "Credential exposure flagged this run"; a warning that fires
-  on the word for a thing rather than the thing trains its reader to ignore
-  it. The corpus of both halves is pinned in
-  `robothor/engine/tests/test_credential_detector_false_positives.py`.
+  credential. It does not fire when the value is
+
+  - a placeholder — `changeme`, `your-token`, `${VAR}`, `{{ var }}`,
+    `<redacted>`, `***`;
+  - an elision, meaning three or more dots or asterisks or the ellipsis
+    character — `ghp_...`, `sk-***********`, `Field(...`. Two is not enough:
+    `**` and `..` occur inside real key material;
+  - a type, schema or label word — `str`, `SecretStr`, `string`, `bearer`,
+    `opaque-bearer`, `access-token`;
+  - **unquoted** and shaped exactly like an env-var name, an attribute path or
+    a call — `DB_PASSWORD_FILE`, `settings.db_password`, `Field(`. An env-var
+    name is words with digits only at the end of a word (`OPENROUTER_API_KEY_2`);
+    an attribute path is lowercase snake_case. Uppercase key material that
+    interleaves digits (`X9K2M_4TQ7P_ZR31_WD8V`) and mixed-case dotted values
+    (a JWT) are NOT name-shaped and do fire. A quoted value never reaches this
+    rule;
+  - a single character class and no longer than twelve characters —
+    `required`, `undefined`.
+
+  Everything else fires: a known key format anywhere in the output, and any
+  literal of eight or more characters bound to a credential identifier that is
+  none of the five shapes above — including single-class values longer than
+  twelve characters, which are treated as passphrases. This was narrowed on
+  2026-09-13 after 46 warnings in 24 hours on ordinary CRM task text
+  (`list_tasks`, `list_my_tasks`, `read_file`, `search_records`) reached the
+  operator as "Credential exposure flagged this run"; a warning that fires on
+  the word for a thing rather than the thing trains its reader to ignore it.
+  The corpus of both halves is pinned in
+  `robothor/engine/tests/test_credential_detector_false_positives.py`, and the
+  rule list above is bound to the code by
+  `tests/test_dp03_credential_rules_documented.py`.
 - **Evidence:** `robothor/engine/guardrails.py` and guardrail tests.
 - **Limitations/actions:** Pattern scanning is not DLP, data classification, or
   proof against encoded/contextual leakage. Add organization patterns,
-  integration-level redaction, egress controls, and testing. The narrowing
-  above is a deliberate trade: a credential that is both format-unknown and
-  shaped like one of the ignored classes (a password that is literally the
-  word `undefined`, say) is not detected.
+  integration-level redaction, egress controls, and testing.
+
+  The narrowing above is a deliberate trade, and this is what it costs. Not
+  detected, when the value has no recognisable key format: an **unquoted**
+  value indistinguishable from an env-var name (`SUPER_SECRET_VALUE_42`,
+  `QWERTY9_ZXCVB8_ASDFG7`); an **unquoted** lowercase dotted value
+  indistinguishable from an attribute path (`svc_prod.tok_9q2m.sig_7zt4`); a
+  single-class value of twelve characters or fewer (a twelve-character
+  lowercase password, a nine-digit PIN); and a value that is exactly a type or
+  placeholder word. The structural form of this: **an unquoted, name-shaped
+  value bypasses the assignment detector**, and unquoted is the ordinary shape
+  of a `.env` file — the highest-value artifact this control scans. The same
+  text in quotes is scanned normally.
+
+  Pre-existing gaps this narrowing neither caused nor closed: a value nested
+  one object deeper (`{"password": {"default": "<secret>"}}`) is not matched at
+  all, because the annotation branch may not cross a brace; in
+  `password: <secret> = changeme` the annotation branch consumes the secret and
+  judges the placeholder; and the value span is greedy across an escaped
+  newline, so a name can be attributed to the previous line's variable.
+
+  The narrowing also does not end the false positives. Measured over the
+  repository's own 514,525 tracked source lines: 471 firing lines before,
+  213 after. All of the remainder are false positives, and ordinary prose
+  words longer than twelve characters (`configuration`, `authorization`,
+  `troubleshooting`) still read as values, because the single-class rule is a
+  length threshold and not a judgement about words. Raising the threshold
+  would start hiding real passphrases, and a hand-maintained word list drifts;
+  the follow-up is to measure against the actual warning stream rather than
+  guess at one.
 
 ### DP-04 — Transport and network boundary
 
