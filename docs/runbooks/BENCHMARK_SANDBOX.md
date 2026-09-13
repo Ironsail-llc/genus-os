@@ -237,6 +237,20 @@ parent. Before it existed this query reported the seven shipped opt-outs as
 leaks every night — and a promotion gate that cries wolf nightly is one the
 operator stops reading.
 
+> **Follow-up — these three queries deserve a `slow` integration test.**
+> They are executed as written today, but against a **sqlite fake** of
+> migration 081's policy (`test_benchmark_decontamination.py::
+> TestTheRunbookAuditQueriesActuallyWork`), and `sandbox_suite_lock` is covered
+> against a fake Postgres. Both have been verified by hand on a scratch
+> Postgres with RLS live and a **non-superuser** role — which matters, because
+> a superuser bypasses RLS unconditionally and makes every such probe
+> meaningless (`_apply_tenant_scope` logs about exactly this). A `slow`-marked
+> test that stands up a scratch database, applies 081, creates a
+> `NOSUPERUSER NOBYPASSRLS` role and runs all three blocks plus a real
+> `pg_try_advisory_lock` would make that evidence repeatable instead of
+> resting on one reviewer's database. Until it exists, re-verify by hand
+> before promoting the sandbox past `observe`.
+
 ## What a benchmark run may touch
 
 Read this before changing anything in the harness. The one-line rule:
@@ -387,6 +401,11 @@ a finding, not noise.
 
 Expect these, and do not read them as regressions:
 
+* **An unreadable break-out reads `null`, not `0`.** If the widening or the
+  query fails, `/costs` returns `benchmark_runs` / `benchmark_cost_usd` as
+  `null` with `benchmark_spend_unreadable: true`, and the tracking layer logs
+  an ERROR naming the endpoint. A zero there would mean "this agent ran no
+  benchmarks", which is a different claim from "I could not look".
 * **Benchmark spend is no longer scoped to the owning tenant.** The children
   execute as `benchmark-sandbox`, so the `benchmark_runs` /
   `benchmark_cost_usd` break-out on `/costs`, in fleet health and in

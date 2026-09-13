@@ -1033,3 +1033,148 @@ class TestTheWideningsFailureIsNotReportedAsZero:
         analytics.get_agent_stats("email-analyst", days=1, tenant_id="default")
 
         assert seen == [None], f"the contamination rung was handed {seen}, not None"
+
+
+class TestCostsSurfacesAnUnreadableBreakOut:
+    """`/costs` is where an operator reads benchmark spend, and it was the
+    last place that turned "I could not look" back into "zero".
+
+    `tracking.get_agent_stats` now reports None and logs an ERROR that names
+    this endpoint. `/costs` coerced it straight back with `or 0`, so the
+    endpoint published a number the layer below had explicitly refused to
+    publish — the C2 symptom, one layer up.
+    """
+
+    @staticmethod
+    def _costs_app(stats: dict):
+        from unittest.mock import patch
+
+        from starlette.testclient import TestClient
+
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.health import create_health_app
+
+        config = EngineConfig(
+            bot_token="t",
+            default_chat_id="1",
+            port=18899,
+            tenant_id="acme-instance",
+            workspace=Path("/tmp"),
+            manifest_dir=Path("/tmp"),
+        )
+        app = create_health_app(config)
+        schedules = [{"agent_id": "email-analyst"}]
+        return (
+            TestClient(app),
+            patch("robothor.engine.tracking.list_schedules", return_value=schedules),
+            patch("robothor.engine.tracking.get_agent_stats", return_value=stats),
+        )
+
+    READABLE = {
+        "total_runs": 4,
+        "total_cost_usd": 1.5,
+        "completed": 4,
+        "failed": 0,
+        "timeouts": 0,
+        "avg_duration_ms": 10,
+        "total_input_tokens": 1,
+        "total_output_tokens": 1,
+        "benchmark_runs": 2,
+        "benchmark_cost_usd": 0.75,
+    }
+    UNREADABLE = {**READABLE, "benchmark_runs": None, "benchmark_cost_usd": None}
+
+    def test_a_readable_break_out_is_unchanged(self) -> None:
+        client, p_sched, p_stats = self._costs_app(self.READABLE)
+        with p_sched, p_stats:
+            body = client.get("/costs").json()
+        assert body["benchmark_runs"] == 2
+        assert body["benchmark_cost_usd"] == pytest.approx(0.75)
+        assert body["agents"]["email-analyst"]["benchmark_cost_usd"] == pytest.approx(0.75)
+        assert body.get("benchmark_spend_unreadable") is False
+
+    def test_an_unreadable_break_out_reaches_the_body_as_null(self) -> None:
+        client, p_sched, p_stats = self._costs_app(self.UNREADABLE)
+        with p_sched, p_stats:
+            body = client.get("/costs").json()
+
+        assert body["benchmark_runs"] is None, (
+            "/costs republished a zero the layer below refused to publish"
+        )
+        assert body["benchmark_cost_usd"] is None
+        agent = body["agents"]["email-analyst"]
+        assert agent["benchmark_runs"] is None
+        assert agent["benchmark_cost_usd"] is None
+
+    def test_the_body_says_it_is_unreadable_rather_than_only_implying_it(self) -> None:
+        """A null is easy to read as "nothing". A flag is not."""
+        client, p_sched, p_stats = self._costs_app(self.UNREADABLE)
+        with p_sched, p_stats:
+            body = client.get("/costs").json()
+        assert body.get("benchmark_spend_unreadable") is True
+
+    def test_the_agent_cost_columns_are_untouched(self) -> None:
+        """The break-out failing must not cost the caller its real numbers."""
+        client, p_sched, p_stats = self._costs_app(self.UNREADABLE)
+        with p_sched, p_stats:
+            body = client.get("/costs").json()
+        assert body["total_runs"] == 4
+        assert body["total_cost_usd"] == pytest.approx(1.5)
+        assert body["agents"]["email-analyst"]["total_cost_usd"] == pytest.approx(1.5)
+
+
+class TestTheCostsReadersTolerateNull:
+    """Both shipped readers of `/costs` format the payload themselves. A null
+    that crashes the renderer is not an improvement on a wrong zero."""
+
+    PAYLOAD = {
+        "hours": 24,
+        "total_runs": 4,
+        "total_cost_usd": 1.5,
+        "benchmark_runs": None,
+        "benchmark_cost_usd": None,
+        "benchmark_spend_unreadable": True,
+        "agents": {
+            "email-analyst": {
+                "runs": 4,
+                "total_cost_usd": 1.5,
+                "total_input_tokens": 1,
+                "total_output_tokens": 1,
+                "benchmark_runs": None,
+                "benchmark_cost_usd": None,
+            }
+        },
+    }
+
+    @pytest.mark.asyncio
+    async def test_the_tui_renders_it(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from robothor.tui.commands import cmd_costs
+
+        app = MagicMock()
+        app.client.get_costs = AsyncMock(return_value=self.PAYLOAD)
+        out = await cmd_costs(app, "")
+        assert "email-analyst" in out
+        assert "1.5000" in out
+
+    def test_the_cli_renders_it(self, capsys) -> None:
+        import argparse
+        import json as _json
+        from unittest.mock import MagicMock, patch
+
+        from robothor.cli.engine import cmd_costs
+
+        payload = dict(self.PAYLOAD)
+        payload["agents"] = [{"agent_id": "email-analyst", "total_cost_usd": 1.5}]
+
+        response = MagicMock()
+        response.read.return_value = _json.dumps(payload).encode()
+        response.__enter__ = lambda self: self
+        response.__exit__ = lambda *_a: False
+
+        with patch("urllib.request.urlopen", return_value=response):
+            rc = cmd_costs(argparse.Namespace(hours=24))
+
+        assert rc == 0
+        assert "email-analyst" in capsys.readouterr().out

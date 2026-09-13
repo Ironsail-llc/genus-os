@@ -45,7 +45,11 @@ KNOWN_LARGE: dict[str, int] = {
     # _install_engine_auth, which is what paid for threading the live scheduler
     # onto the signature (POST /api/admin/scheduler/reconcile has to act on
     # THIS process's job registry) instead of raising this number for it.
-    "health.py::create_health_app": 1431,
+    # 1431 -> 1386: the /costs body moved to _cost_breakdown, which is what
+    # paid for reporting an unreadable benchmark break-out as null rather than
+    # as zero spend — a different claim about the fleet, and one this endpoint
+    # was the last place to get wrong.
+    "health.py::create_health_app": 1386,
     "runner.py::execute": 990,  # +7: task_id propagated onto the run at INSERT time
     "runner.py::_run_loop": 775,
     # +12: run/tenant threaded onto the signature, and the do-not-contact
