@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getEngineClient } from "@/lib/engine/server-client";
-import { ensureCanvasPromptInjected, SESSION_KEY } from "@/lib/engine/session-state";
+import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -9,7 +9,7 @@ export async function GET(req: Request) {
   const client = getEngineClient();
 
   try {
-    const result = await client.chatHistory(SESSION_KEY, limit);
+    const result = await client.chatHistory(limit);
 
     // Eagerly inject visual canvas prompt in background while returning history
     ensureCanvasPromptInjected().catch(() => {});

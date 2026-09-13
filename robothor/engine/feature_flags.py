@@ -258,17 +258,22 @@ def per_user_sessions_mode() -> PerUserSessionsMode:
     Unlike the two-var ``*_ENABLED`` + ``*_MODE`` ladders above, this is a
     single env var, ``ROBOTHOR_PER_USER_SESSIONS``, since there's no separate
     subsystem-enabled gate to flip independently of rollout stage. Returns
-    ``"off"`` (default — every caller gets the requested session key
-    unchanged, identical to pre-flag behavior), ``"observe"`` (still return
+    ``"enforce"`` (the DEFAULT since C9 — member callers are isolated onto
+    their own derived session; owner and service callers are unaffected in
+    every mode, see ``chat._effective_session_key``), ``"observe"`` (return
     the requested key unchanged, but log what would have been derived for
-    non-owner/non-service callers), or ``"enforce"`` (member callers are
-    isolated onto their own derived session; owner and service callers are
-    unaffected in every mode — see ``chat._effective_session_key``).
+    non-owner/non-service callers), or ``"off"`` (the escape hatch — every
+    caller gets the requested session key unchanged, identical to pre-flag
+    behavior).
+
+    An unrecognised value lands on ``"enforce"`` rather than ``"off"``: a typo
+    in the operator's environment must not silently re-open the
+    session-ownership hole this flag closes.
     """
-    raw = _resolve_raw("ROBOTHOR_PER_USER_SESSIONS", "off").strip().lower()
+    raw = _resolve_raw("ROBOTHOR_PER_USER_SESSIONS", "enforce").strip().lower()
     if raw in _VALID_PER_USER_SESSIONS_MODES:
         return raw  # type: ignore[return-value]
-    return "off"
+    return "enforce"
 
 
 TelegramRoleGatesMode = Literal["off", "observe", "enforce"]

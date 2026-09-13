@@ -32,11 +32,22 @@ lands with pairing. An implementation raises :exc:`NotImplementedError` rather
 than returning a plausible default, because a channel that answered "yes" to an
 approval prompt nobody saw is worse than one that refuses.
 
-:meth:`Channel.ask` is now live on Telegram and is called by the ``ask_user``
-tool and by ``permission_escalation.PermissionEscalationManager``. It stays
-optional: ``EventBusChannel.ask`` raises, because a sink has nobody to ask, and
-that raise is part of the contract rather than a gap in it — callers catch it
-and fall through to the durable ``agent_questions`` row.
+:meth:`Channel.ask` is now live on Telegram and webchat, and is called by the
+``ask_user`` tool and by ``permission_escalation.PermissionEscalationManager``.
+It stays optional: ``EventBusChannel.ask`` raises, because a sink has nobody to
+ask, and that raise is part of the contract rather than a gap in it — callers
+catch it and fall through to the durable ``agent_questions`` row.
+
+``ask_wants_question_id`` is an OPT-IN extension of that call and deliberately
+NOT part of the protocol. A channel that sets it truthy is additionally passed
+``question_id`` (the ``agent_questions`` row) and ``run_id``;
+``channels/webchat.py`` needs both because it has no inbound socket, so the row
+is its only return path and the run's status sink its only way to reach the
+browser. A channel that does not set it is called with exactly the five
+arguments declared below, which is the whole point: ``TelegramChannel.ask`` and
+``SlackChannel.ask`` accept no ``**kw``, so an unconditional extra kwarg would
+raise ``TypeError``, be caught by ``ask_user._ask_channel`` as "this channel
+cannot ask", and break every Telegram ask with every test still green.
 
 Because they are declared here, ``isinstance(x, Channel)`` means "implements
 every slot including the optional two". The registry deliberately does not gate
@@ -286,6 +297,12 @@ class Channel(Protocol):
         ``NotImplementedError`` is likewise a legitimate outcome and not a bug
         — a sink has nobody to ask — so **every caller must catch it** and fall
         back to whatever it does when no person is reachable.
+
+        A channel whose only return path is the durable ``agent_questions`` row
+        (webchat) sets the class attribute ``ask_wants_question_id = True`` and
+        is then handed ``question_id`` and ``run_id`` as well. That is an opt-in
+        slot, not an addition to this signature: a channel that does not declare
+        it is called with these five arguments and nothing else.
         """
         ...
 

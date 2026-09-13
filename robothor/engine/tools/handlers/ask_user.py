@@ -70,17 +70,22 @@ MAX_OPTIONS = 6
 #: watching.
 INTERACTIVE_TRIGGERS = frozenset({"telegram", "webchat", "slack", "ide"})
 
-#: Which channel answers for which trigger. ``webchat`` is absent on purpose:
-#: there is no webchat channel, and declaring the name before the path exists
-#: is how a registry starts promising surfaces that do not work. A webchat run
-#: gets the durable row and the ``approval_required`` status event instead, and
-#: the Helm answers it through the bridge.
-_CHANNEL_FOR_TRIGGER = {"telegram": "telegram", "slack": "slack"}
+#: Which channel answers for which trigger. ``webchat`` joined with C9: the
+#: channel exists now, so a Helm run WAITS — the question goes out over the
+#: run's SSE stream, the browser answers the durable row through the bridge, and
+#: the channel learns by polling the row. Before that the row and the status
+#: event went out and only a later turn could see the answer.
+_CHANNEL_FOR_TRIGGER = {"telegram": "telegram", "slack": "slack", "webchat": "webchat"}
 
 #: ``trigger_detail`` prefixes that carry a Telegram chat id. Every interactive
 #: Telegram entry point writes one of these; see ``engine/telegram.py`` and
 #: ``engine/telegram_plan_mode.py``.
 _CHAT_DETAIL_PREFIXES = frozenset({"chat", "plan", "plan-exec", "plan-revise"})
+
+#: The segment of a derived webchat session key that precedes the member's
+#: ``user_accounts.id`` (``agent:{agent}:user:{id}``, see
+#: ``chat.derive_user_session_key``).
+_WEBCHAT_USER_SEGMENT = ":user:"
 
 
 def bounded_timeout(requested: Any) -> float:
@@ -104,6 +109,27 @@ def _telegram_target(trigger_detail: str) -> str:
     head = (trigger_detail or "").split("|", 1)[0]
     prefix, _, value = head.partition(":")
     return value if prefix in _CHAT_DETAIL_PREFIXES else ""
+
+
+def _webchat_target(ctx: ToolContext, trigger_detail: str) -> str:
+    """The member's ``user_accounts.id`` a webchat ask is aimed at, or "".
+
+    The resolved identity first — it is DB-verified — then the session key in
+    the trigger detail, which carries the same id because the derivation put it
+    there. The owner's shared key (``agent:main:primary``) names no user, so it
+    yields "": inventing one would aim a delivery at somebody who was never
+    asked.
+    """
+    identity = getattr(ctx, "identity", None)
+    if identity is not None and getattr(identity, "verified", False):
+        account = str(getattr(identity, "user_account_id", "") or "")
+        if account:
+            return account
+    head = (trigger_detail or "").split("|", 1)[0]
+    prefix, _, key = head.partition(":")
+    if prefix != "webchat" or _WEBCHAT_USER_SEGMENT not in key:
+        return ""
+    return key.rsplit(_WEBCHAT_USER_SEGMENT, 1)[1]
 
 
 def _addressee(ctx: ToolContext, trigger: str) -> str:
@@ -157,7 +183,11 @@ async def _handle_ask_user(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 
     trigger_detail = str((run or {}).get("trigger_detail") or "")
     channel_name = _CHANNEL_FOR_TRIGGER.get(trigger, "")
-    target = _telegram_target(trigger_detail) if channel_name == "telegram" else ""
+    target = ""
+    if channel_name == "telegram":
+        target = _telegram_target(trigger_detail)
+    elif channel_name == "webchat":
+        target = _webchat_target(ctx, trigger_detail)
     addressee = _addressee(ctx, trigger)
     timeout = bounded_timeout(args.get("timeout_seconds"))
 
@@ -207,7 +237,7 @@ async def _handle_ask_user(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     )
 
     answer, delivered, waited = await _ask_channel(
-        channel, question, options, timeout, target, addressee
+        channel, question, options, timeout, target, addressee, asked.id, run_id
     )
     if answer is None:
         return _unanswered(asked.id, waited, delivered=delivered)
@@ -236,6 +266,8 @@ async def _ask_channel(
     timeout: float,
     target: str,
     addressee: str,
+    question_id: str = "",
+    run_id: str = "",
 ) -> tuple[str | None, bool, float]:
     """Put the question to ``channel``. Returns ``(answer, delivered, waited)``.
 
@@ -256,10 +288,21 @@ async def _ask_channel(
     """
     if channel is None:
         return None, False, 0.0
+    # A CAPABILITY PROBE, not an unconditional kwarg. The webchat channel has no
+    # inbound socket, so its only return path is the durable row — it declares
+    # ``ask_wants_question_id`` and is handed the row id and the run to emit on.
+    # Telegram's and Slack's ``ask`` signatures take no ``**kw``, so passing
+    # these to them would raise ``TypeError``, be swallowed by the except below
+    # as "the channel could not ask", and silently break every Telegram ask.
+    extra: dict[str, Any] = (
+        {"question_id": question_id, "run_id": run_id}
+        if getattr(channel, "ask_wants_question_id", False)
+        else {}
+    )
     started = time.monotonic()
     try:
         answer = await channel.ask(
-            question, options, timeout=timeout, target=target, addressee=addressee
+            question, options, timeout=timeout, target=target, addressee=addressee, **extra
         )
     except NotImplementedError:
         logger.info(
