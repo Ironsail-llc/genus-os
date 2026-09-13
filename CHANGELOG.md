@@ -1,3 +1,13 @@
+## [1.70.0](https://github.com/Ironsail-llc/genus-os/compare/v1.69.2...v1.70.0) (2026-09-13)
+
+### Features
+
+* **channels:** protocol, registry, telegram wrapper and delivery by channel ([#517](https://github.com/Ironsail-llc/genus-os/issues/517)) ([46d5f46](https://github.com/Ironsail-llc/genus-os/commit/46d5f46d7a69fb91b9d673185a880265ba062176))
+
+### Documentation
+
+* install, doctor and configuration pages point at one path ([#516](https://github.com/Ironsail-llc/genus-os/issues/516)) ([0c8a93c](https://github.com/Ironsail-llc/genus-os/commit/0c8a93cc3dda766b3d6d3e5cdc09409f8f5d7397))
+
 ## [1.69.2](https://github.com/Ironsail-llc/genus-os/compare/v1.69.1...v1.69.2) (2026-09-12)
 
 ### Bug Fixes
