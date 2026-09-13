@@ -1,3 +1,9 @@
+## [1.74.0](https://github.com/Ironsail-llc/genus-os/compare/v1.73.0...v1.74.0) (2026-09-13)
+
+### Features
+
+* **channels:** access policy, pairing, generic identity table and bridge routes ([#521](https://github.com/Ironsail-llc/genus-os/issues/521)) ([df24d47](https://github.com/Ironsail-llc/genus-os/commit/df24d477006a6aa2369930b2ce16a33b22973704))
+
 ## [1.73.0](https://github.com/Ironsail-llc/genus-os/compare/v1.72.0...v1.73.0) (2026-09-13)
 
 ### Features
