@@ -42,7 +42,7 @@ import re
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import Any
 from urllib.parse import quote
 
 import yaml
@@ -58,17 +58,12 @@ from robothor.templates.safety import (
     validate_identifier,
     workspace_path,
 )
+from routers import _manifest_validation as validation
 from routers._audit import audited
 from routers._engine_client import engine_request
 from routers._operator import require_operator
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
 logger = logging.getLogger(__name__)
-
-#: What every validator here answers: ``(blocking errors, advisory warnings)``.
-_IssueSplit: TypeAlias = tuple[list[dict[str, str]], list[dict[str, str]]]
 
 
 def _require_primary_tenant(tenant_id: str = Depends(get_tenant_id)) -> None:
@@ -319,15 +314,28 @@ def _snapshot(agent_id: str) -> None:
 # ─── Reading ─────────────────────────────────────────────────────────
 
 
+def _block(document: dict[str, Any], key: str) -> dict[str, Any]:
+    """One nested block of a manifest, or ``{}`` if it is not a mapping.
+
+    ``document.get(key) or {}`` is the version that looks right and is not: a
+    FALSY non-mapping (``[]``, ``""``) is caught by the ``or`` and a truthy one
+    (``"0 9 * * *"``, ``[announce]``) sails straight into ``.get()``. That is an
+    `AttributeError` out of a route, and a manifest whose `model:` is a bare
+    string is exactly the kind a human hand-edited and needs the editor for.
+    """
+    value = document.get(key)
+    return value if isinstance(value, dict) else {}
+
+
 def _summary(document: dict[str, Any]) -> dict[str, Any]:
     """The fields one fleet-list row shows.
 
     A whole manifest per row would put every agent's tool list, warmup files
     and delivery target into a single response the list view never reads.
     """
-    schedule = document.get("schedule") or {}
-    delivery = document.get("delivery") or {}
-    model = document.get("model") or {}
+    schedule = _block(document, "schedule")
+    delivery = _block(document, "delivery")
+    model = _block(document, "model")
     return {
         "id": str(document.get("id") or ""),
         "name": document.get("name") or "",
@@ -378,126 +386,10 @@ def _parse(text: str) -> dict[str, Any]:
 
 
 # ─── Validation ──────────────────────────────────────────────────────
-
-
-def _issue(path: str, code: str, message: str) -> dict[str, str]:
-    return {"path": path, "code": code, "message": message}
-
-
-def _not_validatable(where: str, error: BaseException) -> dict[str, str]:
-    """A validator that raised, reported as a finding instead of a 500.
-
-    The exception TYPE and nothing else: a ``KeyError`` or a ``TypeError`` from
-    deep inside a check carries the offending manifest value in its text, and
-    this body reaches a browser (CLAUDE.md rules 1 and 2).
-    """
-    return _issue(
-        "",
-        "not_validatable",
-        f"{where} could not judge this manifest ({type(error).__name__}) — "
-        "a value is the wrong shape",
-    )
-
-
-def _guarded(where: str, call: Callable[[], _IssueSplit]) -> _IssueSplit:
-    """Run one validator, turning a raise into an error finding.
-
-    ``manifest_schema.validate`` documents "Never raises" and
-    ``manifest_checks.validate_agent`` implies it, and neither is true of an
-    arbitrary document: ``sandbox`` as a mapping hits ``x not in {...}`` on an
-    unhashable, ``schedule`` as a list hits ``.get()`` on a list, a non-string
-    ``id`` hits ``re.match``. Every one of those is a manifest an operator needs
-    the editor for MORE than a well-formed one, so a crash here does not just
-    lose a verdict — it hides the file. ``_runtime_issues`` already wrapped its
-    call for exactly this reason; this is the same guard at the other two.
-    """
-    try:
-        return call()
-    except Exception as error:  # noqa: BLE001 — every shape of bad value lands here
-        logger.warning("%s raised on a manifest: %s", where, type(error).__name__)
-        return [_not_validatable(where, error)], []
-
-
-def _schema_issues(document: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """``manifest_schema`` findings, split into blocking and advisory.
-
-    Validated as the MERGED document — file plus ``_defaults.yaml`` — because
-    that is what a run is judged on. Validating the fragment alone reports a
-    missing model on every agent that correctly inherits one.
-    """
-    from robothor.engine import config as engine_config
-    from robothor.engine import manifest_schema
-
-    merged = engine_config._merged_manifest(
-        document,
-        agent_id=str(document.get("id") or ""),
-        defaults=engine_config._load_defaults(_manifest_dir()),
-        workspace=None,
-        trigger_type=None,
-    )
-    errors: list[dict[str, str]] = []
-    warnings: list[dict[str, str]] = []
-    for issue in manifest_schema.validate(merged, strict=False):
-        bucket = errors if issue.severity == "error" else warnings
-        bucket.append(_issue(issue.path, issue.code, issue.message))
-    return errors, warnings
-
-
-def _check_issues(
-    document: dict[str, Any], fleet: dict[str, Any], tools: set[str]
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """The 13 A–M checks, run server-side with ``ci=True``.
-
-    ``ci=True`` skips the two checks (C, J) that assert files exist through
-    symlinks the appliance may not have; the 422 decision is the remaining
-    eleven plus the schema. A ``WARN`` never blocks — it is advice, and a
-    surface that refuses to save on advice is one an operator learns to work
-    around.
-    """
-    from robothor.templates.manifest_checks import validate_agent
-
-    errors: list[dict[str, str]] = []
-    warnings: list[dict[str, str]] = []
-    for result in validate_agent(document, fleet, tools, repo_root=_workspace(), ci=True):
-        if result.status not in {"FAIL", "WARN"}:
-            continue
-        detail = "; ".join([result.message, *result.details]).strip("; ")
-        entry = _issue(f"check.{result.check_id}", f"check_{result.check_id.lower()}", detail)
-        (errors if result.status == "FAIL" else warnings).append(entry)
-    return errors, warnings
-
-
-def _runtime_issues(document: dict[str, Any]) -> list[dict[str, str]]:
-    """Can the engine actually turn this document into a scheduled agent?
-
-    The two questions no static check answers: does ``manifest_to_agent_config``
-    survive the document, and does APScheduler accept the cron in the timezone
-    it is paired with. Both have been the difference between a manifest that
-    validates and an agent that never fires.
-    """
-    from apscheduler.triggers.cron import CronTrigger
-
-    from robothor.engine.config import manifest_to_agent_config
-
-    issues: list[dict[str, str]] = []
-    try:
-        agent = manifest_to_agent_config(document)
-    except Exception as error:  # noqa: BLE001 — every shape of bad value lands here
-        return [_issue("", "not_loadable", f"the engine cannot load this manifest: {error}")]
-
-    crons = [("schedule.cron", agent.cron_expr, agent.timezone)]
-    if agent.heartbeat:
-        crons.append(("heartbeat.cron", agent.heartbeat.cron_expr, agent.heartbeat.timezone))
-    if agent.worker:
-        crons.append(("worker.cron", agent.worker.cron_expr, agent.worker.timezone))
-    for path, cron, timezone in crons:
-        if not cron:
-            continue
-        try:
-            CronTrigger.from_crontab(cron, timezone=timezone)
-        except Exception as error:  # noqa: BLE001 — bad cron, bad tz, both
-            issues.append(_issue(path, "bad_cron", f"the scheduler refuses this schedule: {error}"))
-    return issues
+#
+# The verdicts themselves live in `_manifest_validation`; what stays here is
+# the part that has to touch the engine and the filesystem to assemble one
+# ValidationContext. See that module's header for the seam.
 
 
 async def _engine_tools() -> tuple[set[str], list[dict[str, str]]]:
@@ -510,7 +402,7 @@ async def _engine_tools() -> tuple[set[str], list[dict[str, str]]]:
     status, body = await engine_request("GET", "/api/admin/tools")
     if status >= 400 or not isinstance(body, dict):
         return set(), [
-            _issue(
+            validation.issue(
                 "tools_allowed",
                 "tools_unverified",
                 "the engine did not answer, so tool names were not checked",
@@ -519,45 +411,30 @@ async def _engine_tools() -> tuple[set[str], list[dict[str, str]]]:
     return {str(name) for name in body.get("tools") or []}, []
 
 
-async def _validation_context() -> tuple[dict[str, Any], set[str], list[dict[str, str]]]:
-    """The fleet and the engine's tool list, read once.
+async def _validation_context() -> validation.ValidationContext:
+    """One view of the world for every verdict in this request.
 
     Its own function so an edit can validate the BEFORE and AFTER documents
-    against the same view of the world — two round trips to the engine for one
-    save would let the two verdicts disagree about which tools exist.
+    against the same fleet and the same tool list — see ValidationContext.
     """
     scan = await asyncio.to_thread(_scan)
     fleet = {str(m["id"]): m for m in scan.manifests if isinstance(m.get("id"), str)}
     tools, tool_warnings = await _engine_tools()
-    return fleet, tools, tool_warnings
-
-
-async def _validate(
-    document: dict[str, Any],
-    context: tuple[dict[str, Any], set[str], list[dict[str, str]]] | None = None,
-) -> dict[str, Any]:
-    """Everything that can be said about one manifest, in one body.
-
-    Ordered cheapest-first so the operator sees the structural complaint before
-    the semantic one: a document missing ``id`` produces a readable answer
-    rather than a cascade from every check that dereferences it.
-    """
-    fleet, tools, tool_warnings = context if context is not None else await _validation_context()
-
-    errors, warnings = await asyncio.to_thread(
-        _guarded, "the schema validator", lambda: _schema_issues(document)
+    return validation.ValidationContext(
+        fleet=fleet,
+        tools=tools,
+        manifest_dir=_manifest_dir(),
+        repo_root=_workspace(),
+        tool_warnings=tool_warnings,
     )
-    check_errors, check_warnings = await asyncio.to_thread(
-        _guarded, "the manifest checks", lambda: _check_issues(document, fleet, tools)
-    )
-    errors.extend(check_errors)
-    warnings.extend(check_warnings)
-    warnings.extend(tool_warnings)
-    errors.extend(_runtime_issues(document))
-    return {"ok": not errors, "errors": errors, "warnings": warnings}
 
 
-def _refuse(validation: dict[str, Any]) -> None:
+async def _validate(document: dict[str, Any]) -> dict[str, Any]:
+    """One document's verdict, against a context fetched for it alone."""
+    return await validation.validate(document, await _validation_context())
+
+
+def _refuse(verdict: dict[str, Any]) -> None:
     """Turn a failed validation into a 422 carrying the validator's own words.
 
     The messages are the ones ``manifest_schema`` and ``manifest_checks``
@@ -565,37 +442,8 @@ def _refuse(validation: dict[str, Any]) -> None:
     "invalid manifest" would leave the operator guessing which of forty fields
     to look at.
     """
-    if not validation["ok"]:
-        raise HTTPException(status_code=422, detail=validation)
-
-
-def _introduced(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
-    """The verdict on an EDIT: only the errors this edit is responsible for.
-
-    "A save must not break a manifest" and "a save is gated on the manifest
-    being unbroken" are different promises with opposite outcomes, and the
-    second one locks the operator out of the file exactly when they need it.
-    Running the full validator on the merged document made an agent with a bad
-    cron or a tool the engine no longer registers impossible to repair AND
-    impossible to `disable` — and `disable` is the stop control. Since the tool
-    half reads the LIVE engine's registry, uninstalling one plugin froze every
-    agent that named its tools. `DELETE` does not validate, so retiring the
-    agent was the only remedy the Helm had left.
-
-    Identity is ``(path, code)``: same complaint about the same field. A
-    pre-existing fault is therefore never a free pass for a second one — it is
-    reported as a warning instead, because "allowed through" must not read as
-    "blessed".
-    """
-    already = {(issue["path"], issue["code"]) for issue in before["errors"]}
-    new = [issue for issue in after["errors"] if (issue["path"], issue["code"]) not in already]
-    carried = [issue for issue in after["errors"] if (issue["path"], issue["code"]) in already]
-    return {
-        "ok": not new,
-        "errors": new,
-        "warnings": [*after["warnings"], *carried],
-        "pre_existing": carried,
-    }
+    if not verdict["ok"]:
+        raise HTTPException(status_code=422, detail=verdict)
 
 
 # ─── Deep set of only the form-owned paths ───────────────────────────
@@ -891,11 +739,31 @@ async def list_manifests(request: Request) -> dict[str, Any]:
 
     ``require_operator`` on a GET deliberately: this enumerates the fleet, its
     models and its delivery targets, which is not member data.
+
+    Per manifest rather than one generator over all of them, so that sentence
+    stays true. ``_block`` handles the shapes known to break ``_summary`` today;
+    this handles the field nobody has added yet. One unreadable file belongs in
+    ``broken``, where the operator can see which one to fix — not in a 500 that
+    takes the other nineteen agents off the page with it.
     """
     require_operator(request)
     scan = await asyncio.to_thread(_scan)
-    agents = sorted((_summary(m) for m in scan.manifests), key=lambda row: row["id"])
-    return {"agents": agents, "broken": _broken(scan), "count": len(agents)}
+    agents: list[dict[str, Any]] = []
+    undescribable: list[dict[str, str]] = []
+    for manifest in scan.manifests:
+        agent_id = str(manifest.get("id") or "")
+        try:
+            agents.append(_summary(manifest))
+        except Exception as error:  # noqa: BLE001 — one manifest, not the page
+            logger.warning(
+                "Could not summarise %s: %s", sanitize_log(agent_id), type(error).__name__
+            )
+            undescribable.append(
+                {"id": agent_id, "filename": "", "error_type": type(error).__name__}
+            )
+    agents.sort(key=lambda row: row["id"])
+    broken = [*_broken(scan), *undescribable]
+    return {"agents": agents, "broken": broken, "count": len(agents)}
 
 
 @router.get("/api/agent-manifests/{agent_id}")
@@ -922,7 +790,7 @@ async def get_manifest(agent_id: str, request: Request) -> dict[str, Any]:
             "instructions": "",
             "validation": {
                 "ok": False,
-                "errors": [_issue("", "unparseable", str(unreadable.detail))],
+                "errors": [validation.issue("", "unparseable", str(unreadable.detail))],
                 "warnings": [],
             },
         }
@@ -967,7 +835,7 @@ async def validate_manifest(body: ValidateRequest, request: Request) -> dict[str
         except HTTPException as unreadable:
             return {
                 "ok": False,
-                "errors": [_issue("", "unparseable", str(unreadable.detail))],
+                "errors": [validation.issue("", "unparseable", str(unreadable.detail))],
                 "warnings": [],
             }
     else:
@@ -991,15 +859,15 @@ async def create_manifest(body: CreateRequest, request: Request) -> dict[str, An
     document, instruction_relative, instructions = await asyncio.to_thread(
         _scaffold, agent_id, body
     )
-    validation = await _validate(document)
-    _refuse(validation)
+    verdict = await _validate(document)
+    _refuse(verdict)
 
     await asyncio.to_thread(_write_pair, agent_id, document, instruction_relative, instructions)
     audited(request, "helm.agent_manifest.create", action=agent_id, agent_id=agent_id)
     return {
         "id": agent_id,
         "manifest": document,
-        "warnings": validation["warnings"],
+        "warnings": verdict["warnings"],
         "reconcile": await reconcile_engine_schedules(),
     }
 
@@ -1047,9 +915,10 @@ async def _apply_patch(
     reconcile.
 
     The document is judged twice — as it was and as the edit leaves it — and
-    refused only on what the edit INTRODUCED. See :func:`_introduced` for why a
-    single verdict on the merged document locked the operator out of exactly
-    the manifests they needed to fix or silence.
+    refused only on what the edit INTRODUCED. See
+    :func:`_manifest_validation.introduced` for why a single verdict on the
+    merged document locked the operator out of exactly the manifests they
+    needed to fix or silence.
     """
     agent_id = _safe_id(agent_id)
     path = _manifest_path(agent_id)
@@ -1060,12 +929,15 @@ async def _apply_patch(
     document = _parse(await asyncio.to_thread(path.read_text, encoding="utf-8"))
     _merge_owned(document, changes)
     _bump_version(document, change)
-    # One context for both verdicts: two reads of the engine's tool list across
-    # one save could disagree about which tools exist, and the difference
+    # ONE context for both verdicts: two reads of the engine's tool list across
+    # a single save could disagree about which tools exist, and the difference
     # between the two answers is what decides the refusal.
     context = await _validation_context()
-    validation = _introduced(await _validate(original, context), await _validate(document, context))
-    _refuse(validation)
+    verdict = validation.introduced(
+        await validation.validate(original, context),
+        await validation.validate(document, context),
+    )
+    _refuse(verdict)
 
     await asyncio.to_thread(_snapshot, agent_id)
     await asyncio.to_thread(_write_atomically, path, _dump(document))
@@ -1080,7 +952,12 @@ async def _apply_patch(
     return {
         "id": agent_id,
         "manifest": document,
-        "warnings": validation["warnings"],
+        "warnings": verdict["warnings"],
+        # The faults this edit did not introduce and did not fix. Also present
+        # in `warnings`; named separately so a UI can say "saved — still broken
+        # for these reasons" without diffing two lists to find out which of the
+        # warnings were errors a moment ago. Empty on a healthy manifest.
+        "pre_existing": verdict["pre_existing"],
         "reconcile": await reconcile_engine_schedules(),
     }
 

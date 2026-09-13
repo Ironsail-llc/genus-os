@@ -106,6 +106,19 @@ CAPS = {
     # reconciling to a no-op with a stale row; separating them is what kept the
     # scheduler a call site rather than growing this logic there.
     "robothor/engine/schedule_reconcile.py": 340,
+    # The bridge's agent builder. Not under robothor/, and that is the point:
+    # CAPS was a robothor/-only list, so the largest new file in the manifest-API
+    # change was unbounded while every engine file it touched was pinned to
+    # within 0.6%. The paths here are resolved against REPO_ROOT, so a crm/ entry
+    # costs nothing but the line — and one ratchet is right, because two copies
+    # of a guard drift and the drift is what nobody sees.
+    #
+    # 1,172 -> 1,049: the verdicts moved to _manifest_validation.py along a real
+    # seam (nothing there touches the filesystem, the engine or a request, which
+    # is what lets it take its inputs as parameters instead of importing the
+    # router's resolvers back).
+    "crm/bridge/routers/agent_manifests.py": 1060,
+    "crm/bridge/routers/_manifest_validation.py": 250,
 }
 
 

@@ -95,12 +95,21 @@ def insecure_loopback_dev_mode(monkeypatch):
 UNROUTABLE_HOST = "engine.invalid"
 UNROUTABLE_ENGINE = f"http://{UNROUTABLE_HOST}:1"
 
-#: Transports that cannot leave the process by construction: the ASGI one the
-#: test clients mount the app on, and the mock one a test installs to stand in
-#: for a server. Asking about the TRANSPORT rather than the host is what makes
-#: this airtight — `127.0.0.1` on a real transport is the operator's own engine
-#: on :18800, which is exactly the call that must not happen.
-_IN_PROCESS_TRANSPORTS = (httpx.ASGITransport, httpx.MockTransport)
+#: The only two httpx transports that open a socket. Everything else — the ASGI
+#: one the test clients mount the app on, the mock one a test installs to stand
+#: in for a server, starlette's own TestClient transport, a WSGI one — stays in
+#: the process by construction.
+#:
+#: Enumerated this way round on purpose. Listing the SAFE transports meant a
+#: client using one nobody had thought of was reported as an escape, and
+#: starlette's TestClient (which does not use httpx.ASGITransport) was exactly
+#: that. Listing the two dangerous ones fails closed instead: a new in-process
+#: transport just works, and a new way to reach the network does not.
+#:
+#: Asking about the TRANSPORT rather than the host is what makes this airtight:
+#: 127.0.0.1 on a real transport is the operator's own engine on :18800, which
+#: is precisely the call that must not happen.
+_NETWORK_TRANSPORTS = (httpx.HTTPTransport, httpx.AsyncHTTPTransport)
 
 
 @pytest.fixture(autouse=True)
@@ -125,21 +134,30 @@ def no_engine_calls_from_the_bridge_suite(monkeypatch):
     written tomorrow.
 
     ``engine_base_url`` is the one funnel every caller goes through, and the
-    ``httpx`` transport under it is a second lock for anything that builds a
+    ``httpx`` transports under it are a second lock for anything that builds a
     URL another way. Per-test ``FakeEngine`` patches still win, because they
     replace ``engine_request`` above both.
+
+    **What this does and does not cover.** Four httpx entry points are patched:
+    ``AsyncClient.request``/``send`` and the SYNC ``Client.request``/``send``.
+    The sync ones are not hypothetical — ``templates/hub_client.py`` uses
+    ``httpx.Client``, and ``POST /api/installed-agents/install`` reaches it. Not
+    covered: ``urllib.request.urlopen`` (``routers/setup.py`` uses it for the
+    Ollama probe) and anything using ``socket`` directly. So the honest claim is
+    "nothing in this suite reaches a real host over httpx, and the ENGINE seam
+    specifically is closed at its funnel" — not "a unit suite cannot dial
+    anything", which is what the assertion used to say and could not deliver.
     """
     monkeypatch.setenv("ROBOTHOR_ENGINE_URL", UNROUTABLE_ENGINE)
 
-    real_request = httpx.AsyncClient.request
-
-    async def _in_process_only(self, method, url, *args, **kwargs):
-        if isinstance(getattr(self, "_transport", None), _IN_PROCESS_TRANSPORTS):
-            return await real_request(self, method, url, *args, **kwargs)
+    def _verdict(client, url):
+        """``None`` to allow, else the exception to raise."""
+        if not isinstance(getattr(client, "_transport", None), _NETWORK_TRANSPORTS):
+            return None
         # A relative URL has no host of its own; it resolves against the
         # client's base_url. Reading only the argument would report every such
         # request as an escape to ''.
-        host = httpx.URL(url).host or self.base_url.host
+        host = httpx.URL(url).host or client.base_url.host
         if host == UNROUTABLE_HOST:
             # Where the env pin above sends an unpatched engine call. Refused
             # here rather than left to DNS: instant, and independent of what
@@ -147,14 +165,46 @@ def no_engine_calls_from_the_bridge_suite(monkeypatch):
             # sees the same ConnectError it would from a dead engine, so the
             # "engine unreachable" branch stays exercised rather than mocked
             # out of existence.
-            raise httpx.ConnectError(f"refused by the bridge test suite: {host}")
-        raise AssertionError(
-            f"a bridge test tried to reach {host!r} over a real transport. Patch "
-            "the seam your route uses, or mount a fake — a unit suite must not "
-            "dial anything, and 127.0.0.1 is this developer's own engine."
+            return httpx.ConnectError(f"refused by the bridge test suite: {host}")
+        return AssertionError(
+            f"a bridge test tried to reach {host!r} over a real httpx transport. "
+            "Patch the seam your route uses, or mount a fake — 127.0.0.1 is this "
+            "developer's own engine."
         )
 
-    monkeypatch.setattr(httpx.AsyncClient, "request", _in_process_only)
+    real_async_request = httpx.AsyncClient.request
+    real_async_send = httpx.AsyncClient.send
+    real_sync_request = httpx.Client.request
+    real_sync_send = httpx.Client.send
+
+    async def _async_request(self, method, url, *args, **kwargs):
+        refusal = _verdict(self, url)
+        if refusal is not None:
+            raise refusal
+        return await real_async_request(self, method, url, *args, **kwargs)
+
+    async def _async_send(self, request, *args, **kwargs):
+        refusal = _verdict(self, request.url)
+        if refusal is not None:
+            raise refusal
+        return await real_async_send(self, request, *args, **kwargs)
+
+    def _sync_request(self, method, url, *args, **kwargs):
+        refusal = _verdict(self, url)
+        if refusal is not None:
+            raise refusal
+        return real_sync_request(self, method, url, *args, **kwargs)
+
+    def _sync_send(self, request, *args, **kwargs):
+        refusal = _verdict(self, request.url)
+        if refusal is not None:
+            raise refusal
+        return real_sync_send(self, request, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", _async_request)
+    monkeypatch.setattr(httpx.AsyncClient, "send", _async_send)
+    monkeypatch.setattr(httpx.Client, "request", _sync_request)
+    monkeypatch.setattr(httpx.Client, "send", _sync_send)
 
 
 @pytest.fixture

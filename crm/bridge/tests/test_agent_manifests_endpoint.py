@@ -221,6 +221,49 @@ class TestNoTestReachesARealWorkspace:
         assert status == 502
         assert body == {"error": "engine unavailable"}
 
+    @pytest.mark.parametrize("entry", ["async_request", "async_send", "sync_request", "sync_send"])
+    def test_every_httpx_entry_point_is_covered_not_just_async_request(self, entry):
+        """The guard patched `AsyncClient.request` only, while its assertion
+        said "a unit suite must not dial anything".
+
+        `AsyncClient.send`, and the SYNC `httpx.Client`, both went straight to
+        the network. Not hypothetical: `templates/hub_client.py` uses the sync
+        client, and `POST /api/installed-agents/install` — a route this PR made
+        async — reaches it.
+        """
+        import asyncio
+
+        import httpx
+        import pytest as _pytest
+
+        url = "http://example.com/probe"
+
+        async def _async_request() -> None:
+            async with httpx.AsyncClient() as client:
+                await client.get(url)
+
+        async def _async_send() -> None:
+            async with httpx.AsyncClient() as client:
+                await client.send(client.build_request("GET", url))
+
+        def _sync_request() -> None:
+            with httpx.Client() as client:
+                client.get(url)
+
+        def _sync_send() -> None:
+            with httpx.Client() as client:
+                client.send(client.build_request("GET", url))
+
+        call = {
+            "async_request": lambda: asyncio.run(_async_request()),
+            "async_send": lambda: asyncio.run(_async_send()),
+            "sync_request": _sync_request,
+            "sync_send": _sync_send,
+        }[entry]
+
+        with _pytest.raises(AssertionError, match="real httpx transport"):
+            call()
+
     def test_a_real_transport_to_loopback_is_refused_not_quietly_allowed(self):
         """``127.0.0.1`` is not a safe default here — on a developer's box it is
         their own engine on :18800. The guard asks what the TRANSPORT is, not
@@ -234,7 +277,7 @@ class TestNoTestReachesARealWorkspace:
             async with httpx.AsyncClient() as client:
                 await client.get("http://127.0.0.1:18800/api/admin/models")
 
-        with _pytest.raises(AssertionError, match="real transport"):
+        with _pytest.raises(AssertionError, match="real httpx transport"):
             asyncio.run(_dial())
 
     def test_home_is_redirected_too_so_the_fallback_cannot_bite(self):
@@ -429,6 +472,49 @@ class TestAWrongTypedManifestIsReportedNotRaised:
         assert response.json()["ok"] is False
 
     @pytest.mark.parametrize("case", sorted(WRONG_TYPED))
+    def test_the_fleet_list_survives_a_wrong_typed_manifest(
+        self, client, manifest_dir, fake_engine, case
+    ):
+        """The landing page of the whole feature.
+
+        ``_summary`` reads three blocks with ``document.get(k) or {}``, and a
+        TRUTHY non-mapping sails through that and into ``.get()``. The list
+        route maps it over every manifest in one generator, so one bad file
+        took the entire response with it — and the route's own docstring
+        promises the opposite: "including the ones that will not load".
+
+        This column is the reason the round-1 fix stopped one function short:
+        the class covered validate, GET, PATCH and disable, and never the list.
+        """
+        (manifest_dir / "demo-agent.yaml").write_text(
+            yaml.safe_dump(_wrong_typed(case), sort_keys=False)
+        )
+
+        response = client.get("/api/agent-manifests")
+
+        assert response.status_code == 200, response.text
+
+    def test_one_unreadable_manifest_does_not_hide_the_healthy_agents(
+        self, client, manifest_dir, seeded, fake_engine
+    ):
+        """The property that makes the route worth calling at all. A fleet of
+        twenty with one bad file must list nineteen, not none."""
+        (manifest_dir / "healthy-agent.yaml").write_text(
+            yaml.safe_dump({**EXISTING, "id": "healthy-agent", "name": "Healthy"}, sort_keys=False)
+        )
+        (manifest_dir / "demo-agent.yaml").write_text(
+            yaml.safe_dump({**EXISTING, "model": "not-a-mapping"}, sort_keys=False)
+        )
+
+        body = client.get("/api/agent-manifests").json()
+
+        listed = {row["id"] for row in body["agents"]}
+        assert "healthy-agent" in listed, body
+        # The bad one is named as broken rather than silently dropped — the
+        # operator has to be able to find the file that needs fixing.
+        assert "demo-agent" in listed | {row["id"] for row in body["broken"]}, body
+
+    @pytest.mark.parametrize("case", sorted(WRONG_TYPED))
     def test_a_wrong_typed_manifest_on_disk_can_still_be_read(
         self, client, manifest_dir, fake_engine, case
     ):
@@ -497,12 +583,12 @@ class TestAWrongTypedManifestIsReportedNotRaised:
         """The backstop, probed rather than assumed — this codebase has shipped
         six controls that were green and inert. The value-level guards cover
         what is known today; this covers the check nobody has written yet."""
-        from routers import agent_manifests
+        from routers import _manifest_validation
 
         def _explode(*args, **kwargs):
             raise RuntimeError("a future check echoed a-secret-value")
 
-        with patch.object(agent_manifests, "_check_issues", _explode):
+        with patch.object(_manifest_validation, "check_issues", _explode):
             response = client.post("/api/agent-manifests/validate", json={"manifest": EXISTING})
 
         assert response.status_code == 200, response.text
@@ -848,6 +934,28 @@ class TestAnAlreadyBrokenAgentCanStillBeRepairedAndSilenced:
         rendered = json.dumps(body)
         assert "a_retired_plugin_tool" in rendered, body
 
+    def test_the_carried_faults_are_named_under_their_own_key(
+        self, client, broken_tool, fake_engine
+    ):
+        """`pre_existing` is in the response, not just in the verdict dict.
+
+        It was computed and dropped on the floor — the string appeared nowhere
+        in crm/, docs/ or app/ outside its own assignment. A UI that wants to
+        say "saved, but still broken" should not have to diff `warnings`
+        against a previous call to work out which of them used to be errors.
+        """
+        body = client.post("/api/agent-manifests/demo-agent/disable").json()
+
+        assert "pre_existing" in body, body
+        assert any("a_retired_plugin_tool" in issue["message"] for issue in body["pre_existing"])
+
+    def test_a_healthy_agent_carries_nothing(self, client, seeded, fake_engine):
+        """The counter-case: the key is empty when there is nothing to carry,
+        so its presence means something."""
+        body = client.patch("/api/agent-manifests/demo-agent", json={"name": "Renamed"}).json()
+
+        assert body["pre_existing"] == [], body
+
     def test_a_patch_that_repairs_the_manifest_is_accepted(self, client, broken_cron, fake_engine):
         """The repair path. Editing the very field that is wrong must work."""
         response = client.patch("/api/agent-manifests/demo-agent", json={"cron": "0 9 * * *"})
@@ -876,13 +984,48 @@ class TestAnAlreadyBrokenAgentCanStillBeRepairedAndSilenced:
         self, client, broken_tool, fake_engine
     ):
         """A manifest with one pre-existing fault does not become a free pass
-        for the next one."""
+        for the next one — a fault of a DIFFERENT kind."""
         response = client.patch("/api/agent-manifests/demo-agent", json={"cron": "not a cron"})
 
         assert response.status_code == 422, response.text
         codes = {issue["code"] for issue in response.json()["detail"]["errors"]}
         assert "bad_cron" in codes
         assert "check_d" not in codes, "the pre-existing tool error was re-reported as new"
+
+    def test_a_second_fault_under_the_same_check_is_also_refused(
+        self, client, broken_tool, fake_engine
+    ):
+        """The narrower case, and the one that made the claim false.
+
+        Every `manifest_checks` finding collapses to one `(check.D, check_d)`
+        pair, so keying identity on `(path, code)` made a pre-existing
+        unregistered tool a free pass for a second unregistered tool — the
+        check fires once either way and the edit looked like it introduced
+        nothing. The test that certified the claim used two DIFFERENT checks,
+        so it was narrower than the sentence it protected.
+        """
+        before = _read(broken_tool)["tools_allowed"]
+
+        response = client.patch(
+            "/api/agent-manifests/demo-agent",
+            json={"tools_allowed": [*before, "a_second_missing_tool"]},
+        )
+
+        assert response.status_code == 422, response.text
+        rendered = json.dumps(response.json()["detail"]["errors"])
+        assert "a_second_missing_tool" in rendered, response.text
+        assert _read(broken_tool)["tools_allowed"] == before, (
+            "the second bad tool was written to disk"
+        )
+
+    def test_the_unchanged_pre_existing_fault_is_still_not_refused(
+        self, client, broken_tool, fake_engine
+    ):
+        """The counter-case for the above. Tightening identity must not turn
+        every pre-existing fault back into a lockout — that was I1."""
+        response = client.patch("/api/agent-manifests/demo-agent", json={"name": "Renamed"})
+
+        assert response.status_code == 200, response.text
 
 
 class TestEnableDisable:

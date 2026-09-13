@@ -389,7 +389,7 @@ the same two files, and calls the engine reconcile itself.
 
 | Route | What it does |
 |-------|--------------|
-| `GET /api/agent-manifests` | The fleet, plus a `broken` list naming any manifest that will not load and its error type |
+| `GET /api/agent-manifests` | The fleet, plus a `broken` list naming any manifest that will not load and its error type. One unreadable file lands in `broken`, never in a 500 — a fleet of twenty with one bad manifest lists nineteen |
 | `GET /api/agent-manifests/{id}` | The parsed document, its raw YAML, its instruction file, and its verdict. A broken manifest answers 200 with the verdict, not 404 — "absent" and "unreadable" have different fixes |
 | `POST /api/agent-manifests/validate` | Always 200; the verdict is the payload (`{ok, errors, warnings}`). Send `{manifest}` or `{yaml}` |
 | `POST /api/agent-manifests` | Scaffold + validate + write + reconcile. `409` on a colliding id, `422` carrying the validator's own codes on refusal |
@@ -409,8 +409,14 @@ save is gated on the manifest being unbroken" are different promises, and the
 second locks the operator out of the file exactly when they need it: an agent
 with a bad cron, or one naming a tool a since-uninstalled plugin provided, could
 not be repaired AND could not be `disable`d, and `disable` is the stop control.
-A pre-existing fault comes back in `warnings` instead, so "allowed through" does
-not read as "blessed", and it is never a free pass for a second fault.
+A pre-existing fault comes back in `warnings` — and in `pre_existing`, so a UI
+can say "saved, still broken for these reasons" without diffing two lists — so
+"allowed through" does not read as "blessed". It is never a free pass for a
+second fault, including a second fault of the *same kind*: a finding's identity
+is `(path, code, message)`, and every `manifest_checks` result collapses to one
+`(check.D, check_d)` pair whose message enumerates the offending items. Adding a
+second unregistered tool to a manifest that already had one changes the message,
+so it is still refused.
 
 **What a PATCH may change.** An edit sets only the paths the form owns
 (`routers/agent_manifests.FORM_OWNED_PATHS`: name, description, department,
