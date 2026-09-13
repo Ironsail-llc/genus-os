@@ -60,16 +60,15 @@ describe("ensureCanvasPromptInjected", () => {
     expect(mockChatInject).toHaveBeenCalledTimes(2);
   });
 
-  it("falls back to the shared SESSION_KEY dedup bucket when auth() has no session", async () => {
+  it("falls back to one shared dedup bucket when auth() has no session", async () => {
     mockAuth.mockResolvedValue(null);
-    const { ensureCanvasPromptInjected, SESSION_KEY } = await import("../session-state");
+    const { ensureCanvasPromptInjected } = await import("../session-state");
 
     await ensureCanvasPromptInjected();
     await ensureCanvasPromptInjected();
 
     expect(mockChatInject).toHaveBeenCalledTimes(1);
     expect(mockChatInject).toHaveBeenCalledWith(
-      SESSION_KEY,
       "you have a canvas",
       "visual-canvas-init"
     );
@@ -85,17 +84,20 @@ describe("ensureCanvasPromptInjected", () => {
     expect(mockChatInject).toHaveBeenCalledTimes(1);
   });
 
-  it("always sends the shared SESSION_KEY to the engine, not the dedup key", async () => {
+  it("sends no session key at all — the engine owns that decision", async () => {
+    // The dedup key is a Next-side bookkeeping detail. Sending it to the
+    // engine would be a browser naming the session it lands in, which is the
+    // hole `_effective_session_key` closes.
     mockAuth.mockResolvedValue({ user: { id: "alice" } });
-    const { ensureCanvasPromptInjected, SESSION_KEY } = await import("../session-state");
+    const { ensureCanvasPromptInjected } = await import("../session-state");
 
     await ensureCanvasPromptInjected();
 
     expect(mockChatInject).toHaveBeenCalledWith(
-      SESSION_KEY,
       "you have a canvas",
       "visual-canvas-init"
     );
+    expect(mockChatInject.mock.calls[0]).toHaveLength(2);
   });
 
   it("does not mark as injected when chatInject fails, so a later call retries", async () => {

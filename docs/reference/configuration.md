@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-364 settings in 13 groups.
+365 settings in 13 groups.
 
 ## paths
 
@@ -218,7 +218,7 @@ How the instance reaches people, and who it says it is.
 | `ROBOTHOR_AI_NAME` | str | `Genus` | `robothor-engine` | no | legacy | Name the assistant introduces itself with in channels and on the dashboard. |
 | `ROBOTHOR_AI_PHONE` | str | _(empty)_ | `robothor-engine` | no | legacy | Phone number shown on the assistant's public contact card. |
 | `ROBOTHOR_BRAND_NAME` | str | `Genus OS` | `robothor-engine` | no | legacy | Product name shown in dashboard chrome. |
-| `ROBOTHOR_CHANNELS` | str | _(empty)_ | `robothor-engine` | no | 1.70.0 | Comma-separated names of plugin-provided channels to arm. An installed genus.channels plugin is INERT until it is named here, the same rule ROBOTHOR_SANDBOX_BACKEND follows and for the same reason: a package that became the delivery surface merely by being installed could intercept every briefing. Built-in channels (telegram, event_bus) are always available and are not listed here. Provisional name until adding a channel persists it to config.yaml. |
+| `ROBOTHOR_CHANNELS` | str | _(empty)_ | `robothor-engine` | no | 1.70.0 | Comma-separated names of plugin-provided channels to arm. An installed genus.channels plugin is INERT until it is named here, the same rule ROBOTHOR_SANDBOX_BACKEND follows and for the same reason: a package that became the delivery surface merely by being installed could intercept every briefing. Built-in channels (telegram, event_bus, slack, webchat) are always available and are not listed here. Provisional name until adding a channel persists it to config.yaml. |
 | `ROBOTHOR_CHANNEL_ACCESS_DEFAULT` | str | `pairing` | `robothor-engine` | no | 1.73.0 | Inbound access policy for any channel with no setting of its own -- every plugin channel. One of `pairing` (an unknown sender gets a one-shot code and reaches nothing until an operator approves it), `allowlist` (the channel's own membership test decides) or `open` (anyone the surface admits may drive the agent). A value that is none of those resolves to `pairing`, so a typo cannot open a surface. |
 | `ROBOTHOR_DOMAIN` | str | _(empty)_ | `robothor-engine` | no | legacy | Public domain the tunnel generator issues ingress hostnames under. |
 | `ROBOTHOR_OWNER_EMAIL` | str | _(empty)_ | `robothor-engine` | no | legacy | DEPRECATED operator email. Operator identity belongs in ~/.robothor/owner.yaml; this is read only as a legacy fallback. |
@@ -293,6 +293,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_INJECTION_SCAN_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Injection-scan ladder position: observe logs a suspect prompt, enforce refuses to run it. |
 | `ROBOTHOR_JUDGE_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | **governed.** Let the goal-judge grade recent runs against real outcome signals and write the agent_reviews rows the achievement score is built on. |
 | `ROBOTHOR_MANIFEST_SCHEMA_MODE` | str | `observe` | `robothor-engine` | no | legacy | Agent-manifest schema ladder position: observe logs and counts what enforcement would refuse, enforce refuses the manifest and reports the agent broken. off skips validation entirely. |
+| `ROBOTHOR_PER_USER_SESSIONS` | str | `enforce` | `robothor-engine` | no | 1.74.0 | **governed.** Webchat session isolation: enforce (the default) gives every non-owner member their own derived chat session, observe logs what it would derive and changes nothing, off shares one session between every caller — which also lets any same-tenant caller read any session_key. The tenant owner keeps agent:main:primary in every mode, preserving the operator's webchat<->Telegram continuity. |
 | `ROBOTHOR_PLANNER_ENABLED` | bool | `true` | `robothor-engine` | no | legacy | Let the forward planner turn a thread into structured CRM tasks. Set 0 to fall back to stage-3 behaviour. |
 | `ROBOTHOR_PLUGIN_MANIFEST_ENABLED` | bool | `true` | `robothor-engine` | no | legacy | Validate plugin manifests before a plugin is allowed to load. |
 | `ROBOTHOR_PLUGIN_MANIFEST_MODE` | str | `observe` | `robothor-engine` | no | legacy | Plugin-manifest ladder position: observe logs violations, enforce refuses to load the plugin. |

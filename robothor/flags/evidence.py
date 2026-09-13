@@ -176,6 +176,25 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
     "ROBOTHOR_BENCHMARK_SANDBOX_MODE": EvidenceSource(
         "agent_guardrail_events", "guardrail_name = 'benchmark_sandbox'"
     ),
+    # Per-user webchat sessions leave their evidence in the thing they create:
+    # a session key of the shape `agent:{agent}:user:{user_accounts.id}`, which
+    # only `chat.derive_user_session_key` ever writes (the owner keeps
+    # `agent:main:primary`, Telegram writes the same shared key, and no other
+    # producer of a session key uses the `:user:` segment). `last_active_at` is
+    # the time column because a session row is upserted rather than appended —
+    # `created_at` would date a member's FIRST message forever and read as a
+    # control that stopped firing.
+    #
+    # An honest zero here means one of two things and both are worth seeing: no
+    # non-owner has ever used the Helm on this instance, or the derivation is
+    # not running. On a single-operator instance the correct verdict really is
+    # INERT — there is nobody to isolate — which is why this is evidence rather
+    # than a health check.
+    "ROBOTHOR_PER_USER_SESSIONS": EvidenceSource(
+        "chat_sessions",
+        "session_key LIKE 'agent:%:user:%'",
+        time_column="last_active_at",
+    ),
 }
 
 

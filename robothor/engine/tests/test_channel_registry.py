@@ -186,8 +186,13 @@ class TestTheRegistry:
         the inbound Socket Mode bot having started: a non-built-in name gets a
         ``SenderChannel`` wrapped around whatever ``SlackBot.start()``
         registered, which would put the shim back in front of the real channel.
+
+        ``webchat`` joined it with C9. It writes into a member's own
+        ``chat_sessions`` rows and inbox, so a plugin able to claim the name
+        could redirect every member-facing delivery while the session it wrote
+        to still looked like the member's.
         """
-        assert frozenset({"telegram", "event_bus", "slack"}) == BUILTIN_CHANNELS
+        assert frozenset({"telegram", "event_bus", "slack", "webchat"}) == BUILTIN_CHANNELS
         for name in BUILTIN_CHANNELS:
             assert get_channel(name) is not None, f"built-in channel {name!r} is missing"
 

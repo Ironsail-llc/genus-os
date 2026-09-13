@@ -87,12 +87,17 @@ class TestChatSend:
         assert done_events[0]["data"]["text"] == "Hello from Robothor!"
 
     @pytest.mark.asyncio
-    async def test_missing_fields_returns_400(self, client):
-        """Missing session_key or message returns 400."""
+    async def test_missing_message_returns_400(self, client):
+        """The message is the only required field.
+
+        ``session_key`` is no longer one: the Helm stopped sending it and the
+        engine resolves the caller's own session (``_effective_session_key``),
+        so an omitted key is the main key rather than a bad request.
+        """
         res = await client.post("/chat/send", json={"session_key": "x"})
         assert res.status_code == 400
 
-        res = await client.post("/chat/send", json={"message": "hi"})
+        res = await client.post("/chat/send", json={})
         assert res.status_code == 400
 
     @pytest.mark.asyncio
@@ -170,10 +175,15 @@ class TestChatHistory:
         assert data["messages"][1]["content"] == "I'm here!"
 
     @pytest.mark.asyncio
-    async def test_missing_session_key_returns_400(self, client):
-        """Missing session_key returns 400."""
+    async def test_missing_session_key_reads_the_callers_own_session(self, client):
+        """No key means the caller's own session, not a bad request.
+
+        The browser has nothing useful to say about which session it is in, so
+        it stopped saying anything; the answer names the key the server chose.
+        """
         res = await client.get("/chat/history")
-        assert res.status_code == 400
+        assert res.status_code == 200
+        assert res.json()["sessionKey"]
 
 
 class TestChatInject:

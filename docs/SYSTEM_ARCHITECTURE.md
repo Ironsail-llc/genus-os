@@ -972,6 +972,8 @@ another.
 | `failed:telegram_no_sender` / `failed:telegram_no_chat_id` / `failed:telegram_unexpanded_chat_id` | The same three for the built-in Telegram wrapper, under its historical names. |
 | `failed:telegram_no_config` / `failed:telegram_no_run` | A channel `send()` was called without the config or run it needs. Programming error, recorded rather than raised. |
 | `failed:slack_not_configured` / `failed:slack_unresolved_target` / `failed:slack_client:transport` / `failed:slack_client:dm_open` | The Slack channel is registered on every instance, configured or not. No bot token in the environment or the vault; a target that is not a Slack id (a `#name` cannot be posted to); the `slack_sdk` transport could not be built (usually the `channels` extra is not installed); or a `U…`/`W…` target could not be turned into a conversation. The reason is a CLOSED set of tokens, never the SDK's own text -- a status a query cannot match exactly is not a status, and an SDK error can carry a credential. See [the Slack channel page](channels/slack.md). |
+| `failed:webchat_no_target` / `failed:webchat_unexpanded_target` / `failed:webchat_unknown_user` | The webchat channel was given no `delivery.to`, one that still contains `${…}`, or one that is not an active `user_accounts` row in this tenant. Nothing is written in any of the three. |
+| `failed:webchat_no_session_write` / `failed:webchat_no_notification` / `failed:webchat_send` | A webchat send writes TWO rows — the assistant turn in the member's chat session and the notification in their inbox — so `expected` is 2 and these name which half is missing (the turn, the notification, or both). Half of a web-chat delivery is not a delivery; the halves are named separately because they have different fixes. See [the web chat page](channels/webchat.md). |
 | `failed:event_bus_publish` / `failed:event_bus_disabled` / `failed:event_bus_exception: <err>` / `failed:event_bus_no_run` | The publish did not happen. |
 | `failed:no_channel:<name>` | The agent's `delivery.channel` names a channel nothing is registered under. Delivery is refused rather than redirected to another surface. |
 | `no_output`, `silent`, `suppressed_trivial`, `suppressed_sub_agent`, `blocked_by_hook:<reason>` | Nothing was meant to be sent. |
@@ -1022,7 +1024,14 @@ reachable.
 |---------|-------|
 | `telegram` | With `options` and a reachable aiogram `Bot`, an inline keyboard whose `callback_data` is `ask:<id>:<index>` — the index, because Telegram caps `callback_data` at 64 bytes and a long option would come back truncated into a different answer. With no bot to attach a keyboard to, the options go out numbered in the text and a typed `1`..`N` (or the option itself) answers it. Without options, plain text; `handle_text` intercepts the reply **before** `_enqueue_message`, which would otherwise buffer it until the blocked run finished. See the binding rule below for who may answer |
 | `event_bus` | `NotImplementedError`, permanently |
-| webchat | No channel, so a webchat run **does not wait**: it records the question, emits `approval_required` over its own SSE stream, and returns `delivered: false` in the same tick. The Helm answers through the bridge after the run has finished, and a later turn is what sees the answer |
+| `webchat` | The run **waits — if somebody is listening**, and on the durable row rather than on a reply reaching this process (there is no inbound web-chat socket). `approval_required` (carrying the row id and options) goes out over the run's own SSE stream, the browser answers `POST /api/approvals/question/{id}` through the bridge, and the channel polls that row every ~2s until it is settled. Expiry or the deadline is `None`, never an option. When `emit_status` reports that **no sink took the event** the channel raises `NoListenerError` instead of waiting: the question reached no screen, so `ask_user` records `delivered: false` with `reason: no_listener` in the same tick rather than spending the tool budget and then claiming the person stayed silent. The bridge route is operator-gated, so a member sees the card and an honest refusal rather than a silent failure |
+
+The row id reaches `webchat`'s `ask` through an **opt-in capability flag**, not
+through the signature above: a channel that sets `ask_wants_question_id = True`
+is additionally passed `question_id` and `run_id`. `TelegramChannel.ask` and
+`SlackChannel.ask` accept no `**kw`, so an unconditional extra kwarg would raise
+`TypeError`, be caught by `ask_user._ask_channel` as "this channel cannot ask",
+and break every Telegram ask with every test still green.
 
 **Who may answer.** An ask is bound at mint to `(chat_id, addressee)` and
 settles only for an answer arriving from that chat **and** that sender

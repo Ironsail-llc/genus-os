@@ -13,6 +13,23 @@ file to sync; set them directly in the engine's environment and restart.
 All three are single-var `off → observe → enforce` ladders (see
 `robothor/engine/feature_flags.py` for the authoritative docstrings).
 `off` is always byte-identical to pre-Unified-Identity-Context behavior.
+
+**`ROBOTHOR_PER_USER_SESSIONS` has finished its rollout: its default is now
+`enforce`.** A fresh instance isolates every member onto their own webchat
+session with no flag set, the tenant owner still keeps `agent:main:primary` in
+every mode, and an unrecognised value falls back to `enforce` rather than `off`
+so a typo cannot silently re-open the session-ownership hole. To opt out —
+during a migration, say, or to look at a shared session while debugging:
+
+```bash
+systemctl set-environment ROBOTHOR_PER_USER_SESSIONS=off
+systemctl restart robothor-engine
+```
+
+Note what `off` gives back: any authenticated same-tenant caller can read any
+`session_key` again, including the operator's. Prefer `observe` if what you want
+is the log line rather than the hole. The other two flags are still defaulted
+`off` and roll out as described below.
 `observe` never changes output/authorization — it only logs what `enforce`
 would have done, for soak review — with one deliberate exception:
 `ROBOTHOR_TELEGRAM_ROLE_GATES=observe` fabricates an unregistered GROUP-chat
@@ -21,9 +38,9 @@ sender as `role=guest` (zero tool grants, fail-closed) instead of `off`'s
 the real deny-all outcome for that path (`telegram.py::_resolve_user`,
 `~telegram.py:2688`). `enforce` is the real behavior change everywhere else.
 
-| Flag | Off (default) | Observe | Enforce |
+| Flag | Off | Observe | Enforce |
 |------|----------------|---------|---------|
-| `ROBOTHOR_PER_USER_SESSIONS` | Every webchat caller gets the requested `chat_sessions` key unchanged — one shared session (`agent:main:primary`) for everyone. | Requested key still honored; logs what the derived per-user key *would* have been for non-owner/non-service callers. | Member callers are isolated onto a server-derived `agent:{agent_id}:user:{auth.user_id}` session; the tenant owner keeps `agent:main:primary` (preserves webchat↔Telegram continuity). Applied to send/history/inject/abort/clear/export/plan/deep — also closes the session-ownership hole (any same-tenant caller could previously read any `session_key`). |
+| `ROBOTHOR_PER_USER_SESSIONS` **(default: `enforce`)** | Every webchat caller gets the requested `chat_sessions` key unchanged — one shared session (`agent:main:primary`) for everyone. The escape hatch, not the default. | Requested key still honored; logs what the derived per-user key *would* have been for non-owner/non-service callers. | **The shipped default.** Member callers are isolated onto a server-derived `agent:{agent_id}:user:{auth.user_id}` session; the tenant owner keeps `agent:main:primary` (preserves webchat↔Telegram continuity). Applied to send/history/inject/abort/clear/export/plan/deep — also closes the session-ownership hole (any same-tenant caller could previously read any `session_key`). |
 | `ROBOTHOR_TELEGRAM_ROLE_GATES` | Owner-only Telegram surfaces (`/restart`, `/agents`, `/steer`, `perm:`/`dp:`/`runctl:` callbacks) check `chat_id == default_chat_id` only — a non-owner posting from the operator's own chat_id passes. Unregistered senders in the primary chat are fabricated as `role=owner` with no DB row. Unregistered group senders are fabricated as `role=user`. | Both the legacy chat_id check and the new per-sender role check run; the OLD chat_id check still gates, but every divergence (and every owner fabrication) is logged loudly so the operator can audit what enforce would decide. | Role check only — chat_id is irrelevant to authorization. Owner fabrication requires an actual `tenant_users` row (no more free ride from `default_chat_id`) unless `ROBOTHOR_ALLOW_UNREGISTERED_OWNER_FALLBACK=1` (fresh-install escape hatch — see below). Unregistered group senders fabricate as `role=guest` (zero tool grants — `role_permissions` is fail-closed). |
 | `ROBOTHOR_DATA_SCOPING` | Every data-read tool (and the warmup prompt-assembly path — see the "warmup scoping" fix below) queries unrestricted, identical to pre-flag behavior. | Queries still unrestricted, but every restricted caller's read logs how many rows the "own data + shared" rule *would* have dropped (`robothor.identity.scope.log_would_drop`). | Non-privileged identities (role not in `{owner, admin, service}`) only see rows where `person_id = their own person_id` or `person_id IS NULL` (org-general). Applies to CRM DAL reads, `memory.facts.search_facts`, and warmup's memory-block/entity-context prompt assembly. |
 
@@ -84,8 +101,9 @@ unregistered. Flip `TELEGRAM_ROLE_GATES` to `enforce` (which requires a real
 `tenant_users` row for owner status) first, soak it, and only then start the
 `DATA_SCOPING` ladder.
 
-`ROBOTHOR_PER_USER_SESSIONS` has no ordering dependency on the other two —
-it can be flipped independently.
+`ROBOTHOR_PER_USER_SESSIONS` has no ordering dependency on the other two — it
+shipped `enforce` on its own, and turning it `off` does not affect either of
+them.
 
 ### Escape hatches
 

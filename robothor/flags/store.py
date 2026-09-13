@@ -67,6 +67,16 @@ _HONESTY_SUITE_VALUES: tuple[str, ...] = ("off", "observe", "enforce")
 _TWO_RUNG_MODE_FLAGS: frozenset[str] = frozenset({"ROBOTHOR_RIP_13_MODE", "ROBOTHOR_DNC_MODE"})
 _BOOL_VALUES: tuple[str, ...] = ("true", "false")
 
+#: Flags on the three-rung ``off``/``observe``/``enforce`` ladder — no ``alert``,
+#: because neither blocks an action there would be anything to page about.
+#: ``ROBOTHOR_PER_USER_SESSIONS`` is an isolation switch (whose chat session a
+#: caller lands on) and ``feature_flags.per_user_sessions_mode`` maps every
+#: unrecognised value onto ``enforce``, so offering ``alert`` would let an
+#: operator set a rung, see it stored, and get a different one.
+_THREE_RUNG_MODE_FLAGS: frozenset[str] = frozenset(
+    {"ROBOTHOR_HONESTY_SUITE_MODE", "ROBOTHOR_PER_USER_SESSIONS"}
+)
+
 
 def valid_values_for(name: str) -> tuple[str, ...]:
     """The single source of truth for what a governed flag may be set to.
@@ -76,10 +86,12 @@ def valid_values_for(name: str) -> tuple[str, ...]:
     — the engine maps any other value onto one of those, so the API must not accept
     the full mode ladder for them. Offering a rung the engine does not honor lets an
     operator set it, see it stored, and get different behaviour.
-    ``ROBOTHOR_HONESTY_SUITE_MODE`` is the same shape one rung wider
-    (``off``/``observe``/``enforce``): it is a grader, not a guardrail, so it
-    blocks nothing and has no "would have blocked" event to page about — see
-    ``feature_flags.honesty_suite_mode``. Every other ``*_MODE`` flag accepts the
+    ``_THREE_RUNG_MODE_FLAGS`` are the same shape one rung wider
+    (``off``/``observe``/``enforce``): neither blocks an action, so neither has a
+    "would have blocked" event to page about — ``ROBOTHOR_HONESTY_SUITE_MODE`` is
+    a grader (``feature_flags.honesty_suite_mode``) and
+    ``ROBOTHOR_PER_USER_SESSIONS`` decides which session a caller lands on
+    (``feature_flags.per_user_sessions_mode``).
     Every other ``*_MODE`` flag accepts the full ladder: ``off``/``observe``/``alert``/``enforce``.
 
     Both the bridge's write-path validation (422 on an out-of-range value) and
@@ -91,7 +103,7 @@ def valid_values_for(name: str) -> tuple[str, ...]:
         return _BOOL_VALUES
     if name in _TWO_RUNG_MODE_FLAGS:
         return _RIP_13_VALUES
-    if name == "ROBOTHOR_HONESTY_SUITE_MODE":
+    if name in _THREE_RUNG_MODE_FLAGS:
         return _HONESTY_SUITE_VALUES
     return _MODE_VALUES
 

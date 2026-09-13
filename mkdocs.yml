@@ -72,6 +72,7 @@ exclude_docs: |
   !/channels/slack.md
   !/channels/slack-app-manifest.json
   !/channels/access.md
+  !/channels/webchat.md
   !/runbooks/BENCHMARK_SANDBOX.md
   !/architecture.md
   !/memory-system.md
@@ -101,6 +102,7 @@ nav:
       - Plugins: PLUGINS.md
       - Slack channel: channels/slack.md
       - Channel access: channels/access.md
+      - Web chat channel: channels/webchat.md
       - Benchmark sandbox: runbooks/BENCHMARK_SANDBOX.md
   - Architecture:
       - Overview: architecture.md
