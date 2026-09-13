@@ -195,10 +195,15 @@ def check_workflow_budgets(manifests: dict, *, strict: bool) -> int:
         wf = parse_workflow(data)
         report = report_step_budgets(wf, _chain, strict=strict)
         declared = sum(1 for s in _agent_step_ids(wf) if _agent_chain(manifests.get(s, {})))
+        # `report.checked` is the steps an allowance was actually computed for;
+        # `report.agent_steps` is the steps that EXIST. Summarising the second
+        # is how this gate could still report "1 agent step(s) checked" with an
+        # empty reference chain, having scored nothing at all.
+        declared = min(declared, report.checked)
         totals["workflows"] += 1
-        totals["steps"] += report.agent_steps
+        totals["steps"] += report.checked
         totals["declared"] += declared
-        totals["reference"] += report.agent_steps - declared
+        totals["reference"] += report.checked - declared
         for issue in report.issues:
             icon = "!" if strict else "~"
             print(f"  [{icon}] {path.name}: {issue.message}")

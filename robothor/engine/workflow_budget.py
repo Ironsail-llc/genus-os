@@ -370,11 +370,16 @@ def report_step_budgets(
             except Exception as e:
                 logger.debug("Chain lookup failed for %s: %s", _sanitize(agent_id), e)
                 chain = []
-            if not chain:
+            allowance = step_chain_allowance(chain) if chain else 0
+            if allowance <= 0:
+                # A step is CHECKED when a number was computed for it, not when
+                # it was merely visited. An empty chain, or a chain of models
+                # with no allowance between them — either way nothing was
+                # scored, and counting it would restate the inert state these
+                # counts exist to expose, one layer further in.
                 unresolved.append(step_id)
                 continue
             checked += 1
-            allowance = step_chain_allowance(chain)
             if budget > 0 and allowance > budget:
                 issues.append(
                     BudgetIssue(

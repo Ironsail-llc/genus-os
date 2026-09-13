@@ -176,3 +176,67 @@ class TestTheShippedWorkflowsPassTheShippedGate:
         )
         failures = validator.check_workflow_budgets(manifests, strict=True)
         assert failures == 0, capsys.readouterr().out
+
+
+class TestTheFallbackIsNotItselfAssumed:
+    """Review N6: the reference chain is now the only thing standing between
+    this gate and the inert state N5 fixed, so it gets the same treatment the
+    gate gave the manifests — the count must come from what was SCORED, not
+    from what was present.
+
+    `agent_steps` counts agent steps found; `checked` counts the ones an
+    allowance was actually computed for. The summary read the first. Emptying
+    `REFERENCE_CHAIN` therefore left a 900s workflow reporting "1 agent step(s)
+    checked" and exiting 0, with nothing scored at all: the backstop looked at
+    the same inflated number and saw work being done.
+    """
+
+    def test_the_reference_chain_is_worth_the_incident_chain(self):
+        """If this drifts to a cheaper shape the gate silently loosens, which
+        on a platform checkout means it loosens for every step it checks."""
+        from robothor.engine.llm_budgets import REFERENCE_CHAIN
+        from robothor.engine.workflow_budget import step_chain_allowance
+
+        assert step_chain_allowance(list(REFERENCE_CHAIN)) == 1800, (
+            "the fallback no longer models the 2026-09-13 chain "
+            "(300 + 300 + 300 + 600 plus one 300s primary retry)"
+        )
+
+    def test_an_empty_reference_chain_is_a_failure_not_a_pass(
+        self, validator, tmp_path, capsys, monkeypatch
+    ):
+        """The mutation that N5's own tests could not see: with nothing to fall
+        back to, the incident's exact 900s budget must not exit 0."""
+        from robothor.engine import llm_budgets
+
+        monkeypatch.setattr(llm_budgets, "REFERENCE_CHAIN", ())
+        validator.WORKFLOW_DIR = _workflow(tmp_path, 900)
+
+        failures = validator.check_workflow_budgets({}, strict=True)
+        out = capsys.readouterr().out
+        assert "1 agent step(s) checked" not in out, (
+            f"a step nothing was scored against was counted as checked: {out}"
+        )
+        assert failures >= 1, f"scoring nothing against a 900s budget exited clean: {out}"
+        assert "not evidence of anything" in out, out
+
+    def test_a_chain_that_scores_zero_is_unresolved_not_checked(
+        self, validator, tmp_path, capsys, monkeypatch
+    ):
+        """The same hole one level down: a chain can be non-empty and still
+        score nothing, if the per-call timeouts it is built from are zero. That
+        is reachable from config — `LLM_REQUEST_TIMEOUT_BATCH` is read from the
+        environment — and a zero allowance is never greater than a budget, so
+        it would pass every workflow in silence."""
+        from robothor.engine import llm_budgets
+
+        monkeypatch.setattr(llm_budgets, "LLM_REQUEST_TIMEOUT_BATCH", 0)
+        monkeypatch.setattr(llm_budgets, "LLM_REQUEST_TIMEOUT_OLLAMA", 0)
+        validator.WORKFLOW_DIR = _workflow(tmp_path, 900)
+
+        failures = validator.check_workflow_budgets(
+            {"probe-classifier": INCIDENT_MANIFEST}, strict=True
+        )
+        out = capsys.readouterr().out
+        assert "1 agent step(s) checked" not in out, out
+        assert failures >= 1, f"a workflow scored against nothing exited clean: {out}"
