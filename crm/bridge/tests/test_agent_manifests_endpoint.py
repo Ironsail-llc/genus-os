@@ -622,6 +622,125 @@ class TestRunNow:
         assert response.status_code == 502
 
 
+# ─── No caller-supplied id reaches an engine URL ─────────────────────
+
+
+HOSTILE_IDS = [
+    "../x",
+    "..",
+    "a/b",
+    "http://evil.example.com",
+    "https://evil.example.com/api/admin/models",
+    "a?b=c",
+    "a#b",
+    "A",
+    "",
+    "a" * 65,
+    "x\ny",
+]
+
+
+class TestNoHostileIdReachesTheEngine:
+    """``/run`` is the only place in the appliance where a caller chooses part
+    of an engine URL.
+
+    ``validate_identifier`` fullmatches ``[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?``
+    BEFORE the path is built, the surviving value is then percent-encoded, and
+    ``_engine_client._checked_path`` refuses anything that is not a literal
+    ``/api/...`` path at the sink. Three locks; this asserts the first one
+    fires, and that nothing is dialled when it does.
+    """
+
+    @pytest.mark.parametrize("agent_id", HOSTILE_IDS)
+    def test_a_url_shaped_id_is_422_before_any_engine_call(
+        self, client, seeded, fake_engine, agent_id
+    ):
+        from urllib.parse import quote
+
+        # Encoded so the value survives routing and reaches the handler: an
+        # unencoded "../x" is normalised away by the client before the request
+        # is ever sent, which would make this test pass for the wrong reason.
+        response = client.post(f"/api/agent-manifests/{quote(agent_id, safe='')}/run")
+
+        assert response.status_code in (404, 422), response.text
+        assert fake_engine.calls == [], f"{agent_id!r} reached the engine"
+
+    @pytest.mark.parametrize(
+        "agent_id", [i for i in HOSTILE_IDS if i and "/" not in i and i not in {".", ".."}]
+    )
+    def test_a_hostile_id_that_reaches_the_handler_is_a_422(
+        self, client, seeded, fake_engine, agent_id
+    ):
+        """These ids survive routing — no slash and no dot segment — so they
+        prove the HANDLER's gate rather than the router's path normalisation.
+        Same parameter on all five routes."""
+        from urllib.parse import quote
+
+        encoded = quote(agent_id, safe="")
+        statuses = {
+            "GET": client.get(f"/api/agent-manifests/{encoded}").status_code,
+            "PATCH": client.patch(
+                f"/api/agent-manifests/{encoded}", json={"name": "X"}
+            ).status_code,
+            "enable": client.post(f"/api/agent-manifests/{encoded}/enable").status_code,
+            "disable": client.post(f"/api/agent-manifests/{encoded}/disable").status_code,
+            "DELETE": client.request(
+                "DELETE", f"/api/agent-manifests/{encoded}", json={"confirm": agent_id}
+            ).status_code,
+        }
+
+        assert statuses == dict.fromkeys(statuses, 422)
+        assert fake_engine.calls == []
+
+    @pytest.mark.parametrize("agent_id", [i for i in HOSTILE_IDS if i])
+    def test_the_same_ids_are_refused_on_every_id_bearing_route(
+        self, client, seeded, fake_engine, agent_id
+    ):
+        """The gate is on the id, not on one route. GET/PATCH/DELETE/enable/
+        disable all take the same path parameter, and all of them can reach a
+        filesystem path or the engine with it."""
+        from urllib.parse import quote
+
+        encoded = quote(agent_id, safe="")
+        responses = {
+            "GET": client.get(f"/api/agent-manifests/{encoded}"),
+            "PATCH": client.patch(f"/api/agent-manifests/{encoded}", json={"name": "X"}),
+            "enable": client.post(f"/api/agent-manifests/{encoded}/enable"),
+            "disable": client.post(f"/api/agent-manifests/{encoded}/disable"),
+            "DELETE": client.request(
+                "DELETE", f"/api/agent-manifests/{encoded}", json={"confirm": agent_id}
+            ),
+        }
+
+        # 422 when the value reaches the handler and `_safe_id` refuses it; 404
+        # when it carries a slash, because the client normalises the path away
+        # before the router ever sees this route. Both are refusals that happen
+        # before anything is read, written or dialled — which is the property.
+        # A 200 or a 5xx anywhere here would not be.
+        refused = {name: r.status_code for name, r in responses.items()}
+        assert all(status in (404, 422) for status in refused.values()), refused
+        assert fake_engine.calls == []
+
+    def test_a_valid_id_still_reaches_the_engine(self, client, seeded, fake_engine):
+        """The counter-case. A guard that refused everything would make every
+        assertion above vacuous."""
+        response = client.post("/api/agent-manifests/demo-agent/run")
+
+        assert response.status_code == 200
+        assert ("POST", "/api/agents/demo-agent/trigger") in fake_engine.calls
+
+    def test_the_path_is_percent_encoded_on_the_way_out(self, client, seeded, fake_engine):
+        """``validate_identifier`` already leaves nothing to encode, which is
+        the point: the second lock costs nothing and holds if the first is ever
+        loosened."""
+        import inspect
+
+        from routers import agent_manifests
+
+        source = inspect.getsource(agent_manifests.run_manifest)
+        assert "quote(agent_id" in source, "the run proxy stopped encoding the id"
+
+
 # ─── Rules 1 and 2 ───────────────────────────────────────────────────
 
 

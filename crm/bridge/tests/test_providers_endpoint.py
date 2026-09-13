@@ -21,6 +21,7 @@ import json
 import logging
 from pathlib import Path  # noqa: TC003
 from unittest.mock import patch
+from urllib.parse import quote
 
 import pytest
 import yaml
@@ -523,6 +524,22 @@ class TestTestConnectionProxy:
     ) -> None:
         response = controls_client_as_operator.post(
             "/api/providers/nope/test", json={"api_key": FAKE_KEY}
+        )
+        assert response.status_code == 404
+        assert fake_engine.calls == []
+
+    @pytest.mark.parametrize(
+        "provider_id", ["..", "a/b", "http://evil.example.com", "a?b=c", "a#b", "%2e%2e"]
+    )
+    def test_a_url_shaped_provider_id_never_reaches_the_engine(
+        self, controls_client_as_operator, fake_engine, provider_id
+    ) -> None:
+        """This route interpolates an id into an engine URL. It is not a regex
+        that makes that safe but an allowlist: ``provider_by_id`` is a dict
+        lookup against the static PROVIDERS table, so the id that reaches the
+        URL is a repo constant and the caller's string is only ever a key."""
+        response = controls_client_as_operator.post(
+            f"/api/providers/{quote(provider_id, safe='')}/test", json={"api_key": FAKE_KEY}
         )
         assert response.status_code == 404
         assert fake_engine.calls == []
