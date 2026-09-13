@@ -282,7 +282,7 @@ class TestToolExecution:
             mock_update.return_value = True
             await _execute_tool(
                 "update_task",
-                {"id": "task-123", "requiresHuman": True},
+                {"id": "aaaaaaa1-0000-4000-8000-000000000123", "requiresHuman": True},
                 agent_id="test-agent",
                 tenant_id="test-tenant",
             )
@@ -340,7 +340,7 @@ class TestToolExecution:
             mock_update.return_value = True
             await _execute_tool(
                 "update_task",
-                {"id": "task-123", "status": "DONE"},
+                {"id": "aaaaaaa1-0000-4000-8000-000000000123", "status": "DONE"},
                 agent_id="main",
                 tenant_id="test-tenant",
                 task_author_override="scout",
@@ -618,16 +618,22 @@ class TestMergeAndAliasTools:
     async def test_merge_people_executor(self):
         """merge_people calls dal.merge_people."""
         with patch("robothor.crm.dal.merge_people") as mock_merge:
-            mock_merge.return_value = {"id": "keeper-1", "first_name": "Alice"}
+            mock_merge.return_value = {
+                "id": "33333333-3333-4333-8333-333333333333",
+                "first_name": "Alice",
+            }
             result = await _execute_tool(
                 "merge_people",
-                {"keeperId": "keeper-1", "loserId": "loser-1"},
+                {
+                    "keeperId": "33333333-3333-4333-8333-333333333333",
+                    "loserId": "44444444-4444-4444-8444-444444444444",
+                },
                 tenant_id="test",
             )
         assert result["success"] is True
         mock_merge.assert_called_once_with(
-            keeper_id="keeper-1",
-            loser_id="loser-1",
+            keeper_id="33333333-3333-4333-8333-333333333333",
+            loser_id="44444444-4444-4444-8444-444444444444",
             tenant_id="test",
         )
 
@@ -635,10 +641,13 @@ class TestMergeAndAliasTools:
     async def test_merge_contacts_executor(self):
         """merge_contacts is an alias for merge_people."""
         with patch("robothor.crm.dal.merge_people") as mock_merge:
-            mock_merge.return_value = {"id": "keeper-1"}
+            mock_merge.return_value = {"id": "33333333-3333-4333-8333-333333333333"}
             result = await _execute_tool(
                 "merge_contacts",
-                {"keeperId": "keeper-1", "loserId": "loser-1"},
+                {
+                    "keeperId": "33333333-3333-4333-8333-333333333333",
+                    "loserId": "44444444-4444-4444-8444-444444444444",
+                },
                 tenant_id="test",
             )
         assert result["success"] is True
@@ -648,16 +657,19 @@ class TestMergeAndAliasTools:
     async def test_merge_companies_executor(self):
         """merge_companies calls dal.merge_companies."""
         with patch("robothor.crm.dal.merge_companies") as mock_merge:
-            mock_merge.return_value = {"id": "keeper-co"}
+            mock_merge.return_value = {"id": "55555555-5555-4555-8555-555555555555"}
             result = await _execute_tool(
                 "merge_companies",
-                {"keeperId": "keeper-co", "loserId": "loser-co"},
+                {
+                    "keeperId": "55555555-5555-4555-8555-555555555555",
+                    "loserId": "66666666-6666-4666-8666-666666666666",
+                },
                 tenant_id="test",
             )
         assert result["success"] is True
         mock_merge.assert_called_once_with(
-            keeper_id="keeper-co",
-            loser_id="loser-co",
+            keeper_id="55555555-5555-4555-8555-555555555555",
+            loser_id="66666666-6666-4666-8666-666666666666",
             tenant_id="test",
         )
 
@@ -668,7 +680,12 @@ class TestMergeAndAliasTools:
             mock_merge.return_value = None
             result = await _execute_tool(
                 "merge_people",
-                {"keeperId": "bad", "loserId": "bad"},
+                # Well-formed ids that do not exist: the "not found" path, as
+                # distinct from the id-shape refusal in _id_argument_error.
+                {
+                    "keeperId": "77777777-7777-4777-8777-777777777777",
+                    "loserId": "88888888-8888-4888-8888-888888888888",
+                },
                 tenant_id="test",
             )
         assert "error" in result
@@ -801,7 +818,7 @@ class TestTaskResolutionFixes:
             mock_resolve.return_value = True
             await _execute_tool(
                 "resolve_task",
-                {"id": "task-123", "resolution": "Done"},
+                {"id": "aaaaaaa1-0000-4000-8000-000000000123", "resolution": "Done"},
                 agent_id="main",
                 tenant_id="test-tenant",
             )

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 from robothor.constants import SANDBOX_DENIAL_PREFIX
+from robothor.crm.tool_ids import id_argument_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -75,26 +75,39 @@ def _sandbox_write_allowed(name: str, ctx: ToolContext) -> bool:
     return name in SANDBOX_WRITE_TOOLS and ctx.tenant_id == sandbox_tenant_id()
 
 
+# ── Id validation at the tool boundary ───────────────────────────────────
+#
+# The tables and the check live in robothor.crm.tool_ids, because the same
+# tools are dispatched from two places — this module for the agent fleet and
+# robothor.api.mcp.handle_tool_call for the operator's own Claude sessions —
+# and a guard that covers one dispatcher is the same mistake one file over.
+# Every handler registered here is a CRM tool, so the check applies to all of
+# them; the MCP dispatcher scopes it with tool_ids.CRM_TOOLS.
+
+
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        if name in _CRM_MUTATING_TOOLS:
+        async def guarded(
+            args: dict[str, Any],
+            ctx: ToolContext,
+            _fn: Callable[..., Any] = fn,
+            _name: str = name,
+        ) -> dict[str, Any]:
+            if (
+                _name in _CRM_MUTATING_TOOLS
+                and ctx.is_benchmark
+                and not _sandbox_write_allowed(_name, ctx)
+            ):
+                return {
+                    "error": f"{SANDBOX_DENIAL_PREFIX} {_name} writes are disabled",
+                    "guard": "is_benchmark",
+                }
+            bad_id = id_argument_error(_name, args)
+            if bad_id is not None:
+                return bad_id
+            return cast("dict[str, Any]", await _fn(args, ctx))
 
-            async def gated(
-                args: dict[str, Any],
-                ctx: ToolContext,
-                _fn: Callable[..., Any] = fn,
-                _name: str = name,
-            ) -> dict[str, Any]:
-                if ctx.is_benchmark and not _sandbox_write_allowed(_name, ctx):
-                    return {
-                        "error": f"{SANDBOX_DENIAL_PREFIX} {_name} writes are disabled",
-                        "guard": "is_benchmark",
-                    }
-                return cast("dict[str, Any]", await _fn(args, ctx))
-
-            HANDLERS[name] = gated
-        else:
-            HANDLERS[name] = fn
+        HANDLERS[name] = guarded
         return fn
 
     return decorator
@@ -485,20 +498,9 @@ async def _get_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         scope_for_query,
     )
 
-    # Validate at the tool boundary: LLM-hallucinated placeholder ids
-    # ("task_jkl012") used to reach the uuid-typed SQL parameter verbatim and
-    # crash with psycopg2 InvalidTextRepresentation.
-    task_id = args.get("id", "")
-    try:
-        uuid.UUID(str(task_id))
-    except ValueError:
-        return {
-            "error": (
-                f"invalid task id {task_id!r} — expected a UUID; "
-                "use list_tasks or list_my_tasks to find real task ids"
-            )
-        }
-
+    # The id shape is validated in _handler, for every id-bearing tool in
+    # this module (see robothor.crm.tool_ids) — this one used to carry the only
+    # copy of that guard.
     _mode = data_scoping_mode()
     result = await asyncio.to_thread(
         get_task,
@@ -1037,18 +1039,14 @@ async def _list_messages(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     from robothor.engine.feature_flags import data_scoping_mode
     from robothor.identity.scope import log_would_drop, observe_scope, scope_for_query
 
-    # Validate at the tool boundary: LLM-hallucinated placeholder ids
-    # ("cnv-00456") used to reach the integer-typed SQL parameter verbatim and
-    # crash with psycopg2 InvalidTextRepresentation.
-    raw_conversation_id = args.get("conversationId")
+    # _handler has already refused a non-integer conversation id (see
+    # id_argument_error); this is the coercion the DAL needs, not a second
+    # check. Kept defensive so a direct call cannot reach SQL with a string.
     try:
-        conversation_id = int(str(raw_conversation_id))
+        conversation_id = int(str(args.get("conversationId")))
     except (TypeError, ValueError):
-        return {
-            "error": (
-                f"invalid conversation id {raw_conversation_id!r} — expected an integer id; "
-                "use list_conversations to find real conversation ids"
-            )
+        return id_argument_error("list_messages", args) or {
+            "error": "conversationId is not a valid id — expected an integer id"
         }
 
     _mode = data_scoping_mode()
