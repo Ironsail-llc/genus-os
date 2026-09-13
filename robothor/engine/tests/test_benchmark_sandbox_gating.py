@@ -98,8 +98,11 @@ class TestNonBenchmarkBehaviorUnchanged:
             patch("robothor.crm.dal.get_task", return_value=None),
             patch("robothor.crm.dal.resolve_task", return_value=True) as mock_resolve,
         ):
-            result = await HANDLERS["resolve_task"]({"id": "task-1", "resolution": "done"}, ctx)
-        assert result == {"success": True, "id": "task-1"}
+            # A real UUID: the handlers refuse a placeholder id at the tool
+            # boundary, before the sandbox gate has anything to say.
+            task_id = "aaaaaaa1-0000-4000-8000-000000000001"
+            result = await HANDLERS["resolve_task"]({"id": task_id, "resolution": "done"}, ctx)
+        assert result == {"success": True, "id": task_id}
         assert mock_resolve.called
 
     @pytest.mark.asyncio

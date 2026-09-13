@@ -190,7 +190,70 @@ class TestDoNotContactSurface:
         import robothor.crm.dal as dal
 
         monkeypatch.setattr(dal, "update_person", _fake_update_person)
-        result = await handle_tool_call("update_person", {"id": "p1", "doNotContact": True})
+        # A real UUID: ids are validated at this boundary now, so a
+        # placeholder would be refused before the DAL (see TestIdValidation).
+        person_id = "11111111-1111-4111-8111-111111111111"
+        result = await handle_tool_call("update_person", {"id": person_id, "doNotContact": True})
 
-        assert result == {"success": True, "id": "p1"}
+        assert result == {"success": True, "id": person_id}
         assert captured["do_not_contact"] is True
+
+
+class TestIdValidation:
+    """The MCP surface is the *other* dispatcher for the same CRM tools.
+
+    The engine handlers grew an id-shape guard after `get_person` and
+    `list_tasks` crashed with psycopg2 InvalidTextRepresentation on
+    2026-09-13. This module declares and dispatches the same tools straight
+    to the DAL, and it is the surface the operator's own Claude sessions use
+    (`mcp__robothor-memory__get_person`), so the identical crash lives here
+    until both dispatchers call the same validator.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_person_refuses_an_email_address_as_an_id(self, monkeypatch):
+        import robothor.crm.dal as dal
+
+        def _must_not_run(*a, **k):  # pragma: no cover - the point is it never runs
+            raise AssertionError("the DAL was reached with a non-uuid id")
+
+        monkeypatch.setattr(dal, "get_person", _must_not_run)
+        result = await handle_tool_call("get_person", {"id": "bob.quill@example.com"})
+
+        assert "bob.quill@example.com" in result["error"]
+        assert "not a valid id" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_refuses_a_numeric_person_id(self, monkeypatch):
+        import robothor.crm.dal as dal
+
+        def _must_not_run(*a, **k):  # pragma: no cover
+            raise AssertionError("the DAL was reached with a non-uuid personId")
+
+        monkeypatch.setattr(dal, "list_tasks", _must_not_run)
+        result = await handle_tool_call("list_tasks", {"personId": "85105"})
+
+        assert "85105" in result["error"]
+        assert "not a valid id" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_a_real_id_still_reaches_the_dal(self, monkeypatch):
+        import robothor.crm.dal as dal
+
+        person_id = "11111111-1111-4111-8111-111111111111"
+        monkeypatch.setattr(dal, "get_person", lambda pid: {"id": pid})
+        assert await handle_tool_call("get_person", {"id": person_id}) == {"id": person_id}
+
+    @pytest.mark.asyncio
+    async def test_an_unfiltered_list_still_reaches_the_dal(self, monkeypatch):
+        """The optional personId filter being absent is not an invalid id."""
+        import robothor.crm.dal as dal
+
+        monkeypatch.setattr(dal, "list_tasks", lambda **kwargs: [])
+        assert await handle_tool_call("list_tasks", {}) == {"tasks": [], "count": 0}
+
+    @pytest.mark.asyncio
+    async def test_a_non_crm_tool_is_untouched(self, monkeypatch):
+        """The guard keys off CRM id argument names, not every tool call."""
+        result = await handle_tool_call("nonexistent_tool", {"id": "not-a-uuid"})
+        assert "not a valid id" not in result.get("error", "")

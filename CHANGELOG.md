@@ -1,3 +1,14 @@
+## [1.76.0](https://github.com/Ironsail-llc/genus-os/compare/v1.75.0...v1.76.0) (2026-09-13)
+
+### Features
+
+* **channels:** email as a delivery target with dnc check ([#523](https://github.com/Ironsail-llc/genus-os/issues/523)) ([3435210](https://github.com/Ironsail-llc/genus-os/commit/343521036dbee158d6bba8d4eb0205bf957d1857))
+
+### Bug Fixes
+
+* **guardrails:** the credential detector ignores placeholders, type names and labels ([#526](https://github.com/Ironsail-llc/genus-os/issues/526)) ([fecfb92](https://github.com/Ironsail-llc/genus-os/commit/fecfb927849ef19560c9bd55f9c4c3fd76ac2bdc))
+* **memory:** remote generation reports the caller's budget and reserves headroom ([#525](https://github.com/Ironsail-llc/genus-os/issues/525)) ([bfe4b0d](https://github.com/Ironsail-llc/genus-os/commit/bfe4b0db56108ca4573661389678147d9011e066))
+
 ## [1.75.0](https://github.com/Ironsail-llc/genus-os/compare/v1.74.0...v1.75.0) (2026-09-13)
 
 ### Features

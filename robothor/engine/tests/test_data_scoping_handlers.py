@@ -22,13 +22,19 @@ import pytest
 from robothor.engine.tools.dispatch import _execute_tool
 from robothor.identity import IdentityContext
 
+# The CRM handlers validate id shape at the tool boundary, and a placeholder
+# id is refused before any DAL call, so fixture ids here are real UUIDs.
+OWN_PERSON_ID = "11111111-1111-4111-8111-111111111111"
+OTHER_PERSON_ID = "99999999-9999-4999-8999-999999999999"
+NOTE_ID = "22222222-2222-4222-8222-222222222222"
+
 RESTRICTED_IDENTITY = IdentityContext(
     tenant_id="tenant-a",
     channel="webchat",
     identifier="user-1",
     verified=True,
     role="member",
-    person_id="person-1",
+    person_id=OWN_PERSON_ID,
 )
 
 
@@ -67,7 +73,7 @@ class TestSearchMemoryScoping:
         scope = mock_search.call_args.kwargs.get("scope")
         assert scope is not None
         assert scope.restricted is True
-        assert scope.person_id == "person-1"
+        assert scope.person_id == OWN_PERSON_ID
 
     @pytest.mark.asyncio
     async def test_enforce_mode_no_identity_passes_none(self):
@@ -87,8 +93,8 @@ class TestSearchMemoryScoping:
             patch("robothor.memory.facts.search_facts") as mock_search,
         ):
             mock_search.return_value = [
-                {"id": 1, "person_id": "person-1", "fact_text": "own"},
-                {"id": 2, "person_id": "person-9", "fact_text": "not mine"},
+                {"id": 1, "person_id": OWN_PERSON_ID, "fact_text": "own"},
+                {"id": 2, "person_id": OTHER_PERSON_ID, "fact_text": "not mine"},
             ]
             await _call(
                 "search_memory", {"query": "x"}, identity=RESTRICTED_IDENTITY, user_role="member"
@@ -140,8 +146,8 @@ class TestListNotesScoping:
         caplog.set_level(logging.INFO, logger="robothor.identity.scope")
         with _mode_env("observe"), patch("robothor.crm.dal.list_notes") as mock_list:
             mock_list.return_value = [
-                {"id": "n1", "person_id": "person-1"},
-                {"id": "n2", "person_id": "person-9"},
+                {"id": "n1", "person_id": OWN_PERSON_ID},
+                {"id": "n2", "person_id": OTHER_PERSON_ID},
             ]
             await _call("list_notes", {}, identity=RESTRICTED_IDENTITY, user_role="member")
         assert mock_list.call_args.kwargs.get("scope") is None
@@ -157,9 +163,12 @@ class TestOtherCrmHandlersWireScope:
     @pytest.mark.asyncio
     async def test_get_person(self):
         with _mode_env("enforce"), patch("robothor.crm.dal.get_person") as mock_get:
-            mock_get.return_value = {"id": "person-1"}
+            mock_get.return_value = {"id": OWN_PERSON_ID}
             await _call(
-                "get_person", {"id": "person-1"}, identity=RESTRICTED_IDENTITY, user_role="member"
+                "get_person",
+                {"id": OWN_PERSON_ID},
+                identity=RESTRICTED_IDENTITY,
+                user_role="member",
             )
         assert mock_get.call_args.kwargs.get("scope") is not None
 
@@ -173,9 +182,9 @@ class TestOtherCrmHandlersWireScope:
     @pytest.mark.asyncio
     async def test_get_note(self):
         with _mode_env("enforce"), patch("robothor.crm.dal.get_note") as mock_get:
-            mock_get.return_value = {"id": "note-1"}
+            mock_get.return_value = {"id": NOTE_ID}
             await _call(
-                "get_note", {"id": "note-1"}, identity=RESTRICTED_IDENTITY, user_role="member"
+                "get_note", {"id": NOTE_ID}, identity=RESTRICTED_IDENTITY, user_role="member"
             )
         assert mock_get.call_args.kwargs.get("scope") is not None
 
@@ -220,10 +229,10 @@ class TestOtherCrmHandlersWireScope:
     @pytest.mark.asyncio
     async def test_get_contact_360(self):
         with _mode_env("enforce"), patch("robothor.crm.dal.get_contact_360") as mock_get:
-            mock_get.return_value = {"person": {"id": "person-1"}}
+            mock_get.return_value = {"person": {"id": OWN_PERSON_ID}}
             await _call(
                 "get_contact_360",
-                {"id": "person-1"},
+                {"id": OWN_PERSON_ID},
                 identity=RESTRICTED_IDENTITY,
                 user_role="member",
             )
@@ -276,7 +285,7 @@ class TestOtherCrmHandlersWireScope:
             mock_get.return_value = []
             await _call(
                 "list_contact_messages",
-                {"id": "person-1"},
+                {"id": OWN_PERSON_ID},
                 identity=RESTRICTED_IDENTITY,
                 user_role="member",
             )
@@ -313,7 +322,7 @@ class TestListMessagesRefusal:
             patch("robothor.crm.dal.get_conversation") as mock_get_convo,
         ):
             mock_list.return_value = [{"id": "m1"}, {"id": "m2"}]
-            mock_get_convo.return_value = {"id": 1, "person_id": "person-9"}
+            mock_get_convo.return_value = {"id": 1, "person_id": OTHER_PERSON_ID}
             result = await _call(
                 "list_messages",
                 {"conversationId": 1},
@@ -340,7 +349,7 @@ class TestListMessagesRefusal:
             patch("robothor.crm.dal.get_conversation") as mock_get_convo,
         ):
             mock_list.return_value = [{"id": "m1"}]
-            mock_get_convo.return_value = {"id": 1, "person_id": "person-1"}
+            mock_get_convo.return_value = {"id": 1, "person_id": OWN_PERSON_ID}
             await _call(
                 "list_messages",
                 {"conversationId": 1},
@@ -367,7 +376,7 @@ class TestListContactMessagesRefusal:
             mock_get.return_value = {"error": "Access denied — restricted to your own record"}
             result = await _call(
                 "list_contact_messages",
-                {"id": "person-9"},
+                {"id": OTHER_PERSON_ID},
                 identity=RESTRICTED_IDENTITY,
                 user_role="member",
             )
@@ -385,7 +394,7 @@ class TestListContactMessagesRefusal:
             mock_get.return_value = [{"id": "m1"}, {"id": "m2"}]
             result = await _call(
                 "list_contact_messages",
-                {"id": "person-9"},
+                {"id": OTHER_PERSON_ID},
                 identity=RESTRICTED_IDENTITY,
                 user_role="member",
             )
@@ -410,7 +419,7 @@ class TestListContactMessagesRefusal:
             mock_get.return_value = [{"id": "m1"}]
             await _call(
                 "list_contact_messages",
-                {"id": "person-1"},
+                {"id": OWN_PERSON_ID},
                 identity=RESTRICTED_IDENTITY,
                 user_role="member",
             )
@@ -427,7 +436,7 @@ class TestSearchRecordsPerTableObserve:
         with _mode_env("observe"), patch("robothor.crm.dal.search_records") as mock_search:
             mock_search.return_value = [
                 {"id": "p1", "_table": "crm_people"},  # not own row -> dropped
-                {"id": "n1", "person_id": "person-9", "_table": "crm_notes"},  # dropped
+                {"id": "n1", "person_id": OTHER_PERSON_ID, "_table": "crm_notes"},  # dropped
                 {"id": "c1", "_table": "crm_companies"},  # unscoped, never dropped
             ]
             await _call(
