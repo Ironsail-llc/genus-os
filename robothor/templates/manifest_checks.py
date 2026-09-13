@@ -42,10 +42,15 @@ class CheckResult:
     Helm's agent builder refuses an edit on exactly that comparison, and it
     refused a repair.
 
-    Populated from ``details`` when a check already puts one string per problem
-    there (most of them do), or explicitly via ``faults=`` when the enumeration
-    lives in the message instead. Empty means "this result is one fault", which
-    is what every previously-written check that sets neither is saying.
+    **Opt-in, never inferred.** It defaulted to ``details`` for one round, which
+    is right for the seven checks whose details are one string per problem and
+    wrong for the two whose details are prose — K keeps its computed list in the
+    MESSAGE and puts advice in details, so the list was thrown away; E puts two
+    lines of CONTEXT in details, so one problem became two findings and the
+    explanation was lost from both. A default that guesses right seven times out
+    of nine is what silently breaks the tenth, so it no longer guesses: a check
+    that enumerates says so, and an empty ``faults`` means "one result, one
+    problem — use the message".
     """
 
     def __init__(self, check_id: str, name: str):
@@ -54,6 +59,9 @@ class CheckResult:
         self.status = "PASS"
         self.message = ""
         self.details: list[str] = []
+        #: One string per independent problem, or empty for "this is one
+        #: problem". Set it wherever ``details`` enumerates; see the class
+        #: docstring for why it is not inferred from ``details``.
         self.faults: list[str] = []
 
     def fail(
@@ -62,7 +70,7 @@ class CheckResult:
         self.status = "FAIL"
         self.message = msg
         self.details = details or []
-        self.faults = faults if faults is not None else list(self.details)
+        self.faults = list(faults or [])
         return self
 
     def warn(
@@ -71,7 +79,7 @@ class CheckResult:
         self.status = "WARN"
         self.message = msg
         self.details = details or []
-        self.faults = faults if faults is not None else list(self.details)
+        self.faults = list(faults or [])
         return self
 
     def skip(self, msg: str) -> CheckResult:
@@ -122,7 +130,7 @@ def check_schema_required(
         issues.append(f"department '{dept}' not in schema enum: {sorted(departments)}")
 
     if issues:
-        return result.fail("Schema violations (required)", issues)
+        return result.fail("Schema violations (required)", issues, faults=issues)
     return result
 
 
@@ -174,7 +182,7 @@ def check_structure(manifest: dict[str, Any], inherited_model: str = "") -> Chec
         )
 
     if issues:
-        return result.fail("Structure issues", issues)
+        return result.fail("Structure issues", issues, faults=issues)
     return result
 
 
@@ -200,8 +208,8 @@ def check_files(manifest: dict[str, Any], repo_root: Path) -> CheckResult:
     if issues:
         has_missing = any("not found" in i for i in issues)
         if has_missing:
-            return result.fail("Missing files", issues)
-        return result.warn("File issues", issues)
+            return result.fail("Missing files", issues, faults=issues)
+        return result.warn("File issues", issues, faults=issues)
     return result
 
 
@@ -298,7 +306,7 @@ def check_relationships(manifest: dict[str, Any], all_manifests: dict[str, Any])
         issues.append(f"escalates_to '{escalates_to}' has no manifest")
 
     if issues:
-        return result.warn("Relationship targets incomplete", issues)
+        return result.warn("Relationship targets incomplete", issues, faults=issues)
     return result
 
 
@@ -392,7 +400,7 @@ def check_hooks(manifest: dict[str, Any]) -> CheckResult:
             issues.append(f"hooks[{i}]: missing 'event_type'")
 
     if issues:
-        return result.fail("Invalid hook entries", issues)
+        return result.fail("Invalid hook entries", issues, faults=issues)
     return result
 
 

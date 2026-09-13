@@ -598,6 +598,85 @@ class TestAWrongTypedManifestIsReportedNotRaised:
         assert "a-secret-value" not in json.dumps(body), "the raise text leaked"
 
 
+class TestOneProblemIsOneFinding:
+    """`CheckResult.faults` must not guess which checks enumerate.
+
+    Round 3 defaulted `faults` from `details`, which is right for the seven
+    checks whose details are one string per problem and wrong for the two whose
+    details are prose. A default that guesses right seven times out of nine is
+    what silently breaks the tenth:
+
+    * **K** carries its list in the MESSAGE (`Missing basic I/O tools: [...]`)
+      and a sentence of advice in `details` — so the default threw the list away
+      and reported only the advice.
+    * **E** carries its explanation in the message and two lines of CONTEXT in
+      `details` — so one problem became two findings and the explanation was
+      lost from both.
+
+    The default is now opt-in: a check says `faults=` when its details
+    enumerate, and otherwise one result is one finding carrying its whole
+    message. A future prose-details check cannot repeat this, because nothing
+    infers anything any more.
+    """
+
+    def _findings(self, client, manifest: dict, bucket: str, check: str) -> list[dict]:
+        body = client.post("/api/agent-manifests/validate", json={"manifest": manifest}).json()
+        return [issue for issue in body[bucket] if issue["path"] == f"check.{check}"]
+
+    def test_check_k_keeps_the_list_of_missing_tools(self, client, workspace, fake_engine):
+        """Only `write_file` is missing, deliberately.
+
+        K's `details` is generic advice that names all three basic tools, so a
+        manifest missing all three would pass this test even with the computed
+        list thrown away — the assertion has to be able to tell the COMPUTED
+        set from the boilerplate that mentions the same words.
+        """
+        candidate = {**EXISTING, "tools_allowed": ["exec", "read_file"]}
+
+        found = self._findings(client, candidate, "warnings", "K")
+
+        assert len(found) == 1, found
+        message = found[0]["message"]
+        assert "Missing basic I/O tools" in message, message
+        assert "write_file" in message, message
+
+    def test_check_e_is_one_finding_that_explains_itself(self, client, workspace, fake_engine):
+        candidate = {
+            **EXISTING,
+            "status_file": "brain/memory/demo-agent-status.md",
+            "tools_allowed": ["read_file"],
+        }
+
+        found = self._findings(client, candidate, "errors", "E")
+
+        assert len(found) == 1, found
+        assert "status_file but no write tools" in found[0]["message"], found[0]
+
+    def test_an_enumerating_check_still_reports_one_finding_per_item(
+        self, client, workspace, fake_engine
+    ):
+        """The counter-case. Making the default conservative must not undo
+        round 3 — D still has to split, or the partial-repair fix is gone."""
+        candidate = {**EXISTING, "tools_allowed": ["bad_a", "bad_b", "exec"]}
+
+        found = self._findings(client, candidate, "errors", "D")
+
+        assert len(found) == 2, found
+        rendered = json.dumps(found)
+        assert "bad_a" in rendered and "bad_b" in rendered
+
+    def test_a_multi_issue_schema_check_still_splits(self, client, workspace, fake_engine):
+        """Check A's details genuinely are one string per problem, so it keeps
+        the per-item behaviour it needs for the same reason D does."""
+        candidate = {**EXISTING, "id": "Not-Kebab", "department": "not-a-department"}
+
+        found = self._findings(client, candidate, "errors", "A")
+
+        assert len(found) >= 2, found
+        rendered = json.dumps(found)
+        assert "kebab-case" in rendered and "department" in rendered
+
+
 # ─── Creating ────────────────────────────────────────────────────────
 
 
