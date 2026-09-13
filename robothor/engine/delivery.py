@@ -2,9 +2,21 @@
 Output delivery — routes agent output to the correct destination.
 
 Modes:
-- announce: Send to Telegram chat
+- announce: Send to the agent's ``delivery.channel`` (``telegram`` by default)
 - none: Silent (no delivery)
 - log: Publish to event bus only
+
+Announced output is routed **by name**. ``AgentConfig.delivery_channel`` used to
+be parsed from the manifest, stored on ``agent_schedules``, reported on the
+dashboard — and ignored, because this module called ``_deliver_telegram`` for
+every announced run. It now resolves through
+:func:`robothor.engine.channels.get_channel`, and a name nothing is registered
+under is recorded ``failed:no_channel:<name>`` rather than quietly delivered to
+Telegram.
+
+Whatever the channel, the status is derived from the receipt the channel
+returned — see :mod:`robothor.engine.channels.base` for why that rule is
+written down rather than assumed.
 """
 
 from __future__ import annotations
@@ -14,7 +26,7 @@ import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from robothor.engine.chunking import split_telegram_message
+from robothor.engine.channels import SendReceipt, get_channel
 from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode
 
 if TYPE_CHECKING:
@@ -27,9 +39,26 @@ _platform_senders: dict[str, Any] = {}
 
 
 def register_platform_sender(platform: str, send_func: Callable[..., Any]) -> None:
-    """Register a send function for a delivery platform."""
+    """Register a send function for a delivery platform.
+
+    Also registers the sender as a named channel, so the five existing callers
+    become channel registrations without changing. ``engine/slack.py`` has
+    registered a ``"slack"`` sender since it was written and nothing could
+    reach it; a manifest naming ``delivery.channel: slack`` now can.
+
+    Built-in channel names are exempt: the Telegram bot calls
+    ``set_telegram_sender(self.send_message)`` from its own constructor, and
+    replacing the built-in wrapper with a bare sender would drop the guards
+    (missing chat id, unexpanded ``${VAR}``) that wrapper exists for.
+    """
     _platform_senders[platform] = send_func
     logger.info("Registered platform sender: %s", platform)
+
+    from robothor.engine.channels import BUILTIN_CHANNELS, register_channel
+    from robothor.engine.channels.sender import SenderChannel
+
+    if platform not in BUILTIN_CHANNELS:
+        register_channel(platform, SenderChannel(platform, send_func))
 
 
 def get_platform_sender(platform: str) -> Any | None:
@@ -508,7 +537,32 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
         return True
 
     if mode == DeliveryMode.ANNOUNCE:
-        result = await _deliver_telegram(config, text, run)
+        # Route by NAME. An empty delivery_channel means telegram, which is
+        # every manifest shipped so far, so no instance changes behaviour.
+        name = (config.delivery_channel or "telegram").strip() or "telegram"
+        channel = get_channel(name)
+        if channel is None:
+            logger.error(
+                "Agent %s announces on channel %r, which is not registered — "
+                "refusing to fall back to another surface",
+                config.id,
+                name,
+            )
+            _mark_delivery_failed(run, name, f"failed:no_channel:{name}")
+            await _persist_delivery_status(run)
+            return False
+        try:
+            receipt = await channel.send(config.delivery_to, text, config=config, run=run)
+        except Exception as e:
+            # The protocol says a send reports failure as a receipt rather than
+            # raising, but a third-party channel is third-party code: a bug in
+            # one must not escape into run finalization, where it would look
+            # like the run itself failed. Recorded, not swallowed.
+            logger.error("Channel %s raised while delivering for %s: %s", name, config.id, e)
+            _mark_delivery_failed(run, name, f"failed:{name}_exception: {e}")
+            await _persist_delivery_status(run)
+            return False
+        result = await _finish_delivery(config, run, text, name, receipt)
         await _persist_delivery_status(run)
         return result
 
@@ -537,57 +591,78 @@ def _mark_delivery_failed(run: AgentRun, channel: str, status: str) -> None:
     run.delivered_at = None
 
 
-def _acknowledged_messages(sent: Any) -> tuple[int, list[str]]:
-    """Count the chunks the platform actually acknowledged.
+def apply_receipt(run: AgentRun, channel: str, receipt: SendReceipt) -> bool:
+    """Stamp ``run`` with what a channel proved, and say whether it was complete.
 
-    ``TelegramBot.send_message`` returns one entry per chunk it managed to
-    send — a chunk that failed both the HTML and the plain-text attempt is
-    simply absent from the list, so the length of the result is the only
-    evidence of what landed.
+    The single mapping from receipt to ``agent_runs.delivery_status``. It lives
+    here rather than in each channel for the same reason
+    ``channels.base.acknowledged_messages`` is shared: two opinions about what
+    the same evidence means is how one surface ends up stricter than another.
 
-    Args:
-        sent: Whatever the registered sender returned.
+    - every chunk acknowledged: ``delivered``, with ``delivered_at`` set
+    - some chunks acknowledged: ``partial:<sent>/<expected>``
+    - nothing acknowledged: ``failed:<channel>_send``
+
+    A channel that knows something the counts do not — a misconfiguration
+    caught before the send, an exception — supplies ``receipt.status`` and that
+    value is used verbatim.
+
+    ``delivered_at`` is set only on a complete send, whatever the status says: a
+    truncated briefing is not a delivered briefing.
 
     Returns:
-        ``(acknowledged_count, platform_message_ids)``. The id list can be
-        shorter than the count if the platform returned an object without a
-        ``message_id``; the count, not the ids, decides delivery.
+        True only if the channel acknowledged every expected chunk.
     """
-    if not sent:
-        return 0, []
-    try:
-        messages = list(sent)
-    except TypeError:  # a single message object, not a sequence
-        messages = [sent]
+    run.delivery_channel = channel
+    if receipt.status:
+        run.delivery_status = receipt.status
+    elif receipt.complete:
+        run.delivery_status = "delivered"
+    elif receipt.acknowledged:
+        run.delivery_status = f"partial:{receipt.acknowledged}/{receipt.expected}"
+    else:
+        run.delivery_status = f"failed:{channel}_send"
+    run.delivered_at = datetime.now(UTC) if receipt.complete else None
+    return receipt.complete
 
-    count = 0
-    message_ids: list[str] = []
-    for msg in messages:
-        if msg is None:
-            continue
-        count += 1
-        mid = getattr(msg, "message_id", None)
-        if mid is not None:
-            message_ids.append(str(mid))
-    return count, message_ids
+
+async def _finish_delivery(
+    config: AgentConfig,
+    run: AgentRun,
+    text: str,
+    channel: str,
+    receipt: SendReceipt,
+) -> bool:
+    """Record the outcome and fire POST_DELIVERY once, for any channel.
+
+    The dispatch stays here rather than inside each wrapper so
+    ``channel_bus.on_post_delivery`` keeps exactly one instrumentation point no
+    matter which surface sent. Nothing acknowledged means nothing is recorded as
+    said — a failed send must not surface to the channel bus.
+    """
+    complete = apply_receipt(run, channel, receipt)
+    if receipt.acknowledged and receipt.post_delivery:
+        await _dispatch_post_delivery(
+            config=config,
+            run=run,
+            text=receipt.body or text,
+            channel=channel,
+            chat_id=receipt.target or (config.delivery_to or ""),
+            platform_message_ids=receipt.platform_ids,
+        )
+    return complete
 
 
 async def _deliver_telegram(config: AgentConfig, text: str, run: AgentRun) -> bool:
     """Send output to Telegram and record what actually happened.
 
-    ``TelegramBot.send_message`` never raises: it retries a failed chunk as
-    plain text and, when that fails too, logs the error and returns a list
-    that is simply *missing* that chunk (empty if every chunk failed). The
-    returned list is therefore the only evidence of delivery, so the status
-    is derived from it rather than assumed — the same discipline
-    ``alerts.py`` adopted after the arity bug sent 432+ pages nowhere:
-
-    - every chunk acknowledged: ``delivered``, with ``delivered_at`` set
-    - some chunks acknowledged: ``partial:<sent>/<expected>``
-    - nothing acknowledged: ``failed:telegram_send``
-
-    ``delivered_at`` is set only on a complete send — a truncated briefing
-    is not a delivered briefing.
+    Kept as the seam it became. Tests import and call it directly, and instances
+    monkeypatch it to intercept what gets sent, so the send logic moved to
+    :class:`robothor.engine.channels.telegram.TelegramChannel` and this stayed
+    put as the thin delegate. ``TelegramChannel.send`` checks whether this
+    attribute is still the original function and honours a replacement rather
+    than sending anyway — a control whose caller has been replaced is inert, and
+    this codebase has shipped that twice.
 
     Args:
         config: The agent config supplying the chat id and display name.
@@ -597,72 +672,16 @@ async def _deliver_telegram(config: AgentConfig, text: str, run: AgentRun) -> bo
     Returns:
         True only if every chunk was acknowledged by the platform.
     """
-    sender = get_platform_sender("telegram")
-    if sender is None:
-        logger.warning("Telegram sender not initialized, can't deliver for %s", config.id)
-        _mark_delivery_failed(run, "telegram", "failed:telegram_no_sender")
-        return False
+    from robothor.engine.channels.telegram import TelegramChannel
 
-    chat_id = config.delivery_to
-    if not chat_id:
-        logger.warning("No delivery_to chat ID for %s", config.id)
-        _mark_delivery_failed(run, "telegram", "failed:telegram_no_chat_id")
-        return False
-    if "${" in chat_id:
-        logger.error("Unexpanded env var in delivery_to for %s: %s", config.id, chat_id)
-        _mark_delivery_failed(run, "telegram", "failed:telegram_unexpanded_chat_id")
-        return False
+    receipt = await TelegramChannel()._send_now(config, text, config.delivery_to)
+    return await _finish_delivery(config, run, text, "telegram", receipt)
 
-    header = f"*{config.name}*\n\n"
-    full_text = header + text
-    expected_chunks = len(split_telegram_message(full_text))
 
-    try:
-        sent = await sender(chat_id, full_text)
-    except Exception as e:
-        logger.error("Telegram delivery failed for %s: %s", config.id, e)
-        _mark_delivery_failed(run, "telegram", f"failed:telegram_exception: {e}")
-        return False
-
-    acknowledged, platform_message_ids = _acknowledged_messages(sent)
-
-    if acknowledged == 0:
-        logger.error(
-            "Telegram delivery for %s acknowledged 0 of %d chunk(s) — "
-            "the operator saw nothing (run=%s)",
-            config.id,
-            expected_chunks,
-            run.id,
-        )
-        _mark_delivery_failed(run, "telegram", "failed:telegram_send")
-        return False
-
-    complete = acknowledged >= expected_chunks
-    run.delivery_channel = "telegram"
-    if complete:
-        run.delivery_status = "delivered"
-        run.delivered_at = datetime.now(UTC)
-    else:
-        run.delivery_status = f"partial:{acknowledged}/{expected_chunks}"
-        run.delivered_at = None
-        logger.error(
-            "Telegram delivery for %s was truncated: %d of %d chunk(s) landed (run=%s)",
-            config.id,
-            acknowledged,
-            expected_chunks,
-            run.id,
-        )
-
-    # Map the chunks that DID land so reply-to resolution still works for them.
-    await _dispatch_post_delivery(
-        config=config,
-        run=run,
-        text=full_text,
-        channel="telegram",
-        chat_id=chat_id,
-        platform_message_ids=platform_message_ids,
-    )
-    return complete
+#: The identity ``TelegramChannel.send`` compares against to tell "nobody has
+#: replaced the delegate" from "something has, and its return value is now the
+#: only evidence of what happened".
+_ORIGINAL_DELIVER_TELEGRAM = _deliver_telegram
 
 
 async def _dispatch_post_delivery(

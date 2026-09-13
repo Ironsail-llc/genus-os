@@ -1,0 +1,219 @@
+"""The channel contract: what it means to reach a person, and to have proof.
+
+A channel is one surface the instance talks to people over. Before this module
+the surface was not an abstraction at all — ``delivery.deliver()`` dispatched on
+the delivery *mode* and called ``_deliver_telegram`` for every announced run,
+while ``AgentConfig.delivery_channel`` was parsed from the manifest, written to
+``agent_schedules``, shown on the dashboard, and never once consulted to decide
+where anything went.
+
+The one rule this module exists to enforce
+------------------------------------------
+**A receipt is derived from what the sender returned. Never from reaching the
+next line.** ``robothor/engine/CLAUDE.md`` states it as ``delivered =
+bool(sent)``, and it is written down because the alternative shipped: the alert
+pager read an HTTP 401 as a delivered page and 432+ notifications went nowhere
+while every log line said "sent". ``TelegramBot.send_message`` is built the same
+way — it retries a failed chunk as plain text and, when that fails too, logs and
+returns a list that is simply *missing* that chunk (empty when every chunk
+failed). It never raises. So the length of the returned list is the only
+evidence that anybody saw anything.
+
+``engine/slack.py`` is the standing counter-example: its registered sender
+returns ``None``, so a channel built from it acknowledges nothing and reports
+``failed:``. That is the correct outcome. A channel that assumed success because
+the call did not raise would be a lie with a green test beside it.
+
+Optional slots
+--------------
+:meth:`Channel.ask` and :meth:`Channel.resolve_identity` are declared here so
+the shape is settled, and are *not* implemented by anything in this release —
+inbound identity resolution lands with pairing, and interactive asks with the
+permission-escalation rework. An implementation raises
+:exc:`NotImplementedError` rather than returning a plausible default, because a
+channel that answered "yes" to an approval prompt nobody saw is worse than one
+that refuses.
+
+Because they are declared here, ``isinstance(x, Channel)`` means "implements
+every slot including the optional two". The registry deliberately does not gate
+on that — it requires only ``send``, so a plugin can ship a send-only channel —
+and no code path calls ``ask`` or ``resolve_identity`` yet.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Sequence
+
+__all__ = ["Channel", "SendReceipt", "acknowledged_messages", "receipt_from"]
+
+
+@dataclass(frozen=True)
+class SendReceipt:
+    """What a channel can actually prove about one send.
+
+    Attributes:
+        acknowledged: how many chunks the platform confirmed. Counted from the
+            sender's return value, never assumed.
+        expected: how many chunks the body was split into.
+        platform_ids: the platform's own message ids for the chunks that
+            landed, so reply-to resolution still works for a partial send. May
+            be shorter than ``acknowledged`` when a platform returns an object
+            with no id; the count, not the ids, decides delivery.
+        status: the exact ``agent_runs.delivery_status`` value this channel
+            wants recorded, when it knows something the counts do not — a
+            misconfiguration caught before the send
+            (``failed:telegram_no_chat_id``), or a send that raised. Left
+            ``None``, the status is derived from the counts by
+            :func:`robothor.engine.delivery.apply_receipt`, so there is one
+            mapping rather than one per channel.
+        target: the address the send was aimed at, carried back so the
+            POST_DELIVERY hook can record where the message landed.
+        body: the text as the channel actually sent it, including whatever
+            header the channel added. The channel bus records this, not the
+            pre-formatting body.
+        post_delivery: False for a sink with no per-recipient message to
+            resolve a reply against (the event bus). Suppresses the
+            POST_DELIVERY dispatch rather than recording a message id nobody
+            can reply to.
+    """
+
+    acknowledged: int
+    expected: int
+    platform_ids: list[str] = field(default_factory=list)
+    status: str | None = None
+    target: str = ""
+    body: str = ""
+    post_delivery: bool = True
+
+    @property
+    def complete(self) -> bool:
+        """True only when every expected chunk was acknowledged.
+
+        ``acknowledged > 0`` is part of the test on purpose: an ``expected`` of
+        zero must never make "nothing was sent" satisfy ">= expected".
+        """
+        return self.acknowledged > 0 and self.acknowledged >= self.expected
+
+
+def acknowledged_messages(sent: Any) -> tuple[int, list[str]]:
+    """Count the chunks the platform actually acknowledged.
+
+    ``TelegramBot.send_message`` returns one entry per chunk it managed to
+    send — a chunk that failed both the HTML and the plain-text attempt is
+    simply absent from the list, so the length of the result is the only
+    evidence of what landed.
+
+    Args:
+        sent: Whatever the registered sender returned.
+
+    Returns:
+        ``(acknowledged_count, platform_message_ids)``. The id list can be
+        shorter than the count if the platform returned an object without a
+        ``message_id``; the count, not the ids, decides delivery.
+    """
+    if not sent:
+        return 0, []
+    try:
+        messages = list(sent)
+    except TypeError:  # a single message object, not a sequence
+        messages = [sent]
+
+    count = 0
+    message_ids: list[str] = []
+    for msg in messages:
+        if msg is None:
+            continue
+        count += 1
+        mid = getattr(msg, "message_id", None)
+        if mid is not None:
+            message_ids.append(str(mid))
+    return count, message_ids
+
+
+def receipt_from(
+    sent: Any,
+    expected: int,
+    *,
+    status: str | None = None,
+    target: str = "",
+    body: str = "",
+    post_delivery: bool = True,
+) -> SendReceipt:
+    """Build a receipt from a sender's return value.
+
+    Every channel goes through this rather than counting for itself — two
+    opinions about what "acknowledged" means is how one surface ends up
+    stricter than another about the same evidence.
+    """
+    acknowledged, platform_ids = acknowledged_messages(sent)
+    return SendReceipt(
+        acknowledged=acknowledged,
+        expected=expected,
+        platform_ids=platform_ids,
+        status=status,
+        target=target,
+        body=body,
+        post_delivery=post_delivery,
+    )
+
+
+@runtime_checkable
+class Channel(Protocol):
+    """One surface the instance reaches people over.
+
+    ``name`` is the value a manifest's ``delivery.channel`` has to match, and
+    the key the registry stores the channel under.
+
+    ``inbound_router`` is the slot for the receiving half. It is ``None`` for
+    every channel in this release: the inbound pipeline still lives in
+    ``engine/telegram.py`` and ``engine/slack.py``, which duplicate
+    authorize → resolve identity → session key → ``runner.execute`` → reply.
+    Unifying those needs a second real inbound surface to generalise against,
+    so the slot is declared and left empty rather than filled with a
+    single-caller abstraction.
+    """
+
+    name: str
+    inbound_router: Any | None
+
+    async def start(self) -> None:
+        """Begin receiving. A send-only channel may do nothing."""
+        ...
+
+    async def stop(self) -> None:
+        """Stop receiving and release transport resources."""
+        ...
+
+    async def send(self, target: str, text: str, **kw: Any) -> SendReceipt:
+        """Send ``text`` to ``target`` and return what can be proved about it.
+
+        Must not raise for an ordinary delivery failure: a failure is a receipt
+        with ``acknowledged == 0``, because a caller that has to catch an
+        exception to notice non-delivery will eventually forget to.
+        """
+        ...
+
+    async def health(self) -> dict[str, Any]:
+        """Whatever the operator needs to see about this channel's readiness."""
+        ...
+
+    async def ask(self, question: str, options: Sequence[str]) -> str:
+        """Put a choice to a person and wait for their answer.
+
+        Not implemented in this release — interactive approval still runs
+        through ``engine/permission_escalation.py``, which is Telegram-bound
+        and keeps its pending prompts in RAM.
+        """
+        ...
+
+    async def resolve_identity(self, native_id: str) -> Any:
+        """Map a platform-native sender id onto a Genus identity.
+
+        Not implemented in this release — pairing and identity land with the
+        second inbound surface.
+        """
+        ...

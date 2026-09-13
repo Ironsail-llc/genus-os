@@ -23,6 +23,7 @@ The Python Agent Engine: LLM runner, tool registry, Telegram bot, scheduler, hoo
 | `runner.py` | `AgentRunner` — orchestration + the tool loop (`_run_loop`) |
 | `llm_client.py` | `LLMClient` — LLM dispatch, model fallback, streaming, cost |
 | `tools/` | Tool schemas (`schemas.py`), registry/filtering (`registry.py`), dispatch (`dispatch.py`), handlers (`handlers/`) |
+| `channels/` | Channel protocol + receipt (`base.py`), name→channel registry (`registry.py`), one wrapper per surface (`telegram.py`, `event_bus.py`, `sender.py`) |
 | `scheduler.py` | Cron-based agent scheduling + heartbeat |
 
 ## Testing

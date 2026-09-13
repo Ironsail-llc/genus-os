@@ -44,6 +44,7 @@ available to any agent whose manifest lists it in `tools_allowed`.
 | `genus.services` | `services` | **any** named service — the group that names no kind |
 | `genus.commands` | `commands` | operator verbs — `robothor <verb>` |
 | `genus.sandboxes` | `sandboxes` | alternative sandbox runtimes (**opt-in**, see below) |
+| `genus.channels` | `channels` | outbound/inbound channel implementations (**opt-in**, see below) |
 | `genus.memory` | `providers` | extra memory sources, merged **after** built-in recall |
 | `genus.doctor` | `checks` | `genus doctor` checks — ids must be prefixed with the distribution's own name and may not shadow a built-in |
 
@@ -160,7 +161,8 @@ second copy would drift the first time a subcommand was added.
 ## A sandbox runtime — the one group installation does not activate
 
 Every group above takes effect as soon as the package is installed. This one
-does not, and the difference is deliberate.
+does not, and neither does a channel, below — both differences are
+deliberate.
 
 The sandbox is what confines untrusted execution. A package able to replace
 it merely by being present could replace it with a no-op, and nothing would
@@ -187,6 +189,57 @@ could not express a different isolation model, which is the point of having
 one. Naming a backend that is not installed **raises**; it never falls back
 to the built-in runtime, because a silent fall-back would turn a
 misconfigured hardening step into an invisible downgrade.
+
+## A channel — the other group installation does not activate
+
+A channel is where the operator's output goes — Telegram, the event bus, or
+whatever a plugin adds. A package able to become that surface merely by
+being installed could intercept every briefing, and nothing would look any
+different. So, like a sandbox backend, an installed channel stays inert
+until the operator names it:
+
+```bash
+ROBOTHOR_CHANNELS=acme
+```
+
+```python
+# acme_channel/__init__.py
+from robothor.engine.channels.base import SendReceipt
+
+class AcmeChannel:
+    name = "acme"
+    inbound_router = None
+
+    async def start(self): ...
+    async def stop(self): ...
+    async def health(self):
+        return {"ok": True}
+
+    async def send(self, target, text, **kw) -> SendReceipt:
+        # One entry per chunk the platform confirmed; an empty list means
+        # nothing landed, and never raise for an ordinary failure.
+        landed = await acme_sdk.post(target, text)
+        return SendReceipt(
+            acknowledged=len(landed),
+            expected=1,
+            platform_ids=[str(m.id) for m in landed],
+        )
+
+PLUGIN = {
+    "genus_contract_version": "1.0",
+    "channels": {"acme": AcmeChannel()},
+}
+```
+
+A receipt is derived from what the sender returned, never from reaching the
+next line: `SendReceipt(acknowledged=..., expected=..., platform_ids=[...])`.
+A channel that acknowledges nothing is recorded `failed:`, the same rule
+`delivery.py` applies to the built-in senders.
+
+`telegram` and `event_bus` are built in and reserved — a plugin claiming
+either name is refused by the loader, the same as claiming a built-in tool.
+And naming a channel that is not installed does not fall back to Telegram:
+delivery records `failed:no_channel:<name>` instead.
 
 ## A named service — the group that names no kind
 

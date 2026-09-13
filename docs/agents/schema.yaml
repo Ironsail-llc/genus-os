@@ -129,7 +129,12 @@ recommended:
       default: none
     channel:
       type: string
-      description: Required when mode=announce
+      description: >
+        The channel announced output is delivered to; empty means `telegram`.
+        Built-ins are `telegram` and `event_bus`. A plugin-provided channel
+        must additionally be armed in ROBOTHOR_CHANNELS. A name nothing is
+        registered under makes the run's delivery_status
+        `failed:no_channel:<name>` at runtime rather than failing validation.
     to:
       type: string
       description: Channel-specific target (e.g., Telegram chat ID)

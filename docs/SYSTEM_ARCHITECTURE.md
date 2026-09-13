@@ -874,11 +874,13 @@ and acknowledge only the rows whose text survived into the delivered preamble
 
 #### Delivery status vocabulary
 
-`agent_runs.delivery_status` is written by `robothor/engine/delivery.py` and is
-derived from what the sender actually returned — never from the fact that a
-send was attempted. `TelegramBot.send_message` swallows per-chunk exceptions
-and returns one entry per chunk it managed to send (empty if all of them
-failed), so the length of that list is the only evidence of delivery.
+`agent_runs.delivery_status` is written by `robothor/engine/delivery.py`.
+Announced output is routed by name through `robothor/engine/channels/`
+(`AgentConfig.delivery_channel`, empty meaning `telegram`), and the status is
+derived from the `SendReceipt` the channel returned — never from the fact
+that a send was attempted. `TelegramBot.send_message` swallows per-chunk
+exceptions and returns one entry per chunk it managed to send (empty if all
+of them failed), so the length of that list is the only evidence of delivery.
 
 | Status | Meaning |
 |--------|---------|
@@ -889,6 +891,7 @@ failed), so the length of that list is the only evidence of delivery.
 | `failed:telegram_exception: <err>` | The send raised. |
 | `failed:telegram_no_sender` / `failed:telegram_no_chat_id` / `failed:telegram_unexpanded_chat_id` | Misconfiguration caught before the send. |
 | `failed:event_bus_publish` / `failed:event_bus_disabled` / `failed:event_bus_exception: <err>` | The publish did not happen. |
+| `failed:no_channel:<name>` | The agent's `delivery.channel` names a channel nothing is registered under. Delivery is refused rather than redirected to another surface. |
 | `no_output`, `silent`, `suppressed_trivial`, `suppressed_sub_agent`, `blocked_by_hook:<reason>` | Nothing was meant to be sent. |
 
 Consumers must treat *only* `delivered` as reach: `analytics.py` counts it for

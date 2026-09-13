@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-359 settings in 13 groups.
+360 settings in 13 groups.
 
 ## paths
 
@@ -218,6 +218,7 @@ How the instance reaches people, and who it says it is.
 | `ROBOTHOR_AI_NAME` | str | `Genus` | `robothor-engine` | no | legacy | Name the assistant introduces itself with in channels and on the dashboard. |
 | `ROBOTHOR_AI_PHONE` | str | _(empty)_ | `robothor-engine` | no | legacy | Phone number shown on the assistant's public contact card. |
 | `ROBOTHOR_BRAND_NAME` | str | `Genus OS` | `robothor-engine` | no | legacy | Product name shown in dashboard chrome. |
+| `ROBOTHOR_CHANNELS` | str | _(empty)_ | `robothor-engine` | no | 1.70.0 | Comma-separated names of plugin-provided channels to arm. An installed genus.channels plugin is INERT until it is named here, the same rule ROBOTHOR_SANDBOX_BACKEND follows and for the same reason: a package that became the delivery surface merely by being installed could intercept every briefing. Built-in channels (telegram, event_bus) are always available and are not listed here. Provisional name until adding a channel persists it to config.yaml. |
 | `ROBOTHOR_DOMAIN` | str | _(empty)_ | `robothor-engine` | no | legacy | Public domain the tunnel generator issues ingress hostnames under. |
 | `ROBOTHOR_OWNER_EMAIL` | str | _(empty)_ | `robothor-engine` | no | legacy | DEPRECATED operator email. Operator identity belongs in ~/.robothor/owner.yaml; this is read only as a legacy fallback. |
 | `ROBOTHOR_OWNER_NAME` | str | _(empty)_ | `robothor-engine` | no | legacy | DEPRECATED operator display name. Operator identity belongs in ~/.robothor/owner.yaml; this is read only as a legacy fallback. |
