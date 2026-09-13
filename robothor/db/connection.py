@@ -334,7 +334,16 @@ def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
 
 
 def read_every_tenant_in_transaction(conn: psycopg2.extensions.connection) -> None:
-    """Let THIS TRANSACTION read rows of every tenant, for one narrow purpose.
+    """A deliberate RLS widening: let THIS TRANSACTION read every tenant's rows.
+
+    Not a convenience and not a bug fix — a widening of row-level security,
+    scoped as narrowly as the mechanism allows, and pinned to its three call
+    sites by ``test_benchmark_decontamination.py::
+    TestTheRlsWideningHasExactlyThreeCallers``. Those three are the benchmark
+    **audit and spend** queries: ``analytics._benchmark_spend``,
+    ``analytics.get_fleet_health`` and ``tracking.get_agent_stats``. A fourth
+    caller reds that test on purpose, because every call site added here is
+    another query that can read across tenants.
 
     The RLS policy (migration 081) has a permissive branch for an empty
     ``app.tenant_id``; this takes it, with ``set_config(..., is_local => true)``

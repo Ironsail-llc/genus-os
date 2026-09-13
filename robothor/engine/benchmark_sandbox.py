@@ -526,9 +526,18 @@ def _advisory_lock_key(tenant_id: str) -> int:
     )
 
 
+#: Outcomes of :func:`sandbox_suite_lock`. The two failures are distinguished
+#: because they mean different things to whoever reads the refusal: one says
+#: another suite is running, the other says this instance cannot serialise them
+#: at all.
+LOCK_ACQUIRED = "acquired"
+LOCK_HELD_ELSEWHERE = "sandbox_locked_by_another_suite"
+LOCK_UNAVAILABLE = "sandbox_lock_unavailable"
+
+
 @contextmanager
-def sandbox_suite_lock(tenant_id: str) -> Iterator[bool]:
-    """Hold the shared sandbox tenant for one suite. Yields whether we got it.
+def sandbox_suite_lock(tenant_id: str) -> Iterator[str]:
+    """Hold the shared sandbox tenant for one suite. Yields the outcome.
 
     :func:`teardown_sandbox` hard-deletes **every** row of 14 tables in the
     tenant, whoever wrote them — deliberately, so an agent's own rows cannot
@@ -547,18 +556,24 @@ def sandbox_suite_lock(tenant_id: str) -> Iterator[bool]:
     because a benchmark that silently queues for an hour behind another is not
     better than one that says it did not run.
 
-    If the lock machinery itself is unavailable (no connection, no such
-    function), this yields True and logs an ERROR. Refusing every suite because
-    the *serialiser* is down would turn a database hiccup into a dark night for
-    the whole fleet, which is a worse failure than an unserialised run that
-    almost certainly has no concurrent partner. The log line is the signal.
+    **This fails CLOSED.** If the lock machinery itself is unavailable — no
+    connection, no such function — the suite is refused, not run unserialised.
+    An earlier draft ran it anyway with an ERROR in the log, on the argument
+    that a dark fleet night is the worse failure. It is not, and the asymmetry
+    is the whole point: a refused suite is a visible absence someone chases,
+    while an unserialised suite that loses the race has its fixtures swept
+    mid-task and produces a plausible low score with no error anywhere. A wrong
+    number nobody can tell is wrong is the failure this repository keeps
+    re-learning. Benchmark safety fails closed.
 
     Args:
         tenant_id: the sandbox tenant this suite will seed and sweep.
 
     Yields:
-        True when this suite may proceed, False when another suite holds the
-        tenant and this one must refuse rather than grade.
+        :data:`LOCK_ACQUIRED` when this suite may proceed;
+        :data:`LOCK_HELD_ELSEWHERE` when another suite holds the tenant;
+        :data:`LOCK_UNAVAILABLE` when the lock could not be attempted at all.
+        Only the first is permission to run.
     """
     from robothor.db.connection import get_connection
 
@@ -574,21 +589,22 @@ def sandbox_suite_lock(tenant_id: str) -> Iterator[bool]:
                     "benchmark sandbox %s is held by another suite; refusing this one",
                     tenant_id,
                 )
-                yield False
+                yield LOCK_HELD_ELSEWHERE
                 return
             try:
-                yield True
+                yield LOCK_ACQUIRED
             finally:
                 with contextlib.suppress(Exception):
                     conn.cursor().execute("SELECT pg_advisory_unlock(%s)", (key,))
     except Exception as exc:  # noqa: BLE001 — see the docstring
         logger.error(
-            "benchmark sandbox lock unavailable for %s (%s): this suite runs "
-            "UNSERIALISED — a concurrent suite would sweep its fixtures mid-task",
+            "benchmark sandbox lock unavailable for %s (%s): REFUSING the suite. "
+            "Running unserialised risks a concurrent suite sweeping its fixtures "
+            "mid-task, which grades as a plausible low score with no error.",
             tenant_id,
             exc,
         )
-        yield True
+        yield LOCK_UNAVAILABLE
 
 
 def _check_identifier(name: str) -> str:

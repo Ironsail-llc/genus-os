@@ -184,6 +184,7 @@ async def _run_suite(
     seed_raises: bool = False,
     ensure_raises: bool = False,
     lock_state: set[str] | None = None,
+    lock_unavailable: bool = False,
     expect_error: bool = False,
 ) -> dict[str, Any]:
     """Drive ``_benchmark_run`` end to end with the database stubbed out."""
@@ -217,15 +218,24 @@ async def _run_suite(
     @contextmanager
     def _lock(tenant_id: str) -> Any:
         """A fake of the Postgres advisory lock: one holder per tenant."""
+        from robothor.engine.benchmark_sandbox import (
+            LOCK_ACQUIRED,
+            LOCK_HELD_ELSEWHERE,
+            LOCK_UNAVAILABLE,
+        )
+
+        if lock_unavailable:
+            yield LOCK_UNAVAILABLE
+            return
         if lock_state is None:
-            yield True
+            yield LOCK_ACQUIRED
             return
         if tenant_id in lock_state:
-            yield False
+            yield LOCK_HELD_ELSEWHERE
             return
         lock_state.add(tenant_id)
         try:
-            yield True
+            yield LOCK_ACQUIRED
         finally:
             lock_state.discard(tenant_id)
 
@@ -648,9 +658,46 @@ class TestSandboxSuiteLock:
         gate.set()
         await first
 
+        from robothor.engine.benchmark_sandbox import LOCK_HELD_ELSEWHERE
+
         assert second.get("success") is False
+        assert second.get("reason") == LOCK_HELD_ELSEWHERE
         assert "another benchmark suite" in str(second.get("error", "")).lower()
         assert second_runner.calls == [], "the refused suite still ran tasks"
+
+    @pytest.mark.asyncio
+    async def test_an_unavailable_lock_refuses_the_suite(self) -> None:
+        """Fail CLOSED. An earlier draft ran the suite unserialised with an
+        ERROR in the log, on the argument that a dark fleet night is worse.
+        It is not: an unserialised suite can have its fixtures swept mid-task
+        by a concurrent one and the result is a plausible low score with no
+        error anywhere — a wrong number nobody can tell is wrong. A refused
+        suite is a visible absence. Benchmark safety fails closed."""
+        from robothor.engine.benchmark_sandbox import LOCK_UNAVAILABLE
+
+        runner = _Recorder()
+        teardowns: list[str] = []
+        result = await _run_suite(
+            runner,
+            sandbox_on=True,
+            lock_unavailable=True,
+            teardowns=teardowns,
+            expect_error=True,
+        )
+
+        assert result.get("success") is False
+        assert result.get("reason") == LOCK_UNAVAILABLE
+        assert result.get("aggregate_score") is None, "an unlocked suite was still graded"
+        assert runner.calls == [], "the suite ran without holding the sandbox lock"
+        assert teardowns == [], "a refused suite swept a tenant it never held"
+
+    @pytest.mark.asyncio
+    async def test_an_unavailable_lock_does_not_block_a_sandbox_off_run(self) -> None:
+        """With the sandbox off there is no shared tenant to serialise."""
+        runner = _Recorder()
+        result = await _run_suite(runner, sandbox_on=False, lock_unavailable=True)
+        assert result.get("success") is True
+        assert len(runner.calls) == 1
 
     @pytest.mark.asyncio
     async def test_the_lock_is_released_when_the_suite_ends(self) -> None:

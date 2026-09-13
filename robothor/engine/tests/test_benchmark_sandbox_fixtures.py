@@ -1059,10 +1059,12 @@ class TestSandboxSuiteLockAgainstAFakePostgres:
         monkeypatch.setattr(conn_mod, "get_connection", fake)
 
         with bs.sandbox_suite_lock("benchmark-sandbox") as first:
-            assert first is True
+            assert first == bs.LOCK_ACQUIRED
             assert held, "the fake never recorded the lock — it is not being taken"
             with bs.sandbox_suite_lock("benchmark-sandbox") as second:
-                assert second is False, "two suites held the sandbox tenant at once"
+                assert second == bs.LOCK_HELD_ELSEWHERE, (
+                    "two suites held the sandbox tenant at once"
+                )
 
     def test_the_lock_is_released_on_the_way_out(self, monkeypatch: Any) -> None:
         from robothor.db import connection as conn_mod
@@ -1071,10 +1073,10 @@ class TestSandboxSuiteLockAgainstAFakePostgres:
         monkeypatch.setattr(conn_mod, "get_connection", fake)
 
         with bs.sandbox_suite_lock("benchmark-sandbox") as got:
-            assert got is True
+            assert got == bs.LOCK_ACQUIRED
         assert held == set()
         with bs.sandbox_suite_lock("benchmark-sandbox") as again:
-            assert again is True
+            assert again == bs.LOCK_ACQUIRED
 
     def test_it_is_released_even_when_the_suite_raises(self, monkeypatch: Any) -> None:
         from robothor.db import connection as conn_mod
@@ -1093,15 +1095,17 @@ class TestSandboxSuiteLockAgainstAFakePostgres:
         monkeypatch.setattr(conn_mod, "get_connection", fake)
 
         with bs.sandbox_suite_lock("benchmark-sandbox") as first:
-            assert first is True
+            assert first == bs.LOCK_ACQUIRED
             with bs.sandbox_suite_lock("benchmark-ci-7") as second:
-                assert second is True
+                assert second == bs.LOCK_ACQUIRED
 
-    def test_an_unavailable_lock_does_not_dark_the_fleet(
-        self, monkeypatch: Any, caplog: Any
-    ) -> None:
-        """Refusing every suite because the SERIALISER is down turns a database
-        hiccup into a dark night for the whole fleet. It runs, and it says so."""
+    def test_an_unavailable_lock_fails_closed(self, monkeypatch: Any, caplog: Any) -> None:
+        """The serialiser being down is not permission to run unserialised.
+
+        A refused suite is a visible absence; an unserialised one that loses the
+        race grades a swept sandbox as a plausible low score with no error
+        anywhere. Benchmark safety fails closed.
+        """
         import logging
 
         from robothor.db import connection as conn_mod
@@ -1112,5 +1116,9 @@ class TestSandboxSuiteLockAgainstAFakePostgres:
         monkeypatch.setattr(conn_mod, "get_connection", _broken)
         with caplog.at_level(logging.ERROR, logger="robothor.engine.benchmark_sandbox"):
             with bs.sandbox_suite_lock("benchmark-sandbox") as got:
-                assert got is True
-        assert any("UNSERIALISED" in r.getMessage() for r in caplog.records)
+                assert got == bs.LOCK_UNAVAILABLE
+        assert any("REFUSING" in r.getMessage() for r in caplog.records)
+
+    def test_the_three_outcomes_are_distinct(self) -> None:
+        """Two failures that mean different things must not collapse into one."""
+        assert len({bs.LOCK_ACQUIRED, bs.LOCK_HELD_ELSEWHERE, bs.LOCK_UNAVAILABLE}) == 3

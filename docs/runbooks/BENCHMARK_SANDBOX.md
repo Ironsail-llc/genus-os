@@ -120,6 +120,17 @@ consequently do not run — the harness logs a WARNING per task when that
 happens, and `TestShippedSuitePostures.STATE_CHECKS_GO_INERT` names it so the
 trade stays declared rather than discovered.
 
+> **Follow-up — `cross-pollination`'s read-backs are inert.**
+> Fixing it properly needs a **memory-block fixture**: something that seeds an
+> `autoagent_learnings` block into the sandbox tenant the way `fixtures.yaml`
+> seeds CRM rows. The fixture system writes CRM tables only
+> (`SEEDABLE_COLUMNS`, `_SWEEP_ORDER`), so this is a feature, not a config
+> change — and the sweep has to learn to delete `agent_memory_blocks` in the
+> sandbox before anything seeds one there, or the block outlives its task and
+> the next night grades last night's fiction. Until then the case runs
+> `production-read-only` with its `state_checks` skipped, which is exactly what
+> it did before the sandbox existed.
+
 **Adding a posture is not free.** An opted-out task is a task the sandbox is not
 protecting. The posture is validated on load — an unknown value fails the suite
 with `success: false` rather than silently grading against production — and

@@ -794,3 +794,81 @@ class TestTheRunbookAuditQueriesActuallyWork:
         the third way to get an empty result that means nothing."""
         rows = self._db("benchmark-sandbox").execute(self._runbook_query("-- UNBOUND")).fetchall()
         assert rows == []
+
+
+class TestTheRlsWideningHasExactlyThreeCallers:
+    """``read_every_tenant_in_transaction`` relaxes RLS for its transaction.
+
+    It exists because the benchmark spend break-out cannot see the graded
+    children once they execute as ``benchmark-sandbox``, and a WHERE clause
+    alone does not fix that — the policy filters the rows before the predicate
+    is reached. That is a narrow, justified widening, and it is exactly the
+    kind of helper that acquires callers: each one is another query that can
+    read every tenant's rows, and nothing else in the tree announces it.
+
+    So the caller set is pinned. Adding a fourth call site reds this test and
+    forces the question to be asked out loud.
+    """
+
+    EXPECTED_CALLERS: set[str] = {
+        "robothor/engine/analytics.py::_benchmark_spend",
+        "robothor/engine/analytics.py::get_fleet_health",
+        "robothor/engine/tracking.py::get_agent_stats",
+    }
+
+    HELPER = "read_every_tenant_in_transaction"
+
+    @classmethod
+    def _callers(cls) -> set[str]:
+        """Every ``module::function`` in robothor/ that CALLS the helper."""
+        import ast
+
+        root = Path(__file__).resolve().parents[2]
+        found: set[str] = set()
+        for path in sorted(root.rglob("*.py")):
+            if "/tests/" in str(path) or path.name.startswith("test_"):
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError):  # pragma: no cover - unreadable file
+                continue
+            rel = path.relative_to(root.parent)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                for sub in ast.walk(node):
+                    if not isinstance(sub, ast.Call):
+                        continue
+                    func = sub.func
+                    name = (
+                        func.id
+                        if isinstance(func, ast.Name)
+                        else (func.attr if isinstance(func, ast.Attribute) else None)
+                    )
+                    if name == cls.HELPER:
+                        found.add(f"{rel}::{node.name}")
+        return found
+
+    def test_the_scanner_finds_the_helper_at_all(self) -> None:
+        """An inert scan passes by matching nothing."""
+        assert self._callers(), (
+            f"no call site of {self.HELPER} found — the scan is broken, or the "
+            "helper was renamed without updating this test"
+        )
+
+    def test_exactly_the_audited_callers(self) -> None:
+        callers = self._callers()
+        assert callers == self.EXPECTED_CALLERS, (
+            "the RLS widening gained or lost a caller. Every entry here is a "
+            "query that may read EVERY tenant's rows; adding one is a decision, "
+            f"not a refactor. Difference: {sorted(callers ^ self.EXPECTED_CALLERS)}"
+        )
+
+    def test_the_docstring_says_what_it_is(self) -> None:
+        """The next reader must not have to infer it from the name."""
+        from robothor.db.connection import read_every_tenant_in_transaction
+
+        doc = (read_every_tenant_in_transaction.__doc__ or "").lower()
+        assert "rls" in doc
+        assert "widening" in doc, "the docstring does not name this as a deliberate widening"
+        assert "benchmark" in doc, "the docstring does not name the queries it exists for"

@@ -2154,6 +2154,34 @@ async def _execute_suite_tasks(
     return results, total_cost
 
 
+def _sandbox_lock_refusal(status: str, tenant_id: str, suite_id: str) -> dict[str, Any]:
+    """Refuse a suite that could not take the shared sandbox tenant.
+
+    Fails CLOSED in both cases, including when the lock could not be attempted
+    at all. Running unserialised risks a concurrent suite sweeping this one's
+    fixtures mid-task, which grades as a plausible low score with no error
+    anywhere — strictly worse than a visible absence. The two statuses are kept
+    apart because they send the reader to different places: one to the other
+    suite, one to the database.
+    """
+    from robothor.engine.benchmark_sandbox import LOCK_UNAVAILABLE
+
+    if status == LOCK_UNAVAILABLE:
+        detail = (
+            f"the benchmark sandbox lock could not be taken for {tenant_id}; "
+            f"refusing to run {suite_id} unserialised — a concurrent suite would "
+            "sweep its fixtures mid-task and the low score would look like the agent"
+        )
+    else:
+        detail = (
+            f"another benchmark suite holds the sandbox tenant {tenant_id}; "
+            f"refusing to run {suite_id} rather than grade against a sandbox it "
+            "is sweeping"
+        )
+    logger.error("benchmark %s refused: %s", suite_id, detail)
+    return {"success": False, "reason": status, "error": detail}
+
+
 @_handler("benchmark_run")
 async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Execute a benchmark suite against an agent and score the results.
@@ -2239,16 +2267,9 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     else:
         from robothor.engine import benchmark_sandbox as _bs
 
-        with _bs.sandbox_suite_lock(suite_tenant) as locked:
-            if not locked:
-                return {
-                    "success": False,
-                    "error": (
-                        f"another benchmark suite holds the sandbox tenant "
-                        f"{suite_tenant}; refusing to run {suite_id} rather than "
-                        "grade against a sandbox it is sweeping"
-                    ),
-                }
+        with _bs.sandbox_suite_lock(suite_tenant) as lock_status:
+            if lock_status != _bs.LOCK_ACQUIRED:
+                return _sandbox_lock_refusal(lock_status, suite_tenant, suite_id)
             results, total_cost = await _execute_suite_tasks(**task_args)
 
     # Every task in the suite is a case, whether or not it got to run. The
