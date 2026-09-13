@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from robothor.engine.channels import SendReceipt, get_channel
 from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode
+from robothor.engine.thin_announce import note_body_fallback, record_note_fallback
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -127,18 +128,28 @@ async def _persist_delivery_status(run: AgentRun) -> None:
     This is needed because _persist_run() in the runner may have already saved the
     run to DB before deliver() sets delivery_status/delivered_at/delivery_channel.
     Idempotent — safe to call even if the run hasn't been persisted yet.
+
+    ``outcome_notes`` rides along when the in-memory run has one, because
+    delivery is the last thing to write it: the thin-announce fallback appends
+    its note here, after ``_assess_outcome`` already persisted the detection, so
+    leaving the column alone would mean the row said a run was thin and never
+    that anything was done about it. A ``None`` is skipped rather than written —
+    an unassessed run (the interactive path calls this too) must not blank a
+    note the finalizer wrote.
     """
     if not run.id or not run.delivery_status:
         return
     try:
         from robothor.db.connection import get_connection
 
+        notes = getattr(run, "outcome_notes", None)
         with get_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """UPDATE agent_runs
-                   SET delivery_status = %s, delivered_at = %s, delivery_channel = %s
+                   SET delivery_status = %s, delivered_at = %s, delivery_channel = %s,
+                       outcome_notes = COALESCE(%s, outcome_notes)
                    WHERE id = %s""",
-                (run.delivery_status, run.delivered_at, run.delivery_channel, run.id),
+                (run.delivery_status, run.delivered_at, run.delivery_channel, notes, run.id),
             )
             conn.commit()
     except Exception:
@@ -542,7 +553,8 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
     # send it using the GWS tools:") and has no idea what actually
     # happened. The raw output_text stays in agent_runs; only the
     # delivered body is swapped.
-    if _is_heartbeat_run(run) and _beat_incomplete_text(run, delivered_source):
+    beat_reframed = _is_heartbeat_run(run) and _beat_incomplete_text(run, delivered_source)
+    if beat_reframed:
         reframed = _reframe_beat_output(run)
         logger.info(
             "Heartbeat reframed for %s: budget=%s last_step_err=%s",
@@ -565,6 +577,28 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
         run.delivery_status = "suppressed_trivial"
         await _persist_delivery_status(run)
         return True
+
+    # A thin announce reply ("Briefing delivered.") is a meta-confirmation, not
+    # the content the announce promised — the run did the work and saved it as a
+    # CRM note. Deliver that note body instead of the stub. Announce-only, and
+    # never over a reframed beat: that diagnostic says the run did NOT finish,
+    # which a rescued body would contradict. run.output_text keeps the stub as
+    # evidence; only the delivered body changes. See engine/thin_announce.py.
+    #
+    # After the trivial-output check for the same reason the banner below is:
+    # a beat that was meant to stay silent must not be resurrected by it.
+    announcing = config.delivery_mode == DeliveryMode.ANNOUNCE
+    note_body = note_body_fallback(run, text) if announcing and not beat_reframed else None
+    if note_body:
+        logger.info(
+            "Thin announce output for %s (%d chars) replaced by the %d-char note "
+            "body this run wrote",
+            config.id,
+            len(text),
+            len(note_body),
+        )
+        text = note_body
+        record_note_fallback(run)
 
     # Honest-failure banner. Appended AFTER the trivial-output check so it can
     # never resurrect a beat that was meant to stay silent, and to the

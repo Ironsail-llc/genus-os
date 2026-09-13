@@ -987,6 +987,26 @@ an unrecorded delivery is worse than a recorded failure. Production's
 replacement that does not: **a replacement must stamp `run.delivery_status`**
 (the simplest way is to call the original it replaced).
 
+**A thin announce reply falls back to the note the run wrote.** An announce
+agent sometimes finishes its work, saves the result as a CRM note
+(`create_note`, a 1,000+ character body) and then ends the run with a
+meta-confirmation — `"Briefing delivered."`, 19 characters — so the operator
+received a header with nothing under it. `run_finalizer._assess_outcome` has
+always *flagged* that (`Thin announce output (N chars) — likely
+meta-confirmation instead of full content`); `deliver()` now recovers from it.
+When the mode is ANNOUNCE, the final text is thin by the same predicate
+(`is_thin_announce_output` in `robothor/engine/thin_announce.py`, one threshold
+shared with the finalizer), and a `create_note` step **belonging to this run** recorded
+a body that is itself substantial and longer than the final text, that body is
+delivered in place of the stub — under the header the channel already adds, with
+`delivery_status` recorded from the receipt exactly as any other send, and
+`; delivered note body instead of thin output` appended to `outcome_notes` so
+the row explains why the delivered text differs from `agent_runs.output_text`
+(which keeps the stub as evidence). With no such note the stub is delivered as
+before and the finalizer's note stands. Only the note body the agent itself
+authored is ever substituted — never a tool's output, and never a note from
+another run.
+
 Consumers must treat *only* `delivered` as reach: `analytics.py` counts it for
 the delivery success rate, and `scheduler._maybe_emit_heartbeat_status_ping`
 fires a fallback ping for everything else, so a `partial:` or `failed:` beat
