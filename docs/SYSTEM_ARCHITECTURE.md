@@ -918,6 +918,37 @@ A write that does not reconcile is a write that changes nothing, so every
 manifest writer calls it: `POST`/`PATCH`/`DELETE /api/agent-manifests`,
 `/api/installed-agents` install/update/remove, and `POST /api/setup/agent`.
 
+#### Workflow budgets and step visibility
+
+A workflow's `timeout_seconds` is one wall-clock budget shared by all of its
+steps, and an agent step spends it walking that agent's model chain — primary,
+one in-place transient retry, then each fallback, each leg with its own per-call
+allowance (`LLM_REQUEST_TIMEOUT_BATCH` for cloud models on a workflow or cron
+trigger, `LLM_REQUEST_TIMEOUT_OLLAMA` for the local tail). **No step may be
+allowed more wall-clock than the workflow that contains it.** `email-pipeline`
+carried a 900 s budget while its classify step's four-model chain was allowed
+`300 + 300 + 300 + 600` plus one 300 s retry — 1,800 s — so the run could only
+ever finish while the primary answered first try; when the primary began
+returning empty completions on 2026-09-11 every run died at exactly 900 s.
+`robothor/engine/workflow_budget.py` now enforces this at both ends:
+`load_workflows` logs a `Config validation [workflow:…]` warning naming the
+step, its computed worst case and the budget (an error under `strict`, the same
+ladder as the agent-manifest check `_check_stall_budget_vs_llm_timeout`, which
+validates the identical inversion for stall budgets), and at runtime the
+workflow publishes its deadline so each LLM call is clamped to what is actually
+left — the chain walk refuses to *start* a further model once the budget is
+gone, raising `WorkflowDeadlineExceeded` naming the step and the model in
+flight rather than dying anonymously in the outer `asyncio.timeout`.
+
+A step's `workflow_run_steps` row is written when the step is **dispatched**,
+as `running` with its `started_at`, and updated in place when it finishes. It
+used to be written only on completion, so a step that never returned left no row
+at all: timed-out runs read `steps 0/2` with an empty step table, and "the
+workflow never started" was indistinguishable from "step 1 has been running for
+fifteen minutes". Rows still `running` when the run ends are closed out as
+`timeout` (migration 119) rather than left immortal, and the run's own
+`error_message` names the step that was in flight.
+
 #### Engine admin routes
 
 Everything under `/api/admin` requires the `engine:control` scope

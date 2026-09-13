@@ -75,7 +75,12 @@ KNOWN_LARGE: dict[str, int] = {
     # -7: rate-limit wait and the malformed-tool-call verdict extracted;
     # +4: review-requested comments on the malformed-tool-call branch (why the
     # re-roll spends `attempt`, and what skipping `_handle_model_error` costs)
-    "llm_client.py::_call_llm": 267,
+    # 267 -> 242: the per-model admission decision (spent credential, open
+    # breaker, retired pool) went to _skip_model_reason and the per-call
+    # timeout selection to _per_call_timeout. That is what paid for the
+    # workflow-deadline clamp inside the attempt loop rather than raising
+    # this number for it.
+    "llm_client.py::_call_llm": 242,
     "config.py::manifest_to_agent_config": 268,
     # scheduler.py::start is gone from this list: 266 -> 116. The three
     # hand-written registration blocks (heartbeat, worker, cron) became one
@@ -86,14 +91,21 @@ KNOWN_LARGE: dict[str, int] = {
     # _emit_tool_call_events, which more than paid for accumulating the
     # streamed reasoning_details litellm's stream_chunk_builder drops and for
     # threading the rejected history into the replay digest.
-    "llm_client.py::_call_llm_streaming": 247,
+    # 247 -> 245: its own per-call timeout selection now shares
+    # _per_call_timeout with _call_llm, which more than paid for the same
+    # workflow-deadline clamp landing on this chain walk too.
+    "llm_client.py::_call_llm_streaming": 245,
     "telegram.py::run_agent": 257,
     "tools/handlers/experiment.py::_experiment_commit": 256,
     "telegram.py::_handle_goal_command": 242,
     "managed_agents/runner.py::run_on_managed_agents": 241,
     "runner.py::execute_deep": 224,
     "chat.py::run_approved": 218,
-    "workflow.py::execute": 208,
+    # workflow.py::execute is gone from this list: 208 -> 179. The finalization
+    # cluster (completion stamp, terminal status, the failed->timeout
+    # reclassification) became _finalize_status, which is what paid for the
+    # workflow-deadline scope and the orphan-step close-out rather than raising
+    # this number for them.
 }
 
 

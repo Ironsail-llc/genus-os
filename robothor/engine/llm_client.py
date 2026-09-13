@@ -53,6 +53,7 @@ from robothor.engine.reasoning_replay import (
 from robothor.engine.retry import retry_async
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.stall_watchdog import _active_watchdog_var
+from robothor.engine.workflow_budget import bound_call_timeout
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -220,6 +221,58 @@ def _record_execution_mode(model: str) -> None:
 def is_local_model(model: str) -> bool:
     """Is this served on-device, with no credential and no provider account?"""
     return model.startswith(("ollama_chat/", "ollama/"))
+
+
+def _per_call_timeout(model: str, timeout_override: float | None) -> float:
+    """Seconds one provider call may take before the chain walk gives up on it.
+
+    Wraps each provider call so the runner cancels and falls through if the
+    provider hangs: the ``timeout`` kwarg already passed to litellm is
+    best-effort and was observed silently ignored, causing 1800s stalls against
+    codex/gpt-5.5 in the 2026-05-28 incident. The local tier gets its own,
+    larger value; ``timeout_override`` is how batch-shaped (cron/workflow) runs
+    get the higher non-interactive allowance.
+    """
+    if model.startswith("ollama_chat/"):
+        return float(LLM_REQUEST_TIMEOUT_OLLAMA)
+    return float(timeout_override if timeout_override is not None else LLM_REQUEST_TIMEOUT)
+
+
+def _skip_model_reason(
+    model: str,
+    model_var: str | None,
+    dead_credentials: set[str],
+    breaker: Any,
+    pool: KeyPool | None,
+) -> str | None:
+    """Why this model must not be tried on this call, or ``None`` to try it.
+
+    Extracted from the chain walk so the admission decision is one readable
+    thing rather than three ``continue``s interleaved with the call itself.
+    Mutates ``dead_credentials`` on the exhausted-pool branch on purpose: that
+    is the record of what this call has already proven spent, and every later
+    model sharing the credential is skipped on the strength of it.
+    """
+    if model_var is not None and model_var in dead_credentials:
+        # Its credential was proven spent earlier in this same call. Trying it
+        # buys a guaranteed failure and a round trip. Guarded on `is not None`
+        # deliberately: a model with no pooled credential shares nothing with
+        # anyone, and treating them as a group would let one provider's quota
+        # error strand the local tier — the very outage this code exists to end.
+        return "it shares a credential already proven spent"
+    if breaker.is_open(model):
+        # This model has failed repeatedly and is in cooldown. Skipping it here
+        # is the point: otherwise a dead provider costs the full per-call
+        # timeout on every run, forever (codex/* did exactly that for a month).
+        return "circuit breaker open"
+    if pool is not None and pool.exhausted():
+        # Every configured credential for this provider is retired. Calling
+        # anyway would omit api_key and hand litellm the very key the pool just
+        # proved dead, quietly undoing retirement.
+        if model_var is not None:
+            dead_credentials.add(model_var)
+        return "every configured credential for it is retired"
+    return None
 
 
 async def _releasing_stream(stream: Any, cm: Any) -> Any:
@@ -1560,48 +1613,12 @@ class LLMClient:
             if broken_models and model in broken_models:
                 continue
             model_var = env_var_for_model(model)
-            if model_var is not None and model_var in dead_credentials:
-                # Its credential was proven spent earlier in this same call.
-                # Trying it buys a guaranteed failure and a round trip.
-                # Guarded on `is not None` deliberately: a model with no
-                # pooled credential shares nothing with anyone, and treating
-                # them as a group would let one provider's quota error strand
-                # the local tier — the very outage this code exists to end.
-                logger.info(
-                    "skipping %s — it shares a credential already proven spent",
-                    _sanitize(model),
-                )
-                continue
-            if breaker.is_open(model):
-                # This model has failed repeatedly and is in cooldown. Skipping
-                # it here is the point: otherwise a dead provider costs the full
-                # per-call timeout on every run, forever (codex/* did exactly
-                # that for a month).
-                logger.info("skipping %s — circuit breaker open", _sanitize(model))
-                continue
-            # Per-call timeout (seconds) — wraps each provider call so the
-            # runner cancels and falls through if the provider hangs. The
-            # `timeout` kwarg already passed to litellm is best-effort and
-            # was observed silently ignored, causing 1800s stalls against
-            # codex/gpt-5.5 in the 2026-05-28 incident.
-            if model.startswith("ollama_chat/"):
-                per_call_timeout: float = LLM_REQUEST_TIMEOUT_OLLAMA
-            else:
-                per_call_timeout = (
-                    timeout_override if timeout_override is not None else LLM_REQUEST_TIMEOUT
-                )
             pool = self._key_pool(model)
-            if pool is not None and pool.exhausted():
-                # Every configured credential for this provider is retired.
-                # Calling anyway would omit api_key and hand litellm the very
-                # key the pool just proved dead, quietly undoing retirement.
-                if model_var is not None:
-                    dead_credentials.add(model_var)
-                logger.info(
-                    "skipping %s — every configured credential for it is retired",
-                    _sanitize(model),
-                )
+            skip = _skip_model_reason(model, model_var, dead_credentials, breaker, pool)
+            if skip:
+                logger.info("skipping %s — %s", _sanitize(model), skip)
                 continue
+            per_call_timeout = _per_call_timeout(model, timeout_override)
             # Rotating through spare credentials must not eat the transient
             # retry budget: a key swap and a flaky provider are different
             # failures. They are counted separately so that configuring a
@@ -1613,6 +1630,17 @@ class LLMClient:
             malformed_retries_left = MALFORMED_TOOL_ARGS_RETRIES
             attempt = 0
             while attempt < attempts:
+                # Inside a workflow step, no call may be given more time than
+                # the WORKFLOW has left — and one whose budget is already gone
+                # does not get started at all. That is what stops a chain walk
+                # (or an in-place retry, which is why this sits INSIDE the
+                # attempt loop) from spending 300s, or 600s on the local tail,
+                # of a budget that expired: on 2026-09-13 one classify step ate
+                # a whole 900s email-pipeline run that way. Raising here rather
+                # than inside the `try` is deliberate — the deadline is not a
+                # transient provider failure and must not buy a retry. Inert
+                # outside a workflow.
+                per_call_timeout = bound_call_timeout(per_call_timeout, model)
                 attempt_key = None
                 try:
                     kwargs = self._build_llm_kwargs(
@@ -1835,15 +1863,11 @@ class LLMClient:
         for model in models:
             if broken_models and model in broken_models:
                 continue
-            # Per-call timeout for the initial stream-creation await.
-            # Subsequent chunk reads are guarded by STREAM_CHUNK_TIMEOUT
-            # in the consumption loop below. See _call_llm for context.
-            if model.startswith("ollama_chat/"):
-                per_call_timeout: float = LLM_REQUEST_TIMEOUT_OLLAMA
-            else:
-                per_call_timeout = (
-                    timeout_override if timeout_override is not None else LLM_REQUEST_TIMEOUT
-                )
+            # Bounds the initial stream-creation await; subsequent chunk reads
+            # are guarded by STREAM_CHUNK_TIMEOUT in the consumption loop below.
+            # Clamped to the workflow deadline for the same reason _call_llm is
+            # — a bound that holds on only one of two chain walks has a hole.
+            per_call_timeout = bound_call_timeout(_per_call_timeout(model, timeout_override), model)
             if get_model_breaker().is_open(model):
                 # _call_llm has skipped open-breaker models for a long time,
                 # because a dead provider otherwise costs the full per-call

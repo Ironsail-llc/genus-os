@@ -50,9 +50,15 @@ if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
 
+from robothor.engine import workflow_budget  # noqa: E402
 from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+#: Run-context key naming the step currently in flight. A step cancelled by the
+#: workflow deadline leaves it behind on purpose — it is what lets the timeout
+#: finalizer say WHICH step ate the budget instead of "Timed out after 900s".
+IN_FLIGHT_STEP_KEY = "_in_flight_step"
 
 
 # Safe expression evaluator for workflow templates/conditions. Replaces raw
@@ -327,6 +333,7 @@ class WorkflowEngine:
                     loaded += 1
                     logger.info("Loaded workflow: %s (%d steps)", wf.id, len(wf.steps))
                     self._warn_dangling_agent_refs(wf)
+                    self._warn_budget_inversions(wf)
             except Exception as e:
                 logger.error("Failed to load workflow %s: %s", f, e)
 
@@ -361,6 +368,46 @@ class WorkflowEngine:
                     _sanitize(step.id),
                     _sanitize(step.agent_id),
                 )
+
+    def _warn_budget_inversions(self, wf: WorkflowDef) -> None:
+        """Warn when one step's model chain can outspend the whole workflow.
+
+        The sibling of ``manifest_schema._check_stall_budget_vs_llm_timeout``,
+        which validates this identical inversion for agent manifests. Nothing
+        compared a workflow's ``timeout_seconds`` against the per-call
+        allowance of its own steps, so ``email-pipeline`` ran for months with a
+        900s budget and a classify step whose four-model chain is allowed
+        1,800s — it could only ever finish while the primary answered first
+        try, and the day the primary started returning empty completions every
+        run died at exactly 900s.
+
+        Same channel and same ladder as the dangling-ref check above: a
+        warning on the startup log, and the workflow still loads. A budget
+        that is merely optimistic must not take a pipeline offline.
+        """
+        from robothor.engine.config import load_agent_config
+
+        def _chain(agent_id: str) -> list[str]:
+            cfg = load_agent_config(agent_id, self.config.manifest_dir)
+            if cfg is None:
+                return []
+            # model_fallbacks already carries the instance's last-resort model
+            # (config._with_last_resort), which is the 600s local tail that
+            # makes the worst case what it is.
+            return [cfg.model_primary, *cfg.model_fallbacks]
+
+        try:
+            issues = workflow_budget.check_step_budgets(wf, _chain)
+        except Exception as e:  # pragma: no cover - defensive, load must not fail
+            logger.debug("Budget check failed for %s: %s", _sanitize(wf.id), e)
+            return
+
+        for issue in issues:
+            logger.warning(
+                "Config validation [workflow:%s]: %s",
+                _sanitize(wf.id),
+                _sanitize(issue.message),
+            )
 
     def get_workflow(self, workflow_id: str) -> WorkflowDef | None:
         """Get a workflow definition by ID."""
@@ -499,11 +546,13 @@ class WorkflowEngine:
 
         try:
             try:
-                async with asyncio.timeout(wf.timeout_seconds):
-                    await self._execute_steps(run, wf)
+                with workflow_budget.workflow_deadline(workflow_id, wf.timeout_seconds):
+                    async with asyncio.timeout(wf.timeout_seconds):
+                        await self._execute_steps(run, wf)
             except TimeoutError:
                 run.status = RunStatus.TIMEOUT
-                run.error_message = f"Timed out after {wf.timeout_seconds}s"
+                run.error_message = self._timeout_message(run, wf)
+                self._close_orphan_steps(run, run.error_message)
                 logger.warning("Workflow %s timed out", _sanitize(workflow_id))
             except asyncio.CancelledError:
                 # Engine shutdown/restart cancelled this task mid-run. Without
@@ -518,6 +567,7 @@ class WorkflowEngine:
                     run.duration_ms = int(
                         (run.completed_at - run.started_at).total_seconds() * 1000
                     )
+                self._close_orphan_steps(run, run.error_message)
                 self._persist_run_end(run)
                 logger.warning(
                     "Workflow %s cancelled mid-run (engine shutdown), run=%s",
@@ -548,39 +598,7 @@ class WorkflowEngine:
                 )
                 return run
 
-            # Finalize
-            run.completed_at = datetime.now(UTC)
-            if run.started_at:
-                run.duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
-
-            # Set final status if not already failed/timed out
-            if run.status == RunStatus.RUNNING:
-                failed = sum(1 for r in run.step_results if r.status == WorkflowStepStatus.FAILED)
-                run.status = RunStatus.FAILED if failed > 0 else RunStatus.COMPLETED
-
-            # A FAILED run that consumed the whole workflow budget was really
-            # killed by the deadline. This used to be the ONLY way a workflow
-            # timeout surfaced: the runner absorbed the CancelledError that
-            # asyncio.timeout delivers and reported a step *failure*, leaving
-            # the TimeoutError branch above unreachable for agent steps. The
-            # runner now re-raises an outer cancellation, so that branch does
-            # fire — this reclassification stays as a backstop for steps that
-            # fail for their own reasons right at the deadline.
-            if run.status == RunStatus.FAILED and run.duration_ms >= wf.timeout_seconds * 1000:
-                last = run.step_results[-1] if run.step_results else None
-                last_step = last.step_id if last else "unknown"
-                last_error = (last.error_message if last else None) or run.error_message or ""
-                run.status = RunStatus.TIMEOUT
-                run.error_message = (
-                    f"Timed out after {wf.timeout_seconds}s "
-                    f"(step '{last_step}' cancelled: {last_error})"
-                )
-                logger.warning(
-                    "Workflow %s reclassified failed→timeout (budget %ds exhausted)",
-                    _sanitize(workflow_id),
-                    wf.timeout_seconds,
-                )
-
+            self._finalize_status(run, wf)
             self._persist_run_end(run)
 
             logger.info(
@@ -602,6 +620,56 @@ class WorkflowEngine:
             return run
         finally:
             await release(dedup_key)
+
+    def _timeout_message(self, run: WorkflowRun, wf: WorkflowDef) -> str:
+        """Say WHICH step was in flight when the budget expired.
+
+        ``Timed out after 900s`` on its own is what the 2026-09-13 diagnosis
+        had to work with: no step rows, no step name, and the answer only
+        reachable by joining ``agent_runs`` to ``workflow_runs`` on timestamps.
+        The in-flight step id survives its own cancellation in the run context
+        precisely so this line can carry it.
+        """
+        in_flight = run.context.get(IN_FLIGHT_STEP_KEY)
+        base = f"Timed out after {wf.timeout_seconds}s"
+        if not in_flight:
+            return base
+        return f"{base} (step '{in_flight}' still in flight)"
+
+    def _finalize_status(self, run: WorkflowRun, wf: WorkflowDef) -> None:
+        """Stamp completion time and settle the run's terminal status."""
+        run.completed_at = datetime.now(UTC)
+        if run.started_at:
+            run.duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
+
+        # Set final status if not already failed/timed out
+        if run.status == RunStatus.RUNNING:
+            failed = sum(1 for r in run.step_results if r.status == WorkflowStepStatus.FAILED)
+            run.status = RunStatus.FAILED if failed > 0 else RunStatus.COMPLETED
+
+        # A FAILED run that consumed the whole workflow budget was really
+        # killed by the deadline. This used to be the ONLY way a workflow
+        # timeout surfaced: the runner absorbed the CancelledError that
+        # asyncio.timeout delivers and reported a step *failure*, leaving
+        # the TimeoutError branch above unreachable for agent steps. The
+        # runner now re-raises an outer cancellation, so that branch does
+        # fire — this reclassification stays as a backstop for steps that
+        # fail for their own reasons right at the deadline.
+        if run.status == RunStatus.FAILED and run.duration_ms >= wf.timeout_seconds * 1000:
+            last = run.step_results[-1] if run.step_results else None
+            last_step = last.step_id if last else run.context.get(IN_FLIGHT_STEP_KEY, "unknown")
+            last_error = (last.error_message if last else None) or run.error_message or ""
+            run.status = RunStatus.TIMEOUT
+            run.error_message = (
+                f"Timed out after {wf.timeout_seconds}s "
+                f"(step '{last_step}' cancelled: {last_error})"
+            )
+            self._close_orphan_steps(run, run.error_message)
+            logger.warning(
+                "Workflow %s reclassified failed→timeout (budget %ds exhausted)",
+                _sanitize(run.workflow_id),
+                wf.timeout_seconds,
+            )
 
     def _notify_run_failure(self, run: WorkflowRun) -> None:
         """Page the operator about a failed/timed-out cron workflow run.
@@ -898,24 +966,38 @@ class WorkflowEngine:
         )
 
         start = time.monotonic()
+        # Visible while it runs, both in the DB and in the run's own context —
+        # the timeout finalizer reads the latter to name the step that was in
+        # flight when the budget expired.
+        self._persist_step_start(run, result)
+        run.context[IN_FLIGHT_STEP_KEY] = step.id
 
         try:
-            if step.type == WorkflowStepType.AGENT:
-                await self._run_agent_step(step, run, result)
-            elif step.type == WorkflowStepType.TOOL:
-                await self._run_tool_step(step, run, result)
-            elif step.type == WorkflowStepType.CONDITION:
-                self._run_condition_step(step, run, result)
-            elif step.type == WorkflowStepType.TRANSFORM:
-                self._run_transform_step(step, run, result)
-            elif step.type == WorkflowStepType.APPROVAL:
-                await self._run_approval_step(step, run, result)
-            elif step.type == WorkflowStepType.NOOP:
-                result.status = WorkflowStepStatus.COMPLETED
+            # Inside this scope the step's LLM chain walk is clamped to what is
+            # left of the WORKFLOW's budget, so one slow model can no longer
+            # spend the whole run (workflow_budget.bound_call_timeout).
+            with workflow_budget.step_scope(step.id):
+                if step.type == WorkflowStepType.AGENT:
+                    await self._run_agent_step(step, run, result)
+                elif step.type == WorkflowStepType.TOOL:
+                    await self._run_tool_step(step, run, result)
+                elif step.type == WorkflowStepType.CONDITION:
+                    self._run_condition_step(step, run, result)
+                elif step.type == WorkflowStepType.TRANSFORM:
+                    self._run_transform_step(step, run, result)
+                elif step.type == WorkflowStepType.APPROVAL:
+                    await self._run_approval_step(step, run, result)
+                elif step.type == WorkflowStepType.NOOP:
+                    result.status = WorkflowStepStatus.COMPLETED
         except Exception as e:
             result.status = WorkflowStepStatus.FAILED
             result.error_message = str(e)
             logger.error("Step %s failed: %s", step.id, e, exc_info=True)
+
+        # Deliberately NOT in a `finally`: a step cancelled by the workflow
+        # deadline must leave this key behind, because it is the only record of
+        # which step was in flight when the budget expired.
+        run.context.pop(IN_FLIGHT_STEP_KEY, None)
 
         result.duration_ms = int((time.monotonic() - start) * 1000)
         result.completed_at = datetime.now(UTC)
@@ -1126,11 +1208,15 @@ class WorkflowEngine:
         run.context.pop("_resume_step", None)
 
         try:
-            async with asyncio.timeout(wf.timeout_seconds):
-                await self._execute_steps(run, wf, start_step_id=resume_step_id)
+            # A resumed run gets a fresh budget (the approval wait is not work),
+            # and the same deadline its steps' LLM chains must respect.
+            with workflow_budget.workflow_deadline(run.workflow_id, wf.timeout_seconds):
+                async with asyncio.timeout(wf.timeout_seconds):
+                    await self._execute_steps(run, wf, start_step_id=resume_step_id)
         except TimeoutError:
             run.status = RunStatus.TIMEOUT
-            run.error_message = f"Timed out after {wf.timeout_seconds}s (resumed)"
+            run.error_message = f"{self._timeout_message(run, wf)} (resumed)"
+            self._close_orphan_steps(run, run.error_message)
         except Exception as e:
             run.status = RunStatus.FAILED
             run.error_message = str(e)
@@ -1506,42 +1592,159 @@ class WorkflowEngine:
         except Exception as e:
             logger.warning("Failed to persist workflow run end: %s", e)
 
-    def _persist_step(self, run: WorkflowRun, result: WorkflowStepResult) -> None:
-        """Record a workflow step result in DB."""
-        try:
-            import json
+    def _persist_step_start(self, run: WorkflowRun, result: WorkflowStepResult) -> None:
+        """Write the step's row the moment it is dispatched, as ``running``.
 
+        The row used to be written only when a step FINISHED. A step that never
+        returned therefore left no trace at all: every timed-out
+        ``email-pipeline`` run in the 2026-09-13 diagnosis read ``steps 0/2``
+        with zero rows in ``workflow_run_steps``, so "the workflow never
+        started" and "step 1 has been running for fifteen minutes" were the
+        same observation. Writing on dispatch is what makes the in-flight step
+        — and how long it has been in flight — readable while it is still
+        happening.
+        """
+        # A row still ``running`` for THIS step means the previous attempt
+        # failed and the retry loop is going round again. Close it before
+        # laying down the new one, or the final UPDATE (which matches on
+        # status) would stamp every attempt with the last attempt's outcome.
+        self._close_running_steps(
+            run,
+            WorkflowStepStatus.FAILED,
+            "superseded by a retry of the same step",
+            step_id=result.step_id,
+        )
+        try:
             from robothor.db.connection import get_connection
 
             with get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
                     """INSERT INTO workflow_run_steps
-                       (run_id, step_id, step_type, status,
-                        agent_id, agent_run_id, tool_name,
-                        tool_input, tool_output,
-                        condition_branch, output_text,
-                        error_message, duration_ms,
-                        started_at, completed_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                       (run_id, step_id, step_type, status, started_at)
+                       VALUES (%s, %s, %s, %s, %s)""",
                     (
                         run.id,
                         result.step_id,
                         result.step_type.value,
-                        result.status.value,
-                        None,
-                        result.agent_run_id,
-                        None,
-                        None,
-                        json.dumps(result.tool_output, default=str) if result.tool_output else None,
-                        result.condition_branch,
-                        result.output_text[:2000] if result.output_text else None,
-                        result.error_message,
-                        result.duration_ms,
+                        WorkflowStepStatus.RUNNING.value,
                         result.started_at,
-                        result.completed_at,
                     ),
                 )
+                conn.commit()
+        except Exception as e:
+            logger.warning("Failed to persist workflow step start: %s", e)
+
+    def _close_orphan_steps(self, run: WorkflowRun, error_message: str) -> None:
+        """Close out rows left ``running`` when the run itself ended.
+
+        A row stuck in ``running`` forever is the immortal-orphan shape the
+        run-level finalizer already exists to prevent (29 of them, oldest 171
+        days, in the 2026-08 diagnosis) — one table down. The step that was in
+        flight when the budget expired is exactly the evidence this change is
+        for, so it is stamped ``timeout``, not deleted.
+        """
+        self._close_running_steps(run, WorkflowStepStatus.TIMEOUT, error_message)
+
+    def _close_running_steps(
+        self,
+        run: WorkflowRun,
+        status: WorkflowStepStatus,
+        error_message: str,
+        step_id: str = "",
+    ) -> None:
+        """Stamp this run's ``running`` step rows with a terminal status."""
+        try:
+            from robothor.db.connection import get_connection
+
+            params: list[Any] = [
+                status.value,
+                datetime.now(UTC),
+                error_message,
+                run.id,
+                WorkflowStepStatus.RUNNING.value,
+            ]
+            sql = """UPDATE workflow_run_steps
+                     SET status = %s, completed_at = %s, error_message = %s
+                     WHERE run_id = %s AND status = %s"""
+            if step_id:
+                sql += " AND step_id = %s"
+                params.append(step_id)
+
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(sql, tuple(params))
+                conn.commit()
+        except Exception as e:
+            logger.warning("Failed to close running workflow steps: %s", e)
+
+    def _persist_step(self, run: WorkflowRun, result: WorkflowStepResult) -> None:
+        """Record a workflow step result in DB.
+
+        Updates the ``running`` row ``_persist_step_start`` laid down, and
+        falls back to an INSERT when there is none — the parallel *container*
+        result is assembled by the fan-out rather than dispatched as a single
+        step, and a resumed run's approval step is finalized by an engine that
+        never started it.
+        """
+        try:
+            import json
+
+            from robothor.db.connection import get_connection
+
+            output = json.dumps(result.tool_output, default=str) if result.tool_output else None
+            text = result.output_text[:2000] if result.output_text else None
+
+            with get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """UPDATE workflow_run_steps
+                       SET status = %s, agent_run_id = %s, tool_output = %s,
+                           condition_branch = %s, output_text = %s,
+                           error_message = %s, duration_ms = %s, completed_at = %s
+                       WHERE run_id = %s AND step_id = %s AND status = %s""",
+                    (
+                        result.status.value,
+                        result.agent_run_id,
+                        output,
+                        result.condition_branch,
+                        text,
+                        result.error_message,
+                        result.duration_ms,
+                        result.completed_at,
+                        run.id,
+                        result.step_id,
+                        WorkflowStepStatus.RUNNING.value,
+                    ),
+                )
+                if not cur.rowcount:
+                    cur.execute(
+                        """INSERT INTO workflow_run_steps
+                           (run_id, step_id, step_type, status,
+                            agent_id, agent_run_id, tool_name,
+                            tool_input, tool_output,
+                            condition_branch, output_text,
+                            error_message, duration_ms,
+                            started_at, completed_at)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (
+                            run.id,
+                            result.step_id,
+                            result.step_type.value,
+                            result.status.value,
+                            None,
+                            result.agent_run_id,
+                            None,
+                            None,
+                            output,
+                            result.condition_branch,
+                            text,
+                            result.error_message,
+                            result.duration_ms,
+                            result.started_at,
+                            result.completed_at,
+                        ),
+                    )
                 conn.commit()
         except Exception as e:
             logger.warning("Failed to persist workflow step: %s", e)
