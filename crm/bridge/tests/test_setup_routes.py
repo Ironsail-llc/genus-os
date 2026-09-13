@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -986,6 +986,14 @@ class TestAgent:
             }
 
         monkeypatch.setattr(setup_router, "install_preset", install_preset)
+        # The route now tells the engine to reconcile after the install — the
+        # wizard's last screen would otherwise claim a fleet that fires nothing
+        # until the engine restarts. Stubbed because the real call is an HTTP
+        # request to whatever ROBOTHOR_ENGINE_URL resolves to, and on a
+        # developer's box that is their live engine.
+        reconcile = AsyncMock(return_value={"applied": True})
+        monkeypatch.setattr(setup_router, "reconcile_engine_schedules", reconcile)
+        return reconcile
 
     async def test_installs_a_preset_and_names_the_agents(
         self, test_client, claim, workspace, fake_installer
@@ -996,6 +1004,19 @@ class TestAgent:
 
         assert response.status_code == 200
         assert response.json()["installed"] == ["main", "concierge"]
+
+    async def test_it_reconciles_so_the_new_fleet_actually_fires(
+        self, test_client, claim, workspace, fake_installer
+    ):
+        """``install_preset`` writes manifests; the engine is still holding the
+        job set it derived at boot. Without this call the wizard finishes and
+        not one agent runs."""
+        response = await test_client.post(
+            "/api/setup/agent", json={"preset": "standard"}, headers=_auth(claim)
+        )
+
+        fake_installer.assert_awaited_once()
+        assert response.json()["reconcile"] == {"applied": True}
 
     async def test_an_unknown_preset_is_422(self, test_client, claim, workspace, fake_installer):
         response = await test_client.post(
@@ -1152,6 +1173,14 @@ class TestTheWholeCeremony:
                 "failed": {},
                 "missing": [],
             },
+        )
+        # The agent step tells the engine to reconcile. Stubbed for the same
+        # reason every other outbound call in this ceremony is: the real one is
+        # an HTTP request to whatever ROBOTHOR_ENGINE_URL resolves to.
+        monkeypatch.setattr(
+            setup_router,
+            "reconcile_engine_schedules",
+            AsyncMock(return_value={"applied": True}),
         )
 
         # 1. status is open, 2. the printed token buys a claim.

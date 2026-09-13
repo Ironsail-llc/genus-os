@@ -864,6 +864,54 @@ Single daemon handling agent orchestration, Telegram delivery, and cron scheduli
 | Event Hooks | — | Redis Stream consumers (email, calendar triggers) |
 | Tool Registry | — | 54 tools, direct DAL calls (no HTTP roundtrip) |
 
+#### Schedule reconciliation
+
+The manifests on disk are the source of truth; the APScheduler job set is a
+derivative, and reconcile is what makes the two agree. `CronScheduler.reconcile`
+runs from the watchdog every five minutes and on demand from
+`POST /api/admin/scheduler/reconcile`, and both **add, replace and prune**:
+
+| Outcome | When |
+|---------|------|
+| `added` | A manifest declares a job the scheduler does not hold — a new agent, or one whose `schedule.enabled` just went back to `true` |
+| `replaced` | The job exists with a different trigger or misfire grace. Compared on `repr(trigger)`, because `CronTrigger.__eq__` is identity and `str(trigger)` omits the timezone — so a timezone-only edit is invisible to either obvious comparison |
+| `pruned` | The manifest is gone, or `schedule.enabled: false`. The DB row survives a disable so the fleet view can show "off" rather than "deleted" |
+| `blocked` | Nothing happened. See below |
+
+`robothor/engine/schedule_reconcile.py` owns the derivation ("which jobs does
+this manifest ask for") and `scheduler.start()` consumes the same function, so
+boot and reconcile cannot disagree about a namespace — which is how
+`main:worker` came to be pruned five minutes after every restart. Job ids under
+`_SYSTEM_JOB_PREFIXES` (`workflow:`, `memory:`, `plugin:`) are never touched: a
+manifest cannot know about them, so reconcile must not judge them.
+
+**The dirty-scan interlock.** A scan that could not read every manifest is
+authority for nothing: reconcile adds nothing, replaces nothing, prunes nothing,
+and reports `blocked` as `{agent-id: ErrorType}` (or `{"*": "manifest directory
+unreadable"}`). On 2026-08-23 a YAML typo made one manifest unparseable, the
+loader dropped it, reconcile could not tell "broken" from "deleted", and it
+deleted the primary agent's heartbeat and worker schedules; the operator got
+silence for 3h48m. Pruning is one-way and `agent_schedules` has no tombstone, so
+the refusal is not negotiable — and adding from a partial view is refused for
+the milder version of the same reason: a trigger derived from an incomplete
+fleet is one nobody can account for.
+
+A write that does not reconcile is a write that changes nothing, so every
+manifest writer calls it: `POST`/`PATCH`/`DELETE /api/agent-manifests`,
+`/api/installed-agents` install/update/remove, and `POST /api/setup/agent`.
+
+#### Engine admin routes
+
+Everything under `/api/admin` requires the `engine:control` scope
+(`robothor/engine/auth.py::_CONTROL_PATHS`), reads included, and a route added
+under that prefix inherits the requirement rather than having to remember it.
+
+| Route | Module | Purpose |
+|-------|--------|---------|
+| `GET /api/admin/providers`, `POST .../{id}/test`, `GET /api/admin/models`, `POST /api/admin/secrets/reload`, `POST /api/admin/defaults/reload` | `admin_providers.py` | Credentials, the model catalogue, a real test completion |
+| `POST /api/admin/scheduler/reconcile` | `admin_scheduler.py` | Re-derive the job set; answers `{added, replaced, pruned, blocked, clean}`, or 503 when this process holds no scheduler |
+| `GET /api/admin/tools` | `admin_scheduler.py` | The registered tool names a manifest may name. The bridge's manifest validator reads this rather than importing `ToolRegistry`, because only the engine process knows what its plugins contributed |
+
 Engine alerts (`robothor/engine/alerts.py`) route by severity: `critical`
 pages Telegram immediately; `warning`/`info` become `alert_digest`
 notification rows in `crm_agent_notifications` addressed to the operator-facing
@@ -1196,6 +1244,8 @@ robothor/                                 Project root (git repo)
 │   ├── tools.py                          54-tool registry with direct DAL calls
 │   ├── telegram.py                       aiogram v3 Telegram bot
 │   ├── scheduler.py                      APScheduler cron from YAML manifests
+│   ├── schedule_reconcile.py             The wanted job set, as data (start + reconcile share it)
+│   ├── admin_scheduler.py                POST /api/admin/scheduler/reconcile, GET /api/admin/tools
 │   ├── hooks.py                          Redis Stream event-driven triggers
 │   ├── tracking.py                       agent_runs + agent_run_steps DAL
 │   └── tests/                            89 unit tests

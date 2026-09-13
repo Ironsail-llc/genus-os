@@ -36,6 +36,7 @@ def _default_tenant() -> str:
 
 
 from middleware import AuthMiddleware, CorrelationMiddleware, RBACMiddleware, TenantMiddleware
+from routers.agent_manifests import router as agent_manifests_router
 from routers.agents import router as agents_router
 from routers.audit import router as audit_router
 from routers.auth import router as auth_router
@@ -162,6 +163,10 @@ app.include_router(notifications_router)
 app.include_router(tenants_router)
 app.include_router(integration_router)
 app.include_router(installed_agents_router)
+# Agent manifests: the Helm's agent builder. Beside installed_agents because
+# both write to docs/agents/ — one from the marketplace, one from a form — and
+# both have to tell the engine to reconcile afterwards.
+app.include_router(agent_manifests_router)
 app.include_router(audit_router)
 app.include_router(controls_router)
 app.include_router(fleet_router)

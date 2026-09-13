@@ -102,7 +102,23 @@ Agents are built using a CLI + Claude Code workflow:
 3. **Deploy**: `genus agent install <name>` activates the agent in the fleet
 4. **Iterate**: Engine agents (Agent Architect, Nightwatch) can propose improvements via PRs
 
+The Helm's agent builder (`/api/agent-manifests`) is the same flow without the
+ssh session: it scaffolds from the same templates, validates with the same
+checks, writes the same files, and then calls the engine reconcile so the agent
+fires without a restart. See `docs/AGENT_BUILDER.md`.
+
 Agent manifests and instructions are instance data — they stay in `docs/agents/` and `brain/agents/` (gitignored). Platform code provides the engine, tools, and templates.
+
+Two sub-directories of `docs/agents/` are instance-owned and gitignored too:
+
+| Directory | Written by | What it holds |
+|-----------|-----------|---------------|
+| `docs/agents/retired/` (instance) | `DELETE /api/agent-manifests/{id}` | Manifests taken off the fleet. Moved, never unlinked — re-instating an agent is a `mv` back. |
+| `docs/agents/.history/<id>/` | every manifest write | The five previous versions of that agent's manifest, newest last. A convenience over `git`, not the backup story. |
+
+Neither is visible to the engine: `load_manifest_dir` globs `*.yaml` one level
+deep and non-recursively, so a retired or historical manifest can never be
+loaded as a live agent.
 
 ## Upgrade Path
 

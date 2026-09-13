@@ -59,6 +59,37 @@ def insecure_loopback_dev_mode(monkeypatch):
     reset()
 
 
+@pytest.fixture(autouse=True)
+def no_engine_calls_from_the_bridge_suite(monkeypatch):
+    """No bridge test may reach a real engine.
+
+    Three routers now call the engine after a manifest write — the agent
+    builder, the marketplace installer and the first-run wizard — and
+    ``engine_request`` is a plain HTTP POST to whatever ``ROBOTHOR_ENGINE_URL``
+    resolves to. On a developer's box that is their LIVE engine, so an
+    unpatched test would rebuild the operator's job set from a unit suite. That
+    is a production side effect, and the default has to be fail-closed rather
+    than "every test remembered to patch".
+
+    Stubbed as *unreachable* rather than as a success: a test that means to
+    assert the engine was called patches these again itself (the inner patch
+    wins), and one that does not gets the honest answer for a box with no
+    engine on it.
+    """
+
+    async def _unreachable(*args, **kwargs):
+        return 502, {"error": "engine unavailable"}
+
+    async def _not_reconciled(*args, **kwargs):
+        return {"applied": False, "error": "engine unavailable"}
+
+    monkeypatch.setattr("routers.agent_manifests.engine_request", _unreachable, raising=False)
+    monkeypatch.setattr(
+        "routers.installed_agents.reconcile_engine_schedules", _not_reconciled, raising=False
+    )
+    monkeypatch.setattr("routers.setup.reconcile_engine_schedules", _not_reconciled, raising=False)
+
+
 @pytest.fixture
 def test_prefix():
     """Unique prefix to tag all test data for isolation and cleanup."""

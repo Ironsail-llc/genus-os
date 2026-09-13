@@ -8,7 +8,7 @@ delete an agent and leave nothing behind to attribute it.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -62,8 +62,23 @@ def installer():
         ) as update,
         patch("robothor.templates.installer.remove") as remove,
         patch("routers._audit.log_event") as log_event,
+        # Each of these routes now tells the engine to reconcile — without that
+        # the manifest the installer just wrote does not fire until a restart.
+        # Stubbed here because the real call is an HTTP request to whatever
+        # ROBOTHOR_ENGINE_URL resolves to, which on a developer's box is their
+        # LIVE engine, and a test suite must not reconcile somebody's fleet.
+        patch(
+            "routers.installed_agents.reconcile_engine_schedules",
+            new=AsyncMock(return_value={"applied": True}),
+        ) as reconcile,
     ):
-        yield MagicMock(install=install, update=update, remove=remove, log_event=log_event)
+        yield MagicMock(
+            install=install,
+            update=update,
+            remove=remove,
+            log_event=log_event,
+            reconcile=reconcile,
+        )
 
 
 # WHICH LOCK EACH TEST PROVES — read this before deleting one as redundant.
@@ -124,6 +139,30 @@ def test_operator_removes_and_the_act_is_audited(installer):
     installer.remove.assert_called_once_with("note-taker")
     assert installer.log_event.call_args.args[0] == "helm.agent.remove"
     assert installer.log_event.call_args.kwargs["action"] == "note-taker"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("post", "/api/installed-agents/install", {"slug": "note-taker", "variables": {}}),
+        ("post", "/api/installed-agents/note-taker/update", None),
+        ("delete", "/api/installed-agents/note-taker", None),
+    ],
+)
+def test_every_install_state_change_tells_the_engine_to_reconcile(installer, method, path, body):
+    """The half of the act that was missing.
+
+    ``reconcile()`` was prune-only and nothing added a job after boot, so a
+    marketplace install wrote a manifest, answered 200, and the agent did not
+    fire until somebody restarted the engine. The write is not the act; the
+    write plus the reconcile is.
+    """
+    client = _client("owner")
+    response = getattr(client, method)(path, json=body) if body else getattr(client, method)(path)
+
+    assert response.status_code == 200
+    installer.reconcile.assert_awaited_once()
+    assert response.json()["reconcile"] == {"applied": True}
 
 
 def test_a_failed_install_is_audited_as_an_error(installer):

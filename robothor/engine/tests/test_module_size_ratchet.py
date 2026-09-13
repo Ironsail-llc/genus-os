@@ -87,7 +87,15 @@ CAPS = {
     # ratchet did its job — it forced the extraction and made this residual
     # an explicit decision rather than drift. Do not raise again without
     # extracting something real.
-    "robothor/engine/scheduler.py": 1626,  # +19: catch-up stagger (paces spawns after downtime)
+    # 1626 -> 1600: the wanted-job-set derivation left for
+    # schedule_reconcile.py, and start()'s three hand-written registration
+    # blocks collapsed into one loop over it (266 -> 117 lines). That is what
+    # paid for reconcile learning to add and replace, rather than raising this.
+    "robothor/engine/scheduler.py": 1600,
+    # The job-set derivation reconcile and start() now share. Bounded from the
+    # day it lands: this is the module that would otherwise absorb every
+    # scheduling concern that does not fit in scheduler.py's cap.
+    "robothor/engine/schedule_reconcile.py": 300,
 }
 
 

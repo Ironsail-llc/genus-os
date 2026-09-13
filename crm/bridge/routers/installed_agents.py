@@ -6,6 +6,7 @@ for the Helm UI's marketplace panel.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -23,6 +24,7 @@ from robothor.templates.safety import (
 )
 from routers._audit import audited
 from routers._operator import require_operator
+from routers.agent_manifests import reconcile_engine_schedules
 
 logger = logging.getLogger(__name__)
 
@@ -144,15 +146,27 @@ def list_installed_agents() -> dict[str, object]:
 
 
 @router.post("/install")
-def install_agent(req: InstallRequest, request: Request) -> dict[str, object]:
+async def install_agent(req: InstallRequest, request: Request) -> dict[str, object]:
     """Install an agent from the Programmatic Resources hub.
 
     Operator-only and audited: this writes an agent manifest and runs the
     template installer against the appliance, which is not a member act.
     ``req.variables`` routinely carries credentials, so only the slug is
     recorded — never the variables.
+
+    ``async`` with the install itself in a thread, so the route can await the
+    engine reconcile afterwards. Without that call the manifest this just wrote
+    sits inert until somebody restarts the engine, which is the whole reason the
+    marketplace "installed" an agent that never ran.
     """
     require_operator(request)
+    result = await asyncio.to_thread(_install_from_hub, req, request)
+    result["reconcile"] = await reconcile_engine_schedules()
+    return result
+
+
+def _install_from_hub(req: InstallRequest, request: Request) -> dict[str, object]:
+    """The blocking half: a hub download and the template installer."""
     try:
         from robothor.templates.hub_client import HubClient, trusted_bundle_sha256
         from robothor.templates.installer import install
@@ -188,9 +202,19 @@ def install_agent(req: InstallRequest, request: Request) -> dict[str, object]:
 
 
 @router.post("/{agent_id}/update")
-def update_agent(agent_id: str, request: Request) -> dict[str, object]:
-    """Update an installed agent to the latest version. Operator-only, audited."""
+async def update_agent(agent_id: str, request: Request) -> dict[str, object]:
+    """Update an installed agent to the latest version. Operator-only, audited.
+
+    Reconciles afterwards: an update can change the agent's cron, and the
+    engine is holding the trigger it parsed at boot until it is told otherwise.
+    """
     require_operator(request)
+    result = await asyncio.to_thread(_update_from_hub, agent_id, request)
+    result["reconcile"] = await reconcile_engine_schedules()
+    return result
+
+
+def _update_from_hub(agent_id: str, request: Request) -> dict[str, object]:
     try:
         from robothor.templates.hub_client import HubClient, trusted_bundle_sha256
         from robothor.templates.installer import update
@@ -228,9 +252,19 @@ def update_agent(agent_id: str, request: Request) -> dict[str, object]:
 
 
 @router.delete("/{agent_id}")
-def remove_agent(agent_id: str, request: Request) -> dict[str, object]:
-    """Remove an installed agent. Operator-only, audited."""
+async def remove_agent(agent_id: str, request: Request) -> dict[str, object]:
+    """Remove an installed agent. Operator-only, audited.
+
+    Reconciles afterwards so the schedule goes with the manifest, instead of the
+    engine firing a job for an agent whose config no longer exists.
+    """
     require_operator(request)
+    result = await asyncio.to_thread(_remove_installed, agent_id, request)
+    result["reconcile"] = await reconcile_engine_schedules()
+    return result
+
+
+def _remove_installed(agent_id: str, request: Request) -> dict[str, object]:
     try:
         from robothor.templates.installer import remove
 

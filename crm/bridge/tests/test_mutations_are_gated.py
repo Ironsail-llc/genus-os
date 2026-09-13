@@ -126,7 +126,17 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
 # fleet's default model. Either one is enough on its own; a future "it is
 # tenant data, bridge:write covers it" entry would hand every member session
 # the ability to point the whole fleet at a model of their choosing.
-MUST_BE_GATED_PREFIXES = ("/api/vault", "/api/installed-agents", "/api/providers")
+#
+# ``/api/agent-manifests`` writes the files that decide which agents exist, what
+# model they dial, which tools they may call and when they fire. A member
+# session that reached it could give itself an agent with `exec` on the
+# appliance, so there is no tenant-scoping argument that could ever justify it.
+MUST_BE_GATED_PREFIXES = (
+    "/api/vault",
+    "/api/installed-agents",
+    "/api/providers",
+    "/api/agent-manifests",
+)
 
 
 def _all_routes() -> list[Any]:
@@ -190,6 +200,11 @@ EXPECTED_ROUTER_MODULES = frozenset(
         # so a mount that silently stopped contributing routes would take the
         # gate assertions on them with it and still leave the floor intact.
         "routers.providers",
+        # Manifest writes. Same reasoning: these are the only routes that decide
+        # which agents exist and what they may do, and a mount that stopped
+        # contributing them would leave both this floor and the per-route gate
+        # assertions vacuously green.
+        "routers.agent_manifests",
     }
 )
 

@@ -42,6 +42,10 @@ brain/*.sqlite3
 docs/agents/*.yaml
 docs/agents/*.md
 docs/agents/retired/
+# Per-agent snapshot ring the Helm's agent builder writes before every edit.
+# Instance data like every other manifest here, and invisible to the engine:
+# load_manifest_dir globs *.yaml one level deep, non-recursively.
+docs/agents/.history/
 docs/agents/delphi/
 docs/workflows/delphi/
 !docs/agents/schema.yaml
