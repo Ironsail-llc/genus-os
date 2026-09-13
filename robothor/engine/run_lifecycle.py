@@ -170,6 +170,31 @@ INIT_TIMEOUT_SECONDS = 60
 logger = logging.getLogger(__name__)
 
 
+def spawn_post_stall_autodream(agent_id: str) -> None:
+    """Kick off memory consolidation after the stall watchdog kills a run.
+
+    Best-effort and deliberately silent on failure: this is cleanup on a path
+    that is already finalizing a dead run, and an autoDream import error must
+    not stop the terminal row being written.
+
+    Lives here rather than inline in ``runner.execute`` because "recovery
+    helper spawns" is this module's own contract, and the runner is the
+    god-object the decomposition ratchet exists to shrink.
+    """
+    try:
+        from robothor.engine.autodream import is_cooled_down, run_autodream
+
+        if is_cooled_down():
+            from robothor.engine.task_registry import get_task_registry
+
+            get_task_registry().spawn(
+                run_autodream(mode="post_stall"),
+                name=f"autodream-post-stall:{agent_id}",
+            )
+    except Exception as e:
+        logger.warning("autoDream post_stall failed: %s", _sanitize(e))
+
+
 class RunLifecycleMixin:
     """See module docstring for the contract."""
 

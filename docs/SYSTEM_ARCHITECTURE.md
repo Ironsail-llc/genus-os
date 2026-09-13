@@ -918,6 +918,71 @@ A write that does not reconcile is a write that changes nothing, so every
 manifest writer calls it: `POST`/`PATCH`/`DELETE /api/agent-manifests`,
 `/api/installed-agents` install/update/remove, and `POST /api/setup/agent`.
 
+#### Workflow budgets and step visibility
+
+A workflow's `timeout_seconds` is one wall-clock budget shared by all of its
+steps, and an agent step spends it walking that agent's model chain — primary,
+one in-place transient retry, then each fallback, each leg with its own per-call
+allowance (`LLM_REQUEST_TIMEOUT_BATCH` for cloud models on a workflow or cron
+trigger, `LLM_REQUEST_TIMEOUT_OLLAMA` for the local tail). **No step may be
+allowed more wall-clock than the workflow that contains it.** `email-pipeline`
+carried a 900 s budget while its classify step's four-model chain was allowed
+`300 + 300 + 300 + 600` plus one 300 s retry — 1,800 s — so the run could only
+ever finish while the primary answered first try; when the primary began
+returning empty completions on 2026-09-11 every run died at exactly 900 s.
+`robothor/engine/workflow_budget.py` enforces this at both ends.
+`load_workflows` logs a `Config validation [workflow:…]` warning naming the
+step, its computed worst case and the budget — the same ladder as the
+agent-manifest check `_check_stall_budget_vs_llm_timeout`, which validates the
+identical inversion for stall budgets — and `scripts/validate_agents.py --ci`
+runs the same check with `strict=True`, so an inversion it can resolve fails
+the PR instead of scrolling past. Both surfaces report **how much they
+checked**: an unresolved chain must never be mistaken for a clean one. Because
+every agent manifest is gitignored, the CLI falls back to
+`llm_budgets.REFERENCE_CHAIN` — the four-model shape the platform ships — so
+the *tracked* `docs/workflows/*.yaml` budgets are genuinely checked on a clean
+checkout, and a green `validate-agents` job is evidence rather than an absence
+of it. Checking zero agent steps is itself reported as a failure. The arithmetic reads its constants from `robothor/engine/llm_budgets.py`,
+the same leaf `llm_client` spends them out of, so prediction and runtime cannot
+drift; that leaf is also why the check needs no provider SDK to run.
+
+At runtime the workflow publishes its deadline so each LLM call is clamped to
+what is actually left. The chain walk refuses to *start* a model the budget can
+no longer afford, raising `WorkflowDeadlineError` — which names the workflow,
+the step and the refused model, and which `runner.execute` classifies as a
+**cancellation, not a timeout**: the agent's own clock never fired, so counting
+it in the timeout rate would be the same corruption `GENUINE_TIMEOUT_SQL`
+exists to prevent. The runner writes its row and re-raises, because only the
+workflow engine knows which step to mark — and so does `ToolRegistry.execute`,
+since `spawn_agent` runs its child `runner.execute` inline in the parent's task
+and therefore inside the same deadline scope; left to the registry's broad
+`except TimeoutError` it became "Tool 'spawn_agent' timed out after 120s", a
+duration that never elapsed.
+
+Being a cancellation has one consequence worth stating. `cancelled` is in
+`RESUMABLE_STATUSES`, so without a second rule a restart would resume an agent
+run its workflow deliberately abandoned — outside any deadline, with no
+workflow left to report to, and spending the budget that was already exhausted.
+`resume.resumable()` therefore drops runs whose reason starts with
+`WORKFLOW_BUDGET_CANCEL_PREFIX`: the one `cancelled` that is a decision rather
+than a casualty.
+
+The deadline is one budget for the whole run, **not a per-step allowance**: it
+stops a step outspending its workflow, and does not stop a first step leaving
+the second one nothing. Dividing it would need a per-step budget in the YAML,
+which no workflow declares today.
+
+A step's `workflow_run_steps` row is written when the step is **dispatched**,
+as `running` with its `started_at`, and updated in place when it finishes. It
+used to be written only on completion, so a step that never returned left no row
+at all: timed-out runs read `steps 0/2` with an empty step table, and "the
+workflow never started" was indistinguishable from "step 1 has been running for
+fifteen minutes". Rows still `running` when the run ends are closed out as
+`timeout` (migration 119) rather than left immortal, and the run's own
+`error_message` names the step — or, for a parallel fan-out, the steps — that
+were in flight. `WorkflowStepStatus` is held against that CHECK constraint by
+`test_schema_drift.py`, the same guard its three sibling enums already had.
+
 #### Engine admin routes
 
 Everything under `/api/admin` requires the `engine:control` scope

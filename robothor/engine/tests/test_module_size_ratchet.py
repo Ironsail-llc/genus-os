@@ -43,7 +43,8 @@ CAPS = {
     # had one). Seven lines: a four-line note and a two-line branch inside
     # execute(). There is no cohesive cluster to extract here — the write has
     # to happen where the run row is being assembled.
-    "robothor/engine/runner.py": 2522,
+    # 2522 -> 2520: the post-stall autoDream spawn left for run_lifecycle.py.
+    "robothor/engine/runner.py": 2520,
     # 2545: a concurrent session ratcheted this to 2539 by lifting injection
     # screening and journal resume out of execute(); the deliverable guard's call
     # site adds the rest. Its 25 lines of logic went to loop_guards.py, so what
@@ -83,7 +84,11 @@ CAPS = {
     # untyped call in a typed context. The signature costs six lines and the
     # TYPE_CHECKING import four; trimming to fit would have meant deleting
     # the docstring that says why watchdog_fired overrides the status.
-    "robothor/engine/cancel_outcome.py": 86,
+    # 86 -> 83: learning a THIRD kind of evidence (a workflow budget expiring
+    # mid-call is a cancellation, not a timeout) was paid for by moving
+    # `propagates_to_caller` beside the exception that gave that rule its
+    # second member, and by deleting history the module docstring already told.
+    "robothor/engine/cancel_outcome.py": 83,
     # Fleet admission (2026-08-27): extracted from the scheduler rather than
     # growing it past its cap — the pool it drives had no production caller for
     # its whole existence, and the wiring is a cohesive unit of its own.
