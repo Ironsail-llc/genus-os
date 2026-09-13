@@ -28,6 +28,10 @@ _ENGINE = Path(__file__).resolve().parents[1]
 #: A function longer than this is a decomposition problem, not a style one.
 MAX_NEW_FUNCTION_LINES = 200
 
+#: Re-measured against the merged tree on 2026-09-13: four entries carried
+#: 1-3 lines of inherited slack and were tightened to actual. The file's rule
+#: is "pinned at their current size"; headroom nobody earned is where the
+#: next function regrows.
 #: Every function already over the line, pinned at its measured size
 #: (2026-08-27). These may SHRINK — the test fails if one grows, and fails if
 #: an entry is more than 10% larger than reality, so shrinking forces the cap
@@ -37,7 +41,7 @@ KNOWN_LARGE: dict[str, int] = {
     # workflow-approval tools) left as one cluster, `_HUMAN_IN_THE_LOOP_SCHEMAS`.
     # ask_user's own schema is in that constant, so the new tool cost this
     # function nothing and paid down 66 lines on the way in.
-    "tools/schemas.py::get_engine_schemas": 3454,
+    "tools/schemas.py::get_engine_schemas": 3453,
     # -29: every subsystem router mount extracted to _mount_subsystem_routers,
     # which is what made room for the /api/admin registration rather than
     # raising this number for it.
@@ -50,7 +54,11 @@ KNOWN_LARGE: dict[str, int] = {
     # as zero spend — a different claim about the fleet, and one this endpoint
     # was the last place to get wrong.
     "health.py::create_health_app": 1386,
-    "runner.py::execute": 990,  # +7: task_id propagated onto the run at INSERT time
+    # 990 -> 989: the post-stall autoDream spawn moved to
+    # run_lifecycle.spawn_post_stall_autodream ("recovery helper spawns" is
+    # that module's own contract), which is what paid for classifying a
+    # workflow-budget kill and letting it propagate.
+    "runner.py::execute": 989,  # +7: task_id propagated onto the run at INSERT time
     "runner.py::_run_loop": 775,
     # +12: run/tenant threaded onto the signature, and the do-not-contact
     # refusal at the head of both outbound-mail branches. The check itself
@@ -67,7 +75,7 @@ KNOWN_LARGE: dict[str, int] = {
     # 371 -> 365: the Slack start block and the channel-registry warm-up both
     # moved into _start_channels, which is what made room for the warm-up
     # rather than raising this number for it.
-    "daemon.py::main": 365,
+    "daemon.py::main": 364,
     "telegram.py::_run_interactive": 384,
     # 370 -> 347: shaping the graded child (silent delivery, iteration cap,
     # deny-list, is_benchmark) moved to _shape_child_config, which is what paid
@@ -87,14 +95,22 @@ KNOWN_LARGE: dict[str, int] = {
     "analytics.py::get_agent_stats": 326,
     # 303 -> 301: the reconcile reporting moved to _log_reconcile, which is
     # what paid for reporting added/replaced as well as pruned.
-    "daemon.py::_watchdog": 301,
+    "daemon.py::_watchdog": 298,
     "chat.py::plan_approve": 286,
     "compaction.py::compact": 276,
     # -7: rate-limit wait and the malformed-tool-call verdict extracted;
     # +4: review-requested comments on the malformed-tool-call branch (why the
     # re-roll spends `attempt`, and what skipping `_handle_model_error` costs)
-    "llm_client.py::_call_llm": 267,
-    "config.py::manifest_to_agent_config": 268,
+    # 267 -> 242: the per-model admission decision (spent credential, open
+    # breaker, retired pool) went to _skip_model_reason and the per-call
+    # timeout selection to _per_call_timeout. That is what paid for the
+    # workflow-deadline clamp inside the attempt loop rather than raising
+    # this number for it.
+    # 242 -> 240: _skip_model_reason now returns the pool it looked up, so the
+    # call site stopped needing its own _key_pool line — which is also what
+    # restored the lazy lookup for models the walk skips.
+    "llm_client.py::_call_llm": 240,
+    "config.py::manifest_to_agent_config": 267,
     # scheduler.py::start is gone from this list: 266 -> 116. The three
     # hand-written registration blocks (heartbeat, worker, cron) became one
     # loop over schedule_reconcile.agent_job_specs, which is also what
@@ -104,14 +120,21 @@ KNOWN_LARGE: dict[str, int] = {
     # _emit_tool_call_events, which more than paid for accumulating the
     # streamed reasoning_details litellm's stream_chunk_builder drops and for
     # threading the rejected history into the replay digest.
-    "llm_client.py::_call_llm_streaming": 247,
+    # 247 -> 245: its own per-call timeout selection now shares
+    # _per_call_timeout with _call_llm, which more than paid for the same
+    # workflow-deadline clamp landing on this chain walk too.
+    "llm_client.py::_call_llm_streaming": 245,
     "telegram.py::run_agent": 257,
     "tools/handlers/experiment.py::_experiment_commit": 256,
     "telegram.py::_handle_goal_command": 242,
     "managed_agents/runner.py::run_on_managed_agents": 241,
     "runner.py::execute_deep": 224,
     "chat.py::run_approved": 218,
-    "workflow.py::execute": 208,
+    # workflow.py::execute is gone from this list: 208 -> 179. The finalization
+    # cluster (completion stamp, terminal status, the failed->timeout
+    # reclassification) became _finalize_status, which is what paid for the
+    # workflow-deadline scope and the orphan-step close-out rather than raising
+    # this number for them.
 }
 
 

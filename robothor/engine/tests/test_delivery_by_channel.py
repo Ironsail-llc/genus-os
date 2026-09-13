@@ -21,7 +21,7 @@ import ast
 import importlib
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -229,37 +229,142 @@ class TestTheAnnounceBranchIsNotHardcoded:
     """
 
     @staticmethod
-    def _announce_branch() -> ast.If:
+    def _module_tree() -> ast.Module:
         module = importlib.import_module("robothor.engine.delivery")
         assert module.__file__ is not None
-        source = Path(module.__file__).read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        deliver_fn = next(
-            n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "deliver"
-        )
+        return ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _calls(node: ast.AST) -> set[str | None]:
+        return {
+            getattr(n.func, "id", None) or getattr(n.func, "attr", None)
+            for n in ast.walk(node)
+            if isinstance(n, ast.Call)
+        }
+
+    @classmethod
+    def _announce_call_sets(cls) -> list[set[str | None]]:
+        """The calls on each announce path through ``deliver()``.
+
+        Two things changed here after this guard raised a false alarm:
+
+        * **Every** ``If`` in ``deliver()`` testing ANNOUNCE is collected, not
+          the first. Taking the first made the guard report on whichever
+          announce-mode branch happened to sit highest: a thin-announce check
+          added above the dispatch failed ``test_deliver_announce_resolves_a_
+          channel`` with ``assert 'get_channel' in {'note_substitution'}`` — a
+          complaint about a property that had not changed.
+        * Each branch's call set is **extended with the bodies of same-module
+          helpers it calls**, so extracting the send into
+          ``_send_announcement`` cannot move the hardcoded-Telegram check out
+          from under the guard. A guard that a refactor can walk out of is the
+          inert kind this repo keeps finding.
+        """
+        tree = cls._module_tree()
+        helpers = {
+            n.name: n for n in tree.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+        }
+        deliver_fn = helpers["deliver"]
+        branches = []
         for node in ast.walk(deliver_fn):
             if isinstance(node, ast.If):
                 names = {a.attr for a in ast.walk(node.test) if isinstance(a, ast.Attribute)}
                 if "ANNOUNCE" in names:
-                    return node
-        raise AssertionError("deliver() has no DeliveryMode.ANNOUNCE branch")
-
-    @staticmethod
-    def _calls(branch: ast.If) -> set[str | None]:
-        return {
-            getattr(n.func, "id", None) or getattr(n.func, "attr", None)
-            for n in ast.walk(branch)
-            if isinstance(n, ast.Call)
-        }
+                    branches.append(node)
+        assert branches, "deliver() has no DeliveryMode.ANNOUNCE branch"
+        every = []
+        for branch in branches:
+            calls = cls._calls(branch)
+            for name in list(calls):
+                if name in helpers and name != "deliver":
+                    calls |= cls._calls(helpers[name])
+            every.append(calls)
+        return every
 
     def test_deliver_announce_resolves_a_channel(self):
-        assert "get_channel" in self._calls(self._announce_branch()), (
-            "the ANNOUNCE branch does not resolve a channel by name — "
+        assert any("get_channel" in calls for calls in self._announce_call_sets()), (
+            "no ANNOUNCE branch resolves a channel by name — "
             "delivery_channel is being parsed and ignored again"
         )
 
     def test_deliver_announce_does_not_hardcode_telegram(self):
-        assert "_deliver_telegram" not in self._calls(self._announce_branch()), (
-            "the ANNOUNCE branch still calls _deliver_telegram directly, so a "
+        assert all("_deliver_telegram" not in calls for calls in self._announce_call_sets()), (
+            "an ANNOUNCE branch still calls _deliver_telegram directly, so a "
             "named channel is decoration"
         )
+
+    def test_the_guard_follows_the_helper_the_send_was_extracted_into(self):
+        """Evidence that the transitive walk is load-bearing: the send itself
+        lives in ``_send_announcement`` now, and ``channel.send`` has to be
+        visible from the announce branch through it."""
+        assert any("send" in calls for calls in self._announce_call_sets())
+
+
+class TestEmailRoutesThroughTheBuiltInChannel:
+    """``delivery.channel: email`` end to end, including the refusal.
+
+    The refusal half is the one worth having here rather than only in the
+    channel's own suite: a status the channel returns is a control only once
+    ``apply_receipt`` has written it into ``agent_runs``, which is the column
+    analytics and the heartbeat ping read. A guard whose refusal never reached
+    that column would look, to every dashboard, exactly like a delivery.
+    """
+
+    @staticmethod
+    def _email_channel(gws, *, present: bool = True):
+        from robothor.engine.channels import get_channel
+        from robothor.engine.channels.email import EmailChannel
+
+        channel = get_channel("email")
+        assert isinstance(channel, EmailChannel)
+        channel.gws_send = gws
+        channel.gws_probe = lambda: present
+        return channel
+
+    @staticmethod
+    def _recording_gws(sent: list[list[str]]):
+        def _gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
+            sent.append(args)
+            return {"id": "18f0000000000000"}
+
+        return _gws
+
+    @pytest.mark.asyncio
+    async def test_a_manifest_naming_email_reaches_the_email_channel(
+        self, telegram_sender, persisted
+    ):
+        sent: list[list[str]] = []
+        self._email_channel(self._recording_gws(sent))
+        run = _run()
+        config = _config(delivery_channel="email", delivery_to="alice@example.com")
+
+        with patch("robothor.crm.dal.do_not_contact_emails", return_value=set()):
+            result = await deliver(config, run)
+
+        assert result is True
+        assert len(sent) == 1
+        telegram_sender.assert_not_called()
+        assert run.delivery_channel == "email"
+        assert run.delivery_status == "delivered"
+        assert persisted == ["delivered"]
+
+    @pytest.mark.asyncio
+    async def test_a_flagged_recipient_is_recorded_as_a_refusal_not_a_delivery(
+        self, telegram_sender, persisted
+    ):
+        sent: list[list[str]] = []
+        self._email_channel(self._recording_gws(sent))
+        run = _run()
+        config = _config(delivery_channel="email", delivery_to="bob@example.com")
+
+        with (
+            patch("robothor.crm.dal.do_not_contact_emails", return_value={"bob@example.com"}),
+            patch("robothor.engine.tracking.log_guardrail_event"),
+        ):
+            result = await deliver(config, run)
+
+        assert result is False
+        assert sent == [], "a flagged recipient reached the transport"
+        assert run.delivery_status == "failed:email_dnc"
+        assert run.delivered_at is None
+        assert persisted == ["failed:email_dnc"]

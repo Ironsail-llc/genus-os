@@ -59,7 +59,11 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
     ),
     "/api/notifications": (
         "Tenant CRM data written by member sessions and agent tokens — bridge:write "
-        "scope + TenantMiddleware tenant pinning, same as /api/people."
+        "scope + TenantMiddleware tenant pinning, same as /api/people. The inbox "
+        "READ is additionally caller-scoped in the handler (owner/admin any id, "
+        "everybody else their own actor_id) because the webchat channel puts "
+        "member-private chat deliveries in there; see "
+        "test_notifications_inbox_scope.py."
     ),
     "/api/routines": (
         "Tenant-scoped scheduled work (every DAL call takes tenant_id) — bridge:write "

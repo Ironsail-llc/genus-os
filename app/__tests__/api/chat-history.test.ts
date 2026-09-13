@@ -5,7 +5,6 @@ vi.mock("@/lib/config", () => ({
   HELM_AGENT_ID: "helm-user",
   OWNER_NAME: "there",
   AI_NAME: "Robothor",
-  SESSION_KEY: "agent:main:webchat-user",
 }));
 
 // Mock the engine client module
@@ -62,9 +61,8 @@ describe("GET /api/chat/history", () => {
     const req = new Request("http://localhost:3004/api/chat/history?limit=10");
     await GET(req);
 
-    expect(mockChatHistory).toHaveBeenCalledWith(
-      "agent:main:webchat-user",
-      10
-    );
+    // The limit, and nothing else: the session is the engine's to decide from
+    // the authenticated caller, so the route has no key to pass.
+    expect(mockChatHistory).toHaveBeenCalledWith(10);
   });
 });

@@ -1,5 +1,5 @@
 import { getEngineClient } from "@/lib/engine/server-client";
-import { ensureCanvasPromptInjected, SESSION_KEY } from "@/lib/engine/session-state";
+import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -18,7 +18,7 @@ export async function POST(req: Request) {
     // Fire-and-forget — cached after first success, no need to block
     ensureCanvasPromptInjected().catch(() => {});
 
-    const engineRes = await client.chatSend(SESSION_KEY, message);
+    const engineRes = await client.chatSend(message);
 
     if (!engineRes.body) {
       return new Response(

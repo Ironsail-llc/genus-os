@@ -1,3 +1,33 @@
+## [1.76.2](https://github.com/Ironsail-llc/genus-os/compare/v1.76.1...v1.76.2) (2026-09-13)
+
+### Bug Fixes
+
+* **delivery:** a thin announce reply falls back to the note the run wrote ([#524](https://github.com/Ironsail-llc/genus-os/issues/524)) ([e24d962](https://github.com/Ironsail-llc/genus-os/commit/e24d962f36f3574667e11797b5ab9a159b49d83c))
+* **workflow:** a step cannot outspend its workflow, and steps are visible while running ([#529](https://github.com/Ironsail-llc/genus-os/issues/529)) ([eecc6cc](https://github.com/Ironsail-llc/genus-os/commit/eecc6ccbf374853a12140687ef1bc451d87a92d7))
+
+## [1.76.1](https://github.com/Ironsail-llc/genus-os/compare/v1.76.0...v1.76.1) (2026-09-13)
+
+### Bug Fixes
+
+* **crm:** person and task lookups refuse a non-uuid id before the query ([#527](https://github.com/Ironsail-llc/genus-os/issues/527)) ([808a0d2](https://github.com/Ironsail-llc/genus-os/commit/808a0d20c4e30e3c9feada44e17b63e470616c3e))
+
+## [1.76.0](https://github.com/Ironsail-llc/genus-os/compare/v1.75.0...v1.76.0) (2026-09-13)
+
+### Features
+
+* **channels:** email as a delivery target with dnc check ([#523](https://github.com/Ironsail-llc/genus-os/issues/523)) ([3435210](https://github.com/Ironsail-llc/genus-os/commit/343521036dbee158d6bba8d4eb0205bf957d1857))
+
+### Bug Fixes
+
+* **guardrails:** the credential detector ignores placeholders, type names and labels ([#526](https://github.com/Ironsail-llc/genus-os/issues/526)) ([fecfb92](https://github.com/Ironsail-llc/genus-os/commit/fecfb927849ef19560c9bd55f9c4c3fd76ac2bdc))
+* **memory:** remote generation reports the caller's budget and reserves headroom ([#525](https://github.com/Ironsail-llc/genus-os/issues/525)) ([bfe4b0d](https://github.com/Ironsail-llc/genus-os/commit/bfe4b0db56108ca4573661389678147d9011e066))
+
+## [1.75.0](https://github.com/Ironsail-llc/genus-os/compare/v1.74.0...v1.75.0) (2026-09-13)
+
+### Features
+
+* **webchat:** per-user sessions, webchat channel and ask over sse ([#522](https://github.com/Ironsail-llc/genus-os/issues/522)) ([563dd17](https://github.com/Ironsail-llc/genus-os/commit/563dd17fa6c0934220f3b71626b60b5008330a0c))
+
 ## [1.74.0](https://github.com/Ironsail-llc/genus-os/compare/v1.73.0...v1.74.0) (2026-09-13)
 
 ### Features

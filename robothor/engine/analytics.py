@@ -54,11 +54,32 @@ INTERRUPTED_SQL = (
 )
 
 
+#: What `WorkflowDeadlineError` writes when a workflow's budget expires inside
+#: one of its agent steps. A stable prefix rather than a shape match, because
+#: two different subsystems now key off it: the timeout rate (which must not
+#: count it) and resume (which must not restart it).
+WORKFLOW_BUDGET_CANCEL_PREFIX = "Workflow budget exhausted"
+
+
 def is_external_cancellation(error_message: str | None) -> bool:
     """Was this run killed from outside rather than by its own clock?"""
     if not error_message:
         return False
     return error_message.startswith(EXTERNAL_CANCEL_PREFIX)
+
+
+def is_workflow_budget_cancellation(error_message: str | None) -> bool:
+    """Was this run cut short because its WORKFLOW ran out of budget?
+
+    A third kind of interruption, and the only one that is deliberate: the
+    workflow decided this agent could not be afforded, and the workflow run
+    itself has already reached a terminal status. Distinguishing it matters
+    twice — it is not a timeout the agent earned, and it is not work a restart
+    should pick back up.
+    """
+    if not error_message:
+        return False
+    return error_message.startswith(WORKFLOW_BUDGET_CANCEL_PREFIX)
 
 
 #: Terminal states that mean "interrupted, not finished" — the runs resume

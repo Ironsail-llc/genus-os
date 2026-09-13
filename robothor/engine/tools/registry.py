@@ -18,6 +18,7 @@ from robothor.engine.tools.constants import (
 )
 from robothor.engine.tools.dispatch import _execute_tool
 from robothor.engine.tools.schemas import get_engine_schemas
+from robothor.engine.workflow_budget import WorkflowDeadlineError
 
 if TYPE_CHECKING:
     from robothor.engine.models import AgentConfig
@@ -708,6 +709,17 @@ class ToolRegistry:
                     is_benchmark=is_benchmark,
                     identity=identity,
                 )
+        except WorkflowDeadlineError:
+            # NOT this tool's timeout. `spawn_agent` runs a child
+            # `runner.execute` INLINE in the parent's task, so it inherits the
+            # workflow's deadline scope and its chain walk can raise here.
+            # `WorkflowDeadlineError` subclasses `TimeoutError`, so the handler
+            # below used to turn it into "Tool 'spawn_agent' timed out after
+            # 120s" — a fabricated cause at a duration that never elapsed, and
+            # the same destruction of the deadline's identity that
+            # `propagates_to_caller` exists to prevent one frame up. Only the
+            # workflow engine can name the step, so it has to keep travelling.
+            raise
         except TimeoutError:
             logger.warning("Tool %s timed out after %ds", tool_name, timeout)
             return {

@@ -50,6 +50,13 @@ HISTORICAL_GOVERNED_FLAGS: frozenset[str] = frozenset(
         "ROBOTHOR_HONESTY_SUITE_MODE",
         "ROBOTHOR_BENCHMARK_SANDBOX_MODE",
         "ROBOTHOR_DNC_MODE",
+        # Added deliberately when webchat became a delivery destination: a
+        # shared chat session stopped being only a privacy smell and became a
+        # place one member's delivery could land where another reads. Governing
+        # it means an operator can move the rung from Controls instead of
+        # editing /etc and restarting — which is what you want of a switch that
+        # decides who can read whose conversation.
+        "ROBOTHOR_PER_USER_SESSIONS",
     }
 )
 

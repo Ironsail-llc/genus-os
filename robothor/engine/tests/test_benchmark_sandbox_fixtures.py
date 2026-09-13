@@ -510,7 +510,12 @@ class TestCrmHandlerSandboxGate:
             agent_id="benchmark-agent", is_benchmark=True, tenant_id=bs.sandbox_tenant_id()
         )
         with patch("robothor.crm.dal.update_person", return_value=True) as update:
-            result = await HANDLERS["update_person"]({"id": "x", "email": "a@example.com"}, ctx)
+            result = await HANDLERS["update_person"](
+                # A real UUID: an id-shaped refusal at the tool boundary would
+                # mask what this test is about (the sandbox gate).
+                {"id": "11111111-1111-4111-8111-111111111111", "email": "a@example.com"},
+                ctx,
+            )
         assert result.get("guard") != "is_benchmark"
         assert update.called
 
@@ -522,7 +527,9 @@ class TestCrmHandlerSandboxGate:
 
         ctx = ToolContext(agent_id="crm-hygiene", tenant_id="robothor-primary")
         with patch("robothor.crm.dal.update_person", return_value=True) as update:
-            result = await HANDLERS["update_person"]({"id": "x"}, ctx)
+            result = await HANDLERS["update_person"](
+                {"id": "11111111-1111-4111-8111-111111111111"}, ctx
+            )
         assert result.get("guard") != "is_benchmark"
         assert update.called
 

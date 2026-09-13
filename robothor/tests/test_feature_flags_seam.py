@@ -91,3 +91,26 @@ def test_the_dnc_flag_only_offers_the_rungs_the_engine_honours(monkeypatch):
     Offering `off`/`alert` for a flag the engine maps to `enforce` would let an
     operator set a rung, see it stored, and get different behaviour."""
     assert store.valid_values_for("ROBOTHOR_DNC_MODE") == ("observe", "enforce")
+
+
+def test_the_per_user_sessions_flag_only_offers_the_rungs_the_engine_honours():
+    """Three rungs, not four.
+
+    ``per_user_sessions_mode`` maps anything it does not recognise onto
+    ``enforce``, so offering ``alert`` in the Controls picker would let an
+    operator set a rung, see it stored, and get ``enforce`` — the same defect
+    ``ROBOTHOR_DNC_MODE`` above exists to prevent, on a flag that decides who can
+    read whose conversation.
+    """
+    assert store.valid_values_for("ROBOTHOR_PER_USER_SESSIONS") == ("off", "observe", "enforce")
+
+
+def test_the_per_user_sessions_flag_resolves_through_the_governed_store(monkeypatch):
+    """Governed means the operator's DB row wins over the environment — that is
+    the whole reason for declaring it, and a flag that read env only would give
+    the Controls dashboard a switch that writes a row nothing reads."""
+    monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
+    monkeypatch.setattr(store, "resolve", lambda name: "off")
+    assert feature_flags.per_user_sessions_mode() == "off"
+    monkeypatch.setattr(store, "resolve", lambda name: None)
+    assert feature_flags.per_user_sessions_mode() == "enforce"

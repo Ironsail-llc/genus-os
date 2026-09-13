@@ -15,6 +15,7 @@ import {
 import { useVisualState } from "@/hooks/use-visual-state";
 import { useThrottle } from "@/hooks/use-throttle";
 import { MarkerInterceptor } from "@/lib/engine/marker-interceptor";
+import { ChatAskCard } from "@/components/chat-ask-card";
 import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from "lucide-react";
 
 interface ChatMessage {
@@ -30,6 +31,14 @@ interface ActivePlan {
   original_message: string;
   status: string;
   deep_plan?: boolean;
+}
+
+/** A question the agent asked, from the run's `approval_required` SSE event. */
+interface ActiveAsk {
+  id: string;
+  question: string;
+  options: string[];
+  expires_at?: string | null;
 }
 
 /** Strip any residual markers from messages (history or live).
@@ -58,6 +67,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
   const [activePlan, setActivePlan] = useState<ActivePlan | null>(null);
+  const [activeAsk, setActiveAsk] = useState<ActiveAsk | null>(null);
   const [isPlanExecuting, setIsPlanExecuting] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
@@ -82,6 +92,53 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, throttledStreamingText, activePlan, isDeepReasoning]);
+
+  /** An `approval_required` event: the agent asked something and is waiting.
+   *
+   * Keyed on the row id and idempotent, because the same event is emitted twice
+   * for a webchat run — once by the `ask_user` tool and once by the channel that
+   * waits on the row — and two cards for one question would be a lie about how
+   * many answers are needed.
+   *
+   * No id, no card: the answer is a POST to that row, so a card without one
+   * could not carry an answer anywhere. */
+  const handleApprovalRequired = useCallback((parsed: Record<string, unknown>) => {
+    const id = typeof parsed.id === "string" ? parsed.id : "";
+    if (!id) return;
+    setActiveAsk({
+      id,
+      question: typeof parsed.question === "string" ? parsed.question : "",
+      options: Array.isArray(parsed.options) ? (parsed.options as string[]) : [],
+      expires_at: typeof parsed.expires_at === "string" ? parsed.expires_at : null,
+    });
+  }, []);
+
+  /** The events EVERY stream handles identically. Returns true when consumed.
+   *
+   * The panel reads three SSE streams — `/chat/send`, `/chat/plan/start` (also
+   * the revise path) and `/chat/plan/approve` (also deep-plan execution) — and
+   * each one grew its own event `if` ladder. `approval_required` was added to
+   * two of them, which left the stream that matters most uncovered:
+   * `plan/approve` is the FULL-TOOLS execution run (`trigger_detail=
+   * "plan-exec:…"`), i.e. the one Helm run where `ask_user` actually fires. With
+   * the webchat channel now waiting on the durable row, a dropped event there is
+   * not a missing card — it is a run blocked for the whole tool budget on a
+   * question nobody was shown, and then reported to the model as "asked and
+   * stayed silent".
+   *
+   * So the cross-stream events live here, once, and every reader calls this
+   * first. A new stream that forgets to is a missing call to one function rather
+   * than a missing branch in a ladder nobody reads. */
+  const handleSharedStreamEvent = useCallback(
+    (eventType: string, parsed: Record<string, unknown>): boolean => {
+      if (eventType === "approval_required") {
+        handleApprovalRequired(parsed);
+        return true;
+      }
+      return false;
+    },
+    [handleApprovalRequired],
+  );
 
   // Load history on mount
   useEffect(() => {
@@ -186,6 +243,18 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     const text = overrideText || input.trim();
     if (!text || isStreaming || isPlanning) return;
 
+    // A new message means the person moved on, so a finished question stops
+    // sitting above a fresh conversation. It cannot strand an OPEN one: the
+    // composer is disabled for the whole time a run is in flight
+    // (`isStreaming || isPlanExecuting || isPlanning || isDeepReasoning` on the
+    // textarea and the send button), which is exactly the window in which a run
+    // is waiting on an answer.
+    //
+    // No claim that the Helm can bring a dropped card back: it has no approvals
+    // view yet. The row stays answerable through the bridge's approvals endpoint
+    // and a later turn sees the answer.
+    setActiveAsk(null);
+
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -234,6 +303,9 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       const handleSSEEvent = (eventType: string, data: string) => {
         try {
           const parsed = JSON.parse(data);
+          if (handleSharedStreamEvent(eventType, parsed)) {
+            return;
+          }
           if (eventType === "delta") {
             fullResponse += parsed.text || "";
             setStreamingText(fullResponse);
@@ -310,7 +382,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setActiveToolName(null);
       abortRef.current = null;
     }
-  }, [input, isStreaming, isPlanning, deepPlan]);
+  }, [input, isStreaming, isPlanning, deepPlan, handleSharedStreamEvent]);
 
   const sendMessage = useCallback(async () => {
     if (deepMode || planMode) {
@@ -321,6 +393,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
 
     const text = input.trim();
     if (!text || isStreaming) return;
+
+    setActiveAsk(null);
 
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -376,6 +450,9 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       const handleSSEEvent = (eventType: string, data: string) => {
         try {
           const parsed = JSON.parse(data);
+          if (handleSharedStreamEvent(eventType, parsed)) {
+            return;
+          }
           if (eventType === "delta") {
             // Run through marker interceptor to strip [DASHBOARD:...] / [RENDER:...] markers
             const result = interceptor.addChunk(parsed.text || "");
@@ -533,7 +610,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setStreamingText("");
       abortRef.current = null;
     }
-  }, [input, isStreaming, planMode, deepMode, sendPlanMessage, notifyConversationUpdate, setRender]);
+  }, [input, isStreaming, planMode, deepMode, sendPlanMessage, notifyConversationUpdate, setRender, handleSharedStreamEvent]);
 
   const handlePlanApprove = useCallback(async () => {
     if (!activePlan) return;
@@ -580,6 +657,11 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           if (sseData) {
             try {
               const parsed = JSON.parse(sseData);
+              if (handleSharedStreamEvent(sseEventType, parsed)) {
+                sseEventType = "";
+                sseData = "";
+                return;
+              }
               if (sseEventType === "delta") {
                 fullResponse += parsed.text || "";
                 setStreamingText(fullResponse);
@@ -658,7 +740,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setDeepElapsed(0);
       setStreamingText("");
     }
-  }, [activePlan]);
+  }, [activePlan, handleSharedStreamEvent]);
 
   const handlePlanReject = useCallback(async () => {
     if (!activePlan) return;
@@ -800,6 +882,16 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
               </div>
             </div>
           ))}
+
+          {/* The agent's own question — `approval_required` over the run's stream */}
+          {activeAsk && (
+            <ChatAskCard
+              id={activeAsk.id}
+              question={activeAsk.question}
+              options={activeAsk.options}
+              expiresAt={activeAsk.expires_at}
+            />
+          )}
 
           {/* Plan approval card */}
           {activePlan && !isPlanExecuting && (
