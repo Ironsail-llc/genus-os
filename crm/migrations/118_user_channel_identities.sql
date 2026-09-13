@@ -52,7 +52,15 @@ CREATE TABLE IF NOT EXISTS user_channel_identities (
     -- carrying `member` because a query returned nothing. The CHECK is the
     -- same set `accounts.JIT_PROVISIONABLE_ROLES` names, so a privileged role
     -- cannot be written here even by a caller that skipped the DAL.
-    role            TEXT NOT NULL DEFAULT 'member'
+    --
+    -- The column default is `viewer` for the same reason the DAL's is: `member`
+    -- reads like a cap and is not one. Its seeded policy is
+    -- ("member", "*", "allow"), and migration 088 narrows that to read-only only
+    -- for the `__default__` tenant -- so on any other tenant a "capped" pairing
+    -- granted every tool. Nothing relies on this default today (every insert
+    -- names a role), and it is here so a hand-written INSERT during an incident
+    -- lands on the narrow role rather than the wide one.
+    role            TEXT NOT NULL DEFAULT 'viewer'
                     CHECK (role IN ('member', 'viewer')),
     paired_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- WHO decided. `operator:<actor id>` for a bridge approval, `cli:<user>`

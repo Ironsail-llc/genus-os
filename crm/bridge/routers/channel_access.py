@@ -88,7 +88,11 @@ class ApproveRequest(BaseModel):
 
     user_id: str | None = None
     email: str | None = None
-    role: str = "member"
+    #: ``viewer`` and not ``member``: see ``identities.DEFAULT_PAIRED_ROLE``.
+    #: ``member``'s seeded policy allows every tool and migration 088 narrows it
+    #: only for the ``__default__`` tenant, so the previous default was a cap in
+    #: name only. Naming ``member`` still works.
+    role: str = identities.DEFAULT_PAIRED_ROLE
 
 
 def _channel(name: str) -> str:

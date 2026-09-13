@@ -30,8 +30,33 @@ still fabricated as `user` and an unregistered sender in the operator's chat as
 `owner`, both governed by `ROBOTHOR_TELEGRAM_ROLE_GATES` rather than by this
 setting.
 
-A code is only ever sent on a **1:1** surface. A group sender under `pairing`
-gets the ordinary refusal sentence and no code.
+### What an unknown sender sees, per surface
+
+A code is only ever sent on a **1:1** surface — a code posted in a shared room is
+a code anyone in the room can carry to you. What happens on the other surfaces is
+not uniform, because the two channels do not have the same failure mode:
+
+| Surface | Under `pairing`, an unknown sender gets |
+|---------|------------------------------------------|
+| Telegram private chat | The one-sentence reply and a code |
+| Telegram group | The ordinary "not open for self-registration" refusal, on **every** message. No code |
+| Slack DM | The one-sentence reply and a code |
+| Slack channel or group | **Nothing.** Silence, logged as a count |
+
+Telegram answers because its handler sends whatever
+`_handle_unregistered_sender` returns, and `message.answer("")` is an API error —
+so "say nothing" is not a thing that call site can express without changing
+`telegram_handlers.py`, which is at its module-size cap. The refusal it sends is
+the sentence that shipped before this gate existed, so this is the existing
+closed-onboarding behaviour reaching one more surface rather than a new reply.
+
+Slack is silent because its call site *can* be: `say` is only called when there
+is something to say. That is the better behaviour of the two — an unknown sender
+in a room learns nothing, not even that somebody is listening — and Telegram
+should follow when the inbound pipeline moves behind `Channel.inbound_router`.
+
+Neither is a per-message flood: the operator notification is rate-limited to once
+per sender per hour, and the pairing reply itself to three per sender per hour.
 
 A **known identity short-circuits every mode**, checked before the mode is even
 read. Turning a channel to `pairing` is a decision about strangers, not a
@@ -62,6 +87,7 @@ field's own declared default, so blanking `ROBOTHOR_TELEGRAM_ACCESS` gives you
 ```bash
 genus channel access list slack
 genus channel access approve slack ABC234 --user u-alice        # or --email alice@example.com
+genus channel access approve slack ABC234 --user u-alice --role member
 genus channel access deny    slack ABC234
 genus channel access revoke  slack <identity-id>
 ```
@@ -84,15 +110,18 @@ able to enumerate a whole workspace. A malformed id is a 422, a code that is gon
 is a 404, a binding that collides with an existing one is a 409, and a database
 that is not answering is a 503 — never a 500.
 
-### Roles: `member` is not narrow
+### Roles: the default is `viewer`, because `member` is not narrow
 
-`--role` accepts `member` or `viewer`. Those are the roles pairing may grant, but
-only `viewer` is actually restrictive: the seeded `member` policy is
-`("member", "*", "allow")` (`robothor/engine/permissions.py`), which migration
-088 tightens to read-only **for the `__default__` tenant only**. If you are
-pairing somebody you have just met, `--role viewer` is the one that means what it
-sounds like. Check `role_permissions` for your own tenant before assuming
-`member` is a cap.
+`--role` accepts `member` or `viewer`, and **`viewer` is what you get by not
+choosing**. That is not a stylistic default. The seeded `member` policy is
+`("member", "*", "allow")` (`robothor/engine/permissions.py`), and migration 088
+tightens it to read-only **for the `__default__` tenant only** — so on any other
+tenant, a pairing "capped" at `member` granted every tool the fleet has.
+`viewer`'s rows are `search_*` / `get_*` / `list_*` plus a deny-all, which is
+what the word implies.
+
+`member` is still grantable, by name: `--role member`, or `{"role": "member"}` on
+the bridge route. Check `role_permissions` for your own tenant before you do.
 
 ### The one invariant
 
@@ -130,14 +159,18 @@ intend that.
   would have expired — otherwise a denial is something a stranger undoes by
   sending another message, and the operator's pending list refills.
 - **No codes on group surfaces.** A code posted in a shared room is a code
-  anyone in the room can carry to the operator. An unknown sender in a room is
-  ignored and counted, never answered.
+  anyone in the room can carry to the operator. The gate itself returns "send
+  nothing" and logs a count; what the *channel* then does differs, and the table
+  above says which — Slack sends nothing, Telegram falls back to its existing
+  refusal sentence because its call site cannot send nothing.
 - **At most three replies per sender per hour.** The code is idempotent inside
   its TTL, so this is not about minting — it is about not letting a script make
   the bot answer forever.
-- **Pairing never grants a privileged role.** `--role` accepts `member` or
-  `viewer`, mirroring `accounts.JIT_PROVISIONABLE_ROLES`. A flow whose first
-  step is "a stranger sent a message" does not end in an admin.
+- **Pairing never grants a privileged role, and defaults to the narrow one.**
+  `--role` accepts `member` or `viewer`, mirroring
+  `accounts.JIT_PROVISIONABLE_ROLES`; omitting it gives **`viewer`**. A flow whose
+  first step is "a stranger sent a message" does not end in an admin — and, see
+  below, does not end in `member` either unless you say so.
 - **No native ids or display names in logs.** The Slack line this replaced
   logged the raw user id on every refusal, which put a workspace's member ids
   into every log shipper the instance has.

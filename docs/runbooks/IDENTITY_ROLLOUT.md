@@ -203,10 +203,14 @@ Two consequences to plan for:
   does. On a fresh install with no owner row, that flag is what stops you closing
   yourself out of your own bot. Register yourself (`robothor user add`) and then
   remove it.
-- **Group chats get chattier, not quieter.** An unregistered group sender is
-  answered with the ordinary "not open for self-registration" sentence, never a
-  code: a pairing code posted in a shared room is a code anyone in the room can
-  carry to you.
+- **Telegram group chats get chattier, not quieter.** An unregistered group
+  sender is answered with the ordinary "not open for self-registration"
+  sentence — never a code, since a code posted in a shared room is a code anyone
+  in the room can carry to you. Telegram replies rather than staying silent
+  because its handler sends whatever `_handle_unregistered_sender` returns and
+  `message.answer("")` is an API error; Slack, whose call site can simply not
+  call `say`, **is** silent in a room. The reply is rate-limited to three per
+  sender per hour, and the operator notification to one.
 
 **Slack does change, and the one compatibility clause is deliberate.**
 `slack_access` defaults to `pairing`, but an instance that has
@@ -249,10 +253,11 @@ down or restarting the decision still stands and the old window applies. When a
 revoke looks like it did not take, check the engine log for a refused reload
 before assuming the row is wrong.
 
-**Approving somebody you just met:** use `--role viewer`. `member` is one of the
-two roles pairing may grant, but the seeded `member` policy is `("member", "*",
-"allow")` and migration 088 only narrows it for the `__default__` tenant, so
-`member` is not the cap it looks like.
+**Roles.** `viewer` is the default, and deliberately so: the seeded `member`
+policy is `("member", "*", "allow")` and migration 088 narrows it only for the
+`__default__` tenant, so a pairing capped at `member` granted every tool on any
+other tenant. Approve with `--role member` when you mean it, after checking
+`role_permissions` for your tenant.
 
 Migration 118 is additive (two new tables, `CREATE TABLE IF NOT EXISTS`, RLS in
 the permissive-when-unbound shape of 081/106). Nothing changes behaviour until a

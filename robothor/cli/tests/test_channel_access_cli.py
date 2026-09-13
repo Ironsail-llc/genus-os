@@ -152,6 +152,38 @@ def test_approve_by_email_is_accepted(dal):
     assert dal[0][2]["email"] == "alice@example.com"
 
 
+def test_omitting_the_role_grants_viewer(dal):
+    """The narrow role is the one you get by not choosing.
+
+    ``member`` reads like a cap and is not one: its seeded policy is
+    ``("member", "*", "allow")`` and migration 088 narrows it only for the
+    ``__default__`` tenant.
+    """
+    cmd_channel_access(_parse(["channel", "access", "approve", "slack", CODE, "--user", "u-alice"]))
+
+    assert dal[0][2]["role"] == "viewer"
+
+
+def test_member_is_still_available_by_name(dal):
+    cmd_channel_access(
+        _parse(
+            [
+                "channel",
+                "access",
+                "approve",
+                "slack",
+                CODE,
+                "--user",
+                "u-alice",
+                "--role",
+                "member",
+            ]
+        )
+    )
+
+    assert dal[0][2]["role"] == "member"
+
+
 # ── Refusals ────────────────────────────────────────────────────────
 
 

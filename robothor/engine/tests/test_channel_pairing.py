@@ -34,6 +34,7 @@ import pytest
 from psycopg2.extras import RealDictCursor
 
 from robothor.engine.channels import access, identities
+from robothor.identity import IdentityContext
 
 SLACK_USER = "U0PLACEHOLDER"
 TELEGRAM_USER = "100000001"
@@ -162,6 +163,20 @@ def test_generated_codes_avoid_the_ambiguous_characters():
         assert not (set(code) & set("IO01"))
 
 
+def test_the_dal_default_role_is_viewer():
+    """``member`` is not the cap it reads as.
+
+    The seeded policy is ``("member", "*", "allow")``
+    (``robothor/engine/permissions.py``) and migration 088 narrows it only for
+    the ``__default__`` tenant -- so on any other tenant a "capped" pairing
+    granted every tool. ``viewer`` is the role that is actually narrow, so it is
+    what an approver gets by not choosing; ``member`` stays available by name.
+    """
+    import inspect
+
+    assert inspect.signature(identities.approve_pairing).parameters["role"].default == "viewer"
+
+
 def test_a_privileged_role_is_never_pairable():
     for role in ("owner", "admin"):
         with pytest.raises(identities.PairingRoleError):
@@ -214,6 +229,142 @@ def test_no_native_ids_or_display_names_in_logs(monkeypatch, caplog):
     assert SLACK_USER not in emitted
     assert "Alice Example" not in emitted
     assert "ABC234" not in emitted
+
+
+# ── The pending negative-cache window ────────────────────────────────────────
+
+
+class _Clock:
+    """A monotonic clock the test drives, matching ``time.monotonic``'s shape."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def frozen_resolver_clock(monkeypatch):
+    from robothor.identity import resolvers
+
+    clock = _Clock()
+    monkeypatch.setattr(resolvers, "time", clock)
+    resolvers.clear_cache()
+    yield clock
+    resolvers.clear_cache()
+
+
+def _answers_once_then(monkeypatch, first, then):
+    """Register a slack resolver that answers ``first`` once, then ``then``."""
+    from robothor.identity import resolvers
+
+    state = {"served": False}
+
+    def _resolver(identifier: str, tenant_id: str):
+        if not state["served"]:
+            state["served"] = True
+            return first
+        return then
+
+    monkeypatch.setitem(resolvers._RESOLVERS, "slack", _resolver)
+
+
+def test_an_approval_is_visible_within_five_seconds(frozen_resolver_clock, monkeypatch):
+    """The window a waiting sender actually experiences.
+
+    A miss cached for the resolver's normal 60s means the operator approves
+    somebody, their next message is still refused, AND it mints a second pending
+    code that reaches the operator as a duplicate request. Five seconds is short
+    enough that an approval looks like it worked.
+
+    This is the test the re-check found missing: shortening the TTL was the one
+    change with no evidence it was armed.
+
+    The advance is a LITERAL 5.1 seconds and not ``PENDING_MISS_TTL_SECONDS +
+    0.1``. Deriving it from the constant makes the test move with the code: the
+    first cut did that and still passed with the TTL mutated back to 60s, which
+    is a test measuring its own premise. The constant is asserted separately,
+    below.
+    """
+    bound = IdentityContext(
+        tenant_id=TENANT, channel="slack", identifier=SLACK_USER, verified=True, role="viewer"
+    )
+    _answers_once_then(monkeypatch, None, bound)
+    monkeypatch.setenv("ROBOTHOR_SLACK_ACCESS", "pairing")
+    monkeypatch.setattr(access.identities, "mint_code", lambda **kw: "ABC234")
+
+    first = asyncio.run(access.evaluate(channel="slack", native_id=SLACK_USER, tenant_id=TENANT))
+    assert first.allowed is False
+
+    # ...the operator approves here...
+    frozen_resolver_clock.advance(5.1)
+
+    second = asyncio.run(access.evaluate(channel="slack", native_id=SLACK_USER, tenant_id=TENANT))
+
+    assert second.allowed is True
+    assert second.identity is bound
+
+
+def test_the_pending_window_is_at_most_five_seconds():
+    """The number the two clock tests are written against, pinned once.
+
+    They advance a literal 5.1s deliberately -- deriving the advance from this
+    constant would make them pass for any value of it, which is how the TTL
+    mutation survived the first attempt.
+    """
+    assert access.PENDING_MISS_TTL_SECONDS <= 5.0
+
+
+def test_the_default_negative_ttl_would_not_be_visible_in_five_seconds(
+    frozen_resolver_clock, monkeypatch
+):
+    """The other half of the pair, so the test above cannot pass by accident.
+
+    The SAME clock advance against the resolver's default TTL still answers from
+    cache. A regression that dropped ``negative_ttl_seconds`` would fail the test
+    above and this one would explain why.
+    """
+    from robothor.identity import resolvers
+
+    bound = IdentityContext(
+        tenant_id=TENANT, channel="slack", identifier=SLACK_USER, verified=True, role="viewer"
+    )
+    _answers_once_then(monkeypatch, None, bound)
+
+    assert resolvers.resolve_identity("slack", SLACK_USER, TENANT) is None
+    frozen_resolver_clock.advance(5.1)
+    assert resolvers.resolve_identity("slack", SLACK_USER, TENANT) is None
+
+    frozen_resolver_clock.advance(resolvers._CACHE_TTL_SECONDS)
+    assert resolvers.resolve_identity("slack", SLACK_USER, TENANT) is bound
+
+
+def test_a_hit_keeps_the_full_ttl_even_in_pairing_mode(frozen_resolver_clock, monkeypatch):
+    """Only the MISS is shortened. A bound identity is the cheap case to be right
+    about, and re-querying it every 5s would put a database round trip on every
+    message from every paired sender."""
+    from robothor.identity import resolvers
+
+    bound = IdentityContext(
+        tenant_id=TENANT, channel="slack", identifier=SLACK_USER, verified=True, role="viewer"
+    )
+    calls: list[str] = []
+
+    def _resolver(identifier: str, tenant_id: str) -> IdentityContext:
+        calls.append(identifier)
+        return bound
+
+    monkeypatch.setitem(resolvers._RESOLVERS, "slack", _resolver)
+
+    resolvers.resolve_identity("slack", SLACK_USER, TENANT, negative_ttl_seconds=5.0)
+    frozen_resolver_clock.advance(30.0)
+    resolvers.resolve_identity("slack", SLACK_USER, TENANT, negative_ttl_seconds=5.0)
+
+    assert len(calls) == 1
 
 
 # ── The DB-backed half ───────────────────────────────────────────────────────
@@ -367,7 +518,9 @@ def test_approval_binds_the_identity_and_the_next_message_runs_as_that_user(pair
     assert decision.allowed is True
     assert decision.identity is not None
     assert decision.identity.identifier == SLACK_USER
-    assert decision.identity.role == "member"
+    # The default, not an incidental value: an approver who named no role gets
+    # the narrow one, and the run carries it.
+    assert decision.identity.role == "viewer"
 
 
 @pytest.mark.integration
@@ -410,7 +563,29 @@ def test_a_telegram_approval_also_writes_the_tenant_users_row(paired_db):
     row = cur.fetchone()
     assert row is not None
     assert row["is_active"] is True
-    assert row["role"] == "member"
+    assert row["role"] == "viewer"
+
+
+@pytest.mark.integration
+def test_a_named_member_role_reaches_both_rows(paired_db):
+    """``member`` is still grantable; it just has to be asked for."""
+    code = identities.mint_code(
+        channel="telegram", native_id=TELEGRAM_USER, tenant_id=TENANT, display_name="Alice"
+    )
+
+    bound = identities.approve_pairing(
+        code,
+        actor="cli:tester",
+        channel="telegram",
+        tenant_id=TENANT,
+        user_id="u-alice",
+        role="member",
+    )
+
+    assert bound["role"] == "member"
+    cur = paired_db.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT role FROM tenant_users WHERE telegram_user_id = %s", (TELEGRAM_USER,))
+    assert cur.fetchone()["role"] == "member"
 
 
 @pytest.mark.integration
@@ -468,7 +643,7 @@ def test_re_pairing_a_telegram_id_moves_the_tenant_users_row_to_the_new_person(p
     )
     row = cur.fetchone()
     assert row["user_id"] == "u-new"
-    assert row["role"] == "member"
+    assert row["role"] == "viewer"
 
     from robothor.engine.users import lookup_user
 

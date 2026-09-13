@@ -44,6 +44,7 @@ from robothor.db.connection import get_connection
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "DEFAULT_PAIRED_ROLE",
     "PAIRABLE_ROLES",
     "PAIRING_CODE_ALPHABET",
     "PAIRING_CODE_LENGTH",
@@ -81,6 +82,17 @@ PAIRING_TTL_SECONDS = 600
 #: Mirrors ``accounts.JIT_PROVISIONABLE_ROLES``. A privileged role is never
 #: granted by a flow whose first step is "a stranger sent a message".
 PAIRABLE_ROLES = frozenset({"member", "viewer"})
+
+#: What an approver gets by not choosing.
+#:
+#: ``viewer`` and not ``member``, which reads like a cap and is not one: the
+#: seeded policy is ``("member", "*", "allow")``
+#: (``robothor/engine/permissions.py``) and migration 088 narrows it to
+#: read-only only for the ``__default__`` tenant, so on any other tenant a
+#: "capped" pairing granted every tool the fleet has. ``viewer``'s rows are
+#: ``search_*``/``get_*``/``list_*`` and a deny-all, which is what the word
+#: implies. ``member`` stays available -- by name, as a decision somebody made.
+DEFAULT_PAIRED_ROLE = "viewer"
 
 #: The two callers that may settle a pairing, by the prefix their actor string
 #: carries. ``operator:`` is minted by ``crm/bridge/routers/_operator.py``
@@ -456,7 +468,7 @@ def approve_pairing(
     tenant_id: str = DEFAULT_TENANT,
     user_id: str | None = None,
     email: str | None = None,
-    role: str = "member",
+    role: str = DEFAULT_PAIRED_ROLE,
 ) -> dict[str, Any]:
     """Spend a live code and bind its sender to ``user_id``.
 

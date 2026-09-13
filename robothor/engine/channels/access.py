@@ -39,7 +39,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.channels import identities
@@ -79,9 +79,20 @@ FALLBACK_MODE = "pairing"
 #: code is ever minted on.
 DIRECT_SURFACE = "direct"
 
-#: A shared conversation. An unknown sender here is ignored, counted and not
-#: answered: a code posted in a room is a code anyone in the room can carry to
-#: the operator, which is the whole of the attack pairing exists to stop.
+#: A shared conversation. No code is ever minted here -- a code posted in a room
+#: is a code anyone in the room can carry to the operator, which is the whole of
+#: the attack pairing exists to stop.
+#:
+#: This gate answers with ``allowed=False`` and an empty ``refusal``, i.e. "send
+#: nothing", and logs a count. What the CHANNEL does with that differs, so do
+#: not read "send nothing" as "the sender sees nothing": Slack simply does not
+#: call ``say``, while Telegram's ``pairing_reply`` returns ``None`` and its
+#: caller falls through to the closed-onboarding refusal it already sent, because
+#: ``message.answer("")`` is an API error and that call site cannot express
+#: silence without changing ``telegram_handlers.py``. Slack's is the better of
+#: the two — an unknown sender in a room learns nothing, not even that anybody is
+#: listening — and Telegram should follow when the inbound pipeline moves behind
+#: ``Channel.inbound_router``.
 GROUP_SURFACE = "group"
 
 #: Re-exported so a caller validating a code does not have to import the DAL.
@@ -209,6 +220,14 @@ def _declared_defaults() -> dict[str, str]:
 #: inbound path of every message.
 _DECLARED_DEFAULTS: dict[str, str] = _declared_defaults()
 
+#: ``(settings object, {field: was it configured})``.
+#:
+#: The settings object is held, not just its id: it keeps the ``is not``
+#: comparison in :func:`mode_was_configured` meaningful (a freed object's id can
+#: be reused) and it is the same singleton every other caller already holds, so
+#: the reference costs nothing.
+_configured_memo: tuple[Any, dict[str, bool]] | None = None
+
 
 def mode_was_configured(channel: str) -> bool:
     """Whether this channel's mode was CHOSEN, as opposed to defaulted.
@@ -220,15 +239,35 @@ def mode_was_configured(channel: str) -> bool:
     it on the resolved value instead is how an operator who set
     ``ROBOTHOR_SLACK_ACCESS=pairing`` got ``allowlist``, with the warning telling
     them to set the variable they had already set.
-    """
-    from robothor.settings.provenance import is_configured
 
-    return is_configured(f"channels.{_mode_field(channel)}")
+    Memoised, because that caller asks on **every inbound Slack message** while
+    the mode is unset, and answering means walking the settings registry and
+    re-reading config.yaml from disk. The memo is keyed on the settings object
+    itself rather than on a timestamp or a counter: ``get_settings()`` returns a
+    process-wide singleton that ``reset_settings()`` replaces, and that swap is
+    the only event that can change the answer -- so invalidation is a identity
+    comparison and there is nothing for a reload path to remember to call.
+    """
+    global _configured_memo
+
+    from robothor.settings import get_settings, provenance
+
+    settings = get_settings()
+    field = _mode_field(channel)
+    if _configured_memo is None or _configured_memo[0] is not settings:
+        _configured_memo = (settings, {})
+    memo = _configured_memo[1]
+    if field not in memo:
+        memo[field] = provenance.is_configured(f"channels.{field}")
+    return memo[field]
 
 
 def reset_reply_budget() -> None:
     """Forget every sender's reply budget. A test seam, and what a restart does."""
+    global _configured_memo
+
     _replies.clear()
+    _configured_memo = None
 
 
 def _may_reply(channel: str, native_id: str) -> bool:

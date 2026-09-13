@@ -343,6 +343,41 @@ def test_an_explicitly_set_mode_is_reported_as_configured(monkeypatch):
     assert access.access_mode("slack") == "pairing"
 
 
+def test_the_configured_check_is_answered_once_per_settings_generation(monkeypatch):
+    """``mode_was_configured`` walks the settings registry and re-reads
+    config.yaml, and Slack asks it on every inbound message while its mode is
+    unset. Memoised against the settings object itself, so ``reset_settings()``
+    -- the one thing that changes the answer -- invalidates it for free and
+    nothing else has to remember to.
+    """
+    from robothor.settings import get_settings, provenance, reset_settings
+
+    calls: list[str] = []
+    real = provenance.is_configured
+
+    def _counted(field_path: str) -> bool:
+        calls.append(field_path)
+        return real(field_path)
+
+    monkeypatch.setattr(provenance, "is_configured", _counted)
+
+    get_settings()
+    for _ in range(5):
+        access.mode_was_configured("slack")
+    assert calls == ["channels.slack_access"]
+
+    # A different field is its own question.
+    access.mode_was_configured("telegram")
+    assert calls == ["channels.slack_access", "channels.telegram_access"]
+
+    # New settings, new answer -- an operator who exported the variable and
+    # reloaded must not be told the old thing.
+    reset_settings()
+    monkeypatch.setenv("ROBOTHOR_SLACK_ACCESS", "open")
+    assert access.mode_was_configured("slack") is True
+    assert calls.count("channels.slack_access") == 2
+
+
 def test_an_unrecognised_mode_fails_closed(monkeypatch):
     monkeypatch.setenv("ROBOTHOR_SLACK_ACCESS", "everyone")
 

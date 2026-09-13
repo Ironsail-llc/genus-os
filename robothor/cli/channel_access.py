@@ -109,9 +109,14 @@ def add_access_parser(
     approve.add_argument("--email", default=None, help="Bind to the account with this address")
     approve.add_argument(
         "--role",
-        default="member",
-        help="Role to grant. Only the roles pairing may grant are accepted: "
-        + ", ".join(sorted(identities.PAIRABLE_ROLES)),
+        default=identities.DEFAULT_PAIRED_ROLE,
+        help=(
+            f"Role to grant (default: {identities.DEFAULT_PAIRED_ROLE}). Only the roles "
+            f"pairing may grant are accepted: {', '.join(sorted(identities.PAIRABLE_ROLES))}. "
+            "`viewer` is read-only; `member` is NOT a cap on most tenants -- its seeded "
+            "policy allows every tool, and migration 088 narrows it only for the "
+            "__default__ tenant"
+        ),
     )
 
     deny = access_sub.add_parser("deny", help="Refuse a pairing code, permanently")

@@ -219,6 +219,39 @@ def test_approve_passes_an_operator_actor(controls_client_as_operator, store, mo
     assert seen["channel"] == "slack"
 
 
+def test_the_default_role_is_viewer(controls_client_as_operator, store, monkeypatch):
+    """Omitting ``role`` must not grant every tool.
+
+    The seeded ``member`` policy is ``("member", "*", "allow")`` and migration
+    088 narrows it only for the ``__default__`` tenant, so the previous default
+    was a cap in name only. ``member`` is still accepted -- by name.
+    """
+    seen = {}
+
+    def _approve(code, **kw):
+        seen.update(kw)
+        return _identity_row()
+
+    monkeypatch.setattr(store.identities, "approve_pairing", _approve)
+    response = controls_client_as_operator.post(
+        f"/api/channels/slack/pairings/{CODE}/approve", json={"user_id": "u-alice"}
+    )
+
+    assert response.status_code == 200
+    assert seen["role"] == "viewer"
+    assert response.json()["role"] == "viewer"
+
+
+def test_member_is_still_accepted_when_named(controls_client_as_operator, store):
+    response = controls_client_as_operator.post(
+        f"/api/channels/slack/pairings/{CODE}/approve",
+        json={"user_id": "u-alice", "role": "member"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["role"] == "member"
+
+
 @pytest.mark.parametrize("role", ["owner", "admin"])
 def test_approve_refuses_a_privileged_role(controls_client_as_operator, store, role):
     response = controls_client_as_operator.post(

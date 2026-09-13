@@ -293,6 +293,19 @@ class Channel(Protocol):
     async def resolve_identity(self, native_id: str) -> Any:
         """Map a platform-native sender id onto a Genus identity, or ``None``.
 
+        **One path, one cache.** The Telegram and Slack implementations both
+        delegate to :func:`robothor.identity.resolvers.resolve_identity`, and so
+        does the access gate (``channels/access.py::_resolve_known``) — which
+        calls that function directly rather than going through the registry to
+        find this method. So this method currently has no production caller, and
+        that is a deliberate accepted state rather than an oversight: routing the
+        gate through the registry would put a lookup on the inbound hot path and
+        introduce a new failure mode (a channel that raises
+        ``NotImplementedError``) into a function whose contract is "never
+        raises", in exchange for nothing — there would still be exactly one
+        resolution path and one cache. It earns a caller when the inbound
+        pipeline itself moves behind :attr:`inbound_router`.
+
         Declared with the one argument every implementation needs. Telegram and
         Slack additionally accept a keyword ``tenant_id``, which widens what
         they take rather than narrowing it -- a channel that only accepts
