@@ -1,3 +1,9 @@
+## [1.72.0](https://github.com/Ironsail-llc/genus-os/compare/v1.71.0...v1.72.0) (2026-09-13)
+
+### Features
+
+* **channels:** slack as a delivery target with verify and genus channel cli ([#519](https://github.com/Ironsail-llc/genus-os/issues/519)) ([d922374](https://github.com/Ironsail-llc/genus-os/commit/d922374f3f7edff847962506da23fa810fb47cab))
+
 ## [1.71.0](https://github.com/Ironsail-llc/genus-os/compare/v1.70.0...v1.71.0) (2026-09-13)
 
 ### Features
