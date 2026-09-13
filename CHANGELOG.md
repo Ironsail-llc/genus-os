@@ -1,3 +1,9 @@
+## [1.73.0](https://github.com/Ironsail-llc/genus-os/compare/v1.72.0...v1.73.0) (2026-09-13)
+
+### Features
+
+* **tools:** ask_user tool and escalation over channel ask ([#520](https://github.com/Ironsail-llc/genus-os/issues/520)) ([76c72dd](https://github.com/Ironsail-llc/genus-os/commit/76c72dd3cb22f31f073652617d99b08805fcf1b5))
+
 ## [1.72.0](https://github.com/Ironsail-llc/genus-os/compare/v1.71.0...v1.72.0) (2026-09-13)
 
 ### Features
