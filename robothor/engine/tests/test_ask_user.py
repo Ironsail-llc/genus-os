@@ -72,7 +72,7 @@ def telegram_sender():
 
 @pytest.fixture(autouse=True)
 def _clean_ask_registry():
-    from robothor.engine.channels import telegram as tg_channel
+    from robothor.engine.channels import telegram_ask as tg_channel
 
     tg_channel.reset_pending_asks()
     yield
@@ -109,9 +109,15 @@ class _RecordingChannel:
     async def send(self, target, text, **kw):
         raise AssertionError("ask_user must not deliver through send()")
 
-    async def ask(self, question, options=(), *, timeout=300.0, target=""):
+    async def ask(self, question, options=(), *, timeout=300.0, target="", addressee=""):
         self.calls.append(
-            {"question": question, "options": list(options), "timeout": timeout, "target": target}
+            {
+                "question": question,
+                "options": list(options),
+                "timeout": timeout,
+                "target": target,
+                "addressee": addressee,
+            }
         )
         if self._raises is not None:
             raise self._raises
@@ -129,11 +135,17 @@ class TestTelegramAsk:
     async def test_ask_with_options_sends_an_inline_keyboard_and_returns_the_chosen_option(
         self, telegram_sender
     ):
-        from robothor.engine.channels import telegram as tg_channel
+        from robothor.engine.channels import telegram_ask as tg_channel
 
         channel = TelegramChannel()
         task = asyncio.create_task(
-            channel.ask("Which vendor?", ["Acme", "Globex"], timeout=5.0, target="chat-1")
+            channel.ask(
+                "Which vendor?",
+                ["Acme", "Globex"],
+                timeout=5.0,
+                target="chat-1",
+                addressee="op",
+            )
         )
         await asyncio.sleep(0)
         await asyncio.sleep(0)
@@ -150,15 +162,22 @@ class TestTelegramAsk:
         # into a different answer.
         assert callback_data == [f"ask:{ask_id}:0", f"ask:{ask_id}:1"]
 
-        assert tg_channel.resolve_ask_choice(ask_id, 1) == "Globex"
+        assert (
+            tg_channel.resolve_ask_choice(
+                ask_id, 1, chat_id="chat-1", sender_id="op", owner_ok=True
+            )
+            == "Globex"
+        )
         assert await task == "Globex"
 
     @pytest.mark.asyncio
     async def test_ask_without_options_resolves_from_a_plain_text_reply(self, telegram_sender):
-        from robothor.engine.channels import telegram as tg_channel
+        from robothor.engine.channels import telegram_ask as tg_channel
 
         channel = TelegramChannel()
-        task = asyncio.create_task(channel.ask("When?", timeout=5.0, target="chat-1"))
+        task = asyncio.create_task(
+            channel.ask("When?", timeout=5.0, target="chat-1", addressee="op")
+        )
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
@@ -166,24 +185,26 @@ class TestTelegramAsk:
         telegram_sender.bot.send_message.assert_not_awaited()
         assert telegram_sender.sent and "When?" in telegram_sender.sent[0][1]
 
-        assert tg_channel.resolve_ask_text("chat-1", "Tuesday") is True
+        assert tg_channel.resolve_ask_text("chat-1", "op", "Tuesday", owner_ok=True) is True
         assert await task == "Tuesday"
 
     @pytest.mark.asyncio
     async def test_a_reply_in_another_chat_does_not_answer_this_ask(self, telegram_sender):
-        from robothor.engine.channels import telegram as tg_channel
+        from robothor.engine.channels import telegram_ask as tg_channel
 
         channel = TelegramChannel()
-        task = asyncio.create_task(channel.ask("When?", timeout=0.2, target="chat-1"))
+        task = asyncio.create_task(
+            channel.ask("When?", timeout=0.2, target="chat-1", addressee="op")
+        )
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        assert tg_channel.resolve_ask_text("chat-2", "Tuesday") is False
+        assert tg_channel.resolve_ask_text("chat-2", "op", "Tuesday", owner_ok=True) is False
         assert await task is None
 
     @pytest.mark.asyncio
     async def test_ask_times_out_returning_none_rather_than_a_default_option(self, telegram_sender):
-        from robothor.engine.channels import telegram as tg_channel
+        from robothor.engine.channels import telegram_ask as tg_channel
 
         channel = TelegramChannel()
         answer = await channel.ask("Which?", ["Acme", "Globex"], timeout=0.05, target="chat-1")
@@ -210,116 +231,15 @@ class TestTelegramAsk:
 
     @pytest.mark.asyncio
     async def test_resolving_an_unknown_ask_id_is_a_no_op(self, telegram_sender):
-        from robothor.engine.channels import telegram as tg_channel
+        from robothor.engine.channels import telegram_ask as tg_channel
 
-        assert tg_channel.resolve_ask_choice("no-such-ask", 0) is None
-        assert tg_channel.resolve_ask_text("chat-1", "Tuesday") is False
-
-
-class TestTelegramInboundInterception:
-    """The free-text half only works if ``handle_text`` sees it first.
-
-    ``_enqueue_message`` buffers a message and returns while a run is active,
-    and the buffer is only drained in the run's ``finally`` — so an answer that
-    reaches it is invisible to the coroutine blocking on the ask.
-    """
-
-    @pytest.fixture
-    def bot(self, engine_config):
-        from robothor.engine.telegram import TelegramBot
-
-        with (
-            patch("robothor.engine.telegram.Bot") as mock_bot_cls,
-            patch("robothor.engine.telegram.Dispatcher"),
-        ):
-            raw = MagicMock()
-            raw.send_message = AsyncMock()
-            mock_bot_cls.return_value = raw
-            instance = TelegramBot(engine_config, MagicMock())
-            instance.bot = raw
-            yield instance
-
-    def _message(self, chat_id: str, text: str):
-        message = MagicMock()
-        message.text = text
-        message.chat.id = chat_id
-        message.chat.type = "private"
-        message.from_user.id = 4242
-        message.from_user.username = None
-        message.from_user.first_name = "Operator"
-        message.reply_to_message = None
-        message.message_id = 7
-        return message
-
-    @pytest.mark.asyncio
-    async def test_a_text_answer_resolves_the_ask_and_never_reaches_the_run_buffer(self, bot):
-        from robothor.engine.channels import telegram as tg_channel
-
-        chat_id = str(bot.config.default_chat_id)
-        bot._chat_user_info[chat_id] = {
-            "tenant_id": "test-tenant",
-            "display_name": "Operator",
-            "role": "owner",
-            "user_id": "tu-1",
-        }
-        bot._enqueue_message = AsyncMock()
-
-        future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
-        tg_channel._pending_asks["ask-1"] = tg_channel._PendingAsk(
-            future=future, chat_id=chat_id, options=()
+        assert (
+            tg_channel.resolve_ask_choice(
+                "no-such-ask", 0, chat_id="chat-1", sender_id="op", owner_ok=True
+            )
+            is None
         )
-
-        await bot.handle_text(self._message(chat_id, "Tuesday"))
-
-        assert future.result() == "Tuesday"
-        bot._enqueue_message.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_a_non_owner_cannot_answer_the_operators_question(self, bot):
-        from robothor.engine.channels import telegram as tg_channel
-
-        other_chat = "999999"
-        assert other_chat != str(bot.config.default_chat_id)
-        bot._resolve_user = MagicMock(
-            return_value={
-                "tenant_id": "test-tenant",
-                "display_name": "Someone",
-                "role": "user",
-                "user_id": "tu-2",
-            }
-        )
-        bot._enqueue_message = AsyncMock()
-
-        future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
-        tg_channel._pending_asks["ask-1"] = tg_channel._PendingAsk(
-            future=future, chat_id=other_chat, options=()
-        )
-
-        await bot.handle_text(self._message(other_chat, "Tuesday"))
-
-        assert not future.done()
-        bot._enqueue_message.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_ordinary_text_with_no_pending_ask_still_reaches_the_run(self, bot):
-        chat_id = str(bot.config.default_chat_id)
-        bot._chat_user_info[chat_id] = {
-            "tenant_id": "test-tenant",
-            "display_name": "Operator",
-            "role": "owner",
-            "user_id": "tu-1",
-        }
-        bot._enqueue_message = AsyncMock()
-
-        await bot.handle_text(self._message(chat_id, "what is the status"))
-
-        bot._enqueue_message.assert_called_once()
-
-    def test_the_ask_callback_is_registered_on_the_dispatcher(self, bot):
-        registered = [
-            call.args[0].__name__ for call in bot.dp.callback_query.return_value.call_args_list
-        ]
-        assert "on_ask_answer" in registered
+        assert tg_channel.resolve_ask_text("chat-1", "op", "Tuesday", owner_ok=True) is False
 
 
 # ─── The run-status sink ────────────────────────────────────────────
@@ -497,31 +417,53 @@ class TestAskUserTool:
         assert "q-1" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_a_channel_that_cannot_ask_falls_back_to_the_durable_row(
-        self, store, telegram_run
-    ):
-        """``NotImplementedError`` is a legitimate outcome, not a crash."""
+    async def test_a_channel_that_cannot_ask_says_nobody_could_be_asked(self, store, telegram_run):
+        """``NotImplementedError`` is a legitimate outcome, not a crash — and it
+        happens in the same tick, so the answer must not claim a wait."""
         channel = _RecordingChannel(raises=NotImplementedError("a bus has nobody to ask"))
         with patch("robothor.engine.channels.get_channel", return_value=channel):
             result = await _handler()({"question": "Which vendor?"}, _ctx())
 
         assert result["answered"] is False
+        assert result["delivered"] is False
         assert result["question_id"] == "q-1"
+        assert "no channel could deliver" in result["message"]
+        assert "300" not in result["message"]
 
     @pytest.mark.asyncio
-    async def test_no_registered_channel_still_writes_the_row(self, store, telegram_run):
+    async def test_no_registered_channel_says_the_same(self, store, telegram_run):
         with patch("robothor.engine.channels.get_channel", return_value=None):
             result = await _handler()({"question": "Which vendor?"}, _ctx())
 
         assert result["answered"] is False
-        assert result["question_id"] == "q-1"
+        assert result["delivered"] is False
+        assert "no channel could deliver" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_a_webchat_run_records_the_question_for_the_bridge_to_answer(
-        self, store, monkeypatch
+    async def test_a_delivered_question_nobody_answered_reports_the_measured_wait(
+        self, store, telegram_run
     ):
-        """C10 ships no webchat channel. The row plus the status event IS the
-        web path — the Helm answers it through the bridge endpoint."""
+        """The distinction the model needs: was the person not asked, or asked
+        and silent? Only the second is a wait at all — and the number quoted is
+        the one that elapsed, not the one that was requested. This fake returns
+        instantly, so a message quoting 42 here would be the exact fabrication
+        the `delivered` split exists to remove."""
+        channel = _RecordingChannel(answer=None)
+        with patch("robothor.engine.channels.get_channel", return_value=channel):
+            result = await _handler()({"question": "Which?", "timeout_seconds": 42}, _ctx())
+
+        assert result["answered"] is False
+        assert result["delivered"] is True
+        assert result["message"].startswith("No answer after 0s")
+        assert "42" not in result["message"]
+        assert "q-1" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_webchat_run_records_the_question_for_a_later_turn(self, store, monkeypatch):
+        """C10 ships no webchat channel, so this run does NOT wait for the Helm:
+        the row and the ``approval_required`` event go out and the agent moves
+        on in the same tick. The answer is consumed by a later turn, and the
+        result must say so rather than implying a 300-second wait happened."""
         from robothor.engine.tools.handlers import ask_user as module
 
         monkeypatch.setattr(
@@ -532,7 +474,47 @@ class TestAskUserTool:
         result = await _handler()({"question": "Which vendor?"}, _ctx())
 
         assert result["answered"] is False
+        assert result["delivered"] is False
         assert store.rows["q-1"].channel == ""
+        assert "no channel could deliver" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_database_blip_on_the_settle_write_still_returns_the_answer(
+        self, store, telegram_run, monkeypatch
+    ):
+        """The person answered. Losing that because the settle write failed
+        would throw away the only thing the whole tool exists to obtain."""
+        from robothor.engine.tools.handlers import ask_user as module
+
+        def _boom(*a, **kw):
+            raise RuntimeError("db is gone")
+
+        monkeypatch.setattr(module.agent_questions, "answer_question", _boom)
+        channel = _RecordingChannel(answer="Acme")
+        with patch("robothor.engine.channels.get_channel", return_value=channel):
+            result = await _handler()({"question": "Which vendor?"}, _ctx())
+
+        assert result["answered"] is True
+        assert result["answer"] == "Acme"
+
+    @pytest.mark.asyncio
+    async def test_a_database_blip_on_the_ask_write_is_an_error_not_a_crash(
+        self, store, telegram_run, monkeypatch
+    ):
+        """No row means no durable question, so there is nothing honest to
+        return but a refusal — and a bare traceback is not one."""
+        from robothor.engine.tools.handlers import ask_user as module
+
+        def _boom(*a, **kw):
+            raise RuntimeError("db is gone")
+
+        monkeypatch.setattr(module.agent_questions, "ask_question", _boom)
+        channel = _RecordingChannel(answer="Acme")
+        with patch("robothor.engine.channels.get_channel", return_value=channel):
+            result = await _handler()({"question": "Which vendor?"}, _ctx())
+
+        assert "error" in result
+        assert channel.calls == []
 
     @pytest.mark.asyncio
     async def test_a_cron_run_is_refused_with_a_sentence_and_writes_no_row(

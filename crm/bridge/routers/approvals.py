@@ -18,15 +18,18 @@ that are stuck on me" — while the mechanics underneath are genuinely different
     written here instead would leave the agent waiting until its own timeout
     denied it, while the Helm showed a green tick.
 
-Every route asks ``require_operator`` first and writes one ``audited`` event
-after — identifiers only, so the free-text answer never lands in the audit store
-that gets exported to a SIEM.
+Every route asks ``require_operator`` first. Every *answer* — including one that
+is refused — also writes exactly one ``audited`` event, identifiers only, so the
+free-text answer never lands in the audit store that gets exported to a SIEM.
+The listing does not: it changes nothing, and a read that writes a row per poll
+would bury the decisions in the same table an auditor is reading them from.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -49,9 +52,19 @@ KINDS = ("workflow", "question", "escalation")
 
 #: What may appear in the path segment this router hands to ``engine_request``.
 #: That function builds a URL out of it, and ``_checked_path`` refuses anything
-#: odd — but refusing here means the caller gets a 400 instead of a 500, and
+#: odd — but refusing here means the caller gets a 4xx instead of a 500, and
 #: means the id is validated whether or not it is about to be proxied.
+#:
+#: Deliberately looser than a UUID, because an escalation id is
+#: ``uuid4().hex`` — undashed — as the engine minted it. The two DURABLE kinds
+#: get the stricter check below.
 _SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+#: Kinds whose id is a Postgres ``UUID`` column value rather than a path
+#: segment. Anything else reaches ``WHERE id = %s`` and raises
+#: ``InvalidTextRepresentation`` — a 500 with no audit row, because the
+#: exception escapes before :func:`audited` runs.
+_UUID_KINDS = frozenset({"question", "workflow"})
 
 
 class AnswerRequest(BaseModel):
@@ -132,6 +145,12 @@ async def answer_approval(kind: str, approval_id: str, request: Request) -> Any:
         return _refuse(request, kind, approval_id, 400, f"kind must be one of {KINDS}")
     if not _SAFE_ID.fullmatch(approval_id):
         return _refuse(request, kind, approval_id, 400, "malformed id")
+    if kind in _UUID_KINDS and not _is_uuid(approval_id):
+        # 422 rather than 400: the value is well-formed for a path segment and
+        # wrong for this field, which is what 422 means. "refused" rather than
+        # "denied" in the trail, because nothing was denied to anybody — a
+        # verified operator sent something this route cannot act on.
+        return _refuse(request, kind, approval_id, 422, f"{kind} ids are UUIDs", status="refused")
 
     try:
         body = AnswerRequest(**(await request.json()))
@@ -222,13 +241,30 @@ async def _resolve_escalation(request: Request, request_id: str, body: AnswerReq
     )
 
 
-def _refuse(request: Request, kind: str, approval_id: str, code: int, message: str) -> JSONResponse:
-    """Answer and record the refusal. A denied write is a fact an auditor wants."""
+def _is_uuid(value: str) -> bool:
+    """Whether ``value`` is something Postgres will accept for a ``UUID`` column."""
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
+
+
+def _refuse(
+    request: Request,
+    kind: str,
+    approval_id: str,
+    code: int,
+    message: str,
+    *,
+    status: str = "denied",
+) -> JSONResponse:
+    """Answer and record the refusal. A refused write is a fact an auditor wants."""
     audited(
         request,
         "approval.answer",
         action=approval_id if _SAFE_ID.fullmatch(approval_id) else "malformed",
-        status="denied",
+        status=status,
         kind=kind if kind in KINDS else "unknown",
         reason=message,
     )

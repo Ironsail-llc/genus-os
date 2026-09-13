@@ -31,11 +31,10 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
-import uuid
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from robothor.engine.channels.base import SendReceipt, acknowledged_messages, receipt_from
+from robothor.engine.channels import telegram_ask
+from robothor.engine.channels.base import SendReceipt, receipt_from
 from robothor.engine.chunking import split_telegram_message
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -45,18 +44,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 logger = logging.getLogger(__name__)
 
-__all__ = [
-    "TelegramChannel",
-    "has_pending_ask",
-    "pending_ask_ids",
-    "reset_pending_asks",
-    "resolve_ask_choice",
-    "resolve_ask_text",
-]
-
-#: Telegram renders more than this as a wall of buttons, and an operator
-#: scrolling a keyboard is an operator who taps the wrong one.
-MAX_ASK_OPTIONS = 6
+__all__ = ["TelegramChannel"]
 
 #: True while this task is inside ``TelegramChannel.send``. A ``ContextVar``
 #: rather than an instance attribute because one channel object serves every
@@ -65,104 +53,6 @@ MAX_ASK_OPTIONS = 6
 _sending: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "robothor_telegram_channel_sending", default=False
 )
-
-
-# ─── Pending asks ───────────────────────────────────────────────────
-#
-# Module-level rather than an attribute of ``TelegramChannel``: the object that
-# asks is built by the registry on demand, and the object that hears the answer
-# is the bot's dispatcher in ``engine/telegram.py``. Two instances with two
-# dicts would be an ask nobody could ever resolve.
-#
-# The registry lives here and not in ``engine/telegram.py`` for a second reason
-# as well: that module is 100 lines from its size ratchet, and the half of this
-# feature that belongs to the *channel* should be findable beside the channel.
-
-
-@dataclass
-class _PendingAsk:
-    """One question waiting on a person, and where it was asked."""
-
-    future: asyncio.Future[str | None]
-    chat_id: str
-    options: tuple[str, ...]
-
-
-#: ask_id → the question waiting on it. One process, one dict.
-_pending_asks: dict[str, _PendingAsk] = {}
-
-
-def pending_ask_ids() -> list[str]:
-    """The ids of questions currently waiting. Introspection, not control."""
-    return list(_pending_asks)
-
-
-def has_pending_ask(chat_id: str) -> bool:
-    """Whether a free-text question is waiting on an answer from ``chat_id``.
-
-    Only free-text asks count. A question offered as buttons is answered by
-    tapping one: treating the next line the operator types as its answer would
-    turn "hang on, what was the second option again?" into a decision.
-    """
-    return any(p.chat_id == str(chat_id) and not p.options for p in _pending_asks.values())
-
-
-def resolve_ask_choice(ask_id: str, index: int) -> str | None:
-    """Answer a keyboard ask with the option at ``index``. Returns the option.
-
-    ``None`` for an unknown id, an out-of-range index, or an ask that has
-    already been answered — every one of which is an ordinary race (a
-    double-tap, a button pressed after the tool gave up) rather than an error.
-    """
-    pending = _pending_asks.get(str(ask_id))
-    if pending is None or pending.future.done():
-        return None
-    if not 0 <= index < len(pending.options):
-        return None
-    answer = pending.options[index]
-    pending.future.set_result(answer)
-    return answer
-
-
-def resolve_ask_text(chat_id: str, text: str) -> bool:
-    """Answer the oldest free-text ask waiting on ``chat_id`` with ``text``.
-
-    True only when this call is what answered a question — the caller uses that
-    to decide whether the message was consumed or should go on to the run.
-    """
-    for ask_id, pending in list(_pending_asks.items()):
-        if pending.chat_id != str(chat_id) or pending.options or pending.future.done():
-            continue
-        pending.future.set_result(text)
-        logger.debug("Telegram ask %s answered with free text", ask_id)
-        return True
-    return False
-
-
-def reset_pending_asks() -> None:
-    """Drop every pending ask. For tests and for a process reload."""
-    for pending in list(_pending_asks.values()):
-        if not pending.future.done():
-            pending.future.cancel()
-    _pending_asks.clear()
-
-
-def _raw_bot() -> Any | None:
-    """The aiogram ``Bot`` behind the registered Telegram sender, or None.
-
-    The sender is ``TelegramBot.send_message``, and that wrapper silently drops
-    ``reply_markup`` — sending a keyboard through it produces a prompt with no
-    buttons and a plausible-looking success. ``permission_escalation`` unwraps
-    the same way and says the same thing; this is the second caller, not a
-    second opinion.
-
-    ``None`` when the registered sender is a bare function (no bot to unwrap),
-    which is a real configuration: the ask then goes out as plain text.
-    """
-    from robothor.engine.delivery import get_platform_sender
-
-    sender = get_platform_sender("telegram")
-    return getattr(getattr(sender, "__self__", None), "bot", None)
 
 
 class TelegramChannel:
@@ -375,8 +265,16 @@ class TelegramChannel:
         *,
         timeout: float = 300.0,
         target: str = "",
+        addressee: str = "",
     ) -> str | None:
-        """Put ``question`` to the person at ``target`` and wait for an answer.
+        """Put ``question`` to ``addressee`` at ``target`` and wait for an answer.
+
+        ``target`` is the chat; ``addressee`` is the Telegram sender id of the
+        person being asked, and the two together are what an answer has to match
+        before it settles this ask — see
+        :mod:`robothor.engine.channels.telegram_ask`. An empty ``addressee``
+        means the question is the operator's, and only the owner gate can
+        authorize a reply.
 
         ``None`` means nobody answered — no target, no reachable bot, or the
         clock ran out. It is never one of ``options``: a default answer here
@@ -384,11 +282,12 @@ class TelegramChannel:
         ``channels/base.py`` says an unimplemented ``ask`` must raise rather
         than return something plausible.
 
-        With options, the question goes out as an inline keyboard whose
-        ``callback_data`` carries the option INDEX (``ask:<id>:<n>``). Telegram
-        caps ``callback_data`` at 64 bytes, so an option longer than that would
-        come back truncated — as a different answer, silently. Without options
-        the question is plain text and ``handle_text`` intercepts the reply.
+        With options and a reachable aiogram ``Bot``, the question goes out as
+        an inline keyboard whose ``callback_data`` carries the option INDEX
+        (``ask:<id>:<n>``) — Telegram caps ``callback_data`` at 64 bytes, so an
+        option longer than that would come back truncated as a *different*
+        answer. Without a bot the options go out numbered in the text and a
+        typed ``"1".."N"`` (or the option itself) answers it.
         """
         chat_id = str(target or "")
         if not chat_id:
@@ -397,14 +296,16 @@ class TelegramChannel:
             logger.warning("Telegram ask has no target chat; nobody can be asked")
             return None
 
-        opts = tuple(str(o) for o in (options or ()))[:MAX_ASK_OPTIONS]
-        ask_id = uuid.uuid4().hex
-        future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
-        _pending_asks[ask_id] = _PendingAsk(future=future, chat_id=chat_id, options=opts)
+        opts = tuple(str(o) for o in (options or ()))[: telegram_ask.MAX_ASK_OPTIONS]
+        ask_id, future = telegram_ask.register_ask(
+            chat_id=chat_id, sender_id=str(addressee or ""), options=opts
+        )
         try:
-            if not await self._send_question(chat_id, question, ask_id, opts):
+            delivered_as = await telegram_ask.send_question(chat_id, question, ask_id, opts)
+            if not delivered_as:
                 logger.warning("Telegram ask %s was never delivered; not waiting", ask_id)
                 return None
+            telegram_ask._pending_asks[ask_id].delivered_as = delivered_as
             return await asyncio.wait_for(future, timeout=max(1.0, float(timeout)))
         except TimeoutError:
             logger.info("Telegram ask %s went unanswered for %ss", ask_id, timeout)
@@ -415,58 +316,7 @@ class TelegramChannel:
             logger.exception("Telegram ask %s failed", ask_id)
             return None
         finally:
-            _pending_asks.pop(ask_id, None)
-
-    async def _send_question(
-        self, chat_id: str, question: str, ask_id: str, options: tuple[str, ...]
-    ) -> bool:
-        """Put the question on the wire. False when nothing was acknowledged.
-
-        False is load-bearing: :meth:`ask` refuses to block on a question that
-        was never delivered, because an agent waiting ten minutes for a message
-        nobody received is worse than one told immediately that it is on its
-        own.
-        """
-        raw = _raw_bot() if options else None
-        if raw is not None:
-            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(text=text, callback_data=f"ask:{ask_id}:{index}")
-                        for index, text in enumerate(options)
-                    ]
-                ]
-            )
-            try:
-                sent = await raw.send_message(chat_id, question, reply_markup=keyboard)
-            except Exception:  # noqa: BLE001
-                logger.exception("Telegram ask %s could not be sent", ask_id)
-                return False
-            return sent is not None
-
-        from robothor.engine.delivery import get_platform_sender
-
-        sender = get_platform_sender("telegram")
-        if sender is None:
-            logger.warning("Telegram sender not initialized; nobody can be asked")
-            return False
-
-        body = question
-        if options:
-            # No raw bot to attach a keyboard to, so the options have to be in
-            # the text or they are not offered at all.
-            body += "\n\n" + "\n".join(f"{i + 1}. {o}" for i, o in enumerate(options))
-        try:
-            sent = await sender(chat_id, body)
-        except Exception:  # noqa: BLE001
-            logger.exception("Telegram ask %s could not be sent", ask_id)
-            return False
-        # The length of the returned list is the only evidence anybody saw it —
-        # see the rule in ``channels/base.py``.
-        acknowledged, _ = acknowledged_messages(sent)
-        return acknowledged > 0
+            telegram_ask.discard_ask(ask_id)
 
     async def resolve_identity(self, native_id: str) -> Any:
         """Not implemented — inbound identity still resolves in ``engine/telegram.py``."""

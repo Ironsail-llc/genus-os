@@ -264,12 +264,21 @@ class Channel(Protocol):
         *,
         timeout: float = 300.0,
         target: str = "",
+        addressee: str = "",
     ) -> str | None:
         """Put a question to the person at ``target`` and wait for an answer.
 
+        ``target`` is *where* — the address the question is sent to.
+        ``addressee`` is *who* — the channel-native id of the person being
+        asked, and a channel that can receive must bind its pending question to
+        both and settle it only for an answer matching both. An empty
+        ``addressee`` means "whoever the platform's own authorization says may
+        answer here", which for Telegram is the operator. Getting this wrong is
+        how an answer typed by one person settles a question asked of another.
+
         ``options`` offers a fixed set of choices; empty means free text. The
         return is the answer, or ``None`` for "nobody answered" — a timeout, an
-        unreachable surface, or no addressee at all.
+        unreachable surface, or nobody to ask at all.
 
         ``None`` is the **only** non-answer. A channel must never return one of
         ``options`` because the clock ran out: that is an approval nobody gave,

@@ -43,6 +43,21 @@ from robothor.engine.task_registry import get_task_registry
 
 logger = logging.getLogger(__name__)
 
+#: What a `perm:` tap that settled nothing is told, in the alert and appended to
+#: the prompt itself. One sentence for every reason a request can be gone
+#: (swept, timed out, already decided, lost to a restart): the operator's next
+#: action is the same in all of them, and enumerating them tells a forger which
+#: ids are live.
+STALE_PROMPT = "This request is no longer pending."
+
+#: `perm:` action → (approved, remember_session, confirmation). A table rather
+#: than a branch chain so "approve" and "deny" cannot drift apart.
+_PERM_DECISIONS: dict[str, tuple[bool, bool, str]] = {
+    "approve": (True, False, "Approved"),
+    "all": (True, True, "Approved for session"),
+    "deny": (False, False, "Denied"),
+}
+
 
 # File handling — max size for text extraction (5 MB)
 MAX_FILE_SIZE = 5 * 1024 * 1024
@@ -741,63 +756,50 @@ class TelegramHandlersMixin:
             await callback.answer("Permission system not active")
             return
 
-        if action == "approve":
-            mgr.resolve(request_id, approved=True)
-            await callback.answer("Approved")
-        elif action == "all":
-            mgr.resolve(request_id, approved=True, remember_session=True)
-            await callback.answer("Approved for session")
-        elif action == "deny":
-            mgr.resolve(request_id, approved=False)
-            await callback.answer("Denied")
-        else:
+        decision = _PERM_DECISIONS.get(action)
+        if decision is None:
             await callback.answer("Unknown action")
             return
+        approved, remember, confirmation = decision
+
+        # `resolve` reports whether THIS call settled anything. A prompt can
+        # outlive its request — the watchdog sweep reaps orphans, the tool's own
+        # wait_for denies on timeout, a restart empties the map — and the
+        # keyboard stays live in the chat regardless. Answering "Approved" to a
+        # tap that reached nothing is a false confirmation on the approval path.
+        settled = mgr.resolve(request_id, approved=approved, remember_session=remember)
+        if settled:
+            await callback.answer(confirmation)
+        else:
+            # show_alert, because a toast the operator misses leaves them
+            # believing the tap landed.
+            await callback.answer(STALE_PROMPT, show_alert=True)
 
         # Remove inline keyboard after decision
         with contextlib.suppress(Exception):
             if msg and hasattr(msg, "edit_reply_markup"):
                 await msg.edit_reply_markup(reply_markup=None)
+        if not settled:
+            # The alert is transient; the message is what the operator scrolls
+            # back to, and an un-annotated prompt reads as a decision that took.
+            with contextlib.suppress(Exception):
+                if msg and hasattr(msg, "edit_text"):
+                    await msg.edit_text(
+                        f"{getattr(msg, 'text', '') or ''}\n\n{STALE_PROMPT}".strip()
+                    )
 
     # ── Channel.ask answers ──
 
     async def on_ask_answer(self, callback: CallbackQuery) -> None:
         """Resolve a pending ``Channel.ask`` from an inline-keyboard tap.
 
-        Same owner gate as ``perm:``: in a group chat the buttons are visible to
-        everyone in it, and an ask is a decision.
+        The body is in ``channels/telegram_ask.py`` with the binding rules it
+        has to apply — an answer settles an ask only when it comes from the
+        chat AND the sender the ask was minted for.
         """
-        from robothor.engine.channels.telegram import resolve_ask_choice
+        from robothor.engine.channels.telegram_ask import handle_ask_callback
 
-        msg = callback.message
-        sender_id = callback.from_user.id if callback.from_user else "unknown"
-        if not msg or not hasattr(msg, "chat"):
-            await callback.answer("Unauthorized", show_alert=True)
-            return
-        if not self._check_owner_gate(
-            chat_id=str(msg.chat.id), sender_id=str(sender_id), site="ask_answer"
-        ):
-            logger.warning(
-                "Unauthorized ask callback from chat_id=%s user_id=%s", msg.chat.id, sender_id
-            )
-            await callback.answer("Unauthorized", show_alert=True)
-            return
-
-        parts = (callback.data or "").split(":", 2)
-        if len(parts) != 3 or not parts[2].isdigit():
-            await callback.answer("Invalid callback data")
-            return
-
-        chosen = resolve_ask_choice(parts[1], int(parts[2]))
-        if chosen is None:
-            # Already answered, or the asking tool gave up. Saying so beats
-            # acknowledging a tap that changed nothing.
-            await callback.answer("That question is no longer open")
-        else:
-            await callback.answer(chosen)
-        with contextlib.suppress(Exception):
-            if hasattr(msg, "edit_reply_markup"):
-                await msg.edit_reply_markup(reply_markup=None)
+        await handle_ask_callback(self, callback)
 
     # ── Run control callbacks (Steer / Interrupt buttons from /agents) ──
 
@@ -1173,22 +1175,13 @@ class TelegramHandlersMixin:
             await message.answer(reply)
             return
 
-        # ── A pending free-text ask takes this line before the run does ──
-        # `_enqueue_message` buffers a message and returns while a run is
-        # active; the buffer is only drained in that run's `finally`. So an
-        # answer that gets that far is invisible to the coroutine blocking
-        # inside `Channel.ask` — the ask times out and the operator's reply
-        # arrives as the next turn's prompt. Owner-gated for the same reason
-        # the `perm:` callback is: in a group chat anyone can type.
-        from robothor.engine.channels.telegram import has_pending_ask, resolve_ask_text
+        # ── A pending ask bound to (this chat, this sender) takes this line ──
+        # Before the run does: see ``telegram_ask.intercept_ask_answer`` for why
+        # reaching `_enqueue_message` would lose the answer entirely.
+        from robothor.engine.channels.telegram_ask import intercept_ask_answer
 
-        if (
-            has_pending_ask(chat_id)
-            and self._check_owner_gate(
-                chat_id=chat_id, sender_id=telegram_user_id, site="ask_answer"
-            )
-            and resolve_ask_text(chat_id, user_text)
-        ):
+        _quoted = getattr(message.reply_to_message, "message_id", "")
+        if await intercept_ask_answer(self, chat_id, telegram_user_id, user_text, str(_quoted)):
             return
 
         session_key = self._session_key(chat_id)

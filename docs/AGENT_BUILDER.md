@@ -217,9 +217,13 @@ implicit capability.
   answers or the timeout runs out.
 - The question is written to `agent_questions` **before** the channel is asked,
   so a process restart does not lose it and a late answer is still usable.
-- On a webchat run there is no channel to ask over yet: the run emits an
-  `approval_required` status event over the SSE stream and the Helm answers
-  through `POST /api/approvals/question/{id}`.
+- On a webchat run there is no channel to ask over yet, so **the run does not
+  wait**: it records the question, emits an `approval_required` status event
+  over the SSE stream, gets `{"answered": false, "delivered": false}` back in
+  the same tick, and carries on. The Helm answers through
+  `POST /api/approvals/question/{id}` *after* the run has finished, and a later
+  turn is what sees the answer. The tool says exactly that rather than implying
+  a wait it never did.
 - On a **scheduled or sub-agent run the tool refuses**, and says why. Nobody is
   watching those, so asking would block the run until it timed out. Agents that
   need a human on a cron path should file a CRM task instead.

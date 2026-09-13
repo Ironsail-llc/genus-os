@@ -1506,15 +1506,27 @@ class TestPermissionCallbacks:
         callback.answer.assert_called_once_with("Invalid callback data")
 
     @pytest.mark.asyncio
-    async def test_unknown_request_id_answers_gracefully_without_resolving(self, bot):
+    async def test_unknown_request_id_says_so_instead_of_confirming(self, bot):
+        """This used to answer "Approved" for a request that does not exist.
+
+        A prompt outlives its request routinely — the tool's own wait_for denies
+        on timeout, the watchdog reaps orphans, a restart empties the map — and
+        the keyboard stays live in the chat through all of it. Confirming a tap
+        that reached nothing is a false confirmation on the approval path, which
+        is the one path where the operator's belief about what happened has to
+        match what happened. See `test_escalation_deadline.py`.
+        """
+        from robothor.engine.telegram_handlers import STALE_PROMPT
+
         mgr = init_permission_manager(bot, "12345")
         handler = self._get_handler(bot)
 
         callback = self._make_callback("perm:approve:does-not-exist")
+        callback.message.edit_text = AsyncMock()
 
         await handler(callback)  # must not raise despite the unknown request_id
 
-        callback.answer.assert_called_once_with("Approved")
+        callback.answer.assert_called_once_with(STALE_PROMPT, show_alert=True)
         assert mgr._pending == {}
 
 

@@ -999,7 +999,7 @@ reachable.
 |---------|-------|
 | `telegram` | With `options`, an inline keyboard whose `callback_data` is `ask:<id>:<index>` — the index, because Telegram caps `callback_data` at 64 bytes and a long option would come back truncated into a different answer. Without options, plain text; `handle_text` intercepts the reply **before** `_enqueue_message`, which would otherwise buffer it until the blocked run finished. Both are owner-gated (`_check_owner_gate`, site `ask_answer`): in a group chat, anyone can tap or type |
 | `event_bus` | `NotImplementedError`, permanently |
-| webchat | No channel. A webchat run emits `approval_required` over its own SSE stream and is answered through the bridge — see below |
+| webchat | No channel, so a webchat run **does not wait**: it records the question, emits `approval_required` over its own SSE stream, and returns `delivered: false` in the same tick. The Helm answers through the bridge after the run has finished, and a later turn is what sees the answer |
 
 **Who asks.** `ask_user` (`tools/handlers/ask_user.py`) is the agent asking mid-
 turn; it refuses on a run nobody is watching (cron, hooks, sub-agents) with an
@@ -1011,9 +1011,13 @@ unchanged, and the channel is what it falls back to when the bot cannot deliver.
 **What outlives the wait.** `ask_user` writes the `agent_questions` row *before*
 the channel is asked, so a restart mid-ask does not lose the question and a late
 answer is still usable. In-RAM escalations are the exception by design — they
-are sub-minute and interactive — and the watchdog sweeps both halves every two
-minutes (`daemon._sweep_stale_questions`): stale prompts are denied, overdue
-rows are stamped `expired` and **kept**.
+are sub-minute and interactive — and the watchdog sweeps both halves every
+minute (`daemon._sweep_stale_questions`): stale prompts are denied, overdue rows
+are stamped `expired` and **kept**. The sweep reaps an escalation only once it
+is past **its own** `human_approval_timeout`, never on a flat age: a
+housekeeping tick must not be stricter than the budget the manifest declared,
+and a prompt whose request is gone answers "no longer pending" rather than
+confirming a decision the agent never received.
 
 **`approval_required`.** Both askers emit this status event through
 `robothor/engine/run_status.py`, a per-run sink the runner arms alongside the

@@ -558,6 +558,64 @@ class TestSSEStatusEvents:
         assert asks[0]["data"]["options"] == ["Acme", "Globex"]
 
     @pytest.mark.asyncio
+    async def test_a_tool_handler_emit_reaches_the_live_sse_stream(self, client, mock_runner):
+        """The whole chain, driven rather than inspected.
+
+        Every other test here calls ``on_status`` directly, and the runner
+        wiring is asserted by reading its source. Neither proves that a tool
+        handler — which holds only a ``ToolContext`` and has no ``on_status``
+        anywhere in scope — can actually reach a browser. That is exactly the
+        shape of control this project keeps finding built, merged and inert, so
+        this one goes end to end: the real ``session_registry.register`` arms the
+        real ``run_status`` sink with the real callback the chat route built, and
+        the emit happens through ``run_status.emit_status`` the way
+        ``ask_user`` and ``PermissionEscalationManager._announce`` do it.
+        """
+        from robothor.engine import run_status, session_registry
+
+        run = AgentRun(
+            status=RunStatus.COMPLETED,
+            output_text="Waiting",
+            trigger_type=TriggerType.WEBCHAT,
+        )
+
+        async def fake_execute(**kwargs):
+            # Stand in for AgentRunner.execute's own registration, verbatim.
+            session = MagicMock()
+            session.run_id = run.id
+            session_registry.register(session, on_status=kwargs.get("on_status"))
+            try:
+                delivered = await run_status.emit_status(
+                    run.id,
+                    {
+                        "event": "approval_required",
+                        "kind": "question",
+                        "id": "q-live",
+                        "run_id": run.id,
+                        "question": "Which vendor?",
+                        "options": ["Acme"],
+                    },
+                )
+                assert delivered, "no sink was armed for the live run"
+            finally:
+                session_registry.unregister(session)
+            # And the sink must not outlive the run window.
+            assert await run_status.emit_status(run.id, {"event": "approval_required"}) is False
+            return run
+
+        mock_runner.execute = AsyncMock(side_effect=fake_execute)
+
+        res = await client.post(
+            "/chat/send",
+            json={"session_key": "live:main:test", "message": "renew it"},
+        )
+        events = _parse_sse(res.text)
+
+        asks = [e for e in events if e["event"] == "approval_required"]
+        assert len(asks) == 1
+        assert asks[0]["data"]["id"] == "q-live"
+
+    @pytest.mark.asyncio
     async def test_sse_tool_events_unchanged(self, client, mock_runner):
         """Adding on_status doesn't break existing on_tool event forwarding."""
         run = AgentRun(

@@ -97,6 +97,7 @@ class EventBusChannel:
         *,
         timeout: float = 300.0,
         target: str = "",
+        addressee: str = "",
     ) -> str | None:
         """Not implemented, and never will be: a bus has nobody to ask.
 

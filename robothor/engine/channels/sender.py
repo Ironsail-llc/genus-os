@@ -247,6 +247,7 @@ class SenderChannel:
         *,
         timeout: float = 300.0,
         target: str = "",
+        addressee: str = "",
     ) -> str | None:
         """Not implemented: a bare sender is one-way by construction.
 

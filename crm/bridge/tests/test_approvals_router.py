@@ -257,3 +257,58 @@ def test_an_unknown_kind_is_refused(controls_client_as_operator):
         f"/api/approvals/nonsense/{QUESTION_ID}", json={"approved": True}
     )
     assert response.status_code in (400, 404, 422)
+
+
+# ─── Malformed ids ──────────────────────────────────────────────────
+
+
+def test_a_non_uuid_question_id_is_refused_before_the_query(controls_client_as_operator):
+    """The id goes straight into ``WHERE id = %s`` against a UUID column, so
+    psycopg2 raises ``InvalidTextRepresentation`` and the route 500s — and
+    because the exception escapes before ``audited(...)`` the attempt leaves no
+    audit row at all. That is precisely the "a denied write is a fact an auditor
+    wants" property the refusal path exists for."""
+    with (
+        patch("routers.approvals.answer_question") as answer,
+        patch("routers._audit.log_event") as log_event,
+    ):
+        response = controls_client_as_operator.post(
+            "/api/approvals/question/not-a-uuid", json={"answer": "Acme"}
+        )
+
+    assert response.status_code == 422
+    answer.assert_not_called()
+    assert log_event.call_count == 1
+    assert log_event.call_args.args[0] == "approval.answer"
+    assert log_event.call_args.kwargs["status"] == "refused"
+
+
+def test_a_non_uuid_workflow_id_is_refused_too(controls_client_as_operator):
+    with (
+        patch("routers.approvals.decide_approval_by_id") as decide,
+        patch("routers._audit.log_event") as log_event,
+    ):
+        response = controls_client_as_operator.post(
+            "/api/approvals/workflow/abc123", json={"approved": True}
+        )
+
+    assert response.status_code == 422
+    decide.assert_not_called()
+    assert log_event.call_args.kwargs["status"] == "refused"
+
+
+def test_an_escalation_id_is_not_required_to_be_a_uuid(controls_client_as_operator):
+    """Escalation ids are ``uuid4().hex`` as the engine minted them, and they
+    reach the engine as a path segment rather than a column. Requiring the
+    dashed form here would refuse every real one."""
+    engine = AsyncMock(return_value=(200, {"settled": True}))
+    with (
+        patch("routers.approvals.engine_request", engine),
+        patch("routers._audit.log_event"),
+    ):
+        response = controls_client_as_operator.post(
+            f"/api/approvals/escalation/{ESCALATION_ID}", json={"approved": True}
+        )
+
+    assert response.status_code == 200
+    engine.assert_awaited_once()

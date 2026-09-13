@@ -59,6 +59,16 @@ class EscalationRequest:
     guardrail_name: str
     reason: str
     created_at: float
+    #: The monotonic instant this request's OWN budget runs out —
+    #: ``created_at + timeout_seconds``, where ``timeout_seconds`` is the
+    #: agent's ``human_approval_timeout`` (validated 10..3600). ``None`` for a
+    #: request built by hand rather than by :meth:`request_approval`, which
+    #: keeps the legacy ``max_age``-only rule for those.
+    #:
+    #: This exists because the watchdog sweep was reaping on a flat 600 s and
+    #: force-denying agents configured for longer, with their keyboard still
+    #: live. A control may not be stricter than the budget it enforces.
+    expires_at: float | None = None
     result: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     approved: bool | None = None
     telegram_message_id: int | None = None
@@ -135,6 +145,7 @@ class PermissionEscalationManager:
             guardrail_name=guardrail_name,
             reason=reason,
             created_at=time.monotonic(),
+            expires_at=time.monotonic() + max(1.0, float(timeout_seconds)),
         )
         self._pending[request.request_id] = request
 
@@ -218,12 +229,29 @@ class PermissionEscalationManager:
         return True
 
     def cleanup_expired(self, max_age: float = 600.0) -> int:
-        """Remove stale requests older than *max_age* seconds.
+        """Reap orphaned requests. Returns how many were removed.
 
-        Returns the number of requests removed.
+        ``max_age`` is a **floor, never a ceiling**. A request is reaped only
+        once it is older than ``max_age`` AND past its own ``expires_at`` — so
+        this sweep can be late, and can never be early. That asymmetry is the
+        whole point: ``human_approval_timeout`` is per-agent and validated to
+        10..3600, the runbook promises the call auto-denies after *that*, and a
+        housekeeping sweep that denied at 600 s while the operator's keyboard
+        was still live would be a control out-voting the budget it exists to
+        enforce. Being late costs nothing — the waiting coroutine denies itself
+        on its own ``wait_for``, so anything this reaps is already an orphan
+        (a cancelled task, a killed run) with nobody listening.
+
+        A request built by hand carries no ``expires_at`` and keeps the legacy
+        ``max_age``-only rule.
         """
         now = time.monotonic()
-        expired = [rid for rid, req in self._pending.items() if (now - req.created_at) > max_age]
+        expired = [
+            rid
+            for rid, req in self._pending.items()
+            if (now - req.created_at) > max_age
+            and (req.expires_at is None or now >= req.expires_at)
+        ]
         for rid in expired:
             req = self._pending.pop(rid, None)
             if req is not None and not req.result.is_set():
