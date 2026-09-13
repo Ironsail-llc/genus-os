@@ -1251,3 +1251,11 @@ register_agent_context_hook(_git_status_context)
 from robothor.engine.thread_pool import _thread_pool_context  # noqa: E402
 
 register_agent_context_hook(_thread_pool_context)
+
+# Live engine uptime, version and 24h model reach. Registered here rather than
+# implemented here: an agent's only source of truth about its own host used to
+# be semantic memory, which held a nine-day-old undated sentence and re-asserted
+# it as present tense. See robothor/engine/host_state.py for the incident.
+from robothor.engine.host_state import host_state_context  # noqa: E402
+
+register_agent_context_hook(host_state_context)

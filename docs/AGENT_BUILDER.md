@@ -339,6 +339,27 @@ warmup:
   peer_agents: [related-agent]
 ```
 
+**Context hooks you get for free.** Beyond what the manifest names, the
+platform injects a `SITUATIONAL CONTEXT` block from the hooks registered in
+`robothor/engine/warmup.py`. Nothing to configure — each hook decides for
+itself whether your agent gets it:
+
+| Hook | What it adds | Who gets it |
+|------|--------------|-------------|
+| `_date_context` | Today's date, weekday, upcoming US holidays | Every agent |
+| `_travel_status` | The `travel_status` memory block, if non-empty | Every agent |
+| `_weather_context` | The instance's weather status file, if present | Every agent |
+| `_git_status_context` | Branch, working-tree status, last five commits | Agents whose `tools:` include a git tool |
+| `_thread_pool_context` | The thread pool, after an auto-sweep | `main`, on cron beats only |
+| `host_state_context` | Live engine uptime, platform version and last-24h model reach, headed "as of now" | `main` and any agent with a `heartbeat:` block |
+
+`host_state_context` is what stops an agent answering "has the engine been
+restarted?" or "is the fleet on fallbacks?" from a memory fact that was true
+last week. It probes the host directly, says so in its own text, degrades each
+fact to a one-line "unknown" rather than failing, and is memoised for 60
+seconds. Workers deliberately do not get it: they act on CRM tasks, not on
+platform health, and the probe is not free.
+
 Status file — written at end of every run:
 
 ```yaml

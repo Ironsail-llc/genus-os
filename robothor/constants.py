@@ -22,6 +22,14 @@ SANDBOX_DENIAL_PREFIX = "benchmark sandbox:"
 #: and detectors.py (which excludes it) so the label can't drift between them.
 SANDBOX_DENIED_ERROR_TYPE = "sandbox_denied"
 
+#: systemd unit the engine runs as. A constant, not a setting: the warmup
+#: host-state probe (robothor/engine/host_state.py) and the doctor's service
+#: check both name it, and an operator who renames the unit has already had to
+#: edit the unit file the installer wrote. Declaring an env var for it would
+#: add a raw read to a ratchet that only goes down, and buy an instance nothing
+#: the install templates do not already control.
+ENGINE_SERVICE_UNIT = "robothor-engine"
+
 #: crm_agent_notifications.notification_type for an alert raised about (or
 #: inside) a benchmark run. Here for the same layering reason as
 #: SANDBOX_DENIAL_PREFIX: robothor/engine/alerts.py WRITES the type and

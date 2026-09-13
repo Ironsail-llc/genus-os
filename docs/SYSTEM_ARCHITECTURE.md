@@ -939,6 +939,41 @@ and the operator's first interactive turn render an `UNREAD ALERTS (N)` section
 and acknowledge only the rows whose text survived into the delivered preamble
 (see `docs/runbooks/PAGING.md`).
 
+#### Warmup: live host state
+
+`build_warmth_preamble` (`robothor/engine/warmup.py`) runs its sections —
+unread alerts, history, memory blocks, context files, peers, context hooks,
+breadcrumbs, preferences, agent hooks, agent goal, goal recall, active intents
+— and then the registered context hooks: `_date_context`, `_travel_status`,
+`_weather_context`, `_git_status_context`, `_thread_pool_context` and
+`host_state_context`.
+
+`host_state_context` (`robothor/engine/host_state.py`) is the only section that
+probes the running host. It emits three facts in words, headed "LIVE ENGINE
+STATE … as of now":
+
+| Fact | Source |
+|------|--------|
+| Engine uptime, as an **age** | `systemctl show -p ActiveEnterTimestamp --value <unit>` where systemd is booted, else the process start time from `/proc`. Never `NRestarts` — systemd zeroes that on a manual or deploy restart. |
+| Platform version | `robothor.__version__` |
+| Last-24h model reach | One aggregate over `agent_runs.model_used`, tenant-scoped, via `crm.dal.get_model_reach_24h` |
+
+It exists because an agent had no other source of truth about its own host.
+On 2026-09-13 the operator-facing agent reported that the engine "hasn't been
+restarted since Sep 3" and that the fleet was "mostly running on fallback
+models" — both false as spoken (the engine had restarted that morning; 98.8% of
+the day's runs reached the primary). Both came from undated `memory_facts` rows
+that were true when written and were recalled as present tense. The section says
+it is live so the model has a reason to prefer it over such a recollection.
+
+It is bounded and optional: one `systemctl` call with a one-second ceiling plus
+one query, memoised for 60s, rendered only for the operator-facing agent
+(`OPERATOR_INBOX_AGENT_ID`) and agents carrying a `heartbeat:` block — workers
+get nothing. Every fact degrades to its own one-line "unknown" rather than
+raising, and an instance opts out by dropping the `register_agent_context_hook`
+call, like any other hook. The unread-alert and memory sections are untouched by
+it.
+
 #### Delivery status vocabulary
 
 `agent_runs.delivery_status` is written by `robothor/engine/delivery.py`

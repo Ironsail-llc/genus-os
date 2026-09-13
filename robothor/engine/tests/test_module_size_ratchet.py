@@ -62,6 +62,13 @@ CAPS = {
     "robothor/engine/run_llm_calls.py": 450,
     "robothor/engine/tool_admission.py": 400,
     "robothor/engine/run_budget.py": 120,
+    # Live host state for the warmup preamble (2026-09-13). Bounded from the
+    # day it lands, like schedule_reconcile.py: this is the module that would
+    # otherwise absorb every "what is this box doing right now?" probe an agent
+    # ever wants, one system call at a time, inside a code path that runs on
+    # every cron beat and every interactive turn. Anything bigger than these
+    # three facts belongs in a tool the agent calls deliberately, not in warmup.
+    "robothor/engine/host_state.py": 384,
     # Tempo-scaled watchdog budgets (2026-08-27): extracted here rather than
     # growing run_budget past its cap, same as the finalization cluster.
     # Raised 110 -> 125 the same day to admit max_wallclock_ceiling(), which the

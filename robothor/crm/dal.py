@@ -4383,6 +4383,37 @@ def get_person_runs(
         return [dict(r) for r in cur.fetchall()]
 
 
+def get_model_reach_24h(*, tenant_id: str = DEFAULT_TENANT) -> list[dict[str, Any]]:
+    """Runs per model over the last 24 hours, busiest first.
+
+    One aggregate, for the warmup host-state section
+    (``robothor/engine/host_state.py``). It answers exactly one question --
+    "is the fleet actually reaching its primary model?" -- which an agent
+    otherwise answers from recalled memory and gets backwards: on 2026-09-13
+    main reported the fleet "mostly running on fallback models" on a day when
+    98.8% of runs landed on the primary.
+
+    A run whose ``model_used`` is NULL never reached a model at all; it is
+    reported as ``none`` rather than dropped, because excluding it would
+    inflate every share by exactly the failures the question is about.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            """
+            SELECT COALESCE(model_used, 'none') AS model_used,
+                   COUNT(*)::int AS runs
+              FROM agent_runs
+             WHERE tenant_id = %s
+               AND created_at > now() - interval '24 hours'
+             GROUP BY 1
+             ORDER BY 2 DESC
+            """,
+            (tenant_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
 def get_person_memory(
     person_id: str,
     *,
