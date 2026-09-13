@@ -1,3 +1,13 @@
+## [1.77.0](https://github.com/Ironsail-llc/genus-os/compare/v1.76.2...v1.77.0) (2026-09-13)
+
+### Features
+
+* **warmup:** agents see engine uptime, version and model reach as facts ([#530](https://github.com/Ironsail-llc/genus-os/issues/530)) ([8b625d1](https://github.com/Ironsail-llc/genus-os/commit/8b625d13cbc07909c27062311c61bda7292eb3da))
+
+### Bug Fixes
+
+* **benchmark:** every benchmark task run is scoped to the sandbox tenant ([#528](https://github.com/Ironsail-llc/genus-os/issues/528)) ([60c738c](https://github.com/Ironsail-llc/genus-os/commit/60c738caf38dc46a6484f65b71f58f359dd47d92)), closes [#506](https://github.com/Ironsail-llc/genus-os/issues/506)
+
 ## [1.76.2](https://github.com/Ironsail-llc/genus-os/compare/v1.76.1...v1.76.2) (2026-09-13)
 
 ### Bug Fixes
