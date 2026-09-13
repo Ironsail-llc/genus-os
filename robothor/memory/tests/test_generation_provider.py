@@ -276,7 +276,7 @@ async def test_openrouter_chat_payload_and_think_stripping(monkeypatch):
     # litellm-style "openrouter/" prefix is stripped for the raw API
     assert payload["model"] == "xiaomi/mimo-v2.5"
     assert payload["temperature"] == 0.2
-    assert payload["max_tokens"] == 512
+    assert payload["max_tokens"] == 512 + generation.REMOTE_NOTHINK_MARGIN
     assert payload["response_format"]["type"] == "json_schema"
     assert payload["response_format"]["json_schema"]["schema"] == schema
     headers = _FakeAsyncClient.last_post["headers"]
@@ -320,7 +320,11 @@ async def test_openrouter_chat_think_false_disables_reasoning(monkeypatch):
         think=False,
     )
     payload = _FakeAsyncClient.last_post["json"]
-    assert payload["max_tokens"] == 1024  # no inflation without thinking
+    # Reasoning is asked off, but the flag is not always honoured: a small
+    # margin (not the full thinking overhead) keeps a model that ignores it
+    # from spending the caller's whole budget before the answer starts.
+    assert payload["max_tokens"] == 1024 + generation.REMOTE_NOTHINK_MARGIN
+    assert generation.REMOTE_NOTHINK_MARGIN < generation.REMOTE_THINKING_OVERHEAD
     assert payload["reasoning"] == {"enabled": False}
 
 
