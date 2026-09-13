@@ -113,8 +113,10 @@ def note_substitution(run: AgentRun, text: str | None) -> NoteSubstitution | Non
     **The most recently authored note wins** — the highest ``step_number``, not
     the longest body. An agent that files a long research note and then the
     short final briefing must broadcast the briefing. Step numbers are unique
-    within a run (``session.AgentSession`` increments one counter), so there is
-    no tie to break; list order is not trusted.
+    within a run (``session.AgentSession`` increments one counter), so a tie is
+    not reachable in production; should one ever appear, the LAST such step in
+    ``run.steps`` wins. Position alone is never trusted — a step list that
+    arrived out of order still resolves to the highest number.
 
     Never raises. A delivery that fails because the rescue path threw would be
     strictly worse than the stub this exists to replace.

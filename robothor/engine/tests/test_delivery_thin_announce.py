@@ -251,6 +251,22 @@ class TestThinAnnounceFallsBackToTheNote:
         assert substitution is not None
         assert substitution.body == "B" * 400
 
+    def test_equal_step_numbers_resolve_to_the_later_entry(self):
+        """Production cannot produce a tie — one counter numbers a run's steps —
+        but a rule with an undefined case is a rule nobody can rely on, so the
+        last entry in ``run.steps`` wins and that is asserted, not assumed."""
+        run = _run(
+            steps=[
+                _note_step("F" * 400, step_number=7),
+                _note_step("L" * 400, step_number=7),
+            ]
+        )
+
+        substitution = thin_announce.note_substitution(run, THIN_REPLY)
+
+        assert substitution is not None
+        assert substitution.body == "L" * 400
+
 
 class TestTheOutcomeNoteSaysWhatHappened:
     """The note is the only record of why the delivered text differs from
@@ -269,19 +285,36 @@ class TestTheOutcomeNoteSaysWhatHappened:
         assert persisted[-1] == ("delivered", "substituted note body (saved) — delivered")
 
     @pytest.mark.asyncio
-    async def test_a_note_that_failed_to_save_says_so(self, persisted):
-        """The body is still recovered — losing it is the defect — but the row
-        must not claim a note was filed when the write was refused."""
+    async def test_a_note_whose_call_errored_says_so(self, persisted):
+        """A ``create_note`` that raised or timed out carries an
+        ``error_message`` and a normal-looking output. The body is still
+        recovered — losing it is the defect — but the row must not claim a note
+        was filed when the call never completed.
+
+        Split from the tool-output case below on purpose: one step carrying both
+        failure signals leaves either branch of ``_note_saved`` deletable with
+        the suite green.
+        """
         register_channel("fake", _RecordingChannel())
-        step = _note_step(
-            BRIEFING_BODY,
-            error_message="permission denied: crm write refused",
-            tool_output={"error": "Failed to create note"},
-        )
+        step = _note_step(BRIEFING_BODY, error_message="crm write timed out after 120s")
         run = _run(steps=[step])
 
         await deliver(_config(), run)
 
+        assert run.outcome_notes == "substituted note body (note save failed) — delivered"
+        assert persisted[-1][0] == "delivered"
+
+    @pytest.mark.asyncio
+    async def test_a_note_the_handler_refused_says_so(self, persisted):
+        """The other half: the call completed and the handler returned
+        ``{"error": "Failed to create note"}``, with no ``error_message``."""
+        register_channel("fake", _RecordingChannel())
+        step = _note_step(BRIEFING_BODY, tool_output={"error": "Failed to create note"})
+        run = _run(steps=[step])
+
+        await deliver(_config(), run)
+
+        assert step.error_message is None
         assert run.outcome_notes == "substituted note body (note save failed) — delivered"
         assert persisted[-1][0] == "delivered"
 
@@ -418,6 +451,14 @@ class TestNoFallbackWhenItWouldBeWrong:
 
         assert thin_announce.note_substitution(run, THIN_REPLY) is None
 
+    def test_an_id_less_run_does_not_match_an_id_less_step(self):
+        """Without the early return, "" == "" would make every unattributed step
+        in an unattributed run a match — the one case where the scope check
+        cannot catch itself."""
+        run = _run(id="", steps=[_note_step(BRIEFING_BODY, run_id="")])
+
+        assert thin_announce.note_substitution(run, THIN_REPLY) is None
+
     @pytest.mark.asyncio
     async def test_a_thin_note_body_is_another_stub_not_a_rescue(self):
         channel = _RecordingChannel()
@@ -538,6 +579,34 @@ class TestTheOutcomeNoteReachesTheRow:
         sql, params = captured[0]
         assert "COALESCE" in sql.upper()
         assert None in params
+
+
+class TestOneSeparatorForOneColumn:
+    """``outcome_notes`` is appended to by three writers. A second convention
+    made the same field parse two ways depending on which one ran."""
+
+    def test_the_verification_verdict_joins_with_the_shared_separator(self):
+        run = _run()
+        run.outcome_notes = "Thin announce output (19 chars)"
+        run.verified_status = "unverified_claims"
+        run.verification = {"unsupported": ["payment"]}
+
+        run_finalizer.RunFinalizationMixin._note_verification(run)
+
+        assert run.outcome_notes == (
+            f"Thin announce output (19 chars){thin_announce.NOTE_SEPARATOR}"
+            "Unverified claims: payment"
+        )
+        assert " | " not in (run.outcome_notes or "")
+
+    def test_a_first_note_is_not_prefixed_with_a_separator(self):
+        run = _run()
+        run.verified_status = "unverified_claims"
+        run.verification = {"unsupported": ["payment"]}
+
+        run_finalizer.RunFinalizationMixin._note_verification(run)
+
+        assert run.outcome_notes == "Unverified claims: payment"
 
 
 class TestOneThresholdNotTwo:
