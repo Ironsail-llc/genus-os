@@ -27,6 +27,9 @@ truncation treated as a retryable failure instead of an answer.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 import pytest
 
 from robothor.memory import facts as facts_mod
@@ -234,8 +237,17 @@ class TestNoThinkReasoningMargin:
         payload = _FakeAsyncClient.last_post["json"]
         assert payload["max_tokens"] == 64 + generation.REMOTE_THINKING_OVERHEAD
 
-    async def test_the_extraction_budget_itself_is_unchanged(self, monkeypatch) -> None:
-        """Population 2 (genuine extraction overflow) is not what this fixes."""
+    async def test_extractions_content_budget_is_unchanged_and_its_request_grows(
+        self, monkeypatch
+    ) -> None:
+        """Extraction passes think=False, so its wire request moves too.
+
+        The constant — the budget extraction asks for its *answer* — is
+        untouched at 4096; the request carries the same margin every
+        think=False caller now gets, which is 4608 on the wire. Population 2
+        (genuine extraction overflow at 4096) is not what this PR fixes, and
+        the margin is not a fix for it either.
+        """
         assert generation.EXTRACTION_MAX_TOKENS == 4096
         self._install(monkeypatch, {"choices": [{"message": {"content": "[]"}}]})
 
@@ -249,3 +261,96 @@ class TestNoThinkReasoningMargin:
 
         payload = _FakeAsyncClient.last_post["json"]
         assert payload["max_tokens"] == 4096 + generation.REMOTE_NOTHINK_MARGIN
+
+
+class TestAnOverBudgetAnswerIsVisible:
+    """The margin is bought on the wire and cannot be enforced on the answer.
+
+    `strip_think_blocks` removes inline reasoning, but a model that emits no
+    think block (or returns its reasoning in OpenRouter's separate field) can
+    return up to `max_tokens + REMOTE_NOTHINK_MARGIN` tokens of *content*.
+    Silently slicing that back would contradict this module's own rule — a
+    body cut mid-JSON is not an answer, which is why `finish_reason=length`
+    is refused rather than parsed — so the overflow is reported instead of
+    hidden, and the caller still gets the whole answer.
+
+    The one caller with real exposure is `lifecycle._consolidate_group`
+    (256 tokens, free text, written straight into `consolidated_text`).
+    """
+
+    @staticmethod
+    def _payload(chars: int) -> dict:
+        return {"choices": [{"message": {"content": "x" * chars}, "finish_reason": "stop"}]}
+
+    def test_an_over_budget_answer_is_logged(self, caplog) -> None:
+        with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+            content = generation.content_from_response(
+                self._payload(2000), model="test/model", max_tokens=64
+            )
+
+        assert len(content) == 2000, "the answer must not be silently truncated"
+        assert any(
+            generation.ANSWER_OVER_BUDGET_MARKER in r.getMessage() for r in caplog.records
+        ), [r.getMessage() for r in caplog.records]
+
+    def test_the_overflow_line_names_the_caller_and_the_budget(self, caplog) -> None:
+        with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+            generation.content_from_response(self._payload(2000), model="test/model", max_tokens=64)
+
+        line = next(
+            r.getMessage()
+            for r in caplog.records
+            if generation.ANSWER_OVER_BUDGET_MARKER in r.getMessage()
+        )
+        assert "64" in line
+        assert "test_the_overflow_line_names_the_caller_and_the_budget" in line
+
+    def test_an_answer_inside_the_budget_says_nothing(self, caplog) -> None:
+        with caplog.at_level(logging.WARNING, logger="robothor.memory.generation"):
+            generation.content_from_response(self._payload(40), model="test/model", max_tokens=64)
+
+        assert not [
+            r for r in caplog.records if generation.ANSWER_OVER_BUDGET_MARKER in r.getMessage()
+        ]
+
+
+def _label_from_an_asyncio_frame() -> str:
+    """Call `_memory_caller()` from a frame that belongs to the event loop.
+
+    This is what Python 3.11 produces for `lifecycle.judge_importance` — the
+    flagship 64-token caller — because `asyncio.wait_for` wraps the coroutine
+    in `ensure_future` there, so the frame chain above the generation is the
+    loop, not the caller.
+    """
+    namespace: dict = {"__name__": "asyncio.tasks", "generation": generation}
+    exec("def __step():\n    return generation._memory_caller()\n", namespace)  # noqa: S102
+    return str(namespace["__step"]())
+
+
+async def _label_from_a_memory_caller() -> str:
+    return generation._memory_caller()
+
+
+class TestTheCallerLabelIsNeverConfidentlyWrong:
+    """A wrong name is worse than no name.
+
+    The label exists so the operator opens the right file. Walking *past* the
+    event loop to whatever called `asyncio.run` produces a plausible, wrong
+    answer — the same failure mode as the 4096 constant this PR removed.
+    """
+
+    def test_an_event_loop_frame_is_not_named_as_the_caller(self) -> None:
+        assert _label_from_an_asyncio_frame() == "a caller"
+
+    async def test_a_retasked_generation_never_names_the_wrong_caller(self) -> None:
+        """Runs on every interpreter in the CI matrix: on 3.12+ the chain
+        survives `wait_for` and the caller is named; on 3.11 it does not and
+        the label degrades. Either is fine — a third answer is not."""
+        label = await asyncio.wait_for(_label_from_a_memory_caller(), timeout=5)
+        assert label.endswith("._label_from_a_memory_caller") or label == "a caller", label
+
+    def test_a_frame_without_a_module_name_is_skipped(self) -> None:
+        """`f_globals` without `__name__` used to yield a bare '.<func>'."""
+        namespace: dict = {"generation": generation}
+        exec("def anonymous():\n    return generation._memory_caller()\n", namespace)  # noqa: S102
+        assert not str(namespace["anonymous"]()).startswith(".")

@@ -36,6 +36,11 @@ Failure policy (audit lesson: silent fallbacks hide primary-model death):
 - Provider is ``openrouter`` but ``OPENROUTER_API_KEY`` is unset → log an
   ERROR containing ``MEMORY_GENERATION_REMOTE_MISCONFIGURED`` once per
   process and use local.
+- An answer longer than the caller's own budget (the ``think=False`` margin
+  spent on content rather than reasoning) → log a WARNING containing
+  ``MEMORY_GENERATION_ANSWER_OVER_BUDGET`` and hand the answer on whole. It
+  is never sliced: a body cut mid-answer is not an answer, which is the same
+  reason ``finish_reason=length`` is refused rather than parsed.
 
 Alerting (incident 2026-08-21: fact extraction failed continuously for days
 behind ~729 HTTP-429 + ~93 HTTP-503 events, and every signal was a log line
@@ -192,14 +197,27 @@ REMOTE_THINKING_OVERHEAD = 8192
 # their answers with nothing to spare: 27 of the 30 remote truncations over
 # 2026-09-06..13 came back with 0-389 content chars and finish_reason=length
 # at those ceilings. 512 tokens covers every observed case and costs nothing
-# at this volume — and it buys reasoning room only: the reasoning is stripped
-# from the content (strip_think_blocks), so callers still get answers inside
-# the budget they asked for.
+# at this volume.
+#
+# The margin is bought on the WIRE, and it is not enforced on the answer: a
+# model that emits no inline ``<think>`` block can spend it on content, so a
+# reply may run up to max_tokens + REMOTE_NOTHINK_MARGIN. Slicing it back
+# would contradict this module's own rule — a body cut mid-answer is not an
+# answer, which is exactly why finish_reason=length is refused instead of
+# parsed — so an over-budget reply is logged (ANSWER_OVER_BUDGET_MARKER) and
+# handed to the caller whole. Live exposure is one caller:
+# lifecycle._consolidate_group (256, free text, stored verbatim); the others
+# parse a float or a json schema, or truncate on their own.
 REMOTE_NOTHINK_MARGIN = 512
+
+# Chars per token, for the over-budget check only. Deliberately coarse: this
+# decides whether to log a line, never whether to keep an answer.
+CHARS_PER_TOKEN = 4
 
 # Distinctive log markers — grep targets for alerting.
 FALLBACK_MARKER = "MEMORY_GENERATION_REMOTE_FALLBACK"
 MISSING_KEY_MARKER = "MEMORY_GENERATION_REMOTE_MISCONFIGURED"
+ANSWER_OVER_BUDGET_MARKER = "MEMORY_GENERATION_ANSWER_OVER_BUDGET"
 
 # Module counter: number of remote-generation calls that fell back to local.
 remote_fallback_count: int = 0
@@ -592,20 +610,31 @@ def _memory_caller() -> str:
     Every memory caller passes its own budget (judge_importance 64,
     preferences 150, consolidation 256, extraction 4096), so a truncation is
     only actionable if the reader knows which one ran out. Walked from the
-    stack rather than threaded through ten call sites, and only on the error
-    path, so the happy path pays nothing. Falls back to a plain label when
-    the chain is broken (e.g. the generation was started as a bare Task).
+    stack rather than threaded through ten call sites, and only off the happy
+    path, so a successful generation pays nothing for it.
+
+    The walk **stops** at the event loop rather than climbing through it.
+    When the generation was re-tasked — ``asyncio.wait_for`` does exactly
+    that on Python 3.11, and judge_importance is the caller that uses it —
+    everything above that frame belongs to the loop, and naming whatever
+    called ``asyncio.run`` would be a confident wrong answer. That is the
+    failure mode this label exists to end, so it degrades to "a caller"
+    instead.
     """
     frame = inspect.currentframe()
     try:
         while frame is not None:
             module = frame.f_globals.get("__name__", "")
-            if module != __name__ and not module.startswith(("asyncio", "contextlib")):
+            if module.startswith("asyncio"):
+                break  # re-tasked: the chain above here is the event loop
+            # A frame with no module name (exec'd/synthesised) would render
+            # as a bare ".<func>"; skip it rather than name half of it.
+            if module and module != __name__ and not module.startswith("contextlib"):
                 return f"{module.rsplit('.', 1)[-1]}.{frame.f_code.co_name}"
             frame = frame.f_back
     finally:
         del frame
-    return "the caller"
+    return "a caller"
 
 
 def content_from_response(data: dict[str, Any], *, model: str, max_tokens: int) -> str:
@@ -634,6 +663,24 @@ def content_from_response(data: dict[str, Any], *, model: str, max_tokens: int) 
         )
     if not content:
         raise RuntimeError(f"empty content from remote model {model}")
+
+    # The think=False margin is reasoning room bought on the wire; nothing
+    # stops a model that emits no <think> block from spending it on the
+    # answer instead. Cutting the answer back here would be this module's own
+    # cardinal sin (a truncated body handed on as a result), so say it out
+    # loud and pass the whole thing through. Silence would make the margin
+    # look like an invariant it is not.
+    if len(content) > max_tokens * CHARS_PER_TOKEN:
+        logger.warning(
+            "%s: %s asked for max_tokens=%d and %s returned %d content chars "
+            "(~%d tokens) — the answer is passed through whole, not truncated",
+            ANSWER_OVER_BUDGET_MARKER,
+            _memory_caller(),
+            max_tokens,
+            model,
+            len(content),
+            len(content) // CHARS_PER_TOKEN,
+        )
 
     logger.info("remote memory generation: %d content chars via %s", len(content), model)
     return content
