@@ -360,15 +360,25 @@ fact to a one-line "unknown" rather than failing, and is memoised for 60
 seconds. Workers deliberately do not get it: they act on CRM tasks, not on
 platform health, and the probe is not free.
 
-Two details worth knowing if you are writing a heartbeat agent:
+Three details worth knowing if you are writing a heartbeat agent:
 
 - It reaches **interactive** turns too (Telegram, webchat, channel wake), not
   only scheduled ones. The other hooks in this table that target `main` are
   cron-only; this one is not, because the question it answers is one the
-  operator asks in chat.
+  operator asks in chat. `CHANNEL_EVENT` takes the interactive path for *any*
+  agent, so a heartbeat agent woken by a channel event gets it there too.
 - A `heartbeat:` block is by itself enough to make your agent build a warmup
   preamble. You do **not** need to declare a `warmup:` section to get this —
   live engine state counts as a reason to warm.
+- It reads your manifest's `model.primary` to say whether the fleet is actually
+  reaching it. If it cannot see a config it says "the busiest model was …"
+  rather than claiming you have no primary configured — those are different
+  facts, and only one of them is about your manifest.
+
+To turn the section off for an instance, call
+`robothor.engine.host_state.set_host_state_enabled(False)`. That is the single
+switch: it gates the hook, the interactive builder and the warm decision alike.
+Dropping the hook registration only disables the scheduled path.
 
 Status file — written at end of every run:
 

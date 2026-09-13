@@ -25,15 +25,25 @@ This module is the probe. Three facts, in words:
 * the running platform version;
 * last-24h model reach from ONE aggregate over ``agent_runs.model_used``.
 
-Three properties make it safe to leave registered forever:
+Four properties make it safe to leave registered forever:
 
 * **It never raises.** Each fact degrades to its own single "unknown" line. A
   warmup section that can raise is a warmup section that gets reverted.
-* **It is bounded.** One ``systemctl`` call with a one-second ceiling and one
-  aggregate query, cached for a minute, on the operator-facing and
-  heartbeat-class agents only.
+* **It is bounded.** At most two ``systemctl`` calls totalling one second, plus
+  one aggregate with a one-second statement timeout, cached for a minute, on the
+  operator-facing and heartbeat-class agents only.
 * **It says it is live.** The header names the moment, so the model has a
   reason to prefer it over a recalled sentence with no date on it.
+* **It never guesses.** "Unknown", "not running" and "no primary is configured"
+  are three different sentences, and none of them is said unless it is what the
+  probe actually established. Every review round on this module found the same
+  failure: a plausible sentence standing in for an unknown one, under a header
+  telling the model to trust it over memory.
+
+Both warmup builders render it — ``build_warmth_preamble`` through the
+registered agent context hook, ``build_interactive_preamble`` by calling
+``host_state_section`` directly — so ``set_host_state_enabled(False)``, not the
+hook registration, is the switch that turns it off everywhere.
 """
 
 from __future__ import annotations
@@ -44,7 +54,7 @@ import subprocess  # noqa: S404 -- systemctl, fixed argv, no shell
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from robothor.constants import ENGINE_SERVICE_UNIT
 
@@ -56,10 +66,13 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "ENGINE_SERVICE_UNIT",
     "HOST_STATE_CACHE_TTL_SECONDS",
+    "MAX_SYSTEMCTL_CALLS",
     "SYSTEMCTL_TIMEOUT_SECONDS",
+    "EngineState",
     "host_state_context",
     "host_state_section",
     "reset_host_state_cache",
+    "set_host_state_enabled",
     "wants_host_state",
 ]
 
@@ -69,10 +82,14 @@ __all__ = [
 #: nothing and cost a subprocess plus an aggregate each time.
 HOST_STATE_CACHE_TTL_SECONDS = 60
 
-#: Ceiling on the ``systemctl`` call. A wedged systemd costs the warmup a
-#: second, not the run. The surrounding hook runner already logs anything over
+#: Ceiling on EACH ``systemctl`` call. There are at most two — the
+#: ``--timestamp=utc`` probe and, on systemd < 247 which rejects that
+#: option, the legacy retry — so the promise being kept is the TOTAL: a
+#: wedged systemd costs the warmup one second, not the run. Measured at
+#: 1.003s over two spawns. The surrounding hook runner logs anything over
 #: 100ms, so a slow probe is visible without being fatal.
 SYSTEMCTL_TIMEOUT_SECONDS = 0.5
+MAX_SYSTEMCTL_CALLS = 2
 
 _HEADER = (
     "LIVE ENGINE STATE (probed on this host as of now -- this is the current "
@@ -83,8 +100,42 @@ _HEADER = (
 _UNKNOWN_UPTIME = "- Engine uptime: unknown as of now (state could not be read)."
 _UNKNOWN_REACH = "- Model reach, last 24h: unknown as of now (query failed)."
 
-#: (agent id, configured primary) -> (monotonic deadline, rendered section)
-_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
+#: Sentinel primary for "the caller did not tell us". Distinct from ``""``,
+#: which means "this agent genuinely has no primary configured" — conflating
+#: the two is how every interactive turn came to assert the second while only
+#: the first was true.
+_PRIMARY_UNKNOWN = None
+
+#: (agent id, configured primary or None) -> (monotonic deadline, section)
+_CACHE: dict[tuple[str, str | None], tuple[float, str]] = {}
+
+#: One switch for the whole section. Both warmup builders reach it through
+#: ``wants_host_state``, so this is the opt-out that actually opts out —
+#: dropping the ``register_agent_context_hook`` call disables the scheduled
+#: path alone, and ``build_interactive_preamble`` would keep rendering.
+_ENABLED = True
+
+
+class EngineState(NamedTuple):
+    """What systemd (or ``/proc``) says about the engine right now.
+
+    ``state`` carries ``ActiveState`` verbatim so the section can distinguish
+    "running since X" from "the unit exists and is **failed**, and this
+    timestamp is when it last started". A failed unit keeps its historical
+    ``ActiveEnterTimestamp``, and reading it as uptime describes an engine that
+    is not running.
+    """
+
+    started: datetime | None
+    label: str = ""
+    state: str = ""
+
+
+def set_host_state_enabled(enabled: bool) -> None:
+    """Turn the whole section on or off, on every path it renders from."""
+    global _ENABLED  # noqa: PLW0603 -- one process-wide switch, by design
+    _ENABLED = enabled
+    reset_host_state_cache()
 
 
 def reset_host_state_cache() -> None:
@@ -115,6 +166,8 @@ def wants_host_state(agent_id: str, config: AgentConfig | None = None) -> bool:
     operator-facing agent — the one the incident happened to, in chat — is
     matched by id.
     """
+    if not _ENABLED:
+        return False
     from robothor.engine.warmup import OPERATOR_INBOX_AGENT_ID
 
     if agent_id == OPERATOR_INBOX_AGENT_ID:
@@ -209,7 +262,7 @@ def _show_properties(extra_args: list[str]) -> dict[str, str] | None:
     return properties
 
 
-def _systemctl_active_enter() -> tuple[datetime, str] | None:
+def _systemctl_active_enter() -> EngineState | None:
     """When the engine unit last entered ``active``, or None.
 
     ``ActiveEnterTimestamp`` deliberately, **not** ``NRestarts``: systemd
@@ -223,6 +276,13 @@ def _systemctl_active_enter() -> tuple[datetime, str] | None:
     succeeded, no timestamp" and used to fall through to the process clock —
     silently, permanently, and wrong.
 
+    ``ActiveState`` is also *judged*, not merely used as an existence sentinel.
+    A ``failed`` or ``inactive`` unit still carries the ``ActiveEnterTimestamp``
+    of its last start, so reading it unconditionally reported six hours of
+    uptime for a dead engine — reachable from a short-lived ``genus engine run``
+    on a box whose unit has died. Only ``active`` yields an age; anything else
+    is returned as the state, so the section can say the engine is not running.
+
     Two calls at most: ``--timestamp=utc`` shipped in systemd v247, and an
     older manager rejects the option with a non-zero exit rather than ignoring
     it, so the legacy format is the retry.
@@ -232,9 +292,17 @@ def _systemctl_active_enter() -> tuple[datetime, str] | None:
     properties = _show_properties(["--timestamp=utc"])
     if properties is None:
         properties = _show_properties([])
-    if not properties or not properties.get("ActiveState"):
+    state = (properties or {}).get("ActiveState", "")
+    if not state:
         return None
-    return _parse_systemd_timestamp(properties.get("ActiveEnterTimestamp", ""))
+    if state != "active":
+        return EngineState(started=None, state=state)
+    parsed = _parse_systemd_timestamp(
+        properties.get("ActiveEnterTimestamp", "") if properties else ""
+    )
+    if parsed is None:
+        return None
+    return EngineState(started=parsed[0], label=parsed[1], state=state)
 
 
 def _process_start() -> datetime | None:
@@ -265,7 +333,7 @@ def _process_start() -> datetime | None:
         return None
 
 
-def _engine_start() -> tuple[datetime, str] | None:
+def _engine_start() -> EngineState | None:
     """The engine's start time, with the label to display for it, or None.
 
     The process clock is the engine clock only where there is **no unit to
@@ -282,7 +350,9 @@ def _engine_start() -> tuple[datetime, str] | None:
     fallback = _process_start()
     if fallback is None:
         return None
-    return fallback, fallback.strftime("%Y-%m-%d %H:%M UTC")
+    # No unit to ask, so no ActiveState to report: an "active" the manager
+    # never said would be a claim this path cannot make.
+    return EngineState(started=fallback, label=fallback.strftime("%Y-%m-%d %H:%M UTC"))
 
 
 def _format_age(seconds: float) -> str:
@@ -301,12 +371,18 @@ def _format_age(seconds: float) -> str:
 
 
 def _uptime_line() -> str:
-    started = _engine_start()
-    if started is None:
+    engine = _engine_start()
+    if engine is None:
         return _UNKNOWN_UPTIME
-    start_dt, label = started
-    age = _format_age((_now() - start_dt).total_seconds())
-    return f"- Engine up {age} as of now, started {label}."
+    if engine.started is None:
+        if engine.state:
+            return (
+                f"- The engine service is NOT running as of now — systemd reports "
+                f"the unit {engine.state}."
+            )
+        return _UNKNOWN_UPTIME
+    age = _format_age((_now() - engine.started).total_seconds())
+    return f"- Engine up {age} as of now, started {engine.label}."
 
 
 # ── version ───────────────────────────────────────────────────────
@@ -395,18 +471,32 @@ def _no_model_clause(no_model: int) -> str:
     return f" {no_model} runs reached no model." if no_model else ""
 
 
-def _reach_body(configured: str, counts: list[tuple[str, int]]) -> str:
+def _reach_body(configured: str | None, counts: list[tuple[str, int]]) -> str:
     """The sentence, with the primary named only when it IS the primary.
 
-    The first draft fell back to the busiest model and called *that* "the
-    primary". The case where the configured primary got zero runs is exactly
-    the "is the fleet on fallbacks?" case this section exists to settle, and it
-    was answered backwards, under a header instructing the model to prefer this
-    over anything it recalled.
+    Three claims live here and they are deliberately distinct, because two
+    review rounds were spent on conflations between them:
+
+    * ``configured`` names a model the runs recorded -> name it as the primary
+      and give its share. (Round 1's C2: the busiest model used to be renamed
+      "the primary" whenever the real one was absent.)
+    * ``configured`` names a model the runs did NOT record -> say it handled
+      zero. That is the "is the fleet on fallbacks?" answer, and it is the half
+      of the original incident this section exists for.
+    * ``configured`` is ``""`` -> the caller *knows* this agent has no primary,
+      so say so. ``None`` means the caller never told us, which is not a fact
+      about the operator's configuration and must not be reported as one.
+      (Round 2's C3: the interactive builder passed no config at all, so every
+      chat turn asserted main had no configured primary. It has one.)
     """
     total = sum(runs for _, runs in counts)
+    busiest, busiest_runs = counts[0]
+    busiest_share = (
+        f"{busiest} with {busiest_runs} of {total} model calls "
+        f"({100.0 * busiest_runs / total:.1f}%)"
+    )
     target = _normalise_model(configured) if configured else ""
-    matched = next((pair for pair in counts if pair[0] == target), None)
+    matched = next((pair for pair in counts if pair[0] == target), None) if target else None
 
     if matched is not None:
         rest = [pair for pair in counts if pair[0] != matched[0]]
@@ -418,17 +508,21 @@ def _reach_body(configured: str, counts: list[tuple[str, int]]) -> str:
             return f"{body}; the next model was {rest[0][0]} with {rest[0][1]}."
         return f"{body}; nothing else was used."
 
-    busiest, busiest_runs = counts[0]
     if target:
         return (
             f"the configured primary {target} handled 0 of {total} model calls; "
-            f"the busiest was {busiest} with {busiest_runs} "
-            f"({100.0 * busiest_runs / total:.1f}%)."
+            f"the busiest was {busiest_share}."
         )
-    return (
-        f"no primary model is configured for this agent; the busiest was {busiest} "
-        f"with {busiest_runs} of {total} model calls ({100.0 * busiest_runs / total:.1f}%)."
-    )
+    if configured is _PRIMARY_UNKNOWN:
+        return f"the busiest model was {busiest_share}."
+    return f"no primary model is configured for this agent; the busiest was {busiest_share}."
+
+
+def _configured_primary(config: AgentConfig | None) -> str | None:
+    """The agent's primary, or ``None`` when the caller supplied no config."""
+    if config is None:
+        return _PRIMARY_UNKNOWN
+    return getattr(config, "model_primary", "") or ""
 
 
 def _reach_line(config: AgentConfig | None) -> str:
@@ -449,7 +543,7 @@ def _reach_line(config: AgentConfig | None) -> str:
         return f"{head} no runs recorded."
     if not counts:
         return f"{head} no run reached a model at all —{_no_model_clause(no_model)}"
-    body = _reach_body(getattr(config, "model_primary", ""), counts)
+    body = _reach_body(_configured_primary(config), counts)
     return f"{head} {body}{_no_model_clause(no_model)}"
 
 
@@ -480,7 +574,7 @@ def host_state_section(agent_id: str, config: AgentConfig | None = None) -> str 
         # Keyed on the primary too: ``chat_sessions.model_override`` can change
         # main's effective primary between turns, and keying on the id alone
         # served the previous turn's sentence for the rest of the minute.
-        key = (agent_id, getattr(config, "model_primary", "") or "")
+        key = (agent_id, _configured_primary(config))
         now = time.monotonic()
         cached = _CACHE.get(key)
         if cached is not None and cached[0] > now:

@@ -735,6 +735,7 @@ def _interactive_supervisor_sections(
     scope: DataScope | None,
     observe_scope_obj: DataScope | None,
     user_id: str | None,
+    agent_config: AgentConfig | None = None,
 ) -> list[str]:
     """The panorama an operator-facing agent gets on an interactive turn.
 
@@ -759,9 +760,12 @@ def _interactive_supervisor_sections(
     try:
         from robothor.engine.host_state import host_state_section
 
-        # An id, not a config: that is all this targeting needs. See
-        # ``host_state.wants_host_state``.
-        live_state = host_state_section(agent_id)
+        # The config matters, and passing only the id was a defect: without it
+        # the reach sentence took its "no primary is configured" branch on every
+        # interactive turn, so main told the operator — in chat, under a header
+        # saying to prefer this over memory — that it had no configured primary.
+        # It has one; manifests carry model.primary.
+        live_state = host_state_section(agent_id, agent_config)
         if live_state:
             sections.append(live_state)
     except Exception as e:
@@ -797,6 +801,7 @@ def build_interactive_preamble(
     extra_memory_blocks: list[str] | None = None,
     sender_name: str = "",
     identity: IdentityContext | None = None,
+    agent_config: AgentConfig | None = None,
 ) -> str:
     """Build a lightweight warmup preamble for interactive (Telegram) sessions.
 
@@ -817,6 +822,11 @@ def build_interactive_preamble(
             full ``--- CURRENT USER ---`` block (enriched with CRM/memory-graph
             context when available) instead of the bare-name legacy text, and
             ``identity.display_name`` is what gets excluded from entity search.
+        agent_config: The agent's manifest, when the caller has it. Only the
+            host-state section reads it, and only to name the configured
+            primary model — but omitting it is not neutral there: without a
+            config that section cannot tell "no primary is set" from "nobody
+            told me", and it used to assert the former.
 
     Returns:
         Warmup preamble string, or empty string if nothing to inject.
@@ -943,6 +953,7 @@ def build_interactive_preamble(
             scope=_enforce_scope,
             observe_scope_obj=_observe_scope,
             user_id=_scope_user_id,
+            agent_config=agent_config,
         )
     )
 

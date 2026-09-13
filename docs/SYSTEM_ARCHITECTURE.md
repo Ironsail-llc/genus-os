@@ -953,7 +953,7 @@ host. It emits three facts in words, headed "LIVE ENGINE STATE … as of now":
 
 | Fact | Source |
 |------|--------|
-| Engine uptime, as an **age** | `systemctl show -p ActiveEnterTimestamp -p ActiveState --timestamp=utc <unit>` where systemd is booted (retried without `--timestamp=utc` on systemd < 247). Never `NRestarts` — systemd zeroes that on a manual or deploy restart. |
+| Engine uptime, as an **age** | `systemctl show -p ActiveEnterTimestamp -p ActiveState --timestamp=utc <unit>` where systemd is booted (retried without `--timestamp=utc` on systemd < 247). Never `NRestarts` — systemd zeroes that on a manual or deploy restart. An age is rendered only when `ActiveState` is `active`; any other state reads "the engine service is NOT running … systemd reports the unit `<state>`", because a failed unit keeps its last start's timestamp. |
 | Platform version | `robothor.__version__` |
 | Last-24h model reach | One aggregate over `agent_runs.model_used`, tenant-scoped, via `crm.dal.get_model_reach_24h` |
 
@@ -967,11 +967,19 @@ it is live so the model has a reason to prefer it over such a recollection.
 
 **It renders on both preambles.** `build_warmth_preamble` reaches it through the
 registered agent context hook; `build_interactive_preamble` calls
-`host_state_section(agent_id)` directly, via
+`host_state_section(agent_id, agent_config)` directly, via
 `_interactive_supervisor_sections`. That is not belt-and-braces: agent context
 hooks run from the cron builder alone, and the operator was in *chat* when the
 stale fact was asserted, so a section only on the cron path would have missed
 the channel the incident happened on.
+
+**The manifest has to reach it.** `runner.execute` threads `agent_config` into
+`build_interactive_preamble`, because the reach sentence needs the configured
+primary. Without it the section could not tell "this agent has no primary" from
+"nobody told me which one" — and it asserted the former, so every chat turn had
+main reporting that it had no configured primary. It has one; manifests carry
+`model.primary`. A caller that genuinely has only an id now gets the neutral
+"the busiest model was …" wording instead of a claim about configuration.
 
 **It is a reason to warm, not a passenger.** `wants_cron_warmup` (the predicate
 `runner.execute` uses to decide `warmup_kind`) is true when the manifest names
@@ -991,9 +999,14 @@ Bounded and optional: at most two `systemctl` calls at 0.5 s each, plus one
 query with a 1 s `statement_timeout`, memoised 60 s per (agent, configured
 primary), rendered only for the operator-facing agent
 (`OPERATOR_INBOX_AGENT_ID`) and agents carrying a `heartbeat:` block — workers
-get nothing, and make no calls. An instance opts out by dropping the
-`register_agent_context_hook` call, like any other hook. The unread-alert and
-memory sections are untouched by it.
+get nothing, and make no calls.
+
+**One off switch.** `host_state.set_host_state_enabled(False)` disables every
+path — the hook, the interactive builder, and `wants_cron_warmup`'s reason to
+warm — because all three ask `wants_host_state`. Dropping the
+`register_agent_context_hook` call, which was the documented opt-out when this
+was cron-only, now disables the scheduled path alone. The unread-alert and
+memory sections are untouched by any of it.
 
 #### Delivery status vocabulary
 

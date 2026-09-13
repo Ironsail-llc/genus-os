@@ -823,6 +823,8 @@ class AgentRunner(
                         tenant_id=_tenant,
                         sender_name=_sender,
                         identity=effective_identity,
+                        # Host state names the configured primary from this.
+                        agent_config=agent_config,
                     )
 
             warmup_future = loop.run_in_executor(None, _build_interactive_warmup)

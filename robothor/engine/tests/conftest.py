@@ -57,14 +57,30 @@ def no_systemctl_in_engine_tests(monkeypatch: pytest.MonkeyPatch):
     that same global meant a section rendered in one test file could be served
     to another.
 
-    So: stub the probe, make any ``systemctl`` spawn a loud failure rather than
-    a silent host dependency, and clear the cache on both sides of every test.
-    ``test_no_systemctl_in_tests.py`` asserts all three, so weakening this turns
-    the suite red instead of quietly restoring the spawns.
+    So: stub the probe, refuse any ``systemctl`` spawn, and clear the cache on
+    both sides of every test. ``test_no_systemctl_in_tests.py`` asserts all
+    three, so weakening this turns the suite red instead of quietly restoring
+    the spawns.
 
-    Scoped to argv[0] deliberately. A blanket subprocess ban would be reverted
-    the first time a test needed ``git``.
+    **The guarantee is that the spawn does not happen** — not that it is always
+    loud. ``host_profile``'s ``ollama.service`` probe wraps its call in
+    ``except Exception``, so it swallows this AssertionError and returns None,
+    exactly as it does on a host with no systemd. That is correct degradation
+    for that probe; it just means "loud" holds only where the caller does not
+    catch, and the test file pins the property that holds everywhere.
+
+    ``Popen`` is the guarded primitive rather than ``run``: ``run``,
+    ``check_output`` and ``check_call`` are all built on it, so guarding it
+    alone also covers a module that did ``from subprocess import run`` — which
+    patching the module attribute did not, and which reached the host.
+    ``asyncio``'s spawn path does not go through ``Popen``, so it is guarded
+    separately.
+
+    Scoped to argv[0]'s basename deliberately: an exact-string match is one
+    ``/usr/bin/`` away from inert, and a blanket subprocess ban would be
+    reverted the first time a test needed ``git``.
     """
+    import asyncio as _asyncio
     import subprocess as _subprocess
     from pathlib import PurePath
 
@@ -78,19 +94,31 @@ def no_systemctl_in_engine_tests(monkeypatch: pytest.MonkeyPatch):
     _stubbed_probe._is_test_stub = True  # type: ignore[attr-defined]
     monkeypatch.setattr(host_state, "_systemctl_active_enter", _stubbed_probe)
 
-    real_run = _subprocess.run
-
-    def _guarded_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
-        argv0 = cmd[0] if isinstance(cmd, (list, tuple)) and cmd else cmd
+    def _refuse_if_systemctl(args) -> None:  # type: ignore[no-untyped-def]
+        argv0 = args[0] if isinstance(args, (list, tuple)) and args else args
         if isinstance(argv0, (str, PurePath)) and PurePath(str(argv0)).name == "systemctl":
             raise AssertionError(
                 "A test tried to spawn systemctl. Tests must not depend on the "
                 "host's service manager — patch the probe instead "
                 "(see robothor/engine/tests/test_no_systemctl_in_tests.py)."
             )
-        return real_run(cmd, *args, **kwargs)
 
-    monkeypatch.setattr(_subprocess, "run", _guarded_run)
+    real_popen = _subprocess.Popen
+
+    class _GuardedPopen(real_popen):  # type: ignore[misc, valid-type]
+        def __init__(self, args, *rest, **kwargs):  # type: ignore[no-untyped-def]
+            _refuse_if_systemctl(args)
+            super().__init__(args, *rest, **kwargs)
+
+    monkeypatch.setattr(_subprocess, "Popen", _GuardedPopen)
+
+    real_exec = _asyncio.create_subprocess_exec
+
+    async def _guarded_exec(program, *args, **kwargs):  # type: ignore[no-untyped-def]
+        _refuse_if_systemctl([program])
+        return await real_exec(program, *args, **kwargs)
+
+    monkeypatch.setattr(_asyncio, "create_subprocess_exec", _guarded_exec)
     yield
     host_state.reset_host_state_cache()
 

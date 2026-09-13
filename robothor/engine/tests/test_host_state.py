@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 # without a database driver.
 DAL_PATCH = "robothor.crm.dal.get_model_reach_24h"
 START_PATCH = "robothor.engine.host_state._engine_start"
+SYSTEMCTL_PATCH = "robothor.engine.host_state._systemctl_active_enter"
 BLOCK_PATCH = "robothor.memory.blocks.read_block"
 TRACKING_PATCH = "robothor.engine.tracking.get_schedule"
 
@@ -103,7 +104,10 @@ class TestEngineUptime:
         started = datetime(2026, 9, 13, 8, 29, 43, tzinfo=UTC)
         now = datetime(2026, 9, 13, 14, 15, 0, tzinfo=UTC)
         with (
-            patch(START_PATCH, return_value=(started, "2026-09-13 08:29 UTC")),
+            patch(
+                START_PATCH,
+                return_value=host_state.EngineState(started, "2026-09-13 08:29 UTC", "active"),
+            ),
             patch(DAL_PATCH, return_value=_reach(("model-a", 310))),
             patch.object(host_state, "_now", return_value=now),
         ):
@@ -251,9 +255,9 @@ class TestEngineUptime:
         assert captured["timeout"] == host_state.SYSTEMCTL_TIMEOUT_SECONDS
         assert host_state.SYSTEMCTL_TIMEOUT_SECONDS * 2 <= 1.0
 
-    def test_unit_that_never_started_is_unknown(self) -> None:
+    def test_active_unit_with_no_timestamp_is_unknown(self) -> None:
         def _fake_run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
-            return _completed("ActiveEnterTimestamp=n/a\nActiveState=inactive\n")
+            return _completed("ActiveEnterTimestamp=n/a\nActiveState=active\n")
 
         with (
             patch("robothor.engine.host_state._systemd_present", return_value=True),
@@ -391,7 +395,10 @@ class TestModelReach:
     def test_db_failure_yields_one_unknown_line(self, main_config: AgentConfig) -> None:
         started = datetime(2026, 9, 13, 8, 0, 0, tzinfo=UTC)
         with (
-            patch(START_PATCH, return_value=(started, "2026-09-13 08:00 UTC")),
+            patch(
+                START_PATCH,
+                return_value=host_state.EngineState(started, "2026-09-13 08:00 UTC", "active"),
+            ),
             patch(DAL_PATCH, side_effect=RuntimeError("connection refused")),
             patch.object(
                 host_state, "_now", return_value=datetime(2026, 9, 13, 9, 0, 0, tzinfo=UTC)
@@ -672,3 +679,230 @@ class TestFormatAge:
     )
     def test_ages_read_as_words(self, seconds: int, expected: str) -> None:
         assert host_state._format_age(float(seconds)) == expected
+
+
+class TestInteractiveKnowsTheConfiguredPrimary:
+    """The C1 fix introduced a C2-shaped bug on the C1 channel.
+
+    ``_interactive_supervisor_sections`` called ``host_state_section(agent_id)``
+    with no config, so ``getattr(None, "model_primary", "")`` was ``""`` and
+    every interactive turn took the "no primary is configured" branch. Main has
+    one — manifests carry ``model.primary``, and root CLAUDE.md rule 6 makes the
+    manifest the source of truth — so on the operator's own chat channel, under
+    a header saying "prefer this over anything recalled from memory", the agent
+    read a false claim about its own configuration. The cache held both
+    sentences at once, under keys ``("main", "")`` and ``("main", <primary>)``.
+    """
+
+    def test_interactive_wording_matches_the_cron_builder(self, tmp_path: Any) -> None:
+        from robothor.engine.warmup import build_interactive_preamble, build_warmth_preamble
+
+        config = AgentConfig(id="main", name="Main", model_primary="openrouter/vendor/model-a")
+        rows = _reach(("model-a", 310), ("model-b", 4))
+        with (
+            patch(START_PATCH, return_value=None),
+            patch(DAL_PATCH, return_value=rows),
+            patch(TRACKING_PATCH, return_value=None),
+            patch(BLOCK_PATCH, return_value=None),
+        ):
+            cron, _ = build_warmth_preamble(config, tmp_path)
+            host_state.reset_host_state_cache()
+            interactive = build_interactive_preamble(
+                "main", include_blocks=False, agent_config=config
+            )
+
+        expected = "went to the configured primary model-a"
+        assert expected in cron
+        assert expected in interactive
+        assert "no primary model is configured" not in interactive
+
+    def test_an_unsupplied_config_is_not_a_claim_that_none_is_configured(self) -> None:
+        """Belt and braces for any caller that has only an id: "I was not told"
+        and "there is none" are different facts, and only one of them is a
+        statement about the operator's configuration."""
+        with (
+            patch(START_PATCH, return_value=None),
+            patch(DAL_PATCH, return_value=_reach(("model-a", 9), ("model-b", 1))),
+        ):
+            section = host_state.host_state_section("main")
+        assert section is not None
+        assert "no primary model is configured" not in section
+        assert "model-a" in section
+        assert "90.0%" in section
+
+    def test_a_genuinely_unconfigured_agent_still_says_so(self) -> None:
+        config = AgentConfig(id="main", name="Main", model_primary="")
+        with (
+            patch(START_PATCH, return_value=None),
+            patch(DAL_PATCH, return_value=_reach(("model-a", 9), ("model-b", 1))),
+        ):
+            section = host_state.host_state_section("main", config)
+        assert section is not None
+        assert "no primary model is configured" in section
+
+    def test_heartbeat_agent_gets_it_interactively_when_the_config_is_threaded(self) -> None:
+        """``runner`` sets ``warmup_kind="interactive"`` for ANY agent on a
+        CHANNEL_EVENT, so this is reachable, and it is what AGENT_BUILDER now
+        claims."""
+        from robothor.engine.warmup import build_interactive_preamble
+
+        config = AgentConfig(
+            id="ops-watch",
+            name="Ops Watch",
+            model_primary="model-a",
+            heartbeat=HeartbeatConfig(cron_expr="*/30 * * * *"),
+        )
+        with (
+            patch(START_PATCH, return_value=None),
+            patch(DAL_PATCH, return_value=_reach(("model-a", 3))),
+            patch(BLOCK_PATCH, return_value=None),
+        ):
+            preamble = build_interactive_preamble(
+                "ops-watch", include_blocks=False, agent_config=config
+            )
+        assert "LIVE ENGINE STATE" in preamble
+
+    def test_a_worker_gets_nothing_even_with_a_config(self) -> None:
+        from robothor.engine.warmup import build_interactive_preamble
+
+        config = AgentConfig(id="email-responder", name="Email Responder", model_primary="model-a")
+        with (
+            patch(START_PATCH, return_value=None) as start,
+            patch(DAL_PATCH, return_value=_reach(("model-a", 3))) as dal,
+            patch(BLOCK_PATCH, return_value=None),
+        ):
+            preamble = build_interactive_preamble(
+                "email-responder", include_blocks=False, agent_config=config
+            )
+        assert "LIVE ENGINE STATE" not in preamble
+        assert start.call_count == 0
+        assert dal.call_count == 0
+
+    def test_the_runner_threads_the_config(self) -> None:
+        """Pinning the CALL SITE -- the defect was a missing argument, and only
+        the call site can prove it is no longer missing.
+
+        Scoped to the ``build_interactive_preamble(...)`` call rather than to
+        ``execute`` as a whole: ``agent_config=agent_config`` appears ten other
+        times in that method, so a whole-method search would have passed
+        against the broken code.
+        """
+        import inspect
+        import re
+
+        from robothor.engine import runner
+
+        source = inspect.getsource(runner.AgentRunner.execute)
+        call = re.search(r"build_interactive_preamble\((.*?)\n\s*\)", source, re.DOTALL)
+        assert call is not None, "runner no longer calls build_interactive_preamble"
+        assert "agent_config=agent_config" in call.group(1)
+
+
+class TestActiveStateIsJudged:
+    """A failed or inactive unit still carries a historical
+    ``ActiveEnterTimestamp``. Read as a mere "the unit exists" sentinel, it
+    reported six hours of uptime for a dead engine."""
+
+    @pytest.mark.parametrize("state", ["failed", "inactive", "deactivating", "activating"])
+    def test_a_unit_that_is_not_active_never_reports_an_age(self, state: str) -> None:
+        stdout = f"ActiveEnterTimestamp=Sun 2026-09-13 08:29:43 UTC\nActiveState={state}\n"
+        with (
+            patch("robothor.engine.host_state._systemd_present", return_value=True),
+            patch("subprocess.run", lambda *_a, **_k: _completed(stdout)),
+        ):
+            probed = REAL_SYSTEMCTL_ACTIVE_ENTER()
+        assert probed is not None
+        assert probed.started is None
+        assert probed.state == state
+
+    @pytest.mark.parametrize("state", ["failed", "inactive"])
+    def test_the_section_says_the_engine_is_not_running(
+        self, main_config: AgentConfig, state: str
+    ) -> None:
+        stdout = f"ActiveEnterTimestamp=Sun 2026-09-13 08:29:43 UTC\nActiveState={state}\n"
+        with (
+            patch("robothor.engine.host_state._systemd_present", return_value=True),
+            patch("subprocess.run", lambda *_a, **_k: _completed(stdout)),
+            patch(SYSTEMCTL_PATCH, REAL_SYSTEMCTL_ACTIVE_ENTER),
+            patch(DAL_PATCH, return_value=_reach(("model-a", 3))),
+        ):
+            section = host_state.host_state_context(main_config)
+        assert section is not None
+        assert "not running" in section.lower()
+        assert state in section
+        assert "Engine up" not in section
+
+    def test_an_active_unit_still_reports_its_age(self, main_config: AgentConfig) -> None:
+        with (
+            patch("robothor.engine.host_state._systemd_present", return_value=True),
+            patch("subprocess.run", lambda *_a, **_k: _completed(_ACTIVE)),
+            patch(SYSTEMCTL_PATCH, REAL_SYSTEMCTL_ACTIVE_ENTER),
+            patch(DAL_PATCH, return_value=_reach(("model-a", 3))),
+            patch.object(
+                host_state, "_now", return_value=datetime(2026, 9, 13, 14, 29, 43, tzinfo=UTC)
+            ),
+        ):
+            section = host_state.host_state_context(main_config)
+        assert section is not None
+        assert "Engine up 6h 0m" in section
+
+
+class TestOneOffSwitch:
+    """Dropping the hook registration used to be the documented opt-out. It now
+    disables the scheduled path only -- ``build_interactive_preamble`` calls
+    ``host_state_section`` directly and would keep rendering. One switch gates
+    both, because both pass through ``wants_host_state``."""
+
+    def test_disabling_gates_the_hook(self, main_config: AgentConfig) -> None:
+        host_state.set_host_state_enabled(False)
+        try:
+            with (
+                patch(START_PATCH, return_value=None) as start,
+                patch(DAL_PATCH, return_value=_reach(("model-a", 3))) as dal,
+            ):
+                assert host_state.host_state_context(main_config) is None
+            assert start.call_count == 0
+            assert dal.call_count == 0
+        finally:
+            host_state.set_host_state_enabled(True)
+
+    def test_disabling_gates_the_interactive_builder(self) -> None:
+        from robothor.engine.warmup import build_interactive_preamble
+
+        config = AgentConfig(id="main", name="Main", model_primary="model-a")
+        host_state.set_host_state_enabled(False)
+        try:
+            with (
+                patch(START_PATCH, return_value=None),
+                patch(DAL_PATCH, return_value=_reach(("model-a", 3))),
+                patch(BLOCK_PATCH, return_value=None),
+            ):
+                preamble = build_interactive_preamble(
+                    "main", include_blocks=False, agent_config=config
+                )
+            assert "LIVE ENGINE STATE" not in preamble
+        finally:
+            host_state.set_host_state_enabled(True)
+
+    def test_disabling_also_stops_it_being_a_reason_to_warm(self) -> None:
+        from robothor.engine.warmup import wants_cron_warmup
+
+        config = AgentConfig(id="main", name="Main")
+        assert wants_cron_warmup(config) is True
+        host_state.set_host_state_enabled(False)
+        try:
+            assert wants_cron_warmup(config) is False
+        finally:
+            host_state.set_host_state_enabled(True)
+
+    def test_it_is_on_by_default(self, main_config: AgentConfig) -> None:
+        assert host_state.wants_host_state("main") is True
+
+
+class TestTimeoutBudget:
+    def test_two_calls_stay_inside_one_second(self) -> None:
+        """The comment used to describe a single one-second call. There are two
+        at half a second, and the total is what was ever being promised."""
+        assert host_state.SYSTEMCTL_TIMEOUT_SECONDS == 0.5
+        assert host_state.MAX_SYSTEMCTL_CALLS == 2
+        assert host_state.SYSTEMCTL_TIMEOUT_SECONDS * host_state.MAX_SYSTEMCTL_CALLS <= 1.0

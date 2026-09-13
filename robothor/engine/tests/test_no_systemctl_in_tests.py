@@ -54,3 +54,50 @@ def test_other_subprocesses_still_run() -> None:
 def test_the_module_cache_is_cleared_between_tests() -> None:
     """A section rendered in one test must not be served to the next."""
     assert host_state._CACHE == {}
+
+
+def test_popen_cannot_spawn_systemctl() -> None:
+    """``subprocess.run`` was guarded; ``Popen`` was not, and a probe using it
+    reached the host. ``run`` is built on ``Popen``, so guarding ``Popen`` is
+    what makes the guarantee hold for both."""
+    with pytest.raises(AssertionError, match="systemctl"):
+        subprocess.Popen(["systemctl", "show", "-p", "ActiveState"])  # noqa: S603,S607
+
+
+def test_check_output_cannot_spawn_systemctl() -> None:
+    with pytest.raises(AssertionError, match="systemctl"):
+        subprocess.check_output(["systemctl", "is-active", "anything"])  # noqa: S603,S607
+
+
+def test_a_module_that_imported_run_by_name_cannot_spawn_systemctl() -> None:
+    """``from subprocess import run`` binds the function at import, so patching
+    the module attribute alone left this form reaching the host."""
+    from subprocess import run as imported_run
+
+    with pytest.raises(AssertionError, match="systemctl"):
+        imported_run(["systemctl", "status"], check=False)  # noqa: S603,S607
+
+
+async def test_asyncio_cannot_spawn_systemctl() -> None:
+    import asyncio
+
+    with pytest.raises(AssertionError, match="systemctl"):
+        await asyncio.create_subprocess_exec("systemctl", "is-active", "anything")
+
+
+def test_other_popen_subprocesses_still_run() -> None:
+    proc = subprocess.Popen(["echo", "ok"], stdout=subprocess.PIPE, text=True)  # noqa: S603,S607
+    out, _ = proc.communicate()
+    assert out.strip() == "ok"
+
+
+def test_what_the_guard_actually_guarantees_is_that_no_spawn_happens() -> None:
+    """``host_profile``'s probe wraps its call in ``except Exception``, so the
+    guard's AssertionError is swallowed there and the probe returns None. The
+    spawn is still prevented -- which is the guarantee -- but "always loud" is
+    not true at a call site that swallows, so the property pinned here is the
+    one that holds everywhere.
+    """
+    from robothor.engine import host_profile
+
+    assert host_profile._systemctl_ollama_environment() is None
