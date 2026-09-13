@@ -985,6 +985,39 @@ class ChannelSettings(SettingsGroup):
         "target fails loudly instead of posting somewhere nobody chose.",
         since="1.70.0",
     )
+    channel_access_default: str = declare(
+        "pairing",
+        "ROBOTHOR_CHANNEL_ACCESS_DEFAULT",
+        "Inbound access policy for any channel with no setting of its own -- "
+        "every plugin channel. One of `pairing` (an unknown sender gets a "
+        "one-shot code and reaches nothing until an operator approves it), "
+        "`allowlist` (the channel's own membership test decides) or `open` "
+        "(anyone the surface admits may drive the agent). A value that is none "
+        "of those resolves to `pairing`, so a typo cannot open a surface.",
+        since="1.73.0",
+    )
+    telegram_access: str = declare(
+        "open",
+        "ROBOTHOR_TELEGRAM_ACCESS",
+        "Inbound access policy for Telegram. Defaults to `open` for "
+        "COMPATIBILITY, not because it is the recommended setting: Telegram's "
+        "own `_resolve_user` ladder and closed-onboarding refusal already "
+        "decide who may run an agent, and changing that as a side effect of "
+        "shipping the shared gate would be a silent behaviour change on the "
+        "one surface every instance already uses. Set it to `pairing` to have "
+        "an unknown private-chat sender answered with a one-shot code instead.",
+        since="1.73.0",
+    )
+    slack_access: str = declare(
+        "pairing",
+        "ROBOTHOR_SLACK_ACCESS",
+        "Inbound access policy for Slack. Defaults to `pairing`. Set it to "
+        "`allowlist` to keep deciding by ROBOTHOR_SLACK_ALLOWED_USERS / "
+        "_CHANNELS -- which is what an instance that has either of those set "
+        "already gets until it names a mode here -- or to `open` to let anyone "
+        "the workspace admits drive the main agent.",
+        since="1.73.0",
+    )
     voice_notes_enabled: bool = declare(
         False,
         "ROBOTHOR_VOICE_NOTES_ENABLED",

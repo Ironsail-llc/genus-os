@@ -764,11 +764,21 @@ identity shape instead of one per channel:
   `face_identities` (vision, migration 089), and `contact_identifiers`
   (all channels, plus the bridge into the memory graph). One human, one
   person, many bindings.
+- **`user_channel_identities` (migration 118) is the generic binding** —
+  `(tenant, channel, native_id) -> user_id` plus the granted `role`, who
+  granted it and when it was revoked. Telegram still resolves through
+  `tenant_users` (an approval writes both rows); Slack and every plugin
+  channel resolve through this one. It is deliberately **not**
+  `contact_identifiers`: that is a rolodex populated by ingestion, and
+  conflating "we know this person" with "this person may drive the agent"
+  would turn every parsed mailing list into an authorization.
 - **`resolve_identity(channel, identifier, tenant_id) -> IdentityContext`**
   resolves any channel-native id (webchat account UUID, Telegram user id,
-  a recognized face label) down to a common shape — `role`, `person_id`,
-  `verified`, etc. — used uniformly by prompt assembly, permissions, and
-  audit.
+  a recognized face label, a paired Slack user) down to a common shape —
+  `role`, `person_id`, `verified`, etc. — used uniformly by prompt assembly,
+  permissions, and audit. A channel with no dedicated resolver is no longer a
+  dead end: `_resolve_generic` answers out of `user_channel_identities`, so a
+  channel earns resolution by having rows rather than by shipping code.
 - **The `--- CURRENT USER ---` prompt block** (`IdentityContext.prompt_block`)
   is injected on the first turn of every interactive run (and re-injected
   on later turns in a lightweight form) so the agent always knows who it's
@@ -780,6 +790,11 @@ identity shape instead of one per channel:
   service and system/cron callers see everything in-tenant unchanged. See
   `robothor/identity/scope.py` and `docs/runbooks/IDENTITY_ROLLOUT.md` for
   the flags, rollout order, and CLI.
+- **Inbound access policy** — `pairing | allowlist | open`, per channel, is
+  what decides whether an *unresolved* sender gets a run at all. One gate
+  (`robothor/engine/channels/access.py`) for every channel, and one invariant:
+  a channel message may never approve a pairing. See
+  [Channel access](channels/access.md).
 
 ---
 
@@ -1050,6 +1065,31 @@ live-session registry. Payload: `{event, kind: "escalation"|"question", id,
 run_id, agent_id, tool?, question, options, expires_at}`. It is a notification —
 the row (or the pending request) is the truth — and it is how a web client
 learns there is something to answer.
+
+#### Letting a person in: inbound access
+
+`send` and `ask` are about reaching a person. The third question a channel has
+to answer is whether a person may reach *it*, and before migration 118 each
+channel answered differently: Telegram with a ladder of fabricated identities
+inside `_resolve_user`, Slack with an `_authorized` that returned **true when
+no allowlist was configured at all**.
+
+`robothor/engine/channels/access.py` is now the one gate, with three modes —
+`pairing`, `allowlist`, `open` — set per channel through
+`ROBOTHOR_<CHANNEL>_ACCESS` (or `ROBOTHOR_CHANNEL_ACCESS_DEFAULT` for a plugin
+channel). A known identity short-circuits every mode. An unknown sender on a
+`pairing` channel is answered with a six-character one-shot code and nothing
+else; the code is stored as a sha256, lives ten minutes, is spent by a single
+`UPDATE … WHERE used_at IS NULL … RETURNING`, and is never minted on a group
+surface.
+
+**A channel message may never approve a pairing.** `approve_pairing` takes a
+mandatory `actor` and refuses anything not prefixed `operator:` (the bridge's
+operator gate) or `cli:` (a shell on the box), so the stranger who sends
+`approve ABC234` back down the wire is refused structurally rather than by a
+check somebody has to remember. Telegram defaults to `open` purely for
+compatibility; Slack and everything new default to `pairing`. Full rules,
+tables and CLI: [Channel access](channels/access.md).
 
 **Answering from the Helm.** `GET /api/approvals` lists both durable kinds;
 `POST /api/approvals/{kind}/{id}` answers one, with `kind` in `workflow`,

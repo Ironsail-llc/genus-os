@@ -251,7 +251,7 @@ Usage: `genus config schema`
 
 List delivery channels, verify one, or add its credentials.
 
-Usage: `genus channel {list,verify,add}`
+Usage: `genus channel {list,verify,add,access}`
 
 ### `genus channel list`
 
@@ -294,6 +294,12 @@ Usage: `genus channel add <name> [--bot-token BOT_TOKEN] [--app-token APP_TOKEN]
 | `--app-token` | `APP_TOKEN` | — | REFUSED, as --bot-token. Export ROBOTHOR_SLACK_APP_TOKEN instead |
 | `--verify-target` | `VERIFY_TARGET` | — | Conversation `genus channel verify` and the doctor post their test message to. Never a delivery fallback |
 | `--to` | `vault` \| `env` | — | Where to write: the vault, or the instance env file. Default: the vault when this instance has a master key, the env file otherwise |
+
+### `genus channel access`
+
+Who may drive this instance over a channel: pending pairings, approvals, revocations.
+
+Usage: `genus channel access {list,approve,deny,revoke}`
 
 ## `genus doctor`
 

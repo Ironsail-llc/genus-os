@@ -1021,8 +1021,27 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         refusal — no operator name, safe to ship as platform code — and
         notifies the operator (rate-limited to once per sender per hour)
         with a registration hint.
+
+        ``channels.access`` gets first refusal, and takes it only when this
+        instance has actually set ``ROBOTHOR_TELEGRAM_ACCESS=pairing``. It
+        answers ``None`` in every other case — the default ``open`` mode, a
+        suppressed repeat, a mint that failed — and everything below runs
+        byte-for-byte as it did before the gate existed. ``None`` rather than
+        ``""`` because the caller sends whatever comes back and
+        ``message.answer("")`` is an API error.
         """
+        from robothor.engine.channels import access
         from robothor.engine.feature_flags import open_onboarding_enabled
+
+        sender = message.from_user
+        paired = await access.pairing_reply(
+            "telegram",
+            telegram_user_id,
+            tenant_id=self.config.tenant_id,
+            display_name=(getattr(sender, "first_name", None) or "") if sender else "",
+        )
+        if paired is not None:
+            return paired
 
         if open_onboarding_enabled():
             from robothor.engine.onboarding import start_onboarding

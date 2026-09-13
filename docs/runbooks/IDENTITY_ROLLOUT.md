@@ -171,6 +171,53 @@ robothor user link-face --label LABEL --person-id PERSON_ID
   NOT EXISTS`); no live behavior change until `robothor user link-face` is
   actually run.
 
+## Channel access policy and pairing (migration 118)
+
+The three flags above decide what a *resolved* identity may do. A fourth
+question sits in front of them — may an **unresolved** sender get a run at all —
+and it is not a flag ladder but a per-channel mode:
+`ROBOTHOR_TELEGRAM_ACCESS`, `ROBOTHOR_SLACK_ACCESS`, and
+`ROBOTHOR_CHANNEL_ACCESS_DEFAULT` for anything else, each one of
+`pairing | allowlist | open`.
+
+**Nothing about Telegram changes on upgrade.** `telegram_access` defaults to
+`open`, which is the compatibility default and is stated as such in the
+setting's own description: the `_resolve_user` ladder and the closed-onboarding
+refusal stay in charge, and `access.evaluate` is reached only from
+`_handle_unregistered_sender`, which falls through byte-for-byte in every mode
+but `pairing`. `ROBOTHOR_TELEGRAM_ROLE_GATES` semantics are untouched, and
+`_sender_is_owner`/`_check_owner_gate` are not on this path at all.
+
+**Slack does change, and the one compatibility clause is deliberate.**
+`slack_access` defaults to `pairing`, but an instance that has
+`ROBOTHOR_SLACK_ALLOWED_USERS`/`_CHANNELS` set and has *not* named a mode keeps
+running under `allowlist` and logs a warning saying so at start. Silently
+overriding a configured allowlist with `pairing` would lock out everyone on that
+list the moment this released — an availability regression delivered as a
+security improvement. Naming the mode explicitly wins in both directions.
+
+Rollout order for a surface you want closed:
+
+1. Set the mode to `pairing` and restart the engine.
+2. Pair yourself first: message the bot from the account you use, then
+   `genus channel access approve <channel> <code> --user <your user id>`.
+   Confirm with `genus channel access list <channel>` before telling anyone
+   else to try it.
+3. A known identity short-circuits every mode, so people already bound are
+   never asked to re-pair. On Telegram "already bound" means a `tenant_users`
+   row, which is what `lookup_user` reads — a Telegram approval writes both
+   that row and the `user_channel_identities` mirror for exactly this reason.
+
+Migration 118 is additive (two new tables, `CREATE TABLE IF NOT EXISTS`, RLS in
+the permissive-when-unbound shape of 081/106). Nothing changes behaviour until a
+mode is set to `pairing`. Full rules: `docs/channels/access.md`.
+
+**The invariant to keep in mind when operating this:** a channel message can
+never approve a pairing. If someone messages the bot asking you to approve
+their pairing, that request tells you nothing — approve only after confirming
+out of band who they are, because the message and the code came from the same
+place.
+
 ## Architecture
 
 See `docs/SYSTEM_ARCHITECTURE.md` → "Cross-System Identity" for the short
