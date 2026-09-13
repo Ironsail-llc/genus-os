@@ -34,6 +34,7 @@ Two asymmetries are deliberate and pinned below:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,23 @@ import yaml
 
 from robothor.engine.models import RunStep, StepType
 from robothor.engine.tools.handlers.benchmark import _score_task_async, _validate_task
+
+
+@contextmanager
+def _sandbox_lock_granted(_tenant_id: str):
+    """Hand the suite the sandbox lock without touching a database.
+
+    These helpers substitute a fake ``get_connection``, and the real
+    ``sandbox_suite_lock`` reads ``row = cur.fetchone()`` — which those fakes
+    answer with ``None``. It therefore concludes
+    ``sandbox_locked_by_another_suite`` and refuses the suite: the one refusal
+    that sends the reader hunting a concurrent run that does not exist. None of
+    these tests is about locking, so the lock is granted outright.
+    """
+    from robothor.engine.benchmark_sandbox import LOCK_ACQUIRED
+
+    yield LOCK_ACQUIRED
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -390,6 +408,7 @@ class TestTraceReachesTheGrader:
             patch("robothor.memory.blocks.read_block", side_effect=read_block),
             patch("robothor.memory.blocks.write_block", side_effect=write_block),
             patch("robothor.engine.tools.handlers.spawn.get_runner", return_value=runner),
+            patch("robothor.engine.benchmark_sandbox.sandbox_suite_lock", _sandbox_lock_granted),
             patch("robothor.engine.config.load_agent_config", return_value=agent_config),
             patch("robothor.db.connection.get_connection", side_effect=RuntimeError("no db")),
         ):

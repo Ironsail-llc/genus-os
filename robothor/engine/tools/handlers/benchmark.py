@@ -1377,6 +1377,30 @@ SANDBOX_POSTURE = "sandbox"
 PRODUCTION_READ_ONLY_POSTURE = "production-read-only"
 EXECUTION_TENANT_POSTURES = (SANDBOX_POSTURE, PRODUCTION_READ_ONLY_POSTURE)
 
+#: Appended to the ``trigger_detail`` of a task that DECLARED
+#: ``production-read-only``, so the run row itself records the posture.
+#:
+#: Without it the nightly audit cannot do its job. A declared read-only child
+#: sits in the owning tenant on purpose, its ``trigger_detail`` starts
+#: ``benchmark:`` and its parent is ``benchmark-runner`` — identical, on every
+#: clause, to the leak the audit is looking for. The bound query would report
+#: the seven shipped opt-outs as leaks every night, and an operator told to
+#: expect a leak report stops reading it.
+#:
+#: A suffix rather than a column: nothing in the tree parses ``trigger_detail``
+#: positionally (only ``|sender:`` is split out, see ``run_identity.py``), it
+#: still matches ``benchmark_run_filter()``'s ``LIKE 'benchmark:%'``, and it
+#: needs no migration to become queryable on rows that already exist.
+PRODUCTION_READ_ONLY_TRIGGER_SUFFIX = f":{PRODUCTION_READ_ONLY_POSTURE}"
+
+
+def _task_trigger_detail(suite_id: str, task_id: str, posture: str) -> str:
+    """The ``trigger_detail`` a task run is recorded under, posture included."""
+    detail = f"benchmark:{suite_id}:{task_id}"
+    if posture == PRODUCTION_READ_ONLY_POSTURE:
+        return f"{detail}{PRODUCTION_READ_ONLY_TRIGGER_SUFFIX}"
+    return detail
+
 
 def _execution_posture(task: dict[str, Any], suite: dict[str, Any]) -> str:
     """The declared reading environment for one task.
@@ -1910,8 +1934,9 @@ def _task_execution_tenant(
     suite: dict[str, Any],
     suite_tenant: str | None,
     suite_id: str,
-) -> str | None:
-    """The tenant THIS task runs as, and one log line saying so.
+) -> tuple[str | None, str]:
+    """The tenant THIS task runs as and the posture it declared, plus one log
+    line saying which.
 
     Seeding, state checks and teardown all follow this rather than the flag: a
     ``production-read-only`` task is sandbox-on and must seed nothing, sweep
@@ -1930,7 +1955,7 @@ def _task_execution_tenant(
         task["id"],
         exec_tenant or "<the owning tenant, read-only>",
     )
-    return exec_tenant
+    return exec_tenant, posture
 
 
 def _skipped_result(task: dict[str, Any], reason: str) -> dict[str, Any]:
@@ -2005,7 +2030,7 @@ async def _execute_suite_tasks(
             results.append(_skipped_result(task, "suite cost budget exhausted"))
             continue
 
-        exec_tenant = _task_execution_tenant(task, suite, suite_tenant, suite_id)
+        exec_tenant, posture = _task_execution_tenant(task, suite, suite_tenant, suite_id)
         sandboxed = exec_tenant is not None
 
         # Spend kill-switch for this task. Decoupled from grading (Phase 0c):
@@ -2049,7 +2074,7 @@ async def _execute_suite_tasks(
                         runner=runner,
                         agent_id=agent_id,
                         prompt=prompt,
-                        trigger_detail=f"benchmark:{suite_id}:{task['id']}",
+                        trigger_detail=_task_trigger_detail(suite_id, task["id"], posture),
                         child_config=child_config,
                         spawn_context=spawn_context,
                         tenant_id=exec_tenant,

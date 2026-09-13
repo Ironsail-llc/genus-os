@@ -31,6 +31,7 @@ These tests pin the write-time guard. None of them opens a real connection.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -39,6 +40,23 @@ import pytest
 import robothor.db.connection as conn_mod
 from robothor.db.connection import DatabaseGuardError, assert_test_database_write
 from robothor.engine.tools.dispatch import ToolContext
+
+
+@contextmanager
+def _sandbox_lock_granted(_tenant_id: str):
+    """Hand the suite the sandbox lock without touching a database.
+
+    These helpers substitute a fake ``get_connection``, and the real
+    ``sandbox_suite_lock`` reads ``row = cur.fetchone()`` — which those fakes
+    answer with ``None``. It therefore concludes
+    ``sandbox_locked_by_another_suite`` and refuses the suite: the one refusal
+    that sends the reader hunting a concurrent run that does not exist. None of
+    these tests is about locking, so the lock is granted outright.
+    """
+    from robothor.engine.benchmark_sandbox import LOCK_ACQUIRED
+
+    yield LOCK_ACQUIRED
+
 
 CTX = ToolContext(agent_id="auto-agent", workspace="/tmp/test-workspace")
 
@@ -166,6 +184,7 @@ async def _run_benchmark(connection_factory: Any) -> dict[str, Any]:
         patch("robothor.memory.blocks.write_block", side_effect=write_fn),
         patch("robothor.db.connection.get_connection", connection_factory),
         patch("robothor.engine.tools.handlers.spawn.get_runner", return_value=_mock_runner()),
+        patch("robothor.engine.benchmark_sandbox.sandbox_suite_lock", _sandbox_lock_granted),
         patch("robothor.engine.config.load_agent_config", return_value=agent_config),
     ):
         return await _benchmark_run(

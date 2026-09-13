@@ -72,11 +72,15 @@ KNOWN_LARGE: dict[str, int] = {
     # 347 -> 220: the whole per-task loop moved to _execute_suite_tasks, so the
     # suite-level concerns that now wrap it (resolve the execution tenant once,
     # hold the sandbox advisory lock for the suite) are visible in one place.
-    "tools/handlers/benchmark.py::_benchmark_run": 220,
+    # 220 -> 210: pinned at the measured size, not the size it happened to be
+    # under. Ten lines of unearned headroom is where the next function regrows.
+    "tools/handlers/benchmark.py::_benchmark_run": 210,
     # 343 -> 325: the benchmark break-out moved to _benchmark_spend, which is
     # what paid for un-scoping it from the production tenant (the graded
     # children now run as benchmark-sandbox) rather than raising this number.
-    "analytics.py::get_agent_stats": 325,
+    # 325 -> 326: +1 for reporting an unreadable break-out as None rather than
+    # as zero spend, which is a different claim about the fleet.
+    "analytics.py::get_agent_stats": 326,
     # 303 -> 301: the reconcile reporting moved to _log_reconcile, which is
     # what paid for reporting added/replaced as well as pruned.
     "daemon.py::_watchdog": 301,

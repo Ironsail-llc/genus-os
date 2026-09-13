@@ -535,6 +535,78 @@ LOCK_HELD_ELSEWHERE = "sandbox_locked_by_another_suite"
 LOCK_UNAVAILABLE = "sandbox_lock_unavailable"
 
 
+def _try_take_sandbox_lock(tenant_id: str, key: int) -> tuple[str, tuple[Any, Any] | None]:
+    """Acquire the advisory lock, or say why not. Never raises.
+
+    Split out of :func:`sandbox_suite_lock` so the ``yield`` that hands control
+    to the suite sits outside every ``except``. It used to sit inside one:
+    ``@contextmanager`` throws an escaping exception back in at the yield, the
+    handler caught it and yielded a SECOND time, and ``contextlib`` turned that
+    into ``RuntimeError: generator didn't stop after throw()``. The suite's own
+    exception and its traceback were destroyed at the lock boundary, and the
+    operator got a false "lock unavailable" ERROR pointing at the connection
+    pool for what was a typo in a suite file.
+
+    Returns:
+        ``(status, holder)`` — ``holder`` is the ``(context manager,
+        connection)`` pair to release when the suite ends, and is None unless
+        the status is :data:`LOCK_ACQUIRED`.
+    """
+    from robothor.db.connection import get_connection
+
+    holder: tuple[Any, Any] | None = None
+    try:
+        manager = get_connection(autocommit=True)
+        conn = manager.__enter__()
+        holder = (manager, conn)
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (key,))
+        row = cur.fetchone()
+        if row and bool(row[0]):
+            return LOCK_ACQUIRED, holder
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        logger.error(
+            "benchmark sandbox lock unavailable for %s (%s): REFUSING the suite. "
+            "Running unserialised risks a concurrent suite sweeping its fixtures "
+            "mid-task, which grades as a plausible low score with no error.",
+            tenant_id,
+            exc,
+        )
+        _close_lock_holder(holder)
+        return LOCK_UNAVAILABLE, None
+
+    logger.warning("benchmark sandbox %s is held by another suite; refusing this one", tenant_id)
+    _close_lock_holder(holder)
+    return LOCK_HELD_ELSEWHERE, None
+
+
+def _close_lock_holder(holder: tuple[Any, Any] | None) -> None:
+    """Give the pooled connection back. Never raises."""
+    if holder is None:
+        return
+    manager, _conn = holder
+    with contextlib.suppress(Exception):
+        manager.__exit__(None, None, None)
+
+
+def _release_sandbox_lock(holder: tuple[Any, Any] | None, key: int, tenant_id: str) -> None:
+    """Unlock, then hand the connection back. Never raises.
+
+    A suite that has already failed must not have a second failure reported on
+    top of it, and the advisory lock is released by the session ending anyway —
+    so the unlock is best-effort and the connection return is unconditional.
+    """
+    if holder is None:
+        return
+    _manager, conn = holder
+    try:
+        with contextlib.suppress(Exception):
+            conn.cursor().execute("SELECT pg_advisory_unlock(%s)", (key,))
+    finally:
+        _close_lock_holder(holder)
+    logger.debug("benchmark sandbox lock released for %s", tenant_id)
+
+
 @contextmanager
 def sandbox_suite_lock(tenant_id: str) -> Iterator[str]:
     """Hold the shared sandbox tenant for one suite. Yields the outcome.
@@ -575,36 +647,19 @@ def sandbox_suite_lock(tenant_id: str) -> Iterator[str]:
         :data:`LOCK_UNAVAILABLE` when the lock could not be attempted at all.
         Only the first is permission to run.
     """
-    from robothor.db.connection import get_connection
-
     key = _advisory_lock_key(tenant_id)
+    status, holder = _try_take_sandbox_lock(tenant_id, key)
+    if status is not LOCK_ACQUIRED:
+        # Nothing was acquired, so there is nothing to release and nothing the
+        # caller can do inside the block. Yielding here — OUTSIDE any `except`
+        # — is what keeps an exception raised by the suite body from being
+        # thrown back into a handler that would yield a second time.
+        yield status
+        return
     try:
-        with get_connection(autocommit=True) as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT pg_try_advisory_lock(%s)", (key,))
-            row = cur.fetchone()
-            acquired = bool(row[0]) if row else False
-            if not acquired:
-                logger.warning(
-                    "benchmark sandbox %s is held by another suite; refusing this one",
-                    tenant_id,
-                )
-                yield LOCK_HELD_ELSEWHERE
-                return
-            try:
-                yield LOCK_ACQUIRED
-            finally:
-                with contextlib.suppress(Exception):
-                    conn.cursor().execute("SELECT pg_advisory_unlock(%s)", (key,))
-    except Exception as exc:  # noqa: BLE001 — see the docstring
-        logger.error(
-            "benchmark sandbox lock unavailable for %s (%s): REFUSING the suite. "
-            "Running unserialised risks a concurrent suite sweeping its fixtures "
-            "mid-task, which grades as a plausible low score with no error.",
-            tenant_id,
-            exc,
-        )
-        yield LOCK_UNAVAILABLE
+        yield LOCK_ACQUIRED
+    finally:
+        _release_sandbox_lock(holder, key, tenant_id)
 
 
 def _check_identifier(name: str) -> str:

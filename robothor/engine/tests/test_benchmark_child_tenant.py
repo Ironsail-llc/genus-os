@@ -89,7 +89,24 @@ def _make_mock_run() -> MagicMock:
     return run
 
 
-def _suite(*, fixtures: bool = False, execution_tenant: str | None = None, tasks: int = 1) -> str:
+def _suite(
+    *,
+    fixtures: bool = False,
+    execution_tenant: str | None = None,
+    tasks: int = 1,
+    task_postures: list[str | None] | None = None,
+) -> str:
+    """A suite blob for the harness.
+
+    ``task_postures`` declares the posture PER TASK, which is the shape every
+    shipped opt-out actually has: ``main``'s ``memory-recall`` sits beside the
+    six ``_honesty`` cases, and ``agent-architect`` and ``curiosity-engine``
+    each keep fixture-bearing tasks next to theirs. A uniform suite cannot
+    exercise the per-task branch at all — with every task opted out,
+    ``_suite_execution_tenant`` returns None and the branch is right by
+    accident.
+    """
+
     def _task(index: int) -> dict[str, Any]:
         return {
             "id": f"t{index}",
@@ -100,6 +117,11 @@ def _suite(*, fixtures: bool = False, execution_tenant: str | None = None, tasks
         }
 
     task_list = [_task(i + 1) for i in range(tasks)]
+    if task_postures is not None:
+        assert len(task_postures) == len(task_list)
+        for task, posture in zip(task_list, task_postures, strict=True):
+            if posture is not None:
+                task["execution_tenant"] = posture
     suite: dict[str, Any] = {
         "id": "s1",
         "agent_id": "email-analyst",
@@ -181,6 +203,7 @@ async def _run_suite(
     ensured: list[str] | None = None,
     execution_tenant: str | None = None,
     tasks: int = 1,
+    task_postures: list[str | None] | None = None,
     seed_raises: bool = False,
     ensure_raises: bool = False,
     lock_state: set[str] | None = None,
@@ -195,7 +218,10 @@ async def _run_suite(
 
     store, read_fn, write_fn = _mock_blocks()
     store["benchmark:email-analyst:s1"] = _suite(
-        fixtures=fixtures, execution_tenant=execution_tenant, tasks=tasks
+        fixtures=fixtures,
+        execution_tenant=execution_tenant,
+        tasks=tasks,
+        task_postures=task_postures,
     )
 
     def _ensure(tenant_id: str | None = None) -> str:
@@ -245,7 +271,13 @@ async def _run_suite(
         patch("robothor.memory.blocks.read_block", side_effect=read_fn),
         patch("robothor.memory.blocks.write_block", side_effect=write_fn),
         patch("robothor.engine.tools.handlers.spawn.get_runner", return_value=runner),
-        patch("robothor.engine.config.load_agent_config", return_value=_child_config()),
+        # A FRESH config per task: `_shape_child_config` mutates in place, so a
+        # single shared mock makes every recorded call show the LAST task's
+        # deny-list — silently turning a per-task assertion into a whole-suite one.
+        patch(
+            "robothor.engine.config.load_agent_config",
+            side_effect=lambda *_a, **_kw: _child_config(),
+        ),
         patch.object(bench, "sandbox_active", return_value=sandbox_on),
         patch.object(bs, "ensure_sandbox_tenant", side_effect=_ensure),
         patch.object(bs, "seed_fixtures", side_effect=_seed),
@@ -830,6 +862,69 @@ class TestShippedSuitePostures:
             f"{sorted(opted_out ^ set(self.NEEDS_PRODUCTION_READS))}"
         )
 
+    #: Tasks whose SCORE does not move in an empty tenant, but whose CASE stops
+    #: measuring anything: the OR-list already contains the "nothing found"
+    #: branch, or the assertion is satisfied by the agent's own name or a
+    #: literal 0. They keep the sandbox — a vacuous pass is not worth handing a
+    #: graded child the production tenant for — but they are recorded, because
+    #: "the score did not move" is exactly why nobody would notice.
+    #:
+    #: The runbook's "any task that moved is a finding" cannot surface these.
+    #: This dict is the only place they exist.
+    GOES_VACUOUS_IN_AN_EMPTY_TENANT: dict[str, str] = {
+        "enrich-existing-contact": (
+            "'Pick the top 1 least-complete contact from the CRM' against an empty "
+            "CRM; passes on `no.*found|not found|nothing to enrich`"
+        ),
+        "output-format-one-line": (
+            "'Enrich any contact with missing fields'; the one-line format is never "
+            "exercised because there is no contact to enrich"
+        ),
+        "rag-first-not-subagent": (
+            "'Enrich a contact'; passes on the not-found branch without ever "
+            "demonstrating the RAG-before-spawn ordering the case exists to grade"
+        ),
+        "workflow-completes": (
+            "'fetch contacts, run pairwise similarity'; zero contacts means the "
+            "dedup workflow is never run, and `no duplicates|nothing to merge` passes"
+        ),
+        "status-file-written": "same empty dedup workflow; the status file says nothing happened",
+        "write-file-for-status": "same empty dedup workflow; write_file-vs-exec is still graded",
+        "review-learnings": (
+            "reads the tenant-scoped autoresearch_learnings block — the same class as "
+            "cross-pollination — but passes because its OR-list contains the agent's "
+            "own name"
+        ),
+        "list-tasks": "list_my_tasks returns nothing; `0` is in the OR-list",
+    }
+
+    def test_the_vacuous_tasks_are_declared_and_still_sandboxed(self) -> None:
+        """They are a known cost of the sandbox, not an oversight.
+
+        Kept on `sandbox` deliberately: handing a graded child the production
+        tenant to rescue a case that only ever asserted "nothing found" would
+        trade real isolation for a number that was never measuring much.
+        """
+        from robothor.engine.tools.handlers.benchmark import (
+            SANDBOX_POSTURE,
+            _execution_posture,
+        )
+
+        tasks = self._all_tasks()
+        for task_id, why in self.GOES_VACUOUS_IN_AN_EMPTY_TENANT.items():
+            assert task_id in tasks, f"{task_id} has vanished — re-run the audit ({why})"
+            task = tasks[task_id]
+            assert _execution_posture(task, task["_suite"]) == SANDBOX_POSTURE, (
+                f"{task_id} is recorded as going vacuous AND opts out of the "
+                "sandbox — one of the two is wrong"
+            )
+
+    def test_the_two_declared_sets_do_not_overlap(self) -> None:
+        """A task either scores 0 in an empty tenant or passes vacuously in one.
+        Both would mean the audit contradicts itself."""
+        overlap = set(self.NEEDS_PRODUCTION_READS) & set(self.GOES_VACUOUS_IN_AN_EMPTY_TENANT)
+        assert not overlap, f"declared as both breaking and vacuous: {sorted(overlap)}"
+
     def test_every_shipped_posture_is_valid(self) -> None:
         """A typo in a suite file must be caught here, not at 04:00."""
         from robothor.engine.tools.handlers.benchmark import _execution_posture
@@ -908,3 +1003,89 @@ class TestShippedSuitePostures:
 
         suite = {"execution_tenant": "production-read-only"}
         assert _execution_posture({"execution_tenant": "sandbox"}, suite) == SANDBOX_POSTURE
+
+
+# ─── RI1: the per-task branch, in the shape every shipped opt-out has ────────
+
+
+class TestAMixedSuiteRoutesEachTaskSeparately:
+    """Every shipped `production-read-only` task lives in a MIXED suite.
+
+    A uniform suite cannot test the per-task branch: with every task opted out
+    ``_suite_execution_tenant`` returns None, so ``suite_tenant`` is None and
+    ``exec_tenant = suite_tenant`` would be right by accident. Deleting the
+    posture check on that line left the entire engine suite green — 6726
+    passed, 0 red — while re-pointing every opted-out task at the sandbox AND
+    re-opening its deny-list, because ``sandboxed`` drives
+    ``_shape_child_config`` too.
+    """
+
+    @pytest.mark.asyncio
+    async def test_each_task_gets_its_own_tenant(self) -> None:
+        runner = _Recorder()
+        teardowns: list[str] = []
+        await _run_suite(
+            runner,
+            sandbox_on=True,
+            tasks=2,
+            task_postures=[None, "production-read-only"],
+            teardowns=teardowns,
+        )
+
+        assert len(runner.calls) == 2
+        sandboxed, read_only = runner.calls
+
+        assert sandboxed.get("tenant_id") == SANDBOX
+        assert sandboxed["_bound_tenant"] == SANDBOX
+        assert read_only.get("tenant_id") is None, (
+            "an opted-out task was re-pointed at the sandbox by its neighbour"
+        )
+        assert read_only["_bound_tenant"] == OWNING_TENANT
+
+        assert teardowns == [SANDBOX], (
+            f"teardown ran {len(teardowns)} times for one sandboxed task: {teardowns}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_read_only_task_keeps_the_full_deny_list(self) -> None:
+        """The second-order effect: ``sandboxed`` also drives
+        ``_shape_child_config``, so a routing regression re-allows CRM writes
+        in the very task that is reading production."""
+        runner = _Recorder()
+        await _run_suite(
+            runner, sandbox_on=True, tasks=2, task_postures=[None, "production-read-only"]
+        )
+        sandboxed, read_only = runner.calls
+
+        read_only_denied = set(read_only["agent_config"].tools_denied)
+        for tool in ("create_person", "update_person", "create_task", "resolve_task"):
+            assert tool in read_only_denied, (
+                f"{tool} was writable in a task reading the production tenant"
+            )
+
+        sandbox_denied = set(sandboxed["agent_config"].tools_denied)
+        assert "update_person" not in sandbox_denied, (
+            "the sandboxed task lost its sandbox-safe CRM writes — the two "
+            "tasks are being shaped identically, which is the regression"
+        )
+        assert "exec" in sandbox_denied and "store_memory" in sandbox_denied
+
+    @pytest.mark.asyncio
+    async def test_both_tasks_stay_inside_the_write_boundary(self) -> None:
+        runner = _Recorder()
+        await _run_suite(
+            runner, sandbox_on=True, tasks=2, task_postures=[None, "production-read-only"]
+        )
+        assert [call["_marker"] for call in runner.calls] == [True, True]
+
+    @pytest.mark.asyncio
+    async def test_the_sandbox_tenant_is_still_ensured_once(self) -> None:
+        ensured: list[str] = []
+        await _run_suite(
+            _Recorder(),
+            sandbox_on=True,
+            tasks=2,
+            task_postures=[None, "production-read-only"],
+            ensured=ensured,
+        )
+        assert ensured == [SANDBOX]

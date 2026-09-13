@@ -1079,14 +1079,57 @@ class TestSandboxSuiteLockAgainstAFakePostgres:
             assert again == bs.LOCK_ACQUIRED
 
     def test_it_is_released_even_when_the_suite_raises(self, monkeypatch: Any) -> None:
+        """And the suite's OWN exception is what the caller sees.
+
+        This test used to raise ``RuntimeError`` and assert ``RuntimeError``,
+        which the bug satisfied: ``yield LOCK_ACQUIRED`` sat inside the ``try``
+        whose ``except Exception`` yields ``LOCK_UNAVAILABLE``, so an escaping
+        exception was thrown back in at that yield, caught, and the generator
+        yielded a SECOND time — which ``contextlib`` turns into
+        ``RuntimeError: generator didn't stop after throw()``. The original
+        exception and its traceback were destroyed at the boundary, and a false
+        "lock unavailable" ERROR sent the operator to the connection pool for
+        what was a typo in a suite file. A distinct exception class is the only
+        way to see that.
+        """
+
+        class SuiteExplodedError(Exception):
+            pass
+
         from robothor.db import connection as conn_mod
 
         fake, held = self._fake_postgres()
         monkeypatch.setattr(conn_mod, "get_connection", fake)
 
-        with pytest.raises(RuntimeError), bs.sandbox_suite_lock("benchmark-sandbox"):
-            raise RuntimeError("the suite blew up")
+        with pytest.raises(SuiteExplodedError, match="a task had no id") as caught:
+            with bs.sandbox_suite_lock("benchmark-sandbox"):
+                raise SuiteExplodedError("a task had no id")
+
+        assert type(caught.value) is SuiteExplodedError, (
+            "the suite's exception was replaced at the lock boundary"
+        )
         assert held == set(), "a crashed suite kept the sandbox locked for ever"
+
+    def test_a_crash_does_not_log_a_false_lock_failure(self, monkeypatch: Any, caplog: Any) -> None:
+        """The second half of the damage: the operator is told the lock was
+        unavailable when the lock was fine and the suite was not."""
+        import logging
+
+        class SuiteExplodedError(Exception):
+            pass
+
+        from robothor.db import connection as conn_mod
+
+        fake, _held = self._fake_postgres()
+        monkeypatch.setattr(conn_mod, "get_connection", fake)
+
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.benchmark_sandbox"):
+            with pytest.raises(SuiteExplodedError), bs.sandbox_suite_lock("benchmark-sandbox"):
+                raise SuiteExplodedError("boom")
+
+        assert not [r for r in caplog.records if "lock unavailable" in r.getMessage()], (
+            "a suite crash was reported as a lock failure"
+        )
 
     def test_a_different_tenant_is_a_different_lock(self, monkeypatch: Any) -> None:
         from robothor.db import connection as conn_mod

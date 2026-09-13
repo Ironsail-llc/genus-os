@@ -767,8 +767,11 @@ def get_agent_stats(
         row = cur.fetchone()
         stats = dict(row) if row else {}
 
-        stats["benchmark_runs"] = 0
-        stats["benchmark_cost_usd"] = 0.0
+        # None until read: "unknown" and "no benchmark spend" are different
+        # answers, and only one of them is worth acting on. See
+        # analytics._benchmark_spend.
+        stats["benchmark_runs"] = None
+        stats["benchmark_cost_usd"] = None
         try:
             read_every_tenant_in_transaction(conn)
             cur.execute(
@@ -792,6 +795,11 @@ def get_agent_stats(
             stats["benchmark_runs"] = int(brow.get("benchmark_runs") or 0)
             stats["benchmark_cost_usd"] = float(brow.get("benchmark_cost_usd") or 0.0)
         except Exception as e:
-            logger.warning("benchmark spend query failed: %s", e)
+            logger.error(
+                "benchmark break-out unreadable for %s (%s): /costs reports UNKNOWN "
+                "benchmark spend rather than zero",
+                agent_id,
+                e,
+            )
 
         return stats

@@ -754,6 +754,19 @@ class TestTheRunbookAuditQueriesActuallyWork:
                 ("c2", "benchmark-sandbox", "email-analyst", "p1", "benchmark:s1:t2", "2026-09-13"),
                 ("c3", "benchmark-sandbox", "crm-dedup", "p1", "benchmark:s2:t1", "2026-09-13"),
                 ("c4", "acme-instance", "crm-hygiene", "p1", "benchmark:s3:t1", "2026-09-13"),
+                # A DECLARED production-read-only child: it runs in the owning
+                # tenant on purpose (main::memory-recall cannot be graded in an
+                # empty one), and it carries the posture in its trigger_detail.
+                # Without this row the bound query looked correct; with it, the
+                # runbook's "FAIL: any row" reports a leak every night.
+                (
+                    "c5",
+                    "acme-instance",
+                    "main",
+                    "p1",
+                    "benchmark:main:memory-recall:production-read-only",
+                    "2026-09-13",
+                ),
             ],
         )
         # The policy: permissive on an empty binding, otherwise equality.
@@ -772,14 +785,40 @@ class TestTheRunbookAuditQueriesActuallyWork:
         )
 
     def test_bound_to_the_owning_tenant_a_clean_night_is_empty(self):
-        """And the query the runbook gives for that binding says so."""
+        """And the query the runbook gives for that binding says so.
+
+        The bound form must report the genuine leak (``c4``) and NOT the
+        declared ``production-read-only`` child (``c5``), which is in the
+        owning tenant because the suite file says it has to be. Reporting it
+        makes the promotion gate cry wolf every night, and an operator who is
+        told to expect a leak report learns to ignore the query.
+        """
         rows = self._db("acme-instance").execute(self._runbook_query("-- BOUND")).fetchall()
         assert [r for r in rows if r[1] == "benchmark-sandbox"] == [], (
             "a sandbox child was visible from a bound connection — the fake's "
             "policy is not filtering, so this test proves nothing"
         )
         assert rows == [("crm-hygiene", "acme-instance", 1)], (
-            "the bound query must return exactly the leak, and nothing else"
+            "the bound query must return exactly the leak — not the declared "
+            "production-read-only children, which belong in this tenant"
+        )
+
+    def test_the_runbook_lists_the_declared_read_only_children_separately(self):
+        """The operator has to be able to check that the set in the owning
+        tenant matches the table in the runbook, so there is a query for it."""
+        rows = self._db("acme-instance").execute(self._runbook_query("-- DECLARED")).fetchall()
+        assert rows == [("main", "acme-instance", 1)]
+
+    def test_the_runbook_marker_is_the_one_the_harness_writes(self):
+        """A hand-copied literal in the docs is how this drifts."""
+        from robothor.engine.tools.handlers.benchmark import (
+            PRODUCTION_READ_ONLY_TRIGGER_SUFFIX,
+        )
+
+        runbook = self.RUNBOOK.read_text()
+        assert PRODUCTION_READ_ONLY_TRIGGER_SUFFIX in runbook, (
+            "the runbook's audit queries do not use the suffix the harness "
+            f"actually writes ({PRODUCTION_READ_ONLY_TRIGGER_SUFFIX!r})"
         )
 
     def test_the_unbound_query_bound_would_hide_the_children(self):
@@ -872,3 +911,125 @@ class TestTheRlsWideningHasExactlyThreeCallers:
         assert "rls" in doc
         assert "widening" in doc, "the docstring does not name this as a deliberate widening"
         assert "benchmark" in doc, "the docstring does not name the queries it exists for"
+
+
+class TestTheWideningsFailureIsNotReportedAsZero:
+    """`read_every_tenant_in_transaction` refuses rather than return a number
+    it cannot stand behind — and every caller used to catch that refusal, log a
+    warning and leave the spend at 0. That is the C2 symptom exactly: a number
+    an operator reads as "no benchmark spend" when it means "I could not look".
+
+    Zero is a measurement. None is an admission. The break-out must never
+    report the first when it means the second.
+    """
+
+    def test_the_helper_refuses_on_an_autocommit_connection(self, monkeypatch) -> None:
+        from robothor.db import connection as conn_mod
+
+        monkeypatch.setenv("ROBOTHOR_RLS_ENABLED", "1")
+
+        class _Conn:
+            autocommit = True
+
+        with pytest.raises(RuntimeError, match="transactional"):
+            conn_mod.read_every_tenant_in_transaction(_Conn())
+
+    def test_benchmark_spend_returns_none_when_it_cannot_look(self, monkeypatch) -> None:
+        from robothor.engine import analytics
+
+        def _cannot_widen(_conn) -> None:
+            raise RuntimeError("app.tenant_id could not be relaxed")
+
+        monkeypatch.setattr(analytics, "read_every_tenant_in_transaction", _cannot_widen)
+
+        class _Cur:
+            def execute(self, *_a, **_kw) -> None:
+                raise AssertionError("the query ran without the widening")
+
+            def fetchone(self):
+                return {}
+
+        class _Conn:
+            def rollback(self) -> None:
+                return None
+
+        result = analytics._benchmark_spend(_Conn(), _Cur(), "email-analyst", "TRUE", ())
+        assert result is None, (
+            "a break-out that could not read every tenant reported a number "
+            "anyway — and 0 reads as 'no benchmark spend'"
+        )
+
+    def test_agent_stats_reports_unknown_rather_than_zero(self, monkeypatch) -> None:
+        from robothor.engine import analytics
+
+        monkeypatch.setattr(analytics, "_benchmark_spend", lambda *_a, **_kw: None)
+        monkeypatch.setattr(analytics, "_report_contamination", lambda *_a, **_kw: None)
+
+        class _Cur:
+            def execute(self, *_a, **_kw) -> None:
+                return None
+
+            def fetchone(self):
+                return {}
+
+            def fetchall(self):
+                return []
+
+        class _Conn:
+            def cursor(self, *_a, **_kw):
+                return _Cur()
+
+            def rollback(self) -> None:
+                return None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc) -> bool:
+                return False
+
+        monkeypatch.setattr(analytics, "get_connection", lambda *_a, **_kw: _Conn())
+
+        stats = analytics.get_agent_stats("email-analyst", days=1, tenant_id="default")
+        assert stats["benchmark_runs"] is None
+        assert stats["benchmark_cost_usd"] is None
+
+    def test_the_contamination_rung_is_not_told_zero(self, monkeypatch) -> None:
+        """`_report_contamination` early-returns on `<= 0`. Handing it a 0 that
+        means "unknown" silences the rollout's observe rung for the wrong
+        reason, which is the bug this whole finding is about."""
+        from robothor.engine import analytics
+
+        seen: list = []
+        monkeypatch.setattr(analytics, "_benchmark_spend", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            analytics, "_report_contamination", lambda _a, runs, _t: seen.append(runs)
+        )
+
+        class _Cur:
+            def execute(self, *_a, **_kw) -> None:
+                return None
+
+            def fetchone(self):
+                return {}
+
+            def fetchall(self):
+                return []
+
+        class _Conn:
+            def cursor(self, *_a, **_kw):
+                return _Cur()
+
+            def rollback(self) -> None:
+                return None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc) -> bool:
+                return False
+
+        monkeypatch.setattr(analytics, "get_connection", lambda *_a, **_kw: _Conn())
+        analytics.get_agent_stats("email-analyst", days=1, tenant_id="default")
+
+        assert seen == [None], f"the contamination rung was handed {seen}, not None"

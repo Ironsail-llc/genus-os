@@ -190,19 +190,52 @@ empty result as the pass:
 ```sql
 -- BOUND to the owning tenant (an ordinary engine connection, RLS on).
 -- Parent joined by id only; a sandbox child is invisible here BY DESIGN,
--- so this can only ever return a LEAK.
+-- so this can only ever return a child that ran in YOUR tenant.
+-- The declared production-read-only tasks belong here, so they are excluded
+-- by the posture the harness records on the run itself.
 SELECT child.agent_id, child.tenant_id, count(*)
   FROM agent_runs child
   JOIN agent_runs parent ON parent.id = child.parent_run_id
  WHERE parent.agent_id = 'benchmark-runner'
    AND parent.started_at > now() - interval '1 day'
    AND child.trigger_detail LIKE 'benchmark:%'
+   AND child.trigger_detail NOT LIKE '%:production-read-only'
  GROUP BY 1, 2;
--- PASS: EMPTY. FAIL: any row — that child ran in the tenant you are bound to.
+-- PASS: EMPTY — the only children in this tenant are the declared read-only
+--       ones, and they are filtered out above.
+-- FAIL: any row — that child ran in the tenant you are bound to and did not
+--       declare that it needed to.
 ```
 
 Empty is only the pass for the *bound* form. If the unbound query also returns
 nothing, the benchmark did not run — check the schedule, not the isolation.
+
+The exclusion is not a blind spot: check the set it removes against the table
+in "Suites that cannot be graded in an empty tenant", from the same bound
+connection.
+
+```sql
+-- DECLARED production-read-only children of last night's benchmark.
+-- Run this from the SAME bound connection as the query above.
+SELECT child.agent_id, child.tenant_id, count(*)
+  FROM agent_runs child
+  JOIN agent_runs parent ON parent.id = child.parent_run_id
+ WHERE parent.agent_id = 'benchmark-runner'
+   AND parent.started_at > now() - interval '1 day'
+   AND child.trigger_detail LIKE '%:production-read-only'
+ GROUP BY 1, 2;
+-- PASS: exactly the agents in the production-read-only table — today
+--       main, agent-architect and curiosity-engine. Anything else is a suite
+--       that opted out without anyone auditing it.
+```
+
+The posture is recorded as a suffix on the child's `trigger_detail`
+(`benchmark:<suite>:<task>:production-read-only`, written by
+`_task_trigger_detail`), because a declared read-only child is otherwise
+indistinguishable from a leak: same tenant, same `benchmark:` prefix, same
+parent. Before it existed this query reported the seven shipped opt-outs as
+leaks every night — and a promotion gate that cries wolf nightly is one the
+operator stops reading.
 
 ## What a benchmark run may touch
 
