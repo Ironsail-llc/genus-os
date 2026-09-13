@@ -984,11 +984,19 @@ still reaches the operator as a one-line health signal.
 and wait. Two callers, one contract.
 
 ```
-ask(question, options=(), *, timeout=300.0, target="") -> str | None
+ask(question, options=(), *, timeout=300.0, target="", addressee="") -> str | None
 ```
 
+`target` is **where** — the address the question is sent to. `addressee` is
+**who** — the channel-native id of the person being asked. A channel that can
+receive must bind its pending question to *both* and settle it only for an
+answer matching both; getting that wrong is how an answer typed by one person
+settles a question asked of another. An empty `addressee` means "whoever the
+platform's own authorization says may answer here", which for Telegram is the
+operator.
+
 **`None` is the only non-answer, and it is never one of `options`.** A timeout,
-an unreachable surface, or no addressee all return `None`; a channel that
+an unreachable surface, or nobody to ask all return `None`; a channel that
 returned a plausible choice because the clock ran out would be recording a
 decision nobody made. `NotImplementedError` is also a legitimate outcome —
 `EventBusChannel.ask` raises it, because a sink has nobody to ask — so **every
@@ -997,9 +1005,26 @@ reachable.
 
 | Channel | `ask` |
 |---------|-------|
-| `telegram` | With `options`, an inline keyboard whose `callback_data` is `ask:<id>:<index>` — the index, because Telegram caps `callback_data` at 64 bytes and a long option would come back truncated into a different answer. Without options, plain text; `handle_text` intercepts the reply **before** `_enqueue_message`, which would otherwise buffer it until the blocked run finished. Both are owner-gated (`_check_owner_gate`, site `ask_answer`): in a group chat, anyone can tap or type |
+| `telegram` | With `options` and a reachable aiogram `Bot`, an inline keyboard whose `callback_data` is `ask:<id>:<index>` — the index, because Telegram caps `callback_data` at 64 bytes and a long option would come back truncated into a different answer. With no bot to attach a keyboard to, the options go out numbered in the text and a typed `1`..`N` (or the option itself) answers it. Without options, plain text; `handle_text` intercepts the reply **before** `_enqueue_message`, which would otherwise buffer it until the blocked run finished. See the binding rule below for who may answer |
 | `event_bus` | `NotImplementedError`, permanently |
 | webchat | No channel, so a webchat run **does not wait**: it records the question, emits `approval_required` over its own SSE stream, and returns `delivered: false` in the same tick. The Helm answers through the bridge after the run has finished, and a later turn is what sees the answer |
+
+**Who may answer.** An ask is bound at mint to `(chat_id, addressee)` and
+settles only for an answer arriving from that chat **and** that sender
+(`channels/telegram_ask.py`). The rule, in the order it is applied:
+
+| The ask | What authorizes an answer |
+|---------|---------------------------|
+| Bound to an addressee, raised in that person's own chat | The bound chat and the bound sender. Nothing further — this is a registered non-owner answering their own agent's question |
+| Bound to an addressee, raised in the operator's chat | The bound chat and the bound sender, **and** `_check_owner_gate` (site `ask_answer`) on top |
+| No addressee — every permission escalation, raised for the operator by construction | The chat the prompt was sent to, **and** the owner gate. With nobody bound, the gate is the only authorization there is |
+
+Refusals are one sentence for every reason (wrong chat, wrong sender, failed
+gate, already answered) and a counted log line: naming which check failed tells
+a forger how to pass it. The earlier cut authorized purely on
+`chat_id == default_chat_id`, which both locked the addressee out of their own
+question and let anyone in the operator's chat settle an ask registered
+elsewhere — the ask id travels in `callback_data`, so nothing else was needed.
 
 **Who asks.** `ask_user` (`tools/handlers/ask_user.py`) is the agent asking mid-
 turn; it refuses on a run nobody is watching (cron, hooks, sub-agents) with an

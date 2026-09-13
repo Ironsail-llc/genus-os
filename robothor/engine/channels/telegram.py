@@ -305,7 +305,10 @@ class TelegramChannel:
             if not delivered_as:
                 logger.warning("Telegram ask %s was never delivered; not waiting", ask_id)
                 return None
-            telegram_ask._pending_asks[ask_id].delivered_as = delivered_as
+            # Only now is it known which inbound messages this ask may accept.
+            # Until this call it accepts none, so a reply racing the send cannot
+            # answer a keyboard question as though it were free text.
+            telegram_ask.note_ask_delivery(ask_id, delivered_as)
             return await asyncio.wait_for(future, timeout=max(1.0, float(timeout)))
         except TimeoutError:
             logger.info("Telegram ask %s went unanswered for %ss", ask_id, timeout)

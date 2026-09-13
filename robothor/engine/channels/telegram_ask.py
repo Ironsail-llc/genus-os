@@ -50,8 +50,12 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "MAX_ASK_OPTIONS",
+    "discard_ask",
     "handle_ask_callback",
+    "has_pending_ask",
     "intercept_ask_answer",
+    "note_ask_delivery",
+    "note_ask_message_id",
     "pending_ask_ids",
     "register_ask",
     "reset_pending_asks",
@@ -79,12 +83,20 @@ class _PendingAsk:
     ``sender_id`` empty means *no addressee* — the ask was raised for the
     operator (every escalation is) and only the owner gate can authorize it.
 
-    ``delivered_as`` is ``"keyboard"`` or ``"text"``. It is not cosmetic: a
+    ``delivered_as`` is ``""`` until the send returns, then ``"keyboard"`` or
+    ``"text"``. It is not cosmetic, and the empty third state is not either: a
     keyboard ask is answered by tapping, and treating the next line the operator
     types as its answer would turn "hang on, what was the second option again?"
     into a decision. A *text* ask with options — the fallback when no aiogram
     ``Bot`` is reachable — has no buttons to tap, so it must accept a typed
     reply or it can only ever time out.
+
+    The ask is registered BEFORE the send (the ``callback_data`` has to carry
+    the id), so there is a window in which the delivery mode is genuinely not
+    known yet. Defaulting that window to ``"text"`` would let a message racing
+    the send answer an options ask that is about to become a keyboard — so the
+    unknown state accepts nothing, and :func:`note_ask_delivery` is the one way
+    to leave it.
 
     ``message_id`` is the platform id of the question, when the send returned
     one. It is what lets a quoted reply answer the question it quotes rather
@@ -95,11 +107,12 @@ class _PendingAsk:
     chat_id: str
     sender_id: str
     options: tuple[str, ...]
-    delivered_as: str = "text"
+    delivered_as: str = ""
     message_id: str = ""
 
     @property
     def takes_free_text(self) -> bool:
+        """True only once the question is known to have gone out as text."""
         return self.delivered_as == "text"
 
 
@@ -115,14 +128,15 @@ def register_ask(
     chat_id: str,
     sender_id: str = "",
     options: tuple[str, ...] = (),
-    delivered_as: str = "text",
+    delivered_as: str = "",
     message_id: str = "",
 ) -> tuple[str, asyncio.Future[str | None]]:
     """Mint a pending ask and return ``(ask_id, future)``.
 
     Minting before the send is deliberate: the ``callback_data`` has to carry
     the id, and a keyboard whose id is not yet registered is a button that does
-    nothing.
+    nothing. The ask answers nothing until :func:`note_ask_delivery` says how it
+    went out — see :class:`_PendingAsk`.
     """
     ask_id = uuid.uuid4().hex
     future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
@@ -149,9 +163,35 @@ def note_ask_message_id(ask_id: str, message_id: Any) -> None:
         pending.message_id = str(message_id)
 
 
+def note_ask_delivery(ask_id: str, delivered_as: str) -> None:
+    """Record HOW the question went out, once the send says so.
+
+    The one way an ask leaves the unknown state, so that no caller has to reach
+    into ``_pending_asks`` — the registry owns which inbound messages an ask can
+    accept, and a caller assigning that field directly is a caller who can get
+    it wrong at a moment nobody is looking.
+    """
+    pending = _pending_asks.get(str(ask_id))
+    if pending is not None and delivered_as in {"keyboard", "text"}:
+        pending.delivered_as = delivered_as
+
+
 def pending_ask_ids() -> list[str]:
     """The ids of questions currently waiting. Introspection, not control."""
     return list(_pending_asks)
+
+
+def has_pending_ask(chat_id: str) -> bool:
+    """Whether any text-answerable question is waiting in ``chat_id``.
+
+    Deliberately cheap and deliberately NOT an authorization check — it answers
+    "is it worth asking who this person is", and every real check still runs
+    afterwards. See :func:`intercept_ask_answer` for why the order matters.
+    """
+    return any(
+        p.chat_id == str(chat_id) and p.takes_free_text and not p.future.done()
+        for p in _pending_asks.values()
+    )
 
 
 def reset_pending_asks() -> None:
@@ -436,7 +476,17 @@ async def intercept_ask_answer(
     and the buffer is only drained in that run's ``finally`` — so an answer that
     gets that far is invisible to the coroutine blocked inside ``Channel.ask``:
     the ask times out and the reply arrives as the *next* turn's prompt.
+
+    The "is anything pending here" check comes first, and that ordering is not
+    a micro-optimisation. ``_check_owner_gate`` is not a pure predicate: in
+    ``observe`` mode it logs a ``telegram_role_gates: divergence`` line whenever
+    the chat check and the role check disagree. Every inbound message passes
+    through here, so asking it unconditionally would fill that log with
+    ``site=ask_answer`` entries about ordinary conversation and bury the
+    divergences that are actually about a decision.
     """
+    if not has_pending_ask(chat_id):
+        return False
     owner_ok, operator_chat = _gate(bot, chat_id, sender_id)
     return resolve_ask_text(
         str(chat_id),

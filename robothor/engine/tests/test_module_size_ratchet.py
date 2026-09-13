@@ -51,7 +51,11 @@ CAPS = {
     # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
     # Lowered again after phase 3b (_setup_handlers closures -> methods).
     "robothor/engine/telegram.py": 2000,
-    "robothor/engine/telegram_handlers.py": 1300,
+    # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
+    # interception moved to channels/telegram_ask.py, beside the binding rules
+    # they apply. The ratchet only ever goes down, so the new actual is the new
+    # cap — leaving it at 1300 would bank headroom this file did not earn.
+    "robothor/engine/telegram_handlers.py": 1293,
     "robothor/engine/telegram_plan_mode.py": 900,
     "robothor/engine/run_finalizer.py": 1100,
     "robothor/engine/run_lifecycle.py": 800,

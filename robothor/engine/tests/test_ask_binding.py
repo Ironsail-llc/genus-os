@@ -135,15 +135,23 @@ class TestTheAddresseeCanAnswer:
 
 
 class TestForgedAnswersAreIgnored:
+    """Each of the two binding halves gets its own case, varying ONE axis.
+
+    An earlier version of this class forged a different chat *and* a different
+    sender in the same callback, which meant either check alone was enough to
+    pass it — delete the chat comparison and the test stayed green. A test that
+    survives the deletion of the code it is named after is not covering it.
+    """
+
     @pytest.mark.asyncio
-    async def test_a_callback_from_another_chat_cannot_settle_an_ask(self, bot):
-        """The ask id travels in ``callback_data``. Without the chat check,
-        anyone authorized in the operator's chat settles any ask in the
-        process."""
+    async def test_the_bound_sender_from_another_chat_cannot_settle_an_ask(self, bot):
+        """Same person, wrong room. Isolates the CHAT check: the ask id travels
+        in ``callback_data``, so without this comparison a callback replayed
+        into any other chat settles an ask it was never sent to."""
         ask_id, future = _mint(OTHER_CHAT, ADDRESSEE, options=("A", "B"), delivered_as="keyboard")
 
         await telegram_ask.handle_ask_callback(
-            bot, _callback(f"ask:{ask_id}:0", chat_id=OPERATOR, user_id="4242")
+            bot, _callback(f"ask:{ask_id}:0", chat_id=OPERATOR, user_id=ADDRESSEE)
         )
 
         assert not future.done()
@@ -151,10 +159,25 @@ class TestForgedAnswersAreIgnored:
 
     @pytest.mark.asyncio
     async def test_a_different_sender_in_the_bound_chat_cannot_settle_it(self, bot):
+        """Right room, wrong person. Isolates the SENDER check — and this is the
+        group-chat case: the buttons are visible to everyone in the room."""
         ask_id, future = _mint(OTHER_CHAT, ADDRESSEE, options=("A", "B"), delivered_as="keyboard")
 
         await telegram_ask.handle_ask_callback(
             bot, _callback(f"ask:{ask_id}:0", chat_id=OTHER_CHAT, user_id=INTRUDER)
+        )
+
+        assert not future.done()
+        assert ask_id in telegram_ask.pending_ask_ids()
+
+    @pytest.mark.asyncio
+    async def test_neither_check_alone_is_enough(self, bot):
+        """Both wrong at once. Kept as the third case rather than the only one,
+        so the pair above stays the thing that pins each check."""
+        ask_id, future = _mint(OTHER_CHAT, ADDRESSEE, options=("A", "B"), delivered_as="keyboard")
+
+        await telegram_ask.handle_ask_callback(
+            bot, _callback(f"ask:{ask_id}:0", chat_id=OPERATOR, user_id=INTRUDER)
         )
 
         assert not future.done()
@@ -232,10 +255,15 @@ class TestFreeTextIsBoundToo:
         bot._enqueue_message.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_a_reply_in_another_chat_does_not_answer_it(self, bot):
+    async def test_the_bound_sender_replying_in_another_chat_does_not_answer_it(self, bot):
+        """Same person, wrong room — the chat half of the binding, alone.
+
+        The addressee typing into a *different* conversation is answering
+        something else. Without the chat comparison their reply would settle a
+        question they are not currently looking at."""
         _, future = _mint(OTHER_CHAT, ADDRESSEE)
 
-        await bot.handle_text(_message(OPERATOR, "Tuesday", user_id="4242"))
+        await bot.handle_text(_message(OPERATOR, "Tuesday", user_id=ADDRESSEE))
 
         assert not future.done()
         bot._enqueue_message.assert_called_once()
@@ -245,6 +273,44 @@ class TestFreeTextIsBoundToo:
         await bot.handle_text(_message(OPERATOR, "what is the status", user_id="4242"))
 
         bot._enqueue_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_the_owner_gate_is_not_consulted_when_nothing_is_pending(self, bot):
+        """Every inbound message passes this interception, and the gate is not
+        a pure predicate: in ``observe`` mode it logs a
+        ``telegram_role_gates: divergence`` line whenever the chat check and the
+        role check disagree. Asking it on every line of ordinary conversation
+        would bury the real divergences — the ones about an actual decision —
+        under ``site=ask_answer`` noise from messages that were never answers to
+        anything.
+        """
+        bot._check_owner_gate = MagicMock(return_value=True)
+
+        await bot.handle_text(_message(OPERATOR, "what is the status", user_id="4242"))
+
+        bot._check_owner_gate.assert_not_called()
+        bot._enqueue_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_the_owner_gate_is_consulted_when_one_is_pending(self, bot):
+        """The other half: cheapness must not become never-asking."""
+        _mint(OPERATOR, "4242")
+        bot._check_owner_gate = MagicMock(return_value=True)
+
+        await bot.handle_text(_message(OPERATOR, "Tuesday", user_id="4242"))
+
+        bot._check_owner_gate.assert_called_once()
+        assert bot._check_owner_gate.call_args.kwargs["site"] == "ask_answer"
+
+    @pytest.mark.asyncio
+    async def test_a_pending_ask_in_another_chat_does_not_wake_the_gate_here(self, bot):
+        """ "Is anything pending" is asked per chat, not per process."""
+        _mint(OTHER_CHAT, ADDRESSEE)
+        bot._check_owner_gate = MagicMock(return_value=True)
+
+        await bot.handle_text(_message(OPERATOR, "what is the status", user_id="4242"))
+
+        bot._check_owner_gate.assert_not_called()
 
 
 class TestTheNumberedFallbackIsAnswerable:
@@ -330,6 +396,52 @@ class TestTwoAsksInOneChat:
 
         assert not other.done()
         bot._enqueue_message.assert_called_once()
+
+
+class TestAnAskInFlightAcceptsNothing:
+    """The ask is registered before the send, because ``callback_data`` has to
+    carry the id. That leaves a window where the delivery mode is genuinely
+    unknown — and a message arriving in it must not be treated as an answer to a
+    question that is about to go out as buttons."""
+
+    @pytest.mark.asyncio
+    async def test_a_freshly_minted_ask_takes_no_free_text(self, bot):
+        ask_id, future = telegram_ask.register_ask(chat_id=OTHER_CHAT, sender_id=ADDRESSEE)
+        assert telegram_ask._pending_asks[ask_id].delivered_as == ""
+
+        await bot.handle_text(_message(OTHER_CHAT, "Tuesday", user_id=ADDRESSEE))
+
+        assert not future.done()
+        bot._enqueue_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_it_takes_free_text_once_the_send_says_it_went_out_as_text(self, bot):
+        ask_id, future = telegram_ask.register_ask(chat_id=OTHER_CHAT, sender_id=ADDRESSEE)
+        telegram_ask.note_ask_delivery(ask_id, "text")
+
+        await bot.handle_text(_message(OTHER_CHAT, "Tuesday", user_id=ADDRESSEE))
+
+        assert future.result() == "Tuesday"
+
+    @pytest.mark.asyncio
+    async def test_a_keyboard_delivery_still_takes_none(self, bot):
+        ask_id, future = telegram_ask.register_ask(
+            chat_id=OTHER_CHAT, sender_id=ADDRESSEE, options=("A", "B")
+        )
+        telegram_ask.note_ask_delivery(ask_id, "keyboard")
+
+        await bot.handle_text(_message(OTHER_CHAT, "A", user_id=ADDRESSEE))
+
+        assert not future.done()
+
+    @pytest.mark.asyncio
+    async def test_an_unrecognised_delivery_mode_is_ignored(self):
+        """The field decides which inbound messages an ask accepts, so it takes
+        one of two values or stays unknown — never whatever a caller passed."""
+        ask_id, _ = telegram_ask.register_ask(chat_id=OTHER_CHAT, sender_id=ADDRESSEE)
+        telegram_ask.note_ask_delivery(ask_id, "carrier-pigeon")
+
+        assert telegram_ask._pending_asks[ask_id].delivered_as == ""
 
 
 class TestTheChannelBindsWhatItMints:
