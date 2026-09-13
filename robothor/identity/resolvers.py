@@ -36,13 +36,34 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CACHE_TTL_SECONDS = 60
+_CACHE_TTL_SECONDS = 60.0
+
+#: Postgres regex for a UUID in its canonical text form. Guards the
+#: ``uci.user_id::UUID`` cast in ``_resolve_generic``: that column holds either a
+#: ``user_accounts.id`` or a ``tenant_users.user_id``, and casting the second
+#: kind would raise ``InvalidTextRepresentation`` for a perfectly valid row.
+_UUID_TEXT = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 _cache: dict[tuple[str, str, str], tuple[IdentityContext | None, float]] = {}
 
 
-def resolve_identity(channel: str, identifier: str, tenant_id: str) -> IdentityContext | None:
+def resolve_identity(
+    channel: str,
+    identifier: str,
+    tenant_id: str,
+    *,
+    negative_ttl_seconds: float | None = None,
+) -> IdentityContext | None:
     """Resolve a channel-native identifier to an ``IdentityContext``.
+
+    ``negative_ttl_seconds`` shortens how long a MISS is remembered, for the
+    caller that cares: the channel access gate. A sender waiting on a pairing
+    is by definition a miss, and caching that for the full 60 s means the
+    operator approves them and their next message is still refused — and, worse,
+    mints a second pending code that shows up as a second request. A hit keeps
+    the full TTL either way: the expensive thing to be wrong about is an
+    identity that no longer exists, and that is what
+    ``/api/admin/identities/reload`` is for.
 
     Returns ``None`` for an identifier with no matching account/user/binding
     row, or if resolution fails for any reason — never raises. A channel with
@@ -64,7 +85,10 @@ def resolve_identity(channel: str, identifier: str, tenant_id: str) -> IdentityC
         logger.exception("resolve_identity: resolver for channel %r failed", channel)
         result = None
 
-    _cache[cache_key] = (result, time.monotonic() + _CACHE_TTL_SECONDS)
+    ttl = _CACHE_TTL_SECONDS
+    if result is None and negative_ttl_seconds is not None:
+        ttl = min(ttl, max(0.0, negative_ttl_seconds))
+    _cache[cache_key] = (result, time.monotonic() + ttl)
     return result
 
 
@@ -245,14 +269,29 @@ def _resolve_generic(channel: str) -> Callable[[str, str], IdentityContext | Non
                     "COALESCE(ua.person_id::TEXT, tu.person_id::TEXT) AS person_id, "
                     "tu.user_id AS tenant_user_id "
                     "FROM user_channel_identities uci "
+                    # The cast goes on the TEXT side, not on `ua.id`:
+                    # `ua.id::TEXT = uci.user_id` casts an indexed UUID primary
+                    # key on every inbound resolve, which the index cannot
+                    # serve.
+                    #
+                    # It has to be a CASE and not `uci.user_id ~ %s AND
+                    # ua.id = uci.user_id::UUID`, because Postgres does not
+                    # promise to evaluate AND operands left to right -- and
+                    # `user_id` legitimately holds non-UUID values (a
+                    # `tenant_users.user_id`), so an eagerly-evaluated cast
+                    # would raise InvalidTextRepresentation on a valid row and
+                    # take the whole resolve down. CASE *is* documented to
+                    # short-circuit.
                     "LEFT JOIN user_accounts ua "
-                    "  ON ua.tenant_id = uci.tenant_id AND ua.id::TEXT = uci.user_id "
+                    "  ON ua.tenant_id = uci.tenant_id "
+                    "  AND ua.id = (CASE WHEN uci.user_id ~ %s "
+                    "                    THEN uci.user_id END)::UUID "
                     "LEFT JOIN tenant_users tu "
                     "  ON tu.tenant_id = uci.tenant_id AND tu.user_id = uci.user_id "
                     "WHERE uci.tenant_id = %s AND uci.channel = %s "
                     "  AND uci.native_id = %s AND uci.revoked_at IS NULL "
                     "LIMIT 1",
-                    (tenant_id, channel, identifier),
+                    (_UUID_TEXT, tenant_id, channel, identifier),
                 )
                 match = cur.fetchone()
         except (psycopg2.errors.UndefinedTable, psycopg2.Error):

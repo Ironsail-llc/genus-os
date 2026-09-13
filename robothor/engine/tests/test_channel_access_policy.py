@@ -94,18 +94,33 @@ def test_unknown_sender_on_pairing_channel_gets_a_code_and_no_run(unknown, minte
     assert decision.pairing_code is not None
     assert len(decision.pairing_code) == access.PAIRING_CODE_LENGTH
     assert set(decision.pairing_code) <= set(access.PAIRING_CODE_ALPHABET)
-    assert decision.refusal == decision.pairing_code
+    assert decision.pairing_code in decision.refusal
     assert _Runner.call_count == 0
 
 
-def test_the_pairing_reply_carries_the_code_and_nothing_else(unknown, minted, monkeypatch):
-    """No operator name, no instance name, no "ask <someone> to approve"."""
+def test_the_pairing_reply_names_nobody_and_nothing(unknown, minted, monkeypatch):
+    """One neutral sentence and the code.
+
+    A bare six-character code told a stranger nothing about what to do with it,
+    so the reply carries a sentence. What it must NOT carry is the point: the
+    operator's name, the instance's or the product's name, an address, or any
+    "ask <someone>" that hands a stranger a human to social-engineer. A role
+    ("the operator of this assistant") is not an identity.
+    """
     monkeypatch.setenv("ROBOTHOR_SLACK_ACCESS", "pairing")
+    monkeypatch.setenv("ROBOTHOR_AI_NAME", "Distinctive-Assistant-Name")
+    monkeypatch.setenv("ROBOTHOR_BRAND_NAME", "Distinctive-Brand-Name")
+    monkeypatch.setenv("ROBOTHOR_DOMAIN", "distinctive.example.com")
 
     decision = _evaluate(channel="slack", native_id=SLACK_USER, tenant_id=TENANT)
 
-    assert decision.refusal.strip() == decision.refusal
-    assert " " not in decision.refusal
+    assert decision.refusal == (
+        f"Share this code with the operator of this assistant to be paired: {decision.pairing_code}"
+    )
+    for leak in ("Distinctive-Assistant-Name", "Distinctive-Brand-Name", "distinctive.example.com"):
+        assert leak not in decision.refusal
+    assert TENANT not in decision.refusal
+    assert SLACK_USER not in decision.refusal
 
 
 def test_a_retry_asks_the_dal_for_the_same_row_rather_than_minting_a_second(
@@ -284,6 +299,50 @@ def test_a_nonsense_mode_override_falls_back_to_the_setting(unknown, minted, mon
     assert minted == []
 
 
+def test_a_blank_mode_means_unset_and_takes_the_fields_own_default(monkeypatch):
+    """``ROBOTHOR_TELEGRAM_ACCESS=`` is not a request for ``pairing``.
+
+    Blanking a variable asks for whatever the platform ships, and what Telegram
+    ships is ``open``. Falling through to ``channel_access_default`` instead
+    made an empty string mean the opposite of the field's own declared default,
+    and nothing said so.
+    """
+    monkeypatch.setenv("ROBOTHOR_TELEGRAM_ACCESS", "")
+    monkeypatch.setenv("ROBOTHOR_SLACK_ACCESS", "   ")
+
+    assert access.access_mode("telegram") == "open"
+    assert access.access_mode("slack") == "pairing"
+    assert access.mode_was_configured("telegram") is False
+
+
+def test_a_plugin_channel_with_no_field_uses_the_shared_default(monkeypatch):
+    monkeypatch.setenv("ROBOTHOR_CHANNEL_ACCESS_DEFAULT", "open")
+
+    assert access.access_mode("some_plugin_channel") == "open"
+    assert access.mode_was_configured("some_plugin_channel") is True
+
+
+def test_a_channel_name_cannot_reach_a_neighbouring_setting(monkeypatch):
+    """``_mode_field`` matches against declared field names rather than doing a
+    bare getattr, so a channel called ``verify_target`` resolves to the shared
+    default instead of reading ``slack_verify_target``."""
+    monkeypatch.setenv("ROBOTHOR_SLACK_VERIFY_TARGET", "C0PLACEHOLDER")
+
+    assert access.access_mode("slack_verify") == "pairing"
+
+
+def test_an_unset_mode_is_not_reported_as_configured():
+    assert access.mode_was_configured("slack") is False
+    assert access.mode_was_configured("telegram") is False
+
+
+def test_an_explicitly_set_mode_is_reported_as_configured(monkeypatch):
+    monkeypatch.setenv("ROBOTHOR_SLACK_ACCESS", "pairing")
+
+    assert access.mode_was_configured("slack") is True
+    assert access.access_mode("slack") == "pairing"
+
+
 def test_an_unrecognised_mode_fails_closed(monkeypatch):
     monkeypatch.setenv("ROBOTHOR_SLACK_ACCESS", "everyone")
 
@@ -309,7 +368,8 @@ def test_the_telegram_helper_answers_with_a_code_once_pairing_is_on(unknown, min
         access.pairing_reply("telegram", TELEGRAM_USER, tenant_id=TENANT, display_name="Alice")
     )
 
-    assert reply == "ABC234"
+    assert reply is not None
+    assert reply.endswith("ABC234")
 
 
 def test_a_suppressed_telegram_reply_falls_back_instead_of_sending_nothing(
@@ -324,7 +384,7 @@ def test_a_suppressed_telegram_reply_falls_back_instead_of_sending_nothing(
         for _ in range(4)
     ]
 
-    assert replies[:3] == ["ABC234"] * 3
+    assert all(reply is not None and reply.endswith("ABC234") for reply in replies[:3])
     assert replies[3] is None
 
 

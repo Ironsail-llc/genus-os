@@ -27,16 +27,23 @@ belongs in FastAPI's worker threadpool rather than on the event loop — see
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
+import uuid
 from typing import Any
 
+import psycopg2
 from deps import get_tenant_id
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from robothor.engine.channels import identities
 from routers._audit import audited
+from routers._engine_client import engine_request
 from routers._operator import require_operator
+
+logger = logging.getLogger(__name__)
 
 
 def _require_primary_tenant(tenant_id: str = Depends(get_tenant_id)) -> None:
@@ -71,8 +78,6 @@ _CHANNEL_NAME = re.compile(r"^[a-z0-9_]{1,32}$")
 #: value is a 400 rather than a hash lookup that quietly matches nothing.
 _CODE = re.compile(f"^[{identities.PAIRING_CODE_ALPHABET}]{{{identities.PAIRING_CODE_LENGTH}}}$")
 
-_UUID = re.compile(r"^[0-9a-fA-F-]{36}$")
-
 
 class ApproveRequest(BaseModel):
     """Who the code's sender is, in this instance's own terms.
@@ -88,14 +93,54 @@ class ApproveRequest(BaseModel):
 
 def _channel(name: str) -> str:
     if not _CHANNEL_NAME.match(name or ""):
-        raise HTTPException(status_code=400, detail="unrecognized channel name")
+        raise HTTPException(status_code=422, detail="unrecognized channel name")
     return name
 
 
 def _code(value: str) -> str:
     if not _CODE.match((value or "").strip().upper()):
-        raise HTTPException(status_code=400, detail="not a pairing code")
+        raise HTTPException(status_code=422, detail="not a pairing code")
     return value.strip().upper()
+
+
+def _identity_id(value: str) -> str:
+    """An identity id, or 422.
+
+    ``uuid.UUID`` and not a regex. The regex this replaced was
+    ``[0-9a-fA-F-]{36}``, which matches thirty-six hyphens, and equally
+    thirty-six letter ``a`` characters -- both of which reached
+    ``WHERE id = %s`` on a UUID column and came back as a 500. A caller's typo
+    is not an application crash, and a shape check that admits values the column
+    cannot hold is not a shape check.
+    """
+    try:
+        uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=422, detail="not an identity id") from None
+    return str(value)
+
+
+async def _tell_the_engine_to_forget() -> None:
+    """Drop the engine's identity caches, best effort.
+
+    The row is written in THIS process. The engine's belief about who a sender
+    is lives in its own -- 60s in ``identity.resolvers``, **300s** in
+    ``engine.users`` -- so without this an operator watches a revoke succeed and
+    the revoked sender goes on driving the agent for up to five minutes, with
+    nothing anywhere saying why.
+
+    Best effort on purpose: the decision is already durable and the caches
+    expire by themselves, so failing the operator's approval because the engine
+    is mid-restart would be a worse outcome than the staleness this shortens.
+    The failure is logged, never raised.
+    """
+    try:
+        status, _ = await engine_request("POST", "/api/admin/identities/reload")
+    except Exception:  # noqa: BLE001 - a settled decision must not fail on this
+        logger.warning("Could not reach the engine to drop its identity caches", exc_info=True)
+        return
+    if status >= 400:
+        logger.warning("Engine refused an identity cache reload (status %s)", status)
 
 
 def _iso(value: Any) -> Any:
@@ -109,10 +154,27 @@ def _settled(exc: identities.PairingError) -> HTTPException:
     code they were given simply is not there any more, which is the same
     situation whether it expired, was spent or was denied — and saying WHICH
     would tell a caller holding a guessed code that it had once been real.
+
+    ``PairingConflictError`` is a 409, and its message DOES travel: unlike the
+    code errors it says nothing about a credential, and "that user already has a
+    Telegram binding" is the whole of what the operator needs in order to fix
+    it. It used to be an unhandled ``UniqueViolation``, and therefore a 500.
     """
     if isinstance(exc, identities.PairingCodeError):
         return HTTPException(status_code=404, detail="no live pairing code matched")
+    if isinstance(exc, identities.PairingConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
     return HTTPException(status_code=400, detail=str(exc))
+
+
+def _unavailable(exc: psycopg2.Error) -> HTTPException:
+    """A database that is not answering is a dependency being down.
+
+    503 and not 500: an operator paged at 3am needs to know whether the
+    appliance crashed or Postgres did, and every route here is one query deep.
+    """
+    logger.warning("channel access route could not reach the database: %s", type(exc).__name__)
+    return HTTPException(status_code=503, detail="the identity store is unavailable")
 
 
 @router.get("/{name}/pending")
@@ -120,7 +182,10 @@ def list_pending(name: str, request: Request) -> dict[str, Any]:
     """Codes waiting on a decision. Never a code, never a native id."""
     require_operator(request)
     channel = _channel(name)
-    rows = identities.list_pending(channel)
+    try:
+        rows = identities.list_pending(channel)
+    except psycopg2.Error as exc:
+        raise _unavailable(exc) from exc
     return {
         "channel": channel,
         "pending": [
@@ -138,8 +203,12 @@ def list_pending(name: str, request: Request) -> dict[str, Any]:
 
 
 @router.post("/{name}/pairings/{code}/approve")
-def approve(name: str, code: str, body: ApproveRequest, request: Request) -> dict[str, Any]:
-    """Spend a code and bind its sender to a user."""
+async def approve(name: str, code: str, body: ApproveRequest, request: Request) -> dict[str, Any]:
+    """Spend a code and bind its sender to a user.
+
+    ``async`` because it awaits the engine after the write; the psycopg2 work
+    goes through ``asyncio.to_thread``, so nothing blocking runs on the loop.
+    """
     actor = require_operator(request)
     channel = _channel(name)
     checked = _code(code)
@@ -155,10 +224,21 @@ def approve(name: str, code: str, body: ApproveRequest, request: Request) -> dic
         )
         raise HTTPException(status_code=400, detail=f"role {body.role!r} is not one pairing grants")
     if bool(body.user_id) == bool(body.email):
+        # Audited like its sibling above. One of two refusal arms writing a row
+        # is the shape that gets read afterwards as "this never happened".
+        audited(
+            request,
+            "channel.pairing.approve",
+            action=channel,
+            status="denied",
+            role=body.role,
+            reason="no_single_target",
+        )
         raise HTTPException(status_code=400, detail="name exactly one of user_id or email")
 
     try:
-        identity = identities.approve_pairing(
+        identity = await asyncio.to_thread(
+            identities.approve_pairing,
             checked,
             actor=actor,
             channel=channel,
@@ -176,6 +256,8 @@ def approve(name: str, code: str, body: ApproveRequest, request: Request) -> dic
             reason=type(exc).__name__,
         )
         raise _settled(exc) from exc
+    except psycopg2.Error as exc:
+        raise _unavailable(exc) from exc
 
     audited(
         request,
@@ -184,11 +266,12 @@ def approve(name: str, code: str, body: ApproveRequest, request: Request) -> dic
         identity_id=str(identity["id"]),
         role=body.role,
     )
+    await _tell_the_engine_to_forget()
     return {"id": str(identity["id"]), "channel": channel, "role": body.role}
 
 
 @router.post("/{name}/pairings/{code}/deny")
-def deny(name: str, code: str, request: Request) -> dict[str, Any]:
+async def deny(name: str, code: str, request: Request) -> dict[str, Any]:
     """Spend a code without binding anything.
 
     Denial goes through the same one-shot statement as approval rather than
@@ -200,7 +283,9 @@ def deny(name: str, code: str, request: Request) -> dict[str, Any]:
     checked = _code(code)
 
     try:
-        denied = identities.deny_pairing(checked, actor=actor, channel=channel)
+        denied = await asyncio.to_thread(
+            identities.deny_pairing, checked, actor=actor, channel=channel
+        )
     except identities.PairingError as exc:
         audited(
             request,
@@ -210,8 +295,11 @@ def deny(name: str, code: str, request: Request) -> dict[str, Any]:
             reason=type(exc).__name__,
         )
         raise _settled(exc) from exc
+    except psycopg2.Error as exc:
+        raise _unavailable(exc) from exc
 
     audited(request, "channel.pairing.deny", action=channel, pairing_id=str(denied["id"]))
+    await _tell_the_engine_to_forget()
     return {"denied": True, "channel": channel}
 
 
@@ -219,20 +307,26 @@ def deny(name: str, code: str, request: Request) -> dict[str, Any]:
 def list_bound(name: str, request: Request) -> dict[str, Any]:
     """Every live binding on a channel, for the operator who has to review them.
 
-    This one DOES carry native ids: an operator reviewing who can drive their
-    instance cannot review a list of opaque ids, and unlike ``/pending`` these
-    are people they already decided about.
+    The native id is FINGERPRINTED, not returned. Telling two bindings apart is
+    what an operator needs; reading a workspace's member ids is not, and one
+    leaked operator session would otherwise enumerate every bound account on the
+    channel in a single call. ``user_id`` and ``display_name`` stay: they are
+    this instance's own names for its own people, which is a different thing
+    from a third-party platform's identifier for them.
     """
     require_operator(request)
     channel = _channel(name)
-    rows = identities.list_identities(channel)
+    try:
+        rows = identities.list_identities(channel)
+    except psycopg2.Error as exc:
+        raise _unavailable(exc) from exc
     return {
         "channel": channel,
         "identities": [
             {
                 "id": str(row["id"]),
                 "user_id": row["user_id"],
-                "native_id": row["native_id"],
+                "native_id_fingerprint": identities.fingerprint(row["native_id"]),
                 "display_name": row["display_name"],
                 "role": row["role"],
                 "paired_at": _iso(row["paired_at"]),
@@ -245,21 +339,29 @@ def list_bound(name: str, request: Request) -> dict[str, Any]:
 
 
 @router.delete("/{name}/identities/{identity_id}")
-def revoke(name: str, identity_id: str, request: Request) -> dict[str, Any]:
-    """Soft-delete a binding. The same native id may pair again afterwards."""
+async def revoke(name: str, identity_id: str, request: Request) -> dict[str, Any]:
+    """Soft-delete a binding. The same native id may pair again afterwards.
+
+    This is the only control an operator has when a binding goes bad, which is
+    why it awaits the engine cache drop rather than leaving the revoked sender
+    resolvable for another 300 seconds.
+    """
     actor = require_operator(request)
     channel = _channel(name)
-    if not _UUID.match(identity_id or ""):
-        raise HTTPException(status_code=400, detail="not an identity id")
+    checked = _identity_id(identity_id)
 
-    revoked = identities.revoke(identity_id, actor=actor)
+    try:
+        revoked = await asyncio.to_thread(identities.revoke, checked, actor=actor)
+    except psycopg2.Error as exc:
+        raise _unavailable(exc) from exc
     audited(
         request,
         "channel.identity.revoke",
         action=channel,
         status="ok" if revoked else "denied",
-        identity_id=identity_id,
+        identity_id=checked,
     )
     if not revoked:
         raise HTTPException(status_code=404, detail="no live identity with that id")
-    return {"revoked": True, "channel": channel, "id": identity_id}
+    await _tell_the_engine_to_forget()
+    return {"revoked": True, "channel": channel, "id": checked}

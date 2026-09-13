@@ -1087,9 +1087,17 @@ surface.
 mandatory `actor` and refuses anything not prefixed `operator:` (the bridge's
 operator gate) or `cli:` (a shell on the box), so the stranger who sends
 `approve ABC234` back down the wire is refused structurally rather than by a
-check somebody has to remember. Telegram defaults to `open` purely for
-compatibility; Slack and everything new default to `pairing`. Full rules,
-tables and CLI: [Channel access](channels/access.md).
+check somebody has to remember.
+
+Telegram defaults to `open` purely for compatibility, and under `pairing` it
+closes all three of its surfaces — private, group and the operator's own chat —
+so only senders with a `tenant_users` row run. Slack defaults to `pairing`, with
+one compatibility clause for instances carrying a pre-modes allowlist that turns
+on whether the mode was *configured* rather than on what it resolves to. Because
+a decision written by the bridge or the CLI cannot reach the engine's in-process
+identity caches (60 s, and 300 s for `tenant_users`), both callers finish by
+posting `/api/admin/identities/reload`, best effort. Full rules, tables and CLI:
+[Channel access](channels/access.md).
 
 **Answering from the Helm.** `GET /api/approvals` lists both durable kinds;
 `POST /api/approvals/{kind}/{id}` answers one, with `kind` in `workflow`,

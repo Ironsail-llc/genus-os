@@ -70,23 +70,37 @@ class SlackBot:
     def _access_mode(self) -> str:
         """The mode this instance's Slack inbound runs under.
 
-        One compatibility clause, stated rather than hidden: an instance that
-        set ``ROBOTHOR_SLACK_ALLOWED_USERS``/``_CHANNELS`` and has *not* named a
-        mode keeps being governed by those lists. ``slack_access`` defaults to
-        ``pairing``, and silently overriding a configured allowlist with it
-        would lock out everyone on that list the moment this released -- an
-        availability regression delivered as a security improvement, which is a
-        trade no operator agreed to. Naming the mode explicitly wins over this
-        in both directions.
+        One compatibility clause, and it turns on PROVENANCE rather than on the
+        resolved value. An instance that set
+        ``ROBOTHOR_SLACK_ALLOWED_USERS``/``_CHANNELS`` before modes existed and
+        has named no mode keeps being governed by those lists, because
+        ``slack_access`` defaults to ``pairing`` and flipping such an instance on
+        upgrade would lock out everyone on the list -- an availability
+        regression delivered as a security improvement.
+
+        The first cut asked ``access_mode("slack") == "pairing"``, which cannot
+        tell the declared default from an operator naming it. So an instance that
+        explicitly set ``ROBOTHOR_SLACK_ACCESS=pairing`` while any stale
+        allowlist value was still exported was silently downgraded to
+        ``allowlist`` -- and ``_authorized`` is user-**OR-channel**, so every
+        unknown member of the workspace posting in that leftover channel drove
+        the main agent. The warning it logged told the operator to set exactly
+        the variable they had already set, which made the downgrade
+        undiagnosable from the log. ``mode_was_configured`` is the fix: an
+        explicit mode, in either direction, always wins.
         """
-        from robothor.engine.channels.access import access_mode
+        from robothor.engine.channels.access import access_mode, mode_was_configured
 
         mode = access_mode("slack")
+        if mode_was_configured("slack"):
+            return mode
         if mode == "pairing" and (self._allowed_users() or self._allowed_channels()):
             logger.warning(
-                "Slack has an allowlist configured and no explicit mode, so it is "
-                "running in allowlist mode. Set ROBOTHOR_SLACK_ACCESS=pairing to "
-                "require pairing instead, or =allowlist to silence this."
+                "Slack has a legacy ROBOTHOR_SLACK_ALLOWED_USERS/CHANNELS allowlist and "
+                "no ROBOTHOR_SLACK_ACCESS, so it is running in allowlist mode rather "
+                "than the pairing default. Set ROBOTHOR_SLACK_ACCESS explicitly -- to "
+                "`pairing` to require pairing (the allowlist is then ignored), or to "
+                "`allowlist` to keep these lists and silence this."
             )
             return "allowlist"
         return mode

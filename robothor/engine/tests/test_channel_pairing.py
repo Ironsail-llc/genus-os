@@ -63,20 +63,48 @@ def _isolated(monkeypatch):
 # ── The invariant, with no database in sight ─────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "actor",
-    [
-        "telegram:100000001",
-        "slack:U0PLACEHOLDER",
-        "agent:main",
-        "service",
-        "",
-        "operator",  # no colon: the prefix check is not a substring check
-        "cli",
-        "xoperator:1",
-    ],
-)
+#: Every shape that is not an operator-gated route or the local CLI. ``service``
+#: and the two channel-prefixed ones are what an inbound path could plausibly
+#: carry; ``operator``/``cli`` without the colon prove the check is a prefix
+#: test and not a substring test.
+_REFUSED_ACTORS = [
+    "telegram:100000001",
+    "slack:U0PLACEHOLDER",
+    "agent:main",
+    "service",
+    "",
+    "operator",  # no colon: the prefix check is not a substring check
+    "cli",
+    "xoperator:1",
+]
+
+
+@pytest.mark.parametrize("actor", _REFUSED_ACTORS)
 def test_only_an_operator_or_the_cli_may_approve(actor):
+    with pytest.raises(identities.PairingActorError):
+        identities.approve_pairing("ABC234", actor=actor, user_id="u-1", tenant_id=TENANT)
+
+
+@pytest.mark.parametrize("actor", _REFUSED_ACTORS)
+def test_only_an_operator_or_the_cli_may_deny(actor):
+    with pytest.raises(identities.PairingActorError):
+        identities.deny_pairing("ABC234", actor=actor, tenant_id=TENANT)
+
+
+@pytest.mark.parametrize("actor", _REFUSED_ACTORS)
+def test_only_an_operator_or_the_cli_may_revoke(actor):
+    """Revocation is the same authorization decision in reverse, and it was the
+    one with no test: deleting its actor check left every test green."""
+    with pytest.raises(identities.PairingActorError):
+        identities.revoke("00000000-0000-0000-0000-000000000000", actor=actor, tenant_id=TENANT)
+
+
+@pytest.mark.parametrize("actor", ["operator:", "cli:", "operator:   ", "cli:None"])
+def test_an_actor_with_no_id_behind_the_prefix_is_refused(actor):
+    """``_operator.py`` builds ``f"operator:{auth.actor_id}"`` unconditionally,
+    so a null actor id would otherwise write ``paired_by="operator:None"`` --
+    an audit row naming nobody, on the one table that records who let somebody
+    in. The prefix is not the authorization; the prefix plus an id is."""
     with pytest.raises(identities.PairingActorError):
         identities.approve_pairing("ABC234", actor=actor, user_id="u-1", tenant_id=TENANT)
 
@@ -406,6 +434,152 @@ def test_an_unknown_code_is_refused_rather_than_silently_ignored(paired_db):
         identities.approve_pairing(
             "ZZZZZZ", actor="cli:tester", channel="slack", tenant_id=TENANT, user_id="u-alice"
         )
+
+
+@pytest.mark.integration
+def test_re_pairing_a_telegram_id_moves_the_tenant_users_row_to_the_new_person(paired_db):
+    """``lookup_user`` reads ``tenant_users.user_id`` and nothing else.
+
+    An upsert that left that column alone bound the native id to a new person
+    in ``user_channel_identities`` while every Telegram run stayed attributed to
+    the OLD one -- and with it the old ``person_id``, memory scoping and CRM
+    linkage. The two tables then disagree permanently, and only the one nobody
+    reads is right.
+    """
+    cur = paired_db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        "INSERT INTO tenant_users "
+        "(telegram_user_id, display_name, tenant_id, role, user_id, is_active) "
+        "VALUES (%s, %s, %s, %s, %s, TRUE)",
+        (TELEGRAM_USER, "Old Person", TENANT, "owner", "u-old"),
+    )
+
+    code = identities.mint_code(
+        channel="telegram", native_id=TELEGRAM_USER, tenant_id=TENANT, display_name="New Person"
+    )
+    identities.approve_pairing(
+        code, actor="cli:tester", channel="telegram", tenant_id=TENANT, user_id="u-new"
+    )
+
+    cur.execute(
+        "SELECT user_id, role, is_active FROM tenant_users "
+        "WHERE telegram_user_id = %s AND tenant_id = %s",
+        (TELEGRAM_USER, TENANT),
+    )
+    row = cur.fetchone()
+    assert row["user_id"] == "u-new"
+    assert row["role"] == "member"
+
+    from robothor.engine.users import lookup_user
+
+    assert lookup_user(TELEGRAM_USER, tenant_id=TENANT)["user_id"] == "u-new"
+
+
+@pytest.mark.integration
+def test_approving_over_a_deactivated_telegram_row_says_so(paired_db, caplog):
+    """Approval reactivates -- an operator approving IS the decision to let
+    them in -- but a row that somebody deliberately deactivated must not come
+    back silently. One warning, no ids."""
+    cur = paired_db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        "INSERT INTO tenant_users "
+        "(telegram_user_id, display_name, tenant_id, role, user_id, is_active) "
+        "VALUES (%s, %s, %s, %s, %s, FALSE)",
+        (TELEGRAM_USER, "Old Person", TENANT, "member", "u-old"),
+    )
+
+    code = identities.mint_code(channel="telegram", native_id=TELEGRAM_USER, tenant_id=TENANT)
+    with caplog.at_level(logging.WARNING):
+        identities.approve_pairing(
+            code, actor="cli:tester", channel="telegram", tenant_id=TENANT, user_id="u-new"
+        )
+
+    cur.execute("SELECT is_active FROM tenant_users WHERE telegram_user_id = %s", (TELEGRAM_USER,))
+    assert cur.fetchone()["is_active"] is True
+
+    warnings = " | ".join(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+    assert "reactivat" in warnings.lower()
+    assert TELEGRAM_USER not in warnings
+
+
+@pytest.mark.integration
+def test_a_second_telegram_binding_for_one_person_is_a_conflict_not_a_crash(paired_db):
+    """``tenant_users.user_id`` is globally UNIQUE (migration 037), so binding a
+    second Telegram id to the same person raises UniqueViolation. Unhandled it
+    escaped the router as a 500; it is a conflict the operator can act on."""
+    first = identities.mint_code(channel="telegram", native_id=TELEGRAM_USER, tenant_id=TENANT)
+    identities.approve_pairing(
+        first, actor="cli:tester", channel="telegram", tenant_id=TENANT, user_id="u-alice"
+    )
+
+    second = identities.mint_code(channel="telegram", native_id="100000002", tenant_id=TENANT)
+    with pytest.raises(identities.PairingConflictError):
+        identities.approve_pairing(
+            second, actor="cli:tester", channel="telegram", tenant_id=TENANT, user_id="u-alice"
+        )
+
+
+@pytest.mark.integration
+def test_a_conflicting_approval_leaves_the_code_spendable(paired_db):
+    """A refused approval must not burn the grant: the sender cannot ask for
+    another one and the operator would have nothing left to approve."""
+    first = identities.mint_code(channel="telegram", native_id=TELEGRAM_USER, tenant_id=TENANT)
+    identities.approve_pairing(
+        first, actor="cli:tester", channel="telegram", tenant_id=TENANT, user_id="u-alice"
+    )
+    second = identities.mint_code(channel="telegram", native_id="100000002", tenant_id=TENANT)
+
+    with pytest.raises(identities.PairingConflictError):
+        identities.approve_pairing(
+            second, actor="cli:tester", channel="telegram", tenant_id=TENANT, user_id="u-alice"
+        )
+
+    identities.approve_pairing(
+        second, actor="cli:tester", channel="telegram", tenant_id=TENANT, user_id="u-bob"
+    )
+    assert identities.lookup("telegram", "100000002", tenant_id=TENANT)["user_id"] == "u-bob"
+
+
+@pytest.mark.integration
+def test_a_denied_sender_cannot_immediately_mint_another_code(paired_db):
+    """Denial is a decision, and a decision a stranger can undo by sending
+    another message is not one. Until the original TTL expires, a denied sender
+    gets nothing rather than a fresh code in the operator's pending list."""
+    code = identities.mint_code(channel="slack", native_id=SLACK_USER, tenant_id=TENANT)
+    identities.deny_pairing(code, actor="operator:admin-1", channel="slack", tenant_id=TENANT)
+
+    with pytest.raises(identities.PairingDeniedError):
+        identities.mint_code(channel="slack", native_id=SLACK_USER, tenant_id=TENANT)
+
+    assert identities.list_pending("slack", tenant_id=TENANT) == []
+
+
+@pytest.mark.integration
+def test_the_deny_cooldown_lifts_when_the_original_code_would_have_expired(paired_db):
+    code = identities.mint_code(channel="slack", native_id=SLACK_USER, tenant_id=TENANT)
+    identities.deny_pairing(code, actor="operator:admin-1", channel="slack", tenant_id=TENANT)
+    with paired_db.cursor() as cur:
+        cur.execute("UPDATE channel_pairing_codes SET expires_at = NOW() - interval '1 second'")
+
+    fresh = identities.mint_code(channel="slack", native_id=SLACK_USER, tenant_id=TENANT)
+
+    assert len(fresh) == identities.PAIRING_CODE_LENGTH
+    assert len(identities.list_pending("slack", tenant_id=TENANT)) == 1
+
+
+@pytest.mark.integration
+def test_a_gate_refusal_survives_a_denied_sender(paired_db, monkeypatch):
+    """The DAL raising must not become a channel that crashes on a message."""
+    monkeypatch.setenv("ROBOTHOR_SLACK_ACCESS", "pairing")
+    monkeypatch.setattr(access, "_resolve_known", lambda *a, **kw: None)
+    code = identities.mint_code(channel="slack", native_id=SLACK_USER, tenant_id=TENANT)
+    identities.deny_pairing(code, actor="operator:admin-1", channel="slack", tenant_id=TENANT)
+
+    decision = asyncio.run(access.evaluate(channel="slack", native_id=SLACK_USER, tenant_id=TENANT))
+
+    assert decision.allowed is False
+    assert decision.pairing_code is None
+    assert decision.refusal == ""
 
 
 @pytest.mark.integration

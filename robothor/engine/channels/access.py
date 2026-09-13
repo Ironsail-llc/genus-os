@@ -59,8 +59,10 @@ __all__ = [
     "PAIRING_CODE_LENGTH",
     "AccessDecision",
     "AccessMode",
+    "PAIRING_REPLY_TEMPLATE",
     "access_mode",
     "evaluate",
+    "mode_was_configured",
     "pairing_reply",
     "reset_reply_budget",
 ]
@@ -86,12 +88,33 @@ GROUP_SURFACE = "group"
 PAIRING_CODE_ALPHABET = identities.PAIRING_CODE_ALPHABET
 PAIRING_CODE_LENGTH = identities.PAIRING_CODE_LENGTH
 
+#: The whole of what an unknown sender is told. One sentence, because a bare
+#: six-character code tells a stranger nothing about what to do with it and the
+#: first cut sent exactly that.
+#:
+#: What it must NOT contain is the point: no operator name, no instance or brand
+#: name, no address, no "ask <someone>". A stranger who guessed a bot's handle
+#: learns only that pairing exists here -- not who runs it, not what it is, and
+#: nothing that helps them find a human to social-engineer. "the operator of
+#: this assistant" is deliberately a role and not an identity.
+PAIRING_REPLY_TEMPLATE = "Share this code with the operator of this assistant to be paired: {code}"
+
 #: At most three replies per sender per hour, the shape
 #: ``_ONBOARDING_NOTIFY_INTERVAL_SECONDS`` already uses in ``engine/telegram.py``.
 #: The code itself is idempotent inside its TTL, so this is not about minting —
 #: it is about not letting somebody with a script make the bot answer forever.
 REPLY_WINDOW_SECONDS = 3600.0
 MAX_REPLIES_PER_WINDOW = 3
+
+#: How long a resolution MISS is remembered while a channel is in ``pairing``.
+#:
+#: The resolver's own negative TTL is 60s, which is the wrong answer for a
+#: sender waiting to be approved: the operator approves them, their next message
+#: is still refused, and it mints a SECOND pending code that arrives in the
+#: operator's list as a second request from the same person. Five seconds keeps
+#: the burst protection and makes an approval feel like it took effect. It costs
+#: one query per unknown sender per five seconds, bounded by the reply budget.
+PENDING_MISS_TTL_SECONDS = 5.0
 
 _replies: dict[tuple[str, str], list[float]] = {}
 
@@ -131,11 +154,16 @@ def access_mode(channel: str) -> str:
     from robothor.settings import get_settings
 
     channels = get_settings().channels
-    raw = ""
-    if _CHANNEL_NAME.match(channel or ""):
-        raw = str(getattr(channels, f"{channel}_access", "") or "")
-    if not raw:
-        raw = str(channels.channel_access_default or "")
+    field = _mode_field(channel)
+    raw = str(getattr(channels, field, "") or "")
+    if not raw.strip():
+        # Blank is "unset", and unset falls back to the FIELD's own declared
+        # default -- not to ``channel_access_default``. Telegram declares
+        # ``open`` for compatibility, and an operator who blanked
+        # ``ROBOTHOR_TELEGRAM_ACCESS`` has not thereby asked for ``pairing``;
+        # they have asked for whatever the platform ships. Reading the default
+        # off the model keeps the two answers from drifting apart.
+        raw = str(_DECLARED_DEFAULTS.get(field, "") or "")
 
     mode = raw.strip().lower()
     if mode not in MODES:
@@ -148,6 +176,54 @@ def access_mode(channel: str) -> str:
         )
         return FALLBACK_MODE
     return mode
+
+
+def _mode_field(channel: str) -> str:
+    """Which settings field governs ``channel``.
+
+    A channel with a field of its own uses it; everything else -- every plugin
+    channel -- uses ``channel_access_default``. Checked against the declared
+    field names rather than with a bare ``getattr``, so a channel called
+    ``verify_target`` cannot reach a neighbouring setting.
+    """
+    from robothor.settings.model import ChannelSettings
+
+    if _CHANNEL_NAME.match(channel or ""):
+        candidate = f"{channel}_access"
+        if candidate in ChannelSettings.model_fields:
+            return candidate
+    return "channel_access_default"
+
+
+def _declared_defaults() -> dict[str, str]:
+    from robothor.settings.model import ChannelSettings
+
+    return {
+        name: str(field.default or "")
+        for name, field in ChannelSettings.model_fields.items()
+        if name.endswith("_access") or name == "channel_access_default"
+    }
+
+
+#: Resolved once: the model does not change at runtime, and this is on the
+#: inbound path of every message.
+_DECLARED_DEFAULTS: dict[str, str] = _declared_defaults()
+
+
+def mode_was_configured(channel: str) -> bool:
+    """Whether this channel's mode was CHOSEN, as opposed to defaulted.
+
+    The distinction exists for exactly one caller -- ``SlackBot._access_mode``,
+    which keeps an instance that configured a legacy allowlist before modes
+    existed on ``allowlist`` rather than locking everyone out of it. That clause
+    must apply to the declared default and never to an explicit choice: deciding
+    it on the resolved value instead is how an operator who set
+    ``ROBOTHOR_SLACK_ACCESS=pairing`` got ``allowlist``, with the warning telling
+    them to set the variable they had already set.
+    """
+    from robothor.settings.provenance import is_configured
+
+    return is_configured(f"channels.{_mode_field(channel)}")
 
 
 def reset_reply_budget() -> None:
@@ -163,10 +239,17 @@ def _may_reply(channel: str, native_id: str) -> bool:
         return False
     window.append(now)
     _replies[(channel, native_id)] = window
+    identities.prune_oldest(_replies)
     return True
 
 
-def _resolve_known(channel: str, native_id: str, tenant_id: str) -> IdentityContext | None:
+def _resolve_known(
+    channel: str,
+    native_id: str,
+    tenant_id: str,
+    *,
+    negative_ttl_seconds: float | None = None,
+) -> IdentityContext | None:
     """The identity bound to this native id, or None.
 
     Goes through :func:`robothor.identity.resolvers.resolve_identity` — the
@@ -178,7 +261,9 @@ def _resolve_known(channel: str, native_id: str, tenant_id: str) -> IdentityCont
     """
     from robothor.identity.resolvers import resolve_identity
 
-    return resolve_identity(channel, native_id, tenant_id)
+    return resolve_identity(
+        channel, native_id, tenant_id, negative_ttl_seconds=negative_ttl_seconds
+    )
 
 
 async def evaluate(
@@ -211,11 +296,22 @@ async def evaluate(
     refusal), which put a workspace's member ids into every log shipper the
     instance has, for the senders with the least reason to trust it.
     """
-    identity = await asyncio.to_thread(_resolve_known, channel, native_id, tenant_id)
+    resolved_mode = mode if mode in MODES else access_mode(channel)
+
+    # The mode is read BEFORE the identity, and only so a miss can be cached for
+    # the right length of time: a sender waiting on a pairing is a miss by
+    # definition, and remembering that for a full minute makes an approval look
+    # like it did not work. The ORDER OF THE DECISION is unchanged -- a known
+    # identity still short-circuits every mode, on the next line.
+    identity = await asyncio.to_thread(
+        _resolve_known,
+        channel,
+        native_id,
+        tenant_id,
+        negative_ttl_seconds=(PENDING_MISS_TTL_SECONDS if resolved_mode == "pairing" else None),
+    )
     if identity is not None:
         return AccessDecision(allowed=True, identity=identity)
-
-    resolved_mode = mode if mode in MODES else access_mode(channel)
 
     if resolved_mode == "open":
         return AccessDecision(allowed=True)
@@ -249,13 +345,21 @@ async def evaluate(
             tenant_id=tenant_id,
             display_name=display_name,
         )
+    except identities.PairingDeniedError:
+        # An expected outcome, not a fault: this sender was refused and the
+        # refusal has not expired. Nothing goes back, so a denial is not
+        # something a stranger can undo by sending another message.
+        logger.info("channel %s ignored a sender whose pairing was denied", channel)
+        return AccessDecision(allowed=False)
     except Exception:
         # A stranger must not be able to learn that the database is down, and a
         # message must not be able to take the channel down either.
         logger.exception("channel %s could not mint a pairing code", channel)
         return AccessDecision(allowed=False)
 
-    return AccessDecision(allowed=False, refusal=code, pairing_code=code)
+    return AccessDecision(
+        allowed=False, refusal=PAIRING_REPLY_TEMPLATE.format(code=code), pairing_code=code
+    )
 
 
 async def pairing_reply(
@@ -264,15 +368,17 @@ async def pairing_reply(
     *,
     tenant_id: str = DEFAULT_TENANT,
     display_name: str = "",
+    surface: str = DIRECT_SURFACE,
 ) -> str | None:
-    """The pairing answer for an unknown 1:1 sender, or None to fall through.
+    """The pairing answer for an unknown sender, or None to fall through.
 
     The shape Telegram needs. ``None`` means *this gate has nothing to say* —
-    the channel is not in ``pairing`` mode, or the reply was suppressed, or the
-    mint failed — and the caller should do exactly what it did before this gate
-    existed. It is ``None`` rather than ``""`` on purpose: ``message.answer("")``
-    is an API error, so "send nothing" and "send your own refusal" have to be
-    distinguishable at the call site.
+    the channel is not in ``pairing`` mode, the surface is a group, the reply
+    was suppressed, or the mint failed — and the caller should do exactly what
+    it did before this gate existed, which for Telegram is its own refusal
+    sentence. It is ``None`` rather than ``""`` on purpose:
+    ``message.answer("")`` is an API error, so "send nothing of mine" and "send
+    your own refusal" have to be distinguishable at the call site.
     """
     mode = access_mode(channel)
     if mode != "pairing":
@@ -282,7 +388,7 @@ async def pairing_reply(
         native_id,
         tenant_id=tenant_id,
         display_name=display_name,
-        surface=DIRECT_SURFACE,
+        surface=surface,
         mode=mode,
     )
-    return decision.pairing_code
+    return decision.refusal or None

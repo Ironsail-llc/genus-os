@@ -23,16 +23,46 @@ from __future__ import annotations
 
 import argparse  # noqa: TC003 - argparse.Namespace is used at runtime in signatures
 import getpass
+import logging
 import sys
 from typing import Any
 
 from robothor.engine.channels import identities
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["add_access_parser", "cmd_channel_access"]
 
 
 def _err(message: str) -> None:
     print(message, file=sys.stderr)
+
+
+def _tell_the_engine_to_forget() -> None:
+    """Drop the engine's identity caches, best effort.
+
+    The row this command just wrote is durable and correct. What is not is the
+    ENGINE's belief about who a sender is: ``identity.resolvers`` caches a
+    resolution for 60s and ``engine.users`` caches a ``tenant_users`` row for
+    **300s**, both in the engine's own process. So an operator who revoked a
+    binding from this shell watched the command succeed and the revoked sender
+    went on driving the agent for up to five minutes.
+
+    Reached over the engine's local admin API rather than by importing anything:
+    clearing a cache in THIS process would clear a cache nobody is reading. Any
+    failure -- engine down, mid-restart, no control token -- is a warning and
+    nothing more. The decision is already written and the caches expire on their
+    own; failing the operator's command because the engine is restarting would
+    be worse than the staleness this shortens.
+    """
+    import asyncio
+
+    from robothor.engine.admin_client import post_identity_reload
+
+    try:
+        asyncio.run(post_identity_reload())
+    except Exception as exc:  # noqa: BLE001 - a settled decision must not fail on this
+        logger.warning("Could not tell the engine to drop its identity caches: %s", exc)
 
 
 def _actor() -> str:
@@ -129,9 +159,14 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
     print(f"\nIdentities ({len(bound)}):")
     for row in bound:
+        # The native id is FINGERPRINTED. An operator needs to tell two
+        # bindings apart, which a sha256 prefix does; printing a workspace's
+        # member ids into a terminal scrollback (and from there into a bug
+        # report) is a different thing, and not one this command needs.
         print(
             f"  {row['id']}  {row['user_id']}  {row.get('role', '')}  "
-            f"{row.get('display_name') or '(no name)'}  paired {row['paired_at']}"
+            f"{row.get('display_name') or '(no name)'}  "
+            f"{identities.fingerprint(row.get('native_id', ''))}  paired {row['paired_at']}"
         )
     if not bound:
         print("  (none)")
@@ -166,6 +201,7 @@ def _cmd_approve(args: argparse.Namespace) -> int:
         _err(f"Not approved: {exc}")
         return 1
 
+    _tell_the_engine_to_forget()
     print(f"Approved. {args.name} identity {identity['id']} bound as {args.role}.")
     return 0
 
@@ -180,7 +216,11 @@ def _cmd_deny(args: argparse.Namespace) -> int:
         _err(f"Not denied: {exc}")
         return 1
 
-    print(f"Denied. That code can never be approved, on {args.name} or anywhere else.")
+    _tell_the_engine_to_forget()
+    print(
+        f"Denied. That code can never be approved, on {args.name} or anywhere else, "
+        "and that sender gets no new code until the original would have expired."
+    )
     return 0
 
 
@@ -194,5 +234,6 @@ def _cmd_revoke(args: argparse.Namespace) -> int:
     if not revoked:
         _err(f"No live identity {args.identity_id} on {args.name}.")
         return 1
+    _tell_the_engine_to_forget()
     print("Revoked. That sender may pair again; nothing bars the native id.")
     return 0

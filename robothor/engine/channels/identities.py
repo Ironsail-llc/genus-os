@@ -35,6 +35,7 @@ import secrets
 import time
 from typing import Any
 
+import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
@@ -49,12 +50,15 @@ __all__ = [
     "PAIRING_TTL_SECONDS",
     "PairingActorError",
     "PairingCodeError",
+    "PairingConflictError",
+    "PairingDeniedError",
     "PairingError",
     "PairingRoleError",
     "PairingTargetError",
     "approve_pairing",
     "code_hash",
     "deny_pairing",
+    "fingerprint",
     "generate_code",
     "list_identities",
     "list_pending",
@@ -83,6 +87,16 @@ PAIRABLE_ROLES = frozenset({"member", "viewer"})
 #: AFTER its four-condition gate; ``cli:`` by a process already running as a
 #: user with a shell on the box.
 _APPROVAL_ACTOR_PREFIXES = ("operator:", "cli:")
+
+#: How many senders each process-global map remembers.
+#:
+#: Both are keyed by native id and pruned only when a key is touched again, so
+#: a flood of distinct senders would otherwise grow them without limit. The cap
+#: is deliberately generous -- it is a backstop against unbounded growth, not a
+#: capacity plan -- and eviction drops the oldest entries, which for the memo
+#: means a sender gets a rotated code and for the reply budget means a fresh
+#: allowance. Both are the same outcomes a restart produces.
+_MAX_TRACKED_SENDERS = 5000
 
 #: ``(tenant, channel, native_id) -> (code, monotonic deadline)``.
 #:
@@ -115,6 +129,21 @@ class PairingCodeError(PairingError):
     """No live code matched: unknown, expired, already spent, or denied."""
 
 
+class PairingConflictError(PairingError):
+    """The binding collides with one that already exists.
+
+    Separate from :exc:`PairingTargetError` because the operator's next move is
+    different: a target error means they named the wrong person, a conflict
+    means they named a person who is already bound and something has to be
+    revoked first. It is a 409 at the router, never a 500 -- which is what an
+    unhandled ``UniqueViolation`` was.
+    """
+
+
+class PairingDeniedError(PairingError):
+    """This sender was refused and the refusal has not expired yet."""
+
+
 # ── codes ────────────────────────────────────────────────────────────────────
 
 
@@ -128,20 +157,59 @@ def code_hash(code: str) -> str:
     return hashlib.sha256(code.strip().upper().encode("utf-8")).hexdigest()
 
 
+def fingerprint(native_id: str) -> str:
+    """Enough to tell two senders apart, and nothing of either.
+
+    An operator reviewing bindings needs to distinguish rows, which is a
+    different need from reading a workspace's member ids -- and a listing that
+    satisfied the second would let one leaked operator session enumerate every
+    bound account on the channel. Same construction as
+    ``robothor/cli/channel.py``'s credential fingerprint, and for the same
+    reason: a prefix of the value itself would carry part of the value.
+    """
+    return hashlib.sha256((native_id or "").encode("utf-8")).hexdigest()[:12]
+
+
 def reset_code_memo() -> None:
     """Forget every remembered plaintext. A test seam, and what a restart does."""
     _code_memo.clear()
 
 
+def prune_oldest(tracked: dict[Any, Any], limit: int = _MAX_TRACKED_SENDERS) -> int:
+    """Drop the oldest entries until ``tracked`` is within ``limit``.
+
+    Python dicts preserve insertion order, so "oldest" is the front of the
+    mapping. Shared with :mod:`robothor.engine.channels.access`, which has the
+    same unbounded-growth problem in its reply budget and no reason to solve it
+    differently. Returns how many were dropped, so a caller can say so.
+    """
+    dropped = 0
+    while len(tracked) > limit:
+        tracked.pop(next(iter(tracked)))
+        dropped += 1
+    return dropped
+
+
 def _require_settling_actor(actor: str) -> str:
+    """The actor, or :exc:`PairingActorError`.
+
+    A prefix alone is not enough. ``crm/bridge/routers/_operator.py`` builds
+    ``f"operator:{auth.actor_id}"`` unconditionally, so a null actor id would
+    otherwise land in ``paired_by`` as the literal ``"operator:None"`` -- an
+    audit row naming nobody, on the one table that records who let a stranger
+    in. ``None`` is rejected by name for that reason and not on general
+    principle.
+    """
     actor = (actor or "").strip()
-    if not actor.startswith(_APPROVAL_ACTOR_PREFIXES):
+    matched = next((p for p in _APPROVAL_ACTOR_PREFIXES if actor.startswith(p)), "")
+    identifier = actor[len(matched) :].strip() if matched else ""
+    if not matched or not identifier or identifier == "None":
         # The actor is NOT logged. It is the one field an inbound caller would
         # control if this check ever regressed, and a refused value in a log is
         # a refused value in a log shipper.
         raise PairingActorError(
-            "a pairing may only be settled by an operator-gated bridge route "
-            "or the local CLI; a channel message can never approve one"
+            "a pairing may only be settled by an identified operator-gated bridge "
+            "route or the local CLI; a channel message can never approve one"
         )
     return actor
 
@@ -161,6 +229,9 @@ def mint_code(
     process already sent. On a memo miss the pending row's hash is ROTATED
     rather than a second row inserted — one live grant per sender either way.
     """
+    if _denial_is_live(tenant_id, channel, native_id):
+        raise PairingDeniedError("this sender was refused and the refusal has not expired yet")
+
     key = (tenant_id, channel, native_id)
     remembered = _code_memo.get(key)
     if remembered is not None:
@@ -195,8 +266,30 @@ def mint_code(
         conn.commit()
 
     _code_memo[key] = (code, time.monotonic() + PAIRING_TTL_SECONDS)
+    prune_oldest(_code_memo)
     logger.info("channel %s minted a pairing code for tenant %s", channel, tenant_id)
     return code
+
+
+def _denial_is_live(tenant_id: str, channel: str, native_id: str) -> bool:
+    """Whether this sender was refused recently enough for it still to bind.
+
+    Without this, ``deny`` barred one CODE rather than one SENDER: the next
+    message minted a fresh row and the operator's pending list refilled, which
+    makes a denial something a stranger can undo by typing again. The cooldown
+    is the denied code's own remaining TTL -- ten minutes at most -- because a
+    denial is "not now", not a ban, and a permanent block is a different
+    decision with a different verb.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM channel_pairing_codes "
+            "WHERE tenant_id = %s AND channel = %s AND native_id = %s "
+            "AND denied_at IS NOT NULL AND expires_at > NOW() LIMIT 1",
+            (tenant_id, channel, native_id),
+        )
+        return cur.fetchone() is not None
 
 
 def _live_code_matches(tenant_id: str, channel: str, code: str) -> bool:
@@ -393,19 +486,27 @@ def approve_pairing(
             conn.rollback()
             raise PairingTargetError("no account in this tenant has that email address")
 
-        if grant["channel"] == "telegram":
-            _upsert_tenant_user(cur, grant, tenant_id, resolved, role)
-
-        identity = _insert_identity(
-            cur,
-            tenant_id=tenant_id,
-            user_id=resolved,
-            channel=grant["channel"],
-            native_id=grant["native_id"],
-            display_name=grant.get("display_name") or "",
-            role=role,
-            paired_by=actor,
-        )
+        try:
+            if grant["channel"] == "telegram":
+                _upsert_tenant_user(cur, grant, tenant_id, resolved, role)
+            identity = _insert_identity(
+                cur,
+                tenant_id=tenant_id,
+                user_id=resolved,
+                channel=grant["channel"],
+                native_id=grant["native_id"],
+                display_name=grant.get("display_name") or "",
+                role=role,
+                paired_by=actor,
+            )
+        except psycopg2.IntegrityError as exc:
+            # The spend and the binding share one transaction, so this rolls
+            # BOTH back: the code stays live and the operator can approve it
+            # again against a different target. A refused approval that burned
+            # the grant would leave the sender unable to retry and the operator
+            # with nothing left to approve.
+            conn.rollback()
+            raise PairingConflictError(_conflict_message(exc)) from exc
         conn.commit()
 
     _code_memo.pop((tenant_id, grant["channel"], grant["native_id"]), None)
@@ -459,6 +560,23 @@ def _user_id_for_email(cur: Any, email: str, tenant_id: str) -> str:
     return str(row["id"]) if row else ""
 
 
+def _conflict_message(exc: psycopg2.IntegrityError) -> str:
+    """What the operator has to do about a collision, in their terms.
+
+    The constraint names are the platform's, not theirs, and "duplicate key
+    value violates unique constraint" is not an instruction.
+    """
+    detail = str(getattr(exc, "pgerror", "") or exc)
+    if "tenant_users_user_id_key" in detail:
+        return (
+            "that user already has a Telegram binding; revoke it before pairing "
+            "them to a different Telegram account"
+        )
+    if "uq_user_channel_identities_live" in detail:
+        return "that sender is already bound on this channel; revoke the binding first"
+    return "the binding collides with one that already exists"
+
+
 def _upsert_tenant_user(
     cur: Any, grant: dict[str, Any], tenant_id: str, user_id: str, role: str
 ) -> None:
@@ -469,7 +587,33 @@ def _upsert_tenant_user(
     ``user_channel_identities`` would bind somebody the inbound path still
     treats as a stranger — an approval with no effect, which is the failure
     mode this repo has shipped more than once.
+
+    **``user_id`` moves with the binding.** The first cut set everything on the
+    conflict branch EXCEPT that column, so re-pairing a native id to a new
+    person left every Telegram run attributed to the old one — and with it the
+    old ``person_id``, memory scoping and CRM linkage — while
+    ``user_channel_identities`` said the new one. Two tables disagreeing
+    permanently, with only the one nobody reads being right.
+
+    Reactivating a deactivated row is deliberate: an operator approving a
+    pairing IS the decision to let that person in, and refusing would make them
+    guess which of two commands to run. But somebody deactivated that row on
+    purpose, so it is never silent — one WARNING, carrying a count and no ids.
     """
+    cur.execute(
+        "SELECT is_active, user_id FROM tenant_users "
+        "WHERE telegram_user_id = %s AND tenant_id = %s",
+        (grant["native_id"], tenant_id),
+    )
+    existing = cur.fetchone()
+    if existing is not None and not existing["is_active"]:
+        logger.warning(
+            "channel telegram pairing reactivated %d deactivated tenant_users row(s) "
+            "in tenant %s; the approval is the decision to re-admit them",
+            1,
+            tenant_id,
+        )
+
     cur.execute(
         """INSERT INTO tenant_users
                (telegram_user_id, display_name, tenant_id, role, user_id, is_active)
@@ -477,6 +621,7 @@ def _upsert_tenant_user(
            ON CONFLICT (telegram_user_id, tenant_id)
            DO UPDATE SET is_active = TRUE,
                          role = EXCLUDED.role,
+                         user_id = EXCLUDED.user_id,
                          display_name = CASE
                              WHEN EXCLUDED.display_name <> '' THEN EXCLUDED.display_name
                              ELSE tenant_users.display_name

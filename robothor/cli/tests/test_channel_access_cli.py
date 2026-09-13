@@ -24,6 +24,7 @@ from robothor.cli.channel_access import add_access_parser, cmd_channel_access
 
 CODE = "ABC234"
 IDENTITY_ID = "11111111-2222-3333-4444-555555555555"
+NATIVE_ID = "U0PLACEHOLDER"
 
 
 @pytest.fixture(autouse=True)
@@ -71,12 +72,15 @@ def dal(monkeypatch):
                 {
                     "id": IDENTITY_ID,
                     "user_id": "u-alice",
+                    "native_id": NATIVE_ID,
                     "display_name": "Alice",
+                    "role": "member",
                     "paired_at": "now",
                 }
             ],
         ),
     )
+    monkeypatch.setattr(mod, "_tell_the_engine_to_forget", _record("engine_reload", None))
     monkeypatch.setattr(
         mod.identities, "approve_pairing", _record("approve_pairing", {"id": IDENTITY_ID})
     )
@@ -134,8 +138,9 @@ def test_deny_and_revoke_pass_a_cli_actor(dal):
     cmd_channel_access(_parse(["channel", "access", "deny", "slack", CODE]))
     cmd_channel_access(_parse(["channel", "access", "revoke", "slack", IDENTITY_ID]))
 
-    actors = [kwargs["actor"] for _, _, kwargs in dal]
-    assert all(actor.startswith("cli:") for actor in actors)
+    settlements = [(name, kwargs) for name, _, kwargs in dal if name != "engine_reload"]
+    assert [name for name, _ in settlements] == ["deny_pairing", "revoke"]
+    assert all(kwargs["actor"].startswith("cli:") for _, kwargs in settlements)
 
 
 def test_approve_by_email_is_accepted(dal):
@@ -205,3 +210,68 @@ def test_list_prints_pending_codes_and_identities_without_the_code(dal, capsys):
     assert rc == 0
     assert IDENTITY_ID in out
     assert CODE not in out
+
+
+def test_list_fingerprints_the_native_id(dal, capsys):
+    """Same rule as the bridge listing, for the same reason: telling two
+    bindings apart is the need, and printing a workspace's member ids into a
+    terminal scrollback is not."""
+    import hashlib
+
+    cmd_channel_access(_parse(["channel", "access", "list", "slack"]))
+
+    out = capsys.readouterr().out
+    assert NATIVE_ID not in out
+    assert hashlib.sha256(NATIVE_ID.encode()).hexdigest()[:12] in out
+
+
+# ── Telling the engine ──────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["channel", "access", "approve", "slack", CODE, "--user", "u-alice"],
+        ["channel", "access", "deny", "slack", CODE],
+        ["channel", "access", "revoke", "slack", IDENTITY_ID],
+    ],
+)
+def test_every_settlement_tells_the_engine_to_drop_its_caches(dal, argv):
+    """The CLI writes the row in its own process; the engine caches a resolved
+    identity for up to 300s in its. Without this the operator's revoke is a row
+    nobody acts on for five minutes."""
+    cmd_channel_access(_parse(argv))
+
+    assert [name for name, _, _ in dal].count("engine_reload") == 1
+
+
+def test_a_settlement_survives_an_engine_that_cannot_be_reached(monkeypatch, capsys):
+    """Containment is inside ``_tell_the_engine_to_forget``, so this patches the
+    call it makes rather than the function itself -- patching the function would
+    test the test's own stub. Best effort means the approval stands: the row is
+    written and the engine's caches expire on their own within 300s."""
+    from robothor.cli import channel_access as mod
+    from robothor.engine import admin_client
+
+    monkeypatch.setattr(mod.identities, "approve_pairing", lambda *a, **kw: {"id": IDENTITY_ID})
+
+    async def _boom() -> int:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(admin_client, "post_identity_reload", _boom)
+
+    rc = cmd_channel_access(
+        _parse(["channel", "access", "approve", "slack", CODE, "--user", "u-alice"])
+    )
+
+    assert rc == 0
+    assert "Approved" in capsys.readouterr().out
+
+
+def test_a_refused_settlement_does_not_tell_the_engine_anything(dal, capsys):
+    """Nothing changed, so there is nothing for the engine to forget."""
+    cmd_channel_access(
+        _parse(["channel", "access", "approve", "slack", CODE, "--user", "u-a", "--role", "owner"])
+    )
+
+    assert [name for name, _, _ in dal] == []
