@@ -41,15 +41,16 @@ _platform_senders: dict[str, Any] = {}
 def register_platform_sender(platform: str, send_func: Callable[..., Any]) -> None:
     """Register a send function for a delivery platform.
 
-    Also registers the sender as a named channel, so the five existing callers
-    become channel registrations without changing. ``engine/slack.py`` has
-    registered a ``"slack"`` sender since it was written and nothing could
-    reach it; a manifest naming ``delivery.channel: slack`` now can.
+    Also registers the sender as a named channel, so the existing callers become
+    channel registrations without changing. ``engine/slack.py`` has registered a
+    ``"slack"`` sender since it was written and nothing could reach it; a
+    manifest naming ``delivery.channel: slack`` now can.
 
-    Built-in channel names are exempt: the Telegram bot calls
-    ``set_telegram_sender(self.send_message)`` from its own constructor, and
-    replacing the built-in wrapper with a bare sender would drop the guards
-    (missing chat id, unexpanded ``${VAR}``) that wrapper exists for.
+    Built-in channel names are exempt, and that exemption is load-bearing:
+    ``TelegramBot.__init__`` calls ``set_telegram_sender(self.send_message)`` as
+    a side effect of construction, so registering a channel for it would replace
+    the built-in wrapper with a bare sender and drop the guards (missing chat id,
+    unexpanded ``${VAR}``) that wrapper exists for.
     """
     _platform_senders[platform] = send_func
     logger.info("Registered platform sender: %s", platform)
@@ -57,7 +58,10 @@ def register_platform_sender(platform: str, send_func: Callable[..., Any]) -> No
     from robothor.engine.channels import BUILTIN_CHANNELS, register_channel
     from robothor.engine.channels.sender import SenderChannel
 
-    if platform not in BUILTIN_CHANNELS:
+    # An empty name was never rejected here and must not start being: this
+    # function is called from a bot constructor, and a raise would take the
+    # channel down. It simply gets no channel.
+    if platform and platform not in BUILTIN_CHANNELS:
         register_channel(platform, SenderChannel(platform, send_func))
 
 
@@ -607,8 +611,11 @@ def apply_receipt(run: AgentRun, channel: str, receipt: SendReceipt) -> bool:
     caught before the send, an exception — supplies ``receipt.status`` and that
     value is used verbatim.
 
-    ``delivered_at`` is set only on a complete send, whatever the status says: a
-    truncated briefing is not a delivered briefing.
+    ``delivered_at`` is the column that means a person has this, so it is set
+    only on a complete send AND only when the recorded status actually claims
+    delivery. `published` is the case that forces the second half: naming the
+    event bus as a channel must not start stamping `delivered_at` on a Redis
+    stream write that `DeliveryMode.LOG` has always left NULL.
 
     Returns:
         True only if the channel acknowledged every expected chunk.
@@ -622,7 +629,8 @@ def apply_receipt(run: AgentRun, channel: str, receipt: SendReceipt) -> bool:
         run.delivery_status = f"partial:{receipt.acknowledged}/{receipt.expected}"
     else:
         run.delivery_status = f"failed:{channel}_send"
-    run.delivered_at = datetime.now(UTC) if receipt.complete else None
+    reached_a_person = receipt.complete and run.delivery_status == "delivered"
+    run.delivered_at = datetime.now(UTC) if reached_a_person else None
     return receipt.complete
 
 
@@ -662,7 +670,9 @@ async def _deliver_telegram(config: AgentConfig, text: str, run: AgentRun) -> bo
     put as the thin delegate. ``TelegramChannel.send`` checks whether this
     attribute is still the original function and honours a replacement rather
     than sending anyway — a control whose caller has been replaced is inert, and
-    this codebase has shipped that twice.
+    this codebase has shipped that twice. A replacement may wrap and call the
+    original; it must NOT route back through ``get_channel("telegram").send``,
+    which would see itself installed and call it again, forever.
 
     Args:
         config: The agent config supplying the chat id and display name.

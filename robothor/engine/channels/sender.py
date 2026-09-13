@@ -22,7 +22,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.channels.base import SendReceipt, receipt_from
-from robothor.engine.chunking import split_telegram_message
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Callable, Sequence
@@ -87,7 +86,12 @@ class SenderChannel:
         # any other surface; per-surface formatting arrives with the first real
         # non-Telegram target.
         body = f"{config.name}\n\n{text}" if config is not None and config.name else text
-        expected_chunks = len(split_telegram_message(body))
+
+        # One body handed over, so one acknowledgement is the minimum proof.
+        # Deliberately NOT the Telegram chunk count: a surface with a different
+        # length limit chunks differently, and borrowing Telegram's 4096 would
+        # record `partial:1/3` for a send that completed in one message.
+        expected = 1
 
         try:
             sent = await sender(target, body)
@@ -95,19 +99,34 @@ class SenderChannel:
             logger.error("Delivery on channel %s failed: %s", self.name, e)
             return SendReceipt(
                 acknowledged=0,
-                expected=expected_chunks,
+                expected=expected,
                 status=f"failed:{self.name}_exception: {e}",
                 target=target,
                 body=body,
             )
 
-        receipt = receipt_from(sent, expected_chunks, target=target, body=body)
-        if receipt.acknowledged == 0:
+        if sent and not isinstance(sent, list | tuple):
+            # A sender must return the messages it landed, one per chunk. An API
+            # response object is not that, and counting it would be a guess with
+            # a number attached: ``list()`` of a mapping yields its KEYS, so a
+            # three-field Slack response counted as three delivered chunks.
             logger.error(
-                "Channel %s acknowledged 0 of %d chunk(s) — nothing was seen",
+                "Channel %s returned %s, not a sequence of messages — "
+                "refusing to read it as proof of delivery",
                 self.name,
-                expected_chunks,
+                type(sent).__name__,
             )
+            return SendReceipt(
+                acknowledged=0,
+                expected=expected,
+                status=f"failed:{self.name}_unproven",
+                target=target,
+                body=body,
+            )
+
+        receipt = receipt_from(sent, expected, target=target, body=body)
+        if receipt.acknowledged == 0:
+            logger.error("Channel %s acknowledged nothing — nothing was seen", self.name)
         return receipt
 
     async def ask(self, question: str, options: Sequence[str]) -> str:

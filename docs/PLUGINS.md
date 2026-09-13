@@ -234,7 +234,15 @@ PLUGIN = {
 A receipt is derived from what the sender returned, never from reaching the
 next line: `SendReceipt(acknowledged=..., expected=..., platform_ids=[...])`.
 A channel that acknowledges nothing is recorded `failed:`, the same rule
-`delivery.py` applies to the built-in senders.
+`delivery.py` applies to the built-in senders. Return one entry per chunk that
+actually landed — an empty list when none did, and never an API response
+object, which the platform refuses to read as proof.
+
+**`send` is the only method the platform calls today.** `start`, `stop` and
+`health` are part of the protocol because a channel that *receives* needs them,
+and the shape should not change when the inbound half lands — but nothing drives
+them yet, so open your transport lazily inside `send`. A channel that connects
+in `start()` will pass its own tests and deliver nothing.
 
 `telegram` and `event_bus` are built in and reserved — a plugin claiming
 either name is refused by the loader, the same as claiming a built-in tool.

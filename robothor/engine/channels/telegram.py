@@ -90,21 +90,64 @@ class TelegramChannel:
 
         from robothor.engine import delivery
 
-        if run is None or delivery._deliver_telegram is delivery._ORIGINAL_DELIVER_TELEGRAM:
+        if delivery._deliver_telegram is delivery._ORIGINAL_DELIVER_TELEGRAM:
             return await self._send_now(config, text, target)
 
-        # Something replaced the module-level function. Honour it rather than
-        # sending twice, and take its status from the run only if it actually
-        # wrote one — a stale status from an earlier phase is not evidence.
+        if run is None:
+            # The delegate has been replaced and there is no run for it to
+            # record an outcome on. Sending around the replacement would defeat
+            # the only reason this branch exists.
+            return SendReceipt(
+                acknowledged=0, expected=1, status="failed:telegram_no_run", target=target
+            )
+        return await self._send_through_replacement(config, text, target, run)
+
+    async def _send_through_replacement(
+        self, config: AgentConfig, text: str, target: str, run: AgentRun
+    ) -> SendReceipt:
+        """Hand off to whatever replaced ``delivery._deliver_telegram``.
+
+        The replacement's **return value is not evidence**. A bare
+        ``AsyncMock()`` returns a truthy ``MagicMock``, and accepting that as an
+        acknowledged chunk would record ``delivered`` for a send that reached
+        nobody — one level up from "the next line ran", which is the single rule
+        :mod:`robothor.engine.channels.base` exists to enforce.
+
+        What *is* evidence is the status the replacement wrote on the run: it is
+        the same column ``deliver()`` would write, and a replacement that
+        delegates to the real implementation gets one for free. A replacement
+        that writes nothing is recorded ``failed:telegram_unproven`` — before
+        this seam existed, such a patch left the column NULL, so inventing a
+        ``delivered`` here would be strictly worse than the behaviour it
+        replaced.
+
+        ``post_delivery`` is False throughout: a replacement that reached the
+        real send has already fired POST_DELIVERY from inside, and firing it
+        again would write the operator's briefing into their own session twice —
+        the second copy stripped of its header and its platform message ids.
+        """
+        from robothor.engine import delivery
+
         before = run.delivery_status
-        ok = bool(await delivery._deliver_telegram(config, text, run))
-        after = run.delivery_status
+        await delivery._deliver_telegram(config, text, run)
+        recorded = run.delivery_status
+
+        if recorded and recorded != before:
+            return SendReceipt(
+                acknowledged=1 if recorded == "delivered" else 0,
+                expected=1,
+                status=recorded,
+                target=target,
+                body=text,
+                post_delivery=False,
+            )
         return SendReceipt(
-            acknowledged=1 if ok else 0,
+            acknowledged=0,
             expected=1,
-            status=after if after != before else None,
+            status="failed:telegram_unproven",
             target=target,
             body=text,
+            post_delivery=False,
         )
 
     async def _send_now(self, config: AgentConfig, text: str, target: str = "") -> SendReceipt:

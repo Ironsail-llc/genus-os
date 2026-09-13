@@ -38,6 +38,17 @@ Because they are declared here, ``isinstance(x, Channel)`` means "implements
 every slot including the optional two". The registry deliberately does not gate
 on that — it requires only ``send``, so a plugin can ship a send-only channel —
 and no code path calls ``ask`` or ``resolve_identity`` yet.
+
+What the platform drives today
+------------------------------
+``send`` only. **Nothing calls ``start``, ``stop`` or ``health``**: outbound
+delivery resolves a channel and sends, and the daemon owns the Telegram bot's
+own lifecycle directly. They are declared because a channel that receives needs
+them and the shape should not change when the inbound half lands — but a channel
+must open its transport lazily inside ``send`` rather than relying on ``start``
+being called, or it will ship working tests and deliver nothing. Said plainly
+here because a declared-and-inert extension point is this platform's most
+frequent defect, and one that is documented is not a trap.
 """
 
 from __future__ import annotations

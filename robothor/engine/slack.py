@@ -110,16 +110,27 @@ class SlackBot:
         # Register platform sender for delivery
         from robothor.engine.delivery import register_platform_sender
 
-        async def slack_send(channel_id: str, text: str) -> None:
+        async def slack_send(channel_id: str, text: str) -> list[Any]:
+            """Post to Slack and RETURN what landed, one entry per chunk.
+
+            This returned ``None`` for as long as it existed, which was
+            invisible while nothing consumed the registry. Now that a manifest
+            can name ``delivery.channel: slack``, returning nothing would record
+            every successful Slack briefing as ``failed:slack_send`` — a page to
+            the operator about a message that arrived. The receipt rule needs
+            evidence, so the responses are the evidence.
+            """
+            landed: list[Any] = []
             if self._app and self._app.client:
                 # Split long messages
-                chunks = _split_text(text, MAX_SLACK_LENGTH)
-                for chunk in chunks:
-                    await self._app.client.chat_postMessage(
+                for chunk in _split_text(text, MAX_SLACK_LENGTH):
+                    posted = await self._app.client.chat_postMessage(
                         channel=channel_id,
                         text=chunk,
                         mrkdwn=True,
                     )
+                    landed.append(posted)
+            return landed
 
         register_platform_sender("slack", slack_send)
 

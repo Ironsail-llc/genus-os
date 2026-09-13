@@ -18,7 +18,13 @@ from typing import Any
 
 import pytest
 
-from robothor.engine.channels import SendReceipt, get_channel, reset_channels
+from robothor.engine.channels import (
+    BUILTIN_CHANNELS,
+    SendReceipt,
+    get_channel,
+    list_channels,
+    reset_channels,
+)
 from robothor.plugins import reload_plugins
 
 
@@ -135,6 +141,69 @@ class TestInstallingIsNotArming:
         _enable(monkeypatch, "acme, other")
         assert get_channel("acme") is not None
         assert get_channel("other") is not None
+
+    def test_taking_a_name_back_out_disarms_it(self, install, monkeypatch):
+        """An opt-in gate that only ever opens is not a gate. The first version
+        cached the built channel next to the built-ins, so a resolved plugin
+        channel kept serving deliveries after the operator un-armed it."""
+        from robothor.settings import reset_settings
+
+        install({"acme": _PluginChannel()})
+        _enable(monkeypatch, "acme")
+        assert get_channel("acme") is not None
+
+        monkeypatch.delenv("ROBOTHOR_CHANNELS", raising=False)
+        reset_settings()
+        assert get_channel("acme") is None, "un-arming a channel did not disarm it"
+        assert "acme" not in list_channels()
+
+    def test_a_reload_replaces_the_channel_it_serves(self, install, monkeypatch):
+        """`reload_plugins()` exists so a capability can be changed without a
+        restart. A cached channel object made it a no-op for this group."""
+        first = _PluginChannel()
+        install({"acme": first})
+        _enable(monkeypatch, "acme")
+        assert get_channel("acme") is first
+
+        second = _PluginChannel()
+        install({"acme": second})
+        assert get_channel("acme") is second, "a reloaded distribution kept serving the old object"
+
+
+class TestTheBuiltinsAreNeverPublishedHalfBuilt:
+    def test_a_lookup_never_sees_an_empty_registry(self):
+        """The flag used to be set BEFORE the two registrations, so a lookup
+        landing in that window recorded `failed:no_channel:telegram` for a
+        perfectly configured agent. The registry is first touched on the first
+        delivery, not at boot, so the window was real."""
+        from robothor.engine.channels import registry
+
+        reset_channels()
+        assert registry._builtins_registered is False
+        registry._ensure_builtins()
+        assert registry._builtins_registered is True
+        assert set(BUILTIN_CHANNELS) <= set(registry._channels)
+
+    def test_a_failed_registration_does_not_latch_empty(self, monkeypatch):
+        """A transient import failure must be retried, not remembered."""
+        from robothor.engine.channels import registry
+
+        reset_channels()
+        calls = {"n": 0}
+        real = registry.register_channel
+
+        def _fail_once(name, channel, *, builtin=False):  # noqa: ANN001, ANN202
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("transient import failure")
+            real(name, channel, builtin=builtin)
+
+        monkeypatch.setattr(registry, "register_channel", _fail_once)
+        assert get_channel("telegram") is None
+        assert registry._builtins_registered is False, "a transient failure latched"
+
+        monkeypatch.setattr(registry, "register_channel", real)
+        assert get_channel("telegram") is not None
 
 
 class TestBuiltinsAreProtected:

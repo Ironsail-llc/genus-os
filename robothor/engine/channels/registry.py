@@ -26,6 +26,7 @@ exists to prevent.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -53,13 +54,29 @@ BUILTIN_CHANNELS = frozenset({"telegram", "event_bus"})
 #: channel to the instance's configuration.
 CHANNELS_ENV = "ROBOTHOR_CHANNELS"
 
+#: Built-ins and sender shims. Registered explicitly, never expire.
 _channels: dict[str, Channel] = {}
+
 _builtins_registered = False
+
+#: Re-entrant so a built-in whose import reaches back into the engine cannot
+#: deadlock its own registration. Held while the built-ins are registered so no
+#: other thread can observe the half-built registry and record
+#: ``failed:no_channel:telegram`` for a correctly configured agent.
+_builtins_lock = threading.RLock()
 
 #: ``(plugin generation, channels)``. Rebuilt when the generation moves, which
 #: is what makes ``reload_plugins()`` visible here without anyone tracking this
 #: cache.
 _plugin_cache: tuple[int, dict[str, Any]] | None = None
+
+#: ``name -> (plugin generation, channel)`` for channels BUILT from a plugin
+#: spec. Deliberately separate from ``_channels``: a plugin channel must be
+#: re-checked against the armed set and the plugin generation on every lookup,
+#: or the opt-in gate becomes one-way (removing a name from ROBOTHOR_CHANNELS
+#: would not disarm it) and a reloaded distribution would keep serving
+#: deliveries from the object installed before the reload.
+_plugin_channels_built: dict[str, tuple[int, Channel]] = {}
 
 
 def register_channel(name: str, channel: Channel, *, builtin: bool = False) -> None:
@@ -90,22 +107,30 @@ def register_channel(name: str, channel: Channel, *, builtin: bool = False) -> N
 
 
 def _ensure_builtins() -> None:
-    """Register the platform's own channels once, on first use."""
+    """Register the platform's own channels once, on first use.
+
+    The flag is set only AFTER both registrations land. Setting it first would
+    publish an empty registry for as long as the two imports take, and any
+    lookup landing in that window would record ``failed:no_channel:telegram``
+    for a perfectly configured agent — the registry is first touched on the
+    first delivery, not at boot, so that window is real.
+    """
     global _builtins_registered
     if _builtins_registered:
         return
-    # Set the flag first: the imports below reach back into the engine, and a
-    # re-entrant lookup must not register twice.
-    _builtins_registered = True
-    try:
-        from robothor.engine.channels.event_bus import EventBusChannel
-        from robothor.engine.channels.telegram import TelegramChannel
+    with _builtins_lock:
+        if _builtins_registered:
+            return
+        try:
+            from robothor.engine.channels.event_bus import EventBusChannel
+            from robothor.engine.channels.telegram import TelegramChannel
 
-        register_channel("telegram", TelegramChannel(), builtin=True)
-        register_channel("event_bus", EventBusChannel(), builtin=True)
-    except Exception as exc:  # pragma: no cover - an import cycle would show here
-        _builtins_registered = False
-        logger.error("Built-in channels failed to register: %s", exc)
+            register_channel("telegram", TelegramChannel(), builtin=True)
+            register_channel("event_bus", EventBusChannel(), builtin=True)
+        except Exception as exc:  # pragma: no cover - an import cycle would show here
+            logger.error("Built-in channels failed to register: %s", exc)
+            return
+        _builtins_registered = True
 
 
 def enabled_plugin_channels() -> frozenset[str]:
@@ -175,6 +200,10 @@ def get_channel(name: str) -> Channel | None:
     ``None`` is a real answer, not an error: the caller records
     ``failed:no_channel:<name>`` so a misconfigured manifest is visible in
     ``agent_runs`` instead of being redirected somewhere that happens to work.
+
+    A plugin channel is re-checked against the armed set on every lookup, so
+    taking a name out of ``ROBOTHOR_CHANNELS`` actually disarms it in a running
+    engine — an opt-in gate that only ever opens is not a gate.
     """
     clean = (name or "").strip()
     if not clean:
@@ -185,16 +214,26 @@ def get_channel(name: str) -> Channel | None:
         return existing
     if clean not in enabled_plugin_channels():
         return None
+
+    from robothor.plugins import generation
+
+    current = generation()
+    built = _plugin_channels_built.get(clean)
+    if built is not None and built[0] == current:
+        return built[1]
+
     spec = _plugin_channels().get(clean)
     if spec is None:
         logger.warning(
             "Channel %r is named in %s but no installed plugin provides it", clean, CHANNELS_ENV
         )
+        _plugin_channels_built.pop(clean, None)
         return None
     channel = _build(spec)
     if channel is None:
+        _plugin_channels_built.pop(clean, None)
         return None
-    _channels[clean] = channel
+    _plugin_channels_built[clean] = (current, channel)
     return channel
 
 
@@ -217,8 +256,15 @@ def list_channels() -> dict[str, Channel]:
 
 
 def reset_channels() -> None:
-    """Drop every registration and cached lookup. For tests and reloads."""
+    """Drop every registration and cached lookup. For tests and reloads.
+
+    Does NOT clear ``delivery._platform_senders``: a sender registration is a
+    fact about the running process, and the shim rebuilds its channel on the
+    next ``register_platform_sender`` call.
+    """
     global _builtins_registered, _plugin_cache
-    _channels.clear()
-    _builtins_registered = False
-    _plugin_cache = None
+    with _builtins_lock:
+        _channels.clear()
+        _plugin_channels_built.clear()
+        _builtins_registered = False
+        _plugin_cache = None
