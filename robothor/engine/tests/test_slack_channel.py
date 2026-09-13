@@ -346,6 +346,30 @@ class TestTheOptionalSlots:
         with pytest.raises(NotImplementedError):
             await channel.resolve_identity(USER_ID)
 
+    @pytest.mark.asyncio
+    async def test_ask_accepts_the_whole_protocol_signature(self):
+        """A slot that only accepts the two positional arguments is one the
+        real callers cannot reach: both ``ask_user`` and
+        ``PermissionEscalationManager`` pass ``timeout`` and ``target``, and a
+        TypeError there would be caught by their broad handlers and reported as
+        "the channel broke" rather than "Slack cannot ask yet"."""
+        with pytest.raises(NotImplementedError):
+            await SlackChannel().ask("Approve?", ["yes", "no"], timeout=5.0, target=CHANNEL_ID)
+
+    @pytest.mark.asyncio
+    async def test_a_slack_run_still_gets_a_durable_question(self):
+        """The refusal is not a dead end. ``ask_user`` catches it, records the
+        question with no channel, and the operator answers it from the Helm."""
+        from robothor.engine.tools.handlers.ask_user import _ask_channel
+
+        answer, delivered, _waited = await _ask_channel(
+            SlackChannel(), "Approve?", [], 5.0, CHANNEL_ID, USER_ID
+        )
+        assert answer is None
+        # `delivered` False is the whole point: the run is told nobody could be
+        # asked, not that it waited five seconds for a silent operator.
+        assert delivered is False
+
 
 class TestHealth:
     @pytest.mark.asyncio

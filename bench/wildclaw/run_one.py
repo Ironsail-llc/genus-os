@@ -60,9 +60,9 @@ async def _run(prompt: str, timeout_seconds: int) -> dict[str, Any]:
     captured: list[Any] = []
     original_register = session_registry.register
 
-    def _capture(session: Any) -> Any:
+    def _capture(session: Any, **kw: Any) -> None:
         captured.append(session)
-        return original_register(session)
+        original_register(session, **kw)
 
     session_registry.register = _capture
 

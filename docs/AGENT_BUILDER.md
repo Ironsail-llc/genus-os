@@ -199,6 +199,38 @@ Or in chat: a delivery agent with the `list_pending_approvals` /
 `approve_workflow_step` / `reject_workflow_step` tools relays the operator's
 answer, and the engine picks it up on the next watchdog tick (≤1 min).
 
+Or from the Helm: `GET /api/approvals` lists everything waiting on a person —
+workflow steps and `ask_user` questions in one list — and
+`POST /api/approvals/{kind}/{id}` answers one. Both are operator-scoped and
+audited.
+
+#### Asking mid-run: the `ask_user` tool
+
+A workflow approval is a gate the *author* declared. `ask_user` is a question
+the *agent* decides to ask, in the middle of a turn, when a wrong guess would
+be expensive: which recipient, which account, delete or keep. Add it to an
+agent's `tools_allowed` to enable it — it is an ordinary opt-in tool, not an
+implicit capability.
+
+- On Telegram the question arrives as an inline keyboard (with `options`) or as
+  plain text (without), and the agent's run stays blocked until the operator
+  answers or the timeout runs out.
+- The question is written to `agent_questions` **before** the channel is asked,
+  so a process restart does not lose it and a late answer is still usable.
+- On a webchat run there is no channel to ask over yet, so **the run does not
+  wait**: it records the question, emits an `approval_required` status event
+  over the SSE stream, gets `{"answered": false, "delivered": false}` back in
+  the same tick, and carries on. The Helm answers through
+  `POST /api/approvals/question/{id}` *after* the run has finished, and a later
+  turn is what sees the answer. The tool says exactly that rather than implying
+  a wait it never did.
+- On a **scheduled or sub-agent run the tool refuses**, and says why. Nobody is
+  watching those, so asking would block the run until it timed out. Agents that
+  need a human on a cron path should file a CRM task instead.
+- Nobody answering is never an answer: the tool returns
+  `{"answered": false, "question_id": ...}` and the agent is expected to proceed
+  on its best judgement and say what it assumed.
+
 ### Pattern C: Dynamic Sub-Agent Dispatch
 
 The main agent spawns units at runtime based on the request:

@@ -33,7 +33,11 @@ MAX_NEW_FUNCTION_LINES = 200
 #: an entry is more than 10% larger than reality, so shrinking forces the cap
 #: down with it. Delete an entry when its function drops under the threshold.
 KNOWN_LARGE: dict[str, int] = {
-    "tools/schemas.py::get_engine_schemas": 3520,
+    # 3520 -> 3454: the four human-in-the-loop schemas (ask_user plus the three
+    # workflow-approval tools) left as one cluster, `_HUMAN_IN_THE_LOOP_SCHEMAS`.
+    # ask_user's own schema is in that constant, so the new tool cost this
+    # function nothing and paid down 66 lines on the way in.
+    "tools/schemas.py::get_engine_schemas": 3454,
     # -29: every subsystem router mount extracted to _mount_subsystem_routers,
     # which is what made room for the /api/admin registration rather than
     # raising this number for it.

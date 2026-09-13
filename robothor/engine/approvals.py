@@ -236,6 +236,40 @@ def decide_approval(
     return settled
 
 
+def decide_approval_by_id(
+    approval_id: str,
+    decision: ApprovalDecision,
+    *,
+    decided_by: str,
+    note: str = "",
+    tenant_id: str = DEFAULT_TENANT,
+) -> bool:
+    """Settle a pending question addressed by its row id. See :func:`decide_approval`.
+
+    The ``(run_id, step_id)`` pair is what a *workflow* knows about its own
+    gate. A dashboard listing rows knows the id, and asking it to carry a
+    composite key through a URL invites the two halves to be recombined wrongly
+    by the one caller that formats it by hand. Same first-decision-wins
+    predicate; same meaning for False.
+    """
+    from robothor.db.connection import get_connection
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """UPDATE workflow_approvals
+                  SET status = %s, decided_by = %s, decided_at = NOW(), decision_note = %s
+                WHERE id = %s AND tenant_id = %s AND status = 'pending'""",
+            (decision.value, decided_by, note, approval_id, tenant_id or DEFAULT_TENANT),
+        )
+        settled = bool(cur.rowcount > 0)
+        conn.commit()
+
+    if settled:
+        logger.info("Approval %s: id=%s by=%s", decision.value, approval_id, decided_by)
+    return settled
+
+
 def expire_overdue_approvals(*, tenant_id: str = DEFAULT_TENANT) -> list[ApprovalRequest]:
     """Stamp past-deadline questions ``expired`` and return them.
 

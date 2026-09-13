@@ -836,3 +836,33 @@ def test_an_adopted_ledger_is_not_refused_on_the_next_run(tmp_path: Path) -> Non
     connection = _FakeConnection(history=history, schema_present=True)
 
     assert migrate.apply(migrations_dir=tmp_path, connection=connection) == ["002_second"]
+
+
+def test_agent_questions_migration_is_manifested_after_the_benchmark_digest_type() -> None:
+    """117 must be discoverable, and must apply after 116.
+
+    Same failure this file already guards for 113: a migration file that exists
+    on disk but is missing from the canonical manifest is invisible to
+    `_discover`, so no deployment ever runs it and the first INSERT against
+    `agent_questions` fails in production with an UndefinedTable nobody saw
+    coming. Ordering comes from the numeric prefix, so the manifest line has to
+    sit after 116 for the ledger to read in apply order.
+    """
+    lines = [
+        line.strip()
+        for line in migrate._MIGRATION_MANIFEST.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert "crm/117_agent_questions.sql" in lines
+    assert lines.index("crm/117_agent_questions.sql") == (
+        lines.index("crm/116_benchmark_digest_notification_type.sql") + 1
+    )
+
+    sql = (migrate._REPO_ROOT / "crm/migrations/117_agent_questions.sql").read_text()
+    # Idempotent by construction — this migration is re-run on every deploy
+    # that reconciles the ledger, and a bare CREATE TABLE would abort the chain.
+    assert "CREATE TABLE IF NOT EXISTS agent_questions" in sql
+    assert "CREATE POLICY tenant_isolation ON agent_questions" in sql
+    assert "DROP POLICY IF EXISTS tenant_isolation ON agent_questions" in sql
+
+    assert "117_agent_questions" in [m.migration_id for m in migrate._discover()]

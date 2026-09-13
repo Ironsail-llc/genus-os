@@ -240,7 +240,23 @@ class SenderChannel:
             logger.error("Channel %s acknowledged nothing — nothing was seen", self.name)
         return receipt
 
-    async def ask(self, question: str, options: Sequence[str]) -> str:
+    async def ask(
+        self,
+        question: str,
+        options: Sequence[str] = (),
+        *,
+        timeout: float = 300.0,
+        target: str = "",
+        addressee: str = "",
+    ) -> str | None:
+        """Not implemented: a bare sender is one-way by construction.
+
+        Raising rather than returning ``None`` says *there is no way to ask
+        here*, which is a different fact from *the person did not reply* — see
+        :meth:`robothor.engine.channels.base.Channel.ask`. A channel built from
+        a registered send function has no inbound path at all, so it can never
+        become the second one.
+        """
         raise NotImplementedError(f"channel {self.name!r} cannot ask a question")
 
     async def resolve_identity(self, native_id: str) -> Any:

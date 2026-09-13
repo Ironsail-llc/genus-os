@@ -97,9 +97,9 @@ async def _run_reading_a_file(runner, agent_config, file_content: str):
 
     original = session_registry.register
 
-    def _capture(session):
+    def _capture(session, **kw):
         captured.append(session)
-        return original(session)
+        return original(session, **kw)
 
     session_registry.register = _capture
     try:

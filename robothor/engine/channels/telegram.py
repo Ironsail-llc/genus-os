@@ -28,10 +28,12 @@ assertion stays true.
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import logging
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.channels import telegram_ask
 from robothor.engine.channels.base import SendReceipt, receipt_from
 from robothor.engine.chunking import split_telegram_message
 
@@ -256,15 +258,68 @@ class TelegramChannel:
             )
         return receipt
 
-    async def ask(self, question: str, options: Sequence[str]) -> str:
-        """Not implemented — see ``engine/permission_escalation.py``.
+    async def ask(
+        self,
+        question: str,
+        options: Sequence[str] = (),
+        *,
+        timeout: float = 300.0,
+        target: str = "",
+        addressee: str = "",
+    ) -> str | None:
+        """Put ``question`` to ``addressee`` at ``target`` and wait for an answer.
 
-        A default answer here would be an approval nobody gave.
+        ``target`` is the chat; ``addressee`` is the Telegram sender id of the
+        person being asked, and the two together are what an answer has to match
+        before it settles this ask — see
+        :mod:`robothor.engine.channels.telegram_ask`. An empty ``addressee``
+        means the question is the operator's, and only the owner gate can
+        authorize a reply.
+
+        ``None`` means nobody answered — no target, no reachable bot, or the
+        clock ran out. It is never one of ``options``: a default answer here
+        would be a decision nobody made, which is the whole reason
+        ``channels/base.py`` says an unimplemented ``ask`` must raise rather
+        than return something plausible.
+
+        With options and a reachable aiogram ``Bot``, the question goes out as
+        an inline keyboard whose ``callback_data`` carries the option INDEX
+        (``ask:<id>:<n>``) — Telegram caps ``callback_data`` at 64 bytes, so an
+        option longer than that would come back truncated as a *different*
+        answer. Without a bot the options go out numbered in the text and a
+        typed ``"1".."N"`` (or the option itself) answers it.
         """
-        raise NotImplementedError(
-            "interactive ask is not implemented for the Telegram channel yet; "
-            "approval prompts still run through engine/permission_escalation.py"
+        chat_id = str(target or "")
+        if not chat_id:
+            # Guessing a chat here would ask the wrong person. It is the same
+            # judgement `_send_now` makes about a missing delivery_to.
+            logger.warning("Telegram ask has no target chat; nobody can be asked")
+            return None
+
+        opts = tuple(str(o) for o in (options or ()))[: telegram_ask.MAX_ASK_OPTIONS]
+        ask_id, future = telegram_ask.register_ask(
+            chat_id=chat_id, sender_id=str(addressee or ""), options=opts
         )
+        try:
+            delivered_as = await telegram_ask.send_question(chat_id, question, ask_id, opts)
+            if not delivered_as:
+                logger.warning("Telegram ask %s was never delivered; not waiting", ask_id)
+                return None
+            # Only now is it known which inbound messages this ask may accept.
+            # Until this call it accepts none, so a reply racing the send cannot
+            # answer a keyboard question as though it were free text.
+            telegram_ask.note_ask_delivery(ask_id, delivered_as)
+            return await asyncio.wait_for(future, timeout=max(1.0, float(timeout)))
+        except TimeoutError:
+            logger.info("Telegram ask %s went unanswered for %ss", ask_id, timeout)
+            return None
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — a failed ask is an unanswered one
+            logger.exception("Telegram ask %s failed", ask_id)
+            return None
+        finally:
+            telegram_ask.discard_ask(ask_id)
 
     async def resolve_identity(self, native_id: str) -> Any:
         """Not implemented — inbound identity still resolves in ``engine/telegram.py``."""

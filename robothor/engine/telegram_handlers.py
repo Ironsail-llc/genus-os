@@ -43,6 +43,21 @@ from robothor.engine.task_registry import get_task_registry
 
 logger = logging.getLogger(__name__)
 
+#: What a `perm:` tap that settled nothing is told, in the alert and appended to
+#: the prompt itself. One sentence for every reason a request can be gone
+#: (swept, timed out, already decided, lost to a restart): the operator's next
+#: action is the same in all of them, and enumerating them tells a forger which
+#: ids are live.
+STALE_PROMPT = "This request is no longer pending."
+
+#: `perm:` action → (approved, remember_session, confirmation). A table rather
+#: than a branch chain so "approve" and "deny" cannot drift apart.
+_PERM_DECISIONS: dict[str, tuple[bool, bool, str]] = {
+    "approve": (True, False, "Approved"),
+    "all": (True, True, "Approved for session"),
+    "deny": (False, False, "Denied"),
+}
+
 
 # File handling — max size for text extraction (5 MB)
 MAX_FILE_SIZE = 5 * 1024 * 1024
@@ -741,23 +756,50 @@ class TelegramHandlersMixin:
             await callback.answer("Permission system not active")
             return
 
-        if action == "approve":
-            mgr.resolve(request_id, approved=True)
-            await callback.answer("Approved")
-        elif action == "all":
-            mgr.resolve(request_id, approved=True, remember_session=True)
-            await callback.answer("Approved for session")
-        elif action == "deny":
-            mgr.resolve(request_id, approved=False)
-            await callback.answer("Denied")
-        else:
+        decision = _PERM_DECISIONS.get(action)
+        if decision is None:
             await callback.answer("Unknown action")
             return
+        approved, remember, confirmation = decision
+
+        # `resolve` reports whether THIS call settled anything. A prompt can
+        # outlive its request — the watchdog sweep reaps orphans, the tool's own
+        # wait_for denies on timeout, a restart empties the map — and the
+        # keyboard stays live in the chat regardless. Answering "Approved" to a
+        # tap that reached nothing is a false confirmation on the approval path.
+        settled = mgr.resolve(request_id, approved=approved, remember_session=remember)
+        if settled:
+            await callback.answer(confirmation)
+        else:
+            # show_alert, because a toast the operator misses leaves them
+            # believing the tap landed.
+            await callback.answer(STALE_PROMPT, show_alert=True)
 
         # Remove inline keyboard after decision
         with contextlib.suppress(Exception):
             if msg and hasattr(msg, "edit_reply_markup"):
                 await msg.edit_reply_markup(reply_markup=None)
+        if not settled:
+            # The alert is transient; the message is what the operator scrolls
+            # back to, and an un-annotated prompt reads as a decision that took.
+            with contextlib.suppress(Exception):
+                if msg and hasattr(msg, "edit_text"):
+                    await msg.edit_text(
+                        f"{getattr(msg, 'text', '') or ''}\n\n{STALE_PROMPT}".strip()
+                    )
+
+    # ── Channel.ask answers ──
+
+    async def on_ask_answer(self, callback: CallbackQuery) -> None:
+        """Resolve a pending ``Channel.ask`` from an inline-keyboard tap.
+
+        The body is in ``channels/telegram_ask.py`` with the binding rules it
+        has to apply — an answer settles an ask only when it comes from the
+        chat AND the sender the ask was minted for.
+        """
+        from robothor.engine.channels.telegram_ask import handle_ask_callback
+
+        await handle_ask_callback(self, callback)
 
     # ── Run control callbacks (Steer / Interrupt buttons from /agents) ──
 
@@ -1131,6 +1173,15 @@ class TelegramHandlersMixin:
             # (or legacy self-service onboarding under the escape flag).
             reply = await self._handle_unregistered_sender(message, telegram_user_id)
             await message.answer(reply)
+            return
+
+        # ── A pending ask bound to (this chat, this sender) takes this line ──
+        # Before the run does: see ``telegram_ask.intercept_ask_answer`` for why
+        # reaching `_enqueue_message` would lose the answer entirely.
+        from robothor.engine.channels.telegram_ask import intercept_ask_answer
+
+        _quoted = getattr(message.reply_to_message, "message_id", "")
+        if await intercept_ask_answer(self, chat_id, telegram_user_id, user_text, str(_quoted)):
             return
 
         session_key = self._session_key(chat_id)

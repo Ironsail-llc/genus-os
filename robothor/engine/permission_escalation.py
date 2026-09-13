@@ -1,8 +1,25 @@
 """Permission escalation — lightweight human-in-the-loop for agent tool calls.
 
-Most agents run fully autonomously. This module is opt-in only: when a
-guardrail flags a tool call that needs human approval, it sends a Telegram
-inline-keyboard prompt and waits for a response (denies on timeout).
+Most agents run fully autonomously. This module is opt-in only: when a guardrail
+flags a tool call that needs human approval, it asks a person and waits for a
+response, denying on timeout.
+
+Two surfaces, and the order between them matters
+------------------------------------------------
+The **bot** path is the one an operator sees today: a Telegram inline keyboard
+whose ``callback_data`` is ``perm:approve|all|deny:<request_id>``, resolved by
+``TelegramHandlersMixin.on_permission_decision``. It is kept byte-for-byte
+because it is production UX and because a live prompt in a chat outlives a
+deploy — change the callback data and every prompt sent before the restart
+becomes a button that does nothing.
+
+The **channel** path is :meth:`Channel.ask`, and it is what makes this manager
+work on a surface that is not Telegram. It is also the fallback when the bot
+cannot deliver: before it existed, an undeliverable prompt was an instant
+denial, which is right only if there was genuinely nobody else to ask.
+
+Either way the answer comes from a person or it does not come at all. A timeout
+denies, an unreachable surface denies, and an answer nobody recognises denies.
 """
 
 from __future__ import annotations
@@ -16,6 +33,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+#: The three answers an escalation accepts, in the order they are offered. The
+#: button labels on the Telegram keyboard are these same strings, so a channel
+#: ask and a keyboard tap are the same three choices worded identically — an
+#: operator who has learned one surface has learned both.
+APPROVE = "Approve"
+APPROVE_ALL = "Approve All"
+DENY = "Deny"
+ESCALATION_OPTIONS = (APPROVE, APPROVE_ALL, DENY)
 
 
 # ─── Data Model ─────────────────────────────────────────────────────
@@ -33,6 +59,16 @@ class EscalationRequest:
     guardrail_name: str
     reason: str
     created_at: float
+    #: The monotonic instant this request's OWN budget runs out —
+    #: ``created_at + timeout_seconds``, where ``timeout_seconds`` is the
+    #: agent's ``human_approval_timeout`` (validated 10..3600). ``None`` for a
+    #: request built by hand rather than by :meth:`request_approval`, which
+    #: keeps the legacy ``max_age``-only rule for those.
+    #:
+    #: This exists because the watchdog sweep was reaping on a flat 600 s and
+    #: force-denying agents configured for longer, with their keyboard still
+    #: live. A control may not be stricter than the budget it enforces.
+    expires_at: float | None = None
     result: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     approved: bool | None = None
     telegram_message_id: int | None = None
@@ -48,9 +84,25 @@ class PermissionEscalationManager:
     the human responds (or the timeout fires, which denies the call).
     """
 
-    def __init__(self, *, bot: Any, chat_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        bot: Any = None,
+        chat_id: str = "",
+        channel: Any = None,
+        target: str = "",
+    ) -> None:
+        """Build a manager over a Telegram bot, a channel, or both.
+
+        Both is the production wiring, and the bot wins: see the module
+        docstring for why the keyboard path is not merely preferred but
+        preserved. ``channel``/``target`` are what a non-Telegram deployment
+        runs on, and what the bot path falls through to when it cannot deliver.
+        """
         self._bot = bot
         self._chat_id = chat_id
+        self._channel = channel
+        self._target = target
         self._pending: dict[str, EscalationRequest] = {}
         # Keyed by "{agent_id}:{guardrail_name}" → set of tool names
         # approved for this run session.
@@ -93,17 +145,31 @@ class PermissionEscalationManager:
             guardrail_name=guardrail_name,
             reason=reason,
             created_at=time.monotonic(),
+            expires_at=time.monotonic() + max(1.0, float(timeout_seconds)),
         )
         self._pending[request.request_id] = request
 
-        try:
-            await self._send_prompt(request, timeout_seconds)
-        except Exception:
-            logger.exception("Failed to send escalation prompt for %s", request.request_id)
-            # If we can't reach Telegram, deny — a tool flagged for human
-            # review must not proceed without human confirmation.
+        # Tell the run's own surface that it is now waiting on a person. In
+        # RAM by design: this is a notification, and the pending request is
+        # what the answer is resolved against.
+        await self._announce(request, timeout_seconds)
+
+        prompted = False
+        if self._bot is not None:
+            try:
+                await self._send_prompt(request, timeout_seconds)
+                prompted = True
+            except Exception:
+                logger.exception("Failed to send escalation prompt for %s", request.request_id)
+
+        if not prompted:
+            # Either there is no bot at all, or the bot could not deliver.
+            # Before falling back to a denial, try the other surface — "the
+            # operator could not be reached" is a claim worth testing before
+            # it is acted on.
+            approved = await self._ask_over_channel(request, timeout_seconds)
             self._cleanup(request.request_id)
-            return False
+            return approved
 
         try:
             await asyncio.wait_for(request.result.wait(), timeout=timeout_seconds)
@@ -129,16 +195,23 @@ class PermissionEscalationManager:
         *,
         approved: bool,
         remember_session: bool = False,
-    ) -> None:
-        """Resolve a pending escalation request (called from callback handler)."""
+    ) -> bool:
+        """Resolve a pending escalation. True only if THIS call settled it.
+
+        The return value is what lets the bridge's answer endpoint tell "the
+        operator just decided" from "that prompt is long gone" — answering 200
+        to a tap that changed nothing is how a UI ends up showing an approval
+        that never reached the agent. The Telegram callback handler ignores it
+        and is unaffected.
+        """
         request = self._pending.get(request_id)
         if request is None:
             logger.warning("Attempted to resolve unknown escalation %s", request_id)
-            return
+            return False
 
         if request.result.is_set():
             logger.warning("Escalation %s already resolved; ignoring", request_id)
-            return
+            return False
 
         request.approved = approved
 
@@ -153,14 +226,32 @@ class PermissionEscalationManager:
 
         # Wake up the waiting coroutine.
         request.result.set()
+        return True
 
     def cleanup_expired(self, max_age: float = 600.0) -> int:
-        """Remove stale requests older than *max_age* seconds.
+        """Reap orphaned requests. Returns how many were removed.
 
-        Returns the number of requests removed.
+        ``max_age`` is a **floor, never a ceiling**. A request is reaped only
+        once it is older than ``max_age`` AND past its own ``expires_at`` — so
+        this sweep can be late, and can never be early. That asymmetry is the
+        whole point: ``human_approval_timeout`` is per-agent and validated to
+        10..3600, the runbook promises the call auto-denies after *that*, and a
+        housekeeping sweep that denied at 600 s while the operator's keyboard
+        was still live would be a control out-voting the budget it exists to
+        enforce. Being late costs nothing — the waiting coroutine denies itself
+        on its own ``wait_for``, so anything this reaps is already an orphan
+        (a cancelled task, a killed run) with nobody listening.
+
+        A request built by hand carries no ``expires_at`` and keeps the legacy
+        ``max_age``-only rule.
         """
         now = time.monotonic()
-        expired = [rid for rid, req in self._pending.items() if (now - req.created_at) > max_age]
+        expired = [
+            rid
+            for rid, req in self._pending.items()
+            if (now - req.created_at) > max_age
+            and (req.expires_at is None or now >= req.expires_at)
+        ]
         for rid in expired:
             req = self._pending.pop(rid, None)
             if req is not None and not req.result.is_set():
@@ -170,6 +261,101 @@ class PermissionEscalationManager:
         return len(expired)
 
     # ── Internal ────────────────────────────────────────────────────
+
+    async def _announce(self, request: EscalationRequest, timeout_seconds: float) -> None:
+        """Emit ``approval_required`` to whatever is watching this run.
+
+        Emitted here rather than at the escalate branch in ``tool_admission``
+        for one concrete reason: the id. A waiting web client needs the
+        ``request_id`` to answer the prompt through the bridge, and that id does
+        not exist until this method's caller has built the request. Emitting one
+        frame earlier would mean announcing a question nobody could reply to.
+        """
+        from robothor.engine.run_status import emit_status
+
+        await emit_status(
+            request.run_id,
+            {
+                "event": "approval_required",
+                "kind": "escalation",
+                "id": request.request_id,
+                "run_id": request.run_id,
+                "agent_id": request.agent_id,
+                "tool": request.tool_name,
+                "question": _escalation_question(request),
+                "options": list(ESCALATION_OPTIONS),
+                "timeout_seconds": timeout_seconds,
+            },
+        )
+
+    def _resolve_channel(self) -> Any | None:
+        """The surface to ask on, resolved late and cached.
+
+        Late on purpose. ``daemon.main`` wires this manager while it is building
+        the bot, ~70 lines before ``_start_channels`` calls ``warm_channels()``
+        — so a channel captured at construction time would be whatever the
+        registry held before warm-up, forever. The resolution that matters
+        happens at the moment an escalation is actually raised, which is always
+        after startup finished.
+
+        A manager built with an explicit ``channel`` keeps it. One built around
+        the Telegram bot falls back to the Telegram *channel*, which is the same
+        operator on the same surface reached a different way — the point being
+        that an undeliverable keyboard is not by itself proof that nobody could
+        be reached.
+        """
+        if self._channel is None and self._bot is not None:
+            from robothor.engine.channels import get_channel
+
+            self._channel = get_channel("telegram")
+            self._target = self._target or self._chat_id
+        return self._channel
+
+    async def _ask_over_channel(self, request: EscalationRequest, timeout_seconds: float) -> bool:
+        """Ask through :meth:`Channel.ask`. Every way of not knowing is a deny.
+
+        ``None`` (nobody answered), ``NotImplementedError`` (a surface with
+        nobody to ask), a broken transport, and an answer that is not one of the
+        three offered all mean the same thing here. A guardrail escalation that
+        proceeded on any of them would be an approval nobody gave.
+        """
+        channel = self._resolve_channel()
+        if channel is None:
+            logger.warning("Escalation %s has no surface to ask on — denying", request.request_id)
+            return False
+
+        try:
+            answer = await channel.ask(
+                _escalation_question(request, timeout_seconds),
+                ESCALATION_OPTIONS,
+                timeout=timeout_seconds,
+                target=self._target,
+            )
+        except NotImplementedError:
+            logger.warning(
+                "Channel %s cannot ask; denying escalation %s",
+                getattr(channel, "name", "?"),
+                request.request_id,
+            )
+            return False
+        except Exception:
+            logger.exception("Channel ask failed for escalation %s", request.request_id)
+            return False
+
+        if answer == APPROVE_ALL:
+            grant_key = f"{request.agent_id}:{request.guardrail_name}"
+            self._session_grants.setdefault(grant_key, set()).add(request.tool_name)
+            logger.info("Session grant saved: %s tool=%s", grant_key, request.tool_name)
+            return True
+        if answer == APPROVE:
+            return True
+        if answer is not None and answer != DENY:
+            logger.warning(
+                "Escalation %s got an answer that is not one of the options (%r) — denying",
+                request.request_id,
+                answer,
+            )
+        return False
 
     async def _send_prompt(
         self,
@@ -197,15 +383,15 @@ class PermissionEscalationManager:
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="Approve",
+                        text=APPROVE,
                         callback_data=f"perm:approve:{request.request_id}",
                     ),
                     InlineKeyboardButton(
-                        text="Approve All",
+                        text=APPROVE_ALL,
                         callback_data=f"perm:all:{request.request_id}",
                     ),
                     InlineKeyboardButton(
-                        text="Deny",
+                        text=DENY,
                         callback_data=f"perm:deny:{request.request_id}",
                     ),
                 ],
@@ -241,6 +427,25 @@ class PermissionEscalationManager:
 # ─── Helpers ────────────────────────────────────────────────────────
 
 
+def _escalation_question(request: EscalationRequest, timeout_seconds: float | None = None) -> str:
+    """The prompt text, shared by both surfaces so they read the same.
+
+    The Telegram keyboard's own body is built in :meth:`_send_prompt` and keeps
+    its Markdown; this is the plain rendering a channel gets, and the one the
+    ``approval_required`` status event carries to a web client.
+    """
+    text = (
+        f"Agent {request.agent_id} is requesting approval.\n"
+        f"Tool: {request.tool_name}\n"
+        f"Args: {_brief_args(request.tool_args)}\n"
+        f"Policy: {request.guardrail_name}\n"
+        f"Reason: {request.reason}"
+    )
+    if timeout_seconds is not None:
+        text += f"\n\nAuto-denies in {int(timeout_seconds)}s if no response."
+    return text
+
+
 def _brief_args(args: dict[str, Any], max_len: int = 200) -> str:
     """Return a compact, truncated representation of tool arguments."""
     try:
@@ -262,10 +467,23 @@ def get_permission_manager() -> PermissionEscalationManager | None:
     return _escalation_manager
 
 
-def init_permission_manager(bot: Any, chat_id: str) -> PermissionEscalationManager:
-    """Initialise the permission escalation manager singleton."""
+def init_permission_manager(
+    bot: Any,
+    chat_id: str,
+    *,
+    channel: Any = None,
+    target: str = "",
+) -> PermissionEscalationManager:
+    """Initialise the permission escalation manager singleton.
+
+    ``bot``/``chat_id`` stay positional because the daemon and the existing
+    tests call it that way. ``channel``/``target`` arm the second surface — see
+    :class:`PermissionEscalationManager` for which one is asked first.
+    """
     global _escalation_manager
-    _escalation_manager = PermissionEscalationManager(bot=bot, chat_id=chat_id)
+    _escalation_manager = PermissionEscalationManager(
+        bot=bot, chat_id=chat_id, channel=channel, target=target or chat_id
+    )
     return _escalation_manager
 
 

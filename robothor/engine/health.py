@@ -174,6 +174,12 @@ def _mount_subsystem_routers(
 
     register_admin_scheduler(app, scheduler)
 
+    # Answering an in-RAM permission escalation. The pending request lives in
+    # THIS process, so the bridge has to proxy here rather than write a row.
+    from robothor.engine.admin_approvals import register as register_admin_approvals
+
+    register_admin_approvals(app)
+
 
 async def _fleet_readiness(config: EngineConfig, details: dict[str, Any]) -> str:
     """Readiness for the agent fleet. Broken and absent are different answers.

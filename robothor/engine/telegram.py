@@ -258,6 +258,7 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         self.dp.callback_query(F.data.startswith("plan:"))(self.on_plan_decision)
         self.dp.callback_query(F.data.startswith("model:"))(self.on_model_select)
         self.dp.callback_query(F.data.startswith("perm:"))(self.on_permission_decision)
+        self.dp.callback_query(F.data.startswith("ask:"))(self.on_ask_answer)
         self.dp.callback_query(F.data.startswith("runctl:"))(self.on_runctl_callback)
         self.dp.callback_query(F.data.startswith("dp:"))(self.on_delphi_proposal_decision)
         self.dp.message(F.voice | F.video_note)(self.handle_voice)

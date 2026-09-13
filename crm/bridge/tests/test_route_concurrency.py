@@ -103,6 +103,13 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("POST", "/api/installed-agents/install"),
         ("POST", "/api/installed-agents/{agent_id}/update"),
         ("DELETE", "/api/installed-agents/{agent_id}"),
+        # Answering a waiting question. One of its three kinds — a permission
+        # escalation — is an asyncio.Event inside the ENGINE process, so the
+        # route awaits engine_request and a `def` handler could not settle it at
+        # all. The two durable kinds are psycopg2 writes and go through
+        # asyncio.to_thread inside the handler. The read-only listing beside it
+        # stays `def` and is correctly absent from this set.
+        ("POST", "/api/approvals/{kind}/{approval_id}"),
     }
 
 

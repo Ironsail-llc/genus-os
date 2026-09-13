@@ -26,18 +26,21 @@ the call did not raise would be a lie with a green test beside it.
 
 Optional slots
 --------------
-:meth:`Channel.ask` and :meth:`Channel.resolve_identity` are declared here so
-the shape is settled, and are *not* implemented by anything in this release —
-inbound identity resolution lands with pairing, and interactive asks with the
-permission-escalation rework. An implementation raises
-:exc:`NotImplementedError` rather than returning a plausible default, because a
-channel that answered "yes" to an approval prompt nobody saw is worse than one
-that refuses.
+:meth:`Channel.resolve_identity` is declared here so the shape is settled and is
+*not* implemented by anything in this release — inbound identity resolution
+lands with pairing. An implementation raises :exc:`NotImplementedError` rather
+than returning a plausible default, because a channel that answered "yes" to an
+approval prompt nobody saw is worse than one that refuses.
+
+:meth:`Channel.ask` is now live on Telegram and is called by the ``ask_user``
+tool and by ``permission_escalation.PermissionEscalationManager``. It stays
+optional: ``EventBusChannel.ask`` raises, because a sink has nobody to ask, and
+that raise is part of the contract rather than a gap in it — callers catch it
+and fall through to the durable ``agent_questions`` row.
 
 Because they are declared here, ``isinstance(x, Channel)`` means "implements
 every slot including the optional two". The registry deliberately does not gate
-on that — it requires only ``send``, so a plugin can ship a send-only channel —
-and no code path calls ``ask`` or ``resolve_identity`` yet.
+on that — it requires only ``send``, so a plugin can ship a send-only channel.
 
 What the platform drives today
 ------------------------------
@@ -254,12 +257,35 @@ class Channel(Protocol):
         """Whatever the operator needs to see about this channel's readiness."""
         ...
 
-    async def ask(self, question: str, options: Sequence[str]) -> str:
-        """Put a choice to a person and wait for their answer.
+    async def ask(
+        self,
+        question: str,
+        options: Sequence[str] = (),
+        *,
+        timeout: float = 300.0,
+        target: str = "",
+        addressee: str = "",
+    ) -> str | None:
+        """Put a question to the person at ``target`` and wait for an answer.
 
-        Not implemented in this release — interactive approval still runs
-        through ``engine/permission_escalation.py``, which is Telegram-bound
-        and keeps its pending prompts in RAM.
+        ``target`` is *where* — the address the question is sent to.
+        ``addressee`` is *who* — the channel-native id of the person being
+        asked, and a channel that can receive must bind its pending question to
+        both and settle it only for an answer matching both. An empty
+        ``addressee`` means "whoever the platform's own authorization says may
+        answer here", which for Telegram is the operator. Getting this wrong is
+        how an answer typed by one person settles a question asked of another.
+
+        ``options`` offers a fixed set of choices; empty means free text. The
+        return is the answer, or ``None`` for "nobody answered" — a timeout, an
+        unreachable surface, or nobody to ask at all.
+
+        ``None`` is the **only** non-answer. A channel must never return one of
+        ``options`` because the clock ran out: that is an approval nobody gave,
+        and it is the failure this whole module is written against.
+        ``NotImplementedError`` is likewise a legitimate outcome and not a bug
+        — a sink has nobody to ask — so **every caller must catch it** and fall
+        back to whatever it does when no person is reachable.
         """
         ...
 

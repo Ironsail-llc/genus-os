@@ -157,14 +157,20 @@ class TestTelegramWrapper:
         assert receipt.status == "failed:telegram_no_sender"
 
     @pytest.mark.asyncio
-    async def test_ask_and_resolve_identity_are_declared_but_not_implemented(self):
-        """Protocol slots for C8/C10. Declared so the shape is stable; a stub
-        that returned a plausible answer would be worse than a refusal."""
+    async def test_resolve_identity_is_declared_but_not_implemented(self):
+        """Protocol slot for C8. Declared so the shape is stable; a stub that
+        returned a plausible identity would be worse than a refusal.
+
+        ``ask`` used to be asserted here too and is now implemented — see
+        ``test_ask_user.py``. It still never returns a plausible default: with
+        nobody to ask it answers ``None``, which is not one of the options."""
         channel = TelegramChannel()
         with pytest.raises(NotImplementedError):
-            await channel.ask("Approve?", ["yes", "no"])
-        with pytest.raises(NotImplementedError):
             await channel.resolve_identity("42")
+
+    @pytest.mark.asyncio
+    async def test_ask_with_no_target_is_none_and_not_an_option(self):
+        assert await TelegramChannel().ask("Approve?", ["yes", "no"], timeout=1.0) is None
 
 
 class TestTheRegistry:
