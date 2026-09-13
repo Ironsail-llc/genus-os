@@ -263,16 +263,22 @@ class TestTheClassificationCannotDrift:
     no test can fail. So the argument names are read out of the source.
     """
 
-    @staticmethod
-    def _id_literals(path: Path) -> set[str]:
-        """Every "…Id" / "id" string constant in a module."""
+    #: An id name in either spelling, singular or plural. Matching only
+    #: "…Id" left `fooIds`, `foo_id` and `foo_ids` invisible: a new argument
+    #: in any of those shapes could sit beside a classified `fooId` and this
+    #: gate would report nothing, which is the drift it exists to catch.
+    _ID_SUFFIXES = ("Id", "Ids", "_id", "_ids")
+
+    @classmethod
+    def _id_literals(cls, path: Path) -> set[str]:
+        """Every id-shaped string constant in a module."""
         tree = ast.parse(path.read_text())
         return {
             node.value
             for node in ast.walk(tree)
             if isinstance(node, ast.Constant)
             and isinstance(node.value, str)
-            and (node.value == "id" or node.value.endswith("Id"))
+            and (node.value == "id" or node.value.endswith(cls._ID_SUFFIXES))
         }
 
     @property

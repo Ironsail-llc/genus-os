@@ -99,15 +99,34 @@ UUID_ID_ARGS: frozenset[str] = frozenset(
 #: Arguments that address a serial integer key (``crm_conversations.id``).
 INT_ID_ARGS: frozenset[str] = frozenset({"conversationId"})
 
-#: Id-looking names that are deliberately NOT row ids, kept explicit so the
-#: drift test (test_crm_id_validation.py) can tell "classified as free text"
-#: from "nobody thought about it":
+#: Id-looking names that are deliberately NOT tool arguments this guard
+#: validates, kept explicit so the drift test (test_crm_id_validation.py) can
+#: tell "looked at and classified" from "nobody thought about it":
 #:
 #: * ``agentId`` — an agent *name* (``main``, ``crm-hygiene``), defaulting to
 #:   ``ctx.agent_id``.
 #: * ``threadId`` / ``eventId`` / ``escalationId`` — dedup markers parsed out
 #:   of a task *body* (``create_task``), carrying external provider ids.
-NOT_AN_ID: frozenset[str] = frozenset({"agentId", "threadId", "eventId", "escalationId"})
+#: * ``person_id`` / ``company_id`` — the DAL's own column spelling, not a
+#:   tool argument. In the CRM tools they appear only as the *target* of a
+#:   field map (``"personId": "person_id"``), so the value was validated
+#:   under its camelCase argument name before being renamed. On the MCP
+#:   surface ``person_id`` is also the optional property of the vision
+#:   enrollment tools (``enroll_face``, ``enroll_face_from_image``), which
+#:   are not CRM tools and are proxied to the vision service rather than
+#:   bound to a uuid column here.
+#: * ``tenant_id`` — a tenant slug (``robothor-primary``), not a row id.
+NOT_AN_ID: frozenset[str] = frozenset(
+    {
+        "agentId",
+        "threadId",
+        "eventId",
+        "escalationId",
+        "person_id",
+        "company_id",
+        "tenant_id",
+    }
+)
 
 #: Tools whose id argument is mandatory — absent or blank is itself the error.
 #: Everything else treats a missing id as "no filter" (``list_tasks``'s
