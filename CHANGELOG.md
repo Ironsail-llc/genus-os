@@ -1,3 +1,9 @@
+## [1.77.1](https://github.com/Ironsail-llc/genus-os/compare/v1.77.0...v1.77.1) (2026-09-13)
+
+### Bug Fixes
+
+* **llm:** a reasoning-only reply is not an empty one, and attempts are recorded ([#531](https://github.com/Ironsail-llc/genus-os/issues/531)) ([635d534](https://github.com/Ironsail-llc/genus-os/commit/635d534b0e8333d0bdade5ce02da6bbe499b48e5)), closes [#529](https://github.com/Ironsail-llc/genus-os/issues/529)
+
 ## [1.77.0](https://github.com/Ironsail-llc/genus-os/compare/v1.76.2...v1.77.0) (2026-09-13)
 
 ### Features
