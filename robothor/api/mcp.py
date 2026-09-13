@@ -40,6 +40,8 @@ from typing import Any, cast
 
 import httpx
 
+from robothor.crm.tool_ids import CRM_TOOLS, id_argument_error
+
 _MCPDecoratorFactory = Callable[
     [],
     Callable[[Callable[..., Any]], Callable[..., Any]],
@@ -951,6 +953,17 @@ def get_tool_definitions() -> list[dict[str, Any]]:
 
 async def handle_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Handle an MCP tool call and return result."""
+
+    # Id shape first, for the CRM tools. This dispatcher hands arguments
+    # straight to the DAL, so an LLM-invented id ("bob.quill@example.com",
+    # "85105") reached the uuid-typed SQL parameter verbatim and raised
+    # psycopg2 InvalidTextRepresentation — the same crash the engine's
+    # handler path fixed on 2026-09-13, one file over. Same validator, so
+    # both surfaces refuse the same values with the same message.
+    if name in CRM_TOOLS:
+        bad_id = id_argument_error(name, arguments)
+        if bad_id is not None:
+            return bad_id
 
     # ── Memory tools ──
     # TODO: MCP protocol doesn't carry tenant context yet. All memory calls

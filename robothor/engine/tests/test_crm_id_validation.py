@@ -23,12 +23,18 @@ than naming the two handlers that happened to crash this week.
 
 from __future__ import annotations
 
+import ast
 import uuid
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from robothor.api import mcp
+from robothor.crm import tool_ids
+from robothor.engine.tools import dispatch as _dispatch  # noqa: F401 — registry import order
 from robothor.engine.tools.dispatch import ToolContext
+from robothor.engine.tools.handlers import crm as crm_handlers
 from robothor.engine.tools.handlers.crm import HANDLERS
 
 CTX = ToolContext(agent_id="test", tenant_id="test-tenant")
@@ -187,3 +193,118 @@ class TestEveryIdBearingHandler:
         with patch("robothor.crm.dal.get_connection", MagicMock()):
             result = await HANDLERS[tool](args, CTX)
         assert any(o in result["error"] for o in offenders), result["error"]
+
+
+class TestIdsPostgresWouldRefuse:
+    """The guard's whole purpose is that no malformed id reaches SQL.
+
+    So "parses in Python" is the wrong bar: `uuid.UUID` accepts the RFC 4122
+    URN form, which Postgres's uuid input does not, and the value would pass
+    the guard and then crash exactly as before. Upper-case, {braced} and
+    32-hex-no-dash all pass both and must keep passing.
+    """
+
+    UUID = "11111111-1111-4111-8111-111111111111"
+
+    async def test_a_urn_uuid_is_refused(self):
+        with patch("robothor.crm.dal.get_connection") as connection:
+            result = await HANDLERS["get_person"]({"id": f"urn:uuid:{self.UUID}"}, CTX)
+        connection.assert_not_called()
+        assert "not a valid id" in result["error"]
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            UUID,
+            UUID.upper(),
+            "{" + UUID + "}",
+            UUID.replace("-", ""),
+        ],
+    )
+    async def test_forms_postgres_accepts_still_reach_the_dal(self, value):
+        with patch("robothor.crm.dal.get_person", return_value={"id": value}) as dal_get:
+            await HANDLERS["get_person"]({"id": value}, CTX)
+        dal_get.assert_called_once()
+
+    async def test_a_padded_id_is_stripped_rather_than_refused(self):
+        """A model copying an id out of its own last tool result brings the
+        whitespace with it. Refusing that reads as "this UUID is not a UUID"
+        and invites the same value again; Postgres would reject it, so the
+        boundary normalises instead of bouncing it."""
+        with patch("robothor.crm.dal.get_person", return_value={"id": self.UUID}) as dal_get:
+            result = await HANDLERS["get_person"]({"id": f"  {self.UUID}\n"}, CTX)
+        assert "error" not in result
+        assert dal_get.call_args.args[0] == self.UUID
+
+
+class TestTheErrorPointsAtTheRouteThatWorks:
+    async def test_contact_360_names_the_identifier_argument(self):
+        """get_contact_360 resolves an email — telling the model to go and
+        find an id instead, when an email is exactly what that tool takes,
+        is advice that walks past the answer."""
+        with patch("robothor.crm.dal.get_contact_360") as dal_get:
+            result = await HANDLERS["get_contact_360"]({"id": "bob.quill@example.com"}, CTX)
+        dal_get.assert_not_called()
+        assert "identifier" in result["error"], result["error"]
+
+    async def test_the_identifier_route_still_works(self):
+        with patch("robothor.crm.dal.resolve_contact", return_value={"person_id": None}) as resolve:
+            result = await HANDLERS["get_contact_360"](
+                {"identifier": "bob.quill@example.com", "channel": "email"}, CTX
+            )
+        resolve.assert_called_once()
+        assert "not a valid id" not in result.get("error", "")
+
+
+class TestTheClassificationCannotDrift:
+    """`get_task` grew this guard and its siblings did not — because coverage
+    lived in one author's head. A hand-written list of cases repeats that: a
+    handler added later with a new id argument name is silently unguarded and
+    no test can fail. So the argument names are read out of the source.
+    """
+
+    @staticmethod
+    def _id_literals(path: Path) -> set[str]:
+        """Every "…Id" / "id" string constant in a module."""
+        tree = ast.parse(path.read_text())
+        return {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and (node.value == "id" or node.value.endswith("Id"))
+        }
+
+    @property
+    def _classified(self) -> frozenset[str]:
+        return tool_ids.UUID_ID_ARGS | tool_ids.INT_ID_ARGS | tool_ids.NOT_AN_ID
+
+    def test_every_id_name_in_the_handlers_is_classified(self):
+        module = Path(crm_handlers.__file__)
+        unclassified = self._id_literals(module) - self._classified
+        assert not unclassified, (
+            f"unclassified id arguments in {module.name}: {sorted(unclassified)} — "
+            "add each to UUID_ID_ARGS, INT_ID_ARGS, or NOT_AN_ID (with a reason) "
+            "in robothor/crm/tool_ids.py"
+        )
+
+    def test_every_id_name_in_the_mcp_dispatcher_is_classified(self):
+        """The second dispatcher for the same tools; same vocabulary, same rule."""
+        module = Path(mcp.__file__)
+        unclassified = self._id_literals(module) - self._classified
+        assert not unclassified, (
+            f"unclassified id arguments in {module.name}: {sorted(unclassified)}"
+        )
+
+    def test_no_classified_name_is_dead(self):
+        """A name nobody reads is evidence the list was written from memory."""
+        live = self._id_literals(Path(crm_handlers.__file__)) | self._id_literals(
+            Path(mcp.__file__)
+        )
+        dead = (tool_ids.UUID_ID_ARGS | tool_ids.INT_ID_ARGS) - live
+        assert not dead, f"classified but never read: {sorted(dead)}"
+
+    def test_the_guarded_tool_set_matches_the_handler_registry(self):
+        """CRM_TOOLS tells the MCP dispatcher where this vocabulary applies.
+        A handler added without adding it there is an unguarded MCP path."""
+        assert frozenset(HANDLERS) == tool_ids.CRM_TOOLS

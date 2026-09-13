@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 from robothor.constants import SANDBOX_DENIAL_PREFIX
+from robothor.crm.tool_ids import id_argument_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -77,133 +77,12 @@ def _sandbox_write_allowed(name: str, ctx: ToolContext) -> bool:
 
 # ── Id validation at the tool boundary ───────────────────────────────────
 #
-# CRM ids are uuid (people, companies, notes, tasks, notifications) or serial
-# integers (conversations). An LLM-invented placeholder — "task_jkl012",
-# "bob.quill@example.com", "85105" — used to reach the typed SQL parameter
-# verbatim and crash the handler with psycopg2 InvalidTextRepresentation,
-# which dispatch reported to the agent as a raw tool crash.
-#
-# `get_task` grew a guard for exactly this in 2026-08; `_get_person` and
-# `_list_tasks` right beside it did not, and both crashed again on
-# 2026-09-13. So the check lives here, in the decorator every handler in this
-# module already passes through: guard the path every caller crosses, not the
-# one the current caller uses.
-
-#: Arguments this module hands to uuid-typed SQL parameters.
-_UUID_ID_ARGS: frozenset[str] = frozenset(
-    {
-        "id",
-        "personId",
-        "companyId",
-        "taskId",
-        "parentTaskId",
-        "assigneeId",
-        "keeperId",
-        "loserId",
-        "notificationId",
-    }
-)
-
-#: Arguments that address a serial integer key (crm_conversations.id).
-_INT_ID_ARGS: frozenset[str] = frozenset({"conversationId"})
-
-#: Tools whose id argument is mandatory — absent or blank is itself the
-#: error. Everything else treats a missing id as "no filter" (list_tasks's
-#: personId) or has its own fallback (get_contact_360 resolves an
-#: ``identifier`` instead), so absence is left to the handler.
-_REQUIRED_ID_ARGS: dict[str, tuple[str, ...]] = {
-    "get_person": ("id",),
-    "update_person": ("id",),
-    "delete_person": ("id",),
-    "get_company": ("id",),
-    "update_company": ("id",),
-    "delete_company": ("id",),
-    "get_note": ("id",),
-    "update_note": ("id",),
-    "delete_note": ("id",),
-    "get_task": ("id",),
-    "update_task": ("id",),
-    "delete_task": ("id",),
-    "resolve_task": ("id",),
-    "approve_task": ("id",),
-    "reject_task": ("id",),
-    "ack_notification": ("notificationId",),
-    "merge_people": ("keeperId", "loserId"),
-    "merge_contacts": ("keeperId", "loserId"),
-    "merge_companies": ("keeperId", "loserId"),
-    "get_conversation": ("conversationId",),
-    "list_messages": ("conversationId",),
-    "create_message": ("conversationId",),
-    "toggle_conversation_status": ("conversationId",),
-}
-
-#: (marker, subject, where to find a real one). Matched in order against the
-#: argument name — or against the tool name for the bare "id" and for the
-#: merge arguments, which is where the subject actually lives.
-_ID_SUBJECTS: tuple[tuple[str, str, str], ...] = (
-    ("notification", "notification", "get_inbox"),
-    ("conversation", "conversation", "list_conversations"),
-    ("contact", "person", "search_people or list_people"),
-    ("people", "person", "search_people or list_people"),
-    ("person", "person", "search_people or list_people"),
-    ("compan", "company", "list_companies"),
-    ("note", "note", "list_notes"),
-    ("task", "task", "list_tasks or list_my_tasks"),
-    ("message", "conversation", "list_conversations"),
-)
-
-
-def _id_subject(tool: str, arg: str) -> tuple[str, str]:
-    """What kind of record an id argument names, and how to find a real one."""
-    key = tool if arg in ("id", "keeperId", "loserId") else arg
-    lowered = key.lower()
-    for marker, subject, finder in _ID_SUBJECTS:
-        if marker in lowered:
-            return subject, finder
-    return "record", "a list_* tool"
-
-
-def _id_argument_error(tool: str, args: dict[str, Any]) -> dict[str, str] | None:
-    """The error dict for the first unusable id in ``args``, else ``None``.
-
-    Returns rather than raises: the reader is a model, and a named expected
-    format is recoverable on the next turn where a psycopg2 traceback is a
-    dead end that burns an iteration.
-    """
-    required = _REQUIRED_ID_ARGS.get(tool, ())
-    seen: set[str] = set()
-    for arg in (*required, *(a for a in args if a in _UUID_ID_ARGS or a in _INT_ID_ARGS)):
-        if arg in seen:
-            continue
-        seen.add(arg)
-
-        value = args.get(arg)
-        subject, finder = _id_subject(tool, arg)
-        expected = "an integer id" if arg in _INT_ID_ARGS else "a UUID"
-
-        if value is None or (isinstance(value, str) and not value.strip()):
-            if arg not in required:
-                continue  # an optional filter that was simply not passed
-            return {
-                "error": (
-                    f"{tool} needs a {subject} id — expected {expected}; "
-                    f"use {finder} to find real {subject} ids"
-                )
-            }
-
-        try:
-            if arg in _INT_ID_ARGS:
-                int(str(value))
-            else:
-                uuid.UUID(str(value))
-        except (TypeError, ValueError):
-            return {
-                "error": (
-                    f"{subject} id {value!r} is not a valid id — expected {expected}; "
-                    f"use {finder} to find real {subject} ids"
-                )
-            }
-    return None
+# The tables and the check live in robothor.crm.tool_ids, because the same
+# tools are dispatched from two places — this module for the agent fleet and
+# robothor.api.mcp.handle_tool_call for the operator's own Claude sessions —
+# and a guard that covers one dispatcher is the same mistake one file over.
+# Every handler registered here is a CRM tool, so the check applies to all of
+# them; the MCP dispatcher scopes it with tool_ids.CRM_TOOLS.
 
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -223,7 +102,7 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
                     "error": f"{SANDBOX_DENIAL_PREFIX} {_name} writes are disabled",
                     "guard": "is_benchmark",
                 }
-            bad_id = _id_argument_error(_name, args)
+            bad_id = id_argument_error(_name, args)
             if bad_id is not None:
                 return bad_id
             return cast("dict[str, Any]", await _fn(args, ctx))
@@ -620,7 +499,7 @@ async def _get_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     )
 
     # The id shape is validated in _handler, for every id-bearing tool in
-    # this module (see _id_argument_error) — this one used to carry the only
+    # this module (see robothor.crm.tool_ids) — this one used to carry the only
     # copy of that guard.
     _mode = data_scoping_mode()
     result = await asyncio.to_thread(
@@ -1161,12 +1040,12 @@ async def _list_messages(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     from robothor.identity.scope import log_would_drop, observe_scope, scope_for_query
 
     # _handler has already refused a non-integer conversation id (see
-    # _id_argument_error); this is the coercion the DAL needs, not a second
+    # id_argument_error); this is the coercion the DAL needs, not a second
     # check. Kept defensive so a direct call cannot reach SQL with a string.
     try:
         conversation_id = int(str(args.get("conversationId")))
     except (TypeError, ValueError):
-        return _id_argument_error("list_messages", args) or {
+        return id_argument_error("list_messages", args) or {
             "error": "conversationId is not a valid id — expected an integer id"
         }
 
