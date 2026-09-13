@@ -191,8 +191,13 @@ class TestTheRegistry:
         ``chat_sessions`` rows and inbox, so a plugin able to claim the name
         could redirect every member-facing delivery while the session it wrote
         to still looked like the member's.
+
+        ``email`` joined it with C11 on that same footing: a plugin able to
+        claim the name would become the surface the ``do_not_contact`` guard
+        runs inside, and an opt-out control a package can replace merely by
+        being installed is not a control.
         """
-        assert frozenset({"telegram", "event_bus", "slack", "webchat"}) == BUILTIN_CHANNELS
+        assert frozenset({"telegram", "event_bus", "slack", "webchat", "email"}) == BUILTIN_CHANNELS
         for name in BUILTIN_CHANNELS:
             assert get_channel(name) is not None, f"built-in channel {name!r} is missing"
 

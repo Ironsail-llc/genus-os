@@ -21,7 +21,7 @@ import ast
 import importlib
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -263,3 +263,73 @@ class TestTheAnnounceBranchIsNotHardcoded:
             "the ANNOUNCE branch still calls _deliver_telegram directly, so a "
             "named channel is decoration"
         )
+
+
+class TestEmailRoutesThroughTheBuiltInChannel:
+    """``delivery.channel: email`` end to end, including the refusal.
+
+    The refusal half is the one worth having here rather than only in the
+    channel's own suite: a status the channel returns is a control only once
+    ``apply_receipt`` has written it into ``agent_runs``, which is the column
+    analytics and the heartbeat ping read. A guard whose refusal never reached
+    that column would look, to every dashboard, exactly like a delivery.
+    """
+
+    @staticmethod
+    def _email_channel(gws, *, present: bool = True):
+        from robothor.engine.channels import get_channel
+        from robothor.engine.channels.email import EmailChannel
+
+        channel = get_channel("email")
+        assert isinstance(channel, EmailChannel)
+        channel.gws_send = gws
+        channel.gws_probe = lambda: present
+        return channel
+
+    @staticmethod
+    def _recording_gws(sent: list[list[str]]):
+        def _gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
+            sent.append(args)
+            return {"id": "18f0000000000000"}
+
+        return _gws
+
+    @pytest.mark.asyncio
+    async def test_a_manifest_naming_email_reaches_the_email_channel(
+        self, telegram_sender, persisted
+    ):
+        sent: list[list[str]] = []
+        self._email_channel(self._recording_gws(sent))
+        run = _run()
+        config = _config(delivery_channel="email", delivery_to="alice@example.com")
+
+        with patch("robothor.crm.dal.do_not_contact_emails", return_value=set()):
+            result = await deliver(config, run)
+
+        assert result is True
+        assert len(sent) == 1
+        telegram_sender.assert_not_called()
+        assert run.delivery_channel == "email"
+        assert run.delivery_status == "delivered"
+        assert persisted == ["delivered"]
+
+    @pytest.mark.asyncio
+    async def test_a_flagged_recipient_is_recorded_as_a_refusal_not_a_delivery(
+        self, telegram_sender, persisted
+    ):
+        sent: list[list[str]] = []
+        self._email_channel(self._recording_gws(sent))
+        run = _run()
+        config = _config(delivery_channel="email", delivery_to="bob@example.com")
+
+        with (
+            patch("robothor.crm.dal.do_not_contact_emails", return_value={"bob@example.com"}),
+            patch("robothor.engine.tracking.log_guardrail_event"),
+        ):
+            result = await deliver(config, run)
+
+        assert result is False
+        assert sent == [], "a flagged recipient reached the transport"
+        assert run.delivery_status == "failed:email_dnc"
+        assert run.delivered_at is None
+        assert persisted == ["failed:email_dnc"]

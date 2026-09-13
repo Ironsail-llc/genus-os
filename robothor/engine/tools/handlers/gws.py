@@ -470,6 +470,43 @@ def _find_duplicate_event(
 
 _GWS_BINARY: str | None = None
 
+#: The real Rust binary the npm installer extracts, bypassing the Node.js
+#: wrapper. Named here rather than inline so the availability probe below and
+#: the resolver below that cannot drift apart about what "installed" means.
+_GWS_REAL_BINARY = "/usr/lib/node_modules/@googleworkspace/cli/node_modules/.bin_real/gws"
+
+
+def gws_available() -> bool:
+    """Whether a gws CLI exists on this box at all.
+
+    Deliberately UNCACHED, and deliberately not ``_resolve_gws_binary()``: that
+    function's last resort is the bare string ``"gws"``, which it then stores in
+    ``_GWS_BINARY`` for the life of the process. Asking it "is gws installed?"
+    would therefore answer "yes" on a box with no gws — and poison the cache so
+    that every later tool call spawned a command that does not exist.
+
+    Used by the email channel to decide between its two transports, so a wrong
+    answer here is a briefing sent from the wrong address or not at all.
+    """
+    import shutil
+
+    if Path(_GWS_REAL_BINARY).is_file() and os.access(_GWS_REAL_BINARY, os.X_OK):
+        return True
+    return shutil.which("gws") is not None
+
+
+def run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
+    """Run one gws CLI command. The public name for :func:`_run_gws`.
+
+    Same call, same return shape — parsed JSON, ``{"output": …}`` for anything
+    that is not JSON, ``{"error": …}`` for a non-zero exit, a timeout or a
+    missing binary. It exists so a caller outside this module (the email
+    channel) does not have to reach for an underscore-prefixed name, and it
+    adds nothing: a second way to run gws would be a second set of timeouts and
+    a second way to read a failure.
+    """
+    return _run_gws(args, timeout)
+
 
 def _resolve_gws_binary() -> str:
     """Resolve the actual gws binary, bypassing the Node.js wrapper.
@@ -486,7 +523,7 @@ def _resolve_gws_binary() -> str:
         return _GWS_BINARY
 
     # Primary: the real Rust binary extracted by the npm installer
-    real_bin = "/usr/lib/node_modules/@googleworkspace/cli/node_modules/.bin_real/gws"
+    real_bin = _GWS_REAL_BINARY
     if Path(real_bin).is_file() and os.access(real_bin, os.X_OK):
         _GWS_BINARY = real_bin
         logger.debug("gws: using direct binary at %s", real_bin)

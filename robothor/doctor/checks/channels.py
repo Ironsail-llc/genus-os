@@ -293,6 +293,106 @@ async def _slack_verify(ctx: DoctorContext) -> Result:
     return ok("auth.test and the scope probe both answered")
 
 
+async def _email(ctx: DoctorContext) -> Result:
+    """Can this instance send email at all, and through what?
+
+    Email is optional and its absence is the norm, so nothing configured is a
+    skip. Half configured is not: an SMTP host with no from-address sends
+    nothing, and a stored password with no host is a credential this instance
+    has no way to use -- both of which are invisible until a briefing does not
+    arrive, which is the exact failure this package exists to move earlier.
+
+    The transport is named in the passing row because the answer decides where
+    a message comes FROM: ``gws`` sends as the Google Workspace account the CLI
+    is authenticated to, SMTP as ``ROBOTHOR_EMAIL_FROM``. An operator debugging
+    "why did this arrive from that address" is asking exactly this question.
+
+    The password comes from :func:`~robothor.engine.channels.email_credentials.
+    email_credentials`, not from ``ctx.settings``: the settings layer never
+    consults the vault, and the vault is where `genus channel add email` writes
+    by default -- so reading settings would report "not configured" for exactly
+    the installs this check exists to police. Its SOURCE is named and its value
+    never is.
+
+    What this check does NOT do is send. That is `genus channel verify email
+    --to ...`, aimed by hand; a diagnostic that mails somebody every time a
+    Health panel refreshes is not a diagnostic. The SMTP session it does open
+    is skipped under ``--offline``.
+    """
+    from robothor.engine.channels.email import cleartext_login_refusal
+    from robothor.engine.channels.email_credentials import SMTP_PASSWORD_ENV, email_credentials
+    from robothor.engine.tools.handlers.gws import gws_available
+
+    channels = ctx.settings.channels
+    host = (channels.email_smtp_host or "").strip()
+    sender = (channels.email_from or "").strip()
+    user = (channels.email_smtp_user or "").strip()
+    found = email_credentials()
+    password = found.smtp_password or ""
+    gws = bool(await ctx.run_blocking(gws_available))
+
+    if not (host or sender or user or password):
+        if gws:
+            return ok("the gws CLI is installed; the email channel sends through it")
+        return skip("not configured — email is an optional channel")
+
+    if host and not sender:
+        return fail(
+            "ROBOTHOR_EMAIL_SMTP_HOST is set but ROBOTHOR_EMAIL_FROM is not, so the "
+            "SMTP transport has no from-address and every send is refused"
+        )
+    if password and not host:
+        return fail(
+            f"{SMTP_PASSWORD_ENV} is stored but ROBOTHOR_EMAIL_SMTP_HOST is not set, "
+            "so nothing on this instance reads it"
+        )
+    if user and not host:
+        return fail(
+            "ROBOTHOR_EMAIL_SMTP_USER is set but ROBOTHOR_EMAIL_SMTP_HOST is not, so "
+            "there is no server to authenticate to"
+        )
+    if not host:
+        if gws:
+            return ok("the gws CLI is installed; the email channel sends through it")
+        return fail(
+            "ROBOTHOR_EMAIL_FROM is set but there is no transport: the gws CLI is not "
+            "installed and ROBOTHOR_EMAIL_SMTP_HOST is unset"
+        )
+
+    # The SAME function the channel refuses a send with, so the two cannot
+    # drift into disagreeing about the same box. Checked before the gws branch
+    # because a cleartext SMTP fallback is still a published password the day
+    # the gws CLI is upgraded, reinstalled or removed.
+    cleartext = cleartext_login_refusal(
+        port=int(channels.email_smtp_port or 587),
+        starttls=bool(channels.email_smtp_starttls),
+        user=user,
+        password=password,
+    )
+    if cleartext:
+        return fail(cleartext)
+
+    if gws:
+        # Both are configured, and the channel prefers gws. Said plainly here
+        # because the SMTP settings then look configured-and-unused, and an
+        # operator who set them up is entitled to know why their mail arrives
+        # from the other address.
+        return ok(
+            "the gws CLI is installed, so the email channel sends through it; the "
+            "SMTP settings stay the fallback for a box without gws"
+        )
+    if ctx.offline:
+        return Result(status="skip", detail="an SMTP session would leave the box; --offline")
+
+    from robothor.engine.channels.email import EmailChannel
+
+    problem = await EmailChannel().transport_probe()
+    if problem is not None:
+        return fail(f"the SMTP server did not accept a session: {problem}")
+    source = f" (credential from the {found.smtp_password_source})" if user else ""
+    return ok(f"the SMTP server at ROBOTHOR_EMAIL_SMTP_HOST accepted a session{source}")
+
+
 CHECKS: tuple[Check, ...] = (
     Check(
         id="telegram.token",
@@ -314,5 +414,12 @@ CHECKS: tuple[Check, ...] = (
         category="channels",
         severity="info",
         run=_slack_verify,
+    ),
+    Check(
+        id="email.transport",
+        title="Email has a transport, and it answers",
+        category="channels",
+        severity="info",
+        run=_email,
     ),
 )
