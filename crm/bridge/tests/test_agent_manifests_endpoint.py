@@ -1018,6 +1018,80 @@ class TestAnAlreadyBrokenAgentCanStillBeRepairedAndSilenced:
             "the second bad tool was written to disk"
         )
 
+    @pytest.fixture
+    def three_bad_tools(self, manifest_dir, seeded):
+        """The shape a plugin uninstall leaves behind: several names invalid
+        at once."""
+        document = {**EXISTING, "tools_allowed": ["bad_a", "bad_b", "bad_c", "exec"]}
+        seeded.write_text(yaml.safe_dump(document, sort_keys=False))
+        return seeded
+
+    def test_a_partial_repair_is_accepted(self, client, three_bad_tools, fake_engine):
+        """Removing one of three bad tool names is a REPAIR, not a new fault.
+
+        Keying a finding's identity on its message caught the addition
+        direction and broke the removal one: `manifest_checks` collapses N bad
+        items into one result whose message enumerates them, so dropping `bad_c`
+        changed the message, the residual had no match in the before-verdict,
+        and the edit was refused — with a 422 naming `bad_a`, which was already
+        on disk, as an error the operator had just introduced.
+
+        The normal case is a plugin uninstall invalidating five names at once;
+        this forced all five into a single PATCH or none at all.
+        """
+        response = client.patch(
+            "/api/agent-manifests/demo-agent",
+            json={"tools_allowed": ["bad_a", "bad_b", "exec"]},
+        )
+
+        assert response.status_code == 200, response.text
+        assert _read(three_bad_tools)["tools_allowed"] == ["bad_a", "bad_b", "exec"]
+
+    def test_the_residual_of_a_partial_repair_is_reported_as_pre_existing(
+        self, client, three_bad_tools, fake_engine
+    ):
+        """Accepted is not the same as clean: what is left must still be named,
+        and named as something that was already there."""
+        body = client.patch(
+            "/api/agent-manifests/demo-agent",
+            json={"tools_allowed": ["bad_a", "bad_b", "exec"]},
+        ).json()
+
+        carried = json.dumps(body["pre_existing"])
+        assert "bad_a" in carried and "bad_b" in carried, body
+        assert "bad_c" not in carried, "a fault the edit actually fixed is still reported"
+
+    def test_repairing_down_to_one_is_accepted_too(self, client, three_bad_tools, fake_engine):
+        response = client.patch(
+            "/api/agent-manifests/demo-agent", json={"tools_allowed": ["bad_a", "exec"]}
+        )
+
+        assert response.status_code == 200, response.text
+
+    def test_a_full_repair_is_accepted(self, client, three_bad_tools, fake_engine):
+        response = client.patch(
+            "/api/agent-manifests/demo-agent",
+            json={"tools_allowed": ["exec", "read_file", "write_file"]},
+        )
+
+        assert response.status_code == 200, response.text
+
+    def test_a_repair_that_also_introduces_a_new_item_is_still_refused(
+        self, client, three_bad_tools, fake_engine
+    ):
+        """The counter-case that keeps the whole class honest: dropping one bad
+        name must not buy the right to add a different one."""
+        response = client.patch(
+            "/api/agent-manifests/demo-agent",
+            json={"tools_allowed": ["bad_a", "bad_b", "a_brand_new_bad_tool", "exec"]},
+        )
+
+        assert response.status_code == 422, response.text
+        rendered = json.dumps(response.json()["detail"]["errors"])
+        assert "a_brand_new_bad_tool" in rendered
+        assert "bad_a" not in rendered, "a fault that was already on disk was reported as new"
+        assert _read(three_bad_tools)["tools_allowed"] == ["bad_a", "bad_b", "bad_c", "exec"]
+
     def test_the_unchanged_pre_existing_fault_is_still_not_refused(
         self, client, broken_tool, fake_engine
     ):

@@ -127,9 +127,17 @@ def check_issues(
     for result in validate_agent(document, fleet, tools, repo_root=repo_root, ci=True):
         if result.status not in {"FAIL", "WARN"}:
             continue
-        detail = "; ".join([result.message, *result.details]).strip("; ")
-        entry = issue(f"check.{result.check_id}", f"check_{result.check_id.lower()}", detail)
-        (errors if result.status == "FAIL" else warnings).append(entry)
+        bucket = errors if result.status == "FAIL" else warnings
+        path = f"check.{result.check_id}"
+        code = f"check_{result.check_id.lower()}"
+        # ONE finding per independent fault, not one per check. A check that
+        # found three unregistered tool names found three problems, and
+        # `introduced` compares findings — so collapsing them into a single
+        # enumerated message made removing one of the three look like a new
+        # fault, and refused the repair. `CheckResult.faults` is that list;
+        # empty means the result really is one problem.
+        for fault in result.faults or ["; ".join([result.message, *result.details]).strip("; ")]:
+            bucket.append(issue(path, code, fault))
     return errors, warnings
 
 
@@ -206,13 +214,24 @@ def introduced(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     agent was the only remedy the Helm had left.
 
     Identity is ``(path, code, message)`` — the whole finding, not just where it
-    landed. ``(path, code)`` alone was not enough: every ``manifest_checks``
-    result collapses to one ``(check.D, check_d)`` pair whose MESSAGE
-    enumerates the offending items, so adding a second unregistered tool to a
-    manifest that already had one changed the message and nothing else, and the
-    edit looked like it introduced nothing. A pre-existing fault is never a free
-    pass for a second one of the same kind either; the message is where "the
-    same kind" stops being the same complaint.
+    landed — and that only works because a finding is now ONE fault.
+
+    Two rounds of getting this wrong, in opposite directions, and both came from
+    the same place: ``manifest_checks`` used to collapse N independent problems
+    into one result whose message enumerated them.
+
+    * Keyed on ``(path, code)``, every such result was the same finding, so
+      adding a second unregistered tool to a manifest that already had one was
+      invisible and saved.
+    * Keyed on the message, *removing* one of three changed it too, so the two
+      that remained had no match in ``before`` and a partial repair was refused
+      — with a 422 naming a tool that was already on disk as something the
+      operator had just introduced. The round-1 lockout in a new costume.
+
+    The fix is upstream, in ``CheckResult.faults``: one finding per offending
+    item, so identity is per-item by construction and a subset comparison is
+    not needed. Removing a fault leaves the others byte-identical, which is what
+    ``already`` matches on.
 
     Carried faults come back in ``warnings`` AND in ``pre_existing`` — the same
     findings under two keys, because a UI that wants to say "saved, but this

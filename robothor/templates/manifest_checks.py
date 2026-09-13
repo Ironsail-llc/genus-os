@@ -32,7 +32,21 @@ BASIC_IO_TOOLS = {"exec", "read_file", "write_file"}
 
 
 class CheckResult:
-    """Result of a single validation check."""
+    """Result of a single validation check.
+
+    ``faults`` is the list of INDEPENDENT problems behind one result, one string
+    each. A check that finds three unregistered tool names is reporting three
+    faults, not one, and collapsing them into a single enumerated message makes
+    a caller unable to tell a partial repair from a new problem: dropping one of
+    the three changes the message, so the two that remain look introduced. The
+    Helm's agent builder refuses an edit on exactly that comparison, and it
+    refused a repair.
+
+    Populated from ``details`` when a check already puts one string per problem
+    there (most of them do), or explicitly via ``faults=`` when the enumeration
+    lives in the message instead. Empty means "this result is one fault", which
+    is what every previously-written check that sets neither is saying.
+    """
 
     def __init__(self, check_id: str, name: str):
         self.check_id = check_id
@@ -40,17 +54,24 @@ class CheckResult:
         self.status = "PASS"
         self.message = ""
         self.details: list[str] = []
+        self.faults: list[str] = []
 
-    def fail(self, msg: str, details: list[str] | None = None) -> CheckResult:
+    def fail(
+        self, msg: str, details: list[str] | None = None, faults: list[str] | None = None
+    ) -> CheckResult:
         self.status = "FAIL"
         self.message = msg
         self.details = details or []
+        self.faults = faults if faults is not None else list(self.details)
         return self
 
-    def warn(self, msg: str, details: list[str] | None = None) -> CheckResult:
+    def warn(
+        self, msg: str, details: list[str] | None = None, faults: list[str] | None = None
+    ) -> CheckResult:
         self.status = "WARN"
         self.message = msg
         self.details = details or []
+        self.faults = faults if faults is not None else list(self.details)
         return self
 
     def skip(self, msg: str) -> CheckResult:
@@ -206,11 +227,17 @@ def check_tools_registered(manifest: dict[str, Any], registered: set[str]) -> Ch
         agent_id = manifest.get("id", "")
         agent_adapters = get_adapters_for_agent(agent_id)
         if agent_adapters:
-            return result.warn(f"Unregistered tools (may be adapter-provided): {unknown}")
+            return result.warn(
+                f"Unregistered tools (may be adapter-provided): {unknown}",
+                faults=[f"unregistered tool: {name!r}" for name in unknown],
+            )
     except Exception:
         pass
 
-    return result.fail(f"Unknown tools in tools_allowed: {unknown}")
+    return result.fail(
+        f"Unknown tools in tools_allowed: {unknown}",
+        faults=[f"unknown tool in tools_allowed: {name!r}" for name in unknown],
+    )
 
 
 def check_status_file_tools(manifest: dict[str, Any]) -> CheckResult:
@@ -283,7 +310,10 @@ def check_permission_coherence(manifest: dict[str, Any]) -> CheckResult:
     overlap = allowed & denied
 
     if overlap:
-        return result.warn(f"Tools in both allowed and denied: {sorted(overlap)}")
+        return result.warn(
+            f"Tools in both allowed and denied: {sorted(overlap)}",
+            faults=[f"tool in both allowed and denied: {name!r}" for name in sorted(overlap)],
+        )
     return result
 
 
@@ -296,7 +326,10 @@ def check_downstream(manifest: dict[str, Any], all_manifests: dict[str, Any]) ->
 
     invalid = [d for d in downstream if d not in all_manifests]
     if invalid:
-        return result.fail(f"Unknown downstream agents: {invalid}")
+        return result.fail(
+            f"Unknown downstream agents: {invalid}",
+            faults=[f"unknown downstream agent: {name!r}" for name in invalid],
+        )
     return result
 
 
@@ -315,7 +348,10 @@ def check_warmup_files(manifest: dict[str, Any], repo_root: Path) -> CheckResult
             missing.append(cf)
 
     if missing:
-        return result.warn(f"Warmup files not found (may be created at runtime): {missing}")
+        return result.warn(
+            f"Warmup files not found (may be created at runtime): {missing}",
+            faults=[f"warmup file not found: {name!r}" for name in missing],
+        )
     return result
 
 
@@ -377,6 +413,7 @@ def check_secret_refs(manifest: dict[str, Any]) -> CheckResult:
         return result.warn(
             f"Secret keys not in environment: {missing}",
             ["Keys may be loaded at runtime via EnvironmentFile — check secrets.env"],
+            faults=[f"secret key not in environment: {key!r}" for key in missing],
         )
     return result
 

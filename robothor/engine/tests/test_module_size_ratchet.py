@@ -118,7 +118,14 @@ CAPS = {
     # is what lets it take its inputs as parameters instead of importing the
     # router's resolvers back).
     "crm/bridge/routers/agent_manifests.py": 1060,
-    "crm/bridge/routers/_manifest_validation.py": 250,
+    # 250 -> 260: `introduced` now carries the record of getting this wrong
+    # twice in opposite directions — keyed too loosely it missed an added
+    # fault, keyed too tightly it refused a partial repair — plus the per-fault
+    # loop that fixed it. Trimming to fit would mean deleting the explanation to
+    # satisfy a line count, which is the trade this repo has explicitly refused
+    # before (see runner.py's entry). The fix itself went UPSTREAM into
+    # CheckResult.faults rather than growing this file.
+    "crm/bridge/routers/_manifest_validation.py": 260,
 }
 
 

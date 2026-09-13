@@ -412,11 +412,26 @@ not be repaired AND could not be `disable`d, and `disable` is the stop control.
 A pre-existing fault comes back in `warnings` — and in `pre_existing`, so a UI
 can say "saved, still broken for these reasons" without diffing two lists — so
 "allowed through" does not read as "blessed". It is never a free pass for a
-second fault, including a second fault of the *same kind*: a finding's identity
-is `(path, code, message)`, and every `manifest_checks` result collapses to one
-`(check.D, check_d)` pair whose message enumerates the offending items. Adding a
-second unregistered tool to a manifest that already had one changes the message,
-so it is still refused.
+second fault, including one of the *same kind*: a check that finds three
+unregistered tool names reports three findings, not one
+(`CheckResult.faults`), so adding a fourth is refused while **removing** one is
+a repair and is accepted, with the two that remain reported under
+`pre_existing`.
+
+**A save with `pre_existing` still reconciles.** The response carries
+`reconcile.applied: true` and an `added`/`replaced` entry beside the carried
+faults, and that is correct rather than a contradiction: the fault was already
+live before the edit, and the edit did not change what it does to the agent. The
+two classes differ —
+
+| Fault class | Loads? | Schedules? | Example |
+|-------------|--------|-----------|---------|
+| `manifest_checks` FAIL (`check.*`) | yes | yes | an unregistered tool name, a missing instruction file — the agent runs, and the tool is simply unavailable to it |
+| `bad_cron` / `not_loadable` / schema errors | no | no | an unparseable cron, a wrongly-typed block — `manifest_to_agent_config` or APScheduler refuses it, so reconcile has nothing to register |
+
+So `reconcile.applied: true` next to a populated `pre_existing` means "the write
+landed and the schedule is unchanged", not "the manifest is now clean". Read
+`pre_existing` before telling an operator their agent is fixed.
 
 **What a PATCH may change.** An edit sets only the paths the form owns
 (`routers/agent_manifests.FORM_OWNED_PATHS`: name, description, department,

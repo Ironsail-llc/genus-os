@@ -303,6 +303,50 @@ class TestAnEditThatDoesNotMoveTheTrigger:
 
 
 @pytest.mark.usefixtures("_no_db")
+class TestWhichBrokenManifestsStillSchedule:
+    """`docs/AGENT_BUILDER.md` tells an operator that a save carrying
+    `pre_existing` still reconciles, and draws a line between the faults that
+    still schedule and the ones that do not. This is that line, probed.
+
+    The distinction matters because the Helm answers `reconcile.applied: true`
+    beside a populated `pre_existing`, and a reader has to be able to tell
+    "the write landed and the schedule is unchanged" from "the manifest is now
+    clean". A doc table nothing checks is a doc table that drifts.
+    """
+
+    def test_an_unregistered_tool_name_still_schedules(self, scheduler, fleet):
+        """`manifest_to_agent_config` does not resolve tool names and the
+        scheduler does not need them — the tool is simply unavailable to the
+        agent at run time. This is the `check.*` FAIL row of the table."""
+        write_manifest(fleet, extra="tools_allowed: [a_tool_that_does_not_exist]\n")
+
+        result = scheduler.reconcile_schedules()
+
+        assert result.added == ["demo-agent"]
+        assert scheduler.scheduler.get_job("demo-agent") is not None
+
+    def test_an_unparseable_cron_does_not_schedule(self, scheduler, fleet):
+        """The `bad_cron` row. APScheduler refuses the trigger, so there is no
+        job to register and nothing for reconcile to add."""
+        write_manifest(fleet, cron="every other tuesday")
+
+        result = scheduler.reconcile_schedules()
+
+        assert result.added == []
+        assert scheduler.scheduler.get_job("demo-agent") is None
+
+    def test_a_bad_cron_costs_only_that_agent(self, scheduler, fleet):
+        """The counter-case: the table would be misleading if one unschedulable
+        manifest also took the schedulable ones down."""
+        write_manifest(fleet, cron="every other tuesday")
+        write_manifest(fleet, "second-agent", name="Second Agent", cron="0 10 * * *")
+
+        result = scheduler.reconcile_schedules()
+
+        assert result.added == ["second-agent"]
+
+
+@pytest.mark.usefixtures("_no_db")
 class TestTheDirtyScanInterlock:
     """A scan that cannot see every manifest is authority for nothing."""
 
