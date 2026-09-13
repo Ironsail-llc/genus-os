@@ -76,7 +76,7 @@ services:
   # reaches the exited-0 state `service_completed_successfully` waits for, so
   # every service behind it would wait forever instead of failing.
   migrate:
-    image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
+    image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.69.2}"
     container_name: robothor-migrate
     # The account that ran `genus init`, because everything it wrote into
     # the bind-mounted workspace -- owner.yaml, setup_token.yaml, the vault
@@ -94,7 +94,7 @@ services:
     volumes: *genus-workspace
 
   engine:
-    image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
+    image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.69.2}"
     container_name: robothor-engine
     # The account that ran `genus init`, because everything it wrote into
     # the bind-mounted workspace -- owner.yaml, setup_token.yaml, the vault
@@ -134,7 +134,7 @@ services:
       start_period: 60s
 
   bridge:
-    image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
+    image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.69.2}"
     container_name: robothor-bridge
     # The account that ran `genus init`, because everything it wrote into
     # the bind-mounted workspace -- owner.yaml, setup_token.yaml, the vault
@@ -169,7 +169,7 @@ services:
       start_period: 60s
 
   orchestrator:
-    image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
+    image: "ghcr.io/ironsail-llc/genus-os/python:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.69.2}"
     container_name: robothor-orchestrator
     # The account that ran `genus init`, because everything it wrote into
     # the bind-mounted workspace -- owner.yaml, setup_token.yaml, the vault
@@ -206,7 +206,7 @@ services:
   # probes 3004. A container on 3000 published as 3004 would work by accident
   # until anything inside the stack dialled the dashboard by name.
   dashboard:
-    image: "ghcr.io/ironsail-llc/genus-os/app:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.68.0}"
+    image: "ghcr.io/ironsail-llc/genus-os/app:${GENUS_IMAGE_TAG:?set GENUS_IMAGE_TAG to a released version such as v1.69.2}"
     container_name: robothor-dashboard
     restart: always
     depends_on:

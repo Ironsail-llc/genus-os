@@ -1,6 +1,11 @@
 # Service Level Objectives
 
-The reliability targets this instance holds itself to, where each one is
+> **Scope.** The mechanism — `scripts/slo_probe.sh`, the units, the page keys —
+> is platform and ships with every instance. The *budgets* below are the ones
+> the first instance set for itself; an operator picks their own. Purely
+> single-machine runbooks live in [`docs/instance/`](../instance/README.md).
+
+The reliability targets an instance holds itself to, where each one is
 measured, and what to do when one pages.
 
 Two surfaces, deliberately different:

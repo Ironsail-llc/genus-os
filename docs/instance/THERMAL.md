@@ -1,5 +1,9 @@
 # Thermal envelope — GB10 (ThinkStation PGX class)
 
+> **Instance runbook.** This describes the first Genus OS instance — one
+> machine, measured on its own hardware. Re-measure before reusing a number
+> from it on a different box. See [`README.md`](README.md).
+
 Why this file exists: the firmware exposes no ACPI trip points ("[Firmware Bug]: No valid
 trip points!") and the EC hard-cuts power near ~95C with no warning. Every threshold in
 `scripts/thermal-guard.sh`, `robothor/engine/thermal_pressure.py` and the local inference

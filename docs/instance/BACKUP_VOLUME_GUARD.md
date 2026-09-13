@@ -1,5 +1,10 @@
 # Backup Volume Guard
 
+> **Instance runbook.** This describes the first Genus OS instance — its
+> encrypted backup volume, its guard and its incident log. The guard itself
+> ships in `scripts/` and `infra/systemd/`; the volume, the paths and the
+> dates below belong to one deployment. See [`README.md`](README.md).
+
 The runbook the guard's pages point at. It answers one question: **the backup
 volume paged — now what?**
 

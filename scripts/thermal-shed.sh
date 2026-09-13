@@ -10,7 +10,7 @@
 # committed on any branch — so a rebuilt box would silently have lost the guard
 # that saves work while keeping the one that reboots. Adopted 2026-08-28.
 #
-# Why these rungs (docs/runbooks/THERMAL.md, measured 2026-08-28):
+# Why these rungs (docs/instance/THERMAL.md, measured 2026-08-28):
 #   The package budget is shared by CPU and GPU. One 27B stream alone plateaus
 #   ~85C, but that stream PLUS a saturated CPU reached 96C on 2026-08-28. So the
 #   rungs cannot be set from the GPU-only peak; they must leave room for the CPU

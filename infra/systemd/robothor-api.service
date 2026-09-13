@@ -1,11 +1,10 @@
 # Genus OS API Server — systemd service template
 #
-# Installation:
-#   1. Copy this file to /etc/systemd/system/robothor-api.service
-#   2. Edit User= to match your system user
-#   3. Ensure /etc/robothor/robothor.env exists (see robothor.env.example)
-#   4. Run: sudo systemctl daemon-reload
-#   5. Run: sudo systemctl enable --now robothor-api
+# Installation: do NOT copy this file. It is a template with placeholders.
+#   1. Ensure /etc/robothor/robothor.env exists (see robothor.env.example)
+#   2. Run: sudo scripts/install-units.sh   (renders, verifies, installs)
+#   3. Run: sudo systemctl daemon-reload
+#   4. Run: sudo systemctl enable --now robothor-api
 #
 # Logs: journalctl -u robothor-api -f
 

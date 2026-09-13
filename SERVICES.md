@@ -1,32 +1,37 @@
 # Services — Operational Reference
 
-## System-Level Services (need `sudo`)
+Ports, endpoints and health checks for an instance installed on a host with
+systemd. Every unit listed under "Platform units" has a template in
+`infra/systemd/` and is installed by `scripts/install-units.sh` — never by hand.
+A compose or Kubernetes instance runs the same processes without these units;
+see `docs/deployment.md`.
+
+## Platform units (need `sudo`)
 
 All managed via `sudo systemctl {start,stop,restart,status} <unit>`.
 Logs: `journalctl -u <unit> -f`
 
 | Unit | Port | Working Dir | Description |
 |------|------|-------------|-------------|
-| robothor-vision.service | 8600 | brain/memory_system | Vision: smart detection (YOLO+InsightFace+Telegram alerts), modes: disarmed/basic/armed |
-| robothor-orchestrator.service | 9099 | brain/memory_system | FastAPI RAG orchestrator + vision endpoints |
-| ~~robothor-status.service~~ | ~~3000~~ | ~~brain/robothor-status~~ | **RETIRED** — consolidated into engine dashboards (port 18800) |
-| ~~robothor-status-dashboard.service~~ | ~~3001~~ | ~~brain/robothor-status-dashboard~~ | **RETIRED** — consolidated into engine dashboards (port 18800) |
-| ~~robothor-dashboard.service~~ | ~~3003~~ | ~~brain/dashboard~~ | **RETIRED** — consolidated into engine dashboards (port 18800) |
-| ~~robothor-privacy.service~~ | ~~3002~~ | ~~brain/privacy-policy~~ | **RETIRED** — consolidated into engine dashboards (port 18800) |
+| robothor-vision.service | 8600 | workspace | Vision: smart detection (YOLO+InsightFace+alerts), modes: disarmed/basic/armed |
+| robothor-orchestrator.service | 9099 | workspace | FastAPI RAG orchestrator + vision endpoints |
 | robothor-bridge.service | 9100 | crm/bridge | Bridge: contact resolution, webhooks, CRM integration |
-| bridge-watchdog.timer | — | scripts/ | Self-healing watchdog: checks bridge every 5min, auto-restarts on 2 failures |
+| robothor-secrets.service | — | scripts/ | Oneshot: writes `/run/robothor/secrets.env` (tmpfs, 0600) from the configured backend. Every service that needs a credential `Requires=` it |
 | robothor-liveness.timer | — | scripts/ | Independent engine liveness watchdog: probes `/live` every 5min, pages via `send_failure_alert.sh` after 3 consecutive failures (covers SIGKILL, where OnFailure= never fires) |
 | robothor-slo.timer | — | scripts/ | Reliability dead-man: hourly, pages on the AGE of the newest good backup (local dump 26h / offsite 26h / basebackup 8d) plus heartbeat delivery and LLM availability. Level-triggered, so a SKIPPED backup unit cannot go unnoticed (docs/runbooks/SLOS.md) |
 | robothor-restore-drill.timer | — | scripts/ | Monthly restore drill: fetches the newest dump (offsite first), restores into a scratch DB, times and verifies it, drops it. NOT robothor-backup-verify, which only byte-compares (docs/runbooks/RESTORE_DRILL.md) |
-| robothor-app.service | 3004 | app/ | Helm: Next.js 16 + Dockview live dashboard (app.${INSTANCE_DOMAIN}) |
-| smbd.service | 445 | — | Samba file sharing (local network + Tailscale only) |
-| nmbd.service | 137-138 | — | NetBIOS name service for Samba |
-| robothor-engine.service | 18800 | ~/robothor | Python Agent Engine: agents, Telegram, scheduler, hooks (Type=notify, WatchdogSec=90) |
-| robothor-nats.service | 4222, 7422 | — | NATS server with JetStream: federation transport (config: /etc/nats/nats-server.conf) |
+| robothor-app.service | 3004 | app/ | Helm: Next.js 16 + Dockview live dashboard |
+| robothor-engine.service | 18800 | workspace | Python Agent Engine: agents, channels, scheduler, hooks (Type=notify, WatchdogSec=90) |
+| robothor-nats.service | 4222, 7422 | — | NATS server with JetStream: federation transport |
 | robothor-xvfb.service | — | — | Virtual display server (Xvfb :99, 1280x1024) for computer use |
 | robothor-vnc.service | 5900 | — | x11vnc server for monitoring virtual display (localhost only) |
-| cloudflared.service | — | — | Cloudflare tunnel (${INSTANCE_DOMAIN}) |
-| tailscaled.service | — | — | Tailscale VPN (your Tailscale tailnet) |
+
+`infra/systemd/` also ships the backup, basebackup, WAL-offsite, restore-drill,
+thermal, fleet-guard, guardrail-watch, memory-eval and benchmark timers. They
+are optional: enable the ones the deployment wants.
+
+`genus doctor --only host.unit_drift` reports units installed on a box that no
+template describes — the direction `install-units.sh` cannot see.
 
 ## Instance-only services (not shipped with the platform)
 
@@ -45,6 +50,9 @@ something a new instance can turn on.
 | robothor-transcript.service | — | instance `brain/memory_system` | Voice transcript watcher |
 | robothor-crm.service | 3010, 8880 | `crm/` | Docker Compose wrapper: Uptime Kuma, Kokoro TTS |
 | robothor-desktop.service | — | — | Openbox window manager on virtual display :99 |
+| cloudflared.service | — | — | Third-party Cloudflare tunnel. An ingress pattern, not a shipped control |
+| tailscaled.service | — | — | Third-party VPN |
+| smbd.service / nmbd.service | 445, 137-138 | — | Third-party Samba file sharing |
 
 The platform's own units are the ones with a template in `infra/systemd/`;
 `docs/runbooks/INSTANCE_DOCTOR.md` and `scripts/install-units.sh` only know
@@ -61,36 +69,12 @@ about those.
 
 ## Health Checks
 
+`genus doctor` answers this in one command, with severities and an exit code —
+these are the raw probes behind the `services` category.
+
 ```bash
-# Vision service
-curl -s http://localhost:8600/health | jq .
-
-# RAG orchestrator
-curl -s http://localhost:9099/health | jq .
-
-# Status dashboard (now via engine)
-curl -s http://localhost:18800/dashboards/status > /dev/null && echo "OK"
-
-# Ops dashboard (now via engine)
-curl -s http://localhost:18800/dashboards/ops > /dev/null && echo "OK"
-
-# MediaMTX RTSP (test frame capture)
-ffmpeg -rtsp_transport tcp -i rtsp://localhost:8554/webcam -frames:v 1 -y /tmp/test.jpg 2>/dev/null && echo "OK"
-
-# MediaMTX HLS (test stream)
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8890/webcam/ && echo " OK"
-
-# Webcam via Cloudflare tunnel (requires Cloudflare Access auth)
-# Visit: https://cam.${INSTANCE_DOMAIN}/webcam/
-
-# Homepage (now via engine)
-curl -s http://localhost:18800/dashboards/homepage > /dev/null && echo "OK"
-
-# Privacy policy (now via engine)
-curl -s http://localhost:18800/dashboards/privacy > /dev/null && echo "OK"
-
-# Voice server
-curl -s http://localhost:8765/health
+# The one command
+genus doctor --category services
 
 # Agent Engine
 curl -s http://localhost:18800/health | jq .
@@ -98,23 +82,23 @@ curl -s http://localhost:18800/health | jq .
 # Bridge service
 curl -s http://localhost:9100/health | jq .
 
-# Helm (business layer app)
+# RAG orchestrator
+curl -s http://localhost:9099/health | jq .
+
+# Vision service
+curl -s http://localhost:8600/health | jq .
+
+# Helm dashboard
 curl -s -o /dev/null -w "%{http_code}" http://localhost:3004/api/health && echo " OK"
 
-# Uptime Kuma
-curl -s -o /dev/null -w "%{http_code}" http://localhost:3010 && echo " OK"
+# Readiness, which is what an orchestrator gates on
+curl -s http://localhost:18800/ready | jq .
+
+# Engine-served dashboards (status, ops, homepage, privacy)
+curl -s http://localhost:18800/dashboards/status > /dev/null && echo "OK"
 
 # Redis
 redis-cli ping
-
-# Cloudflare tunnel
-curl -s https://${INSTANCE_DOMAIN} > /dev/null && echo "OK"
-
-# Samba
-smbclient -L //localhost -U $USER%$SAMBA_PASSWORD -N 2>/dev/null | grep robothor
-
-# Tailscale
-tailscale status | head -3
 
 # Ollama
 curl -s http://localhost:11434/api/tags | jq '.models[].name'
@@ -125,14 +109,14 @@ psql -d robothor_memory -c "SELECT count(*) FROM long_term_memory;" 2>/dev/null
 
 ## External Access (Cloudflare Tunnel)
 
+An **instance** ingress pattern, shown as one deployment configured it. Nothing
+here is a shipped control: the hostnames, the policies and which services are
+exposed at all are the operator's, and `${INSTANCE_DOMAIN}` stands for whatever
+domain that deployment uses.
+
 | Hostname | Backend | Auth | Purpose |
 |----------|---------|------|---------|
 | cam.${INSTANCE_DOMAIN} | localhost:8890 | Cloudflare Access (email OTP) | Webcam HLS live stream |
-| ${INSTANCE_DOMAIN} | localhost:3000 | Public | Homepage |
-| status.${INSTANCE_DOMAIN} | localhost:3001 | Public | Status dashboard |
-| dashboard.${INSTANCE_DOMAIN} | localhost:3001 | Public | Dashboard (alias) |
-| privacy.${INSTANCE_DOMAIN} | localhost:3002 | Public | Privacy policy |
-| ops.${INSTANCE_DOMAIN} | localhost:3003 | Cloudflare Access (email OTP) | Ops dashboard |
 | voice.${INSTANCE_DOMAIN} | localhost:8765 | Public | Twilio voice (inbound + outbound) |
 | sms.${INSTANCE_DOMAIN} | localhost:8766 | Public | Twilio SMS webhook |
 | engine.${INSTANCE_DOMAIN} | localhost:18800 | Cloudflare Access (email OTP) | Python Agent Engine |
@@ -188,9 +172,11 @@ All services that need credentials load them from one file, written by one scrip
 SOPS is opt-in; see `docs/deployment.md` § Secrets backends. In Python, read a credential
 through `robothor.secrets.get_secret()`.
 
-## System Crontab
+## System Crontab (instance)
 
-View: `crontab -l` | Full reference: `docs/CRON_MAP.md` (instance-local, not shipped)
+The schedule below belongs to one deployment, not to the platform — a new
+instance has none of it. View: `crontab -l` | Full reference:
+`docs/CRON_MAP.md` (instance-local, not shipped)
 Cron jobs that need credentials are wrapped with `scripts/cron-wrapper.sh` (sources `/run/robothor/secrets.env`).
 
 | Schedule | Job | Log |
@@ -216,9 +202,13 @@ Cron jobs that need credentials are wrapped with `scripts/cron-wrapper.sh` (sour
 | 30 4 * * * | SSD backup (daily, LUKS-encrypted) | ~/robothor/scripts/backup.log |
 | 0 5 * * 0 | Weekly review (Sunday) | memory_system/logs/weekly-review.log |
 
-## Engine Scheduled Agents
+## Engine Scheduled Agents (instance)
 
-View: `robothor engine list` | Manifests: `docs/agents/*.yaml` | Model: **Kimi K2.5** (fallback chain)
+One deployment's fleet, as an example of what scheduling looks like. The
+manifests are instance data and the models come from them — read the `model:`
+blocks, never a number in this table.
+
+View: `genus engine list` | Manifests: `docs/agents/*.yaml` (instance-local)
 
 | Schedule | Job | Delivery |
 |----------|-----|----------|
@@ -239,20 +229,23 @@ View: `robothor engine list` | Manifests: `docs/agents/*.yaml` | Model: **Kimi K
 All services are system-level, enabled, and start automatically. If anything fails:
 
 ```bash
-# 1. Verify all services. The retired dashboard units (robothor-status,
-#    robothor-status-dashboard, robothor-dashboard, robothor-privacy) are
-#    gone -- the engine serves those on 18800. Add any instance-only unit
-#    from the section above to this list if your deployment runs it.
-for svc in cloudflared tailscaled robothor-orchestrator \
+# 1. Ask the platform first: this is what genus doctor's services and host
+#    categories are for.
+genus doctor --category services
+
+# 2. Then the units themselves. Add any instance-only unit from the section
+#    above to this list if your deployment runs it.
+for svc in robothor-secrets robothor-orchestrator \
   robothor-vision robothor-bridge robothor-app robothor-engine \
   robothor-nats robothor-xvfb robothor-vnc; do
   printf "%-35s %s\n" "$svc" "$(sudo systemctl is-active $svc)"
 done
 
-# 2. If orchestrator didn't start (depends on ollama + postgres + docker)
+# 3. If orchestrator didn't start (depends on ollama + postgres)
 sudo systemctl restart robothor-orchestrator
 
-# 3. If Docker containers are down (Uptime Kuma, Kokoro TTS) — this unit is
-#    instance-only, see the section above
-sudo systemctl restart robothor-crm
+# 4. A failed robothor-secrets.service takes four services down with it and
+#    nothing retries a oneshot. journalctl -u robothor-secrets says which
+#    backend it chose and why it refused.
+sudo systemctl status robothor-secrets
 ```

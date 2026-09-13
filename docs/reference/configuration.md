@@ -36,7 +36,8 @@ Column meanings:
 - **Secret** — holds a credential. These never have a default and are redacted
   by `genus config`.
 - **Since** — the release that introduced the setting. `legacy` predates this
-  registry.
+  registry; `unreleased` means it is merged but not yet in a tagged release, so
+  it is in the container images built from `main` and not in the last `vX.Y.Z`.
 
 Run `genus config schema` for the same information as JSON Schema.
 
@@ -133,7 +134,7 @@ Cloud model routing, budgets and the failure controls around them.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `OPENROUTER_API_BASE` | str | _(empty)_ | no | no | 1.71.0 | OpenAI-compatible endpoint every `openrouter/*` model is dialled at, instead of https://openrouter.ai/api/v1. Point it at a corporate gateway, a recording proxy, or the acceptance gate's mock server. Declared here so the knob is documented and inventoried, but litellm reads the ENVIRONMENT VARIABLE itself -- setting this key in config.yaml alone changes nothing. |
+| `OPENROUTER_API_BASE` | str | _(empty)_ | no | no | unreleased | OpenAI-compatible endpoint every `openrouter/*` model is dialled at, instead of https://openrouter.ai/api/v1. Point it at a corporate gateway, a recording proxy, or the acceptance gate's mock server. Declared here so the knob is documented and inventoried, but litellm reads the ENVIRONMENT VARIABLE itself -- setting this key in config.yaml alone changes nothing. |
 | `ROBOTHOR_COMPACTION_TRIGGER_TOKENS` | int | `80000` | no | no | legacy | Absolute prompt-token budget above which a run compacts its context. |
 | `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` | int | `40` | no | no | legacy | Number of tools above which schemas are deferred behind tool search rather than sent in full on every request. |
 | `ROBOTHOR_EAGER_TOOL_COMPRESSION` | bool | `false` | `robothor-engine` | no | legacy | Fleet default for compressing tool results as soon as they land rather than at the next compaction. A manifest setting wins over it. |
@@ -345,9 +346,9 @@ Secret material that belongs to no single service.
 | --- | --- | --- | --- | --- | --- | --- |
 | `ROBOTHOR_ENV_FILE` | str | `/etc/robothor/robothor.env` | `robothor-engine`, `robothor-bridge` | no | legacy | The EnvironmentFile systemd loads secrets from. It is instance data, never in git; the path is what the platform declares. |
 | `ROBOTHOR_INTENT_HMAC_SECRET` | str | _(unset)_ | `robothor-engine`, `robothor-bridge` | yes | legacy | Key that signs memory intents so a stored intent cannot be forged. Signing raises rather than falling back when it is unset. |
-| `ROBOTHOR_SECRETS_BACKEND` | str | _(empty)_ | `robothor-secrets`, `robothor-engine`, `robothor-bridge`, `robothor-app`, `robothor-orchestrator` | no | 1.70.0 | Where scripts/load-secrets.sh gets this instance's credentials: `sops` (decrypt /etc/robothor/secrets.enc.json with the age key), `file` (a plaintext file the operator manages, mode 0600 or 0400), or `env` (they are already in the unit environment, so an empty secrets.env is written). Empty means auto-detect: sops if an encrypted store exists, else file if one exists, else env. SOPS is therefore opt-in rather than a precondition for starting. |
-| `ROBOTHOR_SECRETS_BACKEND_FILE` | str | `/etc/robothor/secrets.env` | `robothor-secrets`, `robothor-engine`, `robothor-bridge`, `robothor-app`, `robothor-orchestrator` | no | 1.70.0 | Plaintext KEY=VALUE file the `file` backend reads and copies to /run/robothor/secrets.env. Refused unless it is a regular file of mode 0600 or 0400 owned by root or by the service account. Distinct from ROBOTHOR_SECRETS_FILE, which names the tmpfs file every consumer READS -- one is the input, the other the output. |
-| `ROBOTHOR_SECRETS_ROOT` | str | _(empty)_ | no | no | 1.70.0 | Filesystem prefix load-secrets.sh and decrypt-secrets.sh apply to /etc/robothor and /run/robothor. A test seam, the same idea as install-units.sh --root: it lets the suite exercise every backend for real without root. Empty -- the only value a unit ever supplies -- means the real paths. |
+| `ROBOTHOR_SECRETS_BACKEND` | str | _(empty)_ | `robothor-secrets`, `robothor-engine`, `robothor-bridge`, `robothor-app`, `robothor-orchestrator` | no | 1.69.0 | Where scripts/load-secrets.sh gets this instance's credentials: `sops` (decrypt /etc/robothor/secrets.enc.json with the age key), `file` (a plaintext file the operator manages, mode 0600 or 0400), or `env` (they are already in the unit environment, so an empty secrets.env is written). Empty means auto-detect: sops if an encrypted store exists, else file if one exists, else env. SOPS is therefore opt-in rather than a precondition for starting. |
+| `ROBOTHOR_SECRETS_BACKEND_FILE` | str | `/etc/robothor/secrets.env` | `robothor-secrets`, `robothor-engine`, `robothor-bridge`, `robothor-app`, `robothor-orchestrator` | no | 1.69.0 | Plaintext KEY=VALUE file the `file` backend reads and copies to /run/robothor/secrets.env. Refused unless it is a regular file of mode 0600 or 0400 owned by root or by the service account. Distinct from ROBOTHOR_SECRETS_FILE, which names the tmpfs file every consumer READS -- one is the input, the other the output. |
+| `ROBOTHOR_SECRETS_ROOT` | str | _(empty)_ | no | no | 1.69.0 | Filesystem prefix load-secrets.sh and decrypt-secrets.sh apply to /etc/robothor and /run/robothor. A test seam, the same idea as install-units.sh --root: it lets the suite exercise every backend for real without root. Empty -- the only value a unit ever supplies -- means the real paths. |
 
 ## substrate
 
@@ -356,7 +357,7 @@ Where and how the instance runs: host accounts, federation, backups.
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `GENUS_ALLOW_DEPLOYMENT_LAG` | bool | `false` | `robothor-engine`, `robothor-bridge` | no | legacy | Let the version-consistency check pass while the deployed version trails the released one. An escape hatch for a deliberate hold, not a way to stop noticing that a promotion was lost. |
-| `GENUS_IMAGE_TAG` | str | _(empty)_ | no | no | 1.71.0 | Released image tag infra/docker-compose.apps.yml runs, for every container in the compose substrate. It has no default in the compose file on purpose -- the release build publishes no `latest`, so an unset tag must refuse to start rather than pull something that does not exist. `genus init --substrate compose` writes `v<this CLI's version>` into genus.env and deliberately does NOT read this from the environment; `--image-tag` is the override. |
+| `GENUS_IMAGE_TAG` | str | _(empty)_ | no | no | unreleased | Released image tag infra/docker-compose.apps.yml runs, for every container in the compose substrate. It has no default in the compose file on purpose -- the release build publishes no `latest`, so an unset tag must refuse to start rather than pull something that does not exist. `genus init --substrate compose` writes `v<this CLI's version>` into genus.env and deliberately does NOT read this from the environment; `--image-tag` is the override. |
 | `GENUS_OS_DEPLOYED_AT` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Timestamp the Helm chart stamps onto every pod, so a running container can say when it was deployed rather than when it booted. |
 | `GENUS_OS_DEPLOYED_FROM_PR` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | PR number a staging deployment came from, stamped by the Helm chart. Empty on a production release, which comes from a tag. |
 | `GENUS_OS_IMAGE_TAG` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Container image tag the Helm chart stamped onto the pod. Production pins an exact vX.Y.Z; staging pins pr-N-sha-<short>. |
@@ -369,8 +370,8 @@ Where and how the instance runs: host accounts, federation, backups.
 | `ROBOTHOR_DEV` | bool | `false` | `robothor-engine`, `robothor-bridge` | no | legacy | Set inside the development container image. Marks a build that carries dev tooling and must not be what production runs. |
 | `ROBOTHOR_GPU_CLOCK_CAP_MHZ` | int | `0` | `robothor-engine`, `robothor-bridge` | no | legacy | Upper GPU clock cap applied by the thermal guard. 0 leaves it alone. |
 | `ROBOTHOR_GPU_CLOCK_MIN_MHZ` | int | `0` | `robothor-engine`, `robothor-bridge` | no | legacy | Lower GPU clock bound the guard will not throttle below. 0 leaves it alone. |
-| `ROBOTHOR_INIT_PRESET` | str | `standard` | no | no | 1.71.0 | Agent catalogue preset `genus init` installs when --preset is not given. `genus agent catalog` lists the presets this build carries. |
-| `ROBOTHOR_INIT_SUBSTRATE` | str | `local` | no | no | 1.71.0 | Substrate `genus init` sets up when --substrate is not given: `local` (this machine). `compose`, `systemd` and `helm` are designed but not yet selectable. |
+| `ROBOTHOR_INIT_PRESET` | str | `standard` | no | no | 1.69.0 | Agent catalogue preset `genus init` installs when --preset is not given. `genus agent catalog` lists the presets this build carries. |
+| `ROBOTHOR_INIT_SUBSTRATE` | str | `local` | no | no | 1.69.0 | Substrate `genus init` sets up when --substrate is not given: `local` (this machine). `compose`, `systemd` and `helm` are designed but not yet selectable. |
 | `ROBOTHOR_INSTANCE_ID` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Stable id of this instance in a federation. Both sides must agree or a link mints two different connection ids and carries no messages. |
 | `ROBOTHOR_INSTANCE_NAME` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Human-readable name of this instance, shown to federated peers. |
 | `ROBOTHOR_LIVENESS_FAILURE_THRESHOLD` | int | `3` | `robothor-engine`, `robothor-bridge` | no | legacy | Consecutive failed probes before the guard acts. |

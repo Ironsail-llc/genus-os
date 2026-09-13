@@ -1,6 +1,6 @@
 """The local inference gate: what bounds heat, and what must never block.
 
-Measured on the GB10 (docs/runbooks/THERMAL.md): one 27B stream draws ~62W and
+Measured on the GB10 (docs/instance/THERMAL.md): one 27B stream draws ~62W and
 plateaus near 85C, a single 7.5k-token request lifts the package 22C in 11s, and
 two back-to-back requests cross THROTTLE_C. Recovery is near-instantaneous. So
 the gate has to do two things a plain semaphore cannot: bound how many streams

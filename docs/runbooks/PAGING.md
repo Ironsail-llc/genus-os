@@ -1,5 +1,10 @@
 # Failure Paging (OnFailure → Telegram)
 
+> **Scope.** The paging path ships with the platform; the unit list, the
+> cooldowns and the incident notes describe how the first instance wired it.
+> Purely single-machine runbooks live in
+> [`docs/instance/`](../instance/README.md).
+
 Any wired systemd unit that enters `failed` fires `robothor-alert@<unit>.service`,
 which posts the unit name, host, and last journal lines to the operator's
 Telegram via `scripts/send_failure_alert.sh`.
@@ -62,7 +67,7 @@ Telegram's notification preview, legible without opening the message.
 | Key matches | Consequence line | First thing to check |
 |---|---|---|
 | `*wal-offsite*` | PITR recovery point aging past 15 min — WAL has stopped shipping; last good ship: *(marker)* | `docs/runbooks/PITR.md`; `journalctl -u robothor-wal-offsite` |
-| `*backup-local*` | Nightly dump did NOT happen; newest good: *(marker)*; +24h dump-tier RPO/night | the backup volume — `docs/runbooks/BACKUP_VOLUME_GUARD.md` |
+| `*backup-local*` | Nightly dump did NOT happen; newest good: *(marker)*; +24h dump-tier RPO/night | the backup volume — `docs/instance/BACKUP_VOLUME_GUARD.md` |
 | `*backup-offsite*`, `*offsite-backup*` | Offsite NOT refreshed; a box loss restores from *(marker)* | `docs/runbooks/OFFSITE_BACKUP.md`; rclone remote reachable? |
 | `*basebackup*` | No fresh base backup; PITR must replay every WAL since *(marker)* — restore time growing nightly | `docs/runbooks/PITR.md` |
 | `*backup-verify*` | Backups are UNVERIFIED — a corrupt archive would now go unnoticed until a restore is attempted | `docs/runbooks/OFFSITE_BACKUP.md` |
@@ -72,7 +77,7 @@ Telegram's notification preview, legible without opening the message.
 | `*nats*` | The message fabric is down — agent mail and federation traffic are dropping, not queuing | `docs/runbooks/FEDERATION.md` |
 | `robothor-vision.service`, `robothor-vision*` | Vision capture is down — no camera events; presence and face recognition are blind | the vision journal |
 | `*liveness*` | The liveness watchdog itself is down — nothing is checking whether the engine is alive | this runbook, "Liveness watchdog" below |
-| `*backup-volume-guard*` | The backup volume guard is down — a USB drop will no longer be detected or remapped, and every backup tier it gates goes quiet instead of failing | `docs/runbooks/BACKUP_VOLUME_GUARD.md`; `journalctl -u robothor-backup-volume-guard` |
+| `*backup-volume-guard*` | The backup volume guard is down — a USB drop will no longer be detected or remapped, and every backup tier it gates goes quiet instead of failing | `docs/instance/BACKUP_VOLUME_GUARD.md`; `journalctl -u robothor-backup-volume-guard` |
 | `*robothor-slo*` | The hourly SLO probe is down — backup freshness, liveness staleness and LLM availability will not page until it is back, however far they drift | `docs/runbooks/SLOS.md`; `systemctl status robothor-slo.timer` |
 | `*restore-drill*` | The restore drill did not complete — nothing has proven the backups reconstitute a database, and the RTO number in the runbook is now unmeasured | `docs/runbooks/RESTORE_DRILL.md`; is a scratch database still there? |
 | `*guardrail-watch*` | The daily guardrail watch is down — drop-in and host-script drift, flag soak deadlines and instance manifest validity are all unchecked | `docs/runbooks/GUARDRAIL_FLIPS.md`; `journalctl -u robothor-guardrail-watch` |
@@ -80,9 +85,9 @@ Telegram's notification preview, legible without opening the message.
 | `slo:llm-availability`\* | 5+ runs in the last hour ended "All models failed" — every model shares one credential pool, check it before assuming a provider outage | `docs/runbooks/SLOS.md` (S6) |
 | `slo:guardrail-watch-stale`\* | The daily guardrail-watch report has stopped completing — drift checks, drop-in checks and instance manifest validation may not be running at all | `docs/runbooks/SLOS.md` (S8) |
 | `slo:liveness-stale`\* | The liveness watchdog itself has stopped — its timer stopped firing, or its last run did not succeed | `docs/runbooks/SLOS.md` (S5) |
-| `backup-volume-down`\* | Nightly dump, offsite refresh and base backup/WAL prune are paused; WAL offsite replication of new segments keeps running | `docs/runbooks/BACKUP_VOLUME_GUARD.md` |
-| `backup-volume-auto-recovered-N`\* | The volume dropped and the guard remapped it back on its own — the Nth such drop since boot | `docs/runbooks/BACKUP_VOLUME_GUARD.md` |
-| `backup-volume-recovered`\* | The volume is healthy again, but the guard did not heal it — the device came back, or it was fixed by hand | `docs/runbooks/BACKUP_VOLUME_GUARD.md` |
+| `backup-volume-down`\* | Nightly dump, offsite refresh and base backup/WAL prune are paused; WAL offsite replication of new segments keeps running | `docs/instance/BACKUP_VOLUME_GUARD.md` |
+| `backup-volume-auto-recovered-N`\* | The volume dropped and the guard remapped it back on its own — the Nth such drop since boot | `docs/instance/BACKUP_VOLUME_GUARD.md` |
+| `backup-volume-recovered`\* | The volume is healthy again, but the guard did not heal it — the device came back, or it was fixed by hand | `docs/instance/BACKUP_VOLUME_GUARD.md` |
 | `alert-spool-stuck`\* | The pager's own delivery queue is not moving — every page behind the stuck one is late, not lost | "When you will hear that the spool is stuck" below |
 | anything else | `(no consequence mapped — add one in send_failure_alert.sh)` | add a case; an unmapped page is a page nobody can triage from the preview |
 

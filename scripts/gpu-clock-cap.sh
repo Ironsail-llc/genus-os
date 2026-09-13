@@ -7,7 +7,7 @@
 # N/A for every limit field), so clock is the one lever that bounds watts, and
 # watts are what the package temperature tracks.
 #
-# Measured 2026-08-28 (docs/runbooks/THERMAL.md), qwen3.8:27b, six back-to-back
+# Measured 2026-08-28 (docs/instance/THERMAL.md), qwen3.8:27b, six back-to-back
 # 7.5k-token requests:
 #     uncapped (3003 MHz) : 86C peak, 69W, 26.6 tok/s generation
 #     2000 MHz            : 81C sustained, 39W, 28.3 tok/s
