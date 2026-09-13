@@ -1460,9 +1460,10 @@ def _log_reconcile(outcome: ReconcileResult) -> None:
     """
     if outcome.touched():
         logger.info(
-            "Watchdog: reconciled schedules — added: %s replaced: %s pruned: %s",
+            "Watchdog: reconciled schedules — added: %s replaced: %s refreshed: %s pruned: %s",
             outcome.added,
             outcome.replaced,
+            outcome.refreshed,
             outcome.pruned,
         )
     if outcome.blocked:

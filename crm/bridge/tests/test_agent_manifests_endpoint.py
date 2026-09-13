@@ -93,12 +93,26 @@ def fake_engine():
         yield engine
 
 
+#: The canonical schema, which `manifest_checks.validate_agent` loads from
+#: ``<repo_root>/docs/agents/schema.yaml`` — and ``repo_root`` here is the
+#: WORKSPACE. Without it, check A falls back to `required_fields={"id","name"}`
+#: with an empty department enum, so the strictest check in the set ran against
+#: almost nothing and the tests below could not have told the difference.
+CANONICAL_SCHEMA = (
+    Path(__file__).resolve().parents[3] / "robothor" / "engine" / "schema" / "agent_manifest.yaml"
+)
+
+
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
     """A throwaway workspace. Never the operator's real one — rule 11."""
     manifests = tmp_path / "docs" / "agents"
     manifests.mkdir(parents=True)
     (tmp_path / "brain").mkdir()
+    # Shaped like a real instance: `genus init` puts the schema here, and an
+    # appliance without it silently degrades check A — worth reproducing rather
+    # than papering over, so a test that depends on the enum actually gets it.
+    (manifests / "schema.yaml").write_bytes(CANONICAL_SCHEMA.read_bytes())
     monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
     monkeypatch.delenv("ROBOTHOR_MANIFEST_DIR", raising=False)
     return tmp_path
@@ -141,6 +155,98 @@ def _create_body(**overrides) -> dict:
     }
     body.update(overrides)
     return body
+
+
+# ─── Containment ─────────────────────────────────────────────────────
+
+
+class TestNoTestReachesARealWorkspace:
+    """The forgetful case, which is the only one that matters.
+
+    These routes resolve their write paths from
+    ``EngineConfig.from_env().workspace``, which falls back to ``~/robothor``
+    when ROBOTHOR_WORKSPACE is unset — a developer's live fleet. On 2026-09-12 a
+    test that resolved a workspace from the environment overwrote ten of the
+    operator's agent manifests with their template versions, which is precisely
+    the pair of files ``POST /api/agent-manifests`` writes.
+
+    The per-test ``workspace`` fixture protects the tests that remember it.
+    ``tests/conftest_workspace_containment.contained_workspace`` is autouse and
+    protects the ones that do not, and checks a sentinel manifest byte-for-byte
+    after every test in this package so the redirect is proven rather than
+    assumed.
+
+    Every assertion here runs BEFORE the request, deliberately: a test that
+    probed the escape first and checked afterwards would have to perform the
+    write to find out, and on an unguarded checkout that write is the incident.
+    """
+
+    def test_the_containment_fixture_is_active_in_this_package(self):
+        from tests.conftest_workspace_containment import assert_contained
+
+        assert_contained()
+
+    def test_a_route_that_forgets_the_workspace_fixture_stays_inside_it(self, client, fake_engine):
+        """No ``workspace`` fixture on this test, on purpose."""
+        from tests.conftest_workspace_containment import assert_contained
+
+        contained = assert_contained()
+
+        response = client.post("/api/agent-manifests", json=_create_body(name="Probe Agent"))
+
+        assert response.status_code == 201, response.text
+        assert (contained / "docs" / "agents" / "probe-agent.yaml").is_file()
+        assert (contained / "brain" / "PROBE_AGENT.md").is_file()
+
+    def test_no_router_can_reach_a_real_engine_however_it_imports_the_client(
+        self, _controls_auth_key
+    ):
+        """The engine guard is bound to the SINK, not to three attribute names.
+
+        Its first version patched ``routers.agent_manifests.engine_request`` and
+        two ``reconcile_engine_schedules``. Every router imports those by value,
+        so ``routers.providers`` and ``setup.py``'s two function-local imports
+        were never covered, and a router added tomorrow would be unguarded by
+        construction — the exact failure the fixture claims to replace.
+
+        This calls the shared client directly, the way a router nobody has
+        written yet would, and asserts it cannot reach anything.
+        """
+        import asyncio
+
+        from routers._engine_client import engine_request
+
+        status, body = asyncio.run(engine_request("GET", "/api/admin/models"))
+
+        assert status == 502
+        assert body == {"error": "engine unavailable"}
+
+    def test_a_real_transport_to_loopback_is_refused_not_quietly_allowed(self):
+        """``127.0.0.1`` is not a safe default here — on a developer's box it is
+        their own engine on :18800. The guard asks what the TRANSPORT is, not
+        what the host looks like."""
+        import asyncio
+
+        import httpx
+        import pytest as _pytest
+
+        async def _dial() -> None:
+            async with httpx.AsyncClient() as client:
+                await client.get("http://127.0.0.1:18800/api/admin/models")
+
+        with _pytest.raises(AssertionError, match="real transport"):
+            asyncio.run(_dial())
+
+    def test_home_is_redirected_too_so_the_fallback_cannot_bite(self):
+        """``default_workspace_root`` falls back to ``Path.home()/robothor``
+        when the variable is absent, so pinning only ROBOTHOR_WORKSPACE would
+        leave a helper that clears it pointed straight back at the real one."""
+        from pathlib import Path as _Path
+
+        from tests.conftest_workspace_containment import assert_contained
+
+        contained = assert_contained()
+        assert _Path.home() == contained
 
 
 # ─── The gate ────────────────────────────────────────────────────────
@@ -274,6 +380,138 @@ class TestValidate:
         assert any(issue["code"] == "bad_cron" for issue in body["errors"])
 
 
+# ─── Wrong-typed manifests ───────────────────────────────────────────
+
+
+#: Manifests whose VALUES are the wrong shape, not merely wrong. Each one made
+#: a validator raise before the guard: `x not in {...}` on an unhashable, a
+#: `.get()` on a list, `re.match` on an int. They are the manifests an operator
+#: most needs the editor for, so a 500 here is worse than a 404 — it hides the
+#: file rather than reporting it.
+WRONG_TYPED = {
+    "sandbox_is_a_mapping": {"v2": {"sandbox": {"enabled": True}}},
+    "sandbox_is_a_list": {"v2": {"sandbox": ["local"]}},
+    "guardrail_is_a_dict": {"v2": {"guardrails": [{"name": "x"}]}},
+    "difficulty_is_a_dict": {"v2": {"difficulty_class": {"tier": 1}}},
+    "session_target_is_a_dict": {"schedule": {"session_target": {"mode": "isolated"}}},
+    "schedule_is_a_list": {"schedule": ["0 9 * * *"]},
+    "delivery_is_a_list": {"delivery": ["announce"]},
+    "model_is_a_string": {"model": "openrouter/example/demo-model"},
+    "id_is_an_int": {"id": 7},
+    "name_is_a_list": {"name": ["Demo", "Agent"]},
+    "tools_allowed_is_a_string": {"tools_allowed": "exec"},
+    "changelog_is_a_string": {"changelog": "initial"},
+    "v2_is_a_list": {"v2": ["sandbox"]},
+}
+
+
+def _wrong_typed(key: str) -> dict:
+    return {**EXISTING, **WRONG_TYPED[key]}
+
+
+class TestAWrongTypedManifestIsReportedNotRaised:
+    """``manifest_schema.validate`` says "Never raises". It is not true of an
+    arbitrary document, and this PR is the first caller to hand it an HTTP body.
+
+    The guard is at the call sites rather than only in the validator because
+    the promise is load-bearing here in a way it was not when every caller was
+    the manifest loader: a crash on read means the operator cannot SEE the file
+    that is broken, let alone repair it.
+    """
+
+    @pytest.mark.parametrize("case", sorted(WRONG_TYPED))
+    def test_validate_is_still_always_200(self, client, workspace, fake_engine, case):
+        response = client.post(
+            "/api/agent-manifests/validate", json={"manifest": _wrong_typed(case)}
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["ok"] is False
+
+    @pytest.mark.parametrize("case", sorted(WRONG_TYPED))
+    def test_a_wrong_typed_manifest_on_disk_can_still_be_read(
+        self, client, manifest_dir, fake_engine, case
+    ):
+        """The repair path. 200 with the verdict, per the route's own contract —
+        never a 500, and never a 404 that says the agent does not exist."""
+        (manifest_dir / "demo-agent.yaml").write_text(
+            yaml.safe_dump(_wrong_typed(case), sort_keys=False)
+        )
+
+        response = client.get("/api/agent-manifests/demo-agent")
+
+        assert response.status_code == 200, response.text
+        assert response.json()["validation"]["ok"] is False
+
+    @pytest.mark.parametrize("case", sorted(WRONG_TYPED))
+    def test_a_wrong_typed_manifest_can_still_be_silenced(
+        self, client, manifest_dir, fake_engine, case
+    ):
+        """Disable is the stop control. It must work on the manifests that are
+        already wrong — those are the ones an operator wants stopped."""
+        (manifest_dir / "demo-agent.yaml").write_text(
+            yaml.safe_dump(_wrong_typed(case), sort_keys=False)
+        )
+
+        response = client.post("/api/agent-manifests/demo-agent/disable")
+
+        assert response.status_code < 500, response.text
+
+    @pytest.mark.parametrize("case", sorted(WRONG_TYPED))
+    def test_a_patch_of_a_wrong_typed_manifest_is_a_refusal_not_a_crash(
+        self, client, manifest_dir, fake_engine, case
+    ):
+        (manifest_dir / "demo-agent.yaml").write_text(
+            yaml.safe_dump(_wrong_typed(case), sort_keys=False)
+        )
+
+        response = client.patch("/api/agent-manifests/demo-agent", json={"name": "Renamed"})
+
+        assert response.status_code < 500, response.text
+
+    def test_the_refusal_names_no_manifest_value(self, client, workspace, fake_engine):
+        """An exception's text can carry the offending value verbatim, and this
+        body reaches a browser. Only the type comes out."""
+        secret = "a-value-that-must-not-be-echoed"
+        candidate = {**EXISTING, "v2": {"sandbox": {secret: True}}}
+
+        body = client.post("/api/agent-manifests/validate", json={"manifest": candidate}).json()
+
+        assert body["ok"] is False
+        assert secret not in json.dumps(body)
+
+    def test_a_wrongly_shaped_value_is_named_at_its_own_path(self, client, workspace, fake_engine):
+        """The precise finding, not just "something went wrong". The validator
+        itself now reports the wrong type rather than raising, so the operator
+        is told WHICH field to fix; `not_validatable` is only the backstop for a
+        check that raises anyway (see the next test)."""
+        candidate = {**EXISTING, "v2": {"sandbox": {"enabled": True}}}
+
+        body = client.post("/api/agent-manifests/validate", json={"manifest": candidate}).json()
+
+        sandbox = [issue for issue in body["errors"] if issue["path"] == "v2.sandbox"]
+        assert sandbox, body["errors"]
+        assert sandbox[0]["code"] == "wrong_type"
+
+    def test_a_validator_that_raises_anyway_becomes_a_finding(self, client, workspace, fake_engine):
+        """The backstop, probed rather than assumed — this codebase has shipped
+        six controls that were green and inert. The value-level guards cover
+        what is known today; this covers the check nobody has written yet."""
+        from routers import agent_manifests
+
+        def _explode(*args, **kwargs):
+            raise RuntimeError("a future check echoed a-secret-value")
+
+        with patch.object(agent_manifests, "_check_issues", _explode):
+            response = client.post("/api/agent-manifests/validate", json={"manifest": EXISTING})
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["ok"] is False
+        assert any(issue["code"] == "not_validatable" for issue in body["errors"]), body
+        assert "a-secret-value" not in json.dumps(body), "the raise text leaked"
+
+
 # ─── Creating ────────────────────────────────────────────────────────
 
 
@@ -318,6 +556,36 @@ class TestCreate:
         response = client.post("/api/agent-manifests", json=_create_body(name="Demo Agent"))
 
         assert response.status_code == 409
+
+    def test_a_create_that_loses_the_race_conflicts_instead_of_overwriting(
+        self, client, manifest_dir, fake_engine
+    ):
+        """The ``.exists()`` check is a courtesy; ``O_EXCL`` is the decision.
+
+        Two concurrent creates of the same id both clear the check, and
+        ``os.replace`` overwrites without complaint — so the second silently
+        destroyed the first agent, with the history ring as the only record.
+        The file appearing between the check and the write is simulated here
+        rather than raced, because a race that only sometimes reproduces is a
+        test that only sometimes tests anything.
+        """
+        from routers import agent_manifests
+
+        real_dump = agent_manifests._dump
+        rival = {**EXISTING, "id": "invoice-watcher", "name": "Rival"}
+
+        def _another_writer_gets_there_first(document):
+            (manifest_dir / "invoice-watcher.yaml").write_text(
+                yaml.safe_dump(rival, sort_keys=False)
+            )
+            return real_dump(document)
+
+        with patch.object(agent_manifests, "_dump", _another_writer_gets_there_first):
+            response = client.post("/api/agent-manifests", json=_create_body())
+
+        assert response.status_code == 409, response.text
+        assert _read(manifest_dir / "invoice-watcher.yaml")["name"] == "Rival"
+        assert not list(manifest_dir.glob(".*.tmp"))
 
     def test_operator_text_cannot_inject_yaml_into_the_scaffold(
         self, client, manifest_dir, fake_engine
@@ -529,6 +797,94 @@ class TestPatch:
         assert scan.failures == ()
 
 
+class TestAnAlreadyBrokenAgentCanStillBeRepairedAndSilenced:
+    """A save must not BREAK a manifest. It must not be gated on one that is
+    already broken, which is a different promise and the opposite outcome.
+
+    `_apply_patch` ran the full validator on the merged document, so a manifest
+    that already failed any check could not be turned off — and `disable` is the
+    stop control. Worse, the tool half of the check reads the LIVE engine's
+    registry, so uninstalling one plugin made every agent that named its tools
+    simultaneously un-editable and un-silenceable. `DELETE` does not validate,
+    so retiring the agent was the only remedy the Helm offered.
+
+    The rule now: refuse only the errors THIS EDIT introduced.
+    """
+
+    @pytest.fixture
+    def broken_tool(self, manifest_dir, seeded):
+        """On disk: an agent naming a tool the engine no longer registers."""
+        document = {**EXISTING, "tools_allowed": ["exec", "a_retired_plugin_tool"]}
+        seeded.write_text(yaml.safe_dump(document, sort_keys=False))
+        return seeded
+
+    @pytest.fixture
+    def broken_cron(self, manifest_dir, seeded):
+        document = {**EXISTING, "schedule": {"cron": "not a cron", "timezone": "UTC"}}
+        seeded.write_text(yaml.safe_dump(document, sort_keys=False))
+        return seeded
+
+    def test_disable_silences_an_agent_with_an_unregistered_tool(
+        self, client, broken_tool, fake_engine
+    ):
+        response = client.post("/api/agent-manifests/demo-agent/disable")
+
+        assert response.status_code == 200, response.text
+        assert _read(broken_tool)["schedule"]["enabled"] is False
+
+    def test_disable_silences_an_agent_with_a_bad_cron(self, client, broken_cron, fake_engine):
+        response = client.post("/api/agent-manifests/demo-agent/disable")
+
+        assert response.status_code == 200, response.text
+        assert _read(broken_cron)["schedule"]["enabled"] is False
+
+    def test_the_pre_existing_error_still_comes_back_as_a_warning(
+        self, client, broken_tool, fake_engine
+    ):
+        """Allowed through is not the same as unreported: the operator has to
+        be told the agent is still broken, or the Helm has quietly blessed it."""
+        body = client.post("/api/agent-manifests/demo-agent/disable").json()
+
+        rendered = json.dumps(body)
+        assert "a_retired_plugin_tool" in rendered, body
+
+    def test_a_patch_that_repairs_the_manifest_is_accepted(self, client, broken_cron, fake_engine):
+        """The repair path. Editing the very field that is wrong must work."""
+        response = client.patch("/api/agent-manifests/demo-agent", json={"cron": "0 9 * * *"})
+
+        assert response.status_code == 200, response.text
+        assert _read(broken_cron)["schedule"]["cron"] == "0 9 * * *"
+
+    def test_a_patch_of_an_unrelated_field_on_a_broken_agent_is_accepted(
+        self, client, broken_tool, fake_engine
+    ):
+        response = client.patch("/api/agent-manifests/demo-agent", json={"name": "Renamed"})
+
+        assert response.status_code == 200, response.text
+        assert _read(broken_tool)["name"] == "Renamed"
+
+    def test_an_edit_that_introduces_an_error_is_still_refused(self, client, seeded, fake_engine):
+        """The counter-case, and the whole reason the gate exists. Without it
+        this class would be a description of removing the validation."""
+        response = client.patch("/api/agent-manifests/demo-agent", json={"cron": "not a cron"})
+
+        assert response.status_code == 422, response.text
+        assert any(issue["code"] == "bad_cron" for issue in response.json()["detail"]["errors"])
+        assert _read(seeded)["schedule"]["cron"] == "0 9 * * *", "the file was written anyway"
+
+    def test_an_edit_that_introduces_a_second_error_is_refused_on_that_one_only(
+        self, client, broken_tool, fake_engine
+    ):
+        """A manifest with one pre-existing fault does not become a free pass
+        for the next one."""
+        response = client.patch("/api/agent-manifests/demo-agent", json={"cron": "not a cron"})
+
+        assert response.status_code == 422, response.text
+        codes = {issue["code"] for issue in response.json()["detail"]["errors"]}
+        assert "bad_cron" in codes
+        assert "check_d" not in codes, "the pre-existing tool error was re-reported as new"
+
+
 class TestEnableDisable:
     def test_disable_writes_the_flag_and_enable_restores_it(self, client, seeded, fake_engine):
         client.post("/api/agent-manifests/demo-agent/disable")
@@ -620,6 +976,61 @@ class TestRunNow:
         response = client.post("/api/agent-manifests/demo-agent/run")
 
         assert response.status_code == 502
+
+    def test_an_unknown_agent_is_a_404_and_never_reaches_the_engine(
+        self, client, workspace, fake_engine
+    ):
+        """Every sibling route answers 404 for an id that is not an agent here.
+        This one proxied it and returned the engine's 502, which reads as "the
+        engine is down" — a different problem with a different fix."""
+        response = client.post("/api/agent-manifests/no-such-agent/run")
+
+        assert response.status_code == 404
+        assert fake_engine.calls == [], "an unknown id reached the engine"
+
+
+class TestAMisconfiguredWorkspaceIsARefusalNotACrash:
+    """Brief decision 4: a symlinked workspace directory is an operator's
+    deployment mistake, and it should read as one.
+
+    ``safety.py`` refuses to write through a symlinked root — that part was
+    always right. What was missing is that ``_manifest_root`` was the one path
+    helper with no handler, so the refusal surfaced as an unhandled 500 while a
+    symlinked ``brain/`` correctly gave a 422 naming the rule.
+    """
+
+    @pytest.fixture
+    def symlinked_agents_dir(self, tmp_path, monkeypatch):
+        workspace = tmp_path / "workspace"
+        (workspace / "docs").mkdir(parents=True)
+        (workspace / "brain").mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (workspace / "docs" / "agents").symlink_to(elsewhere, target_is_directory=True)
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+        monkeypatch.delenv("ROBOTHOR_MANIFEST_DIR", raising=False)
+        return elsewhere
+
+    @pytest.mark.parametrize(
+        ("method", "path", "body"),
+        [
+            ("get", "/api/agent-manifests/demo-agent", None),
+            ("post", "/api/agent-manifests", "create"),
+            ("patch", "/api/agent-manifests/demo-agent", {"name": "X"}),
+            ("post", "/api/agent-manifests/demo-agent/disable", None),
+            ("post", "/api/agent-manifests/demo-agent/run", None),
+        ],
+    )
+    def test_a_symlinked_manifest_dir_is_a_422(
+        self, client, symlinked_agents_dir, fake_engine, method, path, body
+    ):
+        payload = _create_body() if body == "create" else body
+        call = getattr(client, method)
+        response = call(path, json=payload) if payload is not None else call(path)
+
+        assert response.status_code == 422, response.text
+        assert "symlink" in response.text.lower()
+        assert not list(symlinked_agents_dir.iterdir()), "a write went through the link"
 
 
 # ─── No caller-supplied id reaches an engine URL ─────────────────────

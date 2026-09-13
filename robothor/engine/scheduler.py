@@ -36,6 +36,7 @@ from robothor.engine.schedule_reconcile import (
     KIND_WORKER,
     JobSpec,
     ReconcileResult,
+    RowLedger,
     agent_job_specs,
     blocked_reasons,
     desired_job_specs,
@@ -279,6 +280,7 @@ class CronScheduler:
         self.runner = runner
         self.workflow_engine = workflow_engine
         self.scheduler = AsyncIOScheduler(timezone=config.default_timezone)
+        self._rows = RowLedger()
 
     async def start(self) -> None:
         """Load manifests and start the scheduler."""
@@ -455,7 +457,9 @@ class CronScheduler:
             )
         except Exception as e:
             logger.warning("Failed to upsert schedule for %s: %s", spec.job_id, e)
+            self._rows.forget(spec.job_id)
             return
+        self._rows.record(spec)
         if active_ids is not None:
             active_ids.add(spec.job_id)
 
@@ -1284,6 +1288,13 @@ class CronScheduler:
         for job_id, spec in wanted.items():
             existing = live.get(job_id)
             if existing is not None and job_matches(existing, spec):
+                # The job is right. The ROW may still not be: agent_schedules
+                # carries the model, the delivery target and the session
+                # target, none of which move the trigger, and the fleet view
+                # and gen_cron_map.py read exactly those columns.
+                if self._rows.needs_write(spec):
+                    self._record_schedule_row(spec)
+                    result.refreshed.append(job_id)
                 continue
             if existing is not None:
                 # Cleared first rather than left to ``replace_existing``:
@@ -1325,8 +1336,10 @@ class CronScheduler:
             if job_id not in result.pruned:
                 result.pruned.append(job_id)
 
+        # A disabled schedule gets no job but keeps its row saying so, on the
+        # same "only when it changed" rule as the live ones above.
         for spec in declared.values():
-            if not spec.enabled:
+            if not spec.enabled and self._rows.needs_write(spec):
                 self._record_schedule_row(spec)
 
         return result

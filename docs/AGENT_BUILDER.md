@@ -393,7 +393,7 @@ the same two files, and calls the engine reconcile itself.
 | `GET /api/agent-manifests/{id}` | The parsed document, its raw YAML, its instruction file, and its verdict. A broken manifest answers 200 with the verdict, not 404 — "absent" and "unreadable" have different fixes |
 | `POST /api/agent-manifests/validate` | Always 200; the verdict is the payload (`{ok, errors, warnings}`). Send `{manifest}` or `{yaml}` |
 | `POST /api/agent-manifests` | Scaffold + validate + write + reconcile. `409` on a colliding id, `422` carrying the validator's own codes on refusal |
-| `PATCH /api/agent-manifests/{id}` | Edits only the form-owned paths, bumps `version`, appends a changelog entry, snapshots the previous document, reconciles |
+| `PATCH /api/agent-manifests/{id}` | Edits only the form-owned paths, bumps `version`, appends a changelog entry, snapshots the previous document, reconciles. Refused only on errors **this edit introduced** — see below |
 | `POST /api/agent-manifests/{id}/enable` \| `/disable` | Sets `schedule.enabled`. Disabling drops the cron, heartbeat and worker jobs on the next reconcile without retiring the agent |
 | `DELETE /api/agent-manifests/{id}` | Body `{"confirm": "<id>"}`. Moves the manifest to the instance's own `docs/agents/retired/` — nothing is unlinked, and the instruction file stays |
 | `POST /api/agent-manifests/{id}/run` | Fires one run now, via the engine's trigger route |
@@ -401,6 +401,16 @@ the same two files, and calls the engine reconcile itself.
 Every write answers with a `reconcile` block. `applied: false` means the file is
 on disk and the engine has not picked it up yet — the watchdog will, within five
 minutes.
+
+**What an edit is refused for.** Only the errors it INTRODUCED. Every edit is
+validated twice — the document as it was, and as the edit leaves it — and the
+difference is what decides the 422. "A save must not break a manifest" and "a
+save is gated on the manifest being unbroken" are different promises, and the
+second locks the operator out of the file exactly when they need it: an agent
+with a bad cron, or one naming a tool a since-uninstalled plugin provided, could
+not be repaired AND could not be `disable`d, and `disable` is the stop control.
+A pre-existing fault comes back in `warnings` instead, so "allowed through" does
+not read as "blessed", and it is never a free pass for a second fault.
 
 **What a PATCH may change.** An edit sets only the paths the form owns
 (`routers/agent_manifests.FORM_OWNED_PATHS`: name, description, department,

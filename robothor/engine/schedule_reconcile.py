@@ -80,6 +80,18 @@ class JobSpec:
         """
         return (repr(self.trigger), self.misfire_grace_time)
 
+    def row(self) -> tuple[Any, ...]:
+        """Everything that lands in ``agent_schedules``, comparably.
+
+        Deliberately NOT part of :meth:`fingerprint`: the trigger decides
+        whether the JOB has to be rebuilt, and this decides whether the ROW has
+        to be rewritten. Conflating them either rebuilds a running job to
+        change a model id, or — the way it actually went — leaves the row
+        holding a model the manifest stopped naming, which is what the fleet
+        view and `gen_cron_map.py` then report.
+        """
+        return (self.enabled, tuple(sorted((k, repr(v)) for k, v in self.upsert.items())))
+
 
 @dataclass
 class ReconcileResult:
@@ -94,6 +106,12 @@ class ReconcileResult:
     added: list[str] = field(default_factory=list)
     replaced: list[str] = field(default_factory=list)
     pruned: list[str] = field(default_factory=list)
+    #: Jobs whose TRIGGER is unchanged but whose ``agent_schedules`` row was
+    #: rewritten — a model, delivery or session-target edit. Its own list
+    #: rather than folded into ``replaced``: nothing about the running job
+    #: moved, and an operator reading "replaced" would go looking for a fire
+    #: time that did not change.
+    refreshed: list[str] = field(default_factory=list)
     #: agent id (or ``"*"`` for the whole directory) → why it was skipped.
     #: Error TYPES and ids only — never a path, a filename or a manifest value.
     blocked: dict[str, str] = field(default_factory=dict)
@@ -105,12 +123,44 @@ class ReconcileResult:
             "added": sorted(self.added),
             "replaced": sorted(self.replaced),
             "pruned": sorted(self.pruned),
+            "refreshed": sorted(self.refreshed),
             "blocked": dict(self.blocked),
             "clean": self.clean,
         }
 
     def touched(self) -> int:
-        return len(self.added) + len(self.replaced) + len(self.pruned)
+        return len(self.added) + len(self.replaced) + len(self.pruned) + len(self.refreshed)
+
+
+class RowLedger:
+    """What this process last wrote to ``agent_schedules``, per job.
+
+    The question "does the row need rewriting" is not the question "does the job
+    need rebuilding", and answering only the second left a model- or
+    delivery-only edit reconciling to a silent no-op: the trigger had not moved,
+    so nothing was written, and the row kept a model the manifest had stopped
+    naming. The fleet view, ``routers/agents.py`` and ``gen_cron_map.py`` all
+    read those columns, so the appliance's own state table disagreed with its
+    manifests until the next restart.
+
+    A ledger rather than "just upsert every spec every pass": reconcile runs
+    every five minutes for the life of the process, and rewriting every row each
+    time is a write loop wearing a reconcile's name. ``forget`` on a failed
+    write is what keeps the next pass trying rather than believing a row it
+    never managed to store.
+    """
+
+    def __init__(self) -> None:
+        self._rows: dict[str, tuple[Any, ...]] = {}
+
+    def needs_write(self, spec: JobSpec) -> bool:
+        return self._rows.get(spec.job_id) != spec.row()
+
+    def record(self, spec: JobSpec) -> None:
+        self._rows[spec.job_id] = spec.row()
+
+    def forget(self, job_id: str) -> None:
+        self._rows.pop(job_id, None)
 
 
 def blocked_reasons(scan: ManifestScan) -> dict[str, str]:

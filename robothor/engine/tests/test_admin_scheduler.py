@@ -63,10 +63,10 @@ def fake_scheduler():
 
 
 class TestReconcileRoute:
-    def test_it_answers_with_the_five_counts(self, fake_scheduler):
+    def test_it_answers_with_every_count(self, fake_scheduler):
         body = _client(fake_scheduler).post("/api/admin/scheduler/reconcile").json()
 
-        assert set(body) == {"added", "replaced", "pruned", "blocked", "clean"}
+        assert set(body) == {"added", "replaced", "pruned", "refreshed", "blocked", "clean"}
         assert body["added"] == ["demo-agent"]
         assert body["pruned"] == ["retired-agent"]
         assert body["blocked"] == {"broken-agent": "SchemaError"}

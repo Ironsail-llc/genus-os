@@ -91,11 +91,21 @@ CAPS = {
     # schedule_reconcile.py, and start()'s three hand-written registration
     # blocks collapsed into one loop over it (266 -> 117 lines). That is what
     # paid for reconcile learning to add and replace, rather than raising this.
-    "robothor/engine/scheduler.py": 1600,
+    # 1600 -> 1610: review round 1 added the row-refresh branch (a trigger can
+    # be unchanged while agent_schedules is not). Its bookkeeping went to
+    # schedule_reconcile.RowLedger; what is left here is the call site. This
+    # corrects a cap set hours earlier in the same PR, not a long-standing one,
+    # and is still 16 lines below where this module started.
+    "robothor/engine/scheduler.py": 1610,
     # The job-set derivation reconcile and start() now share. Bounded from the
     # day it lands: this is the module that would otherwise absorb every
     # scheduling concern that does not fit in scheduler.py's cap.
-    "robothor/engine/schedule_reconcile.py": 300,
+    # 300 -> 340: JobSpec.row() and RowLedger — the agent_schedules half of a
+    # spec, which decides whether the ROW needs rewriting where fingerprint()
+    # decides whether the JOB does. Conflating the two left a model-only edit
+    # reconciling to a no-op with a stale row; separating them is what kept the
+    # scheduler a call site rather than growing this logic there.
+    "robothor/engine/schedule_reconcile.py": 340,
 }
 
 

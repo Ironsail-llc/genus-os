@@ -33,10 +33,38 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 BRIDGE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BRIDGE_DIR))
 
+# And the repo root, so the containment fixture below imports whichever rootdir
+# this suite is invoked from. NOT wrapped in a suppress: the repo-root
+# conftest.py can afford to skip its optional integration fixtures when `tests`
+# is unimportable, and this cannot — a containment guard that silently does not
+# load is the failure it exists to prevent.
+REPO_ROOT = BRIDGE_DIR.parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
 import bridge_service  # noqa: E402
 from bridge_service import app  # noqa: E402
 
 from robothor.events.capabilities import load_capabilities, reset  # noqa: E402
+
+# Structural containment: no bridge test may reach a real workspace.
+#
+# The routers this suite exercises resolve their write paths from
+# `EngineConfig.from_env().workspace`, which falls back to `~/robothor` when
+# ROBOTHOR_WORKSPACE is unset — on a developer's box, the live fleet. The agent
+# builder writes `docs/agents/<id>.yaml` and `brain/<ID>.md`, which is the exact
+# file class the 2026-09-12 incident destroyed, and a per-test `workspace`
+# fixture protects only the tests that remember it.
+#
+# `contained_workspace` is autouse: it pins HOME/ROBOTHOR_WORKSPACE to a
+# throwaway directory AND checks a sentinel manifest byte-for-byte afterwards,
+# so the redirect is verified rather than assumed. Same wiring as
+# robothor/cli/tests/conftest.py and robothor/init/tests/conftest.py; one copy
+# of the fixture, because two copies of a guard drift invisibly.
+from tests.conftest_workspace_containment import (  # noqa: E402, F401 - pytest collects these
+    assert_contained,
+    contained_workspace,
+    env_workspace,
+)
 
 # Platform-owned test fixture — NOT the operator's live brain/agent_capabilities.json.
 # That file is instance-owned (CLAUDE.md rule 11) and gitignored, so it doesn't exist
@@ -59,35 +87,74 @@ def insecure_loopback_dev_mode(monkeypatch):
     reset()
 
 
+#: Where a bridge test's engine call is allowed to go: nowhere.
+#:
+#: ``.invalid`` is reserved by RFC 2606 and guaranteed never to resolve, so even
+#: if every layer below were removed the call would fail DNS rather than reach
+#: somebody's engine.
+UNROUTABLE_HOST = "engine.invalid"
+UNROUTABLE_ENGINE = f"http://{UNROUTABLE_HOST}:1"
+
+#: Transports that cannot leave the process by construction: the ASGI one the
+#: test clients mount the app on, and the mock one a test installs to stand in
+#: for a server. Asking about the TRANSPORT rather than the host is what makes
+#: this airtight — `127.0.0.1` on a real transport is the operator's own engine
+#: on :18800, which is exactly the call that must not happen.
+_IN_PROCESS_TRANSPORTS = (httpx.ASGITransport, httpx.MockTransport)
+
+
 @pytest.fixture(autouse=True)
 def no_engine_calls_from_the_bridge_suite(monkeypatch):
     """No bridge test may reach a real engine.
 
-    Three routers now call the engine after a manifest write — the agent
-    builder, the marketplace installer and the first-run wizard — and
-    ``engine_request`` is a plain HTTP POST to whatever ``ROBOTHOR_ENGINE_URL``
-    resolves to. On a developer's box that is their LIVE engine, so an
-    unpatched test would rebuild the operator's job set from a unit suite. That
-    is a production side effect, and the default has to be fail-closed rather
-    than "every test remembered to patch".
+    Several routers call the engine — the agent builder, the marketplace
+    installer, the first-run wizard, the provider wizard — and ``engine_request``
+    is a plain HTTP POST to whatever ``ROBOTHOR_ENGINE_URL`` resolves to. On a
+    developer's box that is their LIVE engine, so an unpatched test would
+    rebuild the operator's job set, or reload their provider keys, from a unit
+    suite.
 
-    Stubbed as *unreachable* rather than as a success: a test that means to
-    assert the engine was called patches these again itself (the inner patch
-    wins), and one that does not gets the honest answer for a box with no
-    engine on it.
+    Patched at the SINK, not at the callers. The first version of this fixture
+    named three attributes (``routers.agent_manifests.engine_request`` and two
+    ``reconcile_engine_schedules``), and every router imports those by value —
+    so ``routers.providers.engine_request`` and ``setup.py``'s two
+    function-local imports were untouched, and a router added tomorrow would be
+    unguarded by construction. That is precisely the failure mode this
+    docstring claims to be replacing, so it is worth saying twice: a guard
+    bound to the names that exist today is a guard that stops covering the code
+    written tomorrow.
+
+    ``engine_base_url`` is the one funnel every caller goes through, and the
+    ``httpx`` transport under it is a second lock for anything that builds a
+    URL another way. Per-test ``FakeEngine`` patches still win, because they
+    replace ``engine_request`` above both.
     """
+    monkeypatch.setenv("ROBOTHOR_ENGINE_URL", UNROUTABLE_ENGINE)
 
-    async def _unreachable(*args, **kwargs):
-        return 502, {"error": "engine unavailable"}
+    real_request = httpx.AsyncClient.request
 
-    async def _not_reconciled(*args, **kwargs):
-        return {"applied": False, "error": "engine unavailable"}
+    async def _in_process_only(self, method, url, *args, **kwargs):
+        if isinstance(getattr(self, "_transport", None), _IN_PROCESS_TRANSPORTS):
+            return await real_request(self, method, url, *args, **kwargs)
+        # A relative URL has no host of its own; it resolves against the
+        # client's base_url. Reading only the argument would report every such
+        # request as an escape to ''.
+        host = httpx.URL(url).host or self.base_url.host
+        if host == UNROUTABLE_HOST:
+            # Where the env pin above sends an unpatched engine call. Refused
+            # here rather than left to DNS: instant, and independent of what
+            # this box's resolver decides to do with an unknown name. The route
+            # sees the same ConnectError it would from a dead engine, so the
+            # "engine unreachable" branch stays exercised rather than mocked
+            # out of existence.
+            raise httpx.ConnectError(f"refused by the bridge test suite: {host}")
+        raise AssertionError(
+            f"a bridge test tried to reach {host!r} over a real transport. Patch "
+            "the seam your route uses, or mount a fake — a unit suite must not "
+            "dial anything, and 127.0.0.1 is this developer's own engine."
+        )
 
-    monkeypatch.setattr("routers.agent_manifests.engine_request", _unreachable, raising=False)
-    monkeypatch.setattr(
-        "routers.installed_agents.reconcile_engine_schedules", _not_reconciled, raising=False
-    )
-    monkeypatch.setattr("routers.setup.reconcile_engine_schedules", _not_reconciled, raising=False)
+    monkeypatch.setattr(httpx.AsyncClient, "request", _in_process_only)
 
 
 @pytest.fixture

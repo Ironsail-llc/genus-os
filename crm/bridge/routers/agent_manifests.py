@@ -42,7 +42,7 @@ import re
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 from urllib.parse import quote
 
 import yaml
@@ -62,7 +62,13 @@ from routers._audit import audited
 from routers._engine_client import engine_request
 from routers._operator import require_operator
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 logger = logging.getLogger(__name__)
+
+#: What every validator here answers: ``(blocking errors, advisory warnings)``.
+_IssueSplit: TypeAlias = tuple[list[dict[str, str]], list[dict[str, str]]]
 
 
 def _require_primary_tenant(tenant_id: str = Depends(get_tenant_id)) -> None:
@@ -156,11 +162,35 @@ def _manifest_dir() -> Path:
     return EngineConfig.from_env().manifest_dir
 
 
+def _refused(error: TemplateSecurityError) -> HTTPException:
+    """A containment refusal, as a 422 the operator can read.
+
+    Brief decision 4: a symlinked ``brain/`` (or ``docs/agents/``) is a
+    deployment the appliance will not write through, and saying so plainly is
+    the difference between "fix your symlink" and an opaque 500. The message
+    comes from ``safety.py`` and names the rule, never the path.
+    """
+    return HTTPException(status_code=422, detail=str(error))
+
+
 def _manifest_root() -> Path:
-    """The manifest directory, created and canonicalized."""
+    """The manifest directory, created and canonicalized.
+
+    Wrapped like every other path helper here: ``trusted_directory`` refuses a
+    root reached through a symlink, and that refusal is an operator's
+    misconfiguration rather than a bug in this process.
+    """
     directory = _manifest_dir()
-    directory.mkdir(parents=True, exist_ok=True)
-    return trusted_directory(directory, label="agent manifest root")
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        return trusted_directory(directory, label="agent manifest root")
+    except TemplateSecurityError as error:
+        raise _refused(error) from error
+    except OSError as error:
+        logger.warning("Manifest directory unusable: %s", type(error).__name__)
+        raise HTTPException(
+            status_code=422, detail="the agent manifest directory is not writable"
+        ) from error
 
 
 def _safe_id(agent_id: object) -> str:
@@ -168,11 +198,14 @@ def _safe_id(agent_id: object) -> str:
     try:
         return validate_identifier(agent_id, label="agent id")
     except TemplateSecurityError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+        raise _refused(error) from error
 
 
 def _manifest_path(agent_id: str) -> Path:
-    return contained_path(_manifest_root(), f"{agent_id}.yaml", label="agent manifest")
+    try:
+        return contained_path(_manifest_root(), f"{agent_id}.yaml", label="agent manifest")
+    except TemplateSecurityError as error:
+        raise _refused(error) from error
 
 
 def _instruction_filename(agent_id: str) -> str:
@@ -187,24 +220,33 @@ def _instruction_path(relative: object) -> Path:
     A ``brain/`` that is a symlink outside the workspace is refused here
     rather than followed.
     """
-    return workspace_path(
-        _workspace(),
-        relative,
-        allowed_prefix="brain",
-        label="agent instruction file",
-    )
+    try:
+        return workspace_path(
+            _workspace(),
+            relative,
+            allowed_prefix="brain",
+            label="agent instruction file",
+        )
+    except TemplateSecurityError as error:
+        raise _refused(error) from error
 
 
 # ─── Atomic writes + history ─────────────────────────────────────────
 
 
-def _write_atomically(path: Path, text: str) -> None:
+def _write_atomically(path: Path, text: str, *, exclusive: bool = False) -> None:
     """Replace one file in a single step, leaving no residue on failure.
 
     Temp file in the SAME directory so ``os.replace`` stays atomic, fsync
     before the rename so a power loss cannot leave a zero-length manifest, and
     ``BaseException`` on the cleanup so a ``KeyboardInterrupt`` mid-write does
     not strand a ``.tmp`` in the directory the engine globs.
+
+    ``exclusive=True`` makes the create path a create: ``os.replace`` happily
+    overwrites, so ``.exists()`` followed by a write is a check-then-act race in
+    which two concurrent creates both clear the 409 and the second silently
+    destroys the first. ``O_EXCL`` moves the decision into the kernel, where it
+    is the only place it can actually be atomic.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
@@ -214,7 +256,13 @@ def _write_atomically(path: Path, text: str) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        temp_path.replace(path)
+        if exclusive:
+            # link() fails with EEXIST if the target exists — the atomic
+            # "create only" primitive os.replace does not offer.
+            os.link(temp_path, path)
+            temp_path.unlink(missing_ok=True)
+        else:
+            temp_path.replace(path)
     except BaseException:
         temp_path.unlink(missing_ok=True)
         raise
@@ -258,7 +306,14 @@ def _snapshot(agent_id: str) -> None:
         for stale in sorted(target.parent.glob("*.yaml"))[:-HISTORY_DEPTH]:
             stale.unlink(missing_ok=True)
     except Exception as error:  # noqa: BLE001 — a snapshot must not block an edit
-        logger.warning("Could not snapshot manifest for %s: %s", sanitize_log(agent_id), error)
+        # The TYPE only: an OSError's str() is "[Errno 13] Permission denied:
+        # '/home/<user>/robothor/docs/agents/...'". This was the one log line
+        # in the router that could print a path (CLAUDE.md rule 2).
+        logger.warning(
+            "Could not snapshot manifest for %s: %s",
+            sanitize_log(agent_id),
+            type(error).__name__,
+        )
 
 
 # ─── Reading ─────────────────────────────────────────────────────────
@@ -327,6 +382,40 @@ def _parse(text: str) -> dict[str, Any]:
 
 def _issue(path: str, code: str, message: str) -> dict[str, str]:
     return {"path": path, "code": code, "message": message}
+
+
+def _not_validatable(where: str, error: BaseException) -> dict[str, str]:
+    """A validator that raised, reported as a finding instead of a 500.
+
+    The exception TYPE and nothing else: a ``KeyError`` or a ``TypeError`` from
+    deep inside a check carries the offending manifest value in its text, and
+    this body reaches a browser (CLAUDE.md rules 1 and 2).
+    """
+    return _issue(
+        "",
+        "not_validatable",
+        f"{where} could not judge this manifest ({type(error).__name__}) — "
+        "a value is the wrong shape",
+    )
+
+
+def _guarded(where: str, call: Callable[[], _IssueSplit]) -> _IssueSplit:
+    """Run one validator, turning a raise into an error finding.
+
+    ``manifest_schema.validate`` documents "Never raises" and
+    ``manifest_checks.validate_agent`` implies it, and neither is true of an
+    arbitrary document: ``sandbox`` as a mapping hits ``x not in {...}`` on an
+    unhashable, ``schedule`` as a list hits ``.get()`` on a list, a non-string
+    ``id`` hits ``re.match``. Every one of those is a manifest an operator needs
+    the editor for MORE than a well-formed one, so a crash here does not just
+    lose a verdict — it hides the file. ``_runtime_issues`` already wrapped its
+    call for exactly this reason; this is the same guard at the other two.
+    """
+    try:
+        return call()
+    except Exception as error:  # noqa: BLE001 — every shape of bad value lands here
+        logger.warning("%s raised on a manifest: %s", where, type(error).__name__)
+        return [_not_validatable(where, error)], []
 
 
 def _schema_issues(document: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
@@ -430,19 +519,37 @@ async def _engine_tools() -> tuple[set[str], list[dict[str, str]]]:
     return {str(name) for name in body.get("tools") or []}, []
 
 
-async def _validate(document: dict[str, Any]) -> dict[str, Any]:
+async def _validation_context() -> tuple[dict[str, Any], set[str], list[dict[str, str]]]:
+    """The fleet and the engine's tool list, read once.
+
+    Its own function so an edit can validate the BEFORE and AFTER documents
+    against the same view of the world — two round trips to the engine for one
+    save would let the two verdicts disagree about which tools exist.
+    """
+    scan = await asyncio.to_thread(_scan)
+    fleet = {str(m["id"]): m for m in scan.manifests if isinstance(m.get("id"), str)}
+    tools, tool_warnings = await _engine_tools()
+    return fleet, tools, tool_warnings
+
+
+async def _validate(
+    document: dict[str, Any],
+    context: tuple[dict[str, Any], set[str], list[dict[str, str]]] | None = None,
+) -> dict[str, Any]:
     """Everything that can be said about one manifest, in one body.
 
     Ordered cheapest-first so the operator sees the structural complaint before
     the semantic one: a document missing ``id`` produces a readable answer
     rather than a cascade from every check that dereferences it.
     """
-    scan = await asyncio.to_thread(_scan)
-    fleet = {str(m["id"]): m for m in scan.manifests if isinstance(m.get("id"), str)}
-    tools, tool_warnings = await _engine_tools()
+    fleet, tools, tool_warnings = context if context is not None else await _validation_context()
 
-    errors, warnings = await asyncio.to_thread(_schema_issues, document)
-    check_errors, check_warnings = await asyncio.to_thread(_check_issues, document, fleet, tools)
+    errors, warnings = await asyncio.to_thread(
+        _guarded, "the schema validator", lambda: _schema_issues(document)
+    )
+    check_errors, check_warnings = await asyncio.to_thread(
+        _guarded, "the manifest checks", lambda: _check_issues(document, fleet, tools)
+    )
     errors.extend(check_errors)
     warnings.extend(check_warnings)
     warnings.extend(tool_warnings)
@@ -460,6 +567,35 @@ def _refuse(validation: dict[str, Any]) -> None:
     """
     if not validation["ok"]:
         raise HTTPException(status_code=422, detail=validation)
+
+
+def _introduced(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    """The verdict on an EDIT: only the errors this edit is responsible for.
+
+    "A save must not break a manifest" and "a save is gated on the manifest
+    being unbroken" are different promises with opposite outcomes, and the
+    second one locks the operator out of the file exactly when they need it.
+    Running the full validator on the merged document made an agent with a bad
+    cron or a tool the engine no longer registers impossible to repair AND
+    impossible to `disable` — and `disable` is the stop control. Since the tool
+    half reads the LIVE engine's registry, uninstalling one plugin froze every
+    agent that named its tools. `DELETE` does not validate, so retiring the
+    agent was the only remedy the Helm had left.
+
+    Identity is ``(path, code)``: same complaint about the same field. A
+    pre-existing fault is therefore never a free pass for a second one — it is
+    reported as a warning instead, because "allowed through" must not read as
+    "blessed".
+    """
+    already = {(issue["path"], issue["code"]) for issue in before["errors"]}
+    new = [issue for issue in after["errors"] if (issue["path"], issue["code"]) not in already]
+    carried = [issue for issue in after["errors"] if (issue["path"], issue["code"]) in already]
+    return {
+        "ok": not new,
+        "errors": new,
+        "warnings": [*after["warnings"], *carried],
+        "pre_existing": carried,
+    }
 
 
 # ─── Deep set of only the form-owned paths ───────────────────────────
@@ -805,7 +941,10 @@ def _read_instructions(document: dict[str, Any]) -> str:
         return ""
     try:
         path = _instruction_path(relative)
-    except TemplateSecurityError:
+    except HTTPException:
+        # A READ of the fleet must not 422 because one agent names an
+        # instruction file outside the workspace. The refusal is right; making
+        # it fatal to the page is not.
         logger.warning("Refusing to read an instruction file outside the workspace")
         return ""
     return path.read_text(encoding="utf-8") if path.is_file() else ""
@@ -875,13 +1014,18 @@ def _write_pair(
     them is "an instruction file nothing references" rather than "an agent
     whose instructions do not exist", which is the half that makes a run fail.
     """
-    try:
-        instruction_path = _instruction_path(instruction_relative)
-    except TemplateSecurityError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+    instruction_path = _instruction_path(instruction_relative)
     if not instruction_path.exists():
         _write_atomically(instruction_path, instructions)
-    _write_atomically(_manifest_path(agent_id), _dump(document))
+    try:
+        _write_atomically(_manifest_path(agent_id), _dump(document), exclusive=True)
+    except FileExistsError as error:
+        # The 409 above is a courtesy; this is the decision. Two concurrent
+        # creates of the same id both pass `.exists()`, and without O_EXCL the
+        # second would silently destroy the first.
+        raise HTTPException(
+            status_code=409, detail="an agent with that id already exists"
+        ) from error
 
 
 @router.patch("/api/agent-manifests/{agent_id}")
@@ -901,16 +1045,26 @@ async def _apply_patch(
     reconcile. A shortcut that wrote the flag directly would be a second way to
     change a manifest, and the second way is always the one that forgets to
     reconcile.
+
+    The document is judged twice — as it was and as the edit leaves it — and
+    refused only on what the edit INTRODUCED. See :func:`_introduced` for why a
+    single verdict on the merged document locked the operator out of exactly
+    the manifests they needed to fix or silence.
     """
     agent_id = _safe_id(agent_id)
     path = _manifest_path(agent_id)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="no such agent")
 
+    original = _parse(await asyncio.to_thread(path.read_text, encoding="utf-8"))
     document = _parse(await asyncio.to_thread(path.read_text, encoding="utf-8"))
     _merge_owned(document, changes)
     _bump_version(document, change)
-    validation = await _validate(document)
+    # One context for both verdicts: two reads of the engine's tool list across
+    # one save could disagree about which tools exist, and the difference
+    # between the two answers is what decides the refusal.
+    context = await _validation_context()
+    validation = _introduced(await _validate(original, context), await _validate(document, context))
     _refuse(validation)
 
     await asyncio.to_thread(_snapshot, agent_id)
@@ -980,7 +1134,10 @@ async def retire_manifest(agent_id: str, body: DeleteRequest, request: Request) 
 def _retire(agent_id: str, path: Path) -> None:
     root = _manifest_root()
     (root / RETIRED_DIR).mkdir(parents=True, exist_ok=True)
-    target = contained_path(root, f"{RETIRED_DIR}/{agent_id}.yaml", label="retired manifest")
+    try:
+        target = contained_path(root, f"{RETIRED_DIR}/{agent_id}.yaml", label="retired manifest")
+    except TemplateSecurityError as error:
+        raise _refused(error) from error
     path.replace(target)
 
 
@@ -989,6 +1146,11 @@ async def run_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     """Fire the agent once, now. Proxied to the engine, which owns the runner."""
     require_operator(request)
     agent_id = _safe_id(agent_id)
+    # Same 404 every sibling route gives for an id that is not an agent here.
+    # Without it an unknown id was proxied to the engine and came back 502,
+    # which reads as "the engine is down" rather than "no such agent".
+    if not _manifest_path(agent_id).is_file():
+        raise HTTPException(status_code=404, detail="no such agent")
     # Percent-encoded as well as identifier-validated. ``validate_identifier``
     # already limits this to [a-z0-9-], so nothing can survive both — which is
     # the point: this value is the only part of an engine URL that a caller

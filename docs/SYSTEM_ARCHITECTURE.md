@@ -875,6 +875,7 @@ runs from the watchdog every five minutes and on demand from
 |---------|------|
 | `added` | A manifest declares a job the scheduler does not hold — a new agent, or one whose `schedule.enabled` just went back to `true` |
 | `replaced` | The job exists with a different trigger or misfire grace. Compared on `repr(trigger)`, because `CronTrigger.__eq__` is identity and `str(trigger)` omits the timezone — so a timezone-only edit is invisible to either obvious comparison |
+| `refreshed` | The trigger is unchanged but the `agent_schedules` row is not: a model, delivery or session-target edit. Those columns are what the fleet view, `routers/agents.py` and `gen_cron_map.py` read, so skipping the write left the appliance's own state table disagreeing with the manifest until a restart. Its own list because nothing about the running job moved |
 | `pruned` | The manifest is gone, or `schedule.enabled: false`. The DB row survives a disable so the fleet view can show "off" rather than "deleted" |
 | `blocked` | Nothing happened. See below |
 
@@ -909,7 +910,7 @@ under that prefix inherits the requirement rather than having to remember it.
 | Route | Module | Purpose |
 |-------|--------|---------|
 | `GET /api/admin/providers`, `POST .../{id}/test`, `GET /api/admin/models`, `POST /api/admin/secrets/reload`, `POST /api/admin/defaults/reload` | `admin_providers.py` | Credentials, the model catalogue, a real test completion |
-| `POST /api/admin/scheduler/reconcile` | `admin_scheduler.py` | Re-derive the job set; answers `{added, replaced, pruned, blocked, clean}`, or 503 when this process holds no scheduler |
+| `POST /api/admin/scheduler/reconcile` | `admin_scheduler.py` | Re-derive the job set; answers `{added, replaced, refreshed, pruned, blocked, clean}`, or 503 when this process holds no scheduler |
 | `GET /api/admin/tools` | `admin_scheduler.py` | The registered tool names a manifest may name. The bridge's manifest validator reads this rather than importing `ToolRegistry`, because only the engine process knows what its plugins contributed |
 
 Engine alerts (`robothor/engine/alerts.py`) route by severity: `critical`

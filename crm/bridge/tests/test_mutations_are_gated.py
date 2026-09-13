@@ -211,8 +211,12 @@ EXPECTED_ROUTER_MODULES = frozenset(
 
 def test_the_app_actually_exposes_mutation_routes() -> None:
     """Guard the guard: a partial enumeration would make every assertion vacuous."""
+    # 35 -> 60 (actual 63). The floor's whole job is to notice an enumeration
+    # collapse, and one set 28 routes below reality would have let nearly half
+    # the mutation surface disappear silently. Raise it whenever routes are
+    # added, the same way the module ratchets are kept tight.
     routes = _mutation_routes()
-    assert len(routes) >= 35, f"route enumeration collapsed — only found {len(routes)}"
+    assert len(routes) >= 60, f"route enumeration collapsed — only found {len(routes)}"
 
     seen = {route.endpoint.__module__ for route in routes}
     missing = EXPECTED_ROUTER_MODULES - seen

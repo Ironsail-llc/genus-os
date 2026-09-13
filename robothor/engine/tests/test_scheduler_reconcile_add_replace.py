@@ -219,6 +219,90 @@ class TestAddAndReplace:
 
 
 @pytest.mark.usefixtures("_no_db")
+class TestAnEditThatDoesNotMoveTheTrigger:
+    """``agent_schedules`` carries more than the trigger, so "the job is
+    unchanged" is not "the row is unchanged".
+
+    ``job_matches`` compares ``repr(trigger)`` and the misfire grace, which is
+    the right question for APScheduler and the wrong one for the database:
+    ``JobSpec.upsert`` also carries ``model_primary``, ``model_fallbacks``, the
+    three delivery fields, ``session_target`` and ``timeout_seconds``. Editing
+    any of them reconciled to a no-op, the row kept the old value, and the Helm
+    answered ``applied: true`` — the exact "saved and in effect are two
+    different fields" failure this surface exists to remove. Those columns are
+    what `routers/fleet.py`, `routers/agents.py` and `scripts/gen_cron_map.py`
+    read, so the appliance's own state table disagreed with the manifest until
+    the next restart.
+    """
+
+    def _model(self, model: str) -> str:
+        return f"model:\n  primary: {model}\n"
+
+    def test_a_model_only_edit_rewrites_the_schedule_row(self, scheduler, fleet, _no_db):
+        write_manifest(fleet)
+        scheduler.reconcile_schedules()
+        _no_db.reset_mock()
+
+        path = fleet / "demo-agent.yaml"
+        path.write_text(
+            path.read_text().replace(
+                "primary: openrouter/example/demo-model", "primary: openrouter/example/other"
+            )
+        )
+        result = scheduler.reconcile_schedules()
+
+        assert _no_db.call_count == 1, "the row was never rewritten"
+        assert _no_db.call_args.kwargs["model_primary"] == "openrouter/example/other"
+        assert result.refreshed == ["demo-agent"], result
+        assert result.added == [] and result.replaced == []
+
+    def test_a_delivery_only_edit_rewrites_the_schedule_row(self, scheduler, fleet, _no_db):
+        write_manifest(fleet)
+        scheduler.reconcile_schedules()
+        _no_db.reset_mock()
+
+        path = fleet / "demo-agent.yaml"
+        path.write_text(
+            path.read_text().replace(
+                "delivery:\n  mode: none",
+                'delivery:\n  mode: announce\n  channel: telegram\n  to: "1"',
+            )
+        )
+        scheduler.reconcile_schedules()
+
+        assert _no_db.call_count == 1
+        assert _no_db.call_args.kwargs["delivery_mode"] == "announce"
+
+    def test_a_genuinely_unchanged_manifest_still_reconciles_to_nothing(
+        self, scheduler, fleet, _no_db
+    ):
+        """The counter-case. Rewriting the row on every pass would make this
+        class vacuous and turn a five-minute watchdog into a write loop."""
+        write_manifest(fleet)
+        scheduler.reconcile_schedules()
+        _no_db.reset_mock()
+
+        result = scheduler.reconcile_schedules()
+
+        assert _no_db.call_count == 0
+        assert result.added == [] and result.replaced == []
+        assert result.refreshed == []
+        assert result.touched() == 0
+
+    def test_a_trigger_edit_is_replaced_not_merely_refreshed(self, scheduler, fleet, _no_db):
+        """The two lists stay distinct: one means the job moved, the other
+        means only the row did."""
+        write_manifest(fleet)
+        scheduler.reconcile_schedules()
+
+        write_manifest(fleet, cron="30 17 * * *")
+        result = scheduler.reconcile_schedules()
+
+        assert result.replaced == ["demo-agent"]
+        assert result.refreshed == []
+
+
+@pytest.mark.usefixtures("_no_db")
 class TestTheDirtyScanInterlock:
     """A scan that cannot see every manifest is authority for nothing."""
 

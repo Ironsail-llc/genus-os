@@ -95,9 +95,11 @@ def register(app: FastAPI, scheduler: Any = None) -> None:
         # The bridge's audited() is the record of the WRITE; this is the record
         # of the effect.
         logger.info(
-            "event=scheduler.reconcile added=%d replaced=%d pruned=%d blocked=%d clean=%s",
+            "event=scheduler.reconcile added=%d replaced=%d refreshed=%d "
+            "pruned=%d blocked=%d clean=%s",
             len(body["added"]),
             len(body["replaced"]),
+            len(body["refreshed"]),
             len(body["pruned"]),
             len(body["blocked"]),
             body["clean"],
