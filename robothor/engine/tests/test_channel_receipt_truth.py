@@ -28,7 +28,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from robothor.engine.channels import SendReceipt, register_channel, reset_channels
+from robothor.engine.channels import (
+    SendReceipt,
+    get_channel,
+    register_channel,
+    reset_channels,
+)
 from robothor.engine.channels.sender import SenderChannel
 from robothor.engine.delivery import deliver, register_platform_sender, set_telegram_sender
 from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode, RunStatus
@@ -266,3 +271,159 @@ class TestDeliveredAtMeansAPersonHasIt:
         assert await deliver(_config(delivery_channel="plain"), run) is True
         assert run.delivery_status == "delivered"
         assert run.delivered_at is not None
+
+
+class TestAChannelMayNotClaimReachItCannotProve:
+    """``receipt.status`` was used verbatim, which is a hole in the one place
+    the design calls "the single mapping from receipt to delivery_status".
+
+    A channel is third-party code — ``deliver()`` already wraps its ``send`` in
+    ``try/except`` for exactly that reason — and a channel that returned
+    ``status="delivered"`` with nothing acknowledged got ``delivered`` written
+    to ``agent_runs``. ``analytics.py`` counts that as reach and
+    ``scheduler._maybe_emit_heartbeat_status_ping`` suppresses the fallback
+    ping, so a send that arrived nowhere became invisible.
+    """
+
+    @staticmethod
+    def _liar(status: str, acknowledged: int = 0, expected: int = 3):
+        class _Liar:
+            name = "liar"
+            inbound_router = None
+
+            async def start(self) -> None: ...
+            async def stop(self) -> None: ...
+            async def health(self) -> dict[str, Any]:
+                return {}
+
+            async def send(self, target: str, text: str, **kw: Any) -> SendReceipt:
+                return SendReceipt(
+                    acknowledged=acknowledged, expected=expected, status=status, target=target
+                )
+
+        return _Liar()
+
+    @pytest.mark.asyncio
+    async def test_delivered_with_nothing_acknowledged_is_refused(self, dispatches):
+        register_channel("liar", self._liar("delivered"))
+        run = _run()
+
+        result = await deliver(_config(delivery_channel="liar"), run)
+
+        assert result is False
+        assert run.delivery_status != "delivered"
+        assert (run.delivery_status or "").startswith("failed:")
+        assert run.delivered_at is None
+        assert dispatches == []
+
+    @pytest.mark.asyncio
+    async def test_the_refusal_is_invisible_to_neither_analytics_nor_the_ping(self, dispatches):
+        """The two consumers that decide whether anyone is told."""
+        register_channel("liar", self._liar("delivered"))
+        run = _run()
+        await deliver(_config(delivery_channel="liar"), run)
+
+        status = run.delivery_status or ""
+        assert status != "delivered", "analytics.py:397 would count this as reach"
+        assert not status.startswith("delivered"), "scheduler.py:161 would suppress the ping"
+
+    @pytest.mark.asyncio
+    async def test_a_partial_override_is_still_honoured(self, dispatches):
+        """Only a claim of REACH is refused; a channel that reports its own
+        failure or truncation knows something the counts do not."""
+        register_channel("liar", self._liar("partial:1/3", acknowledged=1))
+        run = _run()
+        await deliver(_config(delivery_channel="liar"), run)
+        assert run.delivery_status == "partial:1/3"
+        assert run.delivered_at is None
+
+    @pytest.mark.asyncio
+    async def test_delivered_with_a_complete_receipt_is_believed(self, dispatches):
+        register_channel("liar", self._liar("delivered", acknowledged=3, expected=3))
+        run = _run()
+        assert await deliver(_config(delivery_channel="liar"), run) is True
+        assert run.delivery_status == "delivered"
+        assert run.delivered_at is not None
+
+
+class TestTheShimCountsTheChunksItSent:
+    """``SenderChannel`` hardcoded ``expected = 1``, so a shimmed sender that
+    landed 2 of 3 chunks reported ``acknowledged=2 >= expected=1`` → complete →
+    ``delivered``. Telegram reports ``partial:2/3`` for identical evidence, which
+    is precisely the "one surface ends up stricter than another about the same
+    evidence" the shared counter exists to prevent."""
+
+    @pytest.mark.asyncio
+    async def test_two_of_three_chunks_is_partial_not_delivered(self):
+        from robothor.engine.delivery import apply_receipt
+
+        body = "x" * 9000  # three chunks at a 4000-char limit
+
+        async def _sender(target: str, text: str, **_: Any) -> list[_FakeMessage]:
+            return [_FakeMessage(11), _FakeMessage(12)]
+
+        register_platform_sender("acme_chat", _sender, chunk_size=4000)
+        run = _run()
+        channel = get_channel("acme_chat")
+        assert channel is not None
+        receipt = await channel.send("room-1", body, config=_config(), run=run)
+        apply_receipt(run, "acme_chat", receipt)
+
+        assert receipt.expected == 3
+        assert receipt.acknowledged == 2
+        assert receipt.complete is False
+        assert run.delivery_status == "partial:2/3"
+        assert run.delivered_at is None
+
+    @pytest.mark.asyncio
+    async def test_all_three_chunks_is_delivered(self):
+        from robothor.engine.delivery import apply_receipt
+
+        body = "x" * 9000
+
+        async def _sender(target: str, text: str, **_: Any) -> list[_FakeMessage]:
+            return [_FakeMessage(11), _FakeMessage(12), _FakeMessage(13)]
+
+        register_platform_sender("acme_chat", _sender, chunk_size=4000)
+        run = _run()
+        channel = get_channel("acme_chat")
+        assert channel is not None
+        receipt = await channel.send("room-1", body, config=_config(), run=run)
+        apply_receipt(run, "acme_chat", receipt)
+
+        assert (receipt.acknowledged, receipt.expected) == (3, 3)
+        assert run.delivery_status == "delivered"
+
+    @pytest.mark.asyncio
+    async def test_a_sender_that_declares_no_chunk_size_still_sends_one_body(self):
+        async def _sender(target: str, text: str, **_: Any) -> list[_FakeMessage]:
+            return [_FakeMessage(7)]
+
+        register_platform_sender("acme_chat", _sender)
+        channel = get_channel("acme_chat")
+        assert channel is not None
+        receipt = await channel.send("room-1", "hello", config=_config(), run=_run())
+        assert (receipt.acknowledged, receipt.expected) == (1, 1)
+        assert receipt.complete is True
+
+
+class TestTheShimGuardsTheTargetLikeTelegramDoes:
+    """``failed:telegram_unexpanded_chat_id`` exists because an unexpanded
+    ``${VAR}`` shipped once. The shim reproduced none of that."""
+
+    @pytest.mark.asyncio
+    async def test_an_unexpanded_variable_is_refused_before_the_send(self):
+        calls: list[str] = []
+
+        async def _sender(target: str, text: str, **_: Any) -> list[_FakeMessage]:
+            calls.append(target)
+            return [_FakeMessage(1)]
+
+        register_platform_sender("acme_chat", _sender)
+        channel = get_channel("acme_chat")
+        assert channel is not None
+        receipt = await channel.send("${ACME_ROOM}", "hello", config=_config(), run=_run())
+
+        assert calls == [], "the send went out to a literal ${ACME_ROOM}"
+        assert receipt.status == "failed:acme_chat_unexpanded_target"
+        assert receipt.complete is False

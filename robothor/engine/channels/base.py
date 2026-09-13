@@ -123,8 +123,8 @@ def acknowledged_messages(sent: Any) -> tuple[int, list[str]]:
 
     Returns:
         ``(acknowledged_count, platform_message_ids)``. The id list can be
-        shorter than the count if the platform returned an object without a
-        ``message_id``; the count, not the ids, decides delivery.
+        shorter than the count if the platform returned an object whose id this
+        cannot find; the count, not the ids, decides delivery.
     """
     if not sent:
         return 0, []
@@ -139,10 +139,33 @@ def acknowledged_messages(sent: Any) -> tuple[int, list[str]]:
         if msg is None:
             continue
         count += 1
-        mid = getattr(msg, "message_id", None)
+        mid = _platform_id(msg)
         if mid is not None:
             message_ids.append(str(mid))
     return count, message_ids
+
+
+#: Where each platform keeps the id of a message it just sent, in the order we
+#: look. Telegram is ``message_id``; Slack is ``ts``, and a ``SlackResponse`` is
+#: a mapping rather than an object, so both access shapes are tried. Without
+#: this, a Slack send produced an EMPTY ``platform_ids`` and
+#: ``channel_bus.on_post_delivery`` wrote no ``channel_message_map`` rows — a
+#: briefing nobody could ever reply to.
+_PLATFORM_ID_FIELDS = ("message_id", "ts", "id")
+
+
+def _platform_id(msg: Any) -> Any | None:
+    """The platform's own id for one sent message, or None if it exposes none."""
+    for key in _PLATFORM_ID_FIELDS:
+        value = getattr(msg, key, None)
+        if value is not None:
+            return value
+    for source in (msg, getattr(msg, "data", None)):
+        if isinstance(source, dict):
+            for key in _PLATFORM_ID_FIELDS:
+                if source.get(key) is not None:
+                    return source[key]
+    return None
 
 
 def receipt_from(

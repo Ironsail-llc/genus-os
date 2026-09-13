@@ -42,6 +42,7 @@ __all__ = [
     "list_channels",
     "register_channel",
     "reset_channels",
+    "warm_channels",
 ]
 
 #: Channel names the platform owns. A plugin offering one of these is refused
@@ -127,6 +128,12 @@ def _ensure_builtins() -> None:
 
             register_channel("telegram", TelegramChannel(), builtin=True)
             register_channel("event_bus", EventBusChannel(), builtin=True)
+
+            # Sender shims too: a registration happens once, at bot start, so
+            # a registry that forgot them would never get them back.
+            from robothor.engine.delivery import rebuild_sender_channels
+
+            rebuild_sender_channels()
         except Exception as exc:  # pragma: no cover - an import cycle would show here
             logger.error("Built-in channels failed to register: %s", exc)
             return
@@ -202,8 +209,11 @@ def get_channel(name: str) -> Channel | None:
     ``agent_runs`` instead of being redirected somewhere that happens to work.
 
     A plugin channel is re-checked against the armed set on every lookup, so
-    taking a name out of ``ROBOTHOR_CHANNELS`` actually disarms it in a running
-    engine — an opt-in gate that only ever opens is not a gate.
+    taking a name out of ``ROBOTHOR_CHANNELS`` disarms it at the next settings
+    resolution — an opt-in gate that only ever opens is not a gate. "Next
+    resolution", not "immediately": ``get_settings()`` is process-cached, so an
+    env change reaches a running engine only after ``reset_settings()`` or the
+    ``robothor-engine`` restart ``ChannelSettings.restart_units`` declares.
     """
     clean = (name or "").strip()
     if not clean:
@@ -255,12 +265,35 @@ def list_channels() -> dict[str, Channel]:
     return out
 
 
+async def warm_channels() -> None:
+    """Resolve the built-ins and plugin discovery before anything delivers.
+
+    ``_plugin_channels()`` runs ``entry_points()`` and ``ep.load()`` — which
+    *imports third-party modules* — and ``get_channel`` is called from inside
+    ``deliver()``, an async function. Left to resolve lazily, the first
+    delivery to name a plugin channel would block the event loop on a package
+    import while a briefing was going out. Called once at daemon start, the
+    discovery happens off the delivery path and the per-generation cache serves
+    every later lookup.
+
+    Never raises: a broken distribution must not stop the engine booting, and
+    the failure is already reported by ``_plugin_channels``.
+    """
+    import asyncio
+
+    _ensure_builtins()
+    try:
+        await asyncio.to_thread(_plugin_channels)
+    except Exception as exc:  # noqa: BLE001 — boot must survive a bad plugin
+        logger.warning("Channel discovery failed while warming: %s", exc)
+
+
 def reset_channels() -> None:
     """Drop every registration and cached lookup. For tests and reloads.
 
     Does NOT clear ``delivery._platform_senders``: a sender registration is a
-    fact about the running process, and the shim rebuilds its channel on the
-    next ``register_platform_sender`` call.
+    fact about the running process, and ``_ensure_builtins`` rebuilds a channel
+    for each one on the next lookup.
     """
     global _builtins_registered, _plugin_cache
     with _builtins_lock:

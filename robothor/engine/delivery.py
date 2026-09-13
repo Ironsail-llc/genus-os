@@ -37,8 +37,14 @@ logger = logging.getLogger(__name__)
 # Platform sender registry — populated by daemon on startup.
 _platform_senders: dict[str, Any] = {}
 
+#: The chunk length each sender declared, so a channel rebuilt after a registry
+#: reset keeps the only thing that lets it tell a truncated send from a whole one.
+_platform_chunk_sizes: dict[str, int | None] = {}
 
-def register_platform_sender(platform: str, send_func: Callable[..., Any]) -> None:
+
+def register_platform_sender(
+    platform: str, send_func: Callable[..., Any], *, chunk_size: int | None = None
+) -> None:
     """Register a send function for a delivery platform.
 
     Also registers the sender as a named channel, so the existing callers become
@@ -51,18 +57,50 @@ def register_platform_sender(platform: str, send_func: Callable[..., Any]) -> No
     a side effect of construction, so registering a channel for it would replace
     the built-in wrapper with a bare sender and drop the guards (missing chat id,
     unexpanded ``${VAR}``) that wrapper exists for.
+
+    Args:
+        platform: the name a manifest's ``delivery.channel`` must match.
+        send_func: ``async (target, text) -> list`` — one entry per message it
+            landed, empty when none did. The return value is the only evidence
+            of delivery; see :mod:`robothor.engine.channels.base`.
+        chunk_size: the length ``send_func`` splits a body at, when it splits.
+            A chunking sender that omits this cannot have truncation detected:
+            the shim expects one acknowledgement for the one body it handed
+            over, so 2 of 3 landed chunks would read as delivered. Split with
+            ``chunking.split_message`` so the two counts agree.
     """
     _platform_senders[platform] = send_func
+    _platform_chunk_sizes[platform] = chunk_size
     logger.info("Registered platform sender: %s", platform)
+    _register_sender_channel(platform, send_func, chunk_size)
 
+
+def _register_sender_channel(
+    platform: str, send_func: Callable[..., Any] | None, chunk_size: int | None
+) -> None:
+    """Give ``platform`` a channel, unless the platform owns one already.
+
+    An empty name was never rejected by ``register_platform_sender`` and must
+    not start being: it is called from a bot constructor, where a raise would
+    take the channel down. It simply gets no channel.
+    """
     from robothor.engine.channels import BUILTIN_CHANNELS, register_channel
     from robothor.engine.channels.sender import SenderChannel
 
-    # An empty name was never rejected here and must not start being: this
-    # function is called from a bot constructor, and a raise would take the
-    # channel down. It simply gets no channel.
     if platform and platform not in BUILTIN_CHANNELS:
-        register_channel(platform, SenderChannel(platform, send_func))
+        register_channel(platform, SenderChannel(platform, send_func, chunk_size=chunk_size))
+
+
+def rebuild_sender_channels() -> None:
+    """Re-register a channel for every sender the process has been given.
+
+    ``reset_channels()`` clears the registry, but a sender registration is a
+    fact about the running process — and the registrations happen exactly once,
+    at bot start. Without this, a reset made ``slack`` unreachable until the next
+    ``SlackBot.start()``, which for a running engine is never.
+    """
+    for platform, send_func in list(_platform_senders.items()):
+        _register_sender_channel(platform, send_func, _platform_chunk_sizes.get(platform))
 
 
 def get_platform_sender(platform: str) -> Any | None:
@@ -608,8 +646,19 @@ def apply_receipt(run: AgentRun, channel: str, receipt: SendReceipt) -> bool:
     - nothing acknowledged: ``failed:<channel>_send``
 
     A channel that knows something the counts do not — a misconfiguration
-    caught before the send, an exception — supplies ``receipt.status`` and that
-    value is used verbatim.
+    caught before the send, an exception, a publish the bus refused — supplies
+    ``receipt.status`` and that value is used.
+
+    **But an override may not assert reach the receipt does not support.** A
+    channel is third-party code; ``deliver()`` already wraps ``channel.send`` in
+    ``try/except`` for that reason, and a channel returning
+    ``SendReceipt(acknowledged=0, expected=3, status="delivered")`` would
+    otherwise write ``delivered`` straight into ``agent_runs`` — which
+    ``analytics.py`` counts as reach and which suppresses
+    ``scheduler._maybe_emit_heartbeat_status_ping``, making a send that arrived
+    nowhere invisible. A status claiming delivery on an incomplete receipt is
+    refused and recorded ``failed:<channel>_unproven`` instead. The override is
+    for reporting failure in more detail, never for asserting success.
 
     ``delivered_at`` is the column that means a person has this, so it is set
     only on a complete send AND only when the recorded status actually claims
@@ -621,17 +670,31 @@ def apply_receipt(run: AgentRun, channel: str, receipt: SendReceipt) -> bool:
         True only if the channel acknowledged every expected chunk.
     """
     run.delivery_channel = channel
-    if receipt.status:
-        run.delivery_status = receipt.status
+    status = receipt.status
+    if status and status.startswith("delivered") and not receipt.complete:
+        logger.error(
+            "Channel %s reported status %r but acknowledged %d of %d chunk(s) — "
+            "refusing to record reach it did not prove",
+            channel,
+            status,
+            receipt.acknowledged,
+            receipt.expected,
+        )
+        status = f"failed:{channel}_unproven"
+
+    if status:
+        run.delivery_status = status
     elif receipt.complete:
         run.delivery_status = "delivered"
     elif receipt.acknowledged:
         run.delivery_status = f"partial:{receipt.acknowledged}/{receipt.expected}"
     else:
         run.delivery_status = f"failed:{channel}_send"
-    reached_a_person = receipt.complete and run.delivery_status == "delivered"
-    run.delivered_at = datetime.now(UTC) if reached_a_person else None
-    return receipt.complete
+    recorded = run.delivery_status or ""
+    run.delivered_at = datetime.now(UTC) if recorded == "delivered" else None
+    # The returned bool and the recorded row may never disagree: a caller that
+    # sees True while `agent_runs` says `failed:` is the same lie one layer out.
+    return not recorded.startswith(("failed:", "partial:"))
 
 
 async def _finish_delivery(
@@ -670,9 +733,17 @@ async def _deliver_telegram(config: AgentConfig, text: str, run: AgentRun) -> bo
     put as the thin delegate. ``TelegramChannel.send`` checks whether this
     attribute is still the original function and honours a replacement rather
     than sending anyway — a control whose caller has been replaced is inert, and
-    this codebase has shipped that twice. A replacement may wrap and call the
-    original; it must NOT route back through ``get_channel("telegram").send``,
-    which would see itself installed and call it again, forever.
+    this codebase has shipped that twice.
+
+    **The contract for a replacement:** stamp ``run.delivery_status``, or the
+    delivery is recorded ``failed:telegram_unproven``. A returned ``True`` is
+    not evidence — a bare ``AsyncMock()`` returns a truthy ``MagicMock`` — and
+    the status is the same column ``deliver()`` would have written. Calling the
+    original this replaced is the simplest way to satisfy it. What a
+    replacement must NOT do is route back through
+    ``get_channel("telegram").send``: that would see itself installed and call
+    itself again, which ``TelegramChannel.send`` now refuses with a named error
+    rather than letting it hang.
 
     Args:
         config: The agent config supplying the chat id and display name.

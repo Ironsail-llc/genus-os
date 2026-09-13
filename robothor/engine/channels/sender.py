@@ -22,6 +22,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.channels.base import SendReceipt, receipt_from
+from robothor.engine.chunking import split_message
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Callable, Sequence
@@ -33,18 +34,52 @@ logger = logging.getLogger(__name__)
 __all__ = ["SenderChannel"]
 
 
+def _chunk_count(body: str, chunk_size: int | None) -> int:
+    """How many messages ``body`` becomes on a surface that splits at ``chunk_size``.
+
+    Uses ``chunking.split_message`` — the same function the sender must split
+    with. A ceiling of ``len(body) / chunk_size`` would be wrong in the
+    dangerous direction: the splitter prefers newline boundaries, so it can
+    produce MORE chunks than the arithmetic predicts, and an under-counted
+    ``expected`` makes a truncated send read as complete.
+
+    ``None`` means the sender declared no limit, so the shim treats the body as
+    one message: it can only ever prove what it was told.
+    """
+    if not chunk_size or chunk_size <= 0:
+        return 1
+    return len(split_message(body, chunk_size))
+
+
 class SenderChannel:
     """Adapts a ``register_platform_sender`` function to the channel protocol."""
 
     inbound_router: Any | None = None
 
-    def __init__(self, name: str, send_func: Callable[..., Any] | None = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        send_func: Callable[..., Any] | None = None,
+        *,
+        chunk_size: int | None = None,
+    ) -> None:
         self.name = name
         #: Kept only as a fallback. The registry dict is consulted first on
         #: every send so a re-registration — which is how the Telegram bot
         #: publishes its bound method at construction — is honoured rather than
         #: shadowed by whatever was current when this object was built.
         self._send_func = send_func
+        #: The length the sender splits a body at, when it splits at all.
+        #:
+        #: This is how a chunking sender opts into truncation detection, and it
+        #: is not optional in practice for one that chunks. Without it the shim
+        #: hands over one body, expects one acknowledgement, and a sender that
+        #: split into three and landed two reports ``acknowledged=2 >=
+        #: expected=1`` — ``delivered``, for a briefing the operator received
+        #: two thirds of. Telegram reports ``partial:2/3`` for identical
+        #: evidence, and one surface being laxer than another about the same
+        #: evidence is exactly what the shared counter exists to prevent.
+        self.chunk_size = chunk_size
 
     async def start(self) -> None:
         return None
@@ -80,6 +115,19 @@ class SenderChannel:
             return SendReceipt(
                 acknowledged=0, expected=1, status=f"failed:{self.name}_no_target", target=target
             )
+        if "${" in target:
+            # `failed:telegram_unexpanded_chat_id` exists because a manifest
+            # shipped with an unexpanded variable once. Every surface gets the
+            # guard, or the next one posts to a literal `${SLACK_CHANNEL}`.
+            logger.error(
+                "Unexpanded env var in delivery target for channel %s: %s", self.name, target
+            )
+            return SendReceipt(
+                acknowledged=0,
+                expected=1,
+                status=f"failed:{self.name}_unexpanded_target",
+                target=target,
+            )
 
         # The agent's display name, plain. The Telegram wrapper's ``*name*``
         # header is Telegram markdown and would render as literal asterisks on
@@ -87,11 +135,14 @@ class SenderChannel:
         # non-Telegram target.
         body = f"{config.name}\n\n{text}" if config is not None and config.name else text
 
-        # One body handed over, so one acknowledgement is the minimum proof.
-        # Deliberately NOT the Telegram chunk count: a surface with a different
-        # length limit chunks differently, and borrowing Telegram's 4096 would
-        # record `partial:1/3` for a send that completed in one message.
-        expected = 1
+        # How many acknowledgements this body needs to count as complete. A
+        # sender that declared its chunk size is measured against its own
+        # splitting, so 2 of 3 reads `partial:2/3` exactly as Telegram's does.
+        # One that declared none is handed a single body and owes a single
+        # acknowledgement — deliberately NOT Telegram's 4096, which would record
+        # `partial:1/3` for a send that completed in one message on a surface
+        # with no such limit.
+        expected = _chunk_count(body, self.chunk_size)
 
         try:
             sent = await sender(target, body)

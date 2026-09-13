@@ -28,6 +28,7 @@ assertion stays true.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +43,14 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 logger = logging.getLogger(__name__)
 
 __all__ = ["TelegramChannel"]
+
+#: True while this task is inside ``TelegramChannel.send``. A ``ContextVar``
+#: rather than an instance attribute because one channel object serves every
+#: agent: two concurrent deliveries must not see each other's send as a
+#: recursion, and a task-local flag is the only thing that gets that right.
+_sending: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "robothor_telegram_channel_sending", default=False
+)
 
 
 class TelegramChannel:
@@ -88,6 +97,31 @@ class TelegramChannel:
                 acknowledged=0, expected=1, status="failed:telegram_no_config", target=target
             )
 
+        if _sending.get():
+            # A replacement for `_deliver_telegram` that calls back into this
+            # method would see itself installed and call itself again, forever.
+            # Without this the symptom is a hung delivery or a blown stack, and
+            # neither names the mistake.
+            raise RuntimeError(
+                "TelegramChannel.send was re-entered: a replacement for "
+                "delivery._deliver_telegram routes back through "
+                'get_channel("telegram").send. Call the original it replaced '
+                "instead."
+            )
+
+        token = _sending.set(True)
+        try:
+            return await self._dispatch(target, text, config, run)
+        finally:
+            _sending.reset(token)
+
+    async def _dispatch(
+        self,
+        target: str,
+        text: str,
+        config: AgentConfig,
+        run: AgentRun | None,
+    ) -> SendReceipt:
         from robothor.engine import delivery
 
         if delivery._deliver_telegram is delivery._ORIGINAL_DELIVER_TELEGRAM:
@@ -116,10 +150,20 @@ class TelegramChannel:
         What *is* evidence is the status the replacement wrote on the run: it is
         the same column ``deliver()`` would write, and a replacement that
         delegates to the real implementation gets one for free. A replacement
-        that writes nothing is recorded ``failed:telegram_unproven`` — before
-        this seam existed, such a patch left the column NULL, so inventing a
-        ``delivered`` here would be strictly worse than the behaviour it
-        replaced.
+        that writes nothing is recorded ``failed:telegram_unproven``.
+
+        That last one is a deliberate behaviour change, and the only one in this
+        seam. Before the channel registry such a patch left the column NULL and
+        ``_persist_delivery_status`` early-returns on a falsy status, so
+        *nothing was recorded at all*; the row now carries a ``failed:``, which
+        fires the heartbeat status ping and does not count toward
+        ``analytics.py``'s delivered total. A recorded failure beats an
+        unrecorded delivery, and inventing a ``delivered`` would be worse than
+        either. Production's ``TelegramBot.send_message`` honours the list
+        contract and the real delegate stamps the run, so this only reaches a
+        replacement that does neither — see the contract stated in
+        ``delivery._deliver_telegram``'s docstring and the status table in
+        ``docs/SYSTEM_ARCHITECTURE.md``.
 
         ``post_delivery`` is False throughout: a replacement that reached the
         real send has already fired POST_DELIVERY from inside, and firing it

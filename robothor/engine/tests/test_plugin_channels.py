@@ -233,3 +233,106 @@ class TestTheEnabledSetIsDeclaredConfiguration:
         monkeypatch.setenv("ROBOTHOR_CHANNELS", "acme")
         reset_settings()
         assert get_settings().channels.enabled == "acme"
+
+
+class TestTheGenerationGuardIsActuallyExercised:
+    """The first version of the reload test called ``reset_channels()`` in its
+    fixture, which clears the built-channel cache the generation key exists to
+    invalidate — so removing ``and built[0] == current`` from
+    ``registry.get_channel`` left the whole channel suite green. It was the one
+    mutation of ten that survived. These tests never reset between reloads."""
+
+    @pytest.fixture
+    def install_no_reset(self, monkeypatch):
+        def _install(channels: dict):
+            from robothor.plugins import loader
+
+            monkeypatch.setattr(loader, "_discover", lambda: [_ChannelEP(channels)])
+            reload_plugins()
+
+        yield _install
+        from robothor.plugins import loader
+
+        monkeypatch.setattr(loader, "_discover", list)
+        reload_plugins()
+        reset_channels()
+
+    def test_a_reload_replaces_the_served_channel_without_a_registry_reset(
+        self, install_no_reset, monkeypatch
+    ):
+        from robothor.settings import reset_settings
+
+        monkeypatch.setenv("ROBOTHOR_CHANNELS", "acme")
+        reset_settings()
+        reset_channels()
+
+        first = _PluginChannel()
+        install_no_reset({"acme": first})
+        assert get_channel("acme") is first
+
+        second = _PluginChannel()
+        install_no_reset({"acme": second})
+        # No reset_channels() here: the generation key is the ONLY thing that
+        # can invalidate the cached object.
+        assert get_channel("acme") is second, (
+            "the cached channel outlived reload_plugins() — the generation key is inert"
+        )
+
+    def test_a_repeat_lookup_within_one_generation_is_the_same_object(
+        self, install_no_reset, monkeypatch
+    ):
+        from robothor.settings import reset_settings
+
+        monkeypatch.setenv("ROBOTHOR_CHANNELS", "acme")
+        reset_settings()
+        reset_channels()
+
+        install_no_reset({"acme": _PluginChannel()})
+        assert get_channel("acme") is get_channel("acme")
+
+
+class TestDiscoveryIsWarmedOffTheDeliveryPath:
+    """``_plugin_channels()`` runs ``entry_points()`` and ``ep.load()`` — which
+    imports third-party modules — and it sat inside an ``await`` in
+    ``deliver()``. Blocking the loop on a plugin import while a briefing is
+    going out is the stall the engine's async rule exists to prevent."""
+
+    @pytest.mark.asyncio
+    async def test_warm_channels_resolves_discovery_off_the_lookup_path(self, install, monkeypatch):
+        from robothor.engine.channels import warm_channels
+        from robothor.settings import reset_settings
+
+        install({"acme": _PluginChannel()})
+        monkeypatch.setenv("ROBOTHOR_CHANNELS", "acme")
+        reset_settings()
+        reset_channels()
+
+        await warm_channels()
+
+        # Discovery is cached now: a lookup must not re-enter the loader.
+        from robothor.plugins import loader
+
+        def _boom():
+            raise AssertionError("discovery ran on the delivery path")
+
+        monkeypatch.setattr(loader, "_discover", _boom)
+        assert get_channel("acme") is not None
+
+    @pytest.mark.asyncio
+    async def test_warming_never_raises(self, monkeypatch):
+        from robothor.engine.channels import warm_channels
+        from robothor.plugins import loader
+
+        def _boom():
+            raise RuntimeError("a broken distribution")
+
+        monkeypatch.setattr(loader, "_discover", _boom)
+        reset_channels()
+        await warm_channels()  # a bad plugin must not stop boot
+
+    def test_the_daemon_warms_the_registry(self):
+        import inspect
+
+        from robothor.engine import daemon
+
+        assert "warm_channels" in inspect.getsource(daemon)

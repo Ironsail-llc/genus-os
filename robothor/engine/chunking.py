@@ -49,3 +49,11 @@ def split_telegram_message(text: str, max_length: int = TELEGRAM_MAX_MESSAGE_LEN
         remaining = remaining[split_pos:].lstrip("\n")
 
     return chunks
+
+
+#: The same algorithm under a surface-neutral name. Every channel that splits a
+#: body must split it with THIS, and its shim must be told the limit
+#: (``chunk_size``), or the two disagree about how many messages a body becomes
+#: and a truncated send reads as a complete one — the drift this module was
+#: extracted to prevent, one surface further out.
+split_message = split_telegram_message

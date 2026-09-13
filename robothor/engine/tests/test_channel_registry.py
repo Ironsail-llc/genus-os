@@ -243,3 +243,101 @@ class TestTheSenderShim:
 
         register_platform_sender("telegram", _sender)
         assert isinstance(get_channel("telegram"), TelegramChannel)
+
+
+class TestTheRecursionHazardIsEnforced:
+    """``_deliver_telegram``'s docstring warns that a replacement must not route
+    back through ``get_channel("telegram").send`` — ``send`` would see itself
+    replaced, call the replacement, and go round forever. A documented hazard
+    whose only symptom is a hung delivery is not a guard."""
+
+    @pytest.mark.asyncio
+    async def test_a_replacement_that_routes_back_through_send_is_refused(self, monkeypatch):
+        from robothor.engine.channels.telegram import TelegramChannel
+
+        async def _loops_forever(config, text, run):  # noqa: ANN001, ANN202
+            channel = get_channel("telegram")
+            assert channel is not None
+            await channel.send(config.delivery_to, text, config=config, run=run)
+            return True
+
+        monkeypatch.setattr("robothor.engine.delivery._deliver_telegram", _loops_forever)
+
+        async def _sender(chat_id: str, text: str, **_: Any) -> list[_FakeMessage]:
+            return [_FakeMessage(1)]
+
+        register_platform_sender("telegram", _sender)
+        run = _run()
+
+        with pytest.raises(RuntimeError, match="routes back through") as excinfo:
+            await TelegramChannel().send("42", "hello", config=_config(), run=run)
+
+        # RecursionError IS a RuntimeError and its message contains "recursion",
+        # so a loose assertion here passes on the unguarded code. The point of
+        # the guard is a diagnosable error instead of a blown stack.
+        assert not isinstance(excinfo.value, RecursionError), (
+            "the hazard is still only caught by the interpreter running out of stack"
+        )
+
+    @pytest.mark.asyncio
+    async def test_two_ordinary_sends_in_a_row_are_not_mistaken_for_recursion(self):
+        from robothor.engine.channels.telegram import TelegramChannel
+
+        async def _sender(chat_id: str, text: str, **_: Any) -> list[_FakeMessage]:
+            return [_FakeMessage(1)]
+
+        register_platform_sender("telegram", _sender)
+        channel = TelegramChannel()
+        assert (await channel.send("42", "one", config=_config(), run=_run())).complete
+        assert (await channel.send("42", "two", config=_config(), run=_run())).complete
+
+    @pytest.mark.asyncio
+    async def test_concurrent_sends_do_not_see_each_other(self):
+        """The flag must be per-task, or two agents delivering at once would
+        report a recursion that never happened."""
+        import asyncio
+
+        from robothor.engine.channels.telegram import TelegramChannel
+
+        async def _slow_sender(chat_id: str, text: str, **_: Any) -> list[_FakeMessage]:
+            await asyncio.sleep(0)
+            return [_FakeMessage(1)]
+
+        register_platform_sender("telegram", _slow_sender)
+        channel = TelegramChannel()
+        receipts = await asyncio.gather(
+            *(channel.send("42", f"body {i}", config=_config(), run=_run()) for i in range(5))
+        )
+        assert all(r.complete for r in receipts)
+
+
+class TestResetRebuildsTheSenderShims:
+    """``reset_channels()`` cleared the registry but not ``_platform_senders``,
+    and ``register_platform_sender("slack", ...)`` is called once, at
+    ``SlackBot.start()``. So a reset made the ``slack`` channel unreachable until
+    the next bot start — which for a running engine is never."""
+
+    @pytest.mark.asyncio
+    async def test_a_registered_sender_survives_a_reset(self):
+        async def _sender(target: str, text: str, **_: Any) -> list[_FakeMessage]:
+            return [_FakeMessage(9)]
+
+        register_platform_sender("acme_chat", _sender)
+        assert get_channel("acme_chat") is not None
+
+        reset_channels()
+
+        channel = get_channel("acme_chat")
+        assert channel is not None, "the shim vanished and nothing will re-register it"
+        receipt = await channel.send("room-1", "hello", config=_config(), run=_run())
+        assert receipt.complete is True
+
+    def test_a_rebuilt_shim_keeps_its_declared_chunk_size(self):
+        async def _sender(target: str, text: str, **_: Any) -> list[_FakeMessage]:
+            return [_FakeMessage(9)]
+
+        register_platform_sender("acme_chat", _sender, chunk_size=4000)
+        reset_channels()
+        channel = get_channel("acme_chat")
+        assert channel is not None
+        assert getattr(channel, "chunk_size", None) == 4000

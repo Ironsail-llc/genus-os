@@ -874,25 +874,50 @@ and acknowledge only the rows whose text survived into the delivered preamble
 
 #### Delivery status vocabulary
 
-`agent_runs.delivery_status` is written by `robothor/engine/delivery.py`.
-Announced output is routed by name through `robothor/engine/channels/`
-(`AgentConfig.delivery_channel`, empty meaning `telegram`), and the status is
-derived from the `SendReceipt` the channel returned — never from the fact
-that a send was attempted. `TelegramBot.send_message` swallows per-chunk
-exceptions and returns one entry per chunk it managed to send (empty if all
-of them failed), so the length of that list is the only evidence of delivery.
+`agent_runs.delivery_status` is written by `robothor/engine/delivery.py`
+(`apply_receipt`), from the `SendReceipt` the channel returned — never from the
+fact that a send was attempted. Announced output is routed by name through
+`robothor/engine/channels/` (`AgentConfig.delivery_channel`, empty meaning
+`telegram`), so the *send* happens in a channel wrapper while the *status* is
+still decided in one place. `TelegramBot.send_message` swallows per-chunk
+exceptions and returns one entry per chunk it managed to send (empty if all of
+them failed), so the length of that list is the only evidence of delivery.
+
+A channel may supply its own status when it knows something the counts do not —
+a misconfiguration caught before the send, an exception, a publish the bus
+refused. It may **not** use that to assert reach: a status claiming delivery on
+an incomplete receipt is refused and recorded `failed:<channel>_unproven`, and
+`delivered_at` is set only when the recorded status is `delivered`.
+
+`<channel>` below is the agent's `delivery.channel` — `telegram` unless it names
+another.
 
 | Status | Meaning |
 |--------|---------|
 | `delivered` | Every chunk was acknowledged. Only this value sets `delivered_at`. |
 | `partial:<sent>/<expected>` | Some chunks landed, the rest were lost — a truncated briefing, not a delivered one. |
-| `published` | Event-bus mode; the bus returned a stream message id. |
-| `failed:telegram_send` | The sender returned nothing: the operator saw none of it. |
-| `failed:telegram_exception: <err>` | The send raised. |
-| `failed:telegram_no_sender` / `failed:telegram_no_chat_id` / `failed:telegram_unexpanded_chat_id` | Misconfiguration caught before the send. |
-| `failed:event_bus_publish` / `failed:event_bus_disabled` / `failed:event_bus_exception: <err>` | The publish did not happen. |
+| `published` | Event-bus mode, or `delivery.channel: event_bus`; the bus returned a stream message id. Never sets `delivered_at` — a stream write is not a person reading something. |
+| `failed:<channel>_send` | The sender returned nothing: the recipient saw none of it. `failed:telegram_send` is the common case. |
+| `failed:<channel>_exception: <err>` | The send raised. |
+| `failed:<channel>_unproven` | Something claimed success without evidence: a sender that returned a value which is not a sequence of messages, or a channel whose status claimed delivery its own receipt did not support. |
+| `failed:telegram_unproven` | A replacement for `delivery._deliver_telegram` returned without stamping `run.delivery_status`. See below. |
+| `failed:<channel>_no_sender` / `failed:<channel>_no_target` / `failed:<channel>_unexpanded_target` | Misconfiguration caught before the send, on a channel built from a registered platform sender. |
+| `failed:telegram_no_sender` / `failed:telegram_no_chat_id` / `failed:telegram_unexpanded_chat_id` | The same three for the built-in Telegram wrapper, under its historical names. |
+| `failed:telegram_no_config` / `failed:telegram_no_run` | A channel `send()` was called without the config or run it needs. Programming error, recorded rather than raised. |
+| `failed:event_bus_publish` / `failed:event_bus_disabled` / `failed:event_bus_exception: <err>` / `failed:event_bus_no_run` | The publish did not happen. |
 | `failed:no_channel:<name>` | The agent's `delivery.channel` names a channel nothing is registered under. Delivery is refused rather than redirected to another surface. |
 | `no_output`, `silent`, `suppressed_trivial`, `suppressed_sub_agent`, `blocked_by_hook:<reason>` | Nothing was meant to be sent. |
+
+**`failed:telegram_unproven` is a deliberate behaviour change.** `_deliver_telegram`
+is a seam instances monkeypatch to intercept outbound text. Before the channel
+registry, a replacement that returned `True` and wrote nothing left
+`delivery_status` NULL, and `_persist_delivery_status` early-returns on a falsy
+status — so nothing was recorded at all. It is now recorded as a failure,
+because a bare return value is not evidence that anything reached anybody, and
+an unrecorded delivery is worse than a recorded failure. Production's
+`TelegramBot.send_message` returns its landed messages, so this only bites a
+replacement that does not: **a replacement must stamp `run.delivery_status`**
+(the simplest way is to call the original it replaced).
 
 Consumers must treat *only* `delivered` as reach: `analytics.py` counts it for
 the delivery success rate, and `scheduler._maybe_emit_heartbeat_status_ping`

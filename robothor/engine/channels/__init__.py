@@ -31,6 +31,7 @@ from robothor.engine.channels.registry import (
     list_channels,
     register_channel,
     reset_channels,
+    warm_channels,
 )
 
 __all__ = [
@@ -45,4 +46,5 @@ __all__ = [
     "receipt_from",
     "register_channel",
     "reset_channels",
+    "warm_channels",
 ]
