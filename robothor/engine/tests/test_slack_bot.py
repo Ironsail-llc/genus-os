@@ -7,7 +7,6 @@ tests cover construction + the no-token / no-SDK no-op paths and the daemon wiri
 
 from __future__ import annotations
 
-import inspect
 from types import SimpleNamespace
 
 from robothor.engine.slack import SlackBot
@@ -32,12 +31,18 @@ async def test_start_noops_without_tokens(monkeypatch):
 
 
 def test_daemon_wires_slack_env_gated():
-    from robothor.engine import daemon
+    """AST, not a substring. The old form searched the WHOLE daemon module for
+    three strings, so a comment naming the env var, an unrelated ``SlackBot(...)``
+    and a task called ``slack`` anywhere in 1,300 lines satisfied it."""
+    from robothor.engine.tests.astcheck import called_names, function_def, string_constants
 
-    src = inspect.getsource(daemon)
-    assert "ROBOTHOR_SLACK_BOT_TOKEN" in src
-    assert "SlackBot(runner, config)" in src
-    assert 'name="slack"' in src
+    branch = function_def("robothor.engine.daemon", "_start_channels")
+    assert "SlackBot" in called_names(branch), "the daemon no longer constructs the Slack bot"
+    assert "create_task" in called_names(branch), "the bot is no longer started as a task"
+
+    literals = string_constants(branch)
+    assert "ROBOTHOR_SLACK_BOT_TOKEN" in literals, "the Slack bot start is no longer env-gated"
+    assert "slack" in literals, "the Slack task lost the name the supervisor reports it by"
 
 
 class TestSlackAuthorization:

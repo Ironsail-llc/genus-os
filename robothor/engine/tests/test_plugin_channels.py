@@ -331,8 +331,32 @@ class TestDiscoveryIsWarmedOffTheDeliveryPath:
         await warm_channels()  # a bad plugin must not stop boot
 
     def test_the_daemon_warms_the_registry(self):
-        import inspect
+        """AST, not a substring: ``"warm_channels" in getsource(daemon)`` passed
+        on the docstring that explains why it is called."""
+        from robothor.engine.tests.astcheck import called_names, function_def
 
-        from robothor.engine import daemon
+        branch = function_def("robothor.engine.daemon", "_start_channels")
+        assert "warm_channels" in called_names(branch), (
+            "the daemon no longer warms the channel registry, so plugin discovery "
+            "runs inside the first delivery that names a plugin channel"
+        )
 
-        assert "warm_channels" in inspect.getsource(daemon)
+    @pytest.mark.asyncio
+    async def test_warming_cannot_outlast_its_budget(self, monkeypatch):
+        """``warm_channels`` sits between "all subsystems started" and
+        ``READY=1``. A plugin that blocks at import time held the daemon there
+        forever, and systemd killed the unit for a timeout naming the engine."""
+        import asyncio
+        import time
+
+        from robothor.engine.channels import registry, warm_channels
+
+        monkeypatch.setattr(registry, "WARM_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(registry, "_plugin_channels", lambda: time.sleep(5))
+        reset_channels()
+
+        started = asyncio.get_running_loop().time()
+        await warm_channels()
+        assert asyncio.get_running_loop().time() - started < 2.0, (
+            "warm_channels waited out a hanging plugin import"
+        )

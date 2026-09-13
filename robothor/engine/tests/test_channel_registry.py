@@ -124,7 +124,7 @@ class TestTelegramWrapper:
         register_platform_sender("telegram", _sender)
         run = _run()
         receipt = await TelegramChannel().send("42", "hello", config=_config(), run=run)
-        apply_receipt(run, "telegram", receipt)
+        assert apply_receipt(run, "telegram", receipt) is False
 
         assert receipt.acknowledged == 0
         assert receipt.complete is False
@@ -144,7 +144,7 @@ class TestTelegramWrapper:
         register_platform_sender("telegram", _sender)
         run = _run()
         receipt = await TelegramChannel().send("42", body, config=config, run=run)
-        apply_receipt(run, "telegram", receipt)
+        assert apply_receipt(run, "telegram", receipt) is False
 
         assert receipt.complete is False
         assert run.delivery_status == "partial:1/3"
@@ -169,7 +169,14 @@ class TestTelegramWrapper:
 
 class TestTheRegistry:
     def test_builtin_names_are_registered(self):
-        assert frozenset({"telegram", "event_bus"}) == BUILTIN_CHANNELS
+        """Enumerated, not derived, so adding one is a visible decision.
+
+        ``slack`` joined the set when the outbound channel stopped depending on
+        the inbound Socket Mode bot having started: a non-built-in name gets a
+        ``SenderChannel`` wrapped around whatever ``SlackBot.start()``
+        registered, which would put the shim back in front of the real channel.
+        """
+        assert frozenset({"telegram", "event_bus", "slack"}) == BUILTIN_CHANNELS
         for name in BUILTIN_CHANNELS:
             assert get_channel(name) is not None, f"built-in channel {name!r} is missing"
 
@@ -222,15 +229,21 @@ class TestTheSenderShim:
 
     @pytest.mark.asyncio
     async def test_a_shimmed_sender_returning_none_reports_zero(self):
-        """What ``slack.py`` registers today. Truthfully failed beats a lie."""
+        """A sender offering no evidence. Truthfully failed beats a lie.
 
-        async def _slack_send(target: str, text: str, **_: Any) -> None:
+        Written against ``slack`` when ``slack_send`` returned ``None``; the
+        name moved to a non-built-in because ``slack`` now has a real channel
+        of its own and the shim no longer wraps it. The property under test is
+        the shim's, not Slack's.
+        """
+
+        async def _returns_nothing(target: str, text: str, **_: Any) -> None:
             return None
 
-        register_platform_sender("slack", _slack_send)
-        channel = get_channel("slack")
+        register_platform_sender("acme_chat", _returns_nothing)
+        channel = get_channel("acme_chat")
         assert channel is not None
-        receipt = await channel.send("C1", "hello", config=_config(), run=_run())
+        receipt = await channel.send("room-1", "hello", config=_config(), run=_run())
         assert receipt.acknowledged == 0
         assert receipt.complete is False
 

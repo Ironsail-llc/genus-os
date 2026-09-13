@@ -904,6 +904,7 @@ another.
 | `failed:<channel>_no_sender` / `failed:<channel>_no_target` / `failed:<channel>_unexpanded_target` | Misconfiguration caught before the send, on a channel built from a registered platform sender. |
 | `failed:telegram_no_sender` / `failed:telegram_no_chat_id` / `failed:telegram_unexpanded_chat_id` | The same three for the built-in Telegram wrapper, under its historical names. |
 | `failed:telegram_no_config` / `failed:telegram_no_run` | A channel `send()` was called without the config or run it needs. Programming error, recorded rather than raised. |
+| `failed:slack_not_configured` / `failed:slack_unresolved_target` / `failed:slack_client: <err>` | The Slack channel is registered on every instance, configured or not. No bot token in the environment or the vault; a target that is not a Slack id (a `#name` cannot be posted to); or the `slack_sdk` transport could not be built -- most often the `channels` extra is not installed. See [the Slack channel page](channels/slack.md). |
 | `failed:event_bus_publish` / `failed:event_bus_disabled` / `failed:event_bus_exception: <err>` / `failed:event_bus_no_run` | The publish did not happen. |
 | `failed:no_channel:<name>` | The agent's `delivery.channel` names a channel nothing is registered under. Delivery is refused rather than redirected to another surface. |
 | `no_output`, `silent`, `suppressed_trivial`, `suppressed_sub_agent`, `blocked_by_hook:<reason>` | Nothing was meant to be sent. |

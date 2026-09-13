@@ -67,7 +67,10 @@ def register_platform_sender(
             A chunking sender that omits this cannot have truncation detected:
             the shim expects one acknowledgement for the one body it handed
             over, so 2 of 3 landed chunks would read as delivered. Split with
-            ``chunking.split_message`` so the two counts agree.
+            ``chunking.split_message`` so the two counts agree. Omitting it is
+            no longer quietly tolerated: a sender that returns more than one
+            message for one body is recorded ``failed:<name>_unproven``, because
+            that evidence cannot tell a complete send from a truncated one.
     """
     _platform_senders[platform] = send_func
     _platform_chunk_sizes[platform] = chunk_size

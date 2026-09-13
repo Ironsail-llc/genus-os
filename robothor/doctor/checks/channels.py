@@ -107,23 +107,144 @@ async def _telegram(ctx: DoctorContext) -> list[Result]:
     return results
 
 
-async def _slack(ctx: DoctorContext) -> Result:
-    """Whether a Slack bot token is configured. Informational only.
+#: Slack's own prefixes. A bot token is ``xoxb-``; an app-level (Socket Mode)
+#: token is ``xapp-``. They sit next to each other in the Slack console and are
+#: swapped often enough that the shape check pays for itself.
+_BOT_PREFIX = "xoxb-"
+_APP_PREFIX = "xapp-"
 
-    Slack is an optional channel and its absence is the norm. The shape is
-    checked because a value pasted from the wrong field of the Slack console
-    (an app token where a bot token belongs) is invisible until the first send.
+#: Where a Slack delivery may be aimed. ``C``/``G``/``D`` a conversation,
+#: ``U``/``W`` a person (the channel opens the DM). A ``#name`` is not an id and
+#: the channel refuses it rather than walking ``conversations.list`` per send.
+_TARGET_PREFIXES = ("C", "G", "D", "U", "W")
+
+
+async def _slack(ctx: DoctorContext) -> list[Result]:
+    """Whether Slack is configured consistently, if it is configured at all.
+
+    Slack is an optional channel and its absence is the norm. Three settings
+    can each be individually wrong in a way nothing notices until a briefing
+    does not arrive, so each gets its OWN row: two findings about two different
+    settings sharing one row id means a dashboard filtering on ``slack.token``
+    sees one of them at random depending on which branch ran.
+
+    Nothing here prints a token, malformed or not. A value in the bot-token
+    slot is a credential whatever its shape.
     """
     channels = ctx.settings.channels
     token = channels.slack_bot_token
+    app_token = channels.slack_app_token
+    target = channels.slack_default_target
+    if not token and not app_token and not target:
+        return [skip("not configured — Slack is an optional channel")]
+
+    results: list[Result] = []
     if not token:
-        return skip("no Slack bot token configured")
-    if not token.startswith("xoxb-"):
-        return fail(
-            "ROBOTHOR_SLACK_BOT_TOKEN does not start with 'xoxb-' — a bot token is "
-            "expected here, not an app-level token"
+        results.append(
+            fail(
+                "Slack is partly configured but ROBOTHOR_SLACK_BOT_TOKEN is not set, "
+                "so nothing can be delivered to Slack",
+                sub_id="token",
+            )
         )
-    return ok("a Slack bot token is configured")
+    elif token.startswith(_APP_PREFIX):
+        results.append(
+            fail(
+                "ROBOTHOR_SLACK_BOT_TOKEN holds an app-level token (xapp-). The bot "
+                "token is the xoxb- value on the Slack app's OAuth page",
+                sub_id="token",
+            )
+        )
+    elif not token.startswith(_BOT_PREFIX):
+        results.append(
+            fail(
+                "ROBOTHOR_SLACK_BOT_TOKEN does not start with 'xoxb-' — a bot token is "
+                "expected here, not an app-level token",
+                sub_id="token",
+            )
+        )
+    else:
+        results.append(Result(status="pass", detail="a bot token is configured", sub_id="token"))
+
+    if not app_token:
+        results.append(
+            Result(
+                status="skip",
+                detail=(
+                    "ROBOTHOR_SLACK_APP_TOKEN is unset: outbound delivery works, the "
+                    "inbound Socket Mode bot will not start"
+                ),
+                sub_id="app_token",
+            )
+        )
+    elif not app_token.startswith(_APP_PREFIX):
+        results.append(
+            fail(
+                "ROBOTHOR_SLACK_APP_TOKEN does not start with 'xapp-' — Socket Mode "
+                "needs the app-level token, not the bot token",
+                sub_id="app_token",
+            )
+        )
+    else:
+        results.append(
+            Result(status="pass", detail="an app-level token is configured", sub_id="app_token")
+        )
+
+    if not target:
+        results.append(
+            Result(
+                status="skip",
+                detail=(
+                    "ROBOTHOR_SLACK_DEFAULT_TARGET is unset, so `genus channel verify "
+                    "slack` has nothing to aim at"
+                ),
+                sub_id="target",
+            )
+        )
+    elif target[0] in _TARGET_PREFIXES and target.isalnum():
+        results.append(Result(status="pass", detail=f"target {target}", sub_id="target"))
+    else:
+        results.append(
+            fail(
+                f"ROBOTHOR_SLACK_DEFAULT_TARGET={target!r} is not a Slack id. Use the "
+                "conversation id (C…/G…/D…) or a user id (U…/W…); a #name cannot be "
+                "posted to",
+                sub_id="target",
+            )
+        )
+    return results
+
+
+async def _slack_verify(ctx: DoctorContext) -> Result:
+    """Does the Slack token actually work, and does the app hold its scopes?
+
+    The shape check above catches a token pasted from the wrong field. It
+    cannot catch the two failures that account for the rest: a revoked token,
+    and an app installed without ``chat:write`` — both of which look exactly
+    like a correctly configured instance until a briefing does not arrive.
+
+    Skipped under ``--offline``: this leaves the box. The full four-step
+    version, including a real post, is ``genus channel verify slack``; the
+    doctor deliberately stops short of posting, because a diagnostic that
+    writes into the operator's workspace every time a Health panel refreshes is
+    not a diagnostic.
+    """
+    if not ctx.settings.channels.slack_bot_token:
+        return skip("no Slack bot token configured")
+    if ctx.offline:
+        return Result(status="skip", detail="--offline")
+
+    from robothor.engine.channels.slack import SlackChannel
+
+    channel = SlackChannel()
+    try:
+        report = await channel.health()
+    except Exception as exc:  # noqa: BLE001 — a check must not raise on a broken box
+        return skip(f"Slack could not be reached ({type(exc).__name__})")
+    if not report.get("ok"):
+        detail = str(report.get("error") or "auth.test did not succeed")
+        return fail(f"Slack rejected the bot token: {detail}")
+    return ok(f"auth.test answered for team {report.get('team')}")
 
 
 CHECKS: tuple[Check, ...] = (
@@ -136,9 +257,16 @@ CHECKS: tuple[Check, ...] = (
     ),
     Check(
         id="slack.token",
-        title="Slack bot token",
+        title="Slack is configured consistently",
         category="channels",
         severity="info",
         run=_slack,
+    ),
+    Check(
+        id="slack.verify",
+        title="Slack accepts this instance's token",
+        category="channels",
+        severity="info",
+        run=_slack_verify,
     ),
 )

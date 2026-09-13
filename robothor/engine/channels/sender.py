@@ -79,6 +79,11 @@ class SenderChannel:
         #: two thirds of. Telegram reports ``partial:2/3`` for identical
         #: evidence, and one surface being laxer than another about the same
         #: evidence is exactly what the shared counter exists to prevent.
+        #:
+        #: So omitting it while chunking anyway is refused rather than believed:
+        #: a sender that hands back more than one message for the one body it
+        #: was given has demonstrably split, and ``send`` records
+        #: ``failed:<name>_unproven`` with a log line naming this argument.
         self.chunk_size = chunk_size
 
     async def start(self) -> None:
@@ -176,6 +181,32 @@ class SenderChannel:
             )
 
         receipt = receipt_from(sent, expected, target=target, body=body)
+
+        if self.chunk_size is None and receipt.acknowledged > 1:
+            # The sender split the body — it returned more messages than the one
+            # it was handed — while declaring no chunk size. So `expected` is 1,
+            # `acknowledged` is N, and `N >= 1` reads as DELIVERED no matter how
+            # many chunks were actually lost: a sender that split into five and
+            # landed two would be recorded exactly like one that landed all
+            # five. The evidence does not support either reading, so it supports
+            # neither.
+            logger.error(
+                "Channel %s returned %d messages for one body but declared no chunk_size — "
+                "truncation cannot be detected, so this send is unproven. Pass "
+                "chunk_size= to register_platform_sender and split with "
+                "chunking.split_message.",
+                self.name,
+                receipt.acknowledged,
+            )
+            return SendReceipt(
+                acknowledged=0,
+                expected=expected,
+                platform_ids=receipt.platform_ids,
+                status=f"failed:{self.name}_unproven",
+                target=target,
+                body=body,
+            )
+
         if receipt.acknowledged == 0:
             logger.error("Channel %s acknowledged nothing — nothing was seen", self.name)
         return receipt

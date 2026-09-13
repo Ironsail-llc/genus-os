@@ -216,7 +216,7 @@ class TestASenderMustReturnMessages:
         receipt = await SenderChannel("acme_chat").send(
             "room-1", "hello", config=_config(), run=run
         )
-        apply_receipt(run, "acme_chat", receipt)
+        assert apply_receipt(run, "acme_chat", receipt) is False
 
         assert receipt.complete is False
         assert run.delivery_status == "failed:acme_chat_unproven"
@@ -227,12 +227,49 @@ class TestASenderMustReturnMessages:
         async def _sender(target: str, text: str, **_: Any) -> list[_FakeMessage]:
             return [_FakeMessage(7), _FakeMessage(8)]
 
-        register_platform_sender("acme_chat", _sender)
-        receipt = await SenderChannel("acme_chat").send(
-            "room-1", "hello", config=_config(), run=_run()
+        register_platform_sender("acme_chat", _sender, chunk_size=4000)
+        receipt = await SenderChannel("acme_chat", chunk_size=4000).send(
+            "room-1", "x" * 5000, config=_config(), run=_run()
         )
         assert receipt.complete is True
         assert receipt.platform_ids == ["7", "8"]
+
+    @pytest.mark.asyncio
+    async def test_a_sender_that_chunked_without_declaring_it_is_unproven(self):
+        """Two messages back for one body means it split. With no declared
+        chunk size the shim expected ONE acknowledgement, so ``2 >= 1`` reads as
+        delivered — identically for a sender that split into five and landed
+        two. Evidence that cannot distinguish those two cases supports neither.
+        """
+        from robothor.engine.delivery import apply_receipt
+
+        async def _splits_silently(target: str, text: str, **_: Any) -> list[_FakeMessage]:
+            return [_FakeMessage(7), _FakeMessage(8)]
+
+        register_platform_sender("acme_chat", _splits_silently)
+        run = _run()
+        receipt = await SenderChannel("acme_chat").send(
+            "room-1", "hello", config=_config(), run=run
+        )
+
+        assert receipt.complete is False
+        assert apply_receipt(run, "acme_chat", receipt) is False
+        assert run.delivery_status == "failed:acme_chat_unproven"
+        assert run.delivered_at is None
+
+    def test_the_warning_names_the_flag_that_fixes_it(self, caplog):
+        """A refusal an operator cannot act on is just a lost message."""
+        import asyncio
+
+        async def _splits_silently(target: str, text: str, **_: Any) -> list[_FakeMessage]:
+            return [_FakeMessage(7), _FakeMessage(8)]
+
+        register_platform_sender("acme_chat", _splits_silently)
+        with caplog.at_level("ERROR"):
+            asyncio.run(
+                SenderChannel("acme_chat").send("room-1", "hello", config=_config(), run=_run())
+            )
+        assert "chunk_size" in caplog.text
 
 
 class TestDeliveredAtMeansAPersonHasIt:
@@ -367,7 +404,7 @@ class TestTheShimCountsTheChunksItSent:
         channel = get_channel("acme_chat")
         assert channel is not None
         receipt = await channel.send("room-1", body, config=_config(), run=run)
-        apply_receipt(run, "acme_chat", receipt)
+        assert apply_receipt(run, "acme_chat", receipt) is False
 
         assert receipt.expected == 3
         assert receipt.acknowledged == 2
@@ -389,7 +426,7 @@ class TestTheShimCountsTheChunksItSent:
         channel = get_channel("acme_chat")
         assert channel is not None
         receipt = await channel.send("room-1", body, config=_config(), run=run)
-        apply_receipt(run, "acme_chat", receipt)
+        assert apply_receipt(run, "acme_chat", receipt) is True
 
         assert (receipt.acknowledged, receipt.expected) == (3, 3)
         assert run.delivery_status == "delivered"

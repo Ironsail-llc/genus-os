@@ -9,6 +9,7 @@ When infrastructure, agents, services, or cron jobs change, update docs as part 
 | New agent | `robothor agent scaffold <id>`, edit manifest + instruction file per contracts, the instance's fleet table + `brain/AGENTS.md` + `docs/CRON_MAP.md`, `scripts/validate_agents.py` |
 | Modified agent config | Agent manifest YAML (update first), then `scripts/validate_agents.py --agent <id>` |
 | New MCP/plugin tool | `docs/CONNECTORS.md` + the instance's `brain/AGENTS.md` tool list |
+| New delivery channel, or a change to one (`robothor/engine/channels/`) | The channel's own page under `docs/channels/` (setup, `genus channel verify` steps, target formats, the `delivery_status` values it records), `docs/PLUGINS.md` (the built-in/reserved list), and `mkdocs.yml` -- the `exclude_docs` allowlist **and** the nav. A new `failed:<channel>_*` status must arrive with its row in that page's status table: an operator reading it out of `agent_runs` has nothing else to look it up in |
 | New Cloudflare route | `infra/tunnel/README.md`, `SERVICES.md` (external access table) |
 | New database table | `robothor/migrations/manifest.txt` + `docs/SYSTEM_ARCHITECTURE.md` |
 | Federation changes | `docs/FEDERATION.md`, `docs/SYSTEM_ARCHITECTURE.md` (federation section), `SERVICES.md` |

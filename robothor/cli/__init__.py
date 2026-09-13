@@ -385,6 +385,47 @@ def _build_parser() -> argparse.ArgumentParser:
 
     config_sub.add_parser("schema", help="Print the JSON Schema of every declared setting")
 
+    # channel — what can deliver, whether it works; see robothor/cli/channel.py
+    channel_parser = subparsers.add_parser(
+        "channel", help="List delivery channels, verify one, or add its credentials"
+    )
+    channel_sub = channel_parser.add_subparsers(dest="channel_command")
+
+    channel_list = channel_sub.add_parser(
+        "list", help="Every channel a manifest's delivery.channel could resolve to"
+    )
+    channel_list.add_argument("--json", action="store_true", help="Machine-readable output")
+
+    channel_verify = channel_sub.add_parser(
+        "verify", help="Prove a channel works, step by step (exit 1 on a failed step, 2 if unset)"
+    )
+    channel_verify.add_argument("name", help="Channel name, e.g. slack")
+    channel_verify.add_argument(
+        "--target", default=None, help="Where to post the test message; defaults to the channel's"
+    )
+    channel_verify.add_argument("--json", action="store_true", help="Machine-readable output")
+
+    channel_add = channel_sub.add_parser("add", help="Store a channel's credentials")
+    channel_add.add_argument("name", help="Channel name, e.g. slack")
+    channel_add.add_argument(
+        "--bot-token",
+        default=None,
+        help="Slack bot token. Prefer the prompt: a flag value lands in your shell history",
+    )
+    channel_add.add_argument(
+        "--app-token", default=None, help="Slack app-level token for Socket Mode"
+    )
+    channel_add.add_argument(
+        "--default-target", default=None, help="Conversation id `verify` and the doctor aim at"
+    )
+    channel_add.add_argument(
+        "--to",
+        choices=["vault", "env"],
+        default=None,
+        help="Where to write: the vault, or the instance env file. Default: the vault "
+        "when this instance has a master key, the env file otherwise",
+    )
+
     # doctor — one verdict on whether this instance works; see robothor/doctor/
     doctor_parser = subparsers.add_parser(
         "doctor", help="Diagnose this instance and optionally repair what can be repaired"
@@ -1115,6 +1156,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.config_cmd import cmd_config
 
         return cmd_config(args)
+    if args.command == "channel":
+        from robothor.cli.channel import cmd_channel
+
+        return cmd_channel(args)
     if args.command == "doctor":
         from robothor.cli.doctor_cmd import cmd_doctor
 

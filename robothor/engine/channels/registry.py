@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "BUILTIN_CHANNELS",
     "CHANNELS_ENV",
+    "WARM_TIMEOUT_S",
     "enabled_plugin_channels",
     "get_channel",
     "list_channels",
@@ -48,7 +49,24 @@ __all__ = [
 #: Channel names the platform owns. A plugin offering one of these is refused
 #: by the loader (they are passed as ``reserved_names``), and
 #: :func:`register_channel` refuses to overwrite one.
-BUILTIN_CHANNELS = frozenset({"telegram", "event_bus"})
+#:
+#: ``slack`` is one of them even on an instance that has never configured it.
+#: It has to be: ``SlackBot.start()`` registers a ``slack`` platform sender, and
+#: a non-built-in name gets a :class:`~robothor.engine.channels.sender.
+#: SenderChannel` wrapped around it — which would replace the real channel with
+#: a shim that can only send once the *inbound* socket bot has started. The
+#: built-in exemption in ``delivery._register_sender_channel`` is what keeps the
+#: two halves independent, and it reserves the name against plugins for free.
+BUILTIN_CHANNELS = frozenset({"telegram", "event_bus", "slack"})
+
+#: How long plugin discovery may take before the daemon stops waiting for it.
+#: ``warm_channels`` sits between "all subsystems started" and ``READY=1``, and
+#: it runs third-party ``ep.load()`` imports: without a budget one package that
+#: blocks on a network call at import time holds up systemd's readiness
+#: notification indefinitely, and the unit is killed for a timeout that names
+#: the engine rather than the plugin. Exceeding it is a warning and a lazy
+#: resolution later, not a failure — the cache simply stays cold.
+WARM_TIMEOUT_S = 10.0
 
 #: Environment variable naming the plugin channels the operator has armed.
 #: Provisional: it becomes a persisted list once there is a command that adds a
@@ -124,10 +142,17 @@ def _ensure_builtins() -> None:
             return
         try:
             from robothor.engine.channels.event_bus import EventBusChannel
+            from robothor.engine.channels.slack import SlackChannel
             from robothor.engine.channels.telegram import TelegramChannel
 
             register_channel("telegram", TelegramChannel(), builtin=True)
             register_channel("event_bus", EventBusChannel(), builtin=True)
+            # Registered configured or not. An instance with no Slack token
+            # gets `failed:slack_not_configured` from the send, which names the
+            # missing credential; leaving the name unresolvable would report
+            # `failed:no_channel:slack` and send the operator looking for a
+            # platform feature that is right here.
+            register_channel("slack", SlackChannel(), builtin=True)
 
             # Sender shims too: a registration happens once, at bot start, so
             # a registry that forgot them would never get them back.
@@ -276,14 +301,22 @@ async def warm_channels() -> None:
     discovery happens off the delivery path and the per-generation cache serves
     every later lookup.
 
-    Never raises: a broken distribution must not stop the engine booting, and
-    the failure is already reported by ``_plugin_channels``.
+    Never raises, and never waits forever: a broken distribution must not stop
+    the engine booting, and a SLOW one must not hold up ``READY=1``. The
+    failure is already reported by ``_plugin_channels``; a timeout leaves the
+    cache cold, so the discovery happens on the first lookup that needs it.
     """
     import asyncio
 
     _ensure_builtins()
     try:
-        await asyncio.to_thread(_plugin_channels)
+        await asyncio.wait_for(asyncio.to_thread(_plugin_channels), timeout=WARM_TIMEOUT_S)
+    except TimeoutError:
+        logger.warning(
+            "Channel plugin discovery did not finish within %.0fs; carrying on without a "
+            "warmed cache. A plugin is blocking at import time.",
+            WARM_TIMEOUT_S,
+        )
     except Exception as exc:  # noqa: BLE001 — boot must survive a bad plugin
         logger.warning("Channel discovery failed while warming: %s", exc)
 

@@ -1,0 +1,44 @@
+{
+  "_comment": "Slack app manifest for a Genus OS instance. Every scope here is one the code actually calls - see docs/channels/slack.md. Rename the app to whatever your instance should appear as; nothing else needs editing.",
+  "display_information": {
+    "name": "Genus OS",
+    "description": "Delivers agent output and answers questions from Slack.",
+    "background_color": "#1f2933"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Genus OS",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "chat:write",
+        "im:write",
+        "channels:read",
+        "groups:read",
+        "app_mentions:read",
+        "channels:history",
+        "groups:history",
+        "im:history"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": false
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}
