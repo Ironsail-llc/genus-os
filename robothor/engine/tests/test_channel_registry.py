@@ -16,6 +16,7 @@ news".
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -157,16 +158,20 @@ class TestTelegramWrapper:
         assert receipt.status == "failed:telegram_no_sender"
 
     @pytest.mark.asyncio
-    async def test_resolve_identity_is_declared_but_not_implemented(self):
-        """Protocol slot for C8. Declared so the shape is stable; a stub that
-        returned a plausible identity would be worse than a refusal.
+    async def test_resolve_identity_answers_none_for_an_unknown_sender(self):
+        """Implemented in C8, and still never returns a plausible default.
 
-        ``ask`` used to be asserted here too and is now implemented — see
-        ``test_ask_user.py``. It still never returns a plausible default: with
-        nobody to ask it answers ``None``, which is not one of the options."""
+        ``ask`` and ``resolve_identity`` were both asserted here as refusals
+        while they were unimplemented. Both are now real, and both keep the
+        property that made the refusal correct: an unknown sender resolves to
+        ``None``, not to a fabricated identity. The delegation itself is
+        asserted rather than the database, because an implementation that
+        stopped calling the resolver would pass any test that only checked the
+        return value."""
         channel = TelegramChannel()
-        with pytest.raises(NotImplementedError):
-            await channel.resolve_identity("42")
+        with patch("robothor.identity.resolvers.resolve_identity", return_value=None) as resolver:
+            assert await channel.resolve_identity("42") is None
+        resolver.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_ask_with_no_target_is_none_and_not_an_option(self):

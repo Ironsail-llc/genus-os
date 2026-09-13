@@ -885,6 +885,7 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         "guest" instead — role_permissions is fail-closed (no guest rows
         exist yet), so this is a safe default-off tightening on its own.
         """
+        from robothor.engine.channels.access import access_mode
         from robothor.engine.feature_flags import (
             allow_unregistered_owner_fallback,
             telegram_role_gates_mode,
@@ -908,9 +909,20 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
 
         mode = telegram_role_gates_mode()
 
+        # `pairing` means only KNOWN identities run -- on every surface, not
+        # just in a private chat. Both fabrications below hand an unregistered
+        # sender a working role (`owner` in the operator's chat, `user` in a
+        # group, and `user` maps to ("user","*","allow") -- every tool), so
+        # leaving them live would make `pairing` a setting that closes one
+        # surface of three while the docs claimed it closed the channel. The
+        # owner escape hatch still applies, for the same reason `enforce` keeps
+        # it: a fresh install has no owner row, and the operator must not be
+        # able to lock themselves out of their own bot by closing it.
+        pairing = access_mode("telegram") == "pairing"
+
         # Unregistered user — primary operator gets a fallback
         if chat_id == self.config.default_chat_id and (
-            mode != "enforce" or allow_unregistered_owner_fallback()
+            allow_unregistered_owner_fallback() or (mode != "enforce" and not pairing)
         ):
             if mode == "observe":
                 logger.warning(
@@ -932,8 +944,9 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         # Unregistered user in a group chat — use default tenant. Role is
         # "guest" once the flag leaves "off" (Phase 5 seeds actual
         # role_permissions rows for it; fail-closed until then means zero
-        # tool grants, not a privilege increase).
-        if message.chat.type != "private":
+        # tool grants, not a privilege increase). Skipped entirely under
+        # `pairing`: see the note above.
+        if message.chat.type != "private" and not pairing:
             fallback = {
                 "tenant_id": self.config.tenant_id,
                 "display_name": message.from_user.first_name or "",
@@ -1021,8 +1034,29 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         refusal — no operator name, safe to ship as platform code — and
         notifies the operator (rate-limited to once per sender per hour)
         with a registration hint.
+
+        ``channels.access`` gets first refusal, and takes it only when this
+        instance has actually set ``ROBOTHOR_TELEGRAM_ACCESS=pairing``. It
+        answers ``None`` in every other case — the default ``open`` mode, a
+        suppressed repeat, a mint that failed — and everything below runs
+        byte-for-byte as it did before the gate existed. ``None`` rather than
+        ``""`` because the caller sends whatever comes back and
+        ``message.answer("")`` is an API error.
         """
+        from robothor.engine.channels import access
         from robothor.engine.feature_flags import open_onboarding_enabled
+
+        sender = message.from_user
+        private = getattr(getattr(message, "chat", None), "type", "private") == "private"
+        paired = await access.pairing_reply(
+            "telegram",
+            telegram_user_id,
+            tenant_id=self.config.tenant_id,
+            display_name=(getattr(sender, "first_name", None) or "") if sender else "",
+            surface=access.DIRECT_SURFACE if private else access.GROUP_SURFACE,
+        )
+        if paired is not None:
+            return paired
 
         if open_onboarding_enabled():
             from robothor.engine.onboarding import start_onboarding

@@ -33,6 +33,7 @@ import contextvars
 import logging
 from typing import TYPE_CHECKING, Any
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.channels import telegram_ask
 from robothor.engine.channels.base import SendReceipt, receipt_from
 from robothor.engine.chunking import split_telegram_message
@@ -41,6 +42,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
 
     from robothor.engine.models import AgentConfig, AgentRun
+    from robothor.identity import IdentityContext
 
 logger = logging.getLogger(__name__)
 
@@ -321,9 +323,21 @@ class TelegramChannel:
         finally:
             telegram_ask.discard_ask(ask_id)
 
-    async def resolve_identity(self, native_id: str) -> Any:
-        """Not implemented — inbound identity still resolves in ``engine/telegram.py``."""
-        raise NotImplementedError(
-            "identity resolution is not implemented for the Telegram channel yet; "
-            "the inbound path in engine/telegram.py still owns it"
-        )
+    async def resolve_identity(
+        self, native_id: str, *, tenant_id: str = DEFAULT_TENANT
+    ) -> IdentityContext | None:
+        """Map a Telegram user id onto a Genus identity, or None.
+
+        ``tenant_users`` stays the source of truth and ``lookup_user`` stays the
+        reader: the whole inbound ladder in ``engine/telegram.py`` is built on
+        that table, and a resolver here that answered out of
+        ``user_channel_identities`` alone would hand back an identity the
+        inbound path still treats as a stranger. So this delegates to
+        :func:`robothor.identity.resolvers.resolve_identity`, which is what
+        ``_resolve_telegram`` already does, and a pairing writes BOTH rows (see
+        ``channels/identities.approve_pairing``) rather than teaching one of
+        them to shadow the other.
+        """
+        from robothor.identity.resolvers import resolve_identity
+
+        return await asyncio.to_thread(resolve_identity, self.name, native_id, tenant_id)

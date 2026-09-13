@@ -52,16 +52,58 @@ class SlackBot:
         }
 
     def _authorized(self, user_id: str, channel: str) -> bool:
-        """Inbound authorization for Slack commands.
+        """The allowlist truth table, unchanged, for ``allowlist`` mode.
 
-        When neither allowlist is configured, allow (the bot was deliberately
-        activated; a startup warning already flagged the open surface). When
-        either is set, the message must match a listed user OR channel.
+        When neither allowlist is configured, allow. When either is set, the
+        message must match a listed user OR channel. This is no longer the gate
+        -- :func:`robothor.engine.channels.access.evaluate` is -- it is the
+        membership test that gate calls when the mode is ``allowlist``, which is
+        why the neither-set-means-allow branch survives: inside ``allowlist``
+        mode it is the operator's own stated configuration, where before it was
+        the DEFAULT posture of every Slack install.
         """
         users, channels = self._allowed_users(), self._allowed_channels()
         if not users and not channels:
             return True
         return user_id in users or channel in channels
+
+    def _access_mode(self) -> str:
+        """The mode this instance's Slack inbound runs under.
+
+        One compatibility clause, and it turns on PROVENANCE rather than on the
+        resolved value. An instance that set
+        ``ROBOTHOR_SLACK_ALLOWED_USERS``/``_CHANNELS`` before modes existed and
+        has named no mode keeps being governed by those lists, because
+        ``slack_access`` defaults to ``pairing`` and flipping such an instance on
+        upgrade would lock out everyone on the list -- an availability
+        regression delivered as a security improvement.
+
+        The first cut asked ``access_mode("slack") == "pairing"``, which cannot
+        tell the declared default from an operator naming it. So an instance that
+        explicitly set ``ROBOTHOR_SLACK_ACCESS=pairing`` while any stale
+        allowlist value was still exported was silently downgraded to
+        ``allowlist`` -- and ``_authorized`` is user-**OR-channel**, so every
+        unknown member of the workspace posting in that leftover channel drove
+        the main agent. The warning it logged told the operator to set exactly
+        the variable they had already set, which made the downgrade
+        undiagnosable from the log. ``mode_was_configured`` is the fix: an
+        explicit mode, in either direction, always wins.
+        """
+        from robothor.engine.channels.access import access_mode, mode_was_configured
+
+        mode = access_mode("slack")
+        if mode_was_configured("slack"):
+            return mode
+        if mode == "pairing" and (self._allowed_users() or self._allowed_channels()):
+            logger.warning(
+                "Slack has a legacy ROBOTHOR_SLACK_ALLOWED_USERS/CHANNELS allowlist and "
+                "no ROBOTHOR_SLACK_ACCESS, so it is running in allowlist mode rather "
+                "than the pairing default. Set ROBOTHOR_SLACK_ACCESS explicitly -- to "
+                "`pairing` to require pairing (the allowlist is then ignored), or to "
+                "`allowlist` to keep these lists and silence this."
+            )
+            return "allowlist"
+        return mode
 
     async def start(self) -> None:
         """Initialize and start the Slack bot."""
@@ -88,11 +130,12 @@ class SlackBot:
             return
         bot_token, app_token = found.bot_token, found.app_token
 
-        if not self._allowed_users() and not self._allowed_channels():
+        if self._access_mode() == "open":
             logger.warning(
-                "Slack bot has no ROBOTHOR_SLACK_ALLOWED_USERS/CHANNELS allowlist — "
-                "ANY user in a joined workspace/channel can drive the main agent. "
-                "Set an allowlist to restrict inbound commands."
+                "Slack is in `open` access mode -- ANY user in a joined "
+                "workspace/channel can drive the main agent. Set "
+                "ROBOTHOR_SLACK_ACCESS=pairing (an unknown sender gets a "
+                "one-shot code an operator has to approve) or =allowlist."
             )
 
         app = AsyncApp(token=bot_token)
@@ -183,6 +226,22 @@ class SlackBot:
                 logger.error("Slack chunk rejected for %s: %s", channel_id, e)
         return landed
 
+    @staticmethod
+    def _surface(event: dict[str, Any], channel: str) -> str:
+        """Whether this message arrived somewhere a pairing code may be sent.
+
+        Slack's own ``channel_type`` is the authority (``im`` is a DM); the
+        ``D`` prefix is the fallback for an event shape that omits it. Anything
+        else is a room, and a code posted in a room is a code anyone in it can
+        carry to the operator.
+        """
+        from robothor.engine.channels.access import DIRECT_SURFACE, GROUP_SURFACE
+
+        kind = str(event.get("channel_type") or "")
+        if kind == "im" or (not kind and channel.startswith("D")):
+            return DIRECT_SURFACE
+        return GROUP_SURFACE
+
     async def stop(self) -> None:
         """Stop the Slack bot."""
         if self._handler and self._started:
@@ -203,24 +262,34 @@ class SlackBot:
         channel = event.get("channel", "")
         user_id = event.get("user", "")
 
-        if not self._authorized(user_id, channel):
-            logger.warning(
-                "Ignoring Slack message from unauthorized user %s (channel %s)",
-                user_id,
-                channel,
-            )
+        # One gate, shared with Telegram. The lines this replaced logged the raw
+        # Slack user id on every refusal AND the first 100 characters of every
+        # message, which put a workspace's member ids and its conversations into
+        # every log shipper this instance has -- including the senders with the
+        # least reason to trust it. Nothing below logs an id or a message.
+        from robothor.engine.channels import access
+
+        decision = await access.evaluate(
+            "slack",
+            user_id,
+            tenant_id=self.config.tenant_id,
+            display_name=str((event.get("user_profile") or {}).get("display_name") or ""),
+            surface=self._surface(event, channel),
+            allowlist=lambda: self._authorized(user_id, channel),
+            # The mode THIS bot resolved, not the one the gate would read again.
+            # `_access_mode` carries the allowlist compatibility clause, so a
+            # second read would answer `pairing` where the bot answered
+            # `allowlist` -- and every allowlisted sender would be handed a
+            # pairing code by a gate that was also, separately, correct.
+            mode=self._access_mode(),
+        )
+        if not decision.allowed:
+            if decision.refusal:
+                await say(text=decision.refusal)
             return
 
-        logger.info(
-            "Slack message from %s (channel %s): %s",
-            user_id,
-            channel,
-            text[:100],
-        )
-
-        # Resolve user → tenant (Slack user table not yet implemented;
-        # fall back to engine config tenant for now)
-        tenant_id = self.config.tenant_id
+        identity = decision.identity
+        tenant_id = identity.tenant_id if identity else self.config.tenant_id
 
         # Use shared session system
         from robothor.engine.chat import get_shared_session
@@ -232,13 +301,20 @@ class SlackBot:
         try:
             from robothor.engine.models import TriggerType
 
+            # A paired sender runs as the user the operator bound them to. An
+            # unpaired one only gets here in `open` or `allowlist` mode, and
+            # then carries the same synthetic id this always used -- named
+            # explicitly, because `f"slack:{user_id}"` with `user_role="user"`
+            # was an authorization decision about a string matching no row
+            # anywhere.
             run = await self.runner.execute(
                 agent_id="main",
                 message=text,
                 trigger_type=TriggerType.SLACK,
                 tenant_id=tenant_id,
-                user_id=f"slack:{user_id}",
-                user_role="user",
+                user_id=_run_as(identity, user_id),
+                user_role=(identity.role if identity else "") or "user",
+                identity=identity,
                 conversation_history=list(session.history) if session.history else None,
             )
 
@@ -252,6 +328,19 @@ class SlackBot:
         except Exception:
             logger.exception("Slack agent execution failed")
             await say("Something went wrong. Please try again.")
+
+
+def _run_as(identity: Any, user_id: str) -> str:
+    """The ``user_id`` a Slack-triggered run is attributed to.
+
+    A bound identity's own id, preferring the ``tenant_users.user_id`` the
+    permission tables are keyed on. Falling back to the synthetic
+    ``slack:<id>`` only when nothing is bound keeps the pre-pairing behaviour
+    intact for ``open`` mode instead of leaving those runs unattributed.
+    """
+    if identity is None:
+        return f"slack:{user_id}"
+    return str(identity.tenant_user_id or identity.user_account_id or f"slack:{user_id}")
 
 
 def _split_text(text: str, max_length: int) -> list[str]:

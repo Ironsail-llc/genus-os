@@ -467,6 +467,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "when this instance has a master key, the env file otherwise",
     )
 
+    # access — who may DRIVE this instance over a channel, as opposed to what
+    # can deliver from it. Registered through one call so the two halves could
+    # be written against each other without either blocking on the other.
+    from robothor.cli.channel_access import add_access_parser
+
+    add_access_parser(channel_sub)
+
     # doctor — one verdict on whether this instance works; see robothor/doctor/
     doctor_parser = subparsers.add_parser(
         "doctor", help="Diagnose this instance and optionally repair what can be repaired"
@@ -1198,6 +1205,10 @@ def main(argv: list[str] | None = None) -> int:
 
         return cmd_config(args)
     if args.command == "channel":
+        if getattr(args, "channel_command", None) == "access":
+            from robothor.cli.channel_access import cmd_channel_access
+
+            return cmd_channel_access(args)
         from robothor.cli.channel import cmd_channel
 
         return cmd_channel(args)

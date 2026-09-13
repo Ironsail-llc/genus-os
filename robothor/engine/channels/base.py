@@ -26,11 +26,12 @@ the call did not raise would be a lie with a green test beside it.
 
 Optional slots
 --------------
-:meth:`Channel.resolve_identity` is declared here so the shape is settled and is
-*not* implemented by anything in this release — inbound identity resolution
-lands with pairing. An implementation raises :exc:`NotImplementedError` rather
-than returning a plausible default, because a channel that answered "yes" to an
-approval prompt nobody saw is worse than one that refuses.
+:meth:`Channel.resolve_identity` maps a sender's platform-native id onto a Genus
+identity. Telegram and Slack implement it; a channel that cannot answer raises
+:exc:`NotImplementedError` rather than returning a plausible default, because a
+channel that answered "yes" to an approval prompt nobody saw is worse than one
+that refuses. ``None`` is a different answer again, and the one the access gate
+is built on: *nobody is bound to this id*.
 
 :meth:`Channel.ask` is now live on Telegram and is called by the ``ask_user``
 tool and by ``permission_escalation.PermissionEscalationManager``. It stays
@@ -290,9 +291,31 @@ class Channel(Protocol):
         ...
 
     async def resolve_identity(self, native_id: str) -> Any:
-        """Map a platform-native sender id onto a Genus identity.
+        """Map a platform-native sender id onto a Genus identity, or ``None``.
 
-        Not implemented in this release — pairing and identity land with the
-        second inbound surface.
+        **One path, one cache.** The Telegram and Slack implementations both
+        delegate to :func:`robothor.identity.resolvers.resolve_identity`, and so
+        does the access gate (``channels/access.py::_resolve_known``) — which
+        calls that function directly rather than going through the registry to
+        find this method. So this method currently has no production caller, and
+        that is a deliberate accepted state rather than an oversight: routing the
+        gate through the registry would put a lookup on the inbound hot path and
+        introduce a new failure mode (a channel that raises
+        ``NotImplementedError``) into a function whose contract is "never
+        raises", in exchange for nothing — there would still be exactly one
+        resolution path and one cache. It earns a caller when the inbound
+        pipeline itself moves behind :attr:`inbound_router`.
+
+        Declared with the one argument every implementation needs. Telegram and
+        Slack additionally accept a keyword ``tenant_id``, which widens what
+        they take rather than narrowing it -- a channel that only accepts
+        ``native_id`` still satisfies this, and ``EventBusChannel`` does.
+
+        ``None`` means *nobody is bound to this id*, which is a fact and not a
+        failure: it is what ``robothor/engine/channels/access.py`` acts on to
+        decide whether the sender is paired, allowlisted or refused. A channel
+        must never answer with a fabricated identity — the Telegram ladder's
+        default-chat ``owner`` fallback is the standing example of why, and it
+        is gated behind a flag for exactly that reason.
         """
         ...

@@ -205,18 +205,25 @@ EXPECTED_ROUTER_MODULES = frozenset(
         # contributing them would leave both this floor and the per-route gate
         # assertions vacuously green.
         "routers.agent_manifests",
+        # Channel pairing. The only network-reachable way to approve a pairing
+        # -- i.e. to decide that a stranger who messaged the bot may drive it.
+        # Named rather than only counted for the same reason as providers: if
+        # this router silently stopped contributing routes, the gate assertions
+        # on the approval endpoint would pass by being vacuous.
+        "routers.channel_access",
     }
 )
 
 
 def test_the_app_actually_exposes_mutation_routes() -> None:
     """Guard the guard: a partial enumeration would make every assertion vacuous."""
-    # 35 -> 60 (actual 63). The floor's whole job is to notice an enumeration
+    # 35 -> 60 (actual 63) -> 66 with the three channel-access mutations
+    # (approve, deny, revoke). The floor's whole job is to notice an enumeration
     # collapse, and one set 28 routes below reality would have let nearly half
     # the mutation surface disappear silently. Raise it whenever routes are
     # added, the same way the module ratchets are kept tight.
     routes = _mutation_routes()
-    assert len(routes) >= 60, f"route enumeration collapsed — only found {len(routes)}"
+    assert len(routes) >= 66, f"route enumeration collapsed — only found {len(routes)}"
 
     seen = {route.endpoint.__module__ for route in routes}
     missing = EXPECTED_ROUTER_MODULES - seen

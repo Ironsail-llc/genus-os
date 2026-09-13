@@ -174,6 +174,13 @@ def _mount_subsystem_routers(
 
     register_admin_scheduler(app, scheduler)
 
+    # Dropping the identity caches. The binding is a row anyone can write; the
+    # belief about who a sender IS lives in THIS process for up to 300s, so a
+    # revoke from the Helm has to reach here to take effect promptly.
+    from robothor.engine.admin_identities import register as register_admin_identities
+
+    register_admin_identities(app)
+
     # Answering an in-RAM permission escalation. The pending request lives in
     # THIS process, so the bridge has to proxy here rather than write a row.
     from robothor.engine.admin_approvals import register as register_admin_approvals

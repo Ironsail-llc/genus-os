@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-361 settings in 13 groups.
+364 settings in 13 groups.
 
 ## paths
 
@@ -219,14 +219,17 @@ How the instance reaches people, and who it says it is.
 | `ROBOTHOR_AI_PHONE` | str | _(empty)_ | `robothor-engine` | no | legacy | Phone number shown on the assistant's public contact card. |
 | `ROBOTHOR_BRAND_NAME` | str | `Genus OS` | `robothor-engine` | no | legacy | Product name shown in dashboard chrome. |
 | `ROBOTHOR_CHANNELS` | str | _(empty)_ | `robothor-engine` | no | 1.70.0 | Comma-separated names of plugin-provided channels to arm. An installed genus.channels plugin is INERT until it is named here, the same rule ROBOTHOR_SANDBOX_BACKEND follows and for the same reason: a package that became the delivery surface merely by being installed could intercept every briefing. Built-in channels (telegram, event_bus) are always available and are not listed here. Provisional name until adding a channel persists it to config.yaml. |
+| `ROBOTHOR_CHANNEL_ACCESS_DEFAULT` | str | `pairing` | `robothor-engine` | no | 1.73.0 | Inbound access policy for any channel with no setting of its own -- every plugin channel. One of `pairing` (an unknown sender gets a one-shot code and reaches nothing until an operator approves it), `allowlist` (the channel's own membership test decides) or `open` (anyone the surface admits may drive the agent). A value that is none of those resolves to `pairing`, so a typo cannot open a surface. |
 | `ROBOTHOR_DOMAIN` | str | _(empty)_ | `robothor-engine` | no | legacy | Public domain the tunnel generator issues ingress hostnames under. |
 | `ROBOTHOR_OWNER_EMAIL` | str | _(empty)_ | `robothor-engine` | no | legacy | DEPRECATED operator email. Operator identity belongs in ~/.robothor/owner.yaml; this is read only as a legacy fallback. |
 | `ROBOTHOR_OWNER_NAME` | str | _(empty)_ | `robothor-engine` | no | legacy | DEPRECATED operator display name. Operator identity belongs in ~/.robothor/owner.yaml; this is read only as a legacy fallback. |
+| `ROBOTHOR_SLACK_ACCESS` | str | `pairing` | `robothor-engine` | no | 1.73.0 | Inbound access policy for Slack. Defaults to `pairing`. Set it to `allowlist` to keep deciding by ROBOTHOR_SLACK_ALLOWED_USERS / _CHANNELS -- which is what an instance that has either of those set already gets until it names a mode here -- or to `open` to let anyone the workspace admits drive the main agent. |
 | `ROBOTHOR_SLACK_ALLOWED_CHANNELS` | str | _(empty)_ | `robothor-engine` | no | legacy | Comma-separated Slack channel ids the bot will respond in. |
 | `ROBOTHOR_SLACK_ALLOWED_USERS` | str | _(empty)_ | `robothor-engine` | no | legacy | Comma-separated Slack user ids allowed to talk to the bot. Empty means no allowlist, which the channel warns about at start. |
 | `ROBOTHOR_SLACK_APP_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Slack app-level token for socket mode. |
 | `ROBOTHOR_SLACK_BOT_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Slack bot token. The Slack channel starts only when it and the app token are both set. |
 | `ROBOTHOR_SLACK_VERIFY_TARGET` | str | _(empty)_ | `robothor-engine` | no | 1.70.0 | Conversation `genus channel verify slack` and the doctor's Slack check post their test message to -- a channel id (C.../G.../D...) or a user id (U.../W...), never a #name. Used by verify and the doctor only: delivery never falls back to it, so an agent whose manifest names no target fails loudly instead of posting somewhere nobody chose. |
+| `ROBOTHOR_TELEGRAM_ACCESS` | str | `open` | `robothor-engine` | no | 1.73.0 | Inbound access policy for Telegram. Defaults to `open` for COMPATIBILITY, not because it is the recommended setting: Telegram's own `_resolve_user` ladder and closed-onboarding refusal already decide who may run an agent, and changing that as a side effect of shipping the shared gate would be a silent behaviour change on the one surface every instance already uses. Set it to `pairing` to have an unknown private-chat sender answered with a one-shot code instead. |
 | `ROBOTHOR_TELEGRAM_BOT_NAME` | str | _(empty)_ | `robothor-engine` | no | legacy | @name of the Telegram bot, shown on the dashboard so an operator can find the right conversation. |
 | `ROBOTHOR_TELEGRAM_BOT_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Bot token for the Telegram channel. Empty disables Telegram. Also read from `TELEGRAM_BOT_TOKEN`. |
 | `ROBOTHOR_TELEGRAM_CHAT_ID` | str | _(empty)_ | `robothor-engine` | no | legacy | Default Telegram chat deliveries go to when an agent names none. Also read from `TELEGRAM_CHAT_ID`. |

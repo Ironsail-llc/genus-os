@@ -21,6 +21,7 @@ data.
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -339,12 +340,21 @@ class TestItSplitsWithTheSameFunctionTheBotDoes:
 
 class TestTheOptionalSlots:
     @pytest.mark.asyncio
-    async def test_ask_and_resolve_identity_raise(self):
-        channel = SlackChannel()
+    async def test_ask_still_raises_because_there_is_no_way_to_ask(self):
         with pytest.raises(NotImplementedError):
-            await channel.ask("Approve?", ["yes", "no"])
-        with pytest.raises(NotImplementedError):
-            await channel.resolve_identity(USER_ID)
+            await SlackChannel().ask("Approve?", ["yes", "no"])
+
+    @pytest.mark.asyncio
+    async def test_resolve_identity_answers_none_for_an_unpaired_sender(self):
+        """C8 gave Slack identity resolution; it did not give it a default.
+
+        The inbound path used to run every sender as the literal string
+        ``f"slack:{user_id}"`` with ``user_role="user"`` — an identity no row
+        anywhere matched. An unpaired sender now resolves to ``None`` and the
+        access gate decides what happens next."""
+        with patch("robothor.identity.resolvers.resolve_identity", return_value=None) as resolver:
+            assert await SlackChannel().resolve_identity(USER_ID) is None
+        resolver.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_ask_accepts_the_whole_protocol_signature(self):
