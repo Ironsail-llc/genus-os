@@ -1,3 +1,9 @@
+## [1.75.0](https://github.com/Ironsail-llc/genus-os/compare/v1.74.0...v1.75.0) (2026-09-13)
+
+### Features
+
+* **webchat:** per-user sessions, webchat channel and ask over sse ([#522](https://github.com/Ironsail-llc/genus-os/issues/522)) ([563dd17](https://github.com/Ironsail-llc/genus-os/commit/563dd17fa6c0934220f3b71626b60b5008330a0c))
+
 ## [1.74.0](https://github.com/Ironsail-llc/genus-os/compare/v1.73.0...v1.74.0) (2026-09-13)
 
 ### Features
