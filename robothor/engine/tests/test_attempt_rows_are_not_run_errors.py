@@ -32,32 +32,110 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from robothor.engine.llm_attempts import (
+    OUTCOME_REASONING_ONLY,
     OUTCOME_REASONING_ONLY_RETRY,
     is_attempt_step,
 )
+from robothor.engine.llm_client import LLMClient
 from robothor.engine.models import StepType
 from robothor.engine.run_lifecycle import RunLifecycleMixin
+from robothor.engine.run_llm_calls import LLMCallMixin
 from robothor.engine.session import AgentSession
 
+THINKING_MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
 
-def _self_healed_session() -> AgentSession:
-    """One reasoning-only attempt that the same model then answered."""
+
+def _reply(*, content: str, reasoning: str | None = None, tokens: int = 40) -> Any:
+    message = SimpleNamespace(content=content, tool_calls=None)
+    if reasoning is not None:
+        message.reasoning_content = reasoning
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason="length")],
+        usage=SimpleNamespace(
+            prompt_tokens=900,
+            completion_tokens=tokens,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=tokens),
+        ),
+        model=THINKING_MODEL,
+    )
+
+
+class _LLMRunner(LLMCallMixin):
+    """The mixin's whole contract, so the rows come from the REAL dispatch."""
+
+    def __init__(self) -> None:
+        self._llm = LLMClient()
+        self.config = SimpleNamespace()
+
+    @property
+    def _active_watchdog(self) -> Any:
+        return None
+
+    def _response_cost(self, **_kwargs: Any) -> float:
+        return 0.0
+
+
+async def _self_healed_session() -> AgentSession:
+    """A run the engine ACTUALLY self-healed: reasoning-only, then an answer.
+
+    Built by driving `_llm_call_and_record`, not by hand-writing the rows —
+    a hand-built row proves the consumers filter something, never that the
+    engine emits it (review N2).
+    """
     session = AgentSession(agent_id="test-agent")
-    session.record_llm_attempt(
-        model="openrouter/primary",
-        duration_ms=8000,
-        input_tokens=900,
-        output_tokens=9800,
-        error_message=f"{OUTCOME_REASONING_ONLY_RETRY}: finish_reason=length",
-    )
-    session.record_llm_call(
-        model="openrouter/primary",
-        input_tokens=900,
-        output_tokens=40,
-        duration_ms=500,
-        assistant_message={"role": "assistant", "content": "done"},
-    )
+    runner = _LLMRunner()
+    with (
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch(
+            "robothor.engine.llm_client.litellm.acompletion",
+            new=AsyncMock(
+                side_effect=[
+                    _reply(content="", reasoning="thinking about it…", tokens=9800),
+                    _reply(content="done"),
+                ]
+            ),
+        ),
+        patch("robothor.engine.llm_client.TRANSIENT_RETRY_JITTER_MIN", 0.0),
+        patch("robothor.engine.llm_client.TRANSIENT_RETRY_JITTER_MAX", 0.0),
+    ):
+        await runner._llm_call_and_record(session, [THINKING_MODEL], [], None, set(), 0.3)
     return session
+
+
+@pytest.mark.asyncio
+async def test_the_engine_records_the_self_heal_class() -> None:
+    """N2: `reasoning_only_retry` had no caller — the class was never emitted.
+
+    The production verification query cannot tell a self-heal from a failure
+    unless the engine writes the distinction down.
+    """
+    session = await _self_healed_session()
+    attempt, success = session.run.steps
+    assert attempt.error_message is not None
+    assert attempt.error_message.startswith(f"{OUTCOME_REASONING_ONLY_RETRY}:"), (
+        f"the re-asked attempt must say it self-healed, got {attempt.error_message!r}"
+    )
+    assert success.error_message is None
+
+
+@pytest.mark.asyncio
+async def test_a_reasoning_only_reply_that_never_heals_keeps_the_plain_class() -> None:
+    """The two classes must not collapse into one."""
+    session = AgentSession(agent_id="test-agent")
+    runner = _LLMRunner()
+    with (
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch(
+            "robothor.engine.llm_client.litellm.acompletion",
+            new=AsyncMock(return_value=_reply(content="", reasoning="…", tokens=9800)),
+        ),
+        patch("robothor.engine.llm_client.TRANSIENT_RETRY_JITTER_MIN", 0.0),
+        patch("robothor.engine.llm_client.TRANSIENT_RETRY_JITTER_MAX", 0.0),
+    ):
+        await runner._llm_call_and_record(session, [THINKING_MODEL], [], None, set(), 0.3)
+    classes = [str(s.error_message).split(":")[0] for s in session.run.steps]
+    assert classes.count(OUTCOME_REASONING_ONLY_RETRY) == 1, "the re-ask, once"
+    assert OUTCOME_REASONING_ONLY in classes, "and the one that gave up, plainly"
 
 
 class _Runner(RunLifecycleMixin):
@@ -74,8 +152,9 @@ class _Runner(RunLifecycleMixin):
 
 
 class TestIsAttemptStep:
-    def test_an_llm_call_with_an_error_message_is_an_attempt(self) -> None:
-        session = _self_healed_session()
+    @pytest.mark.asyncio
+    async def test_an_llm_call_with_an_error_message_is_an_attempt(self) -> None:
+        session = await _self_healed_session()
         attempt, success = session.run.steps
         assert is_attempt_step(attempt) is True
         assert is_attempt_step(success) is False
@@ -103,7 +182,7 @@ class TestIsAttemptStep:
 @pytest.mark.asyncio
 async def test_a_self_healed_run_reports_zero_errors_to_the_verifier() -> None:
     runner = _Runner()
-    session = _self_healed_session()
+    session = await _self_healed_session()
     seen: dict[str, Any] = {}
 
     async def _verify(output, criteria, error_count, model, fallback_models=None):
@@ -128,7 +207,7 @@ async def test_a_self_healed_run_reports_zero_errors_to_the_verifier() -> None:
 @pytest.mark.asyncio
 async def test_a_real_tool_error_is_still_counted() -> None:
     runner = _Runner()
-    session = _self_healed_session()
+    session = await _self_healed_session()
     session.record_tool_call(
         tool_name="send_email",
         tool_input={},
@@ -169,8 +248,6 @@ def test_a_failed_attempt_does_not_claim_the_model_served() -> None:
 @pytest.mark.asyncio
 async def test_the_primary_unreached_detector_still_sees_a_dead_primary() -> None:
     """An always-failing primary must not satisfy "reached" (C2)."""
-    from robothor.engine.llm_client import LLMClient
-    from robothor.engine.run_llm_calls import LLMCallMixin
 
     class _R(LLMCallMixin):
         def __init__(self) -> None:

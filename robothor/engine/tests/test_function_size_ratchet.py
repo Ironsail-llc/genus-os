@@ -87,12 +87,14 @@ KNOWN_LARGE: dict[str, int] = {
     # 242 -> 240: _skip_model_reason now returns the pool it looked up, so the
     # call site stopped needing its own _key_pool line — which is also what
     # restored the lazy lookup for models the walk skips.
+    # 236 -> 237: the cancelled-attempt branch, paid for by extracting the
+    # auth-failure verdict to _advance_without_blaming_the_model.
     # 240 -> 236: four more verdicts left the walk — _rotate_credential,
     # _retry_delay, _blame_model and _warn_if_chain_outgrows_its_budget — which
     # is what paid for the reasoning-only re-ask, the per-attempt telemetry and
     # the shared per-model time allowance (DIAG 2026-09-13 §4.1/§4.4, review I6)
     # rather than raising this number for any of them.
-    "llm_client.py::_call_llm": 236,
+    "llm_client.py::_call_llm": 237,
     "config.py::manifest_to_agent_config": 268,
     # scheduler.py::start is gone from this list: 266 -> 116. The three
     # hand-written registration blocks (heartbeat, worker, cron) became one
@@ -106,11 +108,14 @@ KNOWN_LARGE: dict[str, int] = {
     # 247 -> 245: its own per-call timeout selection now shares
     # _per_call_timeout with _call_llm, which more than paid for the same
     # workflow-deadline clamp landing on this chain walk too.
+    # 236 -> 230: the credential rotation and the auth-failure verdict are now
+    # the same two helpers _call_llm uses, which is what paid for the streaming
+    # emptiness guard (one provider call, one row).
     # 245 -> 236: the streaming path's own admission checks (open breaker,
     # retired pool) moved to _streaming_skip_reason, which is what paid for it
     # recording its attempts — so `duration_ms` means the provider attempt on
     # BOTH paths instead of one thing streamed and another not (review I5).
-    "llm_client.py::_call_llm_streaming": 236,
+    "llm_client.py::_call_llm_streaming": 230,
     "telegram.py::run_agent": 257,
     "tools/handlers/experiment.py::_experiment_commit": 256,
     "telegram.py::_handle_goal_command": 242,

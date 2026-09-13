@@ -27,6 +27,7 @@ import pytest
 
 from robothor.engine import llm_client
 from robothor.engine.llm_attempts import (
+    OUTCOME_CANCELLED,
     OUTCOME_EMPTY,
     OUTCOME_SUCCESS,
     describe_completion,
@@ -342,6 +343,90 @@ async def test_the_streaming_path_times_the_attempt_too() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_streamed_answerless_reply_writes_exactly_one_row() -> None:
+    """One provider call is one row (review N1).
+
+    The streamed success path recorded the attempt AND returned the response,
+    so an answerless stream produced a failed-attempt row and a success row for
+    the same call — two rows, one of them claiming an answer that was never
+    there. The streaming path now refuses an answerless reply the way the
+    non-streaming one does: nothing was emitted to `on_content` (there was no
+    content), so advancing cannot duplicate text.
+    """
+    calls: list[str] = []
+
+    async def _acompletion(**kwargs: Any) -> Any:
+        calls.append(kwargs["model"])
+        return _Stream()
+
+    runner = _Runner()
+    session = AgentSession(agent_id="test-agent")
+    with (
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch("robothor.engine.llm_client.litellm.acompletion", new=_acompletion),
+        patch(
+            "robothor.engine.llm_client.litellm.stream_chunk_builder",
+            return_value=_response(content="", completion_tokens=0),
+        ),
+    ):
+        await runner._llm_call_and_record(
+            session, ["openrouter/primary"], [], AsyncMock(), set(), 0.3
+        )
+
+    rows = [s for s in session.run.steps if s.step_type == StepType.LLM_CALL]
+    assert len(calls) == 1
+    assert len(rows) == 1, "one provider call must leave one row"
+    assert rows[0].error_message and OUTCOME_EMPTY in rows[0].error_message
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_answer_still_writes_exactly_one_row() -> None:
+    """…and the common path does not grow a second row either."""
+    runner = _Runner()
+    session = AgentSession(agent_id="test-agent")
+    with (
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch(
+            "robothor.engine.llm_client.litellm.acompletion", new=AsyncMock(return_value=_Stream())
+        ),
+        patch(
+            "robothor.engine.llm_client.litellm.stream_chunk_builder",
+            return_value=_response(),
+        ),
+    ):
+        await runner._llm_call_and_record(
+            session, ["openrouter/primary"], [], AsyncMock(), set(), 0.3
+        )
+    rows = [s for s in session.run.steps if s.step_type == StepType.LLM_CALL]
+    assert len(rows) == 1
+    assert rows[0].error_message is None
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_attempt_records_its_row_then_re_raises() -> None:
+    """A run-deadline cancel is not an Exception, so nothing caught it (N4).
+
+    The attempt still happened and still cost wall clock; the cancellation
+    still stands.
+    """
+    runner = _Runner()
+    session = AgentSession(agent_id="test-agent")
+    with (
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch(
+            "robothor.engine.llm_client.litellm.acompletion",
+            new=AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await runner._llm_call_and_record(session, ["openrouter/only"], [], None, set(), 0.3)
+
+    rows = [s for s in session.run.steps if s.step_type == StepType.LLM_CALL]
+    assert len(rows) == 1
+    assert rows[0].error_message and OUTCOME_CANCELLED in rows[0].error_message
+
+
+@pytest.mark.asyncio
 async def test_attempt_rows_survive_a_cancellation() -> None:
     """A run-deadline cancel cuts straight through the recording line."""
     err = Exception("HTTP 502")
@@ -359,5 +444,6 @@ async def test_attempt_rows_survive_a_cancellation() -> None:
         await runner._llm_call_and_record(session, ["openrouter/only"], [], None, set(), 0.3)
 
     rows = [s for s in session.run.steps if s.step_type == StepType.LLM_CALL]
-    assert len(rows) == 1
+    assert len(rows) == 2, "the 502 AND the attempt the cancel cut through"
     assert "error_502" in (rows[0].error_message or "")
+    assert OUTCOME_CANCELLED in (rows[1].error_message or "")

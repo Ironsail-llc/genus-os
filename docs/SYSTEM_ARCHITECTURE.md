@@ -170,7 +170,11 @@ knowing when reading `agent_run_steps` or the journal:
   90%), capped so the answer always keeps `MIN_ANSWER_TOKENS`. A share, not a
   token count: every `supports_thinking` model in the fleet requests the same
   16,384 output, so absolute rungs all clamped to one number and three of the
-  four manifest settings reached the wire identically. `temperature` is forced
+  four manifest settings reached the wire identically. On that 16,384 the
+  rungs are 4,096 / 8,192 / 12,288 — and `high` and `max` are **the same
+  number**, because 75% is already the `MIN_ANSWER_TOKENS` cap. They separate
+  only on a model with a larger `default_output_tokens`; today `max` buys
+  nothing over `high`. `temperature` is forced
   to 1.0 only for the Anthropic family, which is the API that requires it.
 - **Every attempt is recorded, not just the one that worked.** Each attempt
   writes its own `agent_run_steps` row with its own `duration_ms`; the failed
@@ -181,7 +185,13 @@ knowing when reading `agent_run_steps` or the journal:
   all. `duration_ms` on an `llm_call` row means the **provider attempt** on both
   the streaming and non-streaming paths — never the token-counting prep before
   it — and the rows are written in a `finally`, so a spent credential or a
-  run-deadline cancellation keeps its evidence.
+  run-deadline cancellation keeps its evidence (a cancelled in-flight attempt
+  records `cancelled` and the cancellation still stands). One provider call is
+  one row: a streamed reply that carries no answer advances the chain the way a
+  non-streamed one does, rather than returning a blank turn and recording both
+  a failure and a success for the same call. A reasoning-only reply the same
+  model is re-asked about is written as `reasoning_only_retry`, so a query can
+  tell a self-heal from a model that gave up.
 - **An attempt row is telemetry, not a run error.** `record_llm_call` never
   sets `error_message`, so an `llm_call` row that has one is an attempt row
   (`llm_attempts.is_attempt_step`). They are excluded from the verifier's error
@@ -198,8 +208,13 @@ knowing when reading `agent_run_steps` or the journal:
   bulk of the fleet's timeouts. Every attempt on a model — the in-place retry
   and the reasoning-only re-ask included — shares **one** allowance of that
   length, so one dispatch is bounded by
-  `worst_case_dispatch_seconds(models, timeout)` and stays inside the 1800s
-  `thread_pool.PENDING_EXPIRY_SECONDS` a sub-agent turn is expected to fit in.
+  `worst_case_dispatch_seconds(models, timeout)`. At the batch timeout that is
+  305s per model, so a dispatch fits inside the 1800s
+  `thread_pool.PENDING_EXPIRY_SECONDS` a sub-agent turn is expected to fit in
+  **for chains of at most `MAX_CHAIN_MODELS_BUDGETED` (5) models** — the number
+  the arithmetic is tested against. A longer chain is an operator's choice and
+  is logged, not refused; the local tier's own 600s allowance is longer still,
+  so a chain ending there needs the same check made by hand.
   Inside a workflow step, `workflow_budget.bound_call_timeout` clamps the same
   number again to what the workflow has left, and refuses to start a call the
   workflow cannot afford to finish. The two clamps compose in that order inside

@@ -284,9 +284,12 @@ async def test_the_re_ask_is_bounded_by_what_the_workflow_has_left() -> None:
     assert getattr(result.choices[0].message, "content", None) == "an answer"
     assert acompletion.call_count == 2
     for call in acompletion.call_args_list:
-        assert call.kwargs["timeout"] <= 45.0, (
-            "no attempt may be given more time than the workflow has left"
-        )
+        timeout = call.kwargs["timeout"]
+        assert timeout <= 45.0, "no attempt may be given more time than the workflow has left"
+        # ONE rounding invariant, whichever clamp bound the number (review N3):
+        # a workflow remainder is a raw float, and "timeout after 44.99998s" is
+        # what the model allowance's own rounding exists to avoid.
+        assert timeout == int(timeout), f"an unrounded {timeout} reached litellm"
 
 
 # ─── compaction re-asks instead of walking the chain ────────────────────

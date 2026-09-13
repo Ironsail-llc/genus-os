@@ -24,6 +24,7 @@ a signature that a provider failure has to survive.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextvars import ContextVar
@@ -49,6 +50,10 @@ OUTCOME_REASONING_ONLY: Final = "reasoning_only"
 #: failure without parsing prose.
 OUTCOME_REASONING_ONLY_RETRY: Final = "reasoning_only_retry"
 OUTCOME_TIMEOUT: Final = "timeout"
+#: The run was cancelled while this attempt was in flight — its own deadline,
+#: the stall watchdog, or an operator. Not a provider failure, but the tokens
+#: and the wall clock were spent all the same.
+OUTCOME_CANCELLED: Final = "cancelled"
 OUTCOME_ERROR: Final = "error"
 
 #: Reasoning effort for the same re-ask on paths that speak OpenAI's knob
@@ -237,6 +242,10 @@ def note_outcome(
 
 def classify_error(error: BaseException) -> str:
     """The failure class an operator sorts by."""
+    # First: CancelledError is a BaseException, not an Exception, so it reaches
+    # here only from the call site that catches it deliberately.
+    if isinstance(error, asyncio.CancelledError):
+        return OUTCOME_CANCELLED
     if isinstance(error, TimeoutError):
         return OUTCOME_TIMEOUT
     status = getattr(error, "status_code", None)

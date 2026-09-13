@@ -478,6 +478,9 @@ MIN_THINKING_BUDGET = 1_024
 #: (10k/24k/48k) all clamped to one ceiling and three of the four manifest
 #: settings were indistinguishable on the wire — the knob looked armed and
 #: moved nothing above ``low``.
+#: NOTE: on the current fleet `high` and `max` resolve to the SAME budget —
+#: 75% of 16,384 is already the MIN_ANSWER_TOKENS cap — so `max` buys nothing
+#: over `high` until a model with a larger default_output_tokens is registered.
 _EFFORT_THINKING_SHARE: dict[str, float] = {
     "low": 0.25,
     "medium": 0.50,
@@ -590,13 +593,21 @@ def _attempt_floor(per_call_timeout: float) -> float:
 def _attempt_timeout(model_deadline: float, per_call_timeout: float) -> float:
     """Seconds this attempt may take: what is left of the model's allowance.
 
-    Rounded UP to the whole second the constants are written in, so the first
-    attempt on a model gets its full allowance rather than the microseconds
-    less that reading the clock costs — these numbers reach litellm as the
-    ``timeout`` kwarg and are interpolated into operator-facing log lines, and
-    a fifteen-decimal float there is not an improvement on "timeout after 600s".
+    Whole seconds, whichever clamp binds. These numbers reach litellm as the
+    ``timeout`` kwarg and are interpolated into operator-facing log lines, and a
+    fifteen-decimal float there is not an improvement on "timeout after 600s".
+
+    ONE rule for both inputs — round up, then take the smaller. Up, because the
+    first attempt on a model must get its full allowance rather than the
+    microseconds less that reading the clock costs, and because a workflow
+    remainder of 0.4s has to stay a call that HAPPENS: bounded at a second and
+    cancelled, so the deadline surfaces named on the next pass through the loop
+    rather than the chain quietly ending with nothing tried. The overshoot is
+    under a second against budgets of minutes, and the workflow's own outer
+    timeout is still the backstop.
     """
-    return min(per_call_timeout, float(math.ceil(model_deadline - time.monotonic())))
+    allowance = math.ceil(model_deadline - time.monotonic())
+    return float(min(math.ceil(per_call_timeout), allowance))
 
 
 def _retry_delay(
@@ -674,6 +685,51 @@ def _streaming_skip_reason(model: str, pool: KeyPool | None) -> str | None:
     if pool is not None and pool.exhausted():
         return "every configured credential for it is retired"
     return None
+
+
+def _advance_without_blaming_the_model(e: Exception, model: str) -> bool:
+    """True when the chain must advance WITHOUT marking this model broken.
+
+    A rejected credential says nothing about the model. Blaming it blacklists a
+    healthy model, and because every model in the chain shares the key, a
+    four-deep chain blacklists all four — then keeps skipping them for the
+    breaker's cooldown after the key is fixed.
+    """
+    if not is_auth_failure(e):
+        return False
+    logger.error(
+        "Model %s: the credential was rejected — advancing without marking the "
+        "model broken. Check the key, not the provider.",
+        _sanitize(model),
+    )
+    return True
+
+
+def _streamed_without_an_answer(model: str, shape: CompletionShape) -> EmptyCompletionError:
+    """Advance the chain on a streamed reply that carried no answer.
+
+    The streaming path had NO emptiness check: it recorded the attempt and
+    returned the response, so one provider call left a failed-attempt row AND a
+    success row — the second claiming an answer that was never there. It also
+    handed the operator a blank turn where the non-streaming path would have
+    fallen through to the next model.
+
+    No in-place retry here, unlike ``_call_llm``: a retry after partial content
+    has already been emitted to ``on_content`` would show duplicated text. That
+    cannot arise for THIS branch — an answerless reply emitted no content — but
+    the rule stays simple, so the chain advances instead.
+    """
+    error = EmptyCompletionError(
+        f"{model} streamed no content and no tool call ({shape.describe()})"
+    )
+    logger.warning(
+        "Model %s streamed %s (%s) — advancing to the next model",
+        _sanitize(model),
+        shape.outcome,
+        _sanitize(shape.describe()),
+    )
+    get_model_breaker().record_failure(model, reason=f"streamed {shape.outcome}")
+    return error
 
 
 def _blame_model(breaker: Any, e: Exception, model: str, attempt_timeout: float) -> None:
@@ -2001,10 +2057,14 @@ class LLMClient:
                                     kwargs=kwargs,
                                 )
                     shape = describe_completion(result)
-                    note_outcome(model, attempt_started, shape=shape)
+                    # Decided BEFORE the row is written: a reasoning-only reply
+                    # the same model is about to be re-asked about self-healed,
+                    # and only the row can tell that from one that gave up.
+                    re_ask = shape.reasoning_only and re_asks_left > 0
+                    note_outcome(model, attempt_started, shape=shape, self_healed=re_ask)
                     noted = True
                     if shape.no_answer:
-                        if shape.reasoning_only and re_asks_left > 0:
+                        if re_ask:
                             re_asks_left -= 1
                             thinking_reduced = True
                             nudge = REASONING_ONLY_NUDGE
@@ -2021,6 +2081,14 @@ class LLMClient:
                     breaker.record_success(model)
                     _record_execution_mode(model)
                     return result
+                except asyncio.CancelledError as ce:
+                    # A run-deadline cancel, a stall kill or an operator — not
+                    # a provider failure, and not an Exception, so the handler
+                    # below never saw it. The attempt still happened and still
+                    # cost the wall clock this row exists to account for.
+                    if not noted:
+                        note_outcome(model, attempt_started, error=ce)
+                    raise
                 except Exception as e:
                     last_error = e
                     # `noted` is already True when the response itself was the
@@ -2095,18 +2163,7 @@ class LLMClient:
                     # Giving up on this model — record the failure once per
                     # chain advancement (a retried-then-recovered blip must
                     # not count double toward the breaker threshold).
-                    if is_auth_failure(e):
-                        # A rejected credential says nothing about the model.
-                        # Blaming it blacklists a healthy model, and because
-                        # every model in the chain shares the key, a four-deep
-                        # chain blacklists all four — then keeps skipping them
-                        # for the breaker's cooldown after the key is fixed.
-                        logger.error(
-                            "Model %s: the credential was rejected — advancing "
-                            "without marking the model broken. Check the key, "
-                            "not the provider.",
-                            _sanitize(model),
-                        )
+                    if _advance_without_blaming_the_model(e, model):
                         break
                     _blame_model(breaker, e, model, attempt_timeout)
                     self._handle_model_error(e, model, broken_models, messages=messages)
@@ -2302,16 +2359,20 @@ class LLMClient:
                     # Final progress tick — we have a complete response to return.
                     if self._active_watchdog:
                         self._active_watchdog.touch(f"stream_complete:{model}")
+                    rebuilt = litellm.stream_chunk_builder(chunks)
+                    merge_streamed_reasoning_details(rebuilt, streamed_reasoning_details)
+                    # One meaning for `duration_ms` on both paths: the provider
+                    # attempt, never the token-counting prep before it.
+                    shape = describe_completion(rebuilt)
+                    note_outcome(model, attempt_started, shape=shape)
+                    if shape.no_answer:
+                        last_error = _streamed_without_an_answer(model, shape)
+                        break
                     # The interactive path proves a model healthy more often
                     # than any cron does; without this only failures ever
                     # reach the breaker, so it can open and never clear.
                     get_model_breaker().record_success(model)
                     _record_execution_mode(model)
-                    rebuilt = litellm.stream_chunk_builder(chunks)
-                    merge_streamed_reasoning_details(rebuilt, streamed_reasoning_details)
-                    # One meaning for `duration_ms` on both paths: the provider
-                    # attempt, never the token-counting prep before it.
-                    note_outcome(model, attempt_started, shape=describe_completion(rebuilt))
                     return rebuilt
                 except TimeoutError as te:
                     note_outcome(model, attempt_started, error=te)
@@ -2326,30 +2387,20 @@ class LLMClient:
                     spent = is_credit_exhausted(e)
                     if (spent or is_auth_failure(e)) and attempt_key is not None:
                         assert pool is not None
-                        pool.retire(
+                        # Safe to retry in place: a credential error surfaces at
+                        # stream creation, before any chunk has reached
+                        # on_content, so nothing is duplicated.
+                        if _rotate_credential(
+                            model,
+                            pool,
                             attempt_key,
-                            _retirement_reason(e, spent=spent),
-                        )
-                        if not pool.exhausted() and rotations_left > 0:
+                            e,
+                            spent=spent,
+                            rotations_left=rotations_left,
+                        ):
                             rotations_left -= 1
-                            logger.warning(
-                                "Model %s: credential %s failed (%s) — rotating "
-                                "to the next key and retrying the same model",
-                                _sanitize(model),
-                                pool.fingerprint(attempt_key),
-                                "credit exhausted" if spent else "auth rejected",
-                            )
-                            # Safe to retry in place: a credential error
-                            # surfaces at stream creation, before any chunk has
-                            # reached on_content, so nothing is duplicated.
                             continue
-                    if is_auth_failure(e):
-                        # A rejected credential says nothing about the model.
-                        logger.error(
-                            "Model %s: the credential was rejected — advancing "
-                            "without marking the model broken.",
-                            _sanitize(model),
-                        )
+                    if _advance_without_blaming_the_model(e, model):
                         last_error = e
                         break
                     self._handle_model_error(
