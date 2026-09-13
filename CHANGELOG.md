@@ -1,3 +1,10 @@
+## [1.76.2](https://github.com/Ironsail-llc/genus-os/compare/v1.76.1...v1.76.2) (2026-09-13)
+
+### Bug Fixes
+
+* **delivery:** a thin announce reply falls back to the note the run wrote ([#524](https://github.com/Ironsail-llc/genus-os/issues/524)) ([e24d962](https://github.com/Ironsail-llc/genus-os/commit/e24d962f36f3574667e11797b5ab9a159b49d83c))
+* **workflow:** a step cannot outspend its workflow, and steps are visible while running ([#529](https://github.com/Ironsail-llc/genus-os/issues/529)) ([eecc6cc](https://github.com/Ironsail-llc/genus-os/commit/eecc6ccbf374853a12140687ef1bc451d87a92d7))
+
 ## [1.76.1](https://github.com/Ironsail-llc/genus-os/compare/v1.76.0...v1.76.1) (2026-09-13)
 
 ### Bug Fixes
