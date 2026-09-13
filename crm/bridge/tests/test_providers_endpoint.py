@@ -262,6 +262,61 @@ class TestEngineClient:
         assert body == {"error": "engine unavailable"}
         assert FAKE_KEY not in caplog.text, "a failure path must not log the request body"
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "//evil.example.com/api/admin/models",
+            "http://evil.example.com/api/admin/models",
+            "/api/admin/../../etc/passwd",
+            "/api/admin/models?x=1",
+            "/api/admin/models#frag",
+            "/health",
+            "",
+            "/api/admin/models\n/api/admin/providers",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_it_refuses_a_path_that_is_not_a_literal_engine_api_path(
+        self, _signing_key, monkeypatch, path
+    ):
+        """Paths used to be literals in this repo. The agent-manifest routes
+        now assemble one from an id a caller supplied, so the shape is checked
+        at the sink: ``//host`` or a scheme moves the request to a different
+        server, and ``..`` walks out from under the engine's /api/admin scope
+        gate. The id is validated at the route as well — two locks, because a
+        URL a request is built from gets two."""
+        import httpx
+        from routers import _engine_client
+
+        def _explode(request: httpx.Request) -> httpx.Response:
+            raise AssertionError(f"a refused path still dialled: {request.url}")
+
+        real_client = httpx.AsyncClient
+        monkeypatch.setattr(
+            _engine_client.httpx,
+            "AsyncClient",
+            lambda **kw: real_client(transport=httpx.MockTransport(_explode), **kw),
+        )
+        with pytest.raises(ValueError, match="literal /api/"):
+            await _engine_client.engine_request("GET", path)
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/admin/models",
+            "/api/admin/providers/openrouter/test",
+            "/api/admin/scheduler/reconcile",
+            "/api/agents/demo-agent/trigger",
+            "/api/admin/tools",
+        ],
+    )
+    def test_every_path_this_repo_actually_sends_is_accepted(self, path):
+        """The guard's counter-case. A regex that refused a live call site
+        would take the provider wizard or the agent builder offline."""
+        from routers import _engine_client
+
+        assert _engine_client._checked_path(path) == path
+
 
 class TestOperatorGate:
     def test_a_viewer_cannot_list_providers(self, controls_client_as_viewer) -> None:
