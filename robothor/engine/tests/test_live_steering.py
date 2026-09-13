@@ -50,7 +50,10 @@ def test_runner_registers_the_live_session():
     from robothor.engine import runner
 
     src = inspect.getsource(runner)
-    assert "session_registry.register(session)" in src
+    # The kwarg arms this run's status sink for the same window (see
+    # session_registry.register); the registration itself is what steering
+    # needs, and both are cleared by the one unregister below.
+    assert "session_registry.register(session, on_status=on_status)" in src
     assert "session_registry.unregister(session)" in src
 
 

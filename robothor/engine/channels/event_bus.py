@@ -90,8 +90,20 @@ class EventBusChannel:
             post_delivery=False,
         )
 
-    async def ask(self, question: str, options: Sequence[str]) -> str:
-        """Not implemented, and never will be: a bus has nobody to ask."""
+    async def ask(
+        self,
+        question: str,
+        options: Sequence[str] = (),
+        *,
+        timeout: float = 300.0,
+        target: str = "",
+    ) -> str | None:
+        """Not implemented, and never will be: a bus has nobody to ask.
+
+        Raising rather than returning ``None`` is deliberate even though both
+        mean "no answer". ``None`` says *the person did not reply*; this says
+        *there is no person*, and the caller writes the two down differently.
+        """
         raise NotImplementedError("the event bus is a sink; it cannot ask a question")
 
     async def resolve_identity(self, native_id: str) -> Any:

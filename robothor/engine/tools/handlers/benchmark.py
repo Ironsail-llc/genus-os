@@ -279,6 +279,11 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "approve_workflow_step",
         "reject_workflow_step",
         "list_pending_approvals",
+        # Asking a person mid-run. A graded agent must not be able to page the
+        # operator, and a benchmark run has nobody watching it anyway — the
+        # handler's own trigger gate would refuse, but a tool the harness never
+        # offers cannot be attempted in the first place.
+        "ask_user",
         "delete_task",
         "list_agent_tasks",
         "list_tasks_summary",

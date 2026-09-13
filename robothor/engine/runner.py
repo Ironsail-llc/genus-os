@@ -128,6 +128,9 @@ _LONG_RUNNING_TOOLS = frozenset(
         "buddy_review_pass",
         "deep_reason",
         "look",
+        # Waits on a person; ask_user.bounded_timeout caps its own wait below
+        # what this grants, so the two agree instead of racing.
+        "ask_user",
     }
 )
 
@@ -1324,7 +1327,7 @@ class AgentRunner(
                 # Scoped to the loop window; always unregistered in the finally.
                 from robothor.engine import session_registry
 
-                session_registry.register(session)
+                session_registry.register(session, on_status=on_status)
 
                 try:
                     await self._run_loop(

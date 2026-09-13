@@ -308,6 +308,8 @@ Two databases on the same instance:
 | `crm_tasks` | CRM tasks |
 | `crm_conversations` | CRM conversations |
 | `crm_messages` | CRM messages |
+| `workflow_approvals` | A workflow step waiting on a human verdict, and the verdict |
+| `agent_questions` | A question an agent asked a person (`ask_user`, or a guardrail escalation) and the free-text answer. Separate from `workflow_approvals` because the workflow resume driver acts on every decided row it finds, and an answer is not a verdict |
 
 ### Canonical schema lifecycle
 
@@ -912,6 +914,7 @@ under that prefix inherits the requirement rather than having to remember it.
 | `GET /api/admin/providers`, `POST .../{id}/test`, `GET /api/admin/models`, `POST /api/admin/secrets/reload`, `POST /api/admin/defaults/reload` | `admin_providers.py` | Credentials, the model catalogue, a real test completion |
 | `POST /api/admin/scheduler/reconcile` | `admin_scheduler.py` | Re-derive the job set; answers `{added, replaced, refreshed, pruned, blocked, clean}`, or 503 when this process holds no scheduler |
 | `GET /api/admin/tools` | `admin_scheduler.py` | The registered tool names a manifest may name. The bridge's manifest validator reads this rather than importing `ToolRegistry`, because only the engine process knows what its plugins contributed |
+| `POST /api/admin/approvals/escalation/{id}` | `admin_approvals.py` | Settle a pending permission escalation. The request is an `asyncio.Event` in **this** process, so the bridge proxies here rather than writing a row; 404 when the prompt is gone (timed out, already decided, previous process), 503 when this engine holds no manager |
 
 Engine alerts (`robothor/engine/alerts.py`) route by severity: `critical`
 pages Telegram immediately; `warning`/`info` become `alert_digest`
@@ -973,6 +976,57 @@ Consumers must treat *only* `delivered` as reach: `analytics.py` counts it for
 the delivery success rate, and `scheduler._maybe_emit_heartbeat_status_ping`
 fires a fallback ping for everything else, so a `partial:` or `failed:` beat
 still reaches the operator as a one-line health signal.
+
+#### Asking a person: `Channel.ask`
+
+`send` is one-way. `ask` is the other slot on the channel protocol
+(`robothor/engine/channels/base.py`): put a question to the person at `target`
+and wait. Two callers, one contract.
+
+```
+ask(question, options=(), *, timeout=300.0, target="") -> str | None
+```
+
+**`None` is the only non-answer, and it is never one of `options`.** A timeout,
+an unreachable surface, or no addressee all return `None`; a channel that
+returned a plausible choice because the clock ran out would be recording a
+decision nobody made. `NotImplementedError` is also a legitimate outcome —
+`EventBusChannel.ask` raises it, because a sink has nobody to ask — so **every
+caller catches it** and falls through to whatever it does when no person is
+reachable.
+
+| Channel | `ask` |
+|---------|-------|
+| `telegram` | With `options`, an inline keyboard whose `callback_data` is `ask:<id>:<index>` — the index, because Telegram caps `callback_data` at 64 bytes and a long option would come back truncated into a different answer. Without options, plain text; `handle_text` intercepts the reply **before** `_enqueue_message`, which would otherwise buffer it until the blocked run finished. Both are owner-gated (`_check_owner_gate`, site `ask_answer`): in a group chat, anyone can tap or type |
+| `event_bus` | `NotImplementedError`, permanently |
+| webchat | No channel. A webchat run emits `approval_required` over its own SSE stream and is answered through the bridge — see below |
+
+**Who asks.** `ask_user` (`tools/handlers/ask_user.py`) is the agent asking mid-
+turn; it refuses on a run nobody is watching (cron, hooks, sub-agents) with an
+explanatory error rather than being absent from the toolset.
+`PermissionEscalationManager` (`permission_escalation.py`) is a guardrail
+pausing a tool call; its Telegram keyboard and `perm:` callback data are
+unchanged, and the channel is what it falls back to when the bot cannot deliver.
+
+**What outlives the wait.** `ask_user` writes the `agent_questions` row *before*
+the channel is asked, so a restart mid-ask does not lose the question and a late
+answer is still usable. In-RAM escalations are the exception by design — they
+are sub-minute and interactive — and the watchdog sweeps both halves every two
+minutes (`daemon._sweep_stale_questions`): stale prompts are denied, overdue
+rows are stamped `expired` and **kept**.
+
+**`approval_required`.** Both askers emit this status event through
+`robothor/engine/run_status.py`, a per-run sink the runner arms alongside the
+live-session registry. Payload: `{event, kind: "escalation"|"question", id,
+run_id, agent_id, tool?, question, options, expires_at}`. It is a notification —
+the row (or the pending request) is the truth — and it is how a web client
+learns there is something to answer.
+
+**Answering from the Helm.** `GET /api/approvals` lists both durable kinds;
+`POST /api/approvals/{kind}/{id}` answers one, with `kind` in `workflow`,
+`question`, `escalation`. Operator-scoped and audited (identifiers only — the
+answer text is content, not an identifier). `escalation` is proxied to the
+engine, because settling it means waking a coroutine in that process.
 
 ### Voice & SMS (Twilio)
 

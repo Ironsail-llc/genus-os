@@ -1479,6 +1479,70 @@ def _log_reconcile(outcome: ReconcileResult) -> None:
         )
 
 
+async def _drive_approvals_and_sweep(workflow_engine: WorkflowEngine | None) -> None:
+    """One watchdog tick's worth of human-in-the-loop housekeeping.
+
+    Two halves that fail the same way when nothing calls them. A decided
+    approval nothing acts on leaves its run suspended forever; an expired
+    question nothing stamps stays "open" in the operator's backlog and, in RAM,
+    keeps a button alive that resolves a request nobody is waiting on.
+
+    Extracted from ``_watchdog`` rather than added to it: that function is
+    pinned by the size ratchet, and "add a second housekeeping block" is exactly
+    the growth the pin exists to refuse.
+    """
+    if workflow_engine is not None:
+        try:
+            await workflow_engine.drive_approvals()
+        except Exception as e:  # noqa: BLE001 — never take the loop down
+            logger.warning("Watchdog: approval driver failed: %s", e)
+
+    swept = await _sweep_stale_questions()
+    if swept["prompts"] or swept["questions"]:
+        logger.info(
+            "Watchdog: swept %d stale prompt(s), %d overdue question(s)",
+            swept["prompts"],
+            swept["questions"],
+        )
+
+
+async def _sweep_stale_questions() -> dict[str, int]:
+    """Expire questions whose clock ran out, on both halves of the mechanism.
+
+    In RAM: a prompt whose waiting coroutine is gone (a run the watchdog killed,
+    a cancelled task) leaves an ``EscalationRequest`` in ``_pending`` forever,
+    and the button in the operator's chat keeps resolving it. ``cleanup_expired``
+    was written for exactly this and had no caller in the engine until here.
+
+    In the database: a pending ``agent_questions`` row past ``expires_at`` is
+    stamped ``expired`` and KEPT. That is a different act from deleting it — the
+    row is how a late answer is still usable, and how an operator can later see
+    that an agent asked and nobody replied.
+
+    Never raises. The watchdog's job is to notice things are wrong; a sweep that
+    took the loop down with it would be the thing going wrong.
+    """
+    prompts = 0
+    questions = 0
+    try:
+        from robothor.engine.permission_escalation import get_permission_manager
+
+        mgr = get_permission_manager()
+        if mgr is not None:
+            prompts = mgr.cleanup_expired()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Watchdog: stale prompt sweep failed: %s", exc)
+
+    try:
+        from robothor.engine.agent_questions import expire_overdue_questions
+
+        questions = len(await asyncio.to_thread(expire_overdue_questions))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Watchdog: overdue question sweep failed: %s", exc)
+
+    return {"prompts": prompts, "questions": questions}
+
+
 async def _watchdog(
     config: EngineConfig,
     scheduler: CronScheduler,
@@ -1569,11 +1633,8 @@ async def _watchdog(
         # nothing acts on leaves the run suspended forever — the "built,
         # merged, and not running" failure this platform keeps finding. Two
         # indexed scans; on a box with no pending approvals it is a no-op.
-        if tick_count % 2 == 0 and workflow_engine is not None:
-            try:
-                await workflow_engine.drive_approvals()
-            except Exception as e:
-                logger.warning("Watchdog: approval driver failed: %s", e)
+        if tick_count % 2 == 0:
+            await _drive_approvals_and_sweep(workflow_engine)
 
         # Zombie run reaper (every 40 ticks = 20 minutes)
         if tick_count % 40 == 0:

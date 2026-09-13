@@ -76,18 +76,33 @@ def announce(session: AgentSession) -> None:
             logger.warning("session_registry observer failed: %s", e)
 
 
-def register(session: AgentSession) -> None:
-    """Add a session to the registry, keyed by ``session.run_id``."""
+def register(session: AgentSession, *, on_status: Callable[..., object] | None = None) -> None:
+    """Add a session to the registry, keyed by ``session.run_id``.
+
+    ``on_status`` arms this run's status sink (``robothor/engine/run_status.py``)
+    for the same window. Both answer the same question — *this run is live, here
+    is how to reach it* — off the same key, and the runner registers and clears
+    them at the same two points; keeping them apart would mean two lifetimes
+    that must not diverge and nothing making sure they do not. The sink is what
+    the guardrail escalation path and the ``ask_user`` tool emit
+    ``approval_required`` through, neither of which has ``on_status`` in scope.
+    """
+    from robothor.engine.run_status import register_status_sink
+
     with _lock:
         _active[session.run_id] = session
+    register_status_sink(session.run_id, on_status)
     announce(session)
 
 
 def unregister(session_or_run_id: AgentSession | str) -> None:
-    """Remove a session from the registry. Idempotent."""
+    """Remove a session from the registry, status sink included. Idempotent."""
+    from robothor.engine.run_status import unregister_status_sink
+
     run_id = session_or_run_id if isinstance(session_or_run_id, str) else session_or_run_id.run_id
     with _lock:
         _active.pop(run_id, None)
+    unregister_status_sink(run_id)
 
 
 def lookup(run_id: str) -> AgentSession | None:

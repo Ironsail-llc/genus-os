@@ -38,6 +38,7 @@ def _default_tenant() -> str:
 from middleware import AuthMiddleware, CorrelationMiddleware, RBACMiddleware, TenantMiddleware
 from routers.agent_manifests import router as agent_manifests_router
 from routers.agents import router as agents_router
+from routers.approvals import router as approvals_router
 from routers.audit import router as audit_router
 from routers.auth import router as auth_router
 from routers.auth import sso_secret_present
@@ -173,6 +174,11 @@ app.include_router(fleet_router)
 app.include_router(runs_router)
 app.include_router(system_health_router)
 app.include_router(workflows_router)
+# What is waiting on a person, of every kind. Beside workflows because a
+# workflow approval is one of the three things it answers; the other two are an
+# ask_user question (a row) and a permission escalation (a proxy to the engine,
+# where the pending request actually lives).
+app.include_router(approvals_router)
 # First-run setup. Every route here refuses with 404 once an owner account
 # exists, so on a claimed appliance this router is mounted and unreachable --
 # the gate is asked per request rather than at import, because "has an owner"

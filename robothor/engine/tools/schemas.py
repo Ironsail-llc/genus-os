@@ -23,6 +23,124 @@ _WEB_SEARCH_PROVIDER_DESCRIPTION = (
 )
 
 
+_ASK_USER_DESCRIPTION = (
+    "Ask the person who started this run a question and wait for their answer. Use it "
+    "when a wrong guess would be expensive or hard to undo — which recipient, which "
+    "account, delete or keep — not for anything you can work out yourself. Returns "
+    "{answered: true, answer} when they replied, or {answered: false, question_id} when "
+    "nobody did: the question stays recorded and answerable, and you should proceed on "
+    "your best judgement while saying what you assumed. Only works on a run somebody "
+    "started interactively; on a scheduled or sub-agent run it refuses and says so."
+)
+
+
+#: Every tool whose job is to involve a person. Lifted out of
+#: ``get_engine_schemas`` as a cluster rather than added to it: that function is
+#: pinned by the function-size ratchet and larger on its own than most modules
+#: in the engine, so a new schema has to pay for itself by taking its
+#: neighbours with it. ``ask_user`` is the agent asking; the three workflow
+#: tools are the agent relaying an answer the operator gave in chat.
+_HUMAN_IN_THE_LOOP_SCHEMAS: dict[str, dict[str, Any]] = {
+    "ask_user": {
+        "type": "function",
+        "function": {
+            "name": "ask_user",
+            "description": _ASK_USER_DESCRIPTION,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": (
+                            "The question, in one sentence. Include what you will do with "
+                            "each answer — a person deciding blind picks badly."
+                        ),
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Up to 6 choices, offered as buttons where the surface supports "
+                            "them. Omit for a free-text answer."
+                        ),
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "minimum": 10,
+                        "maximum": 600,
+                        "description": "How long to wait. Defaults to 300.",
+                    },
+                },
+                "required": ["question"],
+            },
+        },
+    },
+    "list_pending_approvals": {
+        "type": "function",
+        "function": {
+            "name": "list_pending_approvals",
+            "description": (
+                "List workflow steps waiting on a human decision, with the question, "
+                "the run id, and how long is left before the step's timeout policy applies."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "approve_workflow_step": {
+        "type": "function",
+        "function": {
+            "name": "approve_workflow_step",
+            "description": (
+                "Approve a workflow step that is waiting on a human decision. Only call "
+                "this when the operator has actually said yes — the workflow will do the "
+                "thing it asked about. The run resumes within a minute."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string", "description": "Workflow run id"},
+                    "step_id": {
+                        "type": "string",
+                        "description": "Step id — required only if several steps are waiting",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Why, in the operator's words. Recorded with the decision.",
+                    },
+                },
+                "required": ["run_id"],
+            },
+        },
+    },
+    "reject_workflow_step": {
+        "type": "function",
+        "function": {
+            "name": "reject_workflow_step",
+            "description": (
+                "Reject a workflow step waiting on a human decision. The workflow will "
+                "not do the thing it asked about, and the run stops (or takes its "
+                "declared rejection branch)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string", "description": "Workflow run id"},
+                    "step_id": {
+                        "type": "string",
+                        "description": "Step id — required only if several steps are waiting",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Why, in the operator's words. Recorded with the decision.",
+                    },
+                },
+                "required": ["run_id"],
+            },
+        },
+    },
+}
+
+
 def get_engine_schemas() -> dict[str, dict[str, Any]]:
     """Return all engine-specific tool schemas keyed by tool name."""
     schemas: dict[str, dict[str, Any]] = {}
@@ -3441,71 +3559,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    schemas["list_pending_approvals"] = {
-        "type": "function",
-        "function": {
-            "name": "list_pending_approvals",
-            "description": (
-                "List workflow steps waiting on a human decision, with the question, "
-                "the run id, and how long is left before the step's timeout policy applies."
-            ),
-            "parameters": {"type": "object", "properties": {}},
-        },
-    }
-
-    schemas["approve_workflow_step"] = {
-        "type": "function",
-        "function": {
-            "name": "approve_workflow_step",
-            "description": (
-                "Approve a workflow step that is waiting on a human decision. Only call "
-                "this when the operator has actually said yes — the workflow will do the "
-                "thing it asked about. The run resumes within a minute."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "run_id": {"type": "string", "description": "Workflow run id"},
-                    "step_id": {
-                        "type": "string",
-                        "description": "Step id — required only if several steps are waiting",
-                    },
-                    "note": {
-                        "type": "string",
-                        "description": "Why, in the operator's words. Recorded with the decision.",
-                    },
-                },
-                "required": ["run_id"],
-            },
-        },
-    }
-
-    schemas["reject_workflow_step"] = {
-        "type": "function",
-        "function": {
-            "name": "reject_workflow_step",
-            "description": (
-                "Reject a workflow step waiting on a human decision. The workflow will "
-                "not do the thing it asked about, and the run stops (or takes its "
-                "declared rejection branch)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "run_id": {"type": "string", "description": "Workflow run id"},
-                    "step_id": {
-                        "type": "string",
-                        "description": "Step id — required only if several steps are waiting",
-                    },
-                    "note": {
-                        "type": "string",
-                        "description": "Why, in the operator's words. Recorded with the decision.",
-                    },
-                },
-                "required": ["run_id"],
-            },
-        },
-    }
+    schemas.update(_HUMAN_IN_THE_LOOP_SCHEMAS)
 
     schemas["team_scratchpad_read"] = {
         "type": "function",

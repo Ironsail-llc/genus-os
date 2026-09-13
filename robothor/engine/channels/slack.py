@@ -508,15 +508,29 @@ class SlackChannel:
 
     # ── C8 / C10 ─────────────────────────────────────────────────────────
 
-    async def ask(self, question: str, options: Sequence[str]) -> str:
-        """Not implemented — interactive asks arrive with the permission rework.
+    async def ask(
+        self,
+        question: str,
+        options: Sequence[str] = (),
+        *,
+        timeout: float = 300.0,
+        target: str = "",
+    ) -> str | None:
+        """Not implemented yet — Block Kit buttons plus an inbound interactions
+        endpoint, neither of which this channel has.
 
-        Block Kit buttons would be the natural implementation and a default
-        answer here would be an approval nobody gave.
+        Raising rather than returning ``None`` is the distinction
+        :mod:`robothor.engine.channels.base` draws: ``None`` means *the person
+        did not reply*, and this means *there is no way to ask them here*. The
+        callers act on it differently — ``ask_user`` records the question with
+        an empty ``channel`` so the operator can still answer it from the Helm,
+        and ``PermissionEscalationManager`` denies. Neither fabricates an
+        answer, which is the only outcome that would actually be wrong.
         """
         raise NotImplementedError(
             "interactive ask is not implemented for the Slack channel yet; "
-            "approval prompts still run through engine/permission_escalation.py"
+            "a Slack-triggered run records its question as an agent_questions row "
+            "and is answered through the bridge's /api/approvals endpoint"
         )
 
     async def resolve_identity(self, native_id: str) -> Any:

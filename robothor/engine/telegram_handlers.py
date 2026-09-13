@@ -759,6 +759,46 @@ class TelegramHandlersMixin:
             if msg and hasattr(msg, "edit_reply_markup"):
                 await msg.edit_reply_markup(reply_markup=None)
 
+    # ── Channel.ask answers ──
+
+    async def on_ask_answer(self, callback: CallbackQuery) -> None:
+        """Resolve a pending ``Channel.ask`` from an inline-keyboard tap.
+
+        Same owner gate as ``perm:``: in a group chat the buttons are visible to
+        everyone in it, and an ask is a decision.
+        """
+        from robothor.engine.channels.telegram import resolve_ask_choice
+
+        msg = callback.message
+        sender_id = callback.from_user.id if callback.from_user else "unknown"
+        if not msg or not hasattr(msg, "chat"):
+            await callback.answer("Unauthorized", show_alert=True)
+            return
+        if not self._check_owner_gate(
+            chat_id=str(msg.chat.id), sender_id=str(sender_id), site="ask_answer"
+        ):
+            logger.warning(
+                "Unauthorized ask callback from chat_id=%s user_id=%s", msg.chat.id, sender_id
+            )
+            await callback.answer("Unauthorized", show_alert=True)
+            return
+
+        parts = (callback.data or "").split(":", 2)
+        if len(parts) != 3 or not parts[2].isdigit():
+            await callback.answer("Invalid callback data")
+            return
+
+        chosen = resolve_ask_choice(parts[1], int(parts[2]))
+        if chosen is None:
+            # Already answered, or the asking tool gave up. Saying so beats
+            # acknowledging a tap that changed nothing.
+            await callback.answer("That question is no longer open")
+        else:
+            await callback.answer(chosen)
+        with contextlib.suppress(Exception):
+            if hasattr(msg, "edit_reply_markup"):
+                await msg.edit_reply_markup(reply_markup=None)
+
     # ── Run control callbacks (Steer / Interrupt buttons from /agents) ──
 
     async def on_runctl_callback(self, callback: CallbackQuery) -> None:
@@ -1131,6 +1171,24 @@ class TelegramHandlersMixin:
             # (or legacy self-service onboarding under the escape flag).
             reply = await self._handle_unregistered_sender(message, telegram_user_id)
             await message.answer(reply)
+            return
+
+        # ── A pending free-text ask takes this line before the run does ──
+        # `_enqueue_message` buffers a message and returns while a run is
+        # active; the buffer is only drained in that run's `finally`. So an
+        # answer that gets that far is invisible to the coroutine blocking
+        # inside `Channel.ask` — the ask times out and the operator's reply
+        # arrives as the next turn's prompt. Owner-gated for the same reason
+        # the `perm:` callback is: in a group chat anyone can type.
+        from robothor.engine.channels.telegram import has_pending_ask, resolve_ask_text
+
+        if (
+            has_pending_ask(chat_id)
+            and self._check_owner_gate(
+                chat_id=chat_id, sender_id=telegram_user_id, site="ask_answer"
+            )
+            and resolve_ask_text(chat_id, user_text)
+        ):
             return
 
         session_key = self._session_key(chat_id)

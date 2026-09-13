@@ -511,6 +511,53 @@ class TestSSEStatusEvents:
         assert tools_start[0]["data"]["tools"] == ["search_memory"]
 
     @pytest.mark.asyncio
+    async def test_sse_emits_approval_required_with_the_row_id(self, client, mock_runner):
+        """A webchat run has no channel to ask on, so this event IS the ask.
+
+        The Helm renders it and answers through the bridge's approval endpoint,
+        which needs the id — an event that announced a question without naming
+        it would be a spinner with no button.
+        """
+        run = AgentRun(
+            status=RunStatus.COMPLETED,
+            output_text="Waiting",
+            trigger_type=TriggerType.WEBCHAT,
+        )
+
+        async def fake_execute(**kwargs):
+            on_status = kwargs.get("on_status")
+            if on_status:
+                # Shape emitted by the ask_user handler and by
+                # PermissionEscalationManager._announce.
+                await on_status(
+                    {
+                        "event": "approval_required",
+                        "kind": "question",
+                        "id": "00000000-0000-0000-0000-000000000001",
+                        "run_id": "00000000-0000-0000-0000-0000000000ff",
+                        "agent_id": "main",
+                        "question": "Which vendor?",
+                        "options": ["Acme", "Globex"],
+                        "expires_at": "2026-01-01T00:00:00+00:00",
+                    }
+                )
+            return run
+
+        mock_runner.execute = AsyncMock(side_effect=fake_execute)
+
+        res = await client.post(
+            "/chat/send",
+            json={"session_key": "approval:main:test", "message": "renew it"},
+        )
+        events = _parse_sse(res.text)
+
+        asks = [e for e in events if e["event"] == "approval_required"]
+        assert len(asks) == 1
+        assert asks[0]["data"]["id"] == "00000000-0000-0000-0000-000000000001"
+        assert asks[0]["data"]["kind"] == "question"
+        assert asks[0]["data"]["options"] == ["Acme", "Globex"]
+
+    @pytest.mark.asyncio
     async def test_sse_tool_events_unchanged(self, client, mock_runner):
         """Adding on_status doesn't break existing on_tool event forwarding."""
         run = AgentRun(
