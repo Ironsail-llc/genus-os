@@ -1038,11 +1038,13 @@ class WorkflowEngine:
             result.error_message = str(e)
             logger.error("Step %s failed: %s", step.id, e, exc_info=True)
 
-        # Deliberately NOT in a `finally`: a step cancelled by the workflow
-        # deadline must leave its id behind, because it is the only record of
-        # which step was in flight when the budget expired. Removing only THIS
-        # step's id (rather than clearing the key) is what keeps a fast
-        # parallel branch from erasing a slow sibling that is still running.
+        # Deliberately NOT in a `finally`. A step killed by the workflow
+        # DEADLINE is caught above and names itself, so it no longer needs the
+        # key — but a true `CancelledError` (engine shutdown) still unwinds
+        # straight past here, and for that one this id is the only record of
+        # which step was in flight. Removing only THIS step's id, rather than
+        # clearing the key, is what keeps a fast parallel branch from erasing a
+        # slow sibling that is still running.
         with contextlib.suppress(ValueError):
             run.context.get(IN_FLIGHT_STEP_KEY, []).remove(step.id)
 

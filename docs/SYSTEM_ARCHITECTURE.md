@@ -936,10 +936,13 @@ step, its computed worst case and the budget — the same ladder as the
 agent-manifest check `_check_stall_budget_vs_llm_timeout`, which validates the
 identical inversion for stall budgets — and `scripts/validate_agents.py --ci`
 runs the same check with `strict=True`, so an inversion it can resolve fails
-the PR instead of scrolling past. Both surfaces also report **how much they
-checked**: on a platform checkout every agent manifest is gitignored, so most
-chains do not resolve, and an unresolved chain must not be mistaken for a clean
-one. The arithmetic reads its constants from `robothor/engine/llm_budgets.py`,
+the PR instead of scrolling past. Both surfaces report **how much they
+checked**: an unresolved chain must never be mistaken for a clean one. Because
+every agent manifest is gitignored, the CLI falls back to
+`llm_budgets.REFERENCE_CHAIN` — the four-model shape the platform ships — so
+the *tracked* `docs/workflows/*.yaml` budgets are genuinely checked on a clean
+checkout, and a green `validate-agents` job is evidence rather than an absence
+of it. Checking zero agent steps is itself reported as a failure. The arithmetic reads its constants from `robothor/engine/llm_budgets.py`,
 the same leaf `llm_client` spends them out of, so prediction and runtime cannot
 drift; that leaf is also why the check needs no provider SDK to run.
 
@@ -950,7 +953,19 @@ the step and the refused model, and which `runner.execute` classifies as a
 **cancellation, not a timeout**: the agent's own clock never fired, so counting
 it in the timeout rate would be the same corruption `GENUINE_TIMEOUT_SQL`
 exists to prevent. The runner writes its row and re-raises, because only the
-workflow engine knows which step to mark.
+workflow engine knows which step to mark — and so does `ToolRegistry.execute`,
+since `spawn_agent` runs its child `runner.execute` inline in the parent's task
+and therefore inside the same deadline scope; left to the registry's broad
+`except TimeoutError` it became "Tool 'spawn_agent' timed out after 120s", a
+duration that never elapsed.
+
+Being a cancellation has one consequence worth stating. `cancelled` is in
+`RESUMABLE_STATUSES`, so without a second rule a restart would resume an agent
+run its workflow deliberately abandoned — outside any deadline, with no
+workflow left to report to, and spending the budget that was already exhausted.
+`resume.resumable()` therefore drops runs whose reason starts with
+`WORKFLOW_BUDGET_CANCEL_PREFIX`: the one `cancelled` that is a decision rather
+than a casualty.
 
 The deadline is one budget for the whole run, **not a per-step allowance**: it
 stops a step outspending its workflow, and does not stop a first step leaving

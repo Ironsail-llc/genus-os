@@ -80,8 +80,14 @@ class WorkflowDeadlineError(TimeoutError):
         # time this is raised the previous call has returned. Saying "in
         # flight" named a model that had already finished, and on a retry it
         # named the wrong attempt (2026-09-13 review M5).
+        #
+        # The leading constant is load-bearing, not decoration: the timeout
+        # rate and the resume scan both identify this kind of cancellation by
+        # that prefix, so the message is a contract rather than prose.
+        from robothor.engine.analytics import WORKFLOW_BUDGET_CANCEL_PREFIX
+
         super().__init__(
-            f"workflow {workflow_id!r} budget exhausted in step {step_id!r}: "
+            f"{WORKFLOW_BUDGET_CANCEL_PREFIX}: workflow {workflow_id!r} step {step_id!r} — "
             f"{remaining:.1f}s left, not enough to start model {model!r}"
         )
 

@@ -100,6 +100,24 @@ def model_call_allowance(model: str, *, batch: bool = True) -> int:
     return LLM_REQUEST_TIMEOUT_BATCH if batch else LLM_REQUEST_TIMEOUT
 
 
+#: The chain SHAPE the platform assumes when an instance's manifests are not
+#: available to read — three cloud models and the on-device tail, which is what
+#: `templates/` ships and what every instance measured so far runs. Worth
+#: 300 + 300 + 300 + 600 plus one 300s primary retry = 1800s.
+#:
+#: It exists so the tracked `docs/workflows/*.yaml` can be checked on a clean
+#: platform checkout, where every `docs/agents/*.yaml` is gitignored and no
+#: real chain resolves. Without it the budget gate could only ever run on an
+#: instance, and a green CI job meant "nothing was checked" rather than
+#: "the budgets are coherent" (2026-09-13 review N5).
+REFERENCE_CHAIN: tuple[str, ...] = (
+    "openrouter/primary",
+    "openrouter/fallback-1",
+    "openrouter/fallback-2",
+    "ollama_chat/local-tail",
+)
+
+
 def in_place_retries(model: str) -> int:
     """In-place retries the chain walk grants ``model`` before advancing.
 

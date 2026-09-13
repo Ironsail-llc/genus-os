@@ -96,22 +96,66 @@ class TestTheStrictHalfActuallyFires:
         )
 
 
-class TestItSaysWhatItCouldNotCheck:
-    def test_an_unresolvable_chain_is_counted_and_reported(self, validator, tmp_path, capsys):
+class TestAGreenJobIsEvidence:
+    """Review N5: the first version could only ever check an INSTANCE. On a
+    platform checkout — the only place `validate-agents` runs — every manifest
+    is gitignored, nothing resolved, and the job exited 0 having checked
+    nothing. A green gate that cannot fail is not a gate.
+
+    The fix is that an unresolved chain falls back to `REFERENCE_CHAIN`, the
+    four-model shape the platform ships, so the TRACKED workflow budgets are
+    really checked here."""
+
+    def test_an_unresolved_chain_is_checked_against_the_reference_shape(
+        self, validator, tmp_path, capsys
+    ):
         validator.WORKFLOW_DIR = _workflow(tmp_path, 900)
         # No manifest for probe-classifier — the platform-checkout case.
         failures = validator.check_workflow_budgets({}, strict=True)
-        assert failures == 0, "an UNCHECKED step must not be reported as a failure"
+        assert failures == 1, (
+            "a 900s budget went unchecked because the agent manifest is gitignored — "
+            "which is every agent manifest, on every platform checkout"
+        )
         out = capsys.readouterr().out
-        assert "0 of 1 agent step(s) checked" in out, out
-        assert "1 chain(s) unresolved" in out, out
+        assert "1 agent step(s) checked" in out, out
+        assert "reference chain" in out, out
 
-    def test_the_platform_checkout_reports_its_own_workflows(self, validator, capsys):
-        """The real files, through the real entry point's helper."""
-        validator.check_workflow_budgets({}, strict=True)
+    def test_a_coherent_budget_still_passes_against_the_reference_shape(self, validator, tmp_path):
+        validator.WORKFLOW_DIR = _workflow(tmp_path, 2400)
+        assert validator.check_workflow_budgets({}, strict=True) == 0
+
+    def test_a_declared_chain_wins_over_the_reference(self, validator, tmp_path, capsys):
+        """The instance's own config is the better answer when it is readable."""
+        validator.WORKFLOW_DIR = _workflow(tmp_path, 900)
+        short = {"model": {"primary": "openrouter/only"}}  # 300 + 300 = 600 < 900
+        assert validator.check_workflow_budgets({"probe-classifier": short}, strict=True) == 0
         out = capsys.readouterr().out
-        assert "Workflow budgets:" in out
-        assert "workflow(s)" in out
+        assert "1 against declared chains" in out, out
+
+    def test_checking_nothing_at_all_is_reported_as_a_failure(self, validator, tmp_path, capsys):
+        """The backstop: reaching zero now means the workflows or the fallback
+        went missing, not that the instance is unusual."""
+        wf_dir = tmp_path / "workflows"
+        wf_dir.mkdir()
+        (wf_dir / "no-agents.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "id": "no-agent-steps",
+                    "timeout_seconds": 900,
+                    "steps": [{"id": "shape", "type": "transform", "expression": "1"}],
+                }
+            )
+        )
+        validator.WORKFLOW_DIR = wf_dir
+        assert validator.check_workflow_budgets({}, strict=True) == 1
+        assert "not evidence of anything" in capsys.readouterr().out
+
+    def test_the_platform_checkout_checks_every_tracked_step(self, validator, capsys):
+        """The real files, through the real entry point's helper."""
+        failures = validator.check_workflow_budgets({}, strict=True)
+        out = capsys.readouterr().out
+        assert "0 agent step(s) checked" not in out, out
+        assert failures == 0, out
 
 
 class TestTheShippedWorkflowsPassTheShippedGate:

@@ -60,6 +60,9 @@ class ResumeCandidate:
     agent_id: str
     resume_attempts: int
     has_checkpoint: bool
+    #: The terminal reason already written on the row. Read, not displayed:
+    #: not every `cancelled` run is a restart casualty (see `resumable`).
+    error_message: str = ""
 
 
 def resume_enabled() -> bool:
@@ -83,8 +86,20 @@ def resumable(candidates: list[ResumeCandidate]) -> list[ResumeCandidate]:
     Filters rather than rejecting wholesale — one spent run must not stop the
     others being recovered.
     """
+    from robothor.engine.analytics import is_workflow_budget_cancellation
+
     keep: list[ResumeCandidate] = []
     for c in candidates:
+        # A workflow-budget kill is the one `cancelled` that is not a
+        # casualty: the workflow DECIDED this agent could not be afforded, and
+        # its own run row is already terminal. Resuming it would restart the
+        # agent outside any deadline scope, with no workflow left to report to
+        # — and the next thing that agent does is spend the budget that was
+        # exhausted in the first place. `cancelled` became resumable to catch
+        # graceful restarts; this rides in on that and must not.
+        if is_workflow_budget_cancellation(c.error_message):
+            logger.info("Run %s was abandoned by its workflow's budget — not resuming", c.run_id)
+            continue
         if not c.has_checkpoint:
             logger.info("Run %s has no checkpoint — leaving it to the reaper", c.run_id)
             continue

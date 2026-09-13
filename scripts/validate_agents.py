@@ -160,17 +160,29 @@ def check_workflow_budgets(manifests: dict, *, strict: bool) -> int:
     chain that fits any budget.
     """
     try:
+        from robothor.engine.llm_budgets import REFERENCE_CHAIN
         from robothor.engine.workflow import parse_workflow
         from robothor.engine.workflow_budget import report_step_budgets
     except Exception as e:  # pragma: no cover - environment dependent
-        print(f"Workflow budgets: SKIPPED — engine not importable ({e})")
-        return 0
+        print(f"Workflow budgets: NOT CHECKED — engine not importable ({e})")
+        return 1 if strict else 0
 
     if not WORKFLOW_DIR.is_dir():
+        print(f"Workflow budgets: NOT CHECKED — no {WORKFLOW_DIR.name}/ directory")
         return 0
 
+    def _chain(agent_id: str) -> list[str]:
+        """This instance's chain if we can read it, else the platform's shape.
+
+        A gitignored manifest is not evidence of a small chain; it is no
+        evidence at all. Falling back to REFERENCE_CHAIN is what lets the
+        TRACKED workflow budgets be checked on a clean platform checkout, which
+        is the only place this job ever runs.
+        """
+        return _agent_chain(manifests.get(agent_id, {})) or list(REFERENCE_CHAIN)
+
     failures = 0
-    totals = {"workflows": 0, "steps": 0, "checked": 0, "unresolved": 0}
+    totals = {"workflows": 0, "steps": 0, "declared": 0, "reference": 0}
     for path in sorted(WORKFLOW_DIR.glob("*.yaml")):
         try:
             data = yaml.safe_load(path.read_text())
@@ -181,30 +193,51 @@ def check_workflow_budgets(manifests: dict, *, strict: bool) -> int:
         if not (data and isinstance(data, dict) and "id" in data):
             continue
         wf = parse_workflow(data)
-        report = report_step_budgets(
-            wf, lambda aid: _agent_chain(manifests.get(aid, {})), strict=strict
-        )
+        report = report_step_budgets(wf, _chain, strict=strict)
+        declared = sum(1 for s in _agent_step_ids(wf) if _agent_chain(manifests.get(s, {})))
         totals["workflows"] += 1
         totals["steps"] += report.agent_steps
-        totals["checked"] += report.checked
-        totals["unresolved"] += len(report.unresolved)
+        totals["declared"] += declared
+        totals["reference"] += report.agent_steps - declared
         for issue in report.issues:
             icon = "!" if strict else "~"
             print(f"  [{icon}] {path.name}: {issue.message}")
             if strict:
                 failures += 1
 
+    detail = f"{totals['declared']} against declared chains"
+    if totals["reference"]:
+        detail += f", {totals['reference']} against the platform reference chain"
     print(
         f"Workflow budgets: {totals['workflows']} workflow(s), "
-        f"{totals['checked']} of {totals['steps']} agent step(s) checked, "
-        f"{totals['unresolved']} chain(s) unresolved"
-        + (
-            " -- agent manifests are gitignored on a platform checkout"
-            if totals["unresolved"]
-            else ""
-        )
+        f"{totals['steps']} agent step(s) checked ({detail})"
     )
+
+    # A job that checked NOTHING must not look like a job that found nothing.
+    # This is the whole reason the reference chain exists, so reaching zero
+    # here means the workflows or the fallback have gone missing, not that the
+    # instance is unusual.
+    if totals["workflows"] and not totals["steps"]:
+        print("  [!] no agent step was checked — this result is not evidence of anything")
+        failures += 1
     return failures
+
+
+def _agent_step_ids(wf) -> list[str]:
+    """Every agent_id an agent step references, parallel branches included."""
+    from robothor.engine.models import WorkflowStepType
+
+    found: list[str] = []
+
+    def _visit(steps) -> None:
+        for step in steps:
+            if getattr(step, "parallel_steps", None):
+                _visit(step.parallel_steps)
+            if getattr(step, "type", None) == WorkflowStepType.AGENT and step.agent_id:
+                found.append(step.agent_id)
+
+    _visit(wf.steps)
+    return found
 
 
 def main():

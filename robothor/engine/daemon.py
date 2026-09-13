@@ -246,8 +246,12 @@ def _resume_scan() -> list[ResumeCandidate]:
             # 2026-08-27 a normal `systemctl restart` tombstoned five in-flight
             # runs two seconds before the new daemon scanned, three of them
             # holding checkpoints, and resume recovered none of them.
+            # error_message comes along because not every `cancelled` run is a
+            # restart casualty: a workflow-budget kill is a DECISION, and
+            # `resumable` needs the reason to tell them apart.
             cur.execute(
-                "SELECT id, agent_id, COALESCE(resume_attempts, 0) FROM agent_runs "
+                "SELECT id, agent_id, COALESCE(resume_attempts, 0), "
+                "COALESCE(error_message, '') FROM agent_runs "
                 "WHERE status = ANY(%s) ORDER BY id",
                 (sorted(RESUMABLE_STATUSES),),
             )
@@ -262,6 +266,7 @@ def _resume_scan() -> list[ResumeCandidate]:
             agent_id=str(r[1] or ""),
             resume_attempts=int(r[2] or 0),
             has_checkpoint=bool(CheckpointManager.load_latest(str(r[0]))),
+            error_message=str(r[3] or "") if len(r) > 3 else "",
         )
         for r in rows
     ]
