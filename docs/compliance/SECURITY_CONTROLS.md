@@ -202,8 +202,8 @@ Status meanings:
   newline, so a name can be attributed to the previous line's variable.
 
   The narrowing also does not end the false positives. Measured over the
-  repository's own 514,525 tracked source lines: 471 firing lines before,
-  213 after. All of the remainder are false positives, and ordinary prose
+  repository's own tracked source: 478 firing lines before, 240 after. All of
+  the remainder are false positives, and ordinary prose
   words longer than twelve characters (`configuration`, `authorization`,
   `troubleshooting`) still read as values, because the single-class rule is a
   length threshold and not a judgement about words. Raising the threshold

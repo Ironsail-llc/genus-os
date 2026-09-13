@@ -249,9 +249,14 @@ _TYPE_AND_SCHEMA_WORDS = frozenset(
 #: a real env-var name is words, optionally numbered at the end of a word
 #: (`OPENROUTER_API_KEY_2`, `S3_BUCKET`), while key material interleaves them
 #: (`X9K2M_4TQ7P_ZR31_WD8V`, `A7F3_B2C1_D0E5_F4A8`, `JBSWY3DPEHPK3PXP_…`). A
-#: length bound does not separate them — all of those fit inside any bound a
-#: name also fits inside — so the shape is what this matches.
-_ENV_VAR_NAME = re.compile(r"^[A-Z]+[0-9]{0,2}(?:_(?:[A-Z]+[0-9]{0,2}|[0-9]{1,3}))+$")
+#: length bound alone does not separate them — all of those fit inside any
+#: bound a name also fits inside — which is why digit placement is the rule.
+#:
+#: The 24-character bound is still here as well, on EVERY segment. Dropping it
+#: alongside the digit rule was incidental rather than required, and it
+#: exempted long all-caps runs (`ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEF_GH`) that
+#: both earlier revisions caught. No env-var name has a 33-character word.
+_ENV_VAR_NAME = re.compile(r"^[A-Z]{1,24}[0-9]{0,2}(?:_(?:[A-Z]{1,24}[0-9]{0,2}|[0-9]{1,3}))+$")
 
 #: `settings.db_password`, `config.get` — a reference to where the credential
 #: lives, which is exactly what an agent is supposed to be able to report.
@@ -263,14 +268,21 @@ _ENV_VAR_NAME = re.compile(r"^[A-Z]+[0-9]{0,2}(?:_(?:[A-Z]+[0-9]{0,2}|[0-9]{1,3}
 #: in the code an agent reads is snake_case.
 _ATTRIBUTE_PATH = re.compile(r"^[a-z_][a-z0-9_]{0,23}(?:\.[a-z_][a-z0-9_]{0,23})+$")
 
-#: `Field(`, `os.getenv(` — a call. No `$` anchor: the value pattern excludes
-#: `)` but not `(` or `=`, so a call WITH arguments arrives as
+#: `Field(`, `os.getenv(` — a call. Not anchored at the paren: the value
+#: pattern excludes `)` but not `(` or `=`, so a call WITH arguments arrives as
 #: `Field(repr=False` and an anchored pattern stopped one character short of
 #: recognising it. That miss was not merely a warning: the redactor rewrote
 #: `providerReference: SecretStr = Field(repr=False)` to
 #: `providerReference: SecretStr=[REDACTED: credential])`, handing an agent
 #: syntactically broken Python for a line holding no credential at all.
-_CALL_REFERENCE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,40}\(")
+#:
+#: The tail must then carry a SEPARATOR, because dropping the anchor outright
+#: exempted every value that merely contains a bracket — `Passw0rd(2024)Xk9`
+#: is an ordinary human password, not a call. A real call's arguments have a
+#: `=`, `,`, `.` or quote in them; key material after a `(` does not. The
+#: alternative (excluding `(` from the value charset) would truncate the
+#: capture and leave the redactor leaking the tail.
+_CALL_REFERENCE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,40}\((?:$|.*[^A-Za-z0-9])")
 
 #: A value with exactly one character class and no more characters than an
 #: ordinary English word is not key material — `required`, `undefined`,

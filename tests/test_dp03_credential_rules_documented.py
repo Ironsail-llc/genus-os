@@ -95,8 +95,25 @@ class TestTheDocumentNamesTheseExamples:
         assert "any mixed-class literal of eight or more" not in _dp03()
 
     def test_the_measured_residual_is_stated(self) -> None:
-        """DP-03 must not imply the false positives are finished."""
-        assert re.search(r"\b213\b", _dp03()), "DP-03 no longer states the measured residual"
+        """DP-03 must not imply the false positives are finished.
+
+        The CLAIM is pinned, not the figure. Asserting the literal count made
+        any unrelated change that moved it red this test with a message that
+        did not say what had happened — a brittle test that teaches its reader
+        to edit the number until it passes.
+        """
+        claim = re.search(r"([\d,]+) firing lines before, ([\d,]+) after", _dp03())
+        assert claim, (
+            "DP-03 must keep stating the measured false-positive residual as "
+            "'<N> firing lines before, <M> after' — it is the sentence that "
+            "stops the section reading as if the problem were finished"
+        )
+        before, after = (int(g.replace(",", "")) for g in claim.groups())
+        assert after < before, (
+            f"DP-03 claims the narrowing made things worse ({before} -> {after}); "
+            "re-measure with the scorer described in the PR and correct the "
+            "sentence, or the section is now false"
+        )
 
 
 class TestThePredicateAgreesWithTheDocument:

@@ -274,6 +274,36 @@ TRUE_POSITIVES: list[tuple[str, object, str]] = [
         _out("api_key: 9q2m..7zt4rv8nw3xk1bd"),
         "9q2m..7zt4rv8nw3xk1bd",
     ),
+    # A bracket inside a password — what `_CALL_REFERENCE` must NOT swallow.
+    # A real call's arguments contain a separator (`=`, `,`, `.`, a quote);
+    # key material that happens to contain `(` does not. The captured value
+    # stops at `)`, which the value charset excludes, so the row states the
+    # captured span as the secret.
+    ("a bracket inside a password", _out("password=Passw0rd(2024)Xk9"), "Passw0rd(2024"),
+    (
+        "a bracket inside a secret",
+        _out("password=secret(9q2mLp7Zt4Rv8"),
+        "secret(9q2mLp7Zt4Rv8",
+    ),
+    ("a bracket inside a token", _out("api_key: tok9q2m(Lp7Zt4Rv8Nw3"), "tok9q2m(Lp7Zt4Rv8Nw3"),
+    # A long all-caps run — what `_ENV_VAR_NAME` must NOT swallow. The digit
+    # placement rule is right, but no real env-var name has a 33-character
+    # word in it, so each segment stays bounded as well.
+    (
+        "a long all-caps run",
+        _out("password=ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEF_GH"),
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEF_GH",
+    ),
+    (
+        "a long all-caps key",
+        _out("api_key: QWERTYUIOPASDFGHJKLZXCVBNMQWERT_YUIOP"),
+        "QWERTYUIOPASDFGHJKLZXCVBNMQWERT_YUIOP",
+    ),
+    (
+        "a long all-caps run with digits",
+        _out("password=ABCDEFGHIJKLMNOPQRSTUVWXYZ12_ABCDEFGHIJ34"),
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ12_ABCDEFGHIJ34",
+    ),
     # The same false-positive shapes with a REAL value in them: a placeholder
     # earlier in the text must not shield what comes after it.
     (
