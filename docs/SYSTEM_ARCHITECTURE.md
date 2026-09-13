@@ -948,13 +948,12 @@ breadcrumbs, preferences, agent hooks, agent goal, goal recall, active intents
 `_weather_context`, `_git_status_context`, `_thread_pool_context` and
 `host_state_context`.
 
-`host_state_context` (`robothor/engine/host_state.py`) is the only section that
-probes the running host. It emits three facts in words, headed "LIVE ENGINE
-STATE … as of now":
+`robothor/engine/host_state.py` is the only section that probes the running
+host. It emits three facts in words, headed "LIVE ENGINE STATE … as of now":
 
 | Fact | Source |
 |------|--------|
-| Engine uptime, as an **age** | `systemctl show -p ActiveEnterTimestamp --value <unit>` where systemd is booted, else the process start time from `/proc`. Never `NRestarts` — systemd zeroes that on a manual or deploy restart. |
+| Engine uptime, as an **age** | `systemctl show -p ActiveEnterTimestamp -p ActiveState --timestamp=utc <unit>` where systemd is booted (retried without `--timestamp=utc` on systemd < 247). Never `NRestarts` — systemd zeroes that on a manual or deploy restart. |
 | Platform version | `robothor.__version__` |
 | Last-24h model reach | One aggregate over `agent_runs.model_used`, tenant-scoped, via `crm.dal.get_model_reach_24h` |
 
@@ -966,13 +965,35 @@ the day's runs reached the primary). Both came from undated `memory_facts` rows
 that were true when written and were recalled as present tense. The section says
 it is live so the model has a reason to prefer it over such a recollection.
 
-It is bounded and optional: one `systemctl` call with a one-second ceiling plus
-one query, memoised for 60s, rendered only for the operator-facing agent
+**It renders on both preambles.** `build_warmth_preamble` reaches it through the
+registered agent context hook; `build_interactive_preamble` calls
+`host_state_section(agent_id)` directly, via
+`_interactive_supervisor_sections`. That is not belt-and-braces: agent context
+hooks run from the cron builder alone, and the operator was in *chat* when the
+stale fact was asserted, so a section only on the cron path would have missed
+the channel the incident happened on.
+
+**It is a reason to warm, not a passenger.** `wants_cron_warmup` (the predicate
+`runner.execute` uses to decide `warmup_kind`) is true when the manifest names
+warmup memory blocks, context files or peer agents — *or* when the agent gets
+host state. Without that, a heartbeat agent with no `warmup:` block built no
+preamble at all and the targeting bought nothing.
+
+**Degradation is uptime's whole design.** On a systemd host a failed, wedged or
+empty probe renders `Engine uptime: unknown` — never this process's own clock.
+(`systemctl show` for a unit that does not exist exits 0 with empty output, so
+`ActiveState` is read alongside the timestamp; the `/proc` process clock is used
+only where there is no systemd to ask.) The model-reach line degrades the same
+way, and runs that reached no model are counted and named as such rather than
+appearing as a model called `none`.
+
+Bounded and optional: at most two `systemctl` calls at 0.5 s each, plus one
+query with a 1 s `statement_timeout`, memoised 60 s per (agent, configured
+primary), rendered only for the operator-facing agent
 (`OPERATOR_INBOX_AGENT_ID`) and agents carrying a `heartbeat:` block — workers
-get nothing. Every fact degrades to its own one-line "unknown" rather than
-raising, and an instance opts out by dropping the `register_agent_context_hook`
-call, like any other hook. The unread-alert and memory sections are untouched by
-it.
+get nothing, and make no calls. An instance opts out by dropping the
+`register_agent_context_hook` call, like any other hook. The unread-alert and
+memory sections are untouched by it.
 
 #### Delivery status vocabulary
 

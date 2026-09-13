@@ -351,7 +351,7 @@ itself whether your agent gets it:
 | `_weather_context` | The instance's weather status file, if present | Every agent |
 | `_git_status_context` | Branch, working-tree status, last five commits | Agents whose `tools:` include a git tool |
 | `_thread_pool_context` | The thread pool, after an auto-sweep | `main`, on cron beats only |
-| `host_state_context` | Live engine uptime, platform version and last-24h model reach, headed "as of now" | `main` and any agent with a `heartbeat:` block |
+| `host_state_context` | Live engine uptime, platform version and last-24h model reach, headed "as of now" | `main` and any agent with a `heartbeat:` block — on **scheduled and interactive** runs alike |
 
 `host_state_context` is what stops an agent answering "has the engine been
 restarted?" or "is the fleet on fallbacks?" from a memory fact that was true
@@ -359,6 +359,16 @@ last week. It probes the host directly, says so in its own text, degrades each
 fact to a one-line "unknown" rather than failing, and is memoised for 60
 seconds. Workers deliberately do not get it: they act on CRM tasks, not on
 platform health, and the probe is not free.
+
+Two details worth knowing if you are writing a heartbeat agent:
+
+- It reaches **interactive** turns too (Telegram, webchat, channel wake), not
+  only scheduled ones. The other hooks in this table that target `main` are
+  cron-only; this one is not, because the question it answers is one the
+  operator asks in chat.
+- A `heartbeat:` block is by itself enough to make your agent build a warmup
+  preamble. You do **not** need to declare a `warmup:` section to get this —
+  live engine state counts as a reason to warm.
 
 Status file — written at end of every run:
 

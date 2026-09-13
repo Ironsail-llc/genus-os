@@ -58,7 +58,9 @@ __all__ = [
     "HOST_STATE_CACHE_TTL_SECONDS",
     "SYSTEMCTL_TIMEOUT_SECONDS",
     "host_state_context",
+    "host_state_section",
     "reset_host_state_cache",
+    "wants_host_state",
 ]
 
 #: How long a rendered section stays good. The facts move on the order of
@@ -70,7 +72,7 @@ HOST_STATE_CACHE_TTL_SECONDS = 60
 #: Ceiling on the ``systemctl`` call. A wedged systemd costs the warmup a
 #: second, not the run. The surrounding hook runner already logs anything over
 #: 100ms, so a slow probe is visible without being fatal.
-SYSTEMCTL_TIMEOUT_SECONDS = 1.0
+SYSTEMCTL_TIMEOUT_SECONDS = 0.5
 
 _HEADER = (
     "LIVE ENGINE STATE (probed on this host as of now -- this is the current "
@@ -81,8 +83,8 @@ _HEADER = (
 _UNKNOWN_UPTIME = "- Engine uptime: unknown as of now (state could not be read)."
 _UNKNOWN_REACH = "- Model reach, last 24h: unknown as of now (query failed)."
 
-#: agent id -> (monotonic deadline, rendered section)
-_CACHE: dict[str, tuple[float, str]] = {}
+#: (agent id, configured primary) -> (monotonic deadline, rendered section)
+_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
 
 
 def reset_host_state_cache() -> None:
@@ -98,17 +100,24 @@ def _now() -> datetime:
 # ── targeting ─────────────────────────────────────────────────────
 
 
-def _wants_host_state(config: AgentConfig) -> bool:
+def wants_host_state(agent_id: str, config: AgentConfig | None = None) -> bool:
     """The operator-facing agent and anything with a heartbeat.
 
     Those are the runs that report on the platform. A plain worker answers a
     CRM task; giving it a per-run ``systemctl`` call and an aggregate query for
     context it cannot act on is fleet-wide cost for nothing, which is the same
     reasoning that keeps the unread-alert digest on ``main`` alone.
+
+    ``config`` is optional because ``build_interactive_preamble`` is handed an
+    agent *id*, not a manifest. Without one the heartbeat test cannot be made,
+    which costs nothing in practice: a heartbeat is a scheduled trigger, so a
+    heartbeat-only agent never takes the interactive path anyway, and the
+    operator-facing agent — the one the incident happened to, in chat — is
+    matched by id.
     """
     from robothor.engine.warmup import OPERATOR_INBOX_AGENT_ID
 
-    if config.id == OPERATOR_INBOX_AGENT_ID:
+    if agent_id == OPERATOR_INBOX_AGENT_ID:
         return True
     return getattr(config, "heartbeat", None) is not None
 
@@ -130,12 +139,19 @@ def _systemd_present() -> bool:
 
 
 def _parse_systemd_timestamp(value: str) -> tuple[datetime, str] | None:
-    """``Sun 2026-09-13 08:29:43 EDT`` -> (aware datetime, display label).
+    """``Sun 2026-09-13 08:29:43 UTC`` -> (aware datetime, display label).
 
-    systemd prints in the host's local zone. The naive part is parsed and
-    localised via ``astimezone()``; the abbreviation is kept verbatim for the
-    label rather than re-derived, so what the agent reads is what the manager
-    said.
+    The probe asks for ``--timestamp=utc``, so the common path parses an
+    explicit UTC instant and no offset is re-derived anywhere. That matters:
+    the first draft echoed systemd's zone abbreviation in the label while
+    computing the age in the *calling process's* zone, and those disagree by an
+    hour throughout the DST fall-back window (``01:30 EST`` and ``01:30 EDT``
+    are different instants that parse identically) and by the full offset after
+    a host timezone change mid-uptime.
+
+    The legacy path — an older systemd that rejects ``--timestamp=`` — still
+    localises a naive stamp, which is correct because ``systemctl`` formats in
+    the calling process's zone, so parser and manager agree by construction.
     """
     text = value.strip()
     if not text or text == "n/a":
@@ -151,21 +167,18 @@ def _parse_systemd_timestamp(value: str) -> tuple[datetime, str] | None:
         naive = datetime.strptime(f"{parts[0]} {parts[1]}", "%Y-%m-%d %H:%M:%S")  # noqa: DTZ007
     except ValueError:
         return None
-    aware = naive.astimezone()
+    aware = naive.replace(tzinfo=UTC) if zone in {"UTC", "GMT", "Z"} else naive.astimezone()
     label = f"{parts[0]} {parts[1][:5]}"
     return aware, f"{label} {zone}".strip()
 
 
-def _systemctl_active_enter() -> tuple[datetime, str] | None:
-    """When the engine unit last entered ``active``, or None.
+def _show_properties(extra_args: list[str]) -> dict[str, str] | None:
+    """Run ``systemctl show`` and return its ``KEY=VALUE`` lines, or None.
 
-    ``ActiveEnterTimestamp`` deliberately, **not** ``NRestarts``: systemd
-    zeroes that counter on a manual or deploy restart, so it read ``0`` on a
-    host with fifteen starts in thirty hours. A counter that lies about a
-    restart is worse than no counter.
+    Deliberately not ``--value``: two properties are needed, and a bare pair of
+    values is positional, so a systemd that reorders or omits one would be
+    silently misread.
     """
-    if not _systemd_present():
-        return None
     try:
         completed = subprocess.run(  # noqa: S603
             [
@@ -173,7 +186,9 @@ def _systemctl_active_enter() -> tuple[datetime, str] | None:
                 "show",
                 "-p",
                 "ActiveEnterTimestamp",
-                "--value",
+                "-p",
+                "ActiveState",
+                *extra_args,
                 ENGINE_SERVICE_UNIT,
             ],
             capture_output=True,
@@ -186,7 +201,40 @@ def _systemctl_active_enter() -> tuple[datetime, str] | None:
         return None
     if completed.returncode != 0:
         return None
-    return _parse_systemd_timestamp(completed.stdout)
+    properties: dict[str, str] = {}
+    for line in completed.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            properties[key.strip()] = value.strip()
+    return properties
+
+
+def _systemctl_active_enter() -> tuple[datetime, str] | None:
+    """When the engine unit last entered ``active``, or None.
+
+    ``ActiveEnterTimestamp`` deliberately, **not** ``NRestarts``: systemd
+    zeroes that counter on a manual or deploy restart, so it read ``0`` on a
+    host with fifteen starts in thirty hours. A counter that lies about a
+    restart is worse than no counter.
+
+    ``ActiveState`` is read alongside it because ``systemctl show`` for a unit
+    that **does not exist exits 0 with empty output**. Without that check, any
+    instance whose unit is not named ``ENGINE_SERVICE_UNIT`` reads as "probe
+    succeeded, no timestamp" and used to fall through to the process clock —
+    silently, permanently, and wrong.
+
+    Two calls at most: ``--timestamp=utc`` shipped in systemd v247, and an
+    older manager rejects the option with a non-zero exit rather than ignoring
+    it, so the legacy format is the retry.
+    """
+    if not _systemd_present():
+        return None
+    properties = _show_properties(["--timestamp=utc"])
+    if properties is None:
+        properties = _show_properties([])
+    if not properties or not properties.get("ActiveState"):
+        return None
+    return _parse_systemd_timestamp(properties.get("ActiveEnterTimestamp", ""))
 
 
 def _process_start() -> datetime | None:
@@ -218,10 +266,19 @@ def _process_start() -> datetime | None:
 
 
 def _engine_start() -> tuple[datetime, str] | None:
-    """Best available engine start time, with the label to display for it."""
-    from_systemd = _systemctl_active_enter()
-    if from_systemd is not None:
-        return from_systemd
+    """The engine's start time, with the label to display for it, or None.
+
+    The process clock is the engine clock only where there is **no unit to
+    ask**. On a systemd host a failed probe is "unknown", full stop — falling
+    through to ``_process_start`` there is how the first draft came to tell the
+    agent, under a header saying "this is the current truth", that the engine
+    had restarted one second ago when a wedged ``systemctl`` hit the ceiling.
+    The same fall-through made ``genus engine run <agent>`` — a short-lived
+    process — report seconds of engine uptime on a box that had been up for
+    days.
+    """
+    if _systemd_present():
+        return _systemctl_active_enter()
     fallback = _process_start()
     if fallback is None:
         return None
@@ -306,22 +363,75 @@ def _normalise_model(name: str) -> str:
     return name.strip().rsplit("/", 1)[-1].lower()
 
 
-def _pick_primary(configured: str, counts: list[tuple[str, int]]) -> tuple[str, int]:
-    """The configured primary's row if the runs recorded it, else the busiest.
+def _tally(rows: list[dict[str, Any]]) -> tuple[list[tuple[str, int]], int]:
+    """Rows -> (model counts busiest-first, runs that reached no model).
 
-    Falling back to the busiest model is deliberate: the question the section
-    answers is "is the fleet reaching its primary?", and an agent with no
-    ``model_primary`` still deserves an honest share rather than silence.
+    Two corrections live here. Counts are keyed on the **normalised** id, so
+    two routes to one model are one entry: unmerged, they were reported as
+    "54.5% went to vendorX/model-a; the next model is vendorY/model-a" — the
+    same model as its own runner-up. And a NULL ``model_used`` is a run that
+    reached no model at all, so it is separated out rather than left to compete
+    for the primary slot under the name ``none``.
     """
-    if configured:
-        target = _normalise_model(configured)
-        for name, runs in counts:
-            if _normalise_model(name) == target:
-                return name, runs
-    return counts[0]
+    merged: dict[str, int] = {}
+    no_model = 0
+    for row in rows:
+        runs = int(row.get("runs") or 0)
+        if runs <= 0:
+            continue
+        raw = row.get("model_used")
+        name = _normalise_model(str(raw)) if raw else ""
+        if not name:
+            no_model += runs
+        else:
+            merged[name] = merged.get(name, 0) + runs
+    counts = sorted(merged.items(), key=lambda pair: (-pair[1], pair[0]))
+    return counts, no_model
 
 
-def _reach_line(config: AgentConfig) -> str:
+def _no_model_clause(no_model: int) -> str:
+    if no_model == 1:
+        return " 1 run reached no model."
+    return f" {no_model} runs reached no model." if no_model else ""
+
+
+def _reach_body(configured: str, counts: list[tuple[str, int]]) -> str:
+    """The sentence, with the primary named only when it IS the primary.
+
+    The first draft fell back to the busiest model and called *that* "the
+    primary". The case where the configured primary got zero runs is exactly
+    the "is the fleet on fallbacks?" case this section exists to settle, and it
+    was answered backwards, under a header instructing the model to prefer this
+    over anything it recalled.
+    """
+    total = sum(runs for _, runs in counts)
+    target = _normalise_model(configured) if configured else ""
+    matched = next((pair for pair in counts if pair[0] == target), None)
+
+    if matched is not None:
+        rest = [pair for pair in counts if pair[0] != matched[0]]
+        body = (
+            f"{matched[1]} of {total} model calls ({100.0 * matched[1] / total:.1f}%) "
+            f"went to the configured primary {matched[0]}"
+        )
+        if rest:
+            return f"{body}; the next model was {rest[0][0]} with {rest[0][1]}."
+        return f"{body}; nothing else was used."
+
+    busiest, busiest_runs = counts[0]
+    if target:
+        return (
+            f"the configured primary {target} handled 0 of {total} model calls; "
+            f"the busiest was {busiest} with {busiest_runs} "
+            f"({100.0 * busiest_runs / total:.1f}%)."
+        )
+    return (
+        f"no primary model is configured for this agent; the busiest was {busiest} "
+        f"with {busiest_runs} of {total} model calls ({100.0 * busiest_runs / total:.1f}%)."
+    )
+
+
+def _reach_line(config: AgentConfig | None) -> str:
     try:
         from robothor.crm.dal import get_model_reach_24h
 
@@ -330,55 +440,59 @@ def _reach_line(config: AgentConfig) -> str:
         logger.debug("host_state: model reach query failed: %s", exc)
         return _UNKNOWN_REACH
     try:
-        counts = [
-            (str(row["model_used"]), int(row["runs"]))
-            for row in rows
-            if int(row.get("runs") or 0) > 0
-        ]
+        counts, no_model = _tally(rows)
     except Exception as exc:
         logger.debug("host_state: model reach rows unusable: %s", exc)
         return _UNKNOWN_REACH
+    head = "- Model reach, last 24h as of now:"
+    if not counts and not no_model:
+        return f"{head} no runs recorded."
     if not counts:
-        return "- Model reach, last 24h: no runs recorded as of now."
-    counts.sort(key=lambda pair: -pair[1])
-    total = sum(runs for _, runs in counts)
-    primary_name, primary_runs = _pick_primary(getattr(config, "model_primary", ""), counts)
-    share = 100.0 * primary_runs / total
-    rest = [pair for pair in counts if pair[0] != primary_name]
-    line = (
-        f"- Model reach, last 24h as of now: {primary_runs} of {total} runs "
-        f"({share:.1f}%) went to the primary {primary_name}"
-    )
-    if rest:
-        return f"{line}; the next model is {rest[0][0]} with {rest[0][1]}."
-    return f"{line}; nothing else was used."
+        return f"{head} no run reached a model at all —{_no_model_clause(no_model)}"
+    body = _reach_body(getattr(config, "model_primary", ""), counts)
+    return f"{head} {body}{_no_model_clause(no_model)}"
 
 
-# ── the hook ──────────────────────────────────────────────────────
+# ── the entry points ──────────────────────────────────────────────
 
 
-def _render(config: AgentConfig) -> str:
+def _render(config: AgentConfig | None) -> str:
     return "\n".join([_HEADER, _uptime_line(), _version_line(), _reach_line(config)])
 
 
-def host_state_context(config: AgentConfig) -> str | None:
-    """Agent context hook -- live engine uptime, version and model reach.
+def host_state_section(agent_id: str, config: AgentConfig | None = None) -> str | None:
+    """The section, or None when this agent does not get it.
 
-    Returns None for agents outside the operator/heartbeat class, and never
-    raises: every fact inside degrades to its own "unknown" line, and an
-    unexpected failure here degrades the whole section to None the way the
-    hook runner would have anyway.
+    **Both** warmup builders call this. The first draft registered it as an
+    agent context hook only, and ``_run_agent_context_hooks`` is reached from
+    ``build_warmth_preamble`` alone — so Telegram, webchat and channel-event
+    runs, which go to ``build_interactive_preamble``, rendered nothing. The
+    operator was in *chat* when the stale fact was asserted, which made the fix
+    absent from the one channel the incident happened on.
+
+    Never raises: every fact degrades to its own "unknown" line, and an
+    unexpected failure degrades the whole section to None, the way the hook
+    runner would have anyway.
     """
     try:
-        if not _wants_host_state(config):
+        if not wants_host_state(agent_id, config):
             return None
+        # Keyed on the primary too: ``chat_sessions.model_override`` can change
+        # main's effective primary between turns, and keying on the id alone
+        # served the previous turn's sentence for the rest of the minute.
+        key = (agent_id, getattr(config, "model_primary", "") or "")
         now = time.monotonic()
-        cached = _CACHE.get(config.id)
+        cached = _CACHE.get(key)
         if cached is not None and cached[0] > now:
             return cached[1]
         section = _render(config)
-        _CACHE[config.id] = (now + HOST_STATE_CACHE_TTL_SECONDS, section)
+        _CACHE[key] = (now + HOST_STATE_CACHE_TTL_SECONDS, section)
     except Exception as exc:  # pragma: no cover -- belt and braces
         logger.debug("host_state: section failed: %s", exc)
         return None
     return section
+
+
+def host_state_context(config: AgentConfig) -> str | None:
+    """Agent context hook — the cron builder's route into the shared section."""
+    return host_state_section(config.id, config)

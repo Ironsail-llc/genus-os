@@ -46,6 +46,56 @@ def isolated_model_breaker(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def no_systemctl_in_engine_tests(monkeypatch: pytest.MonkeyPatch):
+    """No engine test may shell out to the host's service manager.
+
+    Measured with a logging shim first on ``PATH``: the suite spawned
+    ``systemctl`` ten times — eight pre-existing ``ollama.service`` probes and
+    two ``ActiveEnterTimestamp`` reads from the warmup host-state section. That
+    count *understated* it, because ``host_state``'s module-global 60s cache
+    suppressed every later test that warmed up ``main`` inside the window — and
+    that same global meant a section rendered in one test file could be served
+    to another.
+
+    So: stub the probe, make any ``systemctl`` spawn a loud failure rather than
+    a silent host dependency, and clear the cache on both sides of every test.
+    ``test_no_systemctl_in_tests.py`` asserts all three, so weakening this turns
+    the suite red instead of quietly restoring the spawns.
+
+    Scoped to argv[0] deliberately. A blanket subprocess ban would be reverted
+    the first time a test needed ``git``.
+    """
+    import subprocess as _subprocess
+    from pathlib import PurePath
+
+    from robothor.engine import host_state
+
+    host_state.reset_host_state_cache()
+
+    def _stubbed_probe() -> None:
+        return None
+
+    _stubbed_probe._is_test_stub = True  # type: ignore[attr-defined]
+    monkeypatch.setattr(host_state, "_systemctl_active_enter", _stubbed_probe)
+
+    real_run = _subprocess.run
+
+    def _guarded_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+        argv0 = cmd[0] if isinstance(cmd, (list, tuple)) and cmd else cmd
+        if isinstance(argv0, (str, PurePath)) and PurePath(str(argv0)).name == "systemctl":
+            raise AssertionError(
+                "A test tried to spawn systemctl. Tests must not depend on the "
+                "host's service manager — patch the probe instead "
+                "(see robothor/engine/tests/test_no_systemctl_in_tests.py)."
+            )
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(_subprocess, "run", _guarded_run)
+    yield
+    host_state.reset_host_state_cache()
+
+
+@pytest.fixture(autouse=True)
 def explicit_loopback_engine_test_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """Legacy unit apps mount Engine routers without the production middleware.
 

@@ -750,12 +750,9 @@ class AgentRunner(
         # Determine what warmup is needed (before launching parallel tasks)
         warmup_kind: str | None = None  # "cron", "interactive", or None
         if trigger_type in (TriggerType.CRON, TriggerType.HOOK, TriggerType.WORKFLOW):
-            has_warmup = (
-                agent_config.warmup_memory_blocks
-                or agent_config.warmup_context_files
-                or agent_config.warmup_peer_agents
-            )
-            if has_warmup:
+            from robothor.engine.warmup import wants_cron_warmup
+
+            if wants_cron_warmup(agent_config):
                 warmup_kind = "cron"
         elif trigger_type in (TriggerType.TELEGRAM, TriggerType.WEBCHAT):
             # Warm the first turn, then again whenever the last preamble has

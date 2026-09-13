@@ -22,12 +22,18 @@ SANDBOX_DENIAL_PREFIX = "benchmark sandbox:"
 #: and detectors.py (which excludes it) so the label can't drift between them.
 SANDBOX_DENIED_ERROR_TYPE = "sandbox_denied"
 
-#: systemd unit the engine runs as. A constant, not a setting: the warmup
-#: host-state probe (robothor/engine/host_state.py) and the doctor's service
-#: check both name it, and an operator who renames the unit has already had to
-#: edit the unit file the installer wrote. Declaring an env var for it would
-#: add a raw read to a ratchet that only goes down, and buy an instance nothing
-#: the install templates do not already control.
+#: systemd unit the engine runs as, without the ``.service`` suffix. A
+#: constant, not a setting: an operator who renames the unit has already had to
+#: edit the unit file the installer wrote, and declaring an env var would add a
+#: raw read to a ratchet that only goes down.
+#:
+#: Read by the warmup host-state probe (``robothor/engine/host_state.py``) and
+#: the doctor's unit check (``robothor/doctor/checks/services.py``). Several CLI
+#: paths still spell the name inline (``cli/engine.py``, ``cli/admin.py``,
+#: ``cli/config_cmd.py``, ``engine/telegram.py``); those are print-and-shell
+#: sites, not probes, and moving them is a separate change — until they do, this
+#: is the shared source of truth for the two callers that *decide* something
+#: from it, not for the whole platform.
 ENGINE_SERVICE_UNIT = "robothor-engine"
 
 #: crm_agent_notifications.notification_type for an alert raised about (or

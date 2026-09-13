@@ -43,7 +43,7 @@ CAPS = {
     # had one). Seven lines: a four-line note and a two-line branch inside
     # execute(). There is no cohesive cluster to extract here — the write has
     # to happen where the run row is being assembled.
-    "robothor/engine/runner.py": 2522,
+    "robothor/engine/runner.py": 2517,
     # 2545: a concurrent session ratcheted this to 2539 by lifting injection
     # screening and journal resume out of execute(); the deliverable guard's call
     # site adds the rest. Its 25 lines of logic went to loop_guards.py, so what
@@ -68,7 +68,13 @@ CAPS = {
     # ever wants, one system call at a time, inside a code path that runs on
     # every cron beat and every interactive turn. Anything bigger than these
     # three facts belongs in a tool the agent calls deliberately, not in warmup.
-    "robothor/engine/host_state.py": 384,
+    # 384 -> 498 in review round 1, and every line of it is a correction rather
+    # than a feature: the systemd probe now reads ActiveState alongside the
+    # timestamp (a nonexistent unit exits 0 with empty output) and retries
+    # without --timestamp=utc for systemd < 247, and the reach sentence stopped
+    # calling whatever model was busiest "the primary". Nothing new was added to
+    # the section.
+    "robothor/engine/host_state.py": 498,
     # Tempo-scaled watchdog budgets (2026-08-27): extracted here rather than
     # growing run_budget past its cap, same as the finalization cluster.
     # Raised 110 -> 125 the same day to admit max_wallclock_ceiling(), which the
