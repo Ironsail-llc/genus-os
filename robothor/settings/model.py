@@ -975,6 +975,16 @@ class ChannelSettings(SettingsGroup):
         "ROBOTHOR_SLACK_ALLOWED_CHANNELS",
         "Comma-separated Slack channel ids the bot will respond in.",
     )
+    slack_verify_target: str = declare(
+        "",
+        "ROBOTHOR_SLACK_VERIFY_TARGET",
+        "Conversation `genus channel verify slack` and the doctor's Slack check "
+        "post their test message to -- a channel id (C.../G.../D...) or a user "
+        "id (U.../W...), never a #name. Used by verify and the doctor only: "
+        "delivery never falls back to it, so an agent whose manifest names no "
+        "target fails loudly instead of posting somewhere nobody chose.",
+        since="1.70.0",
+    )
     voice_notes_enabled: bool = declare(
         False,
         "ROBOTHOR_VOICE_NOTES_ENABLED",

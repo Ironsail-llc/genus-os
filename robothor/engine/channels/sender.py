@@ -51,6 +51,41 @@ def _chunk_count(body: str, chunk_size: int | None) -> int:
     return len(split_message(body, chunk_size))
 
 
+#: The shortest per-message limit the platform's own surfaces have: Slack's
+#: 4,000 (Telegram's is 4,096). A body under it is one message on every surface
+#: shipped here, so one acknowledgement for it is believable evidence.
+#:
+#: Above it, from a sender that declared no ``chunk_size``, nothing is. See
+#: :func:`_uncountable`.
+UNDECLARED_SAFE_LENGTH = 4000
+
+
+def _uncountable(body: str, acknowledged: int) -> bool:
+    """Whether a no-``chunk_size`` sender's answer can be read at all.
+
+    Two shapes, and the second is the one the first cut of this guard missed:
+
+    * **More than one message came back.** The sender split a body it was handed
+      whole, so ``expected`` is 1, ``acknowledged`` is N, and ``N >= 1`` reads as
+      ``delivered`` however many chunks were lost — a sender that split into five
+      and landed two records identically to one that landed all five.
+
+    * **One message came back for a body longer than any shipped surface sends
+      whole.** This is the WORSE case: a sender that split into five and landed
+      *one* looks exactly like an honest single send, and the count-based guard
+      above never fires. There is no evidence available that distinguishes them,
+      so the shim reports what it has — nothing — rather than the flattering
+      reading. :data:`UNDECLARED_SAFE_LENGTH` is the threshold and it is not a
+      guess: it is the smallest limit this platform's own splitters use.
+
+    The fix for both is one keyword argument at registration, and the log line
+    names it. A surface that genuinely has no limit declares
+    ``chunk_size=None`` today and gets this; it should pass its real ceiling,
+    which is what "no limit" means in practice anyway.
+    """
+    return acknowledged > 1 or (acknowledged == 1 and len(body) > UNDECLARED_SAFE_LENGTH)
+
+
 class SenderChannel:
     """Adapts a ``register_platform_sender`` function to the channel protocol."""
 
@@ -79,6 +114,11 @@ class SenderChannel:
         #: two thirds of. Telegram reports ``partial:2/3`` for identical
         #: evidence, and one surface being laxer than another about the same
         #: evidence is exactly what the shared counter exists to prevent.
+        #:
+        #: So omitting it while chunking anyway is refused rather than believed:
+        #: a sender that hands back more than one message for the one body it
+        #: was given has demonstrably split, and ``send`` records
+        #: ``failed:<name>_unproven`` with a log line naming this argument.
         self.chunk_size = chunk_size
 
     async def start(self) -> None:
@@ -176,6 +216,26 @@ class SenderChannel:
             )
 
         receipt = receipt_from(sent, expected, target=target, body=body)
+
+        if self.chunk_size is None and _uncountable(body, receipt.acknowledged):
+            logger.error(
+                "Channel %s acknowledged %d message(s) for a %d-character body and "
+                "declared no chunk_size, so truncation cannot be detected and this "
+                "send is unproven. Pass chunk_size= to register_platform_sender and "
+                "split with chunking.split_message.",
+                self.name,
+                receipt.acknowledged,
+                len(body),
+            )
+            return SendReceipt(
+                acknowledged=0,
+                expected=expected,
+                platform_ids=receipt.platform_ids,
+                status=f"failed:{self.name}_unproven",
+                target=target,
+                body=body,
+            )
+
         if receipt.acknowledged == 0:
             logger.error("Channel %s acknowledged nothing — nothing was seen", self.name)
         return receipt

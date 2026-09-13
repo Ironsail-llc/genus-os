@@ -31,6 +31,13 @@ REQUIRED_HEADINGS = (
     "### `genus config validate`",
     "## `genus migrate`",
     "### `genus auth setup-link`",
+    # The channel verbs: `verify` is the documented way to tell a working
+    # delivery surface from one that will fail silently at the first briefing,
+    # so a reference that has lost it is a reference an operator cannot follow.
+    "## `genus channel`",
+    "### `genus channel list`",
+    "### `genus channel verify`",
+    "### `genus channel add`",
 )
 
 

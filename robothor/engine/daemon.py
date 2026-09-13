@@ -985,7 +985,12 @@ async def _start_channels(runner: Any, config: Any, tasks: list[asyncio.Task[Any
 
     Two things that belong together and both used to sit inline in ``main()``.
 
-    Slack is env-gated here and ``start()`` self-gates on the tokens again.
+    Slack is gated here on :func:`~robothor.engine.channels.slack_credentials.
+    slack_credentials`, the one reader the outbound channel and the doctor also
+    use, and ``start()`` self-gates on the same call. It used to read
+    ``os.environ`` directly, which meant the tokens `genus channel add slack`
+    writes to the vault by default reached the outbound half and not this one:
+    the bot silently never started, and this gate logs nothing when it declines.
 
     The registry is warmed *now*, off the delivery path: plugin discovery runs
     ``entry_points()`` and ``ep.load()``, which imports third-party modules, and
@@ -998,9 +1003,10 @@ async def _start_channels(runner: Any, config: Any, tasks: list[asyncio.Task[Any
         The ``SlackBot`` if one was started, else None.
     """
     from robothor.engine.channels import warm_channels
+    from robothor.engine.channels.slack_credentials import slack_credentials
 
     slack_bot = None
-    if os.environ.get("ROBOTHOR_SLACK_BOT_TOKEN") and os.environ.get("ROBOTHOR_SLACK_APP_TOKEN"):
+    if slack_credentials(live=True).can_listen:
         from robothor.engine.slack import SlackBot
 
         slack_bot = SlackBot(runner, config)

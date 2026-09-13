@@ -466,6 +466,9 @@ def test_offline_does_not_call_telegram(settings) -> None:
     assert fetch.calls == []
 
 
+FAKE_SLACK_TOKEN = "xoxb-test-not-a-real-token"
+
+
 def test_slack_absent_is_a_skip() -> None:
     assert _run(channel_checks.CHECKS, "slack.token", make_ctx())[0].status == "skip"
 
@@ -480,6 +483,143 @@ def test_an_app_token_where_a_bot_token_belongs_is_reported(settings) -> None:
 def test_slack_is_informational() -> None:
     check = next(item for item in channel_checks.CHECKS if item.id == "slack.token")
     assert check.severity == "info"
+
+
+def test_every_slack_setting_gets_its_own_row(settings) -> None:
+    """Two findings about two settings must not share a row id: a dashboard
+    filtering on `slack.token` would see one of them at random."""
+    settings(
+        ROBOTHOR_SLACK_BOT_TOKEN=FAKE_SLACK_TOKEN,
+        ROBOTHOR_SLACK_APP_TOKEN="xapp-test-not-a-real-token",
+        ROBOTHOR_SLACK_VERIFY_TARGET="C0000000000",
+    )
+    rows = _run(channel_checks.CHECKS, "slack.token", make_ctx())
+    assert [row.sub_id for row in rows] == ["token", "app_token", "target"]
+    assert all(row.status == "pass" for row in rows)
+
+    details = " ".join(row.detail for row in rows)
+    assert FAKE_SLACK_TOKEN not in details
+    # This whole list rides into `GET /api/doctor` on every healthy refresh,
+    # which the bridge serves over HTTP and caches. The operator's channel id is
+    # their own data; a FAILURE names the bad value because that is the finding,
+    # a pass has nothing to add by naming it.
+    assert "C0000000000" not in details
+    # The layer that answered IS worth printing: it is the question an operator
+    # has when `genus channel list` and `genus doctor` disagree.
+    assert "env" in details
+
+
+def test_a_bot_token_in_the_app_token_slot_is_reported(settings) -> None:
+    """The mirror of the case above, and just as invisible: outbound delivery
+    works perfectly while the inbound bot never starts."""
+    settings(
+        ROBOTHOR_SLACK_BOT_TOKEN=FAKE_SLACK_TOKEN,
+        ROBOTHOR_SLACK_APP_TOKEN=FAKE_SLACK_TOKEN,
+    )
+    rows = {row.sub_id: row for row in _run(channel_checks.CHECKS, "slack.token", make_ctx())}
+    assert rows["token"].status == "pass"
+    assert rows["app_token"].status == "fail"
+    assert FAKE_SLACK_TOKEN not in rows["app_token"].detail
+
+
+def test_a_channel_name_as_the_verify_target_is_reported(settings) -> None:
+    """`#general` is a name; the channel refuses it rather than walking
+    conversations.list on every send."""
+    settings(ROBOTHOR_SLACK_BOT_TOKEN=FAKE_SLACK_TOKEN, ROBOTHOR_SLACK_VERIFY_TARGET="#general")
+    rows = {row.sub_id: row for row in _run(channel_checks.CHECKS, "slack.token", make_ctx())}
+    assert rows["target"].status == "fail"
+
+
+def test_slack_verify_skips_when_unconfigured() -> None:
+    assert _run(channel_checks.CHECKS, "slack.verify", make_ctx())[0].status == "skip"
+
+
+def test_slack_verify_skips_under_offline(settings, monkeypatch) -> None:
+    """--offline means nothing leaves the box. A zero call count, not merely a
+    skipped status: a check could report `skip` after doing the work."""
+    calls: list[str] = []
+
+    def _never(_token: str):
+        calls.append(_token)
+        raise AssertionError("the doctor called Slack under --offline")
+
+    from robothor.engine.channels import slack as slack_channel
+
+    monkeypatch.setattr(slack_channel, "_build_client", _never)
+    settings(ROBOTHOR_SLACK_BOT_TOKEN=FAKE_SLACK_TOKEN)
+    assert _run(channel_checks.CHECKS, "slack.verify", make_ctx(offline=True))[0].status == "skip"
+    assert calls == []
+
+
+def test_slack_verify_fails_on_bad_auth(settings, monkeypatch) -> None:
+    class _Rejects:
+        async def auth_test(self):
+            raise RuntimeError("invalid_auth")
+
+    from robothor.engine.channels import slack as slack_channel
+
+    monkeypatch.setattr(slack_channel, "_build_client", lambda _token: _Rejects())
+    settings(ROBOTHOR_SLACK_BOT_TOKEN=FAKE_SLACK_TOKEN)
+    row = _run(channel_checks.CHECKS, "slack.verify", make_ctx())[0]
+    assert row.status == "fail"
+    assert FAKE_SLACK_TOKEN not in row.detail
+
+
+class _Answers:
+    """A Slack that accepts the token and holds the scopes."""
+
+    def __init__(self, *, scope_error: Exception | None = None) -> None:
+        self.scope_error = scope_error
+        self.list_calls = 0
+
+    async def auth_test(self):
+        return {"ok": True, "team": "Example Workspace", "user_id": "U0000000001"}
+
+    async def conversations_list(self, **_):
+        self.list_calls += 1
+        if self.scope_error is not None:
+            raise self.scope_error
+        return {"ok": True, "channels": []}
+
+
+def test_slack_verify_passes_on_a_live_token(settings, monkeypatch) -> None:
+    from robothor.engine.channels import slack as slack_channel
+
+    client = _Answers()
+    monkeypatch.setattr(slack_channel, "_build_client", lambda _token: client)
+    settings(ROBOTHOR_SLACK_BOT_TOKEN=FAKE_SLACK_TOKEN)
+    row = _run(channel_checks.CHECKS, "slack.verify", make_ctx())[0]
+
+    assert row.status == "pass"
+    assert client.list_calls == 1, "the scope probe did not run"
+    # The workspace name is instance data and this row is served over HTTP.
+    assert "Example Workspace" not in row.detail
+
+
+def test_slack_verify_fails_on_a_missing_scope(settings, monkeypatch) -> None:
+    """The brief required `auth.test` + the scope probe, and a first cut ran
+    only the first. `missing_scope` is invisible until a send, so a verify that
+    skips it shows green -- here and on the bridge Health panel -- for an app
+    that cannot post a thing."""
+    from robothor.engine.channels import slack as slack_channel
+
+    class _MissingScopeError(Exception):
+        def __init__(self) -> None:
+            super().__init__("missing_scope")
+            self.response = {
+                "error": "missing_scope",
+                "needed": "channels:read",
+                "provided": "chat:write",
+            }
+
+    client = _Answers(scope_error=_MissingScopeError())
+    monkeypatch.setattr(slack_channel, "_build_client", lambda _token: client)
+    settings(ROBOTHOR_SLACK_BOT_TOKEN=FAKE_SLACK_TOKEN)
+    row = _run(channel_checks.CHECKS, "slack.verify", make_ctx())[0]
+
+    assert row.status == "fail"
+    assert "channels:read" in row.detail, "the scope name IS the fix; it must be named"
+    assert FAKE_SLACK_TOKEN not in row.detail
 
 
 # ── services ─────────────────────────────────────────────────────────────────

@@ -244,10 +244,25 @@ and the shape should not change when the inbound half lands — but nothing driv
 them yet, so open your transport lazily inside `send`. A channel that connects
 in `start()` will pass its own tests and deliver nothing.
 
-`telegram` and `event_bus` are built in and reserved — a plugin claiming
-either name is refused by the loader, the same as claiming a built-in tool.
-And naming a channel that is not installed does not fall back to Telegram:
+`telegram`, `event_bus` and `slack` are built in and reserved — a plugin
+claiming one of those names is refused by the loader, the same as claiming a
+built-in tool. `slack` is reserved even on an instance that has never configured
+it: the name resolves to the built-in channel, which answers
+`failed:slack_not_configured` rather than leaving the operator to guess whether
+the platform has Slack support at all. See
+[the Slack channel page](channels/slack.md) for setting it up.
+
+Naming a channel that is not installed does not fall back to Telegram:
 delivery records `failed:no_channel:<name>` instead.
+
+**Declare your chunk size if you split.** `register_platform_sender(...,
+chunk_size=N)` is how the platform tells a truncated send from a complete one.
+Without it, two answers are recorded `failed:<name>_unproven`, because neither
+can be read: more than one message back for the one body you were handed (you
+split, so "landed all five" and "landed two of five" look identical), and one
+message back for a body longer than 4,000 characters — the shortest limit any
+surface here has, and the case where a sender that split into five and landed
+*one* is indistinguishable from an honest single send.
 
 ## A named service — the group that names no kind
 

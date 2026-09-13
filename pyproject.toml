@@ -119,6 +119,14 @@ channels = [
     # error instead. Floor is the 1.18 line (current major, async Socket
     # Mode adapter); no ceiling, slack-bolt has held its 1.x API.
     "slack-bolt>=1.18",
+    # slack_sdk arrives transitively with bolt, and the OUTBOUND channel
+    # (robothor/engine/channels/slack.py) imports it directly -- it owns its own
+    # AsyncWebClient rather than borrowing the inbound bot's, so that delivery
+    # does not depend on the Socket Mode listener having started. Relying on a
+    # transitive pin for a direct import is the same undeclared-dependency
+    # defect this extra was created to fix. 3.21 is the floor for
+    # slack_sdk.web.async_client.
+    "slack-sdk>=3.21",
 ]
 dev = [
     "pytest>=8.0",

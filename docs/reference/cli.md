@@ -28,7 +28,7 @@ Where to start, rather than reading this top to bottom:
 Settings are documented in the [configuration reference](configuration.md),
 not here: a flag belongs to one command, a setting to the whole instance.
 
-33 verbs.
+34 verbs.
 
 ## `genus plugin`
 
@@ -246,6 +246,54 @@ Usage: `genus config validate [--json]`
 Print the JSON Schema of every declared setting.
 
 Usage: `genus config schema`
+
+## `genus channel`
+
+List delivery channels, verify one, or add its credentials.
+
+Usage: `genus channel {list,verify,add}`
+
+### `genus channel list`
+
+Every channel a manifest's delivery.channel could resolve to.
+
+Usage: `genus channel list [--json]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--json` | — | off | Machine-readable output |
+
+### `genus channel verify`
+
+Prove a channel works, step by step (exit 1 on a failed step, 2 if unset).
+
+Usage: `genus channel verify <name> [--target TARGET] [--json]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Channel name, e.g. slack |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--target` | `TARGET` | — | Where to post the test message; defaults to the channel's |
+| `--json` | — | off | Machine-readable output |
+
+### `genus channel add`
+
+Store a channel's credentials.
+
+Usage: `genus channel add <name> [--bot-token BOT_TOKEN] [--app-token APP_TOKEN] [--verify-target VERIFY_TARGET] [--to TO]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Channel name, e.g. slack |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--bot-token` | `BOT_TOKEN` | — | REFUSED: a token on a command line is world-readable. Use the prompt or export ROBOTHOR_SLACK_BOT_TOKEN |
+| `--app-token` | `APP_TOKEN` | — | REFUSED, as --bot-token. Export ROBOTHOR_SLACK_APP_TOKEN instead |
+| `--verify-target` | `VERIFY_TARGET` | — | Conversation `genus channel verify` and the doctor post their test message to. Never a delivery fallback |
+| `--to` | `vault` \| `env` | — | Where to write: the vault, or the instance env file. Default: the vault when this instance has a master key, the env file otherwise |
 
 ## `genus doctor`
 

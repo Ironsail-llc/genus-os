@@ -69,6 +69,8 @@ exclude_docs: |
   !/reference/cli.md
   !/reference/configuration.md
   !/PLUGINS.md
+  !/channels/slack.md
+  !/channels/slack-app-manifest.json
   !/runbooks/BENCHMARK_SANDBOX.md
   !/architecture.md
   !/memory-system.md
@@ -96,6 +98,7 @@ nav:
       - Settings: reference/configuration.md
   - Operating:
       - Plugins: PLUGINS.md
+      - Slack channel: channels/slack.md
       - Benchmark sandbox: runbooks/BENCHMARK_SANDBOX.md
   - Architecture:
       - Overview: architecture.md

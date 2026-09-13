@@ -61,7 +61,14 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: Lower this whenever the count drops, or the ratchet stops ratcheting.
 #: 489 -> 488: `llm_client.chain_with_last_resort` now reads through the same
 #: `last_resort_model()` as the agent chain.
-ENV_READ_SITE_BASELINE = 488
+#: 488 -> 482: the six raw reads of the two Slack token names went behind
+#: `channels/slack_credentials.slack_credentials()`. They did not multiply, they
+#: MOVED -- and the move is the fix, not the tidying: the daemon gate and
+#: `SlackBot.start` read `os.environ`, the doctor read `ctx.settings`, and the
+#: outbound channel read the secrets accessor, so one box answered "is Slack
+#: configured?" three different ways and the inbound bot silently never started
+#: on any install whose tokens were in the vault.
+ENV_READ_SITE_BASELINE = 482
 
 
 def _discovery():

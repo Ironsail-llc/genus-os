@@ -12,6 +12,11 @@ import logging
 import os
 from typing import Any
 
+from robothor.engine.channels.slack_credentials import (
+    APP_TOKEN_ENV,
+    BOT_TOKEN_ENV,
+    slack_credentials,
+)
 from robothor.engine.chunking import split_message
 
 logger = logging.getLogger(__name__)
@@ -67,15 +72,21 @@ class SlackBot:
             logger.error("slack-bolt not installed. Install with: pip install slack-bolt")
             return
 
-        bot_token = os.environ.get("ROBOTHOR_SLACK_BOT_TOKEN")
-        app_token = os.environ.get("ROBOTHOR_SLACK_APP_TOKEN")
-
-        if not bot_token or not app_token:
+        # Through the one credential reader, not os.environ: `genus channel add
+        # slack` writes to the VAULT by default, and this gate read an
+        # environment nothing ever preloads those rows into — so the bot
+        # silently never started on the most common install while `verify`
+        # reported Socket Mode green.
+        found = slack_credentials(live=True)
+        if not found.can_listen:
             logger.warning(
-                "ROBOTHOR_SLACK_BOT_TOKEN or ROBOTHOR_SLACK_APP_TOKEN not set, "
-                "Slack bot not starting."
+                "%s or %s is set neither in the environment nor in this instance's "
+                "vault, so the Slack bot is not starting.",
+                BOT_TOKEN_ENV,
+                APP_TOKEN_ENV,
             )
             return
+        bot_token, app_token = found.bot_token, found.app_token
 
         if not self._allowed_users() and not self._allowed_channels():
             logger.warning(
@@ -256,7 +267,10 @@ def _split_text(text: str, max_length: int) -> list[str]:
 
 
 def is_slack_configured() -> bool:
-    """Check if Slack environment variables are set."""
-    return bool(
-        os.environ.get("ROBOTHOR_SLACK_BOT_TOKEN") and os.environ.get("ROBOTHOR_SLACK_APP_TOKEN")
-    )
+    """Whether the INBOUND half can start: both tokens, from wherever they live.
+
+    Resolved through :func:`slack_credentials`, so this answers the same way as
+    the daemon gate, the outbound channel and the doctor. It used to read
+    ``os.environ`` and disagree with all three on any vault install.
+    """
+    return slack_credentials().can_listen

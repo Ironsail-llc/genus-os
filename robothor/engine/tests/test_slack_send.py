@@ -111,10 +111,19 @@ class TestAFailurePartwayThrough:
 class TestItIsRegisteredWithItsChunkSize:
     def test_start_registers_the_bound_sender_with_the_slack_limit(self):
         """Without the chunk size the shim cannot tell a truncated briefing from
-        a delivered one — it would count 2 acknowledgements against 1 expected."""
-        import inspect
+        a delivered one — it would count 2 acknowledgements against 1 expected.
 
-        src = inspect.getsource(SlackBot.start)
-        assert "register_platform_sender" in src
-        assert "self.slack_send" in src
-        assert "MAX_SLACK_LENGTH" in src
+        AST, not a substring: the old form searched ``start``'s source text, and
+        the three names it looked for all appear in the docstring of
+        ``slack_send`` one method below.
+        """
+        from robothor.engine.tests.astcheck import called_names, function_def, keywords_of_call
+
+        start = function_def("robothor.engine.slack", "start")
+        assert "register_platform_sender" in called_names(start), (
+            "SlackBot.start no longer registers its sender, so nothing can reach slack_send"
+        )
+        assert "chunk_size" in keywords_of_call(start, "register_platform_sender"), (
+            "the sender is registered without a chunk size, so a truncated Slack "
+            "briefing reads as delivered"
+        )

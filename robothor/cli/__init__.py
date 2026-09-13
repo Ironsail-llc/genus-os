@@ -35,6 +35,7 @@ from typing import Any, cast
 from robothor.cli.admin import REQUIRED_TABLES as REQUIRED_TABLES  # noqa: F401
 from robothor.cli.admin import cmd_tui as _cmd_tui
 from robothor.cli.agent import _cmd_agent_setup as _cmd_agent_setup_impl
+from robothor.secrets.redaction import redact
 
 
 def _cmd_agent_setup() -> int:
@@ -133,6 +134,33 @@ def _invoked_name() -> str:
     return name
 
 
+class _RedactingParser(argparse.ArgumentParser):
+    """An ``ArgumentParser`` whose errors cannot print a credential.
+
+    ``genus channel add`` refuses ``--bot-token`` outright, because a token on a
+    command line is readable by every account on the box. One letter wrong —
+    ``--bot-tokn`` — and that refusal never runs: argparse fails first and
+    prints ``unrecognized arguments: --bot-tokn xoxb-…`` to stderr, publishing
+    the credential from the command whose whole job is to keep it off a command
+    line. The same path carries ``genus vault set``'s secret POSITIONAL,
+    ``genus federation connect``'s invite token and ``genus init
+    --telegram-token``.
+
+    The subclass sits at the TOP because that is where the leak is: every
+    subparser hands its leftovers up, and ``parse_args`` emits "unrecognized
+    arguments" from the root. ``add_subparsers`` defaults ``parser_class`` to
+    ``type(self)``, so one subclass here covers the whole verb tree without any
+    subcommand having to remember.
+
+    Only the *message* is redacted, never the usage block or the flag names: an
+    operator has to be able to see which argument was wrong, and a redactor that
+    ate the error would trade one unusable outcome for another.
+    """
+
+    def error(self, message: str) -> None:  # type: ignore[override]
+        super().error(redact(message))
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the CLI parser.
 
@@ -141,7 +169,7 @@ def _build_parser() -> argparse.ArgumentParser:
     command names would drift the first time a subcommand was added, and
     this project has been bitten three times by exactly that.
     """
-    parser = argparse.ArgumentParser(
+    parser = _RedactingParser(
         prog=_invoked_name(),
         description="Genus OS — An AI brain with persistent memory, vision, and self-healing.",
     )
@@ -384,6 +412,60 @@ def _build_parser() -> argparse.ArgumentParser:
     config_validate.add_argument("--json", action="store_true", help="Machine-readable output")
 
     config_sub.add_parser("schema", help="Print the JSON Schema of every declared setting")
+
+    # channel — what can deliver, whether it works; see robothor/cli/channel.py
+    channel_parser = subparsers.add_parser(
+        "channel", help="List delivery channels, verify one, or add its credentials"
+    )
+    channel_sub = channel_parser.add_subparsers(dest="channel_command")
+
+    channel_list = channel_sub.add_parser(
+        "list", help="Every channel a manifest's delivery.channel could resolve to"
+    )
+    channel_list.add_argument("--json", action="store_true", help="Machine-readable output")
+
+    channel_verify = channel_sub.add_parser(
+        "verify", help="Prove a channel works, step by step (exit 1 on a failed step, 2 if unset)"
+    )
+    channel_verify.add_argument("name", help="Channel name, e.g. slack")
+    channel_verify.add_argument(
+        "--target", default=None, help="Where to post the test message; defaults to the channel's"
+    )
+    channel_verify.add_argument("--json", action="store_true", help="Machine-readable output")
+
+    channel_add = channel_sub.add_parser("add", help="Store a channel's credentials")
+    channel_add.add_argument("name", help="Channel name, e.g. slack")
+    # Declared only so they can be REFUSED with an explanation. A token on a
+    # command line is readable by every account on the box through `ps` and
+    # /proc/<pid>/cmdline and is already in the shell history, and nothing this
+    # command does afterwards takes that back. They stay on the parser because
+    # dropping them would make argparse print "unrecognized arguments: --bot-token
+    # xoxb-…" to stderr, leaking the value through the error for a flag that no
+    # longer exists.
+    channel_add.add_argument(
+        "--bot-token",
+        default=None,
+        help="REFUSED: a token on a command line is world-readable. Use the prompt "
+        "or export ROBOTHOR_SLACK_BOT_TOKEN",
+    )
+    channel_add.add_argument(
+        "--app-token",
+        default=None,
+        help="REFUSED, as --bot-token. Export ROBOTHOR_SLACK_APP_TOKEN instead",
+    )
+    channel_add.add_argument(
+        "--verify-target",
+        default=None,
+        help="Conversation `genus channel verify` and the doctor post their test "
+        "message to. Never a delivery fallback",
+    )
+    channel_add.add_argument(
+        "--to",
+        choices=["vault", "env"],
+        default=None,
+        help="Where to write: the vault, or the instance env file. Default: the vault "
+        "when this instance has a master key, the env file otherwise",
+    )
 
     # doctor — one verdict on whether this instance works; see robothor/doctor/
     doctor_parser = subparsers.add_parser(
@@ -1115,6 +1197,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.config_cmd import cmd_config
 
         return cmd_config(args)
+    if args.command == "channel":
+        from robothor.cli.channel import cmd_channel
+
+        return cmd_channel(args)
     if args.command == "doctor":
         from robothor.cli.doctor_cmd import cmd_doctor
 

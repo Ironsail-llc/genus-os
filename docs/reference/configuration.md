@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-360 settings in 13 groups.
+361 settings in 13 groups.
 
 ## paths
 
@@ -226,6 +226,7 @@ How the instance reaches people, and who it says it is.
 | `ROBOTHOR_SLACK_ALLOWED_USERS` | str | _(empty)_ | `robothor-engine` | no | legacy | Comma-separated Slack user ids allowed to talk to the bot. Empty means no allowlist, which the channel warns about at start. |
 | `ROBOTHOR_SLACK_APP_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Slack app-level token for socket mode. |
 | `ROBOTHOR_SLACK_BOT_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Slack bot token. The Slack channel starts only when it and the app token are both set. |
+| `ROBOTHOR_SLACK_VERIFY_TARGET` | str | _(empty)_ | `robothor-engine` | no | 1.70.0 | Conversation `genus channel verify slack` and the doctor's Slack check post their test message to -- a channel id (C.../G.../D...) or a user id (U.../W...), never a #name. Used by verify and the doctor only: delivery never falls back to it, so an agent whose manifest names no target fails loudly instead of posting somewhere nobody chose. |
 | `ROBOTHOR_TELEGRAM_BOT_NAME` | str | _(empty)_ | `robothor-engine` | no | legacy | @name of the Telegram bot, shown on the dashboard so an operator can find the right conversation. |
 | `ROBOTHOR_TELEGRAM_BOT_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Bot token for the Telegram channel. Empty disables Telegram. Also read from `TELEGRAM_BOT_TOKEN`. |
 | `ROBOTHOR_TELEGRAM_CHAT_ID` | str | _(empty)_ | `robothor-engine` | no | legacy | Default Telegram chat deliveries go to when an agent names none. Also read from `TELEGRAM_CHAT_ID`. |
