@@ -139,11 +139,29 @@ send call returning:
 | `failed:email_unexpanded_target` | A literal `${VAR}` reached the target |
 | `failed:email_unresolved_target` | Neither an address nor a `crm_people` id, or a person with no primary email |
 | `failed:email_no_run` | A send with no run, so no tenant — and the opt-out list is per-tenant. A guard may not guess whose list it is reading |
+| `failed:email_benchmark` | The run is a benchmark. A sandbox tenant isolates the database, not the outside world, so mail stays denied — the same rule `gws_gmail_send` follows |
 
-`ROBOTHOR_DNC_MODE=observe` turns every one of those refusals into a logged,
-recorded note (`agent_guardrail_events.action = 'observed'`) and lets the mail
-go. It is the same lever the `gws_gmail_send` tool answers to, and it exists so
+`ROBOTHOR_DNC_MODE=observe` applies to **the two opt-out refusals only** —
+`failed:email_dnc` and `failed:email_dnc_unreadable` — and lets the mail go.
+The first leaves a row (`agent_guardrail_events.action = 'observed'`); the
+second deliberately leaves only a log line, because that write goes to the same
+database the lookup just failed on. Nothing else in the table above is affected:
+a missing transport, an unexpanded target or a benchmark run is refused in
+observe mode exactly as it is in enforce.
+
+It is the same lever the `gws_gmail_send` tool answers to, and it exists so
 nobody has to reach for the one below it, which is commenting out the check.
+
+## STARTTLS is not optional when there is a password
+
+`ROBOTHOR_EMAIL_SMTP_STARTTLS=false` on a submission port means the `AUTH` line
+— and the password inside it — crosses the network unencrypted. The channel
+**refuses** that combination rather than sending: the send is
+`failed:email_no_transport`, `genus doctor` fails `email.transport` with
+`cleartext login refused`, and `genus channel verify email` names it as a failed
+`transport` step. Turn STARTTLS back on, use port 465 for implicit TLS, or clear
+`ROBOTHOR_EMAIL_SMTP_USER` if the relay authenticates by sending host — with no
+credential there is nothing to publish, and that deployment still works.
 
 ## A known asymmetry
 

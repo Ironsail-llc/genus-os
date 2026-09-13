@@ -555,6 +555,30 @@ class TestArgparseItselfMustNotPrintACredential:
         assert FAKE_APP_TOKEN not in text
         assert "xapp-test" not in text
 
+    #: No credential shape at all — whatever the mail provider issued. That is
+    #: the point: the pattern redactor cannot see it, so the message itself has
+    #: to be scrubbed.
+    SHAPELESS_PASSWORD = "zzTOPSECRETzz-9999"
+
+    def test_a_misspelled_shapeless_credential_flag_does_not_print_its_value(self, capsys):
+        """`--bot-tokn xoxb-…` was caught by SHAPE. An SMTP password has none,
+        so the same typo published it verbatim."""
+        code, text = self._run(
+            ["channel", "add", "email", "--smtp-passwrd", self.SHAPELESS_PASSWORD], capsys
+        )
+
+        assert code == 2
+        assert self.SHAPELESS_PASSWORD not in text
+        assert "smtp-passwrd" in text, "the redaction ate the flag name as well as the value"
+
+    def test_the_equals_form_is_scrubbed_too(self, capsys):
+        code, text = self._run(
+            ["channel", "add", "email", f"--smtp-passwrd={self.SHAPELESS_PASSWORD}"], capsys
+        )
+
+        assert code == 2
+        assert self.SHAPELESS_PASSWORD not in text
+
     def test_a_secret_positional_on_another_verb_is_redacted_too(self, capsys):
         """`genus vault set <key> <value>` takes the secret as a positional, so
         any typo'd flag beside it prints the value. The redaction is on the one
@@ -731,6 +755,42 @@ class TestVerifyEmail:
 
         args = _build_parser().parse_args(["channel", "verify", "email", "--to", "ops@example.com"])
         assert args.target == "ops@example.com"
+
+    def test_verify_takes_a_tenant_flag(self, monkeypatch):
+        """The opt-out list is per-tenant, and verify's used to read the
+        import-time DEFAULT_TENANT — frozen before `load_instance_env()` runs,
+        so on an instance that pins its tenant it cleared an address against the
+        wrong (empty) list and mailed someone who had opted out."""
+        from robothor.cli import _build_parser
+
+        args = _build_parser().parse_args(
+            ["channel", "verify", "email", "--to", "ops@example.com", "--tenant", "tenant-b"]
+        )
+        assert (args.target, args.tenant) == ("ops@example.com", "tenant-b")
+
+    def test_the_tenant_reaches_the_channel(self, monkeypatch):
+        seen: list[str] = []
+        from robothor.engine.channels import reset_channels
+
+        self._channel(monkeypatch)
+        monkeypatch.setattr(
+            "robothor.crm.dal.do_not_contact_emails",
+            lambda _emails, tenant_id="default", **_kw: seen.append(tenant_id) or set(),
+            raising=True,
+        )
+        try:
+            cmd_channel(
+                _args(
+                    channel_command="verify",
+                    name="email",
+                    target="ops@example.com",
+                    tenant="tenant-b",
+                )
+            )
+        finally:
+            reset_channels()
+
+        assert seen == ["tenant-b"]
 
     def test_verify_email_with_a_to_address_sends_one_message(self, monkeypatch):
         sent: list[Any] = []

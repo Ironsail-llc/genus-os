@@ -35,7 +35,7 @@ from typing import Any, cast
 from robothor.cli.admin import REQUIRED_TABLES as REQUIRED_TABLES  # noqa: F401
 from robothor.cli.admin import cmd_tui as _cmd_tui
 from robothor.cli.agent import _cmd_agent_setup as _cmd_agent_setup_impl
-from robothor.secrets.redaction import redact
+from robothor.secrets.redaction import redact, redact_unrecognized_arguments
 
 
 def _cmd_agent_setup() -> int:
@@ -155,10 +155,17 @@ class _RedactingParser(argparse.ArgumentParser):
     Only the *message* is redacted, never the usage block or the flag names: an
     operator has to be able to see which argument was wrong, and a redactor that
     ate the error would trade one unusable outcome for another.
+
+    Two passes, because one is not enough. ``redact`` catches credentials with a
+    SHAPE, which is why ``--bot-tokn xoxb-…`` was covered — Slack tokens have a
+    prefix. An SMTP password has no shape at all, so ``genus channel add email
+    --smtp-passwrd <value>`` published it verbatim. ``redact_unrecognized_
+    arguments`` scrubs by POSITION instead, inside the one message whose tail is
+    raw ``argv``, so every rejected flag's value goes for every verb at once.
     """
 
     def error(self, message: str) -> None:  # type: ignore[override]
-        super().error(redact(message))
+        super().error(redact(redact_unrecognized_arguments(message)))
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -440,6 +447,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Alias for --target. The email channel has no configured fallback "
         "address, so it is named here every time",
+    )
+    channel_verify.add_argument(
+        "--tenant",
+        default=None,
+        help="Tenant whose do-not-contact list the email channel checks --to "
+        "against. Defaults to this instance's configured tenant",
     )
     channel_verify.add_argument("--json", action="store_true", help="Machine-readable output")
 

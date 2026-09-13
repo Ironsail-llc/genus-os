@@ -549,6 +549,257 @@ class TestVerify:
         assert steps[0][1] is False
 
 
+class TestNothingStepsAroundTheClosedStatusSet:
+    """The body and the subject are agent-controlled, and both can raise.
+
+    A lone surrogate is ordinary LLM debris and makes `as_bytes()` raise
+    `UnicodeEncodeError`; a newline in a manifest's `name:` makes the header
+    setter raise `ValueError`. Either one escaping `send()` breaks the protocol
+    contract `delivery.py` states in so many words — and `deliver()` then
+    records `failed:email_exception: <raw exception text>`, a `delivery_status`
+    outside the set `docs/channels/email.md` enumerates, so no dashboard query
+    matches it. The set is only closed if nothing can step around it.
+    """
+
+    #: An unpaired UTF-16 high surrogate: encodable as a str, not as UTF-8.
+    LONE_SURROGATE = "briefing \ud800 ready"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("gws_present", [True, False], ids=["gws", "smtp"])
+    async def test_a_body_that_cannot_be_encoded_is_a_receipt(self, gws_present: bool):
+        gws = _FakeGws()
+        smtp = _SMTPFactory()
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws=gws, gws_present=gws_present, smtp=smtp).send(
+                WILLING, self.LONE_SURROGATE, config=_config(), run=_run()
+            )
+
+        assert receipt.status == "failed:email_send"
+        assert receipt.acknowledged == 0
+
+    @pytest.mark.asyncio
+    async def test_a_newline_in_the_subject_is_a_receipt(self):
+        """Header injection's own defence raises; that raise must not escape."""
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel().send(
+                WILLING,
+                "hello",
+                subject="Briefing\nBcc: bob@example.com",
+                config=_config(),
+                run=_run(),
+            )
+
+        assert receipt.status == "failed:email_send"
+
+    @pytest.mark.asyncio
+    async def test_a_newline_in_the_agent_name_is_a_receipt(self):
+        """The subject falls back to `config.name`, which comes from a manifest."""
+        gws = _FakeGws()
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws=gws).send(
+                WILLING, "hello", config=_config(name="Alice\nBcc: bob@example.com"), run=_run()
+            )
+
+        assert receipt.status == "failed:email_send"
+        assert gws.calls == []
+
+
+class TestTheRowFlagIsItsOwnSignal:
+    @pytest.mark.asyncio
+    async def test_the_person_row_flag_refuses_even_when_the_list_is_empty(self):
+        """The id form is sold on exactly this second signal: the flag follows
+        the PERSON, so it holds for someone whose address has changed or who has
+        no `contact_identifiers` row. With the DAL returning nothing, deleting
+        `and not flagged_on_row` from the guard must fail this test."""
+        gws = _FakeGws()
+        smtp = _SMTPFactory()
+        with (
+            patch(
+                "robothor.crm.dal.get_person",
+                side_effect=_person(FLAGGED_PERSON_ID, FLAGGED, flagged=True),
+            ),
+            patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()),
+            patch("robothor.engine.tracking.log_guardrail_event"),
+        ):
+            receipt = await _channel(gws=gws, smtp=smtp).send(
+                FLAGGED_PERSON_ID, "hello", config=_config(), run=_run()
+            )
+
+        assert receipt.status == "failed:email_dnc"
+        assert (gws.calls, smtp.calls) == ([], [])
+
+
+class TestABenchmarkRunNeverMails:
+    @pytest.mark.asyncio
+    async def test_a_benchmark_run_is_refused_before_any_transport(self):
+        """A sandbox tenant isolates the database, not the outside world. The
+        gws tool path refuses mutating mail under `is_benchmark`; the channel is
+        the second door out of the same building."""
+        gws = _FakeGws()
+        smtp = _SMTPFactory()
+        run = _run()
+        run.is_benchmark = True
+
+        receipt = await _channel(gws=gws, smtp=smtp).send(
+            WILLING, "hello", config=_config(), run=run
+        )
+
+        assert receipt.status == "failed:email_benchmark"
+        assert (gws.calls, smtp.calls) == ([], [])
+
+
+class TestCleartextCredentialsAreRefusedRatherThanSent:
+    @pytest.fixture
+    def cleartext(self, monkeypatch):
+        from robothor.settings import reset_settings
+
+        monkeypatch.setenv("ROBOTHOR_EMAIL_SMTP_STARTTLS", "false")
+        reset_settings()
+
+    @pytest.mark.asyncio
+    async def test_a_cleartext_login_is_refused_not_attempted(self, cleartext):
+        """`ROBOTHOR_EMAIL_SMTP_STARTTLS=false` on a submission port publishes
+        the password on the wire. The setting's own description says so; nothing
+        enforced it."""
+        smtp = _SMTPFactory()
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws_present=False, smtp=smtp).send(
+                WILLING, "hello", config=_config(), run=_run()
+            )
+
+        assert receipt.status == "failed:email_no_transport"
+        assert smtp.calls == [], "a password was about to go out in the clear"
+        assert smtp.client.logins == []
+
+    @pytest.mark.asyncio
+    async def test_a_relay_with_no_credential_still_sends_in_the_clear(
+        self, cleartext, monkeypatch
+    ):
+        """There is nothing to publish when there is no credential. An internal
+        relay that authenticates by sending host is a supported deployment."""
+        from robothor.settings import reset_settings
+
+        monkeypatch.delenv("ROBOTHOR_EMAIL_SMTP_USER", raising=False)
+        monkeypatch.delenv("ROBOTHOR_EMAIL_SMTP_PASSWORD", raising=False)
+        reset_settings()
+
+        smtp = _SMTPFactory()
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws_present=False, smtp=smtp).send(
+                WILLING, "hello", config=_config(), run=_run()
+            )
+
+        assert receipt.acknowledged == 1
+        assert smtp.client.started_tls is False
+
+    @pytest.mark.asyncio
+    async def test_implicit_tls_needs_no_starttls(self, cleartext, monkeypatch):
+        """Port 465 is already TLS, so STARTTLS=false is correct there."""
+        from robothor.settings import reset_settings
+
+        monkeypatch.setenv("ROBOTHOR_EMAIL_SMTP_PORT", "465")
+        reset_settings()
+
+        smtp = _SMTPFactory()
+        with patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out()):
+            receipt = await _channel(gws_present=False, smtp=smtp).send(
+                WILLING, "hello", config=_config(), run=_run()
+            )
+
+        assert receipt.acknowledged == 1
+        assert smtp.calls == [(SMTP_HOST, 465)]
+        assert smtp.client.logins == [(SMTP_USER, FAKE_SMTP_PASSWORD)]
+
+    @pytest.mark.asyncio
+    async def test_verify_names_the_refusal_rather_than_calling_it_unconfigured(self, cleartext):
+        """Something IS configured and it is wrong. Reporting "never set up"
+        would be exit 2 — an install gate would read it as a pass."""
+        from robothor.engine.channels.base import UNCONFIGURED_STEP
+
+        steps = await _channel(gws_present=False).verify(WILLING)
+
+        by_step = {step: (ok, detail) for step, ok, detail in steps}
+        assert UNCONFIGURED_STEP not in by_step
+        assert by_step["transport"][0] is False
+        assert "cleartext" in by_step["transport"][1].lower()
+
+
+class TestTheGuardrailWriteStaysOffTheEventLoop:
+    @pytest.mark.asyncio
+    async def test_the_guardrail_write_happens_in_a_worker_thread(self):
+        """``log_guardrail_event`` is psycopg2. Every other database call in the
+        module goes through ``asyncio.to_thread`` and the gws path files the
+        same event from inside a thread; this one blocked the loop."""
+        import threading
+
+        writers: list[int] = []
+
+        def _record(*_args: Any, **_kwargs: Any) -> None:
+            writers.append(threading.get_ident())
+
+        with (
+            patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out(FLAGGED)),
+            patch("robothor.engine.tracking.log_guardrail_event", side_effect=_record),
+        ):
+            await _channel().send(FLAGGED, "hello", config=_config(), run=_run())
+
+        assert writers, "the refusal filed no guardrail event"
+        assert writers[0] != threading.get_ident(), (
+            "the guardrail write ran on the event loop; a slow database now stalls "
+            "every other delivery in the same process"
+        )
+
+
+class TestVerifyReadsTheRightTenantsOptOutList:
+    """``DEFAULT_TENANT`` is frozen from ``os.environ`` at import time, and
+    ``robothor.constants`` is already imported before ``genus``'s own
+    ``load_instance_env()`` runs. On an instance that pins its tenant in
+    ``/etc/robothor/robothor.env`` — the documented shape — verify queried the
+    ``default`` tenant's (empty) opt-out list, reported the address clear, and
+    mailed a person who had opted out.
+    """
+
+    @pytest.fixture
+    def pinned_tenant(self, monkeypatch):
+        from robothor.settings import reset_settings
+
+        monkeypatch.setenv("ROBOTHOR_DEFAULT_TENANT", TENANT)
+        reset_settings()
+
+    @staticmethod
+    def _recording_lookup(seen: list[str]):
+        def _lookup(emails, tenant_id: str = "default") -> set[str]:
+            seen.append(tenant_id)
+            return set()
+
+        return _lookup
+
+    @pytest.mark.asyncio
+    async def test_verify_uses_the_tenant_this_instance_is_configured_for(self, pinned_tenant):
+        seen: list[str] = []
+        with patch(
+            "robothor.crm.dal.do_not_contact_emails", side_effect=self._recording_lookup(seen)
+        ):
+            steps = await _channel().verify(WILLING)
+
+        assert seen == [TENANT], (
+            "verify read the import-time DEFAULT_TENANT, so a flagged person in "
+            "the real tenant reads as clear"
+        )
+        detail = {step: d for step, _ok, d in steps}["send"]
+        assert TENANT in detail, "a wrong-tenant clear is indistinguishable from a right one"
+
+    @pytest.mark.asyncio
+    async def test_an_explicit_tenant_wins(self, pinned_tenant):
+        seen: list[str] = []
+        with patch(
+            "robothor.crm.dal.do_not_contact_emails", side_effect=self._recording_lookup(seen)
+        ):
+            await _channel().verify(WILLING, tenant="tenant-b")
+
+        assert seen == ["tenant-b"]
+
+
 class TestTheProtocol:
     @pytest.mark.asyncio
     async def test_ask_raises_not_implemented(self):

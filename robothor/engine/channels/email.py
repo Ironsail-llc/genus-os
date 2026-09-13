@@ -89,6 +89,7 @@ STATUS_NO_TARGET = "failed:email_no_target"
 STATUS_UNEXPANDED = "failed:email_unexpanded_target"
 STATUS_UNRESOLVED = "failed:email_unresolved_target"
 STATUS_NO_RUN = "failed:email_no_run"
+STATUS_BENCHMARK = "failed:email_benchmark"
 STATUS_DNC = "failed:email_dnc"
 STATUS_DNC_UNREADABLE = "failed:email_dnc_unreadable"
 STATUS_NO_TRANSPORT = "failed:email_no_transport"
@@ -100,6 +101,7 @@ STATUSES = frozenset(
         STATUS_UNEXPANDED,
         STATUS_UNRESOLVED,
         STATUS_NO_RUN,
+        STATUS_BENCHMARK,
         STATUS_DNC,
         STATUS_DNC_UNREADABLE,
         STATUS_NO_TRANSPORT,
@@ -160,6 +162,12 @@ class _Transport:
 
     ``kind`` empty means none — reported as ``failed:email_no_transport`` rather
     than as a send that silently did nothing.
+
+    ``refusal`` is the one case where "no transport" is not "nothing is set up":
+    a configuration that IS complete and that this channel declines to use. It
+    is carried rather than merely logged so ``health``, ``verify`` and the
+    doctor can all say which, instead of an operator seeing "not configured"
+    for settings they can see in their own config file.
     """
 
     kind: str = ""
@@ -170,6 +178,41 @@ class _Transport:
     user: str = ""
     password: str = ""
     password_source: str = "missing"
+    refusal: str = ""
+
+
+def cleartext_login_refusal(*, port: int, starttls: bool, user: str, password: str) -> str:
+    """Why this SMTP configuration would publish its password, or ``""``.
+
+    ``ROBOTHOR_EMAIL_SMTP_STARTTLS=false`` on a submission port means the
+    ``AUTH`` line — and the password inside it — crosses the network in the
+    clear, to anything between this box and the mail server. The setting's own
+    description in ``settings/model.py`` says exactly that ("a password sent
+    over a cleartext session is a published password") and nothing enforced it:
+    the channel logged in anyway, with no warning.
+
+    Two configurations that look similar are deliberately NOT refused:
+
+    * **No credential.** There is nothing to publish. An internal relay that
+      authenticates by sending host is a supported deployment, and refusing it
+      would break a working install to protect a password that does not exist.
+    * **Port 465.** Implicit TLS — the session is already encrypted before the
+      first command, and STARTTLS is not offered there at all.
+
+    One rule, one place: the channel calls this to decide whether it has a
+    transport, and ``genus doctor``'s ``email.transport`` calls the same
+    function so the two cannot drift into disagreeing about the same box.
+    """
+    if not (user and password):
+        return ""
+    if port == IMPLICIT_TLS_PORT or starttls:
+        return ""
+    return (
+        "cleartext login refused: ROBOTHOR_EMAIL_SMTP_STARTTLS is false on port "
+        f"{port}, so the SMTP password would cross the network unencrypted. "
+        "Turn STARTTLS back on, use port 465 for implicit TLS, or clear "
+        "ROBOTHOR_EMAIL_SMTP_USER to use a relay that needs no credential."
+    )
 
 
 def _gws_available() -> bool:
@@ -241,6 +284,35 @@ def _opt_out_lookup(address: str, tenant_id: str) -> set[str]:
         )
         time.sleep(_DNC_RETRY_DELAY_SECONDS)
         return do_not_contact_emails([address], tenant_id=tenant_id)
+
+
+def _verify_tenant(explicit: str | None = None) -> str:
+    """Whose opt-out list ``genus channel verify email`` reads.
+
+    **Never** :data:`robothor.constants.DEFAULT_TENANT`. That constant is
+    evaluated from ``os.environ`` at IMPORT time, and ``robothor.constants`` is
+    already in ``sys.modules`` before ``genus``'s own ``load_instance_env()``
+    runs — so on an instance that pins ``ROBOTHOR_DEFAULT_TENANT`` in
+    ``/etc/robothor/robothor.env`` (the documented shape) it stays frozen at
+    ``"default"`` for the whole command. Verify then cleared ``--to`` against
+    the *default* tenant's empty opt-out list, reported the address clear, and
+    mailed a person who had asked not to be contacted. The send path was never
+    affected: it reads ``run.tenant_id``.
+
+    ``get_settings()`` is built lazily, after the instance env is applied, so
+    reading through it at call time gets the tenant this box actually runs as.
+    ``--tenant`` overrides it for an operator verifying on behalf of another.
+    """
+    named = (explicit or "").strip()
+    if named:
+        return named
+    try:
+        from robothor.settings import get_settings
+
+        return (get_settings().database.default_tenant or "").strip() or DEFAULT_TENANT
+    except Exception as exc:  # noqa: BLE001 — a diagnostic must not raise on bad config
+        logger.warning("Could not resolve this instance's tenant, using the default: %s", exc)
+        return DEFAULT_TENANT
 
 
 def _dnc_mode() -> str:
@@ -379,14 +451,30 @@ class EmailChannel:
             return _Transport()
 
         found = email_credentials()
+        port = int(channels.email_smtp_port or 587)
+        starttls = bool(channels.email_smtp_starttls)
+        user = (channels.email_smtp_user or "").strip()
+        password = found.smtp_password or ""
+
+        refusal = cleartext_login_refusal(
+            port=port, starttls=starttls, user=user, password=password
+        )
+        if refusal:
+            # No `kind`, so `send` answers `failed:email_no_transport` — but the
+            # reason is carried rather than dropped, because "not configured" is
+            # a bewildering thing to be told about settings the operator can see
+            # in their own config file.
+            logger.error("The email channel refuses this SMTP configuration: %s", refusal)
+            return _Transport(refusal=refusal)
+
         return _Transport(
             kind="smtp",
             sender=sender,
             host=host,
-            port=int(channels.email_smtp_port or 587),
-            starttls=bool(channels.email_smtp_starttls),
-            user=(channels.email_smtp_user or "").strip(),
-            password=found.smtp_password or "",
+            port=port,
+            starttls=starttls,
+            user=user,
+            password=password,
             password_source=found.smtp_password_source,
         )
 
@@ -410,13 +498,16 @@ class EmailChannel:
         :meth:`verify`'s job, and it is aimed by hand.
         """
         transport = self._transport()
-        return {
+        report: dict[str, Any] = {
             "channel": self.name,
             "configured": bool(transport.kind),
             "transport": transport.kind or None,
             "from": transport.sender or None,
             "ok": bool(transport.kind),
         }
+        if transport.refusal:
+            report["error"] = transport.refusal
+        return report
 
     async def send(
         self,
@@ -435,6 +526,15 @@ class EmailChannel:
         transport is chosen — so a refused recipient is refused on an instance
         with no mail configured at all, and a manifest defect reads as a
         manifest defect rather than as a missing credential.
+
+        **Nothing in here may raise.** ``delivery.py`` catches a raising channel
+        and records ``failed:email_exception: <the exception's own text>``, which
+        is a ``delivery_status`` outside the closed set this module documents —
+        so no dashboard query matches it and third-party text lands in
+        ``agent_runs``. The body and the subject are agent-controlled (the run's
+        own output, and a manifest's ``name:``), so the message is built INSIDE
+        each transport's ``try``: a lone surrogate in an LLM's output made
+        ``as_bytes()`` raise straight out of here.
         """
         agent = getattr(config, "id", "?")
         clean = (target or "").strip()
@@ -454,6 +554,20 @@ class EmailChannel:
                 agent,
             )
             return SendReceipt(acknowledged=0, expected=1, status=STATUS_UNRESOLVED, target=clean)
+
+        # A benchmark run never mails. The sandbox tenant isolates the
+        # DATABASE, not the outside world, and `benchmark_sandbox.py` states
+        # that mail "stays denied, always" — `gws.py` refuses every mutating
+        # gws tool under the same flag. This is the second door out of the same
+        # building, and the instance has already had a benchmark reach a real
+        # recipient once.
+        if getattr(run, "is_benchmark", False):
+            logger.warning(
+                "Refusing an email delivery for %s: this is a benchmark run, and a "
+                "sandbox tenant isolates the database rather than the outside world",
+                agent,
+            )
+            return SendReceipt(acknowledged=0, expected=1, status=STATUS_BENCHMARK, target=clean)
 
         # The opt-out list is per-tenant, and a guard may not guess whose list
         # it is reading: clearing a recipient against some other tenant's list
@@ -482,10 +596,10 @@ class EmailChannel:
         transport = self._transport()
         if not transport.kind:
             logger.warning(
-                "Agent %s announces by email but this instance has neither the gws "
-                "CLI nor %s + ROBOTHOR_EMAIL_FROM",
+                "Agent %s announces by email but this instance has no usable transport: %s",
                 agent,
-                "ROBOTHOR_EMAIL_SMTP_HOST",
+                transport.refusal
+                or "neither the gws CLI nor ROBOTHOR_EMAIL_SMTP_HOST + ROBOTHOR_EMAIL_FROM",
             )
             return SendReceipt(
                 acknowledged=0,
@@ -553,7 +667,7 @@ class EmailChannel:
             # table, and a carve-out keyed on the type would turn any of those
             # going missing into a silent allow.
             if "do_not_contact" not in str(exc):
-                return self._unreadable(address, exc, run)
+                return await self._unreadable(address, exc, run)
             logger.error(
                 "do_not_contact check skipped for the email channel — this schema "
                 "predates migration 113 (%s). Run `robothor migrate`.",
@@ -561,19 +675,24 @@ class EmailChannel:
             )
             blocked = set()
         except Exception as exc:  # noqa: BLE001 — an unreadable list is a receipt
-            return self._unreadable(address, exc, run)
+            return await self._unreadable(address, exc, run)
 
         if not blocked and not flagged_on_row:
             return None
 
         reason = f"recipient flagged do_not_contact: {address}"
-        if _dnc_mode() == "observe":
+        # Both the flag read and the guardrail write are blocking: the flag
+        # store resolves DB-first and `log_guardrail_event` is psycopg2. Every
+        # other database call in this module goes through a thread, and the gws
+        # path files the same event from inside one; these two ran on the event
+        # loop, so a slow database stalled every other delivery in the process.
+        if await asyncio.to_thread(_dnc_mode) == "observe":
             logger.warning(
                 "do_not_contact OBSERVE: the email channel would have refused %s — "
                 "sending anyway because ROBOTHOR_DNC_MODE=observe.",
                 address,
             )
-            _log_dnc_event(run, reason, action="observed", mode="observe")
+            await asyncio.to_thread(_log_dnc_event, run, reason, action="observed", mode="observe")
             return None
 
         logger.error(
@@ -581,11 +700,11 @@ class EmailChannel:
             "(crm_people.do_not_contact).",
             address,
         )
-        _log_dnc_event(run, reason, action="blocked", mode="enforce")
+        await asyncio.to_thread(_log_dnc_event, run, reason, action="blocked", mode="enforce")
         return STATUS_DNC
 
     @staticmethod
-    def _unreadable(address: str, exc: BaseException, run: AgentRun | None) -> str | None:
+    async def _unreadable(address: str, exc: BaseException, run: AgentRun | None) -> str | None:
         """Refuse a send whose opt-out lookup could not be read.
 
         Its own status, never ``failed:email_dnc``: that token is a claim about
@@ -601,7 +720,7 @@ class EmailChannel:
             address,
             _describe(exc),
         )
-        if _dnc_mode() == "observe":
+        if await asyncio.to_thread(_dnc_mode) == "observe":
             logger.warning(
                 "do_not_contact OBSERVE: sending to %s anyway with the opt-out list "
                 "unread, because ROBOTHOR_DNC_MODE=observe.",
@@ -613,20 +732,29 @@ class EmailChannel:
     # ── transports ───────────────────────────────────────────────────────
 
     async def _send_gws(self, address: str, subject: str, body: str, agent: str) -> SendReceipt:
-        """Send through the gws CLI and insist on the message id it files under."""
-        message = _message(address, subject, body)
-        raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
-        args = [
-            "gmail",
-            "users",
-            "messages",
-            "send",
-            "--params",
-            '{"userId":"me"}',
-            "--json",
-            json.dumps({"raw": raw}),
-        ]
+        """Send through the gws CLI and insist on the message id it files under.
+
+        Building the message is INSIDE the try, and so is ``as_bytes()``. Both
+        are fed agent-controlled text, and both can raise on it: a lone
+        surrogate in a run's output (ordinary LLM debris) is a
+        ``UnicodeEncodeError`` from the encoder, a newline in the subject a
+        ``ValueError`` from the header setter. Outside the try those escaped
+        ``send()`` and became ``failed:email_exception: <raw text>`` — a status
+        outside this module's closed set.
+        """
         try:
+            message = _message(address, subject, body)
+            raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+            args = [
+                "gmail",
+                "users",
+                "messages",
+                "send",
+                "--params",
+                '{"userId":"me"}',
+                "--json",
+                json.dumps({"raw": raw}),
+            ]
             result = await asyncio.to_thread(self.gws_send, args, GWS_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001 — a transport failure is a receipt
             logger.error(
@@ -664,10 +792,17 @@ class EmailChannel:
     async def _send_smtp(
         self, transport: _Transport, address: str, subject: str, body: str, agent: str
     ) -> SendReceipt:
-        """Send over SMTP. ``send_message`` returns what it REFUSED."""
-        message = _message(address, subject, body, sender=transport.sender)
-        message_id = str(message["Message-ID"] or "")
+        """Send over SMTP. ``send_message`` returns what it REFUSED.
+
+        The message is built inside the try for the reason :meth:`_send_gws`
+        gives: the subject and body are agent-controlled and can raise, and an
+        exception out of ``send()`` becomes a ``delivery_status`` outside the
+        closed set.
+        """
+        message_id = ""
         try:
+            message = _message(address, subject, body, sender=transport.sender)
+            message_id = str(message["Message-ID"] or "")
             refused = await asyncio.to_thread(self._smtp_exchange, transport, message)
         except Exception as exc:  # noqa: BLE001 — a transport failure is a receipt
             logger.error(
@@ -709,7 +844,9 @@ class EmailChannel:
 
     # ── verify ───────────────────────────────────────────────────────────
 
-    async def verify(self, target: str | None = None) -> list[tuple[str, bool, str]]:
+    async def verify(
+        self, target: str | None = None, *, tenant: str | None = None
+    ) -> list[tuple[str, bool, str]]:
         """Prove, step by step, that this instance can actually send email.
 
         Two steps. ``transport`` is the half an operator can get wrong without
@@ -728,7 +865,7 @@ class EmailChannel:
         one case where sending is the harm.
         """
         transport = self._transport()
-        if not transport.kind:
+        if not transport.kind and not transport.refusal:
             # ONE step, named `configuration`: that shape is how `genus channel
             # verify` tells "never set up" (exit 2) from "set up and broken"
             # (exit 1) without a second round trip to ask.
@@ -740,8 +877,19 @@ class EmailChannel:
                     "and ROBOTHOR_EMAIL_SMTP_HOST + ROBOTHOR_EMAIL_FROM are not both set",
                 )
             ]
+        if transport.refusal:
+            # Configured, and refused. Deliberately NOT the `configuration`
+            # shape: that means "never set up" and exits 2, which an install
+            # gate reads as a pass — and this instance HAS set email up, in a
+            # way that would publish its password.
+            return [
+                ("transport", False, transport.refusal),
+                ("send", False, "not attempted: there is no usable transport"),
+            ]
         steps = [await self._verify_transport(transport)]
-        steps.append(await self._verify_send(transport, (target or "").strip()))
+        steps.append(
+            await self._verify_send(transport, (target or "").strip(), _verify_tenant(tenant))
+        )
         return steps
 
     async def transport_probe(self, transport: _Transport | None = None) -> str | None:
@@ -805,7 +953,9 @@ class EmailChannel:
             with contextlib.suppress(Exception):
                 client.quit()
 
-    async def _verify_send(self, transport: _Transport, target: str) -> tuple[str, bool, str]:
+    async def _verify_send(
+        self, transport: _Transport, target: str, tenant: str
+    ) -> tuple[str, bool, str]:
         """Send one real message, and insist on a message id."""
         step = "send"
         if not target:
@@ -821,20 +971,21 @@ class EmailChannel:
             return (step, False, f"{target!r} is not an email address")
 
         try:
-            blocked = await asyncio.to_thread(_opt_out_lookup, address, DEFAULT_TENANT)
+            blocked = await asyncio.to_thread(_opt_out_lookup, address, tenant)
         except Exception as exc:  # noqa: BLE001
             return (
                 step,
                 False,
-                "the do-not-contact list could not be read, so this address cannot be "
-                f"cleared and nothing was sent ({_describe(exc)})",
+                f"the do-not-contact list for tenant {tenant!r} could not be read, so "
+                f"this address cannot be cleared and nothing was sent ({_describe(exc)})",
             )
         if blocked:
             return (
                 step,
                 False,
-                f"{address} has opted out of contact (crm_people.do_not_contact). "
-                "Verify will not mail them — aim it at an address that has not.",
+                f"{address} has opted out of contact (crm_people.do_not_contact) in "
+                f"tenant {tenant!r}. Verify will not mail them — aim it at an address "
+                "that has not.",
             )
 
         body = "Genus OS channel verification."
@@ -850,12 +1001,15 @@ class EmailChannel:
                 "nothing proves a message was sent",
             )
         # The id identifies a conversation; "it sent, and the address was cleared
-        # against the opt-out list" is the finding.
+        # against the opt-out list" is the finding. The TENANT is named because
+        # a clear read from the wrong tenant's (empty) list looks exactly like a
+        # clear read from the right one — which is how this step once mailed a
+        # person who had opted out.
         return (
             step,
             True,
             "a message was sent and the transport returned its id; the address is "
-            "not on this instance's opt-out list",
+            f"not on tenant {tenant!r}'s opt-out list",
         )
 
     # ── C8 / C10 ─────────────────────────────────────────────────────────

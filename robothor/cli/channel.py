@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse  # noqa: TC003 - argparse.Namespace is used at runtime in signatures
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import sys
@@ -262,8 +263,18 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         )
         return 2
 
+    # ``--tenant`` reaches only a channel that declares it. The opt-out list the
+    # email channel clears ``--to`` against is per-tenant, and a channel that
+    # takes no tenant must not be handed one rather than be given a keyword it
+    # would reject — a verify that raises on an unrelated channel would be worse
+    # than the flag being ignored there.
+    tenant = (getattr(args, "tenant", None) or "").strip()
+    extra: dict[str, Any] = {}
+    if tenant and "tenant" in inspect.signature(verify).parameters:
+        extra["tenant"] = tenant
+
     try:
-        steps = asyncio.run(verify(getattr(args, "target", None)))
+        steps = asyncio.run(verify(getattr(args, "target", None), **extra))
     except Exception as exc:  # noqa: BLE001 — a broken channel is a report, not a traceback
         _err(f"Channel {name!r} raised while verifying: {type(exc).__name__}: {exc}")
         return 1

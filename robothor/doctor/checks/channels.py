@@ -319,6 +319,7 @@ async def _email(ctx: DoctorContext) -> Result:
     Health panel refreshes is not a diagnostic. The SMTP session it does open
     is skipped under ``--offline``.
     """
+    from robothor.engine.channels.email import cleartext_login_refusal
     from robothor.engine.channels.email_credentials import SMTP_PASSWORD_ENV, email_credentials
     from robothor.engine.tools.handlers.gws import gws_available
 
@@ -357,6 +358,19 @@ async def _email(ctx: DoctorContext) -> Result:
             "ROBOTHOR_EMAIL_FROM is set but there is no transport: the gws CLI is not "
             "installed and ROBOTHOR_EMAIL_SMTP_HOST is unset"
         )
+
+    # The SAME function the channel refuses a send with, so the two cannot
+    # drift into disagreeing about the same box. Checked before the gws branch
+    # because a cleartext SMTP fallback is still a published password the day
+    # the gws CLI is upgraded, reinstalled or removed.
+    cleartext = cleartext_login_refusal(
+        port=int(channels.email_smtp_port or 587),
+        starttls=bool(channels.email_smtp_starttls),
+        user=user,
+        password=password,
+    )
+    if cleartext:
+        return fail(cleartext)
 
     if gws:
         # Both are configured, and the channel prefers gws. Said plainly here

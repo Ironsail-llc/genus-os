@@ -267,7 +267,7 @@ Usage: `genus channel list [--json]`
 
 Prove a channel works, step by step (exit 1 on a failed step, 2 if unset).
 
-Usage: `genus channel verify <name> [--target TARGET] [--to TARGET] [--json]`
+Usage: `genus channel verify <name> [--target TARGET] [--to TARGET] [--tenant TENANT] [--json]`
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -277,6 +277,7 @@ Usage: `genus channel verify <name> [--target TARGET] [--to TARGET] [--json]`
 | --- | --- | --- | --- |
 | `--target` | `TARGET` | — | Where to post the test message; defaults to the channel's |
 | `--to` | `TARGET` | — | Alias for --target. The email channel has no configured fallback address, so it is named here every time |
+| `--tenant` | `TENANT` | — | Tenant whose do-not-contact list the email channel checks --to against. Defaults to this instance's configured tenant |
 | `--json` | — | off | Machine-readable output |
 
 ### `genus channel add`

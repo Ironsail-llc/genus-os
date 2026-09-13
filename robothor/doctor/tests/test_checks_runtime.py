@@ -713,6 +713,30 @@ def test_email_transport_skips_the_socket_under_offline(settings, no_gws, monkey
     assert row.status == "skip"
 
 
+def test_email_transport_fails_on_a_cleartext_login(settings, no_gws, monkeypatch) -> None:
+    """STARTTLS off on a submission port with a password configured publishes
+    that password on the wire. The channel refuses the send; the doctor is where
+    an operator finds out why before a briefing goes missing."""
+    from robothor.engine.channels import email as email_channel
+
+    def _never(*_args, **_kwargs):
+        raise AssertionError("the doctor opened an unprotected SMTP session")
+
+    monkeypatch.setattr(email_channel, "_build_smtp", _never)
+    settings(
+        ROBOTHOR_EMAIL_FROM="genus@example.com",
+        ROBOTHOR_EMAIL_SMTP_HOST="smtp.example.com",
+        ROBOTHOR_EMAIL_SMTP_USER="genus@example.com",
+        ROBOTHOR_EMAIL_SMTP_PASSWORD=FAKE_SMTP_PASSWORD,
+        ROBOTHOR_EMAIL_SMTP_STARTTLS="false",
+    )
+    row = _run(channel_checks.CHECKS, "email.transport", make_ctx())[0]
+
+    assert row.status == "fail"
+    assert "cleartext" in row.detail.lower()
+    assert FAKE_SMTP_PASSWORD not in row.detail
+
+
 def test_the_doctor_never_sends_an_email(settings, no_gws, monkeypatch) -> None:
     """The channel's `verify` sends one message. This must not: a diagnostic
     that mails somebody every time a Health panel refreshes is not a
