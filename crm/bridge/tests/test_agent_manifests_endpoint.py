@@ -624,12 +624,20 @@ class TestOneProblemIsOneFinding:
         return [issue for issue in body[bucket] if issue["path"] == f"check.{check}"]
 
     def test_check_k_keeps_the_list_of_missing_tools(self, client, workspace, fake_engine):
-        """Only `write_file` is missing, deliberately.
+        """Only `write_file` is missing, and the assertion is the EXACT computed
+        fragment — both halves of that matter.
 
-        K's `details` is generic advice that names all three basic tools, so a
-        manifest missing all three would pass this test even with the computed
-        list thrown away — the assertion has to be able to tell the COMPUTED
-        set from the boilerplate that mentions the same words.
+        K's `details` is generic advice naming all three basic tools, so this
+        test has been written wrong twice already. `"exec" in message and
+        "write_file" in message` passed with the computed list discarded,
+        because the advice says both words. Splitting it into `"Missing basic
+        I/O tools" in message` plus `"write_file" in message` passed too: the
+        prefix survives on its own if the `: {sorted(missing)}` interpolation is
+        dropped, and the advice still supplies `write_file`.
+
+        Only the whole computed fragment pins it, because only that requires the
+        prefix, the list, AND the list being right. Mutation-proved: removing
+        the interpolation from `check_basic_io_tools` turns this red.
         """
         candidate = {**EXISTING, "tools_allowed": ["exec", "read_file"]}
 
@@ -637,8 +645,7 @@ class TestOneProblemIsOneFinding:
 
         assert len(found) == 1, found
         message = found[0]["message"]
-        assert "Missing basic I/O tools" in message, message
-        assert "write_file" in message, message
+        assert "Missing basic I/O tools: ['write_file']" in message, message
 
     def test_check_e_is_one_finding_that_explains_itself(self, client, workspace, fake_engine):
         candidate = {
