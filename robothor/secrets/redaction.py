@@ -49,11 +49,19 @@ PLACEHOLDER = "<redacted>"
 #: command line. The digit run is anchored at 5+ (the shortest bot id Telegram
 #: has issued) and the secret at 30+ so an ordinary ``12:34`` in prose, a
 #: timestamp or a ``partial:2/3`` status is left alone.
+#:
+#: ``AUTH PLAIN|LOGIN|XOAUTH2 <blob>`` — an SMTP authentication line. An SMTP
+#: password has no shape of its own (it is whatever the mail provider issued),
+#: so there is nothing to match on it directly; the AUTH line that carries it
+#: does have one, and that is the line ``smtplib`` quotes back inside
+#: ``SMTPAuthenticationError`` when a server rejects the credential. The
+#: base64 after ``AUTH PLAIN`` decodes straight to the password.
 _SHAPES = (
     r"xox[abceprs]-[\w-]+",
     r"xapp-[\w-]+",
     r"Bearer\s+\S+",
     r"\b\d{5,}:[A-Za-z0-9_-]{30,}",
+    r"AUTH\s+(?:PLAIN|LOGIN|XOAUTH2)\s+\S+",
 )
 
 _CREDENTIAL_SHAPED = re.compile("|".join(_SHAPES), re.IGNORECASE)

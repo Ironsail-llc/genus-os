@@ -622,6 +622,130 @@ def test_slack_verify_fails_on_a_missing_scope(settings, monkeypatch) -> None:
     assert FAKE_SLACK_TOKEN not in row.detail
 
 
+# ── email ────────────────────────────────────────────────────────────────────
+
+FAKE_SMTP_PASSWORD = "not-a-real-smtp-password-9999"
+
+
+@pytest.fixture
+def no_gws(monkeypatch):
+    """A box without the gws CLI, whatever this one actually has installed."""
+    from robothor.engine.tools.handlers import gws
+
+    monkeypatch.setattr(gws, "gws_available", lambda: False)
+
+
+@pytest.fixture
+def has_gws(monkeypatch):
+    from robothor.engine.tools.handlers import gws
+
+    monkeypatch.setattr(gws, "gws_available", lambda: True)
+
+
+def test_email_transport_skips_when_unconfigured(no_gws) -> None:
+    """Optional, and absent is information. A fail here would teach the
+    operator that red output from the doctor is normal."""
+    row = _run(channel_checks.CHECKS, "email.transport", make_ctx())[0]
+    assert row.status == "skip"
+
+
+def test_email_transport_passes_naming_the_transport(has_gws) -> None:
+    row = _run(channel_checks.CHECKS, "email.transport", make_ctx())[0]
+    assert row.status == "pass"
+    assert "gws" in row.detail
+
+
+def test_email_transport_names_the_credential_source_not_the_credential(
+    settings, no_gws, monkeypatch
+) -> None:
+    from robothor.engine.channels import email as email_channel
+
+    monkeypatch.setattr(
+        email_channel, "_build_smtp", lambda *_a, **_kw: _AcceptingSMTP(), raising=True
+    )
+    settings(
+        ROBOTHOR_EMAIL_FROM="genus@example.com",
+        ROBOTHOR_EMAIL_SMTP_HOST="smtp.example.com",
+        ROBOTHOR_EMAIL_SMTP_USER="genus@example.com",
+        ROBOTHOR_EMAIL_SMTP_PASSWORD=FAKE_SMTP_PASSWORD,
+    )
+    row = _run(channel_checks.CHECKS, "email.transport", make_ctx())[0]
+
+    assert row.status == "pass"
+    assert FAKE_SMTP_PASSWORD not in row.detail
+    assert "env" in row.detail, "which layer answered is the question an operator has"
+
+
+def test_email_transport_fails_on_half_configured_smtp(settings, no_gws) -> None:
+    """A host with no from-address sends nothing, and says so at the first
+    delivery rather than here — which is a message nobody reads until it is
+    missed."""
+    settings(ROBOTHOR_EMAIL_SMTP_HOST="smtp.example.com")
+    row = _run(channel_checks.CHECKS, "email.transport", make_ctx())[0]
+
+    assert row.status == "fail"
+    assert "ROBOTHOR_EMAIL_FROM" in row.detail
+
+
+def test_a_stored_password_nothing_reads_is_reported(settings, no_gws) -> None:
+    settings(ROBOTHOR_EMAIL_SMTP_PASSWORD=FAKE_SMTP_PASSWORD)
+    row = _run(channel_checks.CHECKS, "email.transport", make_ctx())[0]
+
+    assert row.status == "fail"
+    assert "ROBOTHOR_EMAIL_SMTP_HOST" in row.detail
+    assert FAKE_SMTP_PASSWORD not in row.detail
+
+
+def test_email_transport_skips_the_socket_under_offline(settings, no_gws, monkeypatch) -> None:
+    """--offline means nothing leaves the box. A zero call count, not merely a
+    skipped status: a check could report `skip` after doing the work."""
+    from robothor.engine.channels import email as email_channel
+
+    def _never(*_args, **_kwargs):
+        raise AssertionError("the doctor opened an SMTP connection under --offline")
+
+    monkeypatch.setattr(email_channel, "_build_smtp", _never)
+    settings(
+        ROBOTHOR_EMAIL_FROM="genus@example.com",
+        ROBOTHOR_EMAIL_SMTP_HOST="smtp.example.com",
+    )
+    row = _run(channel_checks.CHECKS, "email.transport", make_ctx(offline=True))[0]
+    assert row.status == "skip"
+
+
+def test_the_doctor_never_sends_an_email(settings, no_gws, monkeypatch) -> None:
+    """The channel's `verify` sends one message. This must not: a diagnostic
+    that mails somebody every time a Health panel refreshes is not a
+    diagnostic."""
+    from robothor.engine.channels import email as email_channel
+
+    client = _AcceptingSMTP()
+    monkeypatch.setattr(email_channel, "_build_smtp", lambda *_a, **_kw: client)
+    settings(
+        ROBOTHOR_EMAIL_FROM="genus@example.com",
+        ROBOTHOR_EMAIL_SMTP_HOST="smtp.example.com",
+    )
+    _run(channel_checks.CHECKS, "email.transport", make_ctx())
+    assert client.messages == []
+
+
+class _AcceptingSMTP:
+    """An SMTP server that answers every step and refuses no recipient."""
+
+    def __init__(self) -> None:
+        self.messages: list[object] = []
+
+    def starttls(self) -> None: ...
+
+    def login(self, _user: str, _password: str) -> None: ...
+
+    def send_message(self, message: object) -> dict[str, object]:
+        self.messages.append(message)
+        return {}
+
+    def quit(self) -> None: ...
+
+
 # ── services ─────────────────────────────────────────────────────────────────
 
 

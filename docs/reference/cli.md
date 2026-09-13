@@ -267,7 +267,7 @@ Usage: `genus channel list [--json]`
 
 Prove a channel works, step by step (exit 1 on a failed step, 2 if unset).
 
-Usage: `genus channel verify <name> [--target TARGET] [--json]`
+Usage: `genus channel verify <name> [--target TARGET] [--to TARGET] [--json]`
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -276,13 +276,14 @@ Usage: `genus channel verify <name> [--target TARGET] [--json]`
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--target` | `TARGET` | — | Where to post the test message; defaults to the channel's |
+| `--to` | `TARGET` | — | Alias for --target. The email channel has no configured fallback address, so it is named here every time |
 | `--json` | — | off | Machine-readable output |
 
 ### `genus channel add`
 
 Store a channel's credentials.
 
-Usage: `genus channel add <name> [--bot-token BOT_TOKEN] [--app-token APP_TOKEN] [--verify-target VERIFY_TARGET] [--to TO]`
+Usage: `genus channel add <name> [--bot-token BOT_TOKEN] [--app-token APP_TOKEN] [--smtp-password SMTP_PASSWORD] [--verify-target VERIFY_TARGET] [--from-address FROM_ADDRESS] [--smtp-host SMTP_HOST] [--smtp-port SMTP_PORT] [--smtp-starttls SMTP_STARTTLS] [--smtp-user SMTP_USER] [--to TO]`
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -292,7 +293,13 @@ Usage: `genus channel add <name> [--bot-token BOT_TOKEN] [--app-token APP_TOKEN]
 | --- | --- | --- | --- |
 | `--bot-token` | `BOT_TOKEN` | — | REFUSED: a token on a command line is world-readable. Use the prompt or export ROBOTHOR_SLACK_BOT_TOKEN |
 | `--app-token` | `APP_TOKEN` | — | REFUSED, as --bot-token. Export ROBOTHOR_SLACK_APP_TOKEN instead |
+| `--smtp-password` | `SMTP_PASSWORD` | — | REFUSED, as --bot-token. Export ROBOTHOR_EMAIL_SMTP_PASSWORD instead |
 | `--verify-target` | `VERIFY_TARGET` | — | Conversation `genus channel verify` and the doctor post their test message to. Never a delivery fallback |
+| `--from-address` | `FROM_ADDRESS` | — | Address the email channel sends FROM over SMTP. Required for the SMTP transport; the gws transport sends as its own account |
+| `--smtp-host` | `SMTP_HOST` | — | SMTP server for the email channel's fallback transport |
+| `--smtp-port` | `SMTP_PORT` | — | SMTP port. 587 is submission with STARTTLS, 465 is TLS |
+| `--smtp-starttls` | `true` \| `false` | — | Upgrade the SMTP session with STARTTLS before authenticating. Default true; ignored on port 465 |
+| `--smtp-user` | `SMTP_USER` | — | SMTP username, if the server needs one |
 | `--to` | `vault` \| `env` | — | Where to write: the vault, or the instance env file. Default: the vault when this instance has a master key, the env file otherwise |
 
 ### `genus channel access`

@@ -431,6 +431,16 @@ def _build_parser() -> argparse.ArgumentParser:
     channel_verify.add_argument(
         "--target", default=None, help="Where to post the test message; defaults to the channel's"
     )
+    # The same dest, so one verify parser serves every channel. `--to` is what
+    # an address wants to be called and `--target` what a conversation id does;
+    # two parsers for one command would be two places a channel gets forgotten.
+    channel_verify.add_argument(
+        "--to",
+        dest="target",
+        default=None,
+        help="Alias for --target. The email channel has no configured fallback "
+        "address, so it is named here every time",
+    )
     channel_verify.add_argument("--json", action="store_true", help="Machine-readable output")
 
     channel_add = channel_sub.add_parser("add", help="Store a channel's credentials")
@@ -454,10 +464,37 @@ def _build_parser() -> argparse.ArgumentParser:
         help="REFUSED, as --bot-token. Export ROBOTHOR_SLACK_APP_TOKEN instead",
     )
     channel_add.add_argument(
+        "--smtp-password",
+        default=None,
+        help="REFUSED, as --bot-token. Export ROBOTHOR_EMAIL_SMTP_PASSWORD instead",
+    )
+    channel_add.add_argument(
         "--verify-target",
         default=None,
         help="Conversation `genus channel verify` and the doctor post their test "
         "message to. Never a delivery fallback",
+    )
+    channel_add.add_argument(
+        "--from-address",
+        default=None,
+        help="Address the email channel sends FROM over SMTP. Required for the "
+        "SMTP transport; the gws transport sends as its own account",
+    )
+    channel_add.add_argument(
+        "--smtp-host", default=None, help="SMTP server for the email channel's fallback transport"
+    )
+    channel_add.add_argument(
+        "--smtp-port", default=None, help="SMTP port. 587 is submission with STARTTLS, 465 is TLS"
+    )
+    channel_add.add_argument(
+        "--smtp-starttls",
+        choices=["true", "false"],
+        default=None,
+        help="Upgrade the SMTP session with STARTTLS before authenticating. "
+        "Default true; ignored on port 465",
+    )
+    channel_add.add_argument(
+        "--smtp-user", default=None, help="SMTP username, if the server needs one"
     )
     channel_add.add_argument(
         "--to",

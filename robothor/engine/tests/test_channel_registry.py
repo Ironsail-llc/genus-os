@@ -186,8 +186,13 @@ class TestTheRegistry:
         the inbound Socket Mode bot having started: a non-built-in name gets a
         ``SenderChannel`` wrapped around whatever ``SlackBot.start()``
         registered, which would put the shim back in front of the real channel.
+
+        ``email`` joined it for that reason and one more: a plugin able to claim
+        the name would become the surface the ``do_not_contact`` guard runs
+        inside, and an opt-out control a package can replace by being installed
+        is not a control.
         """
-        assert frozenset({"telegram", "event_bus", "slack"}) == BUILTIN_CHANNELS
+        assert frozenset({"telegram", "event_bus", "slack", "email"}) == BUILTIN_CHANNELS
         for name in BUILTIN_CHANNELS:
             assert get_channel(name) is not None, f"built-in channel {name!r} is missing"
 

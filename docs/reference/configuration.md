@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-364 settings in 13 groups.
+370 settings in 13 groups.
 
 ## paths
 
@@ -218,9 +218,15 @@ How the instance reaches people, and who it says it is.
 | `ROBOTHOR_AI_NAME` | str | `Genus` | `robothor-engine` | no | legacy | Name the assistant introduces itself with in channels and on the dashboard. |
 | `ROBOTHOR_AI_PHONE` | str | _(empty)_ | `robothor-engine` | no | legacy | Phone number shown on the assistant's public contact card. |
 | `ROBOTHOR_BRAND_NAME` | str | `Genus OS` | `robothor-engine` | no | legacy | Product name shown in dashboard chrome. |
-| `ROBOTHOR_CHANNELS` | str | _(empty)_ | `robothor-engine` | no | 1.70.0 | Comma-separated names of plugin-provided channels to arm. An installed genus.channels plugin is INERT until it is named here, the same rule ROBOTHOR_SANDBOX_BACKEND follows and for the same reason: a package that became the delivery surface merely by being installed could intercept every briefing. Built-in channels (telegram, event_bus) are always available and are not listed here. Provisional name until adding a channel persists it to config.yaml. |
+| `ROBOTHOR_CHANNELS` | str | _(empty)_ | `robothor-engine` | no | 1.70.0 | Comma-separated names of plugin-provided channels to arm. An installed genus.channels plugin is INERT until it is named here, the same rule ROBOTHOR_SANDBOX_BACKEND follows and for the same reason: a package that became the delivery surface merely by being installed could intercept every briefing. Built-in channels (telegram, event_bus, slack, email) are always available and are not listed here. Provisional name until adding a channel persists it to config.yaml. |
 | `ROBOTHOR_CHANNEL_ACCESS_DEFAULT` | str | `pairing` | `robothor-engine` | no | 1.73.0 | Inbound access policy for any channel with no setting of its own -- every plugin channel. One of `pairing` (an unknown sender gets a one-shot code and reaches nothing until an operator approves it), `allowlist` (the channel's own membership test decides) or `open` (anyone the surface admits may drive the agent). A value that is none of those resolves to `pairing`, so a typo cannot open a surface. |
 | `ROBOTHOR_DOMAIN` | str | _(empty)_ | `robothor-engine` | no | legacy | Public domain the tunnel generator issues ingress hostnames under. |
+| `ROBOTHOR_EMAIL_FROM` | str | _(empty)_ | `robothor-engine` | no | 1.74.0 | Address the email channel sends FROM over SMTP, and the one an operator will reply to. Required for the SMTP transport and unused by the gws transport, which sends as whichever account the gws CLI is authenticated to. |
+| `ROBOTHOR_EMAIL_SMTP_HOST` | str | _(empty)_ | `robothor-engine` | no | 1.74.0 | SMTP server the email channel falls back to when no gws CLI is installed. Empty means the channel has no SMTP transport; on a box without gws that makes `delivery.channel: email` answer failed:email_no_transport rather than silently doing nothing. |
+| `ROBOTHOR_EMAIL_SMTP_PASSWORD` | str | _(unset)_ | `robothor-engine` | yes | 1.74.0 | SMTP password. Read through the secrets accessor, so `genus channel add email` may put it in this instance's vault instead of the environment. |
+| `ROBOTHOR_EMAIL_SMTP_PORT` | int | `587` | `robothor-engine` | no | 1.74.0 | SMTP port. 587 is submission with STARTTLS; 465 is implicit TLS and the channel opens an SMTP_SSL connection for it instead. |
+| `ROBOTHOR_EMAIL_SMTP_STARTTLS` | bool | `true` | `robothor-engine` | no | 1.74.0 | Upgrade the SMTP connection with STARTTLS before authenticating. On by default: a password sent over a cleartext session is a published password. Ignored on port 465, which is already TLS. |
+| `ROBOTHOR_EMAIL_SMTP_USER` | str | _(empty)_ | `robothor-engine` | no | 1.74.0 | SMTP username. Empty means the channel does not authenticate, which only a relay that accepts the sending host by address will allow. |
 | `ROBOTHOR_OWNER_EMAIL` | str | _(empty)_ | `robothor-engine` | no | legacy | DEPRECATED operator email. Operator identity belongs in ~/.robothor/owner.yaml; this is read only as a legacy fallback. |
 | `ROBOTHOR_OWNER_NAME` | str | _(empty)_ | `robothor-engine` | no | legacy | DEPRECATED operator display name. Operator identity belongs in ~/.robothor/owner.yaml; this is read only as a legacy fallback. |
 | `ROBOTHOR_SLACK_ACCESS` | str | `pairing` | `robothor-engine` | no | 1.73.0 | Inbound access policy for Slack. Defaults to `pairing`. Set it to `allowlist` to keep deciding by ROBOTHOR_SLACK_ALLOWED_USERS / _CHANNELS -- which is what an instance that has either of those set already gets until it names a mode here -- or to `open` to let anyone the workspace admits drive the main agent. |

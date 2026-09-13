@@ -582,3 +582,167 @@ class TestArgparseItselfMustNotPrintACredential:
         assert code == 2
         assert "usage" in text.lower()
         assert "name" in text.lower(), "the missing-argument error lost its content"
+
+
+FAKE_SMTP_PASSWORD = "not-a-real-smtp-password-9999"
+SMTP_HOST = "smtp.example.com"
+FROM_ADDRESS = "genus@example.com"
+
+
+def _email_add_args(**kwargs: Any) -> argparse.Namespace:
+    defaults: dict[str, Any] = {
+        "channel_command": "add",
+        "name": "email",
+        "bot_token": None,
+        "app_token": None,
+        "verify_target": None,
+        "smtp_password": None,
+        "smtp_host": None,
+        "smtp_port": None,
+        "smtp_starttls": None,
+        "smtp_user": None,
+        "from_address": None,
+        "to": None,
+    }
+    defaults.update(kwargs)
+    return _args(**defaults)
+
+
+@pytest.fixture
+def smtp_exported(monkeypatch):
+    """The SMTP password in the environment — `add`'s non-interactive path."""
+    monkeypatch.setenv("ROBOTHOR_EMAIL_SMTP_PASSWORD", FAKE_SMTP_PASSWORD)
+
+
+class TestAddEmail:
+    def test_add_email_writes_the_password_through_the_secrets_accessor(self, vault, smtp_exported):
+        """The KEY is the contract: a write under a name nothing reads is the
+        failure ``vault/naming.py`` exists to make impossible."""
+        assert cmd_channel(_email_add_args()) == 0
+        assert set(vault.written) == {"channels/email/smtp_password"}
+        assert vault.written["channels/email/smtp_password"] == FAKE_SMTP_PASSWORD
+
+    def test_add_email_never_prints_the_password(self, vault, smtp_exported, capsys, caplog):
+        with caplog.at_level("DEBUG"):
+            cmd_channel(_email_add_args())
+        captured = capsys.readouterr()
+
+        assert FAKE_SMTP_PASSWORD not in captured.out
+        assert FAKE_SMTP_PASSWORD not in captured.err
+        assert FAKE_SMTP_PASSWORD not in caplog.text
+        assert "sha256:" in captured.out, "no fingerprint, so two credentials look alike"
+
+    def test_add_email_falls_back_to_the_instance_env_file(self, tmp_path, smtp_exported):
+        """The common install has no master key; a vault-only add fails there."""
+        assert cmd_channel(_email_add_args()) == 0
+        body = (tmp_path / "genus.env").read_text(encoding="utf-8")
+        assert "ROBOTHOR_EMAIL_SMTP_PASSWORD" in body
+
+    def test_the_smtp_settings_are_settings_not_secrets(self, vault, smtp_exported):
+        """A host and a port are not credentials, and putting them behind a
+        master key would make them unreadable by the doctor on an instance with
+        no vault."""
+        assert (
+            cmd_channel(
+                _email_add_args(
+                    smtp_host=SMTP_HOST,
+                    smtp_port="2525",
+                    smtp_user=FROM_ADDRESS,
+                    smtp_starttls="false",
+                    from_address=FROM_ADDRESS,
+                )
+            )
+            == 0
+        )
+
+        from robothor.settings import get_settings, reset_settings
+        from robothor.settings.sources import config_yaml_path
+
+        path = config_yaml_path()
+        assert path is not None and SMTP_HOST in path.read_text(encoding="utf-8")
+        assert "smtp_host" not in "".join(vault.written)
+
+        reset_settings()
+        channels = get_settings().channels
+        assert channels.email_smtp_host == SMTP_HOST
+        # Written as YAML scalars and read back through the real settings
+        # loader: a port that came back as the string "2525" or a starttls that
+        # came back truthy would be a config file that only looks right.
+        assert channels.email_smtp_port == 2525
+        assert channels.email_smtp_starttls is False
+
+    def test_the_smtp_password_flag_is_refused(self, vault, capsys):
+        assert cmd_channel(_email_add_args(smtp_password=FAKE_SMTP_PASSWORD)) == 2
+        assert vault.written == {}, "a password from a command line was stored anyway"
+
+        err = capsys.readouterr().err
+        assert FAKE_SMTP_PASSWORD not in err
+        assert "ROBOTHOR_EMAIL_SMTP_PASSWORD" in err, "the refusal must name the safe path"
+
+    def test_the_refusal_names_the_right_channels_variable(self, vault, capsys):
+        """The refusal used to hard-code Slack's two names, so an operator who
+        put a password on the command line was told to export a bot token."""
+        cmd_channel(_email_add_args(smtp_password=FAKE_SMTP_PASSWORD))
+        err = capsys.readouterr().err
+        assert "ROBOTHOR_SLACK_BOT_TOKEN" not in err
+
+
+class TestVerifyEmail:
+    @staticmethod
+    def _channel(monkeypatch, *, sent: list[Any] | None = None):
+        from robothor.engine.channels import get_channel, reset_channels
+
+        reset_channels()
+        channel = get_channel("email")
+        assert channel is not None
+        channel.gws_probe = lambda: True  # type: ignore[attr-defined]
+
+        def _send(args: list[str], timeout: int = 30) -> dict[str, Any]:
+            if sent is not None:
+                sent.append(args)
+            return {"id": "18f0000000000000"}
+
+        channel.gws_send = _send  # type: ignore[attr-defined]
+        monkeypatch.setattr(
+            "robothor.crm.dal.do_not_contact_emails", lambda *_a, **_kw: set(), raising=True
+        )
+        return channel
+
+    def test_verify_email_requires_to(self, monkeypatch, capsys):
+        """No fallback address. A verification mail is indistinguishable from a
+        real one, so it is aimed by hand every time."""
+        sent: list[Any] = []
+        from robothor.engine.channels import reset_channels
+
+        self._channel(monkeypatch, sent=sent)
+        try:
+            code = cmd_channel(_args(channel_command="verify", name="email", target=None))
+        finally:
+            reset_channels()
+
+        assert code == 1
+        assert sent == [], "verify sent a message with no address to aim at"
+        assert "--to" in capsys.readouterr().out
+
+    def test_to_is_an_alias_for_target_on_the_verify_parser(self, monkeypatch):
+        """One verify parser serves every channel; `--to` reads better for an
+        address and must land on the same dest."""
+        from robothor.cli import _build_parser
+
+        args = _build_parser().parse_args(["channel", "verify", "email", "--to", "ops@example.com"])
+        assert args.target == "ops@example.com"
+
+    def test_verify_email_with_a_to_address_sends_one_message(self, monkeypatch):
+        sent: list[Any] = []
+        from robothor.engine.channels import reset_channels
+
+        self._channel(monkeypatch, sent=sent)
+        try:
+            code = cmd_channel(
+                _args(channel_command="verify", name="email", target="ops@example.com")
+            )
+        finally:
+            reset_channels()
+
+        assert code == 0
+        assert len(sent) == 1
