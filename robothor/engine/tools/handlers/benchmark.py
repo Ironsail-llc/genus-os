@@ -522,20 +522,24 @@ def _benchmark_spawn_context(ctx: ToolContext | None) -> SpawnContext | None:
     identity, person or parent task — a benchmark child gets its own budget and
     must not attribute work to a person or write back to a CRM task.
 
+    Linkage is NOT gated on the decontamination rollout. It was, and the
+    2026-09-13 audit is what that cost: with the flag short of ``enforce``
+    every one of the night's 78 task runs recorded ``parent_run_id = NULL``,
+    so "which runs were last night's benchmark?" could only be answered by a
+    time window over ``agent_runs``. Excluding benchmark traffic from
+    production METRICS is a rollout — a judgement about how numbers are
+    reported. Recording which run spawned which is a fact, and withholding it
+    removes the only handle an auditor has.
+
     Args:
         ctx: the calling tool context, or None.
 
     Returns:
-        A ``SpawnContext``, or None to keep the legacy (unlinked) shape —
-        which is what happens until the decontamination flag reaches
-        ``enforce``, or when there is no parent run id to link to.
+        A ``SpawnContext``, or None when there is no parent run id to link to
+        (a detached harness with no calling run).
     """
-    from robothor.engine.analytics import decontamination_enforced
     from robothor.engine.models import SpawnContext
     from robothor.engine.tools.handlers.spawn import _current_spawn_context
-
-    if not decontamination_enforced():
-        return None
 
     ambient = _current_spawn_context.get()
     parent_run_id = ambient.parent_run_id if ambient else ""
@@ -1353,6 +1357,47 @@ def _seed_task_fixtures(
     return seed_fixtures(spec, keys)
 
 
+def _task_execution_tenant(sandbox_on: bool) -> str | None:
+    """The tenant EVERY task run of this suite executes as, or None.
+
+    The sandbox tenant is a property of *being a benchmark run*, not of the
+    suite's fixture declaration. It used to be the second: the tenant was
+    reached only as a side effect of seeding, so a suite that declared neither
+    ``fixtures:`` nor ``state_checks:`` ran as the graded agent's own tenant —
+    the production one. Of the 78 task runs in the 2026-09-13 fleet benchmark,
+    75 were recorded that way; only ``agent-architect`` (the one suite with a
+    ``fixtures.yaml``) got ``benchmark-sandbox``.
+
+    Nothing leaked, because the D2 write boundary refused 60 writes on the way
+    past. But a refusal is a last line, not an address: the runs were still
+    *attributed* to the production tenant, and every DAL read the child made
+    ran against production rows with benchmark fixture identifiers — which is
+    how ``get_person {"id": "bob.quill@example.com"}`` reached Postgres as a
+    uuid comparison and raised ``InvalidTextRepresentation``.
+
+    An empty sandbox is the right environment for a fixture-less suite, not a
+    degraded one. Those suites state their scenario inside the prompt ("47
+    inbound emails", "thread th456") and grade the transcript; none reads a
+    production row it did not seed. The fleet honesty cases go further and
+    depend on a record being ABSENT — ``missing_record`` is only a valid case
+    while the person really is not there, which an empty tenant guarantees and
+    a production tenant merely happened to satisfy.
+
+    Args:
+        sandbox_on: the suite-wide sandbox posture, resolved once per run.
+
+    Returns:
+        The sandbox tenant id (created if absent, so the child's FK-constrained
+        writes hold), or None when the sandbox is off — in which case the run
+        keeps today's behaviour with the write boundary still armed.
+    """
+    if not sandbox_on:
+        return None
+    from robothor.engine.benchmark_sandbox import ensure_sandbox_tenant
+
+    return ensure_sandbox_tenant()
+
+
 def _render_task_prompt(task: dict[str, Any], seeded: SeededFixtures | None) -> str:
     """Interpolate ``{{fixture.<key>.<field>}}`` against the seeded rows."""
     prompt = task["prompt"]
@@ -1390,25 +1435,29 @@ async def _execute_task_run(
     trigger_detail: str,
     child_config: Any,
     spawn_context: SpawnContext | None,
-    seeded: SeededFixtures | None,
+    tenant_id: str | None,
 ) -> Any:
-    """Run one benchmark task, tenant-scoped to the sandbox when seeded.
+    """Run one benchmark task, tenant-scoped to the sandbox when there is one.
 
     Three layers, because two were not enough. ``runner.execute(tenant_id=…)``
-    is what the CRM DAL reads for its WHERE clauses; ``tenant_scope`` binds
-    ``app.tenant_id`` on every connection taken inside the block, which is what
-    row-level security enforces at the database. Without the second, a
-    sandbox-tenant INSERT is refused by the RLS ``WITH CHECK`` clause the moment
-    ``ROBOTHOR_RLS_ENABLED`` is on.
+    is what the CRM DAL reads for its WHERE clauses and what lands in
+    ``agent_runs.tenant_id``; ``tenant_scope`` binds ``app.tenant_id`` on every
+    connection taken inside the block, which is what row-level security
+    enforces at the database. Without the second, a sandbox-tenant INSERT is
+    refused by the RLS ``WITH CHECK`` clause the moment ``ROBOTHOR_RLS_ENABLED``
+    is on.
 
-    The third is ``benchmark_run_scope``, and it is the one that covers the
-    ``seeded is None`` branch — the branch that runs under the AGENT's own
-    tenant whenever the sandbox is off or the suite declares no fixtures.
-    Nothing bound that branch to anything before 2026-09-12, which is how a
-    fixture person reached production memory. The scope makes every durable
+    The third is ``benchmark_run_scope``, and it is the one that still covers
+    the ``tenant_id is None`` branch — the branch taken when the sandbox is
+    off. Nothing bound that branch to anything before 2026-09-12, which is how
+    a fixture person reached production memory. The scope makes every durable
     memory write inside the child refuse any tenant but the sandbox, and it
     restores the previous marker on the way out so the benchmark runner's own
     writes are unaffected.
+
+    Args:
+        tenant_id: the sandbox tenant when the sandbox is on (for EVERY suite,
+            fixtures or not — see :func:`_task_execution_tenant`), else None.
     """
     from robothor.engine.run_context import benchmark_run_scope
 
@@ -1416,7 +1465,7 @@ async def _execute_task_run(
     # row exists; the marker has to be bound before `execute` is entered, and
     # the id does not exist until it has been.
     with benchmark_run_scope(True, agent_id=agent_id):
-        if seeded is None:
+        if tenant_id is None:
             return await runner.execute(
                 agent_id=agent_id,
                 message=prompt,
@@ -1428,7 +1477,7 @@ async def _execute_task_run(
 
         from robothor.db.connection import tenant_scope
 
-        with tenant_scope(seeded.tenant_id):
+        with tenant_scope(tenant_id):
             return await runner.execute(
                 agent_id=agent_id,
                 message=prompt,
@@ -1436,7 +1485,7 @@ async def _execute_task_run(
                 trigger_detail=trigger_detail,
                 agent_config=child_config,
                 spawn_context=spawn_context,
-                tenant_id=seeded.tenant_id,
+                tenant_id=tenant_id,
             )
 
 
@@ -1641,16 +1690,56 @@ def _score_suite(results: list[dict[str, Any]], *, suite_id: str, agent_id: str)
     }
 
 
-def _teardown_task_fixtures(seeded: SeededFixtures | None) -> None:
-    """Delete every sandbox row this task produced. Never raises."""
-    if seeded is None:
+def _shape_child_config(child_config: Any, task_spend_ceiling: float, sandbox_on: bool) -> None:
+    """Turn a production agent config into a graded benchmark child, in place.
+
+    Cap iterations and force silent delivery. The cap respects the agent's
+    configured ``max_iterations`` up to a hard ceiling of 25 — a flat 15
+    truncated agents that legitimately need deeper loops (e.g.
+    curiosity-engine, configured for 20), forcing a wrap-up before they could
+    converge.
+
+    Then sandbox the side-effecting tools, which is what keeps benchmark test
+    data (``carol@example.com``) out of the live calendar, CRM and email.
+    Everything reaching OUTSIDE this database stays denied in every mode. What
+    changes when the sandbox is active is narrow and deliberate: CRM writes are
+    re-allowed, and every row they touch lives in the isolated sandbox tenant
+    and is deleted when the task ends. Safety tests (``must_refuse``) still
+    work because the agent sees the tool is denied and must refuse the prompt.
+
+    ``is_benchmark`` is defense in depth: the runner's benchmark-mode guard
+    (and the gws CLI wrapper) refuse side-effecting tools even if a future
+    skill/MCP tool re-opens the deny-list hole. The CRM guard additionally
+    consults the run's tenant, so a benchmark run outside the sandbox tenant is
+    refused exactly as before.
+    """
+    from robothor.engine.models import DeliveryMode
+
+    child_config.delivery_mode = DeliveryMode.NONE
+    child_config.max_iterations = min(child_config.max_iterations, 25)
+    child_config.max_cost_usd = task_spend_ceiling
+    child_config.tools_denied = _benchmark_tools_denied(
+        child_config.tools_allowed, sandbox=sandbox_on
+    )
+    child_config.is_benchmark = True
+
+
+def _teardown_task_fixtures(tenant_id: str | None) -> None:
+    """Delete every sandbox row this task produced. Never raises.
+
+    Keyed on the EXECUTION tenant, not on whether the task seeded anything: a
+    fixture-less task now runs in the sandbox too, where the sandbox-safe CRM
+    writes are re-allowed, so it leaves rows of its own that the next night's
+    run would otherwise read as ambient state.
+    """
+    if not tenant_id:
         return
     try:
         from robothor.engine.benchmark_sandbox import teardown_sandbox
 
-        teardown_sandbox(seeded.tenant_id)
+        teardown_sandbox(tenant_id)
     except Exception as exc:  # noqa: BLE001 — teardown must not fail a run
-        logger.warning("benchmark fixture teardown failed for %s: %s", seeded.tenant_id, exc)
+        logger.warning("benchmark fixture teardown failed for %s: %s", tenant_id, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -1778,7 +1867,6 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 
     # Execute each task as a sub-agent run
     from robothor.engine.config import load_agent_config_or_reason
-    from robothor.engine.models import DeliveryMode
 
     # Parent linkage for every task in this suite — see _benchmark_spawn_context.
     benchmark_spawn_ctx = _benchmark_spawn_context(ctx)
@@ -1831,33 +1919,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             )
             continue
 
-        # Cap iterations and force silent delivery. The cap respects the
-        # agent's configured max_iterations up to a hard ceiling of 25 —
-        # a flat 15 truncated agents that legitimately need deeper loops
-        # (e.g. curiosity-engine, configured for 20), forcing a wrap-up
-        # before they could converge.
-        child_config.delivery_mode = DeliveryMode.NONE
-        child_config.max_iterations = min(child_config.max_iterations, 25)
-        child_config.max_cost_usd = task_spend_ceiling
-
-        # Sandbox side-effecting tools during benchmark runs.
-        # Prevents benchmark test data (e.g. carol@example.com) from
-        # polluting the live calendar, CRM, and email systems.
-        # Everything that reaches OUTSIDE this database stays denied in every
-        # mode. What changes when the sandbox is active is narrow and
-        # deliberate: CRM writes are re-allowed, and every row they touch lives
-        # in the isolated sandbox tenant and is deleted when the task ends.
-        # Safety tests (must_refuse) still work because the agent sees the
-        # tool is denied and must refuse the task prompt.
-        child_config.tools_denied = _benchmark_tools_denied(
-            child_config.tools_allowed, sandbox=sandbox_on
-        )
-        # Defense-in-depth: stamp is_benchmark=True so the runner's
-        # benchmark-mode guard (and gws CLI wrapper) refuse side-effecting
-        # tools even if a future skill/MCP tool re-opens the deny-list hole.
-        # The CRM guard additionally consults the run's tenant, so a benchmark
-        # run outside the sandbox tenant is refused exactly as before.
-        child_config.is_benchmark = True
+        _shape_child_config(child_config, task_spend_ceiling, sandbox_on)
 
         # Per-task wall-clock cap. Without one, a hung sub-agent (provider
         # returning blank JSON, runaway token loops) wedges the whole fleet
@@ -1868,10 +1930,14 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         per_task_timeout_seconds = _resolve_task_timeout(task, suite)
 
         seeded: SeededFixtures | None = None
+        exec_tenant: str | None = None
         state_results: list[StateCheckResult] = []
         try:
             import asyncio as _asyncio
 
+            # Resolve the execution tenant BEFORE seeding, so a task that dies
+            # mid-seed is still swept by the `finally` below.
+            exec_tenant = _task_execution_tenant(sandbox_on)
             # Seed this task's fixtures as real rows BEFORE the prompt is
             # rendered: the prompt interpolates their real uuids, so the record
             # it names exists. This is what replaces "Person p-9999 has …",
@@ -1888,7 +1954,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
                         trigger_detail=f"benchmark:{suite_id}:{task['id']}",
                         child_config=child_config,
                         spawn_context=benchmark_spawn_ctx,
-                        seeded=seeded,
+                        tenant_id=exec_tenant,
                     )
             except TimeoutError:
                 results.append(_timeout_result(task, per_task_timeout_seconds, agent_id, suite_id))
@@ -1985,7 +2051,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             # Tear down unconditionally — including after a timeout or a crash.
             # Rows left behind become the next night's ambient state, and a
             # benchmark that grades yesterday's leftovers is worse than none.
-            _teardown_task_fixtures(seeded)
+            _teardown_task_fixtures(exec_tenant)
 
     # Every task in the suite is a case, whether or not it got to run. The
     # only thing `skipped` changes is telemetry — never the denominator.

@@ -58,19 +58,52 @@ premise. It was reverted. **Seed real rows instead.**
 
 This ladder is not the usual bookkeeping one.
 
-| Mode | Seeds fixtures | Sandbox CRM writes | State checks | Score |
-|------|----------------|--------------------|--------------|-------|
-| `off` | no | no | no | unchanged (today's harness) |
-| `observe` | yes | yes | recorded on the task result | **unchanged** |
-| `alert` | yes | yes | recorded + error-logged | unchanged |
-| `enforce` | yes | yes | recorded | **folded into the task score** |
+| Mode | Runs as sandbox tenant | Seeds fixtures | Sandbox CRM writes | State checks | Score |
+|------|------------------------|----------------|--------------------|--------------|-------|
+| `off` | no | no | no | no | unchanged (today's harness) |
+| `observe` | **every task run** | suites that declare them | yes | recorded on the task result | **unchanged** |
+| `alert` | every task run | suites that declare them | yes | recorded + error-logged | unchanged |
+| `enforce` | every task run | suites that declare them | yes | recorded | **folded into the task score** |
 
 `observe` already changes what a benchmark sub-agent can **do** — that is the
 defect being fixed. What it does not change is how the run is **graded**.
 
-**Blast radius is opt-in.** A suite with no `fixtures.yaml` and no
-`state_checks` is not scoped to the sandbox tenant at all and behaves exactly
-as it does today, reads included. Only suites that opt in move.
+### Every task run is the sandbox tenant, and names its parent
+
+With the sandbox on, **every** task run the harness launches executes as the
+sandbox tenant (`_task_execution_tenant`) and is linked to the benchmark
+runner's own run through a `SpawnContext`, whatever the suite declares. Seeding
+and tenancy are separate decisions: a suite with no `fixtures.yaml` seeds
+nothing and still runs in an empty sandbox, which is the right environment for
+suites that state their scenario inside the prompt and the required one for the
+fleet honesty cases, whose `missing_record` case is only valid while the record
+really is absent. Teardown sweeps the sandbox after every task, seeded or not,
+because a fixture-less child can still file its own CRM rows there. The grade
+ledger does **not** move: the `benchmark_results` row is written after the
+tenant scope closes and keeps the owning tenant.
+
+This used to depend on the suite: the sandbox was reached only as a side effect
+of seeding fixtures, so a suite declaring neither `fixtures:` nor
+`state_checks:` ran as the graded agent's own tenant. In the 2026-09-13 fleet
+benchmark that was 75 of 78 task runs. The write boundary refused 60 writes on
+the way past so nothing leaked, but the runs were still *attributed* to
+production and their DAL reads ran against production rows with fixture
+identifiers (`get_person {"id": "bob.quill@example.com"}` → an
+`InvalidTextRepresentation` from a uuid comparison).
+
+Lineage is not gated on the decontamination rollout — excluding benchmark
+traffic from production *metrics* is a judgement, recording which run spawned
+which is a fact. Audit a night by parent, not by time window:
+
+```sql
+-- every task run of last night's benchmark, and the tenant it ran as
+SELECT child.agent_id, child.tenant_id, count(*)
+  FROM agent_runs child
+  JOIN agent_runs parent ON parent.id = child.parent_run_id
+ WHERE parent.agent_id = 'benchmark-runner'
+   AND parent.started_at > now() - interval '1 day'
+ GROUP BY 1, 2;                 -- expect tenant_id = 'benchmark-sandbox' only
+```
 
 ## What a benchmark run may touch
 
@@ -201,9 +234,13 @@ belongs to an agent that can call the benchmark tools while the sandbox mode is
    UNION ALL
    SELECT 'tasks',  count(*) FROM crm_tasks  WHERE tenant_id = 'benchmark-sandbox';
    ```
-3. Zero rows written to any other tenant by a benchmark run — check
-   `agent_runs` rows whose `trigger_detail` starts with `benchmark:` (there is no `is_benchmark` column; the flag lives on the run object only) and confirm the CRM audit log shows no
-   mutation outside `benchmark-sandbox`.
+3. Zero rows written to any other tenant by a benchmark run — walk the night by
+   `parent_run_id` (the lineage query above; there is no `is_benchmark` column,
+   the flag lives on the run object only, and `trigger_detail LIKE 'benchmark:%'`
+   is the fallback for a detached harness that invented its own label) and
+   confirm the CRM audit log shows no mutation outside `benchmark-sandbox`.
+   With the sandbox on, every one of those child rows must itself read
+   `tenant_id = 'benchmark-sandbox'`.
 
 ## Rollback
 

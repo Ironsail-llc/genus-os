@@ -267,8 +267,19 @@ class TestBenchmarkSubRunLineage:
         )
 
     @pytest.mark.asyncio
-    async def test_off_mode_keeps_the_legacy_shape(self, monkeypatch):
-        """Flag off (the merge default until promoted) changes nothing."""
+    async def test_lineage_does_not_wait_for_the_flag(self, monkeypatch):
+        """Linkage is a fact about the run, not a reporting rollout.
+
+        This test used to assert the opposite — flag off, ``spawn_context``
+        None — and the 2026-09-13 fleet audit is what that cost: the flag sat
+        short of ``enforce``, so all 78 task runs recorded
+        ``parent_run_id = NULL`` and the only way to ask which runs belonged to
+        the night's benchmark was a time window over ``agent_runs``.
+
+        What the flag still gates is how analytics REPORT benchmark traffic
+        (``benchmark_excluded``); what it must never gate is whether the row
+        says who spawned it.
+        """
         monkeypatch.delenv("ROBOTHOR_BENCHMARK_DECONTAMINATION_ENABLED", raising=False)
         monkeypatch.delenv("ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE", raising=False)
 
@@ -279,7 +290,9 @@ class TestBenchmarkSubRunLineage:
 
         await _run_suite(mock_runner, _benchmark_child_config())
 
-        assert mock_runner.execute.await_args.kwargs.get("spawn_context") is None
+        spawn_context = mock_runner.execute.await_args.kwargs.get("spawn_context")
+        assert spawn_context is not None
+        assert spawn_context.parent_run_id == PARENT_RUN_ID
 
 
 def _llm_response(content: str):

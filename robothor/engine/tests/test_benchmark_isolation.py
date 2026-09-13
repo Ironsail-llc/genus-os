@@ -843,9 +843,14 @@ class TestTheMarkerIsActuallySet:
 
     @pytest.mark.asyncio
     async def test_the_harness_binds_the_marker_around_the_child_run(self) -> None:
-        """``_execute_task_run`` with ``seeded=None`` — the branch the incident
-        went through — must bind the marker before ``runner.execute`` and
-        restore it afterwards."""
+        """``_execute_task_run`` with ``tenant_id=None`` — the sandbox-off
+        branch the incident went through — must bind the marker before
+        ``runner.execute`` and restore it afterwards.
+
+        With the sandbox ON the child now also carries the sandbox tenant
+        (``_task_execution_tenant``); this is the branch where the marker is
+        the only thing standing between a fixture and production memory.
+        """
         from robothor.engine.run_context import in_benchmark_run
         from robothor.engine.tools.handlers.benchmark import _execute_task_run
 
@@ -865,7 +870,7 @@ class TestTheMarkerIsActuallySet:
             trigger_detail="benchmark:suite:1",
             child_config=SimpleNamespace(is_benchmark=True),
             spawn_context=None,
-            seeded=None,
+            tenant_id=None,
         )
 
         assert result == "ran"
@@ -921,7 +926,7 @@ class TestTheMarkerIsActuallySet:
             trigger_detail="benchmark:suite:1",
             child_config=SimpleNamespace(is_benchmark=True),
             spawn_context=None,
-            seeded=None,
+            tenant_id=None,
         )
         assert stored == [[]], "a benchmark child's memory write was not refused"
 

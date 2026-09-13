@@ -554,14 +554,21 @@ class TestCrmHandlerSandboxGate:
 
 
 class TestSuiteOptIn:
-    """A suite that declares no fixtures keeps today's behaviour exactly.
+    """A suite that declares no fixtures SEEDS nothing. It is still sandboxed.
 
-    The flag's blast radius has to stay confined to suites that opt in, or
-    turning it on silently re-points every other suite's READS at an empty
-    tenant and their grades move for reasons nobody chose.
+    This class used to read "keeps today's behaviour exactly", on the argument
+    that turning the flag on must not re-point another suite's reads at an
+    empty tenant. The 2026-09-13 audit is what that argument cost: 75 of 78
+    task runs executed as the production tenant, because the sandbox was
+    reached only as a side effect of seeding. Seeding and tenancy are now
+    separate decisions — ``_seed_task_fixtures`` still returns None here, while
+    ``_task_execution_tenant`` gives every child the sandbox (see
+    ``test_benchmark_child_tenant.py``). An empty tenant is the right
+    environment for suites that state their scenario in the prompt, and the
+    fleet honesty cases positively require it.
     """
 
-    def test_task_without_fixtures_or_checks_is_not_scoped(self) -> None:
+    def test_task_without_fixtures_or_checks_seeds_nothing(self) -> None:
         from robothor.engine.tools.handlers.benchmark import _seed_task_fixtures
 
         task = {"id": "legacy", "prompt": "p", "expected": {"must_contain": ["x"]}}

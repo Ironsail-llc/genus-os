@@ -65,7 +65,11 @@ KNOWN_LARGE: dict[str, int] = {
     # rather than raising this number for it.
     "daemon.py::main": 365,
     "telegram.py::_run_interactive": 384,
-    "tools/handlers/benchmark.py::_benchmark_run": 370,
+    # 370 -> 347: shaping the graded child (silent delivery, iteration cap,
+    # deny-list, is_benchmark) moved to _shape_child_config, which is what paid
+    # for resolving the child's execution tenant in here rather than raising
+    # this number for it.
+    "tools/handlers/benchmark.py::_benchmark_run": 347,
     "analytics.py::get_agent_stats": 343,
     # 303 -> 301: the reconcile reporting moved to _log_reconcile, which is
     # what paid for reporting added/replaced as well as pruned.
