@@ -47,7 +47,7 @@ on-premises, in a private cloud, or in a deliberately configured air gap.
 
 ## Get Started
 
-- [Quick Start](quickstart.md) — from zero to a working instance in 10 minutes.
+- [Quick Start](quickstart.md) — prerequisites, both substrates, the setup wizard, and what to do when the doctor is red.
 - [Configuration](configuration.md) — environment variables and defaults.
 - [Deployment](deployment.md) — Docker Compose, systemd, or manual.
 - [Architecture](architecture.md) — how the pieces fit together.

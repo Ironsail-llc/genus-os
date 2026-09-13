@@ -9,8 +9,8 @@ the variables.
     change waits on, and whether it holds a credential — is rendered from
     the typed settings model into the
     [configuration reference](reference/configuration.md). A hand-written list
-    is how 91 of the platform's variables ended up documented nowhere; this page
-    stopped carrying one for that reason. `genus config schema` prints the same
+    is how variables ended up documented nowhere at all; this page stopped
+    carrying one for that reason. `genus config schema` prints the same
     information as JSON Schema.
 
 ## Where a value comes from
@@ -33,11 +33,19 @@ Two consequences worth internalising:
   is right. `genus config get` names the layer that won, which is the only
   reliable way to answer "what is this actually set to?" on a box with a
   drop-in, an env file and a config file.
-- **A governed flag outranks everything.** Guardrails and feature gates
-  (`ROBOTHOR_RBAC_MODE` and the rest of the inventory in `infra/flags.yaml`)
-  resolve from the flag store, which is live within seconds and needs no
-  restart. That is deliberate: a guardrail you cannot turn off without a
-  deploy is a guardrail nobody turns on.
+- **A governed flag outranks everything.** The settings marked **governed** in
+  the reference (`ROBOTHOR_RBAC_MODE` and most of the inventory in
+  `infra/flags.yaml`) resolve from the flag store, which is live within
+  seconds and needs no restart. That is deliberate: a guardrail you cannot
+  turn off without a deploy is a guardrail nobody turns on. Not every flag in
+  that inventory is governed — `ROBOTHOR_CONFIG_STRICT_MODE` deliberately is
+  not, because it is read before a database exists, and neither is
+  `ROBOTHOR_MANIFEST_SCHEMA_MODE`. Check the reference rather than assuming.
+- **A governed flag written into `config.yaml` is never read.** The engine's
+  flag reader falls back from the database row to the environment and stops
+  there, while `genus config get` would report `config.yaml` as the winning
+  layer. Set a governed flag with `genus config set`, which routes it to the
+  store, or set it in the environment.
 
 ## Reading and changing settings
 
@@ -138,7 +146,7 @@ simply never applies, and you read the default as your value.
 | Rung | Behaviour |
 |------|-----------|
 | `off` | The key is ignored silently. |
-| `observe` | **Default.** The key is ignored and logged once, naming it. What every existing install gets on upgrade. |
+| `observe` | **Default.** The key is ignored and logged once, naming it. What every install gets, new or upgraded — nothing writes `ROBOTHOR_CONFIG_STRICT_MODE`, so `enforce` is always an explicit act. |
 | `enforce` | Resolving settings fails, naming the key. Recommended for new installs, and for any box where `genus doctor --only config.unknown_keys` reports none. |
 
 The rung can be set in the environment or in the file it governs (as above), so
@@ -148,15 +156,16 @@ knob must not be the thing that stops an instance booting.
 
 ## What the install wizard wrote
 
-`genus init` does not scatter an instance's configuration across `/etc`. Five
-files, each with one job:
+`genus init` does not scatter an instance's configuration across `/etc`. A
+handful of files, each with one job:
 
 | What | Where | Why there |
 |------|-------|-----------|
 | Operator identity | `~/.robothor/owner.yaml` | The file the platform reads. Never a `.env`: two files naming one operator is how an instance answers to one name and files CRM rows under another. |
 | Settings — database host/port/name/user, provider model, Redis and Ollama endpoints, secrets backend, timezone, substrate | `<workspace>/.robothor/config.yaml` | Written through the same writer `genus config set` uses. The database **password** is never written here. |
 | Sign-in secrets (`AUTH_SECRET`, `GENUS_BRIDGE_SSO_SECRET`) and, for the compose substrate, every other credential | `<workspace>/genus.env`, mode 0600 | One file the services read and nothing else may. `genus doctor` refuses to read it at any other mode. |
-| Provider key, Telegram token | The instance vault | Secrets never go in `config.yaml`, which gets copied into bug reports. |
+| Provider key | The instance vault, slot 1 | Secrets never go in `config.yaml`, which gets copied into bug reports. |
+| Telegram bot token | `genus.env` on compose; **nowhere** on `local` | The channel and the doctor read `ROBOTHOR_TELEGRAM_BOT_TOKEN` from the environment, not the vault. `genus init --telegram-token` verifies the token and, on `local`, records only the bot's name. |
 | Fleet model defaults | `<workspace>/docs/agents/_defaults.yaml` (instance data) | The probed model becomes the fleet primary, with up to two registry fallbacks — merged, never replacing a chain you wrote. |
 
 `<workspace>/.env` holds exactly one variable, `ROBOTHOR_WORKSPACE`: a
@@ -174,7 +183,7 @@ Three rules, and the platform enforces all three rather than documenting them:
     from robothor.secrets import get_secret, secret_source
 
     get_secret("OPENROUTER_API_KEY")      # value, or None
-    secret_source("OPENROUTER_API_KEY")   # "env" | "vault" | "missing" — safe to print
+    secret_source("OPENROUTER_API_KEY")   # "env" | "vault" | "missing" | "unavailable"
     ```
 
     It walks the process environment (whatever the backend put there) and then
@@ -227,8 +236,8 @@ resolution sits on the LLM hot path and must not open a database connection per
 call.
 
 Secrets are write-only end to end. `GET /api/providers` reports
-`{configured, source, fingerprint, state, updated_at}` per slot and never a
-value, and the test connection's error text is scrubbed of every credential the
+`configured` for the provider and `{position, source, fingerprint, state,
+updated_at}` for each slot — never a value — and the test connection's error text is scrubbed of every credential the
 provider might have echoed back.
 
 ### Why spares matter
@@ -243,6 +252,7 @@ local tier notwithstanding.
 | Order | Priority order — put the cheapest or highest-limit key first |
 | Discovery | `_2`, `_3`, … up to `_16`; the walk **stops at the first gap** |
 | Spend cap (HTTP 402) | Key sits out `900s`, then returns on its own — topping up needs no restart |
+| Calendar-window quota (daily/weekly/monthly) | Key sits out **6 hours** (`ROBOTHOR_PERIODIC_QUOTA_COOLDOWN_SECONDS`). The short cooldown is wrong here: a weekly cap clears when the provider says so, and retrying it every 900s is ~96 revivals a day, each firing a fresh burst of 403s through every fallback chain — that retry loop was the 2026-08-27 outage |
 | Rejected key (401) | Out for the life of the process; a revoked key never recovers |
 | Model denied (403) | **No** rotation — OpenRouter answers 403 for "this key may not use *this model*", which is the model's problem, not the key's |
 | Provider outage (5xx) | **No** key is retired — the credential was not the problem |
@@ -252,20 +262,22 @@ local tier notwithstanding.
 ## Settings the generated reference cannot carry
 
 The reference is rendered from the typed registry, so three kinds of variable
-are missing from it by design. They are listed here because otherwise they are
-documented nowhere:
+are missing from it by design — a provider's own credential names, what the
+Next.js dashboard reads, and what configures the compose file. They are
+collected here so the reference's absence is not read as their absence; several
+also have a home of their own, named in the row:
 
 | Variable | What it is |
 |----------|------------|
 | `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY` (+ `_2`…`_16`) | Provider credentials. They belong to the providers, not to this platform, so they keep the providers' names rather than being renamed into a Genus namespace |
 | `BRAVE_SEARCH_API_KEY` | Brave Search API key. Set it and `web_search` prefers the Brave API; unset means the provider is absent — no call, no error |
-| `AUTH_SECRET` | The dashboard's own Auth.js secret. Read by Next.js, not by the Python settings model. Required, with `GENUS_BRIDGE_SSO_SECRET`, before the dashboard reports ready |
-| `REDIS_URL` | A full Redis URL that overrides the host/port/db settings, for a managed Redis with credentials in the URL |
-| `EVENT_BUS_ENABLED`, `EVENT_BUS_MAXLEN` | The Redis Streams event bus: on by default, 10,000 entries per stream |
-| `BRIDGE_URL`, `ORCHESTRATOR_URL`, `VISION_URL`, `SEARXNG_URL` | Per-service base-URL overrides that outrank `robothor-services.json` |
+| `AUTH_SECRET` | The dashboard's own Auth.js secret. Read by Next.js, not by the Python settings model. Required, with `GENUS_BRIDGE_SSO_SECRET`, before the dashboard reports ready — see [Deployment](deployment.md#docker-compose) |
+| `REDIS_URL` | A full Redis URL, read by the **event bus** and the service registry only — `RedisConfig.url` in `robothor/config.py` is composed from `ROBOTHOR_REDIS_*` and never reads it. The hazard is the inverse of an override: set one and the other stays on its own default, so set both or neither |
+| `EVENT_BUS_ENABLED`, `EVENT_BUS_MAXLEN` | The Redis Streams event bus: **on** by default, 10,000 entries per stream. Its own page is [Event Bus](event-bus.md) |
+| `BRIDGE_URL`, `ORCHESTRATOR_URL`, `VISION_URL`, `SEARXNG_URL`, `HELM_URL`, `RTSP_URL` | Per-service base-URL overrides in the service registry, which outrank `robothor-services.json`. The MCP server reads `VISION_SERVICE_URL` for the same service — a separate name, and a real trap |
 | `ROBOTHOR_MEMORY_GENERATION_PROVIDER`, `_REMOTE_MODEL`, `_MIN_INTERVAL_S` | Offload memory generation (fact extraction, episode summaries, insight discovery) from the local GPU to a remote provider. Embeddings and reranking always stay local; a remote failure falls back to local Ollama with a `MEMORY_GENERATION_REMOTE_FALLBACK` WARNING |
 | `ROBOTHOR_DECLARED_TOOL_OUTAGES` | `tool:reason,tool:reason` — outages the operator has already decided about, so the tool-outage detector stops alerting on them |
-| `GENUS_IMAGE_TAG`, `GENUS_WORKSPACE`, `GENUS_ENV_FILE`, `GENUS_UID`, `GENUS_GID` | These configure the **compose file**, not the platform, so `genus config` does not know them. See [Deployment](deployment.md#docker-compose) |
+| `GENUS_WORKSPACE`, `GENUS_ENV_FILE`, `GENUS_UID`, `GENUS_GID` | These configure the **compose file**, not the platform, so `genus config` does not know them. (`GENUS_IMAGE_TAG` looks like one of them but *is* declared, in the `substrate` group.) See [Deployment](deployment.md#docker-compose) |
 
 ## Authentication
 
@@ -280,7 +292,9 @@ and restart requirements for all of them are in the
 
 What the settings do not tell you:
 
-- Passwords are argon2id (`robothor/auth/passwords.py`), minimum 12 characters.
+- Passwords are argon2id, minimum 12 characters (`MIN_PASSWORD_LENGTH` in
+  `robothor/auth/local_login.py`; the hashing itself is
+  `robothor/auth/passwords.py`).
 - Every failure — unknown email, wrong password, disabled account, locked
   account — answers the same `invalid credentials`. The only distinguishable
   state is `mfa_required`, and only after a correct password.
@@ -360,10 +374,13 @@ and a `broken_agents` list of ids. An agent reported **broken** needs its
 manifest fixed; an agent reported **missing** needs re-creating. The two are
 never collapsed.
 
-Unknown keys are a warning at load and an error only under `strict`. Nothing in
-the engine runs `strict`; the repository's own template test does, against every
-bundle under `templates/agents/`. A live instance may legitimately carry a field
-a plugin reads; a template shipped from this repository may not.
+Unknown keys are a warning at load and an error only under `strict`. The engine
+itself never loads a manifest that way — a live instance may fairly carry a
+field a plugin reads — but two things do run `strict`: `genus doctor`'s
+`manifests.schema_warnings` check, against the fleet in the configured
+manifest directory, and the repository's own template test, against every
+bundle under `templates/agents/`. So an unknown key is a recommended doctor
+finding on a live box and a hard failure in CI for a shipped template.
 
 ## Web fetch and web search
 
@@ -415,8 +432,8 @@ the result says why in `places_reason`: `geocode_failed:<place>`,
 `place_not_in_query`.
 
 An agent can force one provider with the tool's `provider` argument
-(`searxng`, `browser`, `brave`, `perplexity`); omitting it runs the automatic
-chain. `ROBOTHOR_WEB_SEARCH_BROWSER_FALLBACK=off` disables the *implicit*
+(`auto`, `searxng`, `browser`, `brave`, `perplexity`); `auto`, or omitting it,
+runs the chain above. `ROBOTHOR_WEB_SEARCH_BROWSER_FALLBACK=off` disables the *implicit*
 browser fallback (it drives a headed browser on the operator's display); an
 explicit `provider="browser"` still runs.
 
@@ -435,7 +452,10 @@ agent was reasoning about, which on a real instance is the operator's own data.
 from robothor.config import get_config
 
 cfg = get_config()
-print(cfg.db.dsn)           # "dbname=robothor_memory host=127.0.0.1 ..."
+print(cfg.db.dsn)           # "dbname=robothor_memory port=5432 user=..." —
+                            # host= is omitted entirely when the host is
+                            # empty, which is how libpq is told to use the
+                            # Unix socket
 print(cfg.redis.url)        # "redis://127.0.0.1:6379/0"
 print(cfg.ollama.base_url)  # "http://127.0.0.1:11434"
 print(cfg.workspace)        # Path("<workspace>")

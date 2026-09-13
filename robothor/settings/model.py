@@ -526,7 +526,7 @@ class ProviderSettings(SettingsGroup):
         "config.yaml alone changes nothing.",
         restart_required=False,
         restart_units=(),
-        since="1.71.0",
+        since="unreleased",
     )
     last_resort_model: str = declare(
         "",
@@ -1618,7 +1618,7 @@ class SecretSettings(SettingsGroup):
             "robothor-app",
             "robothor-orchestrator",
         ),
-        since="1.70.0",
+        since="1.69.0",
     )
     backend_file: str = declare(
         "/etc/robothor/secrets.env",
@@ -1635,7 +1635,7 @@ class SecretSettings(SettingsGroup):
             "robothor-app",
             "robothor-orchestrator",
         ),
-        since="1.70.0",
+        since="1.69.0",
     )
     backend_root: str = declare(
         "",
@@ -1647,7 +1647,7 @@ class SecretSettings(SettingsGroup):
         "means the real paths.",
         restart_required=False,
         restart_units=(),
-        since="1.70.0",
+        since="1.69.0",
     )
 
 
@@ -1667,7 +1667,7 @@ class SubstrateSettings(SettingsGroup):
         "yet selectable.",
         restart_required=False,
         restart_units=(),
-        since="1.71.0",
+        since="1.69.0",
     )
     init_preset: str = declare(
         "standard",
@@ -1676,7 +1676,7 @@ class SubstrateSettings(SettingsGroup):
         "given. `genus agent catalog` lists the presets this build carries.",
         restart_required=False,
         restart_units=(),
-        since="1.71.0",
+        since="1.69.0",
     )
     compose_image_tag: str = declare(
         "",
@@ -1690,7 +1690,7 @@ class SubstrateSettings(SettingsGroup):
         "the environment; `--image-tag` is the override.",
         restart_required=False,
         restart_units=(),
-        since="1.71.0",
+        since="unreleased",
     )
     service_user: str = declare(
         "robothor",

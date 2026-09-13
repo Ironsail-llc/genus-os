@@ -84,7 +84,8 @@ Column meanings:
 - **Secret** — holds a credential. These never have a default and are redacted
   by `genus config`.
 - **Since** — the release that introduced the setting. `legacy` predates this
-  registry.
+  registry; `unreleased` means it is merged but not yet in a tagged release, so
+  it is in the container images built from `main` and not in the last `vX.Y.Z`.
 
 Run `genus config schema` for the same information as JSON Schema.
 """

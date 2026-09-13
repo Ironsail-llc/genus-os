@@ -72,13 +72,16 @@ them for you.
 database password and the provider key. Redirect it to a file only you can
 read, or do not redirect it at all.
 
-Three variables configure the compose FILE rather than the platform, so none of
-them is a declared setting and `genus config` does not know them:
+**`GENUS_IMAGE_TAG`** is required and has no default. The release build
+publishes `vX.Y.Z`, `vX.Y`, `vX` and `sha-<short>` and deliberately no
+`latest`, so a default here would name a tag that does not exist; compose
+refuses to start instead, naming the variable. It *is* a declared setting —
+`genus config explain GENUS_IMAGE_TAG` works, and it appears in the
+[`substrate` group of the reference](reference/configuration.md).
 
-- **`GENUS_IMAGE_TAG`** — required, with no default. The release build publishes
-  `vX.Y.Z`, `vX.Y`, `vX` and `sha-<short>` and deliberately no `latest`, so a
-  default here would name a tag that does not exist; compose refuses to start
-  instead, naming the variable.
+The other four configure the compose FILE rather than the platform, so none of
+them is declared and `genus config` does not know them:
+
 - **`GENUS_WORKSPACE`** — the host directory holding this instance's own
   `brain/`, `docs/agents/` and `.robothor/` (instance data, created by
   `genus init`), mounted at `/workspace`. Create it before `up`: a missing bind
@@ -120,14 +123,15 @@ There is no floating tag to chase, so an upgrade is a one-line edit and one
 
 ```bash
 # 1. Name the release you are moving to. No `latest` exists to pull by accident.
-sed -i 's/^GENUS_IMAGE_TAG=.*/GENUS_IMAGE_TAG=v1.69.2/' genus.env
+sed -i 's/^GENUS_IMAGE_TAG=.*/GENUS_IMAGE_TAG=v1.70.0/' genus.env  # the release you are moving TO
 
 # 2. Pull it before anything stops, so a bad tag fails while the old stack is up.
 docker compose --env-file ./genus.env \
   -f docker-compose.yml -f docker-compose.apps.yml pull
 
 # 3. Reconcile. Compose re-runs the one-shot `migrate` service and holds the
-#    engine, bridge, orchestrator and dashboard until it exits 0.
+#    engine, bridge and orchestrator until it exits 0 (the dashboard waits
+#    on those three being healthy, so it is held one step behind them).
 docker compose --env-file ./genus.env \
   -f docker-compose.yml -f docker-compose.apps.yml up -d
 
@@ -136,9 +140,10 @@ genus doctor
 ```
 
 Step 3 is where the schema moves: `migrate` carries `restart: "no"`, and the
-platform services gate on `service_completed_successfully`, so a migration that
-fails leaves them on the **old** images rather than starting against a
-half-migrated database. Read `logs migrate`, fix, and run `up -d` again — it is
+engine, bridge and orchestrator gate on `service_completed_successfully` — and
+the dashboard on those three being healthy — so a migration that fails leaves
+them on the **old** images rather than starting against a half-migrated
+database. Read `logs migrate`, fix, and run `up -d` again — it is
 the same command either way.
 
 Nothing here is a rolling upgrade: the services restart. Take a snapshot first
@@ -150,10 +155,14 @@ create.
 
 The dev overlay restores the source bind mounts and the local builds the
 release file gave up. It needs no `genus.env` — the release file's `env_file`
-entry is optional, so a checkout with nothing but the two variables the base
-file interpolates renders and builds:
+entry is optional — but two variables are interpolated with `:?`, so compose
+refuses to render without them, and they live in two different files:
+`ROBOTHOR_DB_PASSWORD` in the base file, and `GENUS_IMAGE_TAG` in the release
+file (any value will do, because the overlay replaces every image it names):
 
 ```bash
+export ROBOTHOR_DB_PASSWORD=choose-a-password
+export GENUS_IMAGE_TAG=dev
 docker compose \
   -f infra/docker-compose.yml \
   -f infra/docker-compose.apps.yml \
@@ -237,13 +246,24 @@ this box that no template describes. `genus doctor --only host.unit_drift` wraps
 it; the findings are catalogued in
 `docs/runbooks/INSTANCE_DOCTOR.md` in the repository.
 
-Service features, declared in the templates:
-- `Restart=always` with 5s backoff
-- `KillMode=control-group` (no orphaned children)
-- Security hardening: `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`
-- `EnvironmentFile=/etc/robothor/robothor.env` plus an optional
-  `EnvironmentFile=-/run/robothor/secrets.env`
-- `Requires=robothor-secrets.service` on every service that needs a credential
+Service features are declared per template, and they are **not** uniform — read
+the unit rather than assuming:
+
+| | engine | bridge | orchestrator | app |
+|---|---|---|---|---|
+| `Restart=` | `always` | `always` | `on-failure` | `always` |
+| `KillMode=` | `control-group` | `control-group` | `mixed` | `control-group` |
+| `NoNewPrivileges` / `ProtectSystem=strict` / `PrivateTmp` | yes | yes | — | — |
+| `EnvironmentFile=/etc/robothor/robothor.env` | yes | yes | via drop-ins | yes |
+| `EnvironmentFile=-/run/robothor/secrets.env` | yes | yes | yes | yes |
+| `Requires=robothor-secrets.service` | yes | yes | yes | yes |
+
+The orchestrator's two exceptions are deliberate and its own comments say why:
+`KillMode=mixed` sends `SIGTERM` to uvicorn itself rather than to the whole
+group, and `Restart=on-failure` keeps a clean shutdown from being restarted.
+Every unit has the secrets dependency, which is the one that must never be
+optional — a bridge with no shared SSO secret is worse than a bridge that is
+not running.
 
 View logs: `journalctl -u robothor-engine -f`
 
@@ -258,14 +278,15 @@ once, with a drop-in:
 ```bash
 sudo systemctl edit robothor-bridge
 # [Service]
-# EnvironmentFile=-/home/robothor/robothor/genus.env
+# EnvironmentFile=-<workspace>/genus.env
 ```
 
 or copy the two lines into `/etc/robothor/robothor.env`. Without them the
-bridge refuses every `/api/auth/sso` exchange and nobody can sign in, while
-`/ready` stays green — the failure mode that kept `app.robothor.ai` locked out
-for eight days. `genus doctor`'s `secrets.bridge_sso` check is the one that
-says so.
+bridge refuses every `/api/auth/sso` exchange and nobody can sign in. That used
+to be invisible: the bridge's `/ready` answered green for eight days while one
+instance was locked out of its own dashboard. Both halves now report it — the
+bridge's `/ready` carries an `sso_secret` check, and `genus doctor`'s
+`secrets.bridge_sso` is the one to run from a terminal.
 
 ### Secrets backends
 
@@ -312,12 +333,17 @@ In Python, read a credential through the one accessor rather than `os.environ`:
 from robothor.secrets import get_secret, secret_source
 
 get_secret("OPENROUTER_API_KEY")      # value, or None
-secret_source("OPENROUTER_API_KEY")   # "env" | "vault" | "missing" — safe to print
+secret_source("OPENROUTER_API_KEY")   # "env" | "vault" | "missing" | "unavailable"
 ```
 
 It walks the process environment (whatever the backend put there) and then the
-encrypted vault (`genus vault set …`), and treats an unreadable vault as "not
-configured" rather than raising.
+encrypted vault (`genus vault set …`), and never raises. The fourth source value
+is the load-bearing one: **`unavailable` is not `missing`**. `missing` means the
+credential is genuinely not configured; `unavailable` means the vault could not
+be read, so nothing can say whether it holds the key. Collapsing the two is how
+an unreachable credential store reads as an empty one. An unreadable vault sits
+out five minutes before it is probed again, rather than putting a synchronous
+database connect on the LLM hot path.
 
 ## Preparing the dependencies by hand
 
@@ -455,13 +481,16 @@ What the wizard writes, and where:
 | Operator identity | `~/.robothor/owner.yaml` | The file the platform reads. Never `.env` — two files naming one operator is how an instance answers to one name and files CRM rows under another. |
 | Settings (database, provider model, secrets backend) | `<workspace>/.robothor/config.yaml` | Written through the same writer `genus config set` uses. |
 | Workspace pointer | `<workspace>/.env` | `ROBOTHOR_WORKSPACE` only — config.yaml lives inside the workspace and cannot say where it is. |
-| Provider key, Telegram token | The instance vault | Secrets never go in config.yaml, which gets copied into bug reports. |
+| Provider key | The instance vault, slot 1 | Secrets never go in config.yaml, which gets copied into bug reports. |
+| Telegram bot token | `genus.env` on the compose substrate; **nowhere** on `local`, where `--telegram-token` verifies it and records only the bot's name | The channel and `genus doctor` both read `ROBOTHOR_TELEGRAM_BOT_TOKEN` from the environment — see the [quick start](quickstart.md#next-steps). |
 | Resume state | `<workspace>/.robothor/init_state.yaml` | One `step: completed` line each. |
 
 Re-running is routine. An existing `owner.yaml` is never overwritten, and
-completed steps are skipped — except the security note, the verification and the
-link, which run every time, because each one mints or checks something that must
-be current.
+completed steps are skipped — except `ack`, `signin`, `services`, `verify` and
+`link`, which run every time because each one mints, prints or checks something
+that has to be current. On the compose substrate `render`, `up-infra`, `up` and
+`wait` re-run too: reconciling a stack that is already up is what `up -d` is
+for.
 
 ## First run on a headless box
 
@@ -483,7 +512,9 @@ you have to walk away from; `--json` is for a provisioning script. The command
 is deliberately local-only: minting requires shell access to the box, which is
 the one credential the wizard's gate can rely on before an account exists.
 
-The printed address is `127.0.0.1` because that is where the dashboard binds.
+The printed address is `127.0.0.1` because that is the only address the wizard
+can know is right: guessing a public hostname would hand the operator a URL
+that does not resolve and a token that has already started expiring.
 That is loopback on the **server**, so forward the port rather than exposing it:
 
 ```bash
@@ -491,8 +522,8 @@ ssh -L 3004:127.0.0.1:3004 box.example.test
 ```
 
 Then open the printed link on your own machine. `genus init` prints this line
-for you whenever it is not running on a terminal, or the dashboard is not on
-loopback.
+for you whenever stdin is not a terminal — a container, a provisioning script —
+because then nobody is sitting at the machine the loopback address belongs to.
 
 ### Rate limiting the setup link
 
@@ -592,7 +623,8 @@ genus agent catalog                      # what the presets contain
 genus agent install --preset standard
 ```
 
-`minimal` is three agents and nothing scheduled, `standard` adds email triage,
+`minimal` is three agents (one of them with a nightly schedule of its own),
+`standard` adds email triage,
 calendar watch and briefings, `full` is the whole catalogue. `genus init
 --preset NAME` does it during an install.
 
@@ -603,14 +635,15 @@ calendar watch and briefings, `full` is the whole catalogue. `genus init
 - [ ] PostgreSQL: enable SSL for remote connections
 - [ ] Redis: set a password if exposed beyond localhost
 - [ ] Redis: set `maxmemory` and `appendonly yes` for durability
-- [ ] Ollama: verify GPU access with `ollama run qwen3-embedding:0.6b`
+- [ ] Ollama: confirm the models are there and the GPU is used — `ollama ps` after a
+      generation call (`ollama run qwen3:8b`); `ollama run` on an embedding model
+      generates nothing
 - [ ] Run `genus doctor` and clear every `required` failure (exit 0)
 - [ ] Run `genus migrate --status` and confirm no drift and nothing pending
 - [ ] Set up log rotation for `/var/log/robothor/`
-- [ ] Rebuild vector indexes after initial data load: `REINDEX INDEX idx_facts_embedding`
-- [ ] Set `EVENT_BUS_ENABLED=true` if using the event bus
-- [ ] Create `agent_capabilities.json` if deploying multiple agents
-- [ ] Create `robothor-services.json` for service registry
+- [ ] Rebuild vector indexes after initial data load: `REINDEX INDEX idx_facts_embedding_active`
+- [ ] Set `ROBOTHOR_CAPABILITIES_MANIFEST` if the deployment keeps its
+      `agent_capabilities.json` outside the workspace
 - [ ] Set up monitoring (health endpoints return JSON)
 - [ ] Back up PostgreSQL daily (`pg_dump robothor_memory`)
 
@@ -715,17 +748,30 @@ reach are reported as **not run**, never as passing.
 
 | Service | Endpoint | Expected |
 |---------|----------|----------|
-| API Server | `GET /health` on :9099 | `{"status": "ok"}` |
-| Bridge | `GET /health` on :9100 | `{"status": "ok"}` |
+| Engine | `GET /health` on :18800 | `{"status": "ok"}`; `/ready` is the one an orchestrator gates on, and it carries the fleet check |
+| Orchestrator (RAG API) | `GET /health` on :9099 | `{"status": "ok"}` |
+| Bridge | `GET /health` on :9100 | `{"status": "ok"}`; its `/ready` also checks the orchestrator and the SSO secret |
+| Dashboard | `GET /api/health` on :3004 | 200; `/api/ready` is what the compose healthcheck polls |
 | Vision | `GET /health` on :8600 | `{"status": "ok", "mode": "..."}` |
 
-## Directory Structure (Production)
+## Directory Structure (systemd install)
+
+The unit templates spell the workspace `/opt/robothor` and
+`scripts/install-units.sh` renders that to `$ROBOTHOR_WORKSPACE`, so the first
+path below is wherever you pointed the workspace:
 
 ```
-/opt/robothor/                  # Application code
-/etc/robothor/robothor.env      # Configuration (mode 640)
-/var/log/robothor/              # Logs
-/var/lib/robothor/              # Runtime data (ROBOTHOR_WORKSPACE)
-/var/lib/robothor/memory/       # Memory files
-/var/lib/robothor/faces/        # Face recognition database
+/opt/robothor/                        # the workspace ($ROBOTHOR_WORKSPACE): brain/, docs/agents/, .robothor/
+/etc/robothor/robothor.env            # unit environment (mode 640)
+/run/robothor/secrets.env             # tmpfs, 0600, written by robothor-secrets.service
+/run/robothor/restart-requests/       # 0700; the filename is the authorization
+/var/log/robothor/                    # logs
+/var/lib/robothor/backup-state/       # last-good backup markers — must survive a reboot
+/var/lib/robothor/slo-state/          # the daily watch's last-good marker
+/var/lib/robothor/alert-spool/        # pages that could not be delivered yet
+/usr/local/lib/robothor/              # the restart handler, root-owned and outside the checkout
 ```
+
+`/var/lib/robothor` holds evidence that has to outlive a reboot, which is why
+those three are not on tmpfs — a marker that vanishes at boot reads as an
+outage that is not happening.

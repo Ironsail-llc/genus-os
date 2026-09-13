@@ -52,8 +52,9 @@ one-shot migration the services wait on, and a dashboard on
 Run it as the account that will own the instance, **not** as root.
 
 The wheel does not carry the compose files, so fetch the two the stack is made
-of first. They land in the directory you run `genus init` from, which is also
-where it writes `genus.env` — the 0600 file holding every credential:
+of first. `genus.env` — the 0600 file holding every credential — is written
+inside the workspace, which the block below makes the current directory by
+passing `--workspace .`:
 
 <!-- install-gate: compose -->
 ```bash
@@ -160,9 +161,10 @@ your first message. `--offline` records the choice unprobed and says so — and
 deliberately does not count as done, so the next run probes it for real.
 
 Re-running is routine. An existing `owner.yaml` is never overwritten, the two
-sign-in secrets are never rotated, and completed steps are skipped — except the
-security note, the verification and the link, each of which mints or checks
-something that has to be current.
+sign-in secrets are never rotated, and completed steps are skipped — except
+`ack`, `signin`, `services`, `verify` and `link`, each of which mints or checks
+something that has to be current. (On the compose substrate `render`,
+`up-infra`, `up` and `wait` re-run too.)
 
 Where a `local` install puts things:
 
@@ -171,13 +173,57 @@ Where a `local` install puts things:
 | Operator identity | `~/.robothor/owner.yaml` |
 | Settings (database, provider model, secrets backend) | `<workspace>/.robothor/config.yaml` |
 | Sign-in secrets (`AUTH_SECRET`, `GENUS_BRIDGE_SSO_SECRET`) | `<workspace>/genus.env`, mode 0600 |
-| Provider key, Telegram token | The instance vault |
+| Provider key | The instance vault, slot 1 |
+| Telegram bot token | **Nowhere, on this substrate.** `--telegram-token` verifies it with `getMe` and records only the bot's name; see [Next steps](#next-steps) for where to put the token itself |
 | Resume state | `<workspace>/.robothor/init_state.yaml` |
+| Workspace pointer (`ROBOTHOR_WORKSPACE`) | `<workspace>/.env` |
 | Agent manifests and fleet defaults | `<workspace>/docs/agents/` (instance data) |
 
-`systemd` and `helm` are designed but not yet selectable from `--substrate`;
-`genus init` says so rather than pretending they do not exist. Installing the
-units on a box the wizard has already set up is
+### Start the services
+
+`genus init` starts nothing by default: launching two daemons as a side effect
+of a configuration command is a surprise in a provisioning script and at a
+terminal alike. It prints the two commands that start **this** install, worded
+for it —
+
+- a wheel install: `genus engine start`, then `genus serve` (which needs the
+  API extra: `pip install "genusos[api]"`);
+- a checkout with the units installed: `sudo systemctl start robothor-engine`,
+  then `sudo systemctl start robothor-bridge robothor-app`.
+
+`genus init --start` runs them for you instead of printing them.
+
+Started by hand, they do **not** read the `genus.env` the wizard just minted —
+that is what the systemd units' `EnvironmentFile=` is for — so source it first,
+or the bridge comes up and refuses every SSO exchange:
+
+```bash
+set -a; . "$ROBOTHOR_WORKSPACE/genus.env"; set +a
+genus engine start
+genus serve --host 127.0.0.1 --port 9099
+```
+
+What ends up listening where, and what ships it:
+
+| Port | Process | Comes from |
+|------|---------|------------|
+| 18800 | The agent engine | the wheel (`genus engine start`) |
+| 9099 | The orchestrator / RAG API | the wheel plus the `[api]` extra (`genus serve`) |
+| 9100 | The bridge — CRM, auth, and the first-run `/api/setup/*` routes | the checkout (`crm/bridge/bridge_service.py`), the `robothor-bridge` unit, or the compose `bridge` service |
+| 3004 | The Helm dashboard, which serves the `/setup` **page** | the `robothor-app` unit, or the compose `dashboard` service |
+
+The bridge's own `/ready` includes a check against the orchestrator, so
+starting the bridge alone answers 503 for ever. Start the orchestrator first.
+
+**The link `genus init` prints is on `:3004`, so it needs the dashboard.** That
+is the Next.js app in `app/` — the compose substrate publishes it, and
+`robothor-app.service` runs it from a checkout. A bare `pip install genusos`
+box has the engine and the API but no dashboard, so nothing answers that link:
+use `--substrate compose`, or run the dashboard from a checkout.
+
+`systemd` and `helm` are not selectable from `--substrate`; `genus init` says so
+rather than pretending they do not exist. Installing the units on a box the
+wizard has already set up is
 [one script](deployment.md#systemd-services).
 
 ## Option C: containers for the dependencies only
@@ -298,7 +344,7 @@ The three findings a fresh install actually hits:
 |---------|---------------|------------|
 | `db.migrations` fails | The schema is behind the manifest this build ships | `genus doctor --fix`, or `genus migrate`. If it reports **drift** or a ledger row this checkout does not ship, `--fix` refuses on purpose — read `genus migrate --status` and see [the schema section](deployment.md#the-schema) before touching anything |
 | `provider.keys` or `provider.completion` fails | No credential resolved, or the fleet's default model would not answer one token | Store the key where the platform reads it: `genus vault set providers/openrouter/api_key <key>`, then re-run. A 402 means the key is capped, a 403 means the key may not use *that model* — a model problem, not a credential one |
-| `secrets.bridge_sso` fails | `GENUS_BRIDGE_SSO_SECRET` is not where the process that needs it reads it — on systemd the units read `/etc/robothor/robothor.env`, not the workspace's `genus.env` | Point the units at it, per [the sign-in secrets](deployment.md#the-sign-in-secrets-the-units-need). Until you do, the bridge refuses every SSO exchange and nobody can sign in **while `/ready` stays green** — the failure mode that locked an instance out for eight days |
+| `secrets.bridge_sso` fails | `GENUS_BRIDGE_SSO_SECRET` is not where the process that needs it reads it — on systemd the units read `/etc/robothor/robothor.env`, not the workspace's `genus.env` | Point the units at it, per [the sign-in secrets](deployment.md#the-sign-in-secrets-the-units-need). Until you do, the bridge refuses every SSO exchange and nobody can sign in. This used to be invisible — the bridge reported ready for eight days while nobody could get in; the bridge's `/ready` now carries an `sso_secret` check of its own, and this doctor check is the other half |
 
 `identity.owner_account` failing on a box where you have not opened `/setup`
 yet is not a fault — the doctor reports it as a skip while first-run setup is
@@ -332,18 +378,33 @@ Every flag, for `genus init` and for every other verb, is in the
 
 ## Next steps
 
-**Connect Telegram.** Nothing asks for a bot token during install. Add one
-afterwards from the dashboard's Settings page, or from a terminal:
+**Connect Telegram.** Nothing asks for a bot token during install, and a
+Telegram-free instance is a supported deployment. To add one, the token goes
+**in the environment the engine reads** — `ROBOTHOR_TELEGRAM_BOT_TOKEN` — which
+is the one place the channel and `genus doctor` both look:
+
+| Substrate | Put the token in |
+|-----------|------------------|
+| compose | `genus.env`, then `docker compose … up -d` to re-create the engine |
+| systemd | `/etc/robothor/robothor.env` (or the secrets file your backend uses), then `sudo systemctl restart robothor-engine` |
+| a wheel, by hand | the shell that runs `genus engine start` |
+
+`genus config set ROBOTHOR_TELEGRAM_BOT_TOKEN …` is **refused**: the setting is
+declared secret, and the command names `genus vault set` instead. That is the
+one case where the vault is the wrong answer — nothing in the settings layer
+reads a vault row for this credential, so a token stored there alone leaves the
+channel dark. `genus init --telegram-token` is the supported route at install
+time (it verifies the token with `getMe`, and on the compose substrate writes it
+into `genus.env`). The chat id is not a secret and does go through `genus config`:
 
 ```bash
-genus vault set channels/telegram/bot_token <token>
 genus config set ROBOTHOR_TELEGRAM_CHAT_ID <chat-id>
 genus doctor --only telegram.token
 ```
 
-The doctor's `telegram.token` check calls `getMe` and reports a token that is
-set but not shaped like one, or a token with no chat to deliver to — the two
-half-configured states that otherwise look fine until an alert goes nowhere.
+The `telegram.token` check calls `getMe` and reports a token that is set but not
+shaped like one, or a chat id with no token — the two half-configured states
+that otherwise look fine until an alert goes nowhere.
 
 **Invite a user.** Onboarding is a closed allowlist: an account exists because
 an operator added it, never because somebody reached the sign-in page.
