@@ -504,3 +504,81 @@ class TestEveryFailurePathIsAMessageNotATraceback:
         assert "channels/slack/bot_token" in captured.out, "the stored key was not reported"
         assert "WERE stored" in captured.err
         assert FAKE_BOT_TOKEN not in captured.out + captured.err
+
+
+class TestArgparseItselfMustNotPrintACredential:
+    """The leak the refusal left open: a MISSPELLED flag.
+
+    ``--bot-token`` is refused by :class:`TestATokenOnACommandLineCannotBeTakenBack`
+    before anything is stored. But ``--bot-tokn xoxb-…`` never reaches that code
+    at all — argparse fails first and prints ``unrecognized arguments:
+    --bot-tokn xoxb-…`` to stderr. The token then sits in the operator's
+    scrollback, their CI log, and whatever they paste into a bug report, having
+    been published by the very command that exists to keep it off a command
+    line.
+
+    The message is emitted by the TOP-LEVEL parser (``parse_args`` checks for
+    leftovers after every subparser has had its turn), so the redaction has to
+    live there rather than on the ``channel`` subtree. That is the better place
+    anyway: ``genus vault set <key> <value>`` takes a secret as a POSITIONAL,
+    ``genus federation connect`` takes an invite token, and ``genus init
+    --telegram-token`` takes a bot token. Every one of them reaches the same
+    ``error()``.
+    """
+
+    @staticmethod
+    def _run(argv: list[str], capsys) -> tuple[int | None, str]:
+        from robothor.cli import main
+
+        code: int | None = None
+        try:
+            code = main(argv)
+        except SystemExit as exc:  # argparse exits rather than returning
+            code = exc.code if isinstance(exc.code, int) else 1
+        captured = capsys.readouterr()
+        return code, captured.out + captured.err
+
+    def test_a_misspelled_token_flag_does_not_print_the_token(self, capsys):
+        code, text = self._run(["channel", "add", "slack", "--bot-tokn", FAKE_BOT_TOKEN], capsys)
+
+        assert code == 2
+        assert FAKE_BOT_TOKEN not in text, (
+            "argparse printed the token in its 'unrecognized arguments' error"
+        )
+        assert "xoxb-test" not in text
+        # The operator still has to be able to SEE what was wrong.
+        assert "bot-tokn" in text, "the redaction ate the flag name as well as the value"
+
+    def test_the_same_holds_for_the_app_token(self, capsys):
+        code, text = self._run(["channel", "add", "slack", "--app-tokn", FAKE_APP_TOKEN], capsys)
+        assert code == 2
+        assert FAKE_APP_TOKEN not in text
+        assert "xapp-test" not in text
+
+    def test_a_secret_positional_on_another_verb_is_redacted_too(self, capsys):
+        """`genus vault set <key> <value>` takes the secret as a positional, so
+        any typo'd flag beside it prints the value. The redaction is on the one
+        parser every verb's leftovers reach, not on this subtree."""
+        code, text = self._run(
+            ["vault", "set", "--categry", "credential", "channels/slack/bot_token", FAKE_BOT_TOKEN],
+            capsys,
+        )
+        assert code == 2
+        assert FAKE_BOT_TOKEN not in text
+
+    def test_a_telegram_shaped_token_is_redacted(self, capsys):
+        """`genus init --telegram-token` exists, so this shape reaches the same
+        error path. Placeholder digits and a placeholder secret."""
+        telegram = "1234567:AAfake-telegram-token-value-nnnnnnnnnn"
+        code, text = self._run(["init", "--telegram-tokn", telegram], capsys)
+
+        assert code == 2
+        assert telegram not in text
+
+    def test_an_ordinary_error_is_still_readable(self, capsys):
+        """Redaction that ate every message would make the CLI unusable."""
+        code, text = self._run(["channel", "verify"], capsys)
+
+        assert code == 2
+        assert "usage" in text.lower()
+        assert "name" in text.lower(), "the missing-argument error lost its content"

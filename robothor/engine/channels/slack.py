@@ -34,7 +34,6 @@ the scopes it needed — those are Slack's own vocabulary, not the instance's.
 from __future__ import annotations
 
 import logging
-import re
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.channels.base import UNCONFIGURED_STEP, SendReceipt, receipt_from
@@ -45,6 +44,7 @@ from robothor.engine.channels.slack_credentials import (
 )
 from robothor.engine.chunking import split_message
 from robothor.engine.slack import MAX_SLACK_LENGTH
+from robothor.secrets.redaction import redact
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Callable, Sequence
@@ -91,28 +91,14 @@ def _slack_error(exc: BaseException) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-#: Token shapes Slack issues, plus the header they travel in. A credential does
-#: not only reach a log through a payload this module built — it arrives inside
-#: an exception somebody else raised. The case that found this: a bot token that
-#: survived the vault with a trailing newline makes the SDK's header encoder
-#: raise ``ValueError: Invalid header value b'Bearer xoxb-…'``, and
-#: :func:`_describe` used to pass a non-Slack exception's message through
-#: verbatim — so the token went to the journal and, before the reason token
-#: landed, into ``agent_runs``.
-_SECRETISH = re.compile(r"(?:xox[abceprsBAPERS]|xapp)-[\w-]+|Bearer\s+\S+", re.IGNORECASE)
-
-
-def _redact(text: str) -> str:
-    """``text`` with anything token-shaped replaced. Applied to every line out."""
-    return _SECRETISH.sub("<redacted>", text)
-
-
 def _describe(exc: BaseException) -> str:
     """One line about a Slack failure, naming scopes but never a credential.
 
-    Every return goes through :func:`_redact`: a third-party exception's message
-    is not this module's to trust, and this string reaches both the journal and
-    ``genus channel verify``'s output.
+    Every return goes through :func:`~robothor.secrets.redaction.redact`: a
+    third-party exception's message is not this module's to trust, and this
+    string reaches both the journal and ``genus channel verify``'s output. The
+    pattern set is shared with the CLI's argument parser, which has the same
+    problem from the other direction — argparse printing a mistyped token.
     """
     data = _slack_error(exc)
     error = str(data.get("error") or "") or f"{type(exc).__name__}: {exc}"
@@ -120,8 +106,8 @@ def _describe(exc: BaseException) -> str:
         needed = str(data.get("needed") or "?")
         provided = str(data.get("provided") or "")
         detail = f"missing_scope: the app needs {needed}"
-        return _redact(f"{detail} (it has {provided})" if provided else detail)
-    return _redact(error)
+        return redact(f"{detail} (it has {provided})" if provided else detail)
+    return redact(error)
 
 
 class SlackChannel:

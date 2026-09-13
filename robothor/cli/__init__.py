@@ -35,6 +35,7 @@ from typing import Any, cast
 from robothor.cli.admin import REQUIRED_TABLES as REQUIRED_TABLES  # noqa: F401
 from robothor.cli.admin import cmd_tui as _cmd_tui
 from robothor.cli.agent import _cmd_agent_setup as _cmd_agent_setup_impl
+from robothor.secrets.redaction import redact
 
 
 def _cmd_agent_setup() -> int:
@@ -133,6 +134,33 @@ def _invoked_name() -> str:
     return name
 
 
+class _RedactingParser(argparse.ArgumentParser):
+    """An ``ArgumentParser`` whose errors cannot print a credential.
+
+    ``genus channel add`` refuses ``--bot-token`` outright, because a token on a
+    command line is readable by every account on the box. One letter wrong —
+    ``--bot-tokn`` — and that refusal never runs: argparse fails first and
+    prints ``unrecognized arguments: --bot-tokn xoxb-…`` to stderr, publishing
+    the credential from the command whose whole job is to keep it off a command
+    line. The same path carries ``genus vault set``'s secret POSITIONAL,
+    ``genus federation connect``'s invite token and ``genus init
+    --telegram-token``.
+
+    The subclass sits at the TOP because that is where the leak is: every
+    subparser hands its leftovers up, and ``parse_args`` emits "unrecognized
+    arguments" from the root. ``add_subparsers`` defaults ``parser_class`` to
+    ``type(self)``, so one subclass here covers the whole verb tree without any
+    subcommand having to remember.
+
+    Only the *message* is redacted, never the usage block or the flag names: an
+    operator has to be able to see which argument was wrong, and a redactor that
+    ate the error would trade one unusable outcome for another.
+    """
+
+    def error(self, message: str) -> None:  # type: ignore[override]
+        super().error(redact(message))
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the CLI parser.
 
@@ -141,7 +169,7 @@ def _build_parser() -> argparse.ArgumentParser:
     command names would drift the first time a subcommand was added, and
     this project has been bitten three times by exactly that.
     """
-    parser = argparse.ArgumentParser(
+    parser = _RedactingParser(
         prog=_invoked_name(),
         description="Genus OS — An AI brain with persistent memory, vision, and self-healing.",
     )

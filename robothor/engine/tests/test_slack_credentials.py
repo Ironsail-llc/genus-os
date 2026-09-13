@@ -22,11 +22,14 @@ with them nowhere, all three say not configured.
 
 from __future__ import annotations
 
+import ast
+import pathlib
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+import robothor
 from robothor.engine.channels.slack_credentials import (
     APP_TOKEN_ENV,
     APP_TOKEN_VAULT_KEY,
@@ -159,40 +162,142 @@ class TestEverySurfaceAgrees:
         assert await self._channel_says_configured() is False
 
 
-class TestNoSurfaceReadsTheEnvironmentDirectly:
-    """A second reader is how the four surfaces drifted apart in the first place."""
+#: The module allowed to spell a Slack token name. Everything else in
+#: ``robothor/`` has to go through :func:`slack_credentials`.
+CREDENTIAL_OWNER = "robothor/engine/channels/slack_credentials.py"
 
-    def test_no_module_spells_a_slack_token_environment_name_itself(self):
-        import ast
-        import importlib
-        from pathlib import Path
 
-        owner = "robothor/engine/channels/slack_credentials.py"
-        offenders: list[str] = []
-        for dotted in (
-            "robothor.engine.slack",
-            "robothor.engine.daemon",
-            "robothor.engine.channels.slack",
-            "robothor.doctor.checks.channels",
-            "robothor.cli.channel",
+def _literal_strings(node: ast.AST) -> list[str]:
+    """Every string a node evaluates to, for the spellings a grep would miss.
+
+    A plain ``ast.Constant`` is the easy case. ``"ROBOTHOR_SLACK_" + "BOT_TOKEN"``
+    and an f-string of constant parts both produce the same name at runtime and
+    neither shows up as one literal, so a guard that only looked at
+    ``ast.Constant`` could be walked straight past — by accident as easily as on
+    purpose, since line-length reformatting is how a long name gets split in the
+    first place.
+    """
+    if isinstance(node, ast.Constant):
+        return [node.value] if isinstance(node.value, str) else []
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _literal_strings(node.left), _literal_strings(node.right)
+        return [a + b for a in left for b in right]
+    if isinstance(node, ast.JoinedStr):  # an f-string of constant parts only
+        parts: list[str] = []
+        for value in node.values:
+            found = _literal_strings(value)
+            if not found:
+                return []
+            parts.append(found[0])
+        return ["".join(parts)]
+    return []
+
+
+def token_name_reads(source: str) -> list[int]:
+    """Line numbers where ``source`` reads a Slack token name out of the environment.
+
+    Two access shapes, because the first cut of this guard only knew one:
+
+    * a CALL — ``os.environ.get(...)``, ``os.getenv(...)``, and the mutating
+      ``setdefault``/``pop`` accessors;
+    * a SUBSCRIPT — ``os.environ["ROBOTHOR_SLACK_BOT_TOKEN"]``, which is the
+      terser spelling and was invisible to the call-only version.
+
+    Deliberately shape-based rather than name-based: it does not check that the
+    object is ``os.environ``, because anything that reads one of these two names
+    out of any mapping is doing the thing this guard exists to stop.
+    """
+    tree = ast.parse(source)
+    names = {BOT_TOKEN_ENV, APP_TOKEN_ENV}
+    found: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            accessor = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if accessor in {"get", "getenv", "setdefault", "pop"} and any(
+                value in names for arg in node.args for value in _literal_strings(arg)
+            ):
+                found.append(node.lineno)
+        elif isinstance(node, ast.Subscript) and any(
+            value in names for value in _literal_strings(node.slice)
         ):
-            module = importlib.import_module(dotted)
-            assert module.__file__ is not None
-            if module.__file__.endswith(owner):
-                continue
-            tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
-            offenders.extend(
-                f"{dotted}:{node.lineno}"
-                for node in ast.walk(tree)
-                if isinstance(node, ast.Call)
-                and (getattr(node.func, "id", None) or getattr(node.func, "attr", None))
-                in {"get", "getenv", "setdefault", "pop"}
-                and any(
-                    isinstance(arg, ast.Constant) and arg.value in (BOT_TOKEN_ENV, APP_TOKEN_ENV)
-                    for arg in node.args
-                )
+            found.append(node.lineno)
+    return sorted(found)
+
+
+class TestNoSurfaceReadsTheEnvironmentDirectly:
+    """A second reader is how the four surfaces drifted apart in the first place.
+
+    The first cut of this guard named five modules and looked for one access
+    shape. Both halves of that are the thing it is guarding against: a sixth
+    module is exactly what a future change adds, and ``os.environ["…"]`` is a
+    spelling it could not see. It now walks the whole package.
+    """
+
+    @staticmethod
+    def _package_modules() -> list[pathlib.Path]:
+        root = pathlib.Path(robothor.__file__).parent
+        return [
+            path
+            for path in sorted(root.rglob("*.py"))
+            # Test files configure the test, not the product — and several
+            # legitimately construct these names to set up an environment.
+            if "tests" not in path.parts and not path.name.startswith("test_")
+        ]
+
+    def test_the_scan_actually_reaches_the_modules_it_guards(self):
+        """A scan that matches nothing passes forever. Name the files."""
+        scanned = {str(path) for path in self._package_modules()}
+        for required in (
+            "engine/slack.py",
+            "engine/daemon.py",
+            "engine/channels/slack.py",
+            "doctor/checks/channels.py",
+            "cli/channel.py",
+            CREDENTIAL_OWNER.split("robothor/", 1)[1],
+        ):
+            assert any(path.endswith(required) for path in scanned), (
+                f"the guard no longer walks {required}"
             )
+        assert len(scanned) > 200, f"only {len(scanned)} modules scanned; the walk is broken"
+
+    def test_the_detector_finds_every_spelling(self):
+        """Proved against synthetic source, so the guard is known to bite before
+        it is pointed at a package that (correctly) contains nothing."""
+        for spelling in (
+            f'os.environ.get("{BOT_TOKEN_ENV}")',
+            f'os.getenv("{APP_TOKEN_ENV}")',
+            f'os.environ["{BOT_TOKEN_ENV}"]',
+            f'os.environ.pop("{APP_TOKEN_ENV}", None)',
+            f'os.environ.setdefault("{BOT_TOKEN_ENV}", "")',
+            'os.environ.get("ROBOTHOR_SLACK_" + "BOT_TOKEN")',
+            'os.environ["ROBOTHOR_" f"SLACK_APP_TOKEN"]',
+            f'settings.get("{BOT_TOKEN_ENV}")',
+        ):
+            assert token_name_reads(spelling), f"the guard cannot see {spelling!r}"
+
+    def test_the_detector_does_not_cry_wolf(self):
+        for innocent in (
+            'os.environ.get("ROBOTHOR_SLACK_ALLOWED_USERS")',
+            'os.environ.get("ROBOTHOR_CHANNELS")',
+            f'"{BOT_TOKEN_ENV}"',
+            f'logger.warning("%s is unset", "{BOT_TOKEN_ENV}")',
+            f'raise ValueError("{BOT_TOKEN_ENV} is not set")',
+        ):
+            assert not token_name_reads(innocent), f"false positive on {innocent!r}"
+
+    def test_the_owner_is_the_only_module_that_spells_these_names(self):
+        offenders: list[str] = []
+        owner_reads = 0
+        for path in self._package_modules():
+            reads = token_name_reads(path.read_text(encoding="utf-8"))
+            if not reads:
+                continue
+            if str(path).endswith(CREDENTIAL_OWNER):
+                owner_reads += len(reads)
+                continue
+            offenders.extend(f"{path}:{line}" for line in reads)
+
         assert not offenders, (
-            f"these read a Slack token name themselves instead of calling "
-            f"slack_credentials(): {offenders}"
+            "these read a Slack token name out of the environment themselves "
+            f"instead of calling slack_credentials(): {offenders}"
         )
