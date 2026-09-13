@@ -1,3 +1,9 @@
+## [1.76.1](https://github.com/Ironsail-llc/genus-os/compare/v1.76.0...v1.76.1) (2026-09-13)
+
+### Bug Fixes
+
+* **crm:** person and task lookups refuse a non-uuid id before the query ([#527](https://github.com/Ironsail-llc/genus-os/issues/527)) ([808a0d2](https://github.com/Ironsail-llc/genus-os/commit/808a0d20c4e30e3c9feada44e17b63e470616c3e))
+
 ## [1.76.0](https://github.com/Ironsail-llc/genus-os/compare/v1.75.0...v1.76.0) (2026-09-13)
 
 ### Features
