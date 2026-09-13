@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import math
 import os
@@ -182,6 +183,19 @@ _RETRYABLE_TRANSPORT_ERRORS = (
 # budget consumed by reasoning and an empty content back (live-confirmed on
 # xiaomi/mimo-v2.5: finish_reason=length, content="").
 REMOTE_THINKING_OVERHEAD = 8192
+
+# ``think=False`` asks the provider to turn reasoning off
+# (``reasoning: {enabled: false}``) — but that is a request, not a guarantee,
+# and a reasoning model that does not fully honour it still charges its
+# reasoning to max_tokens. A think=False caller used to get zero margin, so
+# judge_importance (64), preferences (150) and consolidation (256) landed
+# their answers with nothing to spare: 27 of the 30 remote truncations over
+# 2026-09-06..13 came back with 0-389 content chars and finish_reason=length
+# at those ceilings. 512 tokens covers every observed case and costs nothing
+# at this volume — and it buys reasoning room only: the reasoning is stripped
+# from the content (strip_think_blocks), so callers still get answers inside
+# the budget they asked for.
+REMOTE_NOTHINK_MARGIN = 512
 
 # Distinctive log markers — grep targets for alerting.
 FALLBACK_MARKER = "MEMORY_GENERATION_REMOTE_FALLBACK"
@@ -504,13 +518,17 @@ async def _openrouter_chat(
     ``max_tokens`` with the answer, so ``think=True`` adds the same overhead
     ollama.chat adds; ``think=False`` disables reasoning outright via
     OpenRouter's ``reasoning`` config (models without reasoning control
-    ignore it; a hard 4xx falls back to local like any other remote error).
+    ignore it; a hard 4xx falls back to local like any other remote error)
+    and adds the smaller REMOTE_NOTHINK_MARGIN, because a model that ignores
+    the flag must not be able to spend a small caller's entire budget on
+    reasoning. Either way the caller's own ``max_tokens`` is what the answer
+    is measured against — the margin is reasoning room, not a bigger answer.
     """
     payload: dict[str, Any] = {
         "model": _remote_model(),
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": max_tokens + REMOTE_THINKING_OVERHEAD if think else max_tokens,
+        "max_tokens": max_tokens + (REMOTE_THINKING_OVERHEAD if think else REMOTE_NOTHINK_MARGIN),
     }
     if not think:
         payload["reasoning"] = {"enabled": False}
@@ -549,7 +567,9 @@ async def _openrouter_chat(
         resp.raise_for_status()
         data = resp.json()
 
-    return content_from_response(data, model=payload["model"])
+    # The caller's own budget, not the inflated one we asked the remote for:
+    # that is the number whoever reads the truncation warning has to change.
+    return content_from_response(data, model=payload["model"], max_tokens=max_tokens)
 
 
 #: Token budget for one fact extraction. Was a bare 1024 at facts.py:268, which
@@ -566,13 +586,41 @@ EXTRACTION_MAX_TOKENS = 4096
 INSIGHT_MAX_TOKENS = 2048
 
 
-def content_from_response(data: dict[str, Any], *, model: str) -> str:
+def _memory_caller() -> str:
+    """``module.function`` of the memory caller that asked for this generation.
+
+    Every memory caller passes its own budget (judge_importance 64,
+    preferences 150, consolidation 256, extraction 4096), so a truncation is
+    only actionable if the reader knows which one ran out. Walked from the
+    stack rather than threaded through ten call sites, and only on the error
+    path, so the happy path pays nothing. Falls back to a plain label when
+    the chain is broken (e.g. the generation was started as a bare Task).
+    """
+    frame = inspect.currentframe()
+    try:
+        while frame is not None:
+            module = frame.f_globals.get("__name__", "")
+            if module != __name__ and not module.startswith(("asyncio", "contextlib")):
+                return f"{module.rsplit('.', 1)[-1]}.{frame.f_code.co_name}"
+            frame = frame.f_back
+    finally:
+        del frame
+    return "the caller"
+
+
+def content_from_response(data: dict[str, Any], *, model: str, max_tokens: int) -> str:
     """Text from a chat completion, refusing anything that was cut short.
 
     A ``finish_reason`` of ``length`` means the model ran out of budget partway
     through. The body that comes back is long and unparseable, and treating it
     as an answer is how "the conversation contained no facts" got recorded 72
     times in a week. Raise instead, so the retry path sees a failure.
+
+    ``max_tokens`` is the *calling* generation's budget. It used to be reported
+    as ``EXTRACTION_MAX_TOKENS`` whatever had failed, so a judge_importance
+    call that died at its own 64-token ceiling told the operator to raise a
+    4096 budget in facts.py — one wrong constant sending every investigation
+    to the wrong file.
     """
     choice = (data.get("choices") or [{}])[0]
     content = strip_think_blocks((choice.get("message") or {}).get("content") or "")
@@ -581,8 +629,8 @@ def content_from_response(data: dict[str, Any], *, model: str) -> str:
     if finish_reason == "length":
         raise RuntimeError(
             f"truncated response from remote model {model}: finish_reason=length "
-            f"after {len(content)} chars — raise max_tokens (currently "
-            f"{EXTRACTION_MAX_TOKENS} for extraction)"
+            f"after {len(content)} chars — {_memory_caller()} asked for "
+            f"max_tokens={max_tokens}; raise that caller's budget"
         )
     if not content:
         raise RuntimeError(f"empty content from remote model {model}")
