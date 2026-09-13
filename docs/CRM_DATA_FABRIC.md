@@ -233,6 +233,16 @@ Delivery agents can call these directly:
   resolve first, then fetch
 - `list_contact_messages(id=..., channel=?, limit=?)` — full bodies
 
+Every id argument is validated at the tool boundary before the query runs
+(`_id_argument_error` in `robothor/engine/tools/handlers/crm.py`): person,
+company, note, task and notification ids must be UUIDs and conversation ids
+integers. A hallucinated id (`{"id": "jane@example.com"}`,
+`{"personId": "85105"}`) comes back as `{"error": "person id … is not a valid
+id — expected a UUID; use search_people or list_people to find real person
+ids"}` — a recoverable instruction to the model, where the unguarded call was
+an `InvalidTextRepresentation` crash. Use `search_people` /
+`get_contact_360(identifier=…)` to turn an email address into an id.
+
 ## Testing
 
 **Every change is TDD.** Per-channel write-through tests live in
