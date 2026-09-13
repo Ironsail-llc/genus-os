@@ -257,10 +257,12 @@ delivery records `failed:no_channel:<name>` instead.
 
 **Declare your chunk size if you split.** `register_platform_sender(...,
 chunk_size=N)` is how the platform tells a truncated send from a complete one.
-A sender that returns more than one message for the one body it was handed,
-having declared no chunk size, is recorded `failed:<name>_unproven` — the
-evidence cannot distinguish "landed all five" from "landed two of five", so it
-supports neither.
+Without it, two answers are recorded `failed:<name>_unproven`, because neither
+can be read: more than one message back for the one body you were handed (you
+split, so "landed all five" and "landed two of five" look identical), and one
+message back for a body longer than 4,000 characters — the shortest limit any
+surface here has, and the case where a sender that split into five and landed
+*one* is indistinguishable from an honest single send.
 
 ## A named service — the group that names no kind
 

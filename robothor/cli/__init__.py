@@ -407,16 +407,29 @@ def _build_parser() -> argparse.ArgumentParser:
 
     channel_add = channel_sub.add_parser("add", help="Store a channel's credentials")
     channel_add.add_argument("name", help="Channel name, e.g. slack")
+    # Declared only so they can be REFUSED with an explanation. A token on a
+    # command line is readable by every account on the box through `ps` and
+    # /proc/<pid>/cmdline and is already in the shell history, and nothing this
+    # command does afterwards takes that back. They stay on the parser because
+    # dropping them would make argparse print "unrecognized arguments: --bot-token
+    # xoxb-…" to stderr, leaking the value through the error for a flag that no
+    # longer exists.
     channel_add.add_argument(
         "--bot-token",
         default=None,
-        help="Slack bot token. Prefer the prompt: a flag value lands in your shell history",
+        help="REFUSED: a token on a command line is world-readable. Use the prompt "
+        "or export ROBOTHOR_SLACK_BOT_TOKEN",
     )
     channel_add.add_argument(
-        "--app-token", default=None, help="Slack app-level token for Socket Mode"
+        "--app-token",
+        default=None,
+        help="REFUSED, as --bot-token. Export ROBOTHOR_SLACK_APP_TOKEN instead",
     )
     channel_add.add_argument(
-        "--default-target", default=None, help="Conversation id `verify` and the doctor aim at"
+        "--verify-target",
+        default=None,
+        help="Conversation `genus channel verify` and the doctor post their test "
+        "message to. Never a delivery fallback",
     )
     channel_add.add_argument(
         "--to",

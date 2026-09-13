@@ -59,7 +59,26 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
 
-__all__ = ["Channel", "SendReceipt", "acknowledged_messages", "receipt_from"]
+__all__ = [
+    "UNCONFIGURED_STEP",
+    "Channel",
+    "SendReceipt",
+    "acknowledged_messages",
+    "receipt_from",
+]
+
+#: How a channel's optional ``verify()`` says "this instance never set me up",
+#: as opposed to "I tried and something is wrong": it returns exactly ONE step,
+#: under this name, failed.
+#:
+#: The distinction is a different exit code from ``genus channel verify`` — 2
+#: rather than 1 — and it is load-bearing: an instance that never wanted Slack
+#: has not failed a check it did not ask for, and an install gate that treated
+#: the two alike would fail every headless deployment. Naming the shape here,
+#: rather than having the CLI ask ``health()`` separately, saves a second
+#: authenticated round trip per run and stops a channel whose ``health`` raised
+#: from being reported as verifiable.
+UNCONFIGURED_STEP = "configuration"
 
 
 @dataclass(frozen=True)

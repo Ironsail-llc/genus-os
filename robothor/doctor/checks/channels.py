@@ -130,11 +130,21 @@ async def _slack(ctx: DoctorContext) -> list[Result]:
 
     Nothing here prints a token, malformed or not. A value in the bot-token
     slot is a credential whatever its shape.
+
+    The tokens come from :func:`~robothor.engine.channels.slack_credentials.
+    slack_credentials`, not from ``ctx.settings``. The settings layer never
+    consults the vault, and the vault is where `genus channel add slack` writes
+    by default -- so reading settings reported "not configured" for exactly the
+    installs this check exists to police, and the swap check below could not run
+    on any of them. The SOURCE is named in each passing row, because "which
+    layer answered" is the question an operator has when two surfaces disagree.
     """
-    channels = ctx.settings.channels
-    token = channels.slack_bot_token
-    app_token = channels.slack_app_token
-    target = channels.slack_default_target
+    from robothor.engine.channels.slack_credentials import slack_credentials
+
+    found = slack_credentials()
+    token = found.bot_token or ""
+    app_token = found.app_token or ""
+    target = ctx.settings.channels.slack_verify_target
     if not token and not app_token and not target:
         return [skip("not configured — Slack is an optional channel")]
 
@@ -164,7 +174,13 @@ async def _slack(ctx: DoctorContext) -> list[Result]:
             )
         )
     else:
-        results.append(Result(status="pass", detail="a bot token is configured", sub_id="token"))
+        results.append(
+            Result(
+                status="pass",
+                detail=f"a bot token is configured ({found.bot_source})",
+                sub_id="token",
+            )
+        )
 
     if not app_token:
         results.append(
@@ -187,7 +203,11 @@ async def _slack(ctx: DoctorContext) -> list[Result]:
         )
     else:
         results.append(
-            Result(status="pass", detail="an app-level token is configured", sub_id="app_token")
+            Result(
+                status="pass",
+                detail=f"an app-level token is configured ({found.app_source})",
+                sub_id="app_token",
+            )
         )
 
     if not target:
@@ -195,18 +215,24 @@ async def _slack(ctx: DoctorContext) -> list[Result]:
             Result(
                 status="skip",
                 detail=(
-                    "ROBOTHOR_SLACK_DEFAULT_TARGET is unset, so `genus channel verify "
+                    "ROBOTHOR_SLACK_VERIFY_TARGET is unset, so `genus channel verify "
                     "slack` has nothing to aim at"
                 ),
                 sub_id="target",
             )
         )
     elif target[0] in _TARGET_PREFIXES and target.isalnum():
-        results.append(Result(status="pass", detail=f"target {target}", sub_id="target"))
+        # The id itself is instance data and this row rides into
+        # `GET /api/doctor`, which the bridge serves over HTTP and caches. A
+        # failure names the bad value because that IS the finding; a pass has
+        # nothing to add by naming it.
+        results.append(
+            Result(status="pass", detail="a verify target is configured", sub_id="target")
+        )
     else:
         results.append(
             fail(
-                f"ROBOTHOR_SLACK_DEFAULT_TARGET={target!r} is not a Slack id. Use the "
+                f"ROBOTHOR_SLACK_VERIFY_TARGET={target!r} is not a Slack id. Use the "
                 "conversation id (C…/G…/D…) or a user id (U…/W…); a #name cannot be "
                 "posted to",
                 sub_id="target",
@@ -223,13 +249,27 @@ async def _slack_verify(ctx: DoctorContext) -> Result:
     and an app installed without ``chat:write`` — both of which look exactly
     like a correctly configured instance until a briefing does not arrive.
 
-    Skipped under ``--offline``: this leaves the box. The full four-step
-    version, including a real post, is ``genus channel verify slack``; the
-    doctor deliberately stops short of posting, because a diagnostic that
-    writes into the operator's workspace every time a Health panel refreshes is
-    not a diagnostic.
+    Two read-only round trips, and both earn their place:
+
+    ``auth.test`` tells a live token from a revoked one, which no amount of
+    shape checking can.
+
+    The scope probe (``conversations.list(limit=1)``) catches an app installed
+    without the scopes the code calls. ``missing_scope`` is the single most
+    common Slack setup failure and it is invisible until a send — so a
+    ``slack.verify`` that skipped it would show green, here and on the bridge's
+    Health panel, for an app that cannot post a thing. A first cut of this check
+    did skip it; the scopes the error names are the whole fix, so they are
+    surfaced and nothing else from the error is.
+
+    Skipped under ``--offline``: this leaves the box. What the doctor does NOT
+    do is post. That is ``genus channel verify slack``'s third step, and a
+    diagnostic that writes into the operator's workspace every time a Health
+    panel refreshes is not a diagnostic. Reading does not have that problem.
     """
-    if not ctx.settings.channels.slack_bot_token:
+    from robothor.engine.channels.slack_credentials import slack_credentials
+
+    if not slack_credentials().can_send:
         return skip("no Slack bot token configured")
     if ctx.offline:
         return Result(status="skip", detail="--offline")
@@ -244,7 +284,13 @@ async def _slack_verify(ctx: DoctorContext) -> Result:
     if not report.get("ok"):
         detail = str(report.get("error") or "auth.test did not succeed")
         return fail(f"Slack rejected the bot token: {detail}")
-    return ok(f"auth.test answered for team {report.get('team')}")
+
+    missing = await channel.scope_probe()
+    if missing is not None:
+        return fail(f"the Slack app is missing a scope: {missing}")
+    # No team name and no bot id: this row rides into `GET /api/doctor` on every
+    # healthy refresh, and the workspace name is the operator's own data.
+    return ok("auth.test and the scope probe both answered")
 
 
 CHECKS: tuple[Check, ...] = (

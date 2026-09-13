@@ -138,11 +138,29 @@ def _run() -> AgentRun:
 
 
 @pytest.fixture(autouse=True)
-def _configured(monkeypatch):
-    """A configured instance by default; the unconfigured tests undo it."""
+def _configured(monkeypatch, tmp_path):
+    """A configured instance by default; the unconfigured tests undo it.
+
+    The workspace is pinned to a scratch directory and the settings cache is
+    dropped, so no test in this module reads THIS box's configuration.
+    ``test_verify_without_a_target_cannot_prove_a_post`` is why: it asserts that
+    ``verify()`` with no target cannot post, and
+    ``SlackChannel.verify_target()`` reads real settings. Any instance that
+    followed ``docs/channels/slack.md`` and ran ``genus channel add slack
+    --verify-target …`` has that value in ``<workspace>/.robothor/config.yaml``,
+    and the test failed on it. CI was green only because CI has no such file —
+    the test passed for the wrong reason.
+    """
+    from robothor.settings import reset_settings
+
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("ROBOTHOR_SLACK_BOT_TOKEN", FAKE_BOT_TOKEN)
     monkeypatch.setenv("ROBOTHOR_SLACK_APP_TOKEN", FAKE_APP_TOKEN)
-    monkeypatch.delenv("ROBOTHOR_SLACK_DEFAULT_TARGET", raising=False)
+    monkeypatch.delenv("ROBOTHOR_SLACK_VERIFY_TARGET", raising=False)
+    reset_settings()
+    yield
+    reset_settings()
 
 
 def _long_body(chunks: int) -> str:
@@ -365,9 +383,16 @@ class TestVerify:
             "apps.connections.open",
         ]
         assert all(ok for _step, ok, _detail in steps)
-        assert client.auth_calls == 1
+        assert client.auth_calls == 1, "verify authenticated more than once"
         assert client.list_calls == 1
         assert client.connections == 1
+
+        # m6: this report is pasted into bug reports. The workspace name and the
+        # bot id are the operator's own data; `health()` reports them because
+        # the operator asked this instance about itself, `verify` does not.
+        report = repr(steps)
+        assert "Example Workspace" not in report
+        assert "U0000000001" not in report
 
     @pytest.mark.asyncio
     async def test_a_post_that_returns_no_ts_is_not_a_pass(self):
@@ -411,8 +436,8 @@ class TestVerify:
         assert client.posts == []
 
     @pytest.mark.asyncio
-    async def test_verify_uses_the_default_target_when_given_none(self, monkeypatch):
-        monkeypatch.setenv("ROBOTHOR_SLACK_DEFAULT_TARGET", CHANNEL_ID)
+    async def test_verify_uses_the_configured_target_when_given_none(self, monkeypatch):
+        monkeypatch.setenv("ROBOTHOR_SLACK_VERIFY_TARGET", CHANNEL_ID)
         from robothor.settings import reset_settings
 
         reset_settings()
@@ -496,3 +521,81 @@ class TestTheRegistry:
         for target in ("", "${X}", "#general", CHANNEL_ID):
             receipt = await channel.send(target, "hello", config=_config(), run=_run())
             assert isinstance(receipt, SendReceipt)
+
+
+class TestAFailureStatusIsAStableToken:
+    """``failed:slack_client: <whatever the SDK said>`` was two defects.
+
+    It embedded free-form text, so nothing could match it beyond
+    ``startswith("failed:")`` while every other ``delivery_status`` is a token a
+    query or an alert rule matches exactly. And the text came from the raw
+    exception: a token that reached the SDK malformed — an embedded newline
+    surviving the vault — makes it raise ``ValueError: Invalid header value
+    b'Bearer xoxb-…'``, which went into ``agent_runs`` verbatim and onto the
+    dashboard.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_transport_failure_is_a_closed_reason(self):
+        def _boom(_token: str) -> Any:
+            raise ImportError("No module named 'slack_sdk'")
+
+        channel = SlackChannel()
+        channel.client_factory = _boom
+        receipt = await channel.send(CHANNEL_ID, "hello", config=_config(), run=_run())
+
+        assert receipt.status == "failed:slack_client:transport"
+
+    @pytest.mark.asyncio
+    async def test_a_dm_that_cannot_be_opened_is_its_own_reason(self):
+        class _RefusesToOpen(_FakeClient):
+            async def conversations_open(self, *, users: str, **_: Any) -> _FakeResponse:
+                raise _FakeSlackError({"error": "user_not_found"})
+
+        receipt = await _channel(_RefusesToOpen()).send(
+            USER_ID, "hello", config=_config(), run=_run()
+        )
+
+        assert receipt.status == "failed:slack_client:dm_open"
+
+    @pytest.mark.asyncio
+    async def test_no_sdk_error_text_reaches_the_status_or_the_log(self, caplog):
+        """A malformed credential makes the SDK put the token in its own message."""
+
+        def _leaks(_token: str) -> Any:
+            raise ValueError(f"Invalid header value b'Bearer {FAKE_BOT_TOKEN}'")
+
+        channel = SlackChannel()
+        channel.client_factory = _leaks
+        with caplog.at_level("DEBUG"):
+            receipt = await channel.send(CHANNEL_ID, "hello", config=_config(), run=_run())
+
+        assert FAKE_BOT_TOKEN not in (receipt.status or "")
+        assert FAKE_BOT_TOKEN not in caplog.text
+        assert "Bearer" not in caplog.text
+
+
+class TestTheScopeProbeIsShared:
+    """One probe and one wording, or the CLI reports a missing scope while the
+    Health panel shows green for the same app."""
+
+    @pytest.mark.asyncio
+    async def test_scope_probe_returns_none_when_the_scopes_answer(self):
+        assert await _channel(_FakeClient()).scope_probe() is None
+
+    @pytest.mark.asyncio
+    async def test_scope_probe_names_the_needed_scope_and_no_token(self):
+        error = _FakeSlackError(
+            {"error": "missing_scope", "needed": "channels:read", "provided": "chat:write"}
+        )
+        detail = await _channel(_FakeClient(list_error=error)).scope_probe()
+
+        assert detail is not None
+        assert "channels:read" in detail
+        assert FAKE_BOT_TOKEN not in detail
+
+    @pytest.mark.asyncio
+    async def test_an_unconfigured_instance_gets_a_sentence_not_a_raise(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_SLACK_BOT_TOKEN", raising=False)
+        detail = await _channel(_FakeClient()).scope_probe()
+        assert detail is not None and "ROBOTHOR_SLACK_BOT_TOKEN" in detail

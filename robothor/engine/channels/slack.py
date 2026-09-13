@@ -34,13 +34,17 @@ the scopes it needed — those are Slack's own vocabulary, not the instance's.
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
-from robothor.engine.channels.base import SendReceipt, receipt_from
+from robothor.engine.channels.base import UNCONFIGURED_STEP, SendReceipt, receipt_from
+from robothor.engine.channels.slack_credentials import (
+    APP_TOKEN_ENV,
+    BOT_TOKEN_ENV,
+    slack_credentials,
+)
 from robothor.engine.chunking import split_message
 from robothor.engine.slack import MAX_SLACK_LENGTH
-from robothor.secrets import resolve_secret
-from robothor.vault.naming import channel_field
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Callable, Sequence
@@ -51,19 +55,21 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["MAX_SLACK_LENGTH", "SlackChannel", "split_message"]
 
-#: The environment names the tokens resolve from, with the vault rows A3's
-#: naming puts them in. ``channels/slack/bot_token`` exports as
-#: ``CHANNELS_SLACK_BOT_TOKEN``, NOT ``ROBOTHOR_SLACK_BOT_TOKEN``, so the vault
-#: key has to be passed explicitly or the lookup misses a credential that is
-#: sitting right there.
-BOT_TOKEN_ENV = "ROBOTHOR_SLACK_BOT_TOKEN"
-APP_TOKEN_ENV = "ROBOTHOR_SLACK_APP_TOKEN"
-
 #: Slack's own id prefixes. ``C`` public channel, ``G`` private channel, ``D``
 #: an already-open DM conversation; ``U``/``W`` a person, which has to be turned
 #: into a conversation first.
 _CONVERSATION_PREFIXES = ("C", "G", "D")
 _USER_PREFIXES = ("U", "W")
+
+#: The reasons ``failed:slack_client:<reason>`` can carry. A CLOSED set, and
+#: that is the point: every other ``delivery_status`` is a stable token that a
+#: query, a dashboard filter or an alert rule can match on exactly, and the
+#: first cut of this one embedded the exception's own text — so nothing could
+#: match it beyond ``startswith("failed:")``, and a credential-bearing SDK error
+#: went straight into ``agent_runs``. The detail belongs in the log line, where
+#: ``_describe`` has already stripped it.
+_TRANSPORT = "transport"
+_DM_OPEN = "dm_open"
 
 
 def _is_id(target: str, prefixes: tuple[str, ...]) -> bool:
@@ -85,16 +91,37 @@ def _slack_error(exc: BaseException) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+#: Token shapes Slack issues, plus the header they travel in. A credential does
+#: not only reach a log through a payload this module built — it arrives inside
+#: an exception somebody else raised. The case that found this: a bot token that
+#: survived the vault with a trailing newline makes the SDK's header encoder
+#: raise ``ValueError: Invalid header value b'Bearer xoxb-…'``, and
+#: :func:`_describe` used to pass a non-Slack exception's message through
+#: verbatim — so the token went to the journal and, before the reason token
+#: landed, into ``agent_runs``.
+_SECRETISH = re.compile(r"(?:xox[abceprsBAPERS]|xapp)-[\w-]+|Bearer\s+\S+", re.IGNORECASE)
+
+
+def _redact(text: str) -> str:
+    """``text`` with anything token-shaped replaced. Applied to every line out."""
+    return _SECRETISH.sub("<redacted>", text)
+
+
 def _describe(exc: BaseException) -> str:
-    """One line about a Slack failure, naming scopes but never a credential."""
+    """One line about a Slack failure, naming scopes but never a credential.
+
+    Every return goes through :func:`_redact`: a third-party exception's message
+    is not this module's to trust, and this string reaches both the journal and
+    ``genus channel verify``'s output.
+    """
     data = _slack_error(exc)
     error = str(data.get("error") or "") or f"{type(exc).__name__}: {exc}"
     if data.get("error") == "missing_scope":
         needed = str(data.get("needed") or "?")
         provided = str(data.get("provided") or "")
         detail = f"missing_scope: the app needs {needed}"
-        return f"{detail} (it has {provided})" if provided else detail
-    return error
+        return _redact(f"{detail} (it has {provided})" if provided else detail)
+    return _redact(error)
 
 
 class SlackChannel:
@@ -124,29 +151,33 @@ class SlackChannel:
 
     # ── configuration ────────────────────────────────────────────────────
 
-    def bot_token(self) -> str | None:
-        """The bot token, from the environment or the vault. Never logged."""
-        return resolve_secret(BOT_TOKEN_ENV, vault_key=channel_field("slack", "bot_token")).value
-
-    def app_token(self) -> str | None:
-        """The app-level token Socket Mode needs. Never logged."""
-        return resolve_secret(APP_TOKEN_ENV, vault_key=channel_field("slack", "app_token")).value
+    @staticmethod
+    def bot_token() -> str | None:
+        """The bot token, from wherever this instance keeps it. Never logged."""
+        return slack_credentials().bot_token
 
     @staticmethod
-    def default_target() -> str:
-        """Where ``verify`` and the doctor aim when nothing names a target.
+    def app_token() -> str | None:
+        """The app-level token Socket Mode needs. Never logged."""
+        return slack_credentials().app_token
 
-        Deliberately NOT a fallback for :meth:`send`: an agent whose manifest
-        names no ``delivery_to`` must fail loudly rather than have its briefing
-        land in whatever channel this happens to hold.
+    @staticmethod
+    def verify_target() -> str:
+        """The conversation ``verify`` and the doctor aim at, when told none.
+
+        Not a send fallback and not named like one: ``send`` refuses an empty
+        target outright, because putting a briefing into whatever conversation
+        the box happens to point at is the failure
+        ``failed:telegram_unexpanded_chat_id`` was created to stop, one surface
+        further on.
         """
         try:
             from robothor.settings import get_settings
 
-            return (get_settings().channels.slack_default_target or "").strip()
+            return (get_settings().channels.slack_verify_target or "").strip()
         except Exception as exc:  # noqa: BLE001 — unrelated bad config must not
             # break a verify whose whole job is diagnosing configuration.
-            logger.warning("Could not resolve the Slack default target: %s", exc)
+            logger.warning("Could not resolve the Slack verify target: %s", exc)
             return ""
 
     def _client_for(self, token: str) -> Any:
@@ -250,13 +281,37 @@ class SlackChannel:
 
         try:
             client = self._client_for(token)
-            conversation = await self._conversation(client, clean)
         except Exception as exc:  # noqa: BLE001 — a transport failure is a receipt
-            logger.error("Slack transport unavailable for %s: %s", getattr(config, "id", "?"), exc)
+            # `_describe`, never the raw exception. A malformed token — one that
+            # survived the vault with an embedded newline, say — makes the SDK
+            # raise `ValueError: Invalid header value b'Bearer xoxb-…'`, and this
+            # line goes to the journal while the status below goes into
+            # `agent_runs`, which the dashboard renders.
+            logger.error(
+                "Slack transport unavailable for %s: %s",
+                getattr(config, "id", "?"),
+                _describe(exc),
+            )
             return SendReceipt(
                 acknowledged=0,
                 expected=len(chunks),
-                status=f"failed:slack_client: {_describe(exc)}",
+                status=f"failed:slack_client:{_TRANSPORT}",
+                target=clean,
+                body=body,
+            )
+
+        try:
+            conversation = await self._conversation(client, clean)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Slack could not open a conversation for %s: %s",
+                getattr(config, "id", "?"),
+                _describe(exc),
+            )
+            return SendReceipt(
+                acknowledged=0,
+                expected=len(chunks),
+                status=f"failed:slack_client:{_DM_OPEN}",
                 target=clean,
                 body=body,
             )
@@ -325,6 +380,38 @@ class SlackChannel:
                 thread_ts = response.get("ts")
         return landed
 
+    # ── scopes ───────────────────────────────────────────────────────────
+
+    async def scope_probe(self) -> str | None:
+        """``None`` when the app's read scopes answer, else what it is missing.
+
+        One read-only round trip (``conversations.list(limit=1)``) that catches
+        an app installed without the scopes this module calls. Shared by
+        :meth:`verify` and the doctor's ``slack.verify`` so there is one probe
+        and one wording, rather than a CLI that reports a missing scope and a
+        Health panel that shows green for the same app.
+
+        Opens no transport of its own beyond the cached client, and returns a
+        sentence rather than raising: a diagnostic that raises on a broken box
+        helps nobody.
+        """
+        token = self.bot_token()
+        if not token:
+            return f"{BOT_TOKEN_ENV} is set nowhere this instance reads"
+        try:
+            return await self._probe_scopes(self._client_for(token))
+        except Exception as exc:  # noqa: BLE001 — a probe is a report, not a raise
+            return _describe(exc)
+
+    @staticmethod
+    async def _probe_scopes(client: Any) -> str | None:
+        """The probe itself, against an already-built client."""
+        try:
+            await client.conversations_list(limit=1)
+        except Exception as exc:  # noqa: BLE001
+            return _describe(exc)
+        return None
+
     # ── verify ───────────────────────────────────────────────────────────
 
     async def verify(self, target: str | None = None) -> list[tuple[str, bool, str]]:
@@ -350,7 +437,17 @@ class SlackChannel:
         """
         token = self.bot_token()
         if not token:
-            return [("configuration", False, f"{BOT_TOKEN_ENV} is set nowhere this instance reads")]
+            # ONE step, named `configuration`: that shape is how `genus channel
+            # verify` tells "never set up" (exit 2) from "set up and broken"
+            # (exit 1) without a second round trip to ask.
+            return [
+                (
+                    UNCONFIGURED_STEP,
+                    False,
+                    f"{BOT_TOKEN_ENV} is set neither in the environment nor in this "
+                    "instance's vault",
+                )
+            ]
 
         steps: list[tuple[str, bool, str]] = []
         try:
@@ -363,16 +460,20 @@ class SlackChannel:
         except Exception as exc:  # noqa: BLE001
             steps.append(("auth.test", False, _describe(exc)))
         else:
-            steps.append(("auth.test", True, f"team {auth.get('team')}, bot {auth.get('user_id')}"))
+            # Deliberately NOT the team name or the bot id. ``health()`` reports
+            # both because the operator asked this instance about itself; this
+            # report is the one the module docstring says gets "pasted into bug
+            # reports", and a workspace name is the operator's own data.
+            del auth
+            steps.append(("auth.test", True, "the bot token is live"))
 
-        try:
-            await client.conversations_list(limit=1)
-        except Exception as exc:  # noqa: BLE001
-            steps.append(("conversations.list", False, _describe(exc)))
-        else:
+        missing = await self._probe_scopes(client)
+        if missing is None:
             steps.append(("conversations.list", True, "the app's read scopes answer"))
+        else:
+            steps.append(("conversations.list", False, missing))
 
-        steps.append(await self._verify_post(client, (target or self.default_target()).strip()))
+        steps.append(await self._verify_post(client, (target or self.verify_target()).strip()))
         steps.append(await self._verify_socket())
         return steps
 
@@ -383,7 +484,7 @@ class SlackChannel:
             return (
                 step,
                 False,
-                "no target to post to: pass one, or set ROBOTHOR_SLACK_DEFAULT_TARGET",
+                "no target to post to: pass one, or set ROBOTHOR_SLACK_VERIFY_TARGET",
             )
         try:
             conversation = await self._conversation(client, target)
@@ -399,7 +500,8 @@ class SlackChannel:
             # The one thing that is never evidence: the call returning without
             # an id and without raising.
             return (step, False, "Slack accepted the call but returned no message id")
-        return (step, True, f"posted as {ts}")
+        del ts  # the message id identifies a conversation; "it posted" is the finding
+        return (step, True, "a message posted and Slack returned its id")
 
     async def _verify_socket(self) -> tuple[str, bool, str]:
         """Whether Socket Mode — the inbound half — can open a connection."""

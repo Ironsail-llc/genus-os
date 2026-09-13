@@ -15,9 +15,12 @@ actually reads it.
 
 Nothing here prints a credential. ``add`` reports the destination and a
 fingerprint — a SHA-256 prefix, which identifies the value without carrying any
-of it — and a token passed as a flag is scrubbed out of ``sys.argv`` before
-anything else runs, because ``ps`` shows a command line to every account on the
-box.
+of it — and it **refuses** a token passed as a flag rather than pretending to
+clean up after one: ``ps`` and ``/proc/<pid>/cmdline`` show a command line to
+every account on the box, the shell has already written it to a history file,
+and reassigning ``sys.argv`` (what the first cut did, and called a scrub) leaves
+both of those untouched. The prompt and the environment are the two paths that
+do not publish the value, and the refusal names them.
 """
 
 from __future__ import annotations
@@ -31,7 +34,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from robothor.settings.env import process_env_get
+from robothor.engine.channels.base import UNCONFIGURED_STEP
+from robothor.engine.channels.slack_credentials import environment_token
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +57,7 @@ _ADDABLE: dict[str, tuple[tuple[str, str, str], ...]] = {
 #: field, environment name)``.
 _ADDABLE_SETTINGS: dict[str, tuple[tuple[str, str, str, str], ...]] = {
     "slack": (
-        ("default_target", "channels", "slack_default_target", "ROBOTHOR_SLACK_DEFAULT_TARGET"),
+        ("verify_target", "channels", "slack_verify_target", "ROBOTHOR_SLACK_VERIFY_TARGET"),
     ),
 }
 
@@ -84,20 +88,6 @@ def _fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
 
 
-def _scrub_argv(*values: str) -> None:
-    """Remove a credential from this process's own command line.
-
-    ``ps``, ``/proc/<pid>/cmdline`` and any handler that prints ``sys.argv``
-    all read it. This cannot un-publish what the shell already recorded in a
-    history file — the prompt is the safe path and the help text says so — but
-    it closes the window for the rest of this process's life.
-    """
-    for value in values:
-        if not value:
-            continue
-        sys.argv = [part.replace(value, "***") for part in sys.argv]
-
-
 def _vault_set(key: str, value: str) -> None:
     """Store one credential in the instance vault. The seam the suite replaces."""
     from robothor.vault import set as vault_set
@@ -123,10 +113,32 @@ def _write_env_file(workspace: Path, pairs: dict[str, str]) -> Path:
     ``parse_env_file``'s last-one-wins would make it invisible as well as live.
     Everything else in the file — comments, the database password ``genus
     init`` wrote — is preserved verbatim.
+
+    **A symlink at that path is refused, not followed.**
+    ``secrets/env_file.py::load_instance_env`` refuses one on READ with the
+    rationale "it is the shape of 'make the daemon read a file it would not
+    otherwise open'". This is the other half of that rule, and it was missing:
+    ``read_text()`` follows the link, so the linked-to file's contents were
+    carried over into the new ``genus.env`` verbatim, and ``write_private``'s
+    rename then replaced the symlink with a regular file. Anything the operator
+    could read and an attacker could point at was copied into the one file
+    ``load_instance_env`` ``setdefault``s straight into the engine's
+    environment.
+
+    Raises:
+        OSError: for a symlink at the path, and for any failure of the read or
+            the write. The caller reports it; nothing here prints, because an
+            exception carrying a path is safe and a frame carrying a token is
+            not.
     """
     from robothor.secrets.env_file import env_line, instance_env_path, write_private
 
     path = instance_env_path(workspace)
+    if path.is_symlink():
+        raise OSError(
+            f"{path} is a symlink; refusing to write this instance's credentials "
+            "through one. Replace it with the file itself."
+        )
     kept: list[str] = []
     if path.is_file():
         for raw in path.read_text(encoding="utf-8").splitlines():
@@ -199,6 +211,13 @@ def _cmd_verify(args: argparse.Namespace) -> int:
       Deliberately NOT 1: an instance that never wanted Slack has not failed a
       check it did not ask for, and an install gate that treated the two alike
       would fail every headless deployment.
+
+    "Not configured" is read off ``verify``'s own answer rather than from a
+    separate ``health()`` call: a channel signals it by returning a single step
+    named ``configuration``. The first cut asked ``health()`` first, which cost
+    a second ``auth.test`` round trip per run, and read ``configured`` from a
+    call that also leaves the box — so a channel whose ``health`` raised got
+    reported as verifiable.
     """
     from robothor.engine.channels import get_channel
 
@@ -221,20 +240,15 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         return 2
 
     try:
-        health = asyncio.run(channel.health())
-    except Exception as exc:  # noqa: BLE001
-        health = {"error": f"{type(exc).__name__}: {exc}"}
-    if health.get("configured") is False:
-        _err(f"Channel {name!r} is not configured on this instance; nothing to verify.")
-        return 2
-
-    try:
         steps = asyncio.run(verify(getattr(args, "target", None)))
     except Exception as exc:  # noqa: BLE001 — a broken channel is a report, not a traceback
         _err(f"Channel {name!r} raised while verifying: {type(exc).__name__}: {exc}")
         return 1
 
     rows = [(str(step), bool(ok), str(detail)) for step, ok, detail in steps]
+    if len(rows) == 1 and rows[0][0] == UNCONFIGURED_STEP and not rows[0][1]:
+        _err(f"Channel {name!r} is not configured on this instance: {rows[0][2]}")
+        return 2
     if getattr(args, "json", False):
         print(
             json.dumps(
@@ -276,14 +290,12 @@ def _collect(args: argparse.Namespace, name: str) -> dict[str, tuple[str, str, s
     interactive = sys.stdin.isatty()
     resolved: dict[str, tuple[str, str, str]] = {}
     for attribute, field, env in _ADDABLE[name]:
-        value = (getattr(args, attribute, None) or "").strip()
-        source = "flag"
-        if not value:
-            # Through the settings package's own accessor: the name is built
-            # from `_ADDABLE` at runtime, which is exactly the dynamically-named
-            # read `process_env_get` exists for.
-            value = (process_env_get(env, "") or "").strip()
-            source = "environment"
+        # The environment layer of the ONE Slack credential reader. Deliberately
+        # not the full resolver: `add` is deciding what to STORE, and answering
+        # from the vault would have `--to env` copy a vault row into the
+        # instance env file — a credential moving somewhere nobody asked.
+        value = environment_token(env)
+        source = "environment"
         if not value and interactive:
             value = getpass.getpass(f"{name} {attribute.replace('_', ' ')} (not echoed): ").strip()
             source = "prompt"
@@ -291,6 +303,45 @@ def _collect(args: argparse.Namespace, name: str) -> dict[str, tuple[str, str, s
             resolved[attribute] = (value, field, env)
             logger.debug("genus channel add: %s resolved from the %s", env, source)
     return resolved
+
+
+def _refuse_command_line_tokens(args: argparse.Namespace, name: str) -> str:
+    """The refusal for a token passed as a flag, or "" when none was.
+
+    There is no taking it back. ``ps`` shows any account on the box the full
+    command line of every process, ``/proc/<pid>/cmdline`` is the same data, and
+    the shell has already written it to a history file. Reassigning ``sys.argv``
+    — which is what the first cut of this command did, and called a scrub —
+    rebinds a Python list and leaves the kernel's copy exactly as it was;
+    ``test_a_python_level_scrub_cannot_clear_proc_cmdline`` proves that rather
+    than asserting it. Clearing the real argv needs ``setproctitle`` or
+    ``prctl(PR_SET_MM)`` and a capability, neither of which this platform has.
+
+    So the flags exist only to be refused. They stay DECLARED on the parser on
+    purpose: argparse's "unrecognized arguments" error prints the offending
+    tokens to stderr, so removing them would leak the credential through the
+    error message for a flag that no longer exists.
+
+    Checked before the channel name, because a misspelled name is a typo and a
+    published credential is an incident.
+    """
+    offenders = [
+        flag
+        for flag, attribute in (("--bot-token", "bot_token"), ("--app-token", "app_token"))
+        if (getattr(args, attribute, None) or "").strip()
+    ]
+    if not offenders:
+        return ""
+    envs = ", ".join(sorted({env for _a, _f, env in _ADDABLE.get(name, _ADDABLE["slack"])}))
+    return (
+        f"Refusing {' and '.join(offenders)}: a token on a command line is readable by "
+        "every account on this box through `ps` and /proc/<pid>/cmdline, and is already "
+        "in your shell history. Nothing this command does afterwards can take that back.\n"
+        "Run `genus channel add` with no token flag and paste it at the prompt (it is not "
+        f"echoed), or export it first ({envs}).\n"
+        "If the token has already been on a command line, rotate it in the Slack app "
+        "console rather than storing it."
+    )
 
 
 def _cmd_add(args: argparse.Namespace) -> int:
@@ -303,6 +354,15 @@ def _cmd_add(args: argparse.Namespace) -> int:
     through.
     """
     name = (getattr(args, "name", "") or "").strip().lower()
+
+    # BEFORE the name check: a misspelled channel is a typo, a published
+    # credential is an incident, and returning 2 for the typo first is how the
+    # operator never heard about the second.
+    refusal = _refuse_command_line_tokens(args, name)
+    if refusal:
+        _err(refusal)
+        return 2
+
     if name not in _ADDABLE:
         _err(
             f"`genus channel add` does not know how to configure {name!r}. "
@@ -311,9 +371,6 @@ def _cmd_add(args: argparse.Namespace) -> int:
         return 2
 
     resolved = _collect(args, name)
-    # Before anything is written, logged, or raised: the flag value must not
-    # survive in this process's command line.
-    _scrub_argv(*(value for value, _field, _env in resolved.values()))
 
     if not resolved:
         _err(f"No credentials given for {name!r}; nothing was written.")
@@ -332,11 +389,32 @@ def _cmd_add(args: argparse.Namespace) -> int:
             try:
                 _vault_set(key, value)
             except Exception as exc:  # noqa: BLE001
+                # Say what DID land first. These are written one at a time, so a
+                # refusal on the second leaves the first stored — and an
+                # operator who is told only "the vault refused the app token"
+                # will re-run the whole command, or worse, assume nothing was
+                # written and go looking in the wrong place.
+                for line in written:
+                    print(line)
                 _err(f"The vault refused {key}: {type(exc).__name__}: {exc}")
+                if written:
+                    _err(f"{len(written)} credential(s) above WERE stored; the rest were not.")
                 return 1
             written.append(f"  vault  {key}  (sha256:{_fingerprint(value)})")
     else:
-        path = _write_env_file(workspace, {env: value for value, _field, env in resolved.values()})
+        try:
+            path = _write_env_file(
+                workspace, {env: value for value, _field, env in resolved.values()}
+            )
+        except OSError as exc:
+            # Caught, never propagated. An uncaught exception here would carry a
+            # traceback whose frame locals hold both plaintext tokens, and any
+            # `rich`/Sentry/`--verbose` handler anyone bolts on later prints
+            # frame locals. `exc` names the path, not the value; binding it to a
+            # message and returning drops the traceback with the frames.
+            _err(f"Could not write the instance credential file: {exc}")
+            _err("Nothing was stored. Fix the permissions on that directory and try again.")
+            return 1
         written.extend(
             f"  file   {env}  (sha256:{_fingerprint(value)})"
             for value, _field, env in resolved.values()

@@ -60,11 +60,33 @@ def _add_args(**kwargs: Any) -> argparse.Namespace:
         "name": "slack",
         "bot_token": None,
         "app_token": None,
-        "default_target": None,
+        "verify_target": None,
         "to": None,
     }
     defaults.update(kwargs)
     return _args(**defaults)
+
+
+@pytest.fixture
+def exported(monkeypatch):
+    """Tokens in the environment — the non-interactive path `add` supports.
+
+    Passing them as flags is refused (see
+    :class:`TestATokenOnACommandLineCannotBeTakenBack`), so this is how a test
+    that is about the WRITE, not about the input path, supplies them.
+    """
+
+    def _set(bot: str | None = FAKE_BOT_TOKEN, app: str | None = FAKE_APP_TOKEN):
+        for name, value in (
+            ("ROBOTHOR_SLACK_BOT_TOKEN", bot),
+            ("ROBOTHOR_SLACK_APP_TOKEN", app),
+        ):
+            if value is None:
+                monkeypatch.delenv(name, raising=False)
+            else:
+                monkeypatch.setenv(name, value)
+
+    return _set
 
 
 class _FakeVault:
@@ -87,19 +109,21 @@ def vault(monkeypatch, tmp_path):
 
 
 class TestAddWritesTheCredentialSomewhereDeliberate:
-    def test_add_slack_writes_through_the_secrets_accessor(self, vault):
+    def test_add_slack_writes_through_the_secrets_accessor(self, vault, exported):
         """The KEY is the contract — a write under a name nothing reads is the
         failure ``vault/naming.py`` exists to make impossible."""
-        assert cmd_channel(_add_args(bot_token=FAKE_BOT_TOKEN, app_token=FAKE_APP_TOKEN)) == 0
+        exported()
+        assert cmd_channel(_add_args()) == 0
 
         assert set(vault.written) == {
             "channels/slack/bot_token",
             "channels/slack/app_token",
         }
 
-    def test_add_slack_never_prints_the_token(self, vault, capsys, caplog):
+    def test_add_slack_never_prints_the_token(self, vault, exported, capsys, caplog):
+        exported()
         with caplog.at_level("DEBUG"):
-            cmd_channel(_add_args(bot_token=FAKE_BOT_TOKEN, app_token=FAKE_APP_TOKEN))
+            cmd_channel(_add_args())
         captured = capsys.readouterr()
 
         for stream in (captured.out, captured.err, caplog.text):
@@ -109,20 +133,24 @@ class TestAddWritesTheCredentialSomewhereDeliberate:
             # to anyone holding a copy, which is the whole risk.
             assert "xoxb-test" not in stream
 
-    def test_add_says_where_it_wrote(self, vault, capsys):
-        cmd_channel(_add_args(bot_token=FAKE_BOT_TOKEN, app_token=FAKE_APP_TOKEN))
+    def test_add_says_where_it_wrote(self, vault, exported, capsys):
+        exported()
+        cmd_channel(_add_args())
         out = capsys.readouterr().out
 
         assert "vault" in out
         assert "channels/slack/bot_token" in out
 
-    def test_add_falls_back_to_the_instance_env_file_without_a_vault(self, tmp_path, capsys):
+    def test_add_falls_back_to_the_instance_env_file_without_a_vault(
+        self, tmp_path, exported, capsys
+    ):
         """The most common install has no master key. A vault-only ``add``
         would fail on it, and telling the operator to run three other commands
         first is how a channel never gets configured."""
         from robothor.secrets.env_file import instance_env_path, parse_env_file
 
-        assert cmd_channel(_add_args(bot_token=FAKE_BOT_TOKEN, app_token=FAKE_APP_TOKEN)) == 0
+        exported()
+        assert cmd_channel(_add_args()) == 0
 
         path = instance_env_path(tmp_path)
         values = parse_env_file(path.read_text(encoding="utf-8"))
@@ -130,21 +158,24 @@ class TestAddWritesTheCredentialSomewhereDeliberate:
         assert values["ROBOTHOR_SLACK_APP_TOKEN"] == FAKE_APP_TOKEN
         assert str(path) in capsys.readouterr().out
 
-    def test_the_env_file_is_private(self, tmp_path):
+    def test_the_env_file_is_private(self, tmp_path, exported):
         import stat
 
-        cmd_channel(_add_args(bot_token=FAKE_BOT_TOKEN))
+        exported(app=None)
+        cmd_channel(_add_args())
         from robothor.secrets.env_file import instance_env_path
 
         mode = stat.S_IMODE(instance_env_path(tmp_path).stat().st_mode)
         assert mode == 0o600, f"the instance credential file is mode {mode:o}"
 
-    def test_a_second_add_replaces_rather_than_stacks(self, tmp_path):
+    def test_a_second_add_replaces_rather_than_stacks(self, tmp_path, exported):
         """A superseded token left in the file is still a readable credential."""
         from robothor.secrets.env_file import instance_env_path
 
-        cmd_channel(_add_args(bot_token=FAKE_BOT_TOKEN))
-        cmd_channel(_add_args(bot_token="xoxb-test-rotated-token"))
+        exported(app=None)
+        cmd_channel(_add_args())
+        exported(bot="xoxb-test-rotated-token", app=None)
+        cmd_channel(_add_args())
 
         text = instance_env_path(tmp_path).read_text(encoding="utf-8")
         assert FAKE_BOT_TOKEN not in text
@@ -172,26 +203,16 @@ class TestAddWritesTheCredentialSomewhereDeliberate:
         assert len(prompts) == 2
         assert vault.written["channels/slack/bot_token"] == FAKE_BOT_TOKEN
 
-    def test_a_flagged_token_is_scrubbed_out_of_argv(self, vault, monkeypatch):
-        """``ps`` shows a process's command line to every account on the box,
-        and so does an exception report that prints ``sys.argv``."""
-        monkeypatch.setattr(
-            "sys.argv", ["genus", "channel", "add", "slack", "--bot-token", FAKE_BOT_TOKEN]
-        )
-        cmd_channel(_add_args(bot_token=FAKE_BOT_TOKEN))
-        import sys
-
-        assert FAKE_BOT_TOKEN not in " ".join(sys.argv)
-
-    def test_the_default_target_is_a_setting_not_a_secret(self, vault, tmp_path):
-        cmd_channel(_add_args(bot_token=FAKE_BOT_TOKEN, default_target=CHANNEL_ID))
+    def test_the_verify_target_is_a_setting_not_a_secret(self, vault, exported, tmp_path):
+        exported(app=None)
+        cmd_channel(_add_args(verify_target=CHANNEL_ID))
 
         from robothor.settings.sources import config_yaml_path
 
         path = config_yaml_path()
         assert path is not None
         assert CHANNEL_ID in path.read_text(encoding="utf-8")
-        assert "slack_default_target" not in "".join(vault.written)
+        assert "slack_verify_target" not in "".join(vault.written)
 
     def test_an_unknown_channel_cannot_be_added(self, capsys):
         assert cmd_channel(_add_args(name="teams")) == 2
@@ -236,9 +257,30 @@ class TestVerifyExitCodes:
 
     def test_an_unconfigured_channel_is_two(self, monkeypatch):
         """Not a failure: an instance that never wanted Slack has not failed a
-        verification it did not ask for."""
-        self._install(monkeypatch, [], configured=False)
+        verification it did not ask for.
+
+        Read off `verify`'s own answer — one step named `configuration`, failed
+        — rather than from a separate `health()` call, which cost a second
+        authenticated round trip and reported a channel whose `health` raised as
+        verifiable.
+        """
+        from robothor.engine.channels import UNCONFIGURED_STEP
+
+        self._install(
+            monkeypatch,
+            [(UNCONFIGURED_STEP, False, "a token is set nowhere this instance reads")],
+            configured=False,
+        )
         assert cmd_channel(self._verify_args("fake")) == 2
+
+    def test_a_failed_step_that_is_not_the_configuration_one_is_still_one(self, monkeypatch):
+        """The exit-2 shape is ONE step under that exact name. A real failure
+        that happens to be first must not be downgraded to "never set up"."""
+        self._install(
+            monkeypatch,
+            [("auth.test", False, "invalid_auth"), ("conversations.list", False, "missing_scope")],
+        )
+        assert cmd_channel(self._verify_args("fake")) == 1
 
     def test_an_unknown_channel_is_two(self, capsys):
         assert cmd_channel(self._verify_args("teams")) == 2
@@ -308,3 +350,157 @@ class TestTheVerbIsReachable:
         with patch("robothor.cli.channel.cmd_channel", return_value=0) as command:
             assert main(["channel", "list"]) == 0
         assert command.call_args.args[0].channel_command == "list"
+
+
+class TestATokenOnACommandLineCannotBeTakenBack:
+    """``--bot-token`` is refused, and the reason is demonstrable.
+
+    The first cut kept the flag and "scrubbed" it by reassigning ``sys.argv``.
+    That rebinds a Python list; it does not touch the kernel's copy, so ``ps``
+    and ``/proc/<pid>/cmdline`` went on showing the token for the whole run —
+    which for ``add`` includes the vault round trip and the file write. The
+    docstring claimed all three readers were closed and the test asserted
+    ``sys.argv``, i.e. it certified precisely the one that worked. That is the
+    inert-control shape this campaign keeps finding.
+
+    There is no portable way to clear the kernel argv from CPython, so the flag
+    is refused instead and the operator is sent to the prompt or the
+    environment, neither of which appears in a command line.
+    """
+
+    def test_a_python_level_scrub_cannot_clear_proc_cmdline(self):
+        """The premise, proved rather than asserted.
+
+        A child process rebinds ``sys.argv`` and then reads its OWN
+        ``/proc/self/cmdline``. If a Python-level scrub worked, the sentinel
+        would be gone from it.
+        """
+        import subprocess
+        import sys
+
+        sentinel = "xoxb-test-sentinel-argv-token"
+        child = (
+            "import sys, pathlib;"
+            "sys.argv = ['scrubbed'];"
+            "print(pathlib.Path('/proc/self/cmdline').read_bytes().decode(errors='replace'))"
+        )
+        done = subprocess.run(  # noqa: S603 - a fixed interpreter and a literal script
+            [sys.executable, "-c", child, sentinel],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        assert sentinel in done.stdout, (
+            "the premise of this refusal is wrong: reassigning sys.argv DID "
+            "clear /proc/self/cmdline, so a scrub would be a real control"
+        )
+
+    def test_the_bot_token_flag_is_refused_rather_than_scrubbed(self, vault, capsys):
+        assert cmd_channel(_add_args(bot_token=FAKE_BOT_TOKEN)) == 2
+        assert vault.written == {}, "a token from a command line was stored anyway"
+
+        err = capsys.readouterr().err
+        assert "/proc" in err or " ps " in err, "the refusal does not say why"
+        assert FAKE_BOT_TOKEN not in err
+
+    def test_the_app_token_flag_is_refused_too(self, vault):
+        assert cmd_channel(_add_args(app_token=FAKE_APP_TOKEN)) == 2
+        assert vault.written == {}
+
+    def test_a_flag_is_refused_before_the_channel_name_is_even_checked(self, capsys):
+        """A misspelled name used to return 2 first, so the credential problem
+        was never reported and the advice to rotate never reached the operator."""
+        assert cmd_channel(_add_args(name="teams", bot_token=FAKE_BOT_TOKEN)) == 2
+        err = capsys.readouterr().err
+        assert "command line" in err, "the name error hid the credential problem"
+
+    def test_the_refusal_names_both_safe_paths(self, vault, capsys):
+        cmd_channel(_add_args(bot_token=FAKE_BOT_TOKEN))
+        err = capsys.readouterr().err
+        assert "ROBOTHOR_SLACK_BOT_TOKEN" in err
+        assert "prompt" in err.lower()
+
+
+class TestEveryFailurePathIsAMessageNotATraceback:
+    """``add`` holds two plaintext tokens in its frames for its whole run.
+
+    A standard CPython traceback does not print locals — but `rich`, `cgitb`,
+    Sentry and every `--verbose` handler anyone bolts on later do, and the frames
+    of `_write_env_file` hold `pairs` and `body`: both tokens, formatted. So an
+    exception must not leave this command. Every other exit here is a clean code
+    with a sentence; the env-file write was the one path with neither.
+    """
+
+    def test_an_unwritable_workspace_is_a_sentence_and_an_exit_code(
+        self, tmp_path, exported, capsys
+    ):
+        import stat
+
+        exported()
+        workspace = tmp_path / "readonly"
+        workspace.mkdir()
+        workspace.chmod(stat.S_IRUSR | stat.S_IXUSR)  # r-x------
+        try:
+            os.environ["ROBOTHOR_WORKSPACE"] = str(workspace)
+            rc = cmd_channel(_add_args())
+        finally:
+            workspace.chmod(stat.S_IRWXU)
+            os.environ["ROBOTHOR_WORKSPACE"] = str(tmp_path)
+
+        assert rc == 1, "the write failure escaped as an exception instead of an exit code"
+        captured = capsys.readouterr()
+        assert "Could not write" in captured.err
+        for stream in (captured.out, captured.err):
+            assert FAKE_BOT_TOKEN not in stream
+            assert FAKE_APP_TOKEN not in stream
+            assert "xoxb-test" not in stream
+
+    def test_a_symlink_at_the_env_path_is_refused_and_its_target_untouched(
+        self, tmp_path, exported, capsys
+    ):
+        """`secrets/env_file.py` refuses a symlink here on READ, for "it is the
+        shape of 'make the daemon read a file it would not otherwise open'".
+        The writer followed it: the linked-to file's contents were copied into
+        the new genus.env verbatim, and the rename replaced the link with a
+        regular file — so anything the operator could read and an attacker could
+        point at landed in the one file the engine setdefaults into its own
+        environment.
+        """
+        from robothor.secrets.env_file import instance_env_path
+
+        decoy = tmp_path / "someone-elses-file"
+        decoy.write_text("SOMEONE_ELSES_SECRET=hunter2\n", encoding="utf-8")
+        link = instance_env_path(tmp_path)
+        link.symlink_to(decoy)
+
+        exported()
+        assert cmd_channel(_add_args()) == 1
+
+        assert link.is_symlink(), "the symlink was replaced by a regular file"
+        assert decoy.read_text(encoding="utf-8") == "SOMEONE_ELSES_SECRET=hunter2\n"
+        assert FAKE_BOT_TOKEN not in decoy.read_text(encoding="utf-8")
+        assert "symlink" in capsys.readouterr().err
+
+    def test_a_partial_vault_write_says_what_was_stored(self, vault, exported, monkeypatch, capsys):
+        """Credentials go in one at a time. An operator told only "the vault
+        refused the app token" will re-run, or assume nothing landed and go
+        looking in the wrong place."""
+        from robothor.cli import channel as channel_cmd
+
+        stored: dict[str, str] = {}
+
+        def _one_then_refuse(key: str, value: str) -> None:
+            if stored:
+                raise RuntimeError("the vault is full of bees")
+            stored[key] = value
+
+        monkeypatch.setattr(channel_cmd, "_vault_set", _one_then_refuse)
+        exported()
+        assert cmd_channel(_add_args()) == 1
+
+        captured = capsys.readouterr()
+        assert "channels/slack/bot_token" in captured.out, "the stored key was not reported"
+        assert "WERE stored" in captured.err
+        assert FAKE_BOT_TOKEN not in captured.out + captured.err

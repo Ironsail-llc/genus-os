@@ -12,6 +12,11 @@ Two halves, and they are independent:
 | **Outbound** (the channel) | Posts agent output to a conversation | A bot token |
 | **Inbound** (the Socket Mode bot) | Lets people talk to the main agent from Slack | A bot token **and** an app-level token |
 
+Both halves read the tokens from the same place — the process environment first,
+then this instance's vault — so wherever `genus channel add` put them, every
+surface finds them: the daemon that starts the inbound bot, the outbound
+channel, `genus channel verify`, and `genus doctor`.
+
 They were not independent before: outbound delivery only existed once the
 inbound listener had started, so an instance that merely wanted to post a daily
 briefing had to run a socket connection to do it. If you only want briefings,
@@ -39,19 +44,30 @@ genus channel add slack
 It prompts for each token without echoing it, and writes them to the instance
 vault when this install has a master key, or to the 0600 `genus.env` file in
 your workspace otherwise. It prints **where** it wrote and a SHA-256
-fingerprint — never the value. You can pass `--bot-token` / `--app-token`
-instead of being prompted, but the prompt is the safe path: a flag value lands
-in your shell history.
+fingerprint — never the value.
+
+`--bot-token` and `--app-token` exist only to be **refused**. A token on a
+command line is readable by every account on the box through `ps` and
+`/proc/<pid>/cmdline`, your shell has already written it to a history file, and
+nothing the command does afterwards takes that back. For a script, export the
+value instead:
+
+```bash
+export ROBOTHOR_SLACK_BOT_TOKEN=...   # read from your secret store, not typed
+export ROBOTHOR_SLACK_APP_TOKEN=...
+genus channel add slack
+```
 
 Set the conversation `verify` and `genus doctor` aim at:
 
 ```bash
-genus channel add slack --default-target C0000000000
+genus channel add slack --verify-target C0000000000
 ```
 
-That is a **Slack id**, not a `#name` — see *Targets* below. It is deliberately
-not a fallback for delivery: an agent whose manifest names no target fails
-loudly rather than having its briefing land wherever this happens to point.
+That is a **Slack id**, not a `#name` — see *Targets* below. It is used by
+`verify` and the doctor and by nothing else: delivery never falls back to it, so
+an agent whose manifest names no target fails loudly instead of posting
+somewhere nobody chose.
 
 Restart the engine after either, so it re-reads the credentials:
 
@@ -117,6 +133,8 @@ call returning:
 | `failed:slack_no_target` | The manifest names no `delivery.to` |
 | `failed:slack_unexpanded_target` | A literal `${VAR}` reached the target |
 | `failed:slack_unresolved_target` | The target is not a Slack id |
+| `failed:slack_client:transport` | The Slack client could not be built — usually the `channels` extra is not installed |
+| `failed:slack_client:dm_open` | A `U…`/`W…` target could not be turned into a conversation |
 
 ## Not here yet
 

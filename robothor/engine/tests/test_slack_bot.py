@@ -30,19 +30,29 @@ async def test_start_noops_without_tokens(monkeypatch):
     assert bot._started is False
 
 
-def test_daemon_wires_slack_env_gated():
+def test_daemon_wires_slack_through_the_one_credential_reader():
     """AST, not a substring. The old form searched the WHOLE daemon module for
     three strings, so a comment naming the env var, an unrelated ``SlackBot(...)``
-    and a task called ``slack`` anywhere in 1,300 lines satisfied it."""
+    and a task called ``slack`` anywhere in 1,300 lines satisfied it.
+
+    The gate used to be two ``os.environ`` reads, and that was the defect: the
+    tokens ``genus channel add slack`` writes to the vault by default never
+    reach the process environment, so the inbound bot silently never started
+    while the outbound channel — which did use the accessor — worked fine.
+    ``slack_credentials`` is the one reader every surface now asks.
+    """
     from robothor.engine.tests.astcheck import called_names, function_def, string_constants
 
     branch = function_def("robothor.engine.daemon", "_start_channels")
     assert "SlackBot" in called_names(branch), "the daemon no longer constructs the Slack bot"
     assert "create_task" in called_names(branch), "the bot is no longer started as a task"
-
-    literals = string_constants(branch)
-    assert "ROBOTHOR_SLACK_BOT_TOKEN" in literals, "the Slack bot start is no longer env-gated"
-    assert "slack" in literals, "the Slack task lost the name the supervisor reports it by"
+    assert "slack_credentials" in called_names(branch), (
+        "the daemon's Slack gate no longer goes through the one credential reader, "
+        "so it can disagree with the channel and the doctor about the same box"
+    )
+    assert "slack" in string_constants(branch), (
+        "the Slack task lost the name the supervisor reports it by"
+    )
 
 
 class TestSlackAuthorization:

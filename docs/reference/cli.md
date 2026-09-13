@@ -282,7 +282,7 @@ Usage: `genus channel verify <name> [--target TARGET] [--json]`
 
 Store a channel's credentials.
 
-Usage: `genus channel add <name> [--bot-token BOT_TOKEN] [--app-token APP_TOKEN] [--default-target DEFAULT_TARGET] [--to TO]`
+Usage: `genus channel add <name> [--bot-token BOT_TOKEN] [--app-token APP_TOKEN] [--verify-target VERIFY_TARGET] [--to TO]`
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -290,9 +290,9 @@ Usage: `genus channel add <name> [--bot-token BOT_TOKEN] [--app-token APP_TOKEN]
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
-| `--bot-token` | `BOT_TOKEN` | — | Slack bot token. Prefer the prompt: a flag value lands in your shell history |
-| `--app-token` | `APP_TOKEN` | — | Slack app-level token for Socket Mode |
-| `--default-target` | `DEFAULT_TARGET` | — | Conversation id `verify` and the doctor aim at |
+| `--bot-token` | `BOT_TOKEN` | — | REFUSED: a token on a command line is world-readable. Use the prompt or export ROBOTHOR_SLACK_BOT_TOKEN |
+| `--app-token` | `APP_TOKEN` | — | REFUSED, as --bot-token. Export ROBOTHOR_SLACK_APP_TOKEN instead |
+| `--verify-target` | `VERIFY_TARGET` | — | Conversation `genus channel verify` and the doctor post their test message to. Never a delivery fallback |
 | `--to` | `vault` \| `env` | — | Where to write: the vault, or the instance env file. Default: the vault when this instance has a master key, the env file otherwise |
 
 ## `genus doctor`

@@ -18,6 +18,7 @@ there is still a single instrumentation point no matter which channel sent.
 from __future__ import annotations
 
 from robothor.engine.channels.base import (
+    UNCONFIGURED_STEP,
     Channel,
     SendReceipt,
     acknowledged_messages,
@@ -37,6 +38,7 @@ from robothor.engine.channels.registry import (
 __all__ = [
     "BUILTIN_CHANNELS",
     "CHANNELS_ENV",
+    "UNCONFIGURED_STEP",
     "Channel",
     "SendReceipt",
     "acknowledged_messages",
