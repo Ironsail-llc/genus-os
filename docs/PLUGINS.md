@@ -244,17 +244,21 @@ and the shape should not change when the inbound half lands — but nothing driv
 them yet, so open your transport lazily inside `send`. A channel that connects
 in `start()` will pass its own tests and deliver nothing.
 
-`telegram`, `event_bus`, `slack` and `email` are built in and reserved — a
-plugin claiming one of those names is refused by the loader, the same as
-claiming a built-in tool. `slack` is reserved even on an instance that has never
-configured it: the name resolves to the built-in channel, which answers
-`failed:slack_not_configured` rather than leaving the operator to guess whether
-the platform has Slack support at all. `email` is reserved for that reason and
-one more — a plugin able to claim it would become the surface the
+`telegram`, `event_bus`, `slack`, `webchat` and `email` are built in and
+reserved — a plugin claiming one of those names is refused by the loader, the
+same as claiming a built-in tool. `slack` is reserved even on an instance that
+has never configured it: the name resolves to the built-in channel, which
+answers `failed:slack_not_configured` rather than leaving the operator to guess
+whether the platform has Slack support at all. See
+[the Slack channel page](channels/slack.md) for setting it up. `webchat` is
+reserved for a stronger reason — it writes into a member's own chat session and
+inbox, so a plugin able to claim the name could redirect every member-facing
+delivery while the session it wrote to still looked like the member's. See
+[the web chat page](channels/webchat.md). `email` is reserved on that same
+stronger footing: a plugin able to claim it would become the surface the
 `crm_people.do_not_contact` guard runs inside, and an opt-out control a package
-can replace by being installed is not a control. See
-[the Slack channel page](channels/slack.md) and
-[the email channel page](channels/email.md) for setting them up.
+can replace merely by being installed is not a control. See
+[the email channel page](channels/email.md).
 
 Naming a channel that is not installed does not fall back to Telegram:
 delivery records `failed:no_channel:<name>` instead.

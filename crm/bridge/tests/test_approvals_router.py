@@ -164,6 +164,55 @@ def test_a_question_needs_an_answer(controls_client_as_operator):
     assert response.status_code == 400
 
 
+def test_a_late_answer_settles_the_row_after_the_tool_gave_up(controls_client_as_operator):
+    """The webchat channel stops polling at its own deadline; the person at the
+    Helm has not stopped caring.
+
+    ``agent_questions.answer_question`` settles on ``status <> 'answered'``, not
+    ``status = 'pending'``, so an ``expired`` row is still answerable — and this
+    route must not add a freshness check of its own in front of it. The fake
+    below applies exactly that rule so the assertion is about the rule and not
+    about a mock that says yes to everything.
+    """
+    row = {"status": "expired", "answer": None}
+
+    def _settle(question_id, answer, *, answered_by, tenant_id=""):
+        if row["status"] == "answered":
+            return False
+        row.update(status="answered", answer=answer)
+        return True
+
+    with (
+        patch("routers.approvals.answer_question", _settle),
+        patch("routers._audit.log_event"),
+    ):
+        response = controls_client_as_operator.post(
+            f"/api/approvals/question/{QUESTION_ID}", json={"answer": "Globex"}
+        )
+
+    assert response.status_code == 200
+    assert response.json()["settled"] is True
+    assert row == {"status": "answered", "answer": "Globex"}
+
+
+def test_a_member_session_is_refused_by_require_operator(controls_client_as_user):
+    """The gap C9 ships with, written down rather than discovered.
+
+    A member's ask card posts here and gets a 403: ``require_operator`` admits
+    owner/admin only, and relaxing it means binding the answerer to the row's
+    own ``target``/``addressee`` — C10's authorization rules, which C9 does not
+    touch. The card surfaces this honestly ("an operator has to answer this")
+    instead of looking like a failed request.
+    """
+    with patch("routers.approvals.answer_question") as answer:
+        response = controls_client_as_user.post(
+            f"/api/approvals/question/{QUESTION_ID}", json={"answer": "Globex"}
+        )
+
+    assert response.status_code == 403
+    answer.assert_not_called()
+
+
 # ─── Answering a workflow step ──────────────────────────────────────
 
 

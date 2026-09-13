@@ -13,9 +13,13 @@ that takes a session_key, so that:
   mode (webchat<->Telegram shared-session continuity must survive).
 - non-owner, non-service ("member") callers get transparently isolated onto
   ``agent:{agent_id}:user:{user_id}`` — but ONLY when the flag is
-  ``enforce``. ``observe`` computes and logs the would-be derivation without
-  changing behavior. ``off`` (the default) is byte-identical to pre-flag
-  behavior.
+  ``enforce``, which C9 made the shipped default. ``observe`` computes and
+  logs the would-be derivation without changing behavior. ``off`` is the
+  escape hatch and is byte-identical to pre-flag behavior.
+
+The owner's shared-session behaviour is pinned here with the flag UNSET, not
+merely with it set to ``enforce``: flipping the default must not be able to
+move the operator's webchat↔Telegram session out from under them.
 """
 
 from __future__ import annotations
@@ -27,7 +31,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from robothor.auth.deps import AuthContext
-from robothor.engine.chat import _effective_session_key, _sessions, init_chat, router
+from robothor.engine.chat import (
+    _effective_session_key,
+    _sessions,
+    derive_user_session_key,
+    init_chat,
+    router,
+)
 from robothor.engine.models import AgentRun, RunStatus, TriggerType
 
 
@@ -52,13 +62,45 @@ def _service_auth(agent_id: str = "main") -> AuthContext:
 # ─── Pure-function tests ──────────────────────────────────────────────
 
 
-class TestEffectiveSessionKeyOff:
-    """Default flag state — behavior must be byte-identical to today."""
+class TestTheShippedDefault:
+    """No flag set at all — what a fresh instance actually does."""
 
-    def test_member_unchanged_when_flag_unset(self, monkeypatch):
+    def test_owner_keeps_the_shared_key_when_the_default_is_enforce(self, monkeypatch):
+        """The one behaviour the default flip may never change.
+
+        ``agent:main:primary`` is the key ``engine/telegram.py`` writes into,
+        so moving the owner off it would split the operator's conversation in
+        two. Pinned with the flag UNSET so the default itself is under test.
+        """
         monkeypatch.delenv("ROBOTHOR_PER_USER_SESSIONS", raising=False)
-        auth = _member_auth()
-        assert _effective_session_key(auth, "agent:main:primary") == "agent:main:primary"
+        assert _effective_session_key(_owner_auth(), "agent:main:primary") == "agent:main:primary"
+
+    def test_member_gets_a_derived_key_with_no_flag_set(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_PER_USER_SESSIONS", raising=False)
+        assert _effective_session_key(_member_auth("bob"), "agent:main:primary") == (
+            "agent:main:user:bob"
+        )
+
+    def test_service_keeps_the_requested_key_with_no_flag_set(self, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_PER_USER_SESSIONS", raising=False)
+        assert _effective_session_key(_service_auth(), "agent:main:primary") == "agent:main:primary"
+
+    def test_derivation_helper_is_the_only_rule(self, monkeypatch):
+        """One derivation, two callers.
+
+        ``WebchatChannel.send`` has to reach the same session the member's own
+        requests land in. If it derived the key itself the two would drift the
+        first time either changed, and a delivery would land in a session
+        nobody reads.
+        """
+        monkeypatch.delenv("ROBOTHOR_PER_USER_SESSIONS", raising=False)
+        assert derive_user_session_key("main", "bob") == _effective_session_key(
+            _member_auth("bob"), "agent:main:primary"
+        )
+
+
+class TestEffectiveSessionKeyOff:
+    """The escape hatch — behavior must be byte-identical to pre-flag."""
 
     def test_member_unchanged_when_flag_explicitly_off(self, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
@@ -259,9 +301,9 @@ class TestSendEndpointIsolation:
 
     @pytest.mark.asyncio
     async def test_member_send_unchanged_when_flag_off(self, client, mock_runner, monkeypatch):
-        """Byte-identical proof: default flag state routes a member's traffic
+        """Byte-identical proof: the escape hatch routes a member's traffic
         into the literal requested key, same as pre-flag behavior."""
-        monkeypatch.delenv("ROBOTHOR_PER_USER_SESSIONS", raising=False)
+        monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
         mock_runner.execute = AsyncMock(return_value=_completed_run("member reply"))
 
         with patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")):
@@ -273,8 +315,73 @@ class TestSendEndpointIsolation:
         assert "agent:main:user:bob" not in _sessions
         assert _sessions["agent:main:primary"].history[0]["content"] == "hi from bob"
 
+    @pytest.mark.asyncio
+    async def test_send_with_no_session_key_defaults_to_the_main_key_then_derives(
+        self, client, mock_runner, monkeypatch
+    ):
+        """The Helm no longer sends a key at all — the server owns it.
+
+        An omitted ``session_key`` is the main key, which then goes through the
+        same derivation as one that was sent, so a browser cannot name the
+        session it lands in by omitting the field any more than by forging it.
+        """
+        monkeypatch.delenv("ROBOTHOR_PER_USER_SESSIONS", raising=False)
+        mock_runner.execute = AsyncMock(return_value=_completed_run("member reply"))
+
+        with patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")):
+            res = await client.post("/chat/send", json={"message": "hi"})
+
+        assert res.status_code == 200
+        assert mock_runner.execute.await_args.kwargs["trigger_detail"] == (
+            "webchat:agent:main:user:bob"
+        )
+        assert _sessions["agent:main:user:bob"].history[0]["content"] == "hi"
+
+    @pytest.mark.asyncio
+    async def test_send_still_requires_a_message(self, client, mock_runner, monkeypatch):
+        monkeypatch.delenv("ROBOTHOR_PER_USER_SESSIONS", raising=False)
+        mock_runner.execute = AsyncMock(return_value=_completed_run())
+        with patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")):
+            res = await client.post("/chat/send", json={})
+        assert res.status_code == 400
+        mock_runner.execute.assert_not_awaited()
+
 
 class TestHistoryEndpointIsolation:
+    @pytest.mark.asyncio
+    async def test_member_cannot_read_another_members_session(
+        self, client, mock_runner, monkeypatch
+    ):
+        """Not just the owner's session — any other member's, named directly."""
+        monkeypatch.delenv("ROBOTHOR_PER_USER_SESSIONS", raising=False)
+        mock_runner.execute = AsyncMock(return_value=_completed_run("carol reply"))
+
+        with patch("robothor.engine.chat._auth_context", return_value=_member_auth("carol")):
+            await client.post("/chat/send", json={"message": "carol private"})
+
+        with patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")):
+            res = await client.get("/chat/history?session_key=agent:main:user:carol")
+
+        assert res.status_code == 200
+        body = res.json()
+        assert body["sessionKey"] == "agent:main:user:bob"
+        assert not any("carol private" in m.get("content", "") for m in body["messages"])
+
+    @pytest.mark.asyncio
+    async def test_history_with_no_session_key_reads_the_callers_own_session(
+        self, client, mock_runner, monkeypatch
+    ):
+        monkeypatch.delenv("ROBOTHOR_PER_USER_SESSIONS", raising=False)
+        mock_runner.execute = AsyncMock(return_value=_completed_run("member reply"))
+
+        with patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")):
+            await client.post("/chat/send", json={"message": "hi from bob"})
+            res = await client.get("/chat/history")
+
+        assert res.status_code == 200
+        assert res.json()["sessionKey"] == "agent:main:user:bob"
+        assert res.json()["messages"][0]["content"] == "hi from bob"
+
     @pytest.mark.asyncio
     async def test_member_reads_own_derived_history(self, client, mock_runner, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
@@ -316,7 +423,7 @@ class TestHistoryEndpointIsolation:
 
     @pytest.mark.asyncio
     async def test_history_unchanged_when_flag_off(self, client, monkeypatch):
-        monkeypatch.delenv("ROBOTHOR_PER_USER_SESSIONS", raising=False)
+        monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
         with patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")):
             res = await client.get("/chat/history?session_key=plain-key")
         assert res.status_code == 200

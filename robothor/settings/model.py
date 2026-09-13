@@ -929,7 +929,7 @@ class ChannelSettings(SettingsGroup):
         "ROBOTHOR_SANDBOX_BACKEND follows and for the same reason: a package "
         "that became the delivery surface merely by being installed could "
         "intercept every briefing. Built-in channels (telegram, event_bus, "
-        "slack, email) are always available and are not listed here. "
+        "slack, webchat, email) are always available and are not listed here. "
         "Provisional name until adding a channel persists it to config.yaml.",
         since="1.70.0",
     )
@@ -1340,6 +1340,18 @@ class FlagSettings(SettingsGroup):
         "Agent-manifest schema ladder position: observe logs and counts what "
         "enforcement would refuse, enforce refuses the manifest and reports "
         "the agent broken. off skips validation entirely.",
+    )
+    per_user_sessions: str = declare(
+        "enforce",
+        "ROBOTHOR_PER_USER_SESSIONS",
+        "Webchat session isolation: enforce (the default) gives every non-owner "
+        "member their own derived chat session, observe logs what it would "
+        "derive and changes nothing, off shares one session between every "
+        "caller — which also lets any same-tenant caller read any session_key. "
+        "The tenant owner keeps agent:main:primary in every mode, preserving "
+        "the operator's webchat<->Telegram continuity.",
+        governed=True,
+        since="1.74.0",
     )
     planner_enabled: bool = declare(
         True,

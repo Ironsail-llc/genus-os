@@ -6,9 +6,12 @@ had no way to name the bus as its destination. Registering it as a channel makes
 ``delivery.channel: event_bus`` mean what it reads like, using the same
 publisher and the same statuses.
 
-There is no ``webchat`` channel here. Delivery has no webchat path to wrap yet;
-declaring the name before the path exists is how a registry starts promising
-surfaces that do not work.
+``webchat`` is now its own module (``channels/webchat.py``) rather than the
+absence this note used to record: a member's Helm session and inbox are a real
+destination with two rows to write, which is nothing like a stream publish. What
+stays true here is the distinction that made the bus a channel in the first
+place — this one is a SINK, so :meth:`EventBusChannel.ask` raises permanently,
+while webchat's waits on a durable row.
 """
 
 from __future__ import annotations

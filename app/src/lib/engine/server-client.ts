@@ -63,11 +63,11 @@ class EngineClient {
    * Send a chat message. Returns the raw Response with SSE body.
    * Caller is responsible for reading the SSE stream.
    */
-  async chatSend(sessionKey: string, message: string): Promise<Response> {
+  async chatSend(message: string): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/send`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ session_key: sessionKey, message }),
+      body: JSON.stringify({ message }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
@@ -78,11 +78,10 @@ class EngineClient {
 
   /** Get conversation history for a session. */
   async chatHistory(
-    sessionKey: string,
     limit = 50
   ): Promise<{ sessionKey: string; messages: ChatMessage[] }> {
     const res = await fetch(
-      `${ENGINE_URL}/chat/history?session_key=${encodeURIComponent(sessionKey)}&limit=${limit}`,
+      `${ENGINE_URL}/chat/history?limit=${limit}`,
       { headers: await engineHeaders(), signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {
@@ -92,15 +91,11 @@ class EngineClient {
   }
 
   /** Inject a system message into a session. */
-  async chatInject(
-    sessionKey: string,
-    message: string,
-    label?: string
-  ): Promise<{ ok: boolean }> {
+  async chatInject(message: string, label?: string): Promise<{ ok: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/inject`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ session_key: sessionKey, message, label }),
+      body: JSON.stringify({ message, label }),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
@@ -110,11 +105,11 @@ class EngineClient {
   }
 
   /** Cancel the running response for a session. */
-  async chatAbort(sessionKey: string): Promise<{ ok: boolean; aborted: boolean }> {
+  async chatAbort(): Promise<{ ok: boolean; aborted: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/abort`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ session_key: sessionKey }),
+      body: JSON.stringify({}),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
@@ -124,11 +119,11 @@ class EngineClient {
   }
 
   /** Clear session history. */
-  async chatClear(sessionKey: string): Promise<{ ok: boolean }> {
+  async chatClear(): Promise<{ ok: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/clear`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ session_key: sessionKey }),
+      body: JSON.stringify({}),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
@@ -140,11 +135,11 @@ class EngineClient {
   // ── Plan Mode ──
 
   /** Start plan mode: explore with read-only tools. Returns SSE stream. */
-  async planStart(sessionKey: string, message: string, deepPlan = false): Promise<Response> {
+  async planStart(message: string, deepPlan = false): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/plan/start`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ session_key: sessionKey, message, deep_plan: deepPlan }),
+      body: JSON.stringify({ message, deep_plan: deepPlan }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
@@ -154,11 +149,11 @@ class EngineClient {
   }
 
   /** Approve a pending plan. Returns SSE stream of execution. */
-  async planApprove(sessionKey: string, planId: string): Promise<Response> {
+  async planApprove(planId: string): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/plan/approve`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ session_key: sessionKey, plan_id: planId }),
+      body: JSON.stringify({ plan_id: planId }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
@@ -168,15 +163,11 @@ class EngineClient {
   }
 
   /** Reject a pending plan with optional feedback. */
-  async planReject(
-    sessionKey: string,
-    planId: string,
-    feedback?: string
-  ): Promise<{ ok: boolean }> {
+  async planReject(planId: string, feedback?: string): Promise<{ ok: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/plan/reject`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ session_key: sessionKey, plan_id: planId, feedback }),
+      body: JSON.stringify({ plan_id: planId, feedback }),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
@@ -186,11 +177,9 @@ class EngineClient {
   }
 
   /** Check plan state for a session. */
-  async planStatus(
-    sessionKey: string
-  ): Promise<{ active: boolean; plan?: PlanState }> {
+  async planStatus(): Promise<{ active: boolean; plan?: PlanState }> {
     const res = await fetch(
-      `${ENGINE_URL}/chat/plan/status?session_key=${encodeURIComponent(sessionKey)}`,
+      `${ENGINE_URL}/chat/plan/status`,
       { headers: await engineHeaders(), signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {
@@ -202,11 +191,11 @@ class EngineClient {
   // ── Deep Mode ──
 
   /** Start deep reasoning. Returns SSE stream. */
-  async deepStart(sessionKey: string, query: string): Promise<Response> {
+  async deepStart(query: string): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/deep/start`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ session_key: sessionKey, query }),
+      body: JSON.stringify({ query }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
@@ -216,11 +205,9 @@ class EngineClient {
   }
 
   /** Check deep reasoning state for a session. */
-  async deepStatus(
-    sessionKey: string
-  ): Promise<{ active: boolean; deep?: DeepState }> {
+  async deepStatus(): Promise<{ active: boolean; deep?: DeepState }> {
     const res = await fetch(
-      `${ENGINE_URL}/chat/deep/status?session_key=${encodeURIComponent(sessionKey)}`,
+      `${ENGINE_URL}/chat/deep/status`,
       { headers: await engineHeaders(), signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {

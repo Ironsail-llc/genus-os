@@ -532,6 +532,37 @@ flags:
       `critical:` count is zero. If it is not, that is a bug report, not a
       flag flip.
 
+  - name: ROBOTHOR_PER_USER_SESSIONS
+    owner: ops
+    mode: enforce
+    soak: |
+      Shipped at enforce with no planned_promotion: it is an isolation control,
+      not a containment experiment, and the ladder ran in reverse. `off` was the
+      default through the Unified Identity Context work while the derivation was
+      proven; `enforce` became the default the moment webchat became a delivery
+      DESTINATION as well as a trigger, because a shared session means an agent's
+      message to one member lands where another member reads.
+
+      What enforce does: every non-owner human caller of `/chat/*` is put on a
+      server-derived `agent:{agent}:user:{user_accounts.id}` session instead of
+      whatever `session_key` the browser asked for, which also closes the
+      ownership hole (any same-tenant caller could previously read any key). The
+      tenant OWNER keeps `agent:main:primary` in every mode — the same session
+      the Telegram bot writes into, so the operator's conversation is not split
+      in two. Service tokens (the Telegram bridge, ops tooling) keep the key they
+      name, in every mode.
+
+      An unrecognised value resolves to `enforce`, not `off`: a typo here must
+      not silently re-open the hole. `observe` logs the key it would have derived
+      and changes nothing. `off` is the escape hatch — see
+      docs/runbooks/IDENTITY_ROLLOUT.md, and note what it gives back before
+      setting it.
+
+      Three rungs only (off/observe/enforce): there is no `alert`, because
+      nothing here blocks an action to page about. `flags/store.valid_values_for`
+      says so, so the Controls dashboard cannot offer a rung the engine would
+      silently map onto another.
+
   - name: ROBOTHOR_DNC_MODE
     owner: ops
     mode: enforce

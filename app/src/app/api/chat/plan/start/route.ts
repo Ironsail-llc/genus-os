@@ -1,5 +1,4 @@
 import { getEngineClient } from "@/lib/engine/server-client";
-import { SESSION_KEY } from "@/lib/engine/session-state";
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -16,7 +15,7 @@ export async function POST(req: Request) {
   const client = getEngineClient();
 
   try {
-    const engineRes = await client.planStart(SESSION_KEY, message, deepPlan);
+    const engineRes = await client.planStart(message, deepPlan);
 
     if (!engineRes.body) {
       return new Response(
