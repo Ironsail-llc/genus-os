@@ -268,6 +268,31 @@ def _owning_tenant(monkeypatch: Any) -> None:
     monkeypatch.setenv("ROBOTHOR_BENCHMARK_TENANT", SANDBOX)
 
 
+@pytest.fixture(autouse=True)
+def _no_database(monkeypatch: Any) -> None:
+    """Nothing in this file may reach a real database.
+
+    Added after CI caught what this box could not: the grade-ledger test drove
+    the real ``sandbox_suite_lock``, which takes a connection. On a runner with
+    no Postgres the lock correctly refused the suite and the test failed for a
+    reason unrelated to what it was testing; here it passed, because this box
+    happens to have a live database. A test whose result depends on that is not
+    measuring what it claims to.
+
+    Every database door this file needs is stubbed per test. This shuts the
+    rest, loudly, so the next one is a red test rather than a green one that
+    was only ever green on one machine.
+    """
+
+    def _refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError(
+            "a test in test_benchmark_child_tenant.py reached the database — "
+            "stub the path it took instead of depending on a live Postgres"
+        )
+
+    monkeypatch.setattr("robothor.db.connection.get_connection", _refuse)
+
+
 # ─── (1) the sandbox tenant is a property of the harness ─────────────────────
 
 
@@ -384,7 +409,18 @@ class TestTheGradeLedgerIsNotAgentData:
     async def test_the_results_row_is_written_outside_the_sandbox_scope(self) -> None:
         """``benchmark_results`` is the grade ledger. Mislabelling it
         ``benchmark-sandbox`` would hide every score from the fleet goal
-        metric AND put it in a tenant teardown sweeps."""
+        metric AND put it in a tenant teardown sweeps.
+
+        Every database door is shut, including the sandbox lock's. This test
+        drove the REAL ``sandbox_suite_lock`` until CI caught it: on a runner
+        with no Postgres the lock (rightly) refuses the suite, the suite never
+        reaches its result row, and the assertion failed for a reason that had
+        nothing to do with tenants. It passed here only because this box has a
+        live database — an accident, and exactly the kind of hidden dependency
+        that makes a green suite mean less than it looks.
+        """
+        from contextlib import contextmanager
+
         from robothor.db.connection import effective_tenant
         from robothor.engine.tools.handlers import benchmark as bench
 
@@ -393,10 +429,15 @@ class TestTheGradeLedgerIsNotAgentData:
         def _record(**_kwargs: Any) -> None:
             seen.append(effective_tenant())
 
+        import robothor.engine.benchmark_sandbox as bs
+
+        @contextmanager
+        def _lock(_tenant_id: str) -> Any:
+            yield bs.LOCK_ACQUIRED
+
         runner = _Recorder()
         store, read_fn, write_fn = _mock_blocks()
         store["benchmark:email-analyst:s1"] = _suite()
-        import robothor.engine.benchmark_sandbox as bs
 
         with (
             patch("robothor.memory.blocks.read_block", side_effect=read_fn),
@@ -406,12 +447,14 @@ class TestTheGradeLedgerIsNotAgentData:
             patch.object(bench, "sandbox_active", return_value=True),
             patch.object(bs, "ensure_sandbox_tenant", return_value=SANDBOX),
             patch.object(bs, "teardown_sandbox", return_value=0),
+            patch.object(bs, "sandbox_suite_lock", _lock),
             patch.object(bench, "_write_benchmark_result_row", side_effect=_record),
         ):
-            await bench._benchmark_run(
+            result = await bench._benchmark_run(
                 {"agent_id": "email-analyst", "suite_id": "s1", "tag": "t"}, CTX
             )
 
+        assert not result.get("error"), result
         assert seen == [OWNING_TENANT], (
             "the benchmark_results row was written inside the sandbox tenant "
             "scope — it must not land in a tenant teardown sweeps"
