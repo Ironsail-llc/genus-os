@@ -1,7 +1,7 @@
 # Genus OS security controls inventory
 
-Version: 1.1
-Last updated: 2026-07-13
+Version: 1.2
+Last updated: 2026-09-13
 Scope: repository capabilities and required deployment controls
 
 ## Important use boundary
@@ -138,10 +138,39 @@ Status meanings:
 - **Status:** Partial.
 - **Implementation:** The `no_sensitive_data` post-execution policy detects a
   bounded set of common credential patterns and blocks delivery when enabled.
+  Two detectors run: known key FORMATS (`AKIA…`, `sk-…`, `ghp_…`,
+  `github_pat_…`, `xoxb-…`, PEM private keys), and credential-shaped
+  ASSIGNMENTS — an identifier that names a credential (`password`, `api_key`,
+  `access_token`, …) bound to a literal. The same predicate drives
+  `redact_secrets`, so whatever is detected is also what is removed before the
+  output reaches the model.
+- **What does not count as a credential:** the assignment detector judges the
+  VALUE, not the name, because a field named after a credential is not a
+  credential. It does not fire when the value is a placeholder (`changeme`,
+  `your-token`, `${VAR}`, `{{ var }}`, `<redacted>`, `***`), when the secret
+  material has been elided (`ghp_...`, `sk-***********`, `Field(...`), when
+  the value is a type or schema word (`str`, `SecretStr`, `string`, `bearer`,
+  `opaque-bearer`, `access-token`), when an unquoted value is an env-var NAME
+  or a reference to one (`DB_PASSWORD_FILE`, `settings.db_password`,
+  `os.getenv(`) — the shape a `.env.example` or a docs listing produces — or
+  when the value has a single character class and is no longer than twelve
+  characters (`required`, `undefined`). Real shapes still fire: a known key
+  format anywhere in the output, and any mixed-class literal of eight or more
+  characters bound to a credential identifier. A single-class value longer
+  than twelve characters is treated as a passphrase and still warns. This was
+  narrowed on 2026-09-13 after 46 warnings in 24 hours on ordinary CRM task
+  text (`list_tasks`, `list_my_tasks`, `read_file`, `search_records`) reached
+  the operator as "Credential exposure flagged this run"; a warning that fires
+  on the word for a thing rather than the thing trains its reader to ignore
+  it. The corpus of both halves is pinned in
+  `robothor/engine/tests/test_credential_detector_false_positives.py`.
 - **Evidence:** `robothor/engine/guardrails.py` and guardrail tests.
 - **Limitations/actions:** Pattern scanning is not DLP, data classification, or
   proof against encoded/contextual leakage. Add organization patterns,
-  integration-level redaction, egress controls, and testing.
+  integration-level redaction, egress controls, and testing. The narrowing
+  above is a deliberate trade: a credential that is both format-unknown and
+  shaped like one of the ignored classes (a password that is literally the
+  word `undefined`, say) is not detected.
 
 ### DP-04 — Transport and network boundary
 
