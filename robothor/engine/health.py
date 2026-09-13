@@ -228,6 +228,74 @@ async def _fleet_readiness(config: EngineConfig, details: dict[str, Any]) -> str
     return "ok"
 
 
+def _cost_breakdown(tenant_id: str, hours: int) -> dict[str, Any]:
+    """The `/costs` body: per-agent spend, with benchmark spend broken out.
+
+    Benchmark spend is real money but it is not agent cost, so it is reported
+    alongside and never folded into the agent's number.
+
+    **An unreadable break-out is `None`, never `0`.** `get_agent_stats` reports
+    None when it could not read the benchmark rows at all (see
+    ``analytics._benchmark_spend``), and coercing that back with ``or 0`` would
+    republish as a measurement the number the layer below explicitly refused to
+    publish — "this agent ran no benchmarks" when the truth is "I could not
+    look". One unreadable agent nulls the fleet totals too: a partial sum
+    presented as a total is a wrong number stated confidently.
+    """
+    from robothor.engine.tracking import get_agent_stats, list_schedules
+
+    total_cost = 0.0
+    total_runs = 0
+    benchmark_cost = 0.0
+    benchmark_runs = 0
+    unreadable = False
+    breakdown: dict[str, Any] = {}
+
+    for schedule in list_schedules(tenant_id=tenant_id):
+        agent_id = schedule["agent_id"]
+        stats = get_agent_stats(agent_id, hours=hours, tenant_id=tenant_id)
+        runs = int(stats.get("total_runs", 0) or 0)
+        cost = float(stats.get("total_cost_usd", 0) or 0)
+        total_runs += runs
+        total_cost += cost
+
+        bench_runs = stats.get("benchmark_runs")
+        bench_cost = stats.get("benchmark_cost_usd")
+        if bench_runs is None or bench_cost is None:
+            unreadable = True
+        else:
+            benchmark_runs += int(bench_runs)
+            benchmark_cost += float(bench_cost)
+
+        if runs > 0:
+            breakdown[agent_id] = {
+                "runs": runs,
+                "completed": int(stats.get("completed", 0) or 0),
+                "failed": int(stats.get("failed", 0) or 0),
+                "timeouts": int(stats.get("timeouts", 0) or 0),
+                "avg_duration_ms": int(stats.get("avg_duration_ms", 0) or 0),
+                "total_input_tokens": int(stats.get("total_input_tokens", 0) or 0),
+                "total_output_tokens": int(stats.get("total_output_tokens", 0) or 0),
+                "total_cost_usd": round(cost, 6),
+                "benchmark_runs": int(bench_runs) if bench_runs is not None else None,
+                "benchmark_cost_usd": (
+                    round(float(bench_cost), 6) if bench_cost is not None else None
+                ),
+            }
+
+    return {
+        "hours": hours,
+        "total_runs": total_runs,
+        "total_cost_usd": round(total_cost, 6),
+        "benchmark_runs": None if unreadable else benchmark_runs,
+        "benchmark_cost_usd": None if unreadable else round(benchmark_cost, 6),
+        # Said outright, because a null reads as "nothing" to anyone not
+        # expecting it. The tracking layer logs an ERROR naming this endpoint.
+        "benchmark_spend_unreadable": unreadable,
+        "agents": breakdown,
+    }
+
+
 def create_health_app(
     config: EngineConfig,
     runner: AgentRunner | None = None,
@@ -1192,51 +1260,7 @@ def create_health_app(
     async def costs(hours: int = 24) -> dict[str, Any]:
         """Cost tracking — per-agent breakdown over the last N hours."""
         try:
-            from robothor.engine.tracking import get_agent_stats, list_schedules
-
-            schedules = list_schedules(tenant_id=config.tenant_id)
-            agent_ids = [s["agent_id"] for s in schedules]
-
-            total_cost = 0.0
-            total_runs = 0
-            benchmark_cost = 0.0
-            benchmark_runs = 0
-            breakdown = {}
-
-            for agent_id in agent_ids:
-                stats = get_agent_stats(agent_id, hours=hours, tenant_id=config.tenant_id)
-                runs = int(stats.get("total_runs", 0) or 0)
-                cost = float(stats.get("total_cost_usd", 0) or 0)
-                total_runs += runs
-                total_cost += cost
-                benchmark_runs += int(stats.get("benchmark_runs", 0) or 0)
-                benchmark_cost += float(stats.get("benchmark_cost_usd", 0) or 0)
-                if runs > 0:
-                    breakdown[agent_id] = {
-                        "runs": runs,
-                        "completed": int(stats.get("completed", 0) or 0),
-                        "failed": int(stats.get("failed", 0) or 0),
-                        "timeouts": int(stats.get("timeouts", 0) or 0),
-                        "avg_duration_ms": int(stats.get("avg_duration_ms", 0) or 0),
-                        "total_input_tokens": int(stats.get("total_input_tokens", 0) or 0),
-                        "total_output_tokens": int(stats.get("total_output_tokens", 0) or 0),
-                        "total_cost_usd": round(cost, 6),
-                        "benchmark_runs": int(stats.get("benchmark_runs", 0) or 0),
-                        "benchmark_cost_usd": round(
-                            float(stats.get("benchmark_cost_usd", 0) or 0), 6
-                        ),
-                    }
-
-            return {
-                "hours": hours,
-                "total_runs": total_runs,
-                "total_cost_usd": round(total_cost, 6),
-                # Benchmark spend is real money but it is not agent cost —
-                # reported alongside, never folded into the agent's number.
-                "benchmark_runs": benchmark_runs,
-                "benchmark_cost_usd": round(benchmark_cost, 6),
-                "agents": breakdown,
-            }
+            return _cost_breakdown(config.tenant_id, hours)
         except Exception:
             logger.exception("Failed to compute costs")
             return {"error": "Internal server error"}

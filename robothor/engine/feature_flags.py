@@ -613,13 +613,16 @@ def benchmark_sandbox_mode() -> EnforcementMode:
     runs no state check, and the sub-run executes under the GRADED AGENT's own
     tenant rather than the sandbox one. "Read-only" is what this docstring used
     to claim; it became true only on 2026-09-12, and by enforcement rather than
-    by that sentence — see ``robothor.engine.run_context``. ``observe`` seeds
-    each task's fixtures into the dedicated
-    ``benchmark-sandbox`` tenant, scopes the sub-run to it, re-allows the
-    sandbox-safe CRM writes (see ``robothor.engine.benchmark_sandbox``) and
-    RECORDS every read-back on the task result without folding it into the
-    score. ``alert`` is observe plus an error log per failed read-back.
-    ``enforce`` folds the read-backs into the task score.
+    by that sentence — see ``robothor.engine.run_context``. ``observe`` scopes
+    EVERY task run to the dedicated ``benchmark-sandbox`` tenant — fixture-less
+    suites included, since the sandbox is a property of being a benchmark run
+    and not of the suite (2026-09-13: 75 of 78 runs were recorded against the
+    production tenant because it was the latter) — seeds each task's declared
+    fixtures into it, re-allows the sandbox-safe CRM writes (see
+    ``robothor.engine.benchmark_sandbox``) and RECORDS every read-back on the
+    task result without folding it into the score. ``alert`` is observe plus an
+    error log per failed read-back. ``enforce`` folds the read-backs into the
+    task score.
 
     Said plainly, because the ladder is unusual here: ``observe`` changes what a
     benchmark sub-agent can *do* — that is the point, since the rubrics grade

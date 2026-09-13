@@ -81,18 +81,21 @@ def _units_installed() -> bool:
     import shutil
     import subprocess
 
+    from robothor.constants import ENGINE_SERVICE_UNIT
+
     if shutil.which("systemctl") is None:
         return False
+    unit = f"{ENGINE_SERVICE_UNIT}.service"
     try:
         listed = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            ["systemctl", "list-unit-files", "robothor-engine.service"],  # noqa: S607
+            ["systemctl", "list-unit-files", unit],  # noqa: S607
             capture_output=True,
             text=True,
             timeout=5,
         )
     except Exception:  # noqa: BLE001 - no systemd is an answer, not a crash
         return False
-    return "robothor-engine.service" in listed.stdout
+    return unit in listed.stdout
 
 
 def _substrate_runs_services(ctx: DoctorContext) -> bool:

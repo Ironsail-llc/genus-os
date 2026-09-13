@@ -121,6 +121,29 @@ def _run_context_hooks() -> str:
     return "--- SITUATIONAL CONTEXT ---\n" + "\n".join(results)
 
 
+def wants_cron_warmup(config: AgentConfig) -> bool:
+    """Whether a scheduled run of this agent should build a warmth preamble.
+
+    Declared warmup content is the historical answer: memory blocks, context
+    files or peer agents named in the manifest. Live engine state is the new
+    one, and it has to be a *reason to warm* rather than a passenger — a
+    heartbeat agent that declares no ``warmup:`` block built no preamble at
+    all, so targeting the host-state section at heartbeat-class agents bought
+    exactly nothing and both docs describing it were wrong.
+
+    Lives here rather than inline in ``runner.execute`` so the condition is
+    reachable by a test. It was inlined, and nothing could reach it.
+    """
+    from robothor.engine.host_state import wants_host_state
+
+    return bool(
+        config.warmup_memory_blocks
+        or config.warmup_context_files
+        or config.warmup_peer_agents
+        or wants_host_state(config.id, config)
+    )
+
+
 def build_warmth_preamble(
     config: AgentConfig,
     workspace: Path,
@@ -705,6 +728,71 @@ def _recent_fleet_surfaces(
         return ""
 
 
+def _interactive_supervisor_sections(
+    agent_id: str,
+    *,
+    tenant_id: str,
+    scope: DataScope | None,
+    observe_scope_obj: DataScope | None,
+    user_id: str | None,
+    agent_config: AgentConfig | None = None,
+) -> list[str]:
+    """The panorama an operator-facing agent gets on an interactive turn.
+
+    Three sections that answer "what is going on?" from context alone: live
+    engine state, the open task queue, and what the fleet recently surfaced.
+    They share a condition — this is the agent the operator talks to — so they
+    share a function rather than three inline blocks in a builder that the
+    function-size ratchet had already flagged.
+
+    Host state is here, and not only in ``build_warmth_preamble``, because the
+    agent context hooks run from the cron builder alone. An interactive turn is
+    exactly where the incident happened: the operator asked main, in chat,
+    whether the engine had been restarted, and main answered from a nine-day-old
+    memory fact. A correction absent from the channel the question arrives on
+    corrects nothing.
+
+    Each section is independently guarded — one failing must not cost the other
+    two, nor the preamble.
+    """
+    sections: list[str] = []
+
+    try:
+        from robothor.engine.host_state import host_state_section
+
+        # The config matters, and passing only the id was a defect: without it
+        # the reach sentence took its "no primary is configured" branch on every
+        # interactive turn, so main told the operator — in chat, under a header
+        # saying to prefer this over memory — that it had no configured primary.
+        # It has one; manifests carry model.primary.
+        live_state = host_state_section(agent_id, agent_config)
+        if live_state:
+            sections.append(live_state)
+    except Exception as e:
+        logger.debug("Interactive warmup host state failed: %s", e)
+
+    if agent_id != OPERATOR_INBOX_AGENT_ID:
+        return sections
+
+    for name, builder in (
+        ("open_tasks", _open_tasks_section),
+        ("fleet_surfaces", _recent_fleet_surfaces),
+    ):
+        try:
+            section = builder(
+                tenant_id=tenant_id,
+                scope=scope,
+                observe_scope_obj=observe_scope_obj,
+                user_id=user_id,
+            )
+        except Exception as e:
+            logger.debug("Interactive warmup %s failed: %s", name, e)
+            continue
+        if section:
+            sections.append(section)
+    return sections
+
+
 def build_interactive_preamble(
     agent_id: str,
     user_message: str = "",
@@ -713,6 +801,7 @@ def build_interactive_preamble(
     extra_memory_blocks: list[str] | None = None,
     sender_name: str = "",
     identity: IdentityContext | None = None,
+    agent_config: AgentConfig | None = None,
 ) -> str:
     """Build a lightweight warmup preamble for interactive (Telegram) sessions.
 
@@ -733,6 +822,11 @@ def build_interactive_preamble(
             full ``--- CURRENT USER ---`` block (enriched with CRM/memory-graph
             context when available) instead of the bare-name legacy text, and
             ``identity.display_name`` is what gets excluded from entity search.
+        agent_config: The agent's manifest, when the caller has it. Only the
+            host-state section reads it, and only to name the configured
+            primary model — but omitting it is not neutral there: without a
+            config that section cannot tell "no primary is set" from "nobody
+            told me", and it used to assert the former.
 
     Returns:
         Warmup preamble string, or empty string if nothing to inject.
@@ -852,25 +946,16 @@ def build_interactive_preamble(
     except Exception as e:
         logger.debug("Interactive warmup context hooks failed: %s", e)
 
-    # Main-only panoramic sections: open task queue + recent fleet surfaces.
-    # These let the supervisor answer "what's going on?" from context alone.
-    if agent_id == OPERATOR_INBOX_AGENT_ID:
-        tasks_section = _open_tasks_section(
+    sections.extend(
+        _interactive_supervisor_sections(
+            agent_id,
             tenant_id=tenant_id,
             scope=_enforce_scope,
             observe_scope_obj=_observe_scope,
             user_id=_scope_user_id,
+            agent_config=agent_config,
         )
-        if tasks_section:
-            sections.append(tasks_section)
-        fleet_section = _recent_fleet_surfaces(
-            tenant_id=tenant_id,
-            scope=_enforce_scope,
-            observe_scope_obj=_observe_scope,
-            user_id=_scope_user_id,
-        )
-        if fleet_section:
-            sections.append(fleet_section)
+    )
 
     # Unified agent goal — every agent sees its own (no owner-only scoping).
     try:
@@ -1251,3 +1336,11 @@ register_agent_context_hook(_git_status_context)
 from robothor.engine.thread_pool import _thread_pool_context  # noqa: E402
 
 register_agent_context_hook(_thread_pool_context)
+
+# Live engine uptime, version and 24h model reach. Registered here rather than
+# implemented here: an agent's only source of truth about its own host used to
+# be semantic memory, which held a nine-day-old undated sentence and re-asserted
+# it as present tense. See robothor/engine/host_state.py for the incident.
+from robothor.engine.host_state import host_state_context  # noqa: E402
+
+register_agent_context_hook(host_state_context)

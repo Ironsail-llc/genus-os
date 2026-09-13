@@ -35,6 +35,15 @@ description: "Agent Architect benchmark: fleet analysis, dispatch routing, cross
 
 tasks:
   - id: fleet-analysis
+    # execution_tenant: this task is graded on reading the INSTANCE's own data,
+    # so an empty sandbox turns an honest answer into a failing one. It runs
+    # under the owning tenant with every write still refused — today's
+    # behaviour. See docs/runbooks/BENCHMARK_SANDBOX.md.
+    # Rubric requires per-agent stats for 3 underperforming agents via
+    # `get_agent_stats` (tenant-scoped over agent_runs) plus the
+    # performance_baselines / architect_evolution_log memory blocks
+    # (tenant-scoped agent_memory_blocks). All zero rows in the sandbox.
+    execution_tenant: production-read-only
     # Full-procedure task: it asks the agent to run its ENTIRE documented
     # workflow, not one step. Measured 2026-08-22: this exact case timed out
     # at 900s in all four suites -- one per agent, the heaviest task in each.
@@ -99,6 +108,13 @@ tasks:
       max_iterations: 10
 
   - id: cross-pollination
+    # execution_tenant: this task is graded on reading the INSTANCE's own data,
+    # so an empty sandbox turns an honest answer into a failing one. It runs
+    # under the owning tenant with every write still refused — today's
+    # behaviour. See docs/runbooks/BENCHMARK_SANDBOX.md.
+    # Rubric requires a specific pattern read out of the autoagent_learnings
+    # memory block — tenant-scoped, and empty in the sandbox.
+    execution_tenant: production-read-only
     prompt: "Read autoagent_learnings memory block. Find a pattern that worked on one agent but hasn't been tested on similar agents in the same group (email pipeline, CRM, monitoring). Create a cross-pollination task."
     category: correctness
     weight: 1.0

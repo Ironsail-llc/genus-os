@@ -25,6 +25,7 @@ import ast
 import json
 import uuid
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -267,8 +268,19 @@ class TestBenchmarkSubRunLineage:
         )
 
     @pytest.mark.asyncio
-    async def test_off_mode_keeps_the_legacy_shape(self, monkeypatch):
-        """Flag off (the merge default until promoted) changes nothing."""
+    async def test_lineage_does_not_wait_for_the_flag(self, monkeypatch):
+        """Linkage is a fact about the run, not a reporting rollout.
+
+        This test used to assert the opposite — flag off, ``spawn_context``
+        None — and the 2026-09-13 fleet audit is what that cost: the flag sat
+        short of ``enforce``, so all 78 task runs recorded
+        ``parent_run_id = NULL`` and the only way to ask which runs belonged to
+        the night's benchmark was a time window over ``agent_runs``.
+
+        What the flag still gates is how analytics REPORT benchmark traffic
+        (``benchmark_excluded``); what it must never gate is whether the row
+        says who spawned it.
+        """
         monkeypatch.delenv("ROBOTHOR_BENCHMARK_DECONTAMINATION_ENABLED", raising=False)
         monkeypatch.delenv("ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE", raising=False)
 
@@ -279,7 +291,9 @@ class TestBenchmarkSubRunLineage:
 
         await _run_suite(mock_runner, _benchmark_child_config())
 
-        assert mock_runner.execute.await_args.kwargs.get("spawn_context") is None
+        spawn_context = mock_runner.execute.await_args.kwargs.get("spawn_context")
+        assert spawn_context is not None
+        assert spawn_context.parent_run_id == PARENT_RUN_ID
 
 
 def _llm_response(content: str):
@@ -509,3 +523,658 @@ class TestAnalyticsFilterParity:
             "analytics queries touching agent_runs without the shared "
             f"production filter: {offenders}"
         )
+
+
+# ─── (e) benchmark spend survives the children moving tenant ────────────────
+
+
+class TestBenchmarkSpendIsNotTenantScoped:
+    """Every "benchmark traffic, reported separately" query used to read
+    ``WHERE agent_id = %s AND tenant_id = %s AND <bench_only>`` with the
+    PRODUCTION tenant bound. From 2026-09-13 the harness executes every task
+    run as ``benchmark-sandbox``, so those rows match none of them and:
+
+    * ``/costs`` reports ``benchmark_cost_usd = 0.0`` for every agent — the
+      ~$30/month the break-out exists to surface simply disappears;
+    * fleet health rolls the same zeros up;
+    * ``analytics._report_contamination`` early-returns on
+      ``benchmark_runs <= 0``, so the decontamination rollout's observe and
+      alert rungs go permanently silent and the promotion evidence they exist
+      to produce becomes unobtainable.
+
+    ``bench_only`` already isolates benchmark rows by ``trigger_detail``, so
+    the tenant predicate inside that branch bought nothing and now costs the
+    measurement.
+    """
+
+    @staticmethod
+    def _bench_query(fn: Any) -> str:
+        """The SQL of the one query in ``fn`` that filters on ``bench_only``."""
+        import inspect
+        import re as _re
+
+        src = inspect.getsource(fn)
+        queries = _re.findall(r'f"""(.*?)"""', src, _re.DOTALL)
+        matching = [q for q in queries if "{bench_only}" in q]
+        assert matching, f"no bench_only query found in {fn.__name__}"
+        assert len(matching) == 1, f"{fn.__name__} has {len(matching)} bench_only queries"
+        return matching[0]
+
+    def test_analytics_agent_stats_bench_query_is_tenant_agnostic(self):
+        from robothor.engine.analytics import _benchmark_spend
+
+        assert "tenant_id" not in self._bench_query(_benchmark_spend)
+
+    def test_analytics_fleet_health_bench_query_is_tenant_agnostic(self):
+        from robothor.engine.analytics import get_fleet_health
+
+        assert "tenant_id" not in self._bench_query(get_fleet_health)
+
+    def test_tracking_agent_stats_bench_query_is_tenant_agnostic(self):
+        from robothor.engine.tracking import get_agent_stats
+
+        assert "tenant_id" not in self._bench_query(get_agent_stats)
+
+    def test_the_production_queries_keep_their_tenant_predicate(self):
+        """Only the benchmark break-out loses it. Dropping it anywhere else
+        would be a cross-tenant leak, not a fix."""
+        import inspect
+
+        from robothor.engine.analytics import get_agent_stats
+
+        src = inspect.getsource(get_agent_stats)
+        assert "AND tenant_id = %s" in src or "WHERE tenant_id = %s" in src
+
+    def test_the_bench_query_is_unbound_from_the_rls_tenant(self):
+        """A tenant-agnostic predicate is not enough when RLS is on: the
+        policy filters the sandbox rows out before the WHERE clause is
+        reached. Each bench query must relax the binding for its own
+        transaction, or this whole fix is inert on an RLS instance."""
+        import inspect
+
+        from robothor.engine import analytics, tracking
+
+        for fn in (
+            analytics._benchmark_spend,
+            analytics.get_fleet_health,
+            tracking.get_agent_stats,
+        ):
+            src = inspect.getsource(fn)
+            assert "read_every_tenant_in_transaction" in src, (
+                f"{fn.__module__}.{fn.__name__} reads benchmark rows while still "
+                "bound to one tenant — RLS hides the sandbox children"
+            )
+
+
+@pytest.mark.integration
+class TestBenchmarkSpendCountsSandboxChildren:
+    @staticmethod
+    def _seed(db_cursor, agent_id: str) -> None:
+        db_cursor.execute(
+            """
+            INSERT INTO crm_tenants (id, display_name, active)
+            VALUES ('benchmark-sandbox', 'Benchmark Sandbox', TRUE)
+            ON CONFLICT (id) DO NOTHING
+            """
+        )
+        db_cursor.execute(
+            """
+            INSERT INTO agent_runs
+                (id, tenant_id, agent_id, trigger_type, trigger_detail, status,
+                 total_cost_usd, duration_ms)
+            VALUES
+                (gen_random_uuid(), 'default', %s, 'cron', 'cron:daily',
+                 'completed', 0.25, 1000),
+                (gen_random_uuid(), 'benchmark-sandbox', %s, 'sub_agent',
+                 'benchmark:s1:t1', 'completed', 4.00, 2000),
+                (gen_random_uuid(), 'benchmark-sandbox', %s, 'sub_agent',
+                 'benchmark:s1:t2', 'completed', 2.00, 3000)
+            """,
+            (agent_id, agent_id, agent_id),
+        )
+
+    def test_analytics_sees_a_child_that_ran_in_the_sandbox(
+        self, db_cursor, db_conn, mock_get_connection, observe_decontamination
+    ):
+        from robothor.engine.analytics import get_agent_stats
+
+        agent_id = f"test-agent-{uuid.uuid4().hex[:8]}"
+        self._seed(db_cursor, agent_id)
+
+        stats = get_agent_stats(agent_id, days=1, tenant_id="default")
+
+        assert stats["benchmark_runs"] == 2, (
+            "benchmark children that ran in the sandbox tenant are invisible to "
+            "the spend break-out — $30/month of real money reported as zero"
+        )
+        assert float(stats["benchmark_cost_usd"]) == pytest.approx(6.00)
+
+    def test_tracking_costs_surface_sees_them_too(self, db_cursor, db_conn, mock_get_connection):
+        from robothor.engine.tracking import get_agent_stats
+
+        agent_id = f"test-agent-{uuid.uuid4().hex[:8]}"
+        self._seed(db_cursor, agent_id)
+
+        stats = get_agent_stats(agent_id, hours=24, tenant_id="default")
+
+        assert stats["benchmark_runs"] == 2
+        assert float(stats["benchmark_cost_usd"]) == pytest.approx(6.00)
+
+    def test_fleet_health_sees_them_too(
+        self, db_cursor, db_conn, mock_get_connection, observe_decontamination
+    ):
+        from robothor.engine.analytics import get_fleet_health
+
+        agent_id = f"test-agent-{uuid.uuid4().hex[:8]}"
+        self._seed(db_cursor, agent_id)
+
+        health = get_fleet_health(days=1, tenant_id="default")
+        row = next((a for a in health["agents"] if a["agent_id"] == agent_id), None)
+
+        assert row is not None
+        assert row["benchmark_runs"] == 2
+        assert float(row["benchmark_cost_usd"]) == pytest.approx(6.00)
+
+    def test_the_contamination_rung_still_reports(
+        self, db_cursor, db_conn, mock_get_connection, observe_decontamination, caplog
+    ):
+        """``observe`` exists to produce the promotion evidence. A count that
+        can only be zero is a rung that never reports."""
+        import logging
+
+        from robothor.engine.analytics import get_agent_stats
+
+        agent_id = f"test-agent-{uuid.uuid4().hex[:8]}"
+        self._seed(db_cursor, agent_id)
+
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.analytics"):
+            get_agent_stats(agent_id, days=1, tenant_id="default")
+
+        assert any("benchmark contamination" in r.getMessage() for r in caplog.records), (
+            "the decontamination observe rung went silent when the children moved tenant"
+        )
+
+
+# ─── (f) the runbook's own audit queries, run against an RLS fake ───────────
+
+
+class TestTheRunbookAuditQueriesActuallyWork:
+    """The verification a change ships to prove itself has to be probed too.
+
+    The lineage SQL self-joins ``agent_runs``: the parent lives in the owning
+    tenant, the children in ``benchmark-sandbox``. Migration 081 puts a
+    ``tenant_isolation`` policy on every table with a ``tenant_id`` column,
+    ``FORCE ROW LEVEL SECURITY`` included, and it applies to each *reference* in
+    a query — both aliases of a self-join. So from a connection bound to the
+    owning tenant the join drops every sandbox child, and "expect
+    benchmark-sandbox only" is unreachable: a clean night and a blind query both
+    return nothing.
+
+    These tests execute the queries **as written in the runbook** against a
+    sqlite fake of that policy: ``agent_runs`` is a view over the real rows,
+    filtered exactly the way the policy filters (permissive when the binding is
+    empty). One declared normalisation — Postgres' ``now() - interval '1 day'``
+    is rewritten to a fixed timestamp — because what is under test is the
+    visibility of the join, not date arithmetic.
+    """
+
+    RUNBOOK = Path(__file__).resolve().parents[3] / "docs" / "runbooks" / "BENCHMARK_SANDBOX.md"
+
+    @classmethod
+    def _runbook_query(cls, marker: str) -> str:
+        """The fenced ``sql`` block whose first line names ``marker``."""
+        import re as _re
+
+        blocks = _re.findall(r"```sql\n(.*?)```", cls.RUNBOOK.read_text(), _re.DOTALL)
+        matching = [b for b in blocks if marker in b.splitlines()[0]]
+        assert matching, f"no ```sql block in the runbook starts with {marker!r}"
+        assert len(matching) == 1, f"{len(matching)} blocks start with {marker!r}"
+        return matching[0].replace("now() - interval '1 day'", "'2000-01-01'")
+
+    @staticmethod
+    def _db(binding: str):
+        """A sqlite fake of migration 081's policy on ``agent_runs``.
+
+        One parent in the owning tenant, three children in the sandbox, and one
+        child deliberately leaked into the owning tenant.
+        """
+        import sqlite3
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE TABLE agent_runs_storage ("
+            " id TEXT, tenant_id TEXT, agent_id TEXT, parent_run_id TEXT,"
+            " trigger_detail TEXT, started_at TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO agent_runs_storage VALUES (?,?,?,?,?,?)",
+            [
+                ("p1", "acme-instance", "benchmark-runner", None, "cron:daily", "2026-09-13"),
+                ("c1", "benchmark-sandbox", "email-analyst", "p1", "benchmark:s1:t1", "2026-09-13"),
+                ("c2", "benchmark-sandbox", "email-analyst", "p1", "benchmark:s1:t2", "2026-09-13"),
+                ("c3", "benchmark-sandbox", "crm-dedup", "p1", "benchmark:s2:t1", "2026-09-13"),
+                ("c4", "acme-instance", "crm-hygiene", "p1", "benchmark:s3:t1", "2026-09-13"),
+                # A DECLARED production-read-only child: it runs in the owning
+                # tenant on purpose (main::memory-recall cannot be graded in an
+                # empty one), and it carries the posture in its trigger_detail.
+                # Without this row the bound query looked correct; with it, the
+                # runbook's "FAIL: any row" reports a leak every night.
+                (
+                    "c5",
+                    "acme-instance",
+                    "main",
+                    "p1",
+                    "benchmark:main:memory-recall:production-read-only",
+                    "2026-09-13",
+                ),
+            ],
+        )
+        # The policy: permissive on an empty binding, otherwise equality.
+        where = "1=1" if binding == "" else f"tenant_id = '{binding}'"
+        conn.execute(f"CREATE VIEW agent_runs AS SELECT * FROM agent_runs_storage WHERE {where}")
+        return conn
+
+    def test_unbound_the_audit_sees_every_child_and_names_the_leak(self):
+        rows = self._db("").execute(self._runbook_query("-- UNBOUND")).fetchall()
+        by_tenant = {(agent, tenant): n for agent, tenant, n in rows}
+        assert by_tenant.get(("email-analyst", "benchmark-sandbox")) == 2
+        assert by_tenant.get(("crm-dedup", "benchmark-sandbox")) == 1
+        assert by_tenant.get(("crm-hygiene", "acme-instance")) == 1, (
+            "the unbound audit did not surface the leaked child — it is the only "
+            "form that can, and the runbook sends the operator here"
+        )
+
+    def test_bound_to_the_owning_tenant_a_clean_night_is_empty(self):
+        """And the query the runbook gives for that binding says so.
+
+        The bound form must report the genuine leak (``c4``) and NOT the
+        declared ``production-read-only`` child (``c5``), which is in the
+        owning tenant because the suite file says it has to be. Reporting it
+        makes the promotion gate cry wolf every night, and an operator who is
+        told to expect a leak report learns to ignore the query.
+        """
+        rows = self._db("acme-instance").execute(self._runbook_query("-- BOUND")).fetchall()
+        assert [r for r in rows if r[1] == "benchmark-sandbox"] == [], (
+            "a sandbox child was visible from a bound connection — the fake's "
+            "policy is not filtering, so this test proves nothing"
+        )
+        assert rows == [("crm-hygiene", "acme-instance", 1)], (
+            "the bound query must return exactly the leak — not the declared "
+            "production-read-only children, which belong in this tenant"
+        )
+
+    def test_the_runbook_lists_the_declared_read_only_children_separately(self):
+        """The operator has to be able to check that the set in the owning
+        tenant matches the table in the runbook, so there is a query for it."""
+        rows = self._db("acme-instance").execute(self._runbook_query("-- DECLARED")).fetchall()
+        assert rows == [("main", "acme-instance", 1)]
+
+    def test_the_runbook_marker_is_the_one_the_harness_writes(self):
+        """A hand-copied literal in the docs is how this drifts."""
+        from robothor.engine.tools.handlers.benchmark import (
+            PRODUCTION_READ_ONLY_TRIGGER_SUFFIX,
+        )
+
+        runbook = self.RUNBOOK.read_text()
+        assert PRODUCTION_READ_ONLY_TRIGGER_SUFFIX in runbook, (
+            "the runbook's audit queries do not use the suffix the harness "
+            f"actually writes ({PRODUCTION_READ_ONLY_TRIGGER_SUFFIX!r})"
+        )
+
+    def test_the_unbound_query_bound_would_hide_the_children(self):
+        """Why the runbook's two forms are not interchangeable: run the UNBOUND
+        query on a bound connection and the sandbox children vanish, which reads
+        identically to 'the benchmark never ran'."""
+        rows = self._db("acme-instance").execute(self._runbook_query("-- UNBOUND")).fetchall()
+        assert all(tenant != "benchmark-sandbox" for _, tenant, _ in rows)
+
+    def test_bound_to_the_sandbox_the_join_drops_everything(self):
+        """The parent is filtered out, so the JOIN returns nothing at all —
+        the third way to get an empty result that means nothing."""
+        rows = self._db("benchmark-sandbox").execute(self._runbook_query("-- UNBOUND")).fetchall()
+        assert rows == []
+
+
+class TestTheRlsWideningHasExactlyThreeCallers:
+    """``read_every_tenant_in_transaction`` relaxes RLS for its transaction.
+
+    It exists because the benchmark spend break-out cannot see the graded
+    children once they execute as ``benchmark-sandbox``, and a WHERE clause
+    alone does not fix that — the policy filters the rows before the predicate
+    is reached. That is a narrow, justified widening, and it is exactly the
+    kind of helper that acquires callers: each one is another query that can
+    read every tenant's rows, and nothing else in the tree announces it.
+
+    So the caller set is pinned. Adding a fourth call site reds this test and
+    forces the question to be asked out loud.
+    """
+
+    EXPECTED_CALLERS: set[str] = {
+        "robothor/engine/analytics.py::_benchmark_spend",
+        "robothor/engine/analytics.py::get_fleet_health",
+        "robothor/engine/tracking.py::get_agent_stats",
+    }
+
+    HELPER = "read_every_tenant_in_transaction"
+
+    @classmethod
+    def _callers(cls) -> set[str]:
+        """Every ``module::function`` in robothor/ that CALLS the helper."""
+        import ast
+
+        root = Path(__file__).resolve().parents[2]
+        found: set[str] = set()
+        for path in sorted(root.rglob("*.py")):
+            if "/tests/" in str(path) or path.name.startswith("test_"):
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError):  # pragma: no cover - unreadable file
+                continue
+            rel = path.relative_to(root.parent)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                for sub in ast.walk(node):
+                    if not isinstance(sub, ast.Call):
+                        continue
+                    func = sub.func
+                    name = (
+                        func.id
+                        if isinstance(func, ast.Name)
+                        else (func.attr if isinstance(func, ast.Attribute) else None)
+                    )
+                    if name == cls.HELPER:
+                        found.add(f"{rel}::{node.name}")
+        return found
+
+    def test_the_scanner_finds_the_helper_at_all(self) -> None:
+        """An inert scan passes by matching nothing."""
+        assert self._callers(), (
+            f"no call site of {self.HELPER} found — the scan is broken, or the "
+            "helper was renamed without updating this test"
+        )
+
+    def test_exactly_the_audited_callers(self) -> None:
+        callers = self._callers()
+        assert callers == self.EXPECTED_CALLERS, (
+            "the RLS widening gained or lost a caller. Every entry here is a "
+            "query that may read EVERY tenant's rows; adding one is a decision, "
+            f"not a refactor. Difference: {sorted(callers ^ self.EXPECTED_CALLERS)}"
+        )
+
+    def test_the_docstring_says_what_it_is(self) -> None:
+        """The next reader must not have to infer it from the name."""
+        from robothor.db.connection import read_every_tenant_in_transaction
+
+        doc = (read_every_tenant_in_transaction.__doc__ or "").lower()
+        assert "rls" in doc
+        assert "widening" in doc, "the docstring does not name this as a deliberate widening"
+        assert "benchmark" in doc, "the docstring does not name the queries it exists for"
+
+
+class TestTheWideningsFailureIsNotReportedAsZero:
+    """`read_every_tenant_in_transaction` refuses rather than return a number
+    it cannot stand behind — and every caller used to catch that refusal, log a
+    warning and leave the spend at 0. That is the C2 symptom exactly: a number
+    an operator reads as "no benchmark spend" when it means "I could not look".
+
+    Zero is a measurement. None is an admission. The break-out must never
+    report the first when it means the second.
+    """
+
+    def test_the_helper_refuses_on_an_autocommit_connection(self, monkeypatch) -> None:
+        from robothor.db import connection as conn_mod
+
+        monkeypatch.setenv("ROBOTHOR_RLS_ENABLED", "1")
+
+        class _Conn:
+            autocommit = True
+
+        with pytest.raises(RuntimeError, match="transactional"):
+            conn_mod.read_every_tenant_in_transaction(_Conn())
+
+    def test_benchmark_spend_returns_none_when_it_cannot_look(self, monkeypatch) -> None:
+        from robothor.engine import analytics
+
+        def _cannot_widen(_conn) -> None:
+            raise RuntimeError("app.tenant_id could not be relaxed")
+
+        monkeypatch.setattr(analytics, "read_every_tenant_in_transaction", _cannot_widen)
+
+        class _Cur:
+            def execute(self, *_a, **_kw) -> None:
+                raise AssertionError("the query ran without the widening")
+
+            def fetchone(self):
+                return {}
+
+        class _Conn:
+            def rollback(self) -> None:
+                return None
+
+        result = analytics._benchmark_spend(_Conn(), _Cur(), "email-analyst", "TRUE", ())
+        assert result is None, (
+            "a break-out that could not read every tenant reported a number "
+            "anyway — and 0 reads as 'no benchmark spend'"
+        )
+
+    def test_agent_stats_reports_unknown_rather_than_zero(self, monkeypatch) -> None:
+        from robothor.engine import analytics
+
+        monkeypatch.setattr(analytics, "_benchmark_spend", lambda *_a, **_kw: None)
+        monkeypatch.setattr(analytics, "_report_contamination", lambda *_a, **_kw: None)
+
+        class _Cur:
+            def execute(self, *_a, **_kw) -> None:
+                return None
+
+            def fetchone(self):
+                return {}
+
+            def fetchall(self):
+                return []
+
+        class _Conn:
+            def cursor(self, *_a, **_kw):
+                return _Cur()
+
+            def rollback(self) -> None:
+                return None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc) -> bool:
+                return False
+
+        monkeypatch.setattr(analytics, "get_connection", lambda *_a, **_kw: _Conn())
+
+        stats = analytics.get_agent_stats("email-analyst", days=1, tenant_id="default")
+        assert stats["benchmark_runs"] is None
+        assert stats["benchmark_cost_usd"] is None
+
+    def test_the_contamination_rung_is_not_told_zero(self, monkeypatch) -> None:
+        """`_report_contamination` early-returns on `<= 0`. Handing it a 0 that
+        means "unknown" silences the rollout's observe rung for the wrong
+        reason, which is the bug this whole finding is about."""
+        from robothor.engine import analytics
+
+        seen: list = []
+        monkeypatch.setattr(analytics, "_benchmark_spend", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            analytics, "_report_contamination", lambda _a, runs, _t: seen.append(runs)
+        )
+
+        class _Cur:
+            def execute(self, *_a, **_kw) -> None:
+                return None
+
+            def fetchone(self):
+                return {}
+
+            def fetchall(self):
+                return []
+
+        class _Conn:
+            def cursor(self, *_a, **_kw):
+                return _Cur()
+
+            def rollback(self) -> None:
+                return None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc) -> bool:
+                return False
+
+        monkeypatch.setattr(analytics, "get_connection", lambda *_a, **_kw: _Conn())
+        analytics.get_agent_stats("email-analyst", days=1, tenant_id="default")
+
+        assert seen == [None], f"the contamination rung was handed {seen}, not None"
+
+
+class TestCostsSurfacesAnUnreadableBreakOut:
+    """`/costs` is where an operator reads benchmark spend, and it was the
+    last place that turned "I could not look" back into "zero".
+
+    `tracking.get_agent_stats` now reports None and logs an ERROR that names
+    this endpoint. `/costs` coerced it straight back with `or 0`, so the
+    endpoint published a number the layer below had explicitly refused to
+    publish — the C2 symptom, one layer up.
+    """
+
+    @staticmethod
+    def _costs_app(stats: dict):
+        from unittest.mock import patch
+
+        from starlette.testclient import TestClient
+
+        from robothor.engine.config import EngineConfig
+        from robothor.engine.health import create_health_app
+
+        config = EngineConfig(
+            bot_token="t",
+            default_chat_id="1",
+            port=18899,
+            tenant_id="acme-instance",
+            workspace=Path("/tmp"),
+            manifest_dir=Path("/tmp"),
+        )
+        app = create_health_app(config)
+        schedules = [{"agent_id": "email-analyst"}]
+        return (
+            TestClient(app),
+            patch("robothor.engine.tracking.list_schedules", return_value=schedules),
+            patch("robothor.engine.tracking.get_agent_stats", return_value=stats),
+        )
+
+    READABLE = {
+        "total_runs": 4,
+        "total_cost_usd": 1.5,
+        "completed": 4,
+        "failed": 0,
+        "timeouts": 0,
+        "avg_duration_ms": 10,
+        "total_input_tokens": 1,
+        "total_output_tokens": 1,
+        "benchmark_runs": 2,
+        "benchmark_cost_usd": 0.75,
+    }
+    UNREADABLE = {**READABLE, "benchmark_runs": None, "benchmark_cost_usd": None}
+
+    def test_a_readable_break_out_is_unchanged(self) -> None:
+        client, p_sched, p_stats = self._costs_app(self.READABLE)
+        with p_sched, p_stats:
+            body = client.get("/costs").json()
+        assert body["benchmark_runs"] == 2
+        assert body["benchmark_cost_usd"] == pytest.approx(0.75)
+        assert body["agents"]["email-analyst"]["benchmark_cost_usd"] == pytest.approx(0.75)
+        assert body.get("benchmark_spend_unreadable") is False
+
+    def test_an_unreadable_break_out_reaches_the_body_as_null(self) -> None:
+        client, p_sched, p_stats = self._costs_app(self.UNREADABLE)
+        with p_sched, p_stats:
+            body = client.get("/costs").json()
+
+        assert body["benchmark_runs"] is None, (
+            "/costs republished a zero the layer below refused to publish"
+        )
+        assert body["benchmark_cost_usd"] is None
+        agent = body["agents"]["email-analyst"]
+        assert agent["benchmark_runs"] is None
+        assert agent["benchmark_cost_usd"] is None
+
+    def test_the_body_says_it_is_unreadable_rather_than_only_implying_it(self) -> None:
+        """A null is easy to read as "nothing". A flag is not."""
+        client, p_sched, p_stats = self._costs_app(self.UNREADABLE)
+        with p_sched, p_stats:
+            body = client.get("/costs").json()
+        assert body.get("benchmark_spend_unreadable") is True
+
+    def test_the_agent_cost_columns_are_untouched(self) -> None:
+        """The break-out failing must not cost the caller its real numbers."""
+        client, p_sched, p_stats = self._costs_app(self.UNREADABLE)
+        with p_sched, p_stats:
+            body = client.get("/costs").json()
+        assert body["total_runs"] == 4
+        assert body["total_cost_usd"] == pytest.approx(1.5)
+        assert body["agents"]["email-analyst"]["total_cost_usd"] == pytest.approx(1.5)
+
+
+class TestTheCostsReadersTolerateNull:
+    """Both shipped readers of `/costs` format the payload themselves. A null
+    that crashes the renderer is not an improvement on a wrong zero."""
+
+    PAYLOAD = {
+        "hours": 24,
+        "total_runs": 4,
+        "total_cost_usd": 1.5,
+        "benchmark_runs": None,
+        "benchmark_cost_usd": None,
+        "benchmark_spend_unreadable": True,
+        "agents": {
+            "email-analyst": {
+                "runs": 4,
+                "total_cost_usd": 1.5,
+                "total_input_tokens": 1,
+                "total_output_tokens": 1,
+                "benchmark_runs": None,
+                "benchmark_cost_usd": None,
+            }
+        },
+    }
+
+    @pytest.mark.asyncio
+    async def test_the_tui_renders_it(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from robothor.tui.commands import cmd_costs
+
+        app = MagicMock()
+        app.client.get_costs = AsyncMock(return_value=self.PAYLOAD)
+        out = await cmd_costs(app, "")
+        assert "email-analyst" in out
+        assert "1.5000" in out
+
+    def test_the_cli_renders_it(self, capsys) -> None:
+        import argparse
+        import json as _json
+        from unittest.mock import MagicMock, patch
+
+        from robothor.cli.engine import cmd_costs
+
+        payload = dict(self.PAYLOAD)
+        payload["agents"] = [{"agent_id": "email-analyst", "total_cost_usd": 1.5}]
+
+        response = MagicMock()
+        response.read.return_value = _json.dumps(payload).encode()
+        response.__enter__ = lambda self: self
+        response.__exit__ = lambda *_a: False
+
+        with patch("urllib.request.urlopen", return_value=response):
+            rc = cmd_costs(argparse.Namespace(hours=24))
+
+        assert rc == 0
+        assert "email-analyst" in capsys.readouterr().out

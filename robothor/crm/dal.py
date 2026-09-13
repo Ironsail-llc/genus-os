@@ -4383,6 +4383,47 @@ def get_person_runs(
         return [dict(r) for r in cur.fetchall()]
 
 
+def get_model_reach_24h(*, tenant_id: str = DEFAULT_TENANT) -> list[dict[str, Any]]:
+    """Runs per model over the last 24 hours, busiest first.
+
+    One aggregate, for the warmup host-state section
+    (``robothor/engine/host_state.py``). It answers exactly one question --
+    "is the fleet actually reaching its primary model?" -- which an agent
+    otherwise answers from recalled memory and gets backwards: on 2026-09-13
+    main reported the fleet "mostly running on fallback models" on a day when
+    98.8% of runs landed on the primary.
+
+    A run whose ``model_used`` is NULL never reached a model at all. The NULL
+    is preserved rather than coalesced to the string ``'none'``: as a string it
+    is an ordinary row, and the caller rendered it as a model name ("the next
+    model is none with 8"), and it could even win the busiest slot. The caller
+    separates it out and says "N runs reached no model" instead — counted, but
+    never named as a model and never in a share's denominator.
+
+    Bounded by ``statement_timeout``: this runs inside a warmup preamble, where
+    the ``systemctl`` probe beside it has a sub-second ceiling and an unbounded
+    query would be the asymmetry that makes the whole section unbounded.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        # LOCAL: scoped to this transaction, so a pooled connection is not
+        # left carrying the limit for whatever runs on it next.
+        cur.execute("SET LOCAL statement_timeout = 1000")
+        cur.execute(
+            """
+            SELECT model_used,
+                   COUNT(*)::int AS runs
+              FROM agent_runs
+             WHERE tenant_id = %s
+               AND created_at > now() - interval '24 hours'
+             GROUP BY 1
+             ORDER BY 2 DESC
+            """,
+            (tenant_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
 def get_person_memory(
     person_id: str,
     *,

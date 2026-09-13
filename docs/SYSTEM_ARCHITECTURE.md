@@ -1076,6 +1076,75 @@ and the operator's first interactive turn render an `UNREAD ALERTS (N)` section
 and acknowledge only the rows whose text survived into the delivered preamble
 (see `docs/runbooks/PAGING.md`).
 
+#### Warmup: live host state
+
+`build_warmth_preamble` (`robothor/engine/warmup.py`) runs its sections —
+unread alerts, history, memory blocks, context files, peers, context hooks,
+breadcrumbs, preferences, agent hooks, agent goal, goal recall, active intents
+— and then the registered context hooks: `_date_context`, `_travel_status`,
+`_weather_context`, `_git_status_context`, `_thread_pool_context` and
+`host_state_context`.
+
+`robothor/engine/host_state.py` is the only section that probes the running
+host. It emits three facts in words, headed "LIVE ENGINE STATE … as of now":
+
+| Fact | Source |
+|------|--------|
+| Engine uptime, as an **age** | `systemctl show -p ActiveEnterTimestamp -p ActiveState --timestamp=utc <unit>` where systemd is booted (retried without `--timestamp=utc` on systemd < 247). Never `NRestarts` — systemd zeroes that on a manual or deploy restart. An age is rendered only when `ActiveState` is `active`; any other state reads "the engine service is NOT running … systemd reports the unit `<state>`", because a failed unit keeps its last start's timestamp. |
+| Platform version | `robothor.__version__` |
+| Last-24h model reach | One aggregate over `agent_runs.model_used`, tenant-scoped, via `crm.dal.get_model_reach_24h` |
+
+It exists because an agent had no other source of truth about its own host.
+On 2026-09-13 the operator-facing agent reported that the engine "hasn't been
+restarted since Sep 3" and that the fleet was "mostly running on fallback
+models" — both false as spoken (the engine had restarted that morning; 98.8% of
+the day's runs reached the primary). Both came from undated `memory_facts` rows
+that were true when written and were recalled as present tense. The section says
+it is live so the model has a reason to prefer it over such a recollection.
+
+**It renders on both preambles.** `build_warmth_preamble` reaches it through the
+registered agent context hook; `build_interactive_preamble` calls
+`host_state_section(agent_id, agent_config)` directly, via
+`_interactive_supervisor_sections`. That is not belt-and-braces: agent context
+hooks run from the cron builder alone, and the operator was in *chat* when the
+stale fact was asserted, so a section only on the cron path would have missed
+the channel the incident happened on.
+
+**The manifest has to reach it.** `runner.execute` threads `agent_config` into
+`build_interactive_preamble`, because the reach sentence needs the configured
+primary. Without it the section could not tell "this agent has no primary" from
+"nobody told me which one" — and it asserted the former, so every chat turn had
+main reporting that it had no configured primary. It has one; manifests carry
+`model.primary`. A caller that genuinely has only an id now gets the neutral
+"the busiest model was …" wording instead of a claim about configuration.
+
+**It is a reason to warm, not a passenger.** `wants_cron_warmup` (the predicate
+`runner.execute` uses to decide `warmup_kind`) is true when the manifest names
+warmup memory blocks, context files or peer agents — *or* when the agent gets
+host state. Without that, a heartbeat agent with no `warmup:` block built no
+preamble at all and the targeting bought nothing.
+
+**Degradation is uptime's whole design.** On a systemd host a failed, wedged or
+empty probe renders `Engine uptime: unknown` — never this process's own clock.
+(`systemctl show` for a unit that does not exist exits 0 with empty output, so
+`ActiveState` is read alongside the timestamp; the `/proc` process clock is used
+only where there is no systemd to ask.) The model-reach line degrades the same
+way, and runs that reached no model are counted and named as such rather than
+appearing as a model called `none`.
+
+Bounded and optional: at most two `systemctl` calls at 0.5 s each, plus one
+query with a 1 s `statement_timeout`, memoised 60 s per (agent, configured
+primary), rendered only for the operator-facing agent
+(`OPERATOR_INBOX_AGENT_ID`) and agents carrying a `heartbeat:` block — workers
+get nothing, and make no calls.
+
+**One off switch.** `host_state.set_host_state_enabled(False)` disables every
+path — the hook, the interactive builder, and `wants_cron_warmup`'s reason to
+warm — because all three ask `wants_host_state`. Dropping the
+`register_agent_context_hook` call, which was the documented opt-out when this
+was cron-only, now disables the scheduled path alone. The unread-alert and
+memory sections are untouched by any of it.
+
 #### Delivery status vocabulary
 
 `agent_runs.delivery_status` is written by `robothor/engine/delivery.py`

@@ -305,6 +305,27 @@ class _Stream:
         return gen()
 
 
+class _SilentDelta:
+    content = None
+    tool_calls = None
+    reasoning_content = None
+
+
+class _SilentChunk:
+    choices = [SimpleNamespace(delta=_SilentDelta(), finish_reason=None)]
+    usage = None
+
+
+class _SilentStream:
+    """A stream that never emits content — nothing reaches `on_content`."""
+
+    def __aiter__(self):
+        async def gen():
+            yield _SilentChunk()
+
+        return gen()
+
+
 @pytest.mark.asyncio
 async def test_the_streaming_path_times_the_attempt_too() -> None:
     """`duration_ms` must not mean one thing streamed and another not.
@@ -357,7 +378,7 @@ async def test_a_streamed_answerless_reply_writes_exactly_one_row() -> None:
 
     async def _acompletion(**kwargs: Any) -> Any:
         calls.append(kwargs["model"])
-        return _Stream()
+        return _SilentStream()
 
     runner = _Runner()
     session = AgentSession(agent_id="test-agent")
@@ -377,6 +398,49 @@ async def test_a_streamed_answerless_reply_writes_exactly_one_row() -> None:
     assert len(calls) == 1
     assert len(rows) == 1, "one provider call must leave one row"
     assert rows[0].error_message and OUTCOME_EMPTY in rows[0].error_message
+
+
+@pytest.mark.asyncio
+async def test_a_blank_rebuild_does_not_retract_an_answer_the_operator_saw() -> None:
+    """The guard reads the LIVE stream, not only the rebuild (review S1).
+
+    `stream_chunk_builder` can come back blank on a stream whose deltas already
+    reached `on_content`. Deciding emptiness from the rebuild alone would
+    advance the chain and replace a turn the operator has already watched
+    arrive with a different model's answer — and record a failed attempt for a
+    call that delivered.
+    """
+    delivered: list[str] = []
+    calls: list[str] = []
+
+    async def _acompletion(**kwargs: Any) -> Any:
+        calls.append(kwargs["model"])
+        return _Stream()
+
+    async def _on_content(text: str) -> None:
+        delivered.append(text)
+
+    blank_rebuild = _response(content="", completion_tokens=0)
+    runner = _Runner()
+    session = AgentSession(agent_id="test-agent")
+    with (
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch("robothor.engine.llm_client.litellm.acompletion", new=_acompletion),
+        patch(
+            "robothor.engine.llm_client.litellm.stream_chunk_builder",
+            return_value=blank_rebuild,
+        ),
+    ):
+        response, _model, _ms, _msg = await runner._llm_call_and_record(
+            session, ["openrouter/primary", "openrouter/fallback"], [], _on_content, set(), 0.3
+        )
+
+    assert delivered == ["hi"], "the fixture must actually stream content"
+    assert calls == ["openrouter/primary"], "the chain must not advance on a delivered turn"
+    assert response is blank_rebuild
+    rows = [s for s in session.run.steps if s.step_type == StepType.LLM_CALL]
+    assert len(rows) == 1
+    assert rows[0].error_message is None, "a call that delivered is not a failed attempt"
 
 
 @pytest.mark.asyncio

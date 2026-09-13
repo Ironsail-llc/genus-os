@@ -28,6 +28,10 @@ _ENGINE = Path(__file__).resolve().parents[1]
 #: A function longer than this is a decomposition problem, not a style one.
 MAX_NEW_FUNCTION_LINES = 200
 
+#: Re-measured against the merged tree on 2026-09-13: four entries carried
+#: 1-3 lines of inherited slack and were tightened to actual. The file's rule
+#: is "pinned at their current size"; headroom nobody earned is where the
+#: next function regrows.
 #: Every function already over the line, pinned at its measured size
 #: (2026-08-27). These may SHRINK — the test fails if one grows, and fails if
 #: an entry is more than 10% larger than reality, so shrinking forces the cap
@@ -37,7 +41,7 @@ KNOWN_LARGE: dict[str, int] = {
     # workflow-approval tools) left as one cluster, `_HUMAN_IN_THE_LOOP_SCHEMAS`.
     # ask_user's own schema is in that constant, so the new tool cost this
     # function nothing and paid down 66 lines on the way in.
-    "tools/schemas.py::get_engine_schemas": 3454,
+    "tools/schemas.py::get_engine_schemas": 3453,
     # -29: every subsystem router mount extracted to _mount_subsystem_routers,
     # which is what made room for the /api/admin registration rather than
     # raising this number for it.
@@ -45,7 +49,11 @@ KNOWN_LARGE: dict[str, int] = {
     # _install_engine_auth, which is what paid for threading the live scheduler
     # onto the signature (POST /api/admin/scheduler/reconcile has to act on
     # THIS process's job registry) instead of raising this number for it.
-    "health.py::create_health_app": 1431,
+    # 1431 -> 1386: the /costs body moved to _cost_breakdown, which is what
+    # paid for reporting an unreadable benchmark break-out as null rather than
+    # as zero spend — a different claim about the fleet, and one this endpoint
+    # was the last place to get wrong.
+    "health.py::create_health_app": 1386,
     # 990 -> 989: the post-stall autoDream spawn moved to
     # run_lifecycle.spawn_post_stall_autodream ("recovery helper spawns" is
     # that module's own contract), which is what paid for classifying a
@@ -67,13 +75,27 @@ KNOWN_LARGE: dict[str, int] = {
     # 371 -> 365: the Slack start block and the channel-registry warm-up both
     # moved into _start_channels, which is what made room for the warm-up
     # rather than raising this number for it.
-    "daemon.py::main": 365,
+    "daemon.py::main": 364,
     "telegram.py::_run_interactive": 384,
-    "tools/handlers/benchmark.py::_benchmark_run": 370,
-    "analytics.py::get_agent_stats": 343,
+    # 370 -> 347: shaping the graded child (silent delivery, iteration cap,
+    # deny-list, is_benchmark) moved to _shape_child_config, which is what paid
+    # for resolving the child's execution tenant in here rather than raising
+    # this number for it.
+    # 347 -> 220: the whole per-task loop moved to _execute_suite_tasks, so the
+    # suite-level concerns that now wrap it (resolve the execution tenant once,
+    # hold the sandbox advisory lock for the suite) are visible in one place.
+    # 220 -> 210: pinned at the measured size, not the size it happened to be
+    # under. Ten lines of unearned headroom is where the next function regrows.
+    "tools/handlers/benchmark.py::_benchmark_run": 210,
+    # 343 -> 325: the benchmark break-out moved to _benchmark_spend, which is
+    # what paid for un-scoping it from the production tenant (the graded
+    # children now run as benchmark-sandbox) rather than raising this number.
+    # 325 -> 326: +1 for reporting an unreadable break-out as None rather than
+    # as zero spend, which is a different claim about the fleet.
+    "analytics.py::get_agent_stats": 326,
     # 303 -> 301: the reconcile reporting moved to _log_reconcile, which is
     # what paid for reporting added/replaced as well as pruned.
-    "daemon.py::_watchdog": 301,
+    "daemon.py::_watchdog": 298,
     "chat.py::plan_approve": 286,
     "compaction.py::compact": 276,
     # -7: rate-limit wait and the malformed-tool-call verdict extracted;
@@ -95,7 +117,8 @@ KNOWN_LARGE: dict[str, int] = {
     # the shared per-model time allowance (DIAG 2026-09-13 §4.1/§4.4, review I6)
     # rather than raising this number for any of them.
     "llm_client.py::_call_llm": 237,
-    "config.py::manifest_to_agent_config": 268,
+    # 268 -> 267 on main, kept: this branch does not touch that function.
+    "config.py::manifest_to_agent_config": 267,
     # scheduler.py::start is gone from this list: 266 -> 116. The three
     # hand-written registration blocks (heartbeat, worker, cron) became one
     # loop over schedule_reconcile.agent_job_specs, which is also what

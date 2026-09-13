@@ -44,7 +44,11 @@ CAPS = {
     # execute(). There is no cohesive cluster to extract here — the write has
     # to happen where the run row is being assembled.
     # 2522 -> 2520: the post-stall autoDream spawn left for run_lifecycle.py.
-    "robothor/engine/runner.py": 2520,
+    # 2520 -> 2514 on merge: that extraction and the host-state work landed
+    # independently, so the ratchet takes the merged actual rather than either
+    # branch's number -- a cap carried over from one side would bank the other
+    # side's savings as headroom.
+    "robothor/engine/runner.py": 2514,
     # 2545: a concurrent session ratcheted this to 2539 by lifting injection
     # screening and journal resume out of execute(); the deliverable guard's call
     # site adds the rest. Its 25 lines of logic went to loop_guards.py, so what
@@ -70,6 +74,24 @@ CAPS = {
     "robothor/engine/run_llm_calls.py": 450,
     "robothor/engine/tool_admission.py": 400,
     "robothor/engine/run_budget.py": 120,
+    # Live host state for the warmup preamble (2026-09-13). Bounded from the
+    # day it lands, like schedule_reconcile.py: this is the module that would
+    # otherwise absorb every "what is this box doing right now?" probe an agent
+    # ever wants, one system call at a time, inside a code path that runs on
+    # every cron beat and every interactive turn. Anything bigger than these
+    # three facts belongs in a tool the agent calls deliberately, not in warmup.
+    # 384 -> 498 in review round 1, then 498 -> 592 in round 2, and every line
+    # of both is a correction rather than a feature: the systemd probe reads and
+    # now JUDGES ActiveState (a nonexistent unit exits 0 with empty output; a
+    # failed unit keeps its last start's timestamp) and retries without
+    # --timestamp=utc for systemd < 247; the reach sentence stopped calling
+    # whatever model was busiest "the primary", and then learned to tell "no
+    # primary is configured" from "nobody told me which one". The section still
+    # renders the same three facts it started with. Each round's growth is
+    # distinguishing a case that was previously answered with a plausible guess —
+    # which is the whole defect class this module exists to close, so the cap
+    # moving for that reason is the ratchet working, not being dodged.
+    "robothor/engine/host_state.py": 592,
     # Tempo-scaled watchdog budgets (2026-08-27): extracted here rather than
     # growing run_budget past its cap, same as the finalization cluster.
     # Raised 110 -> 125 the same day to admit max_wallclock_ceiling(), which the

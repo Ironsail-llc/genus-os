@@ -22,7 +22,7 @@ import contextlib
 from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection, read_every_tenant_in_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +205,64 @@ def production_run_filter(alias: str = "") -> str:
     return f"{prefix}parent_run_id IS NULL AND {exclude_benchmark_filter(alias)}"
 
 
-def _report_contamination(agent_id: str, benchmark_runs: int, tenant_id: str) -> None:
+def _benchmark_spend(
+    conn: Any,
+    cur: Any,
+    agent_id: str,
+    window_sql: str,
+    window_params: tuple[Any, ...],
+) -> tuple[int, float] | None:
+    """One agent's benchmark-harness runs and spend, or None. Never raises.
+
+    Deliberately NOT tenant-scoped. ``benchmark_run_filter()`` already isolates
+    benchmark rows by ``trigger_detail``, and since 2026-09-13 every graded task
+    run executes as the ``benchmark-sandbox`` tenant — so a query bound to the
+    owning tenant matched none of them and reported every agent's benchmark
+    spend as 0.0, which also silenced the decontamination rollout's observe rung
+    (``_report_contamination`` early-returns on a zero count).
+
+    The WHERE clause is only half of that: RLS filters the sandbox rows out
+    before the predicate is reached, so the transaction is relaxed for this one
+    read — see :func:`robothor.db.connection.read_every_tenant_in_transaction`.
+
+    Returns:
+        ``(benchmark_runs, benchmark_cost_usd)``, or **None** when the break-out
+        could not be read. Never ``(0, 0.0)`` on failure: zero is a
+        measurement — "this agent ran no benchmarks" — and reporting it when the
+        truth is "I could not look" recreates the exact symptom this function
+        exists to fix. The caller keeps its own numbers either way; it just has
+        to say "unknown" rather than "none".
+    """
+    bench_only = benchmark_run_filter()
+    try:
+        read_every_tenant_in_transaction(conn)
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(*) as benchmark_runs,
+                COALESCE(SUM(total_cost_usd), 0) as benchmark_cost_usd
+            FROM agent_runs
+            WHERE agent_id = %s
+              AND {window_sql}
+              AND {bench_only}
+            """,  # noqa: S608
+            (agent_id, *window_params),
+        )
+        row = cur.fetchone() or {}
+        return int(row.get("benchmark_runs") or 0), float(row.get("benchmark_cost_usd") or 0.0)
+    except Exception as e:
+        logger.error(
+            "benchmark break-out unreadable for %s (%s): reporting UNKNOWN rather "
+            "than zero — a zero here reads as 'this agent ran no benchmarks'",
+            agent_id,
+            e,
+        )
+        with contextlib.suppress(Exception):
+            conn.rollback()
+        return None
+
+
+def _report_contamination(agent_id: str, benchmark_runs: int | None, tenant_id: str) -> None:
     """Record (and at the ``alert`` rung, escalate) benchmark contamination.
 
     Bookkeeping only: never raises, never changes a metric. At ``alert`` the
@@ -216,7 +273,10 @@ def _report_contamination(agent_id: str, benchmark_runs: int, tenant_id: str) ->
 
     try:
         mode = benchmark_decontamination_mode()
-        if mode not in ("observe", "alert") or benchmark_runs <= 0:
+        # `None` means the break-out could not be read at all. Treat it the
+        # same as nothing to report — but it arrives as None rather than 0 so
+        # the distinction survives to here instead of being erased upstream.
+        if mode not in ("observe", "alert") or not benchmark_runs or benchmark_runs <= 0:
             return
         reason = (
             f"{benchmark_runs} benchmark-harness runs are being counted as "
@@ -280,7 +340,6 @@ def get_agent_stats(
     # below is provably the same predicate.
     prod_filter = production_run_filter()
     prod_filter_r = production_run_filter("r")
-    bench_only = benchmark_run_filter()
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -566,30 +625,14 @@ def get_agent_stats(
         # Benchmark traffic, reported SEPARATELY — never as this agent's work.
         # Runs last so the query order every existing caller relies on is
         # unchanged. A failure here must not cost the caller its stats.
-        stats["benchmark_runs"] = 0
-        stats["benchmark_cost_usd"] = 0.0
+        stats["benchmark_runs"] = None
+        stats["benchmark_cost_usd"] = None
         stats["benchmark_excluded"] = decontamination_enforced()
-        try:
-            cur.execute(
-                f"""
-                SELECT
-                    COUNT(*) as benchmark_runs,
-                    COALESCE(SUM(total_cost_usd), 0) as benchmark_cost_usd
-                FROM agent_runs
-                WHERE agent_id = %s
-                  AND tenant_id = %s
-                  AND {window_sql}
-                  AND {bench_only}
-                """,  # noqa: S608
-                (agent_id, tenant_id, *window_params),
-            )
-            brow = cur.fetchone() or {}
-            stats["benchmark_runs"] = int(brow.get("benchmark_runs") or 0)
-            stats["benchmark_cost_usd"] = float(brow.get("benchmark_cost_usd") or 0.0)
-        except Exception as e:
-            logger.warning("benchmark contamination query failed: %s", e)
-            with contextlib.suppress(Exception):
-                conn.rollback()
+        spend = _benchmark_spend(conn, cur, agent_id, window_sql, window_params)
+        # None propagates as None: "unknown", not "none". Consumers that sum
+        # these already coerce with `or 0`.
+        stats["benchmark_runs"] = spend[0] if spend else None
+        stats["benchmark_cost_usd"] = spend[1] if spend else None
 
     _report_contamination(agent_id, stats["benchmark_runs"], tenant_id)
     return stats
@@ -636,8 +679,11 @@ def get_fleet_health(
         rows = cur.fetchall()
 
         # Benchmark spend, per agent, kept OUT of the cost columns above.
-        benchmarks: dict[str, dict[str, Any]] = {}
+        # None, not {}: "could not read" must not arrive downstream looking
+        # like "no agent ran a benchmark". See _benchmark_spend.
+        benchmarks: dict[str, dict[str, Any]] | None = {}
         try:
+            read_every_tenant_in_transaction(conn)
             cur.execute(
                 f"""
                 SELECT
@@ -645,16 +691,25 @@ def get_fleet_health(
                     COUNT(*) as benchmark_runs,
                     COALESCE(SUM(total_cost_usd), 0) as benchmark_cost_usd
                 FROM agent_runs
-                WHERE tenant_id = %s
-                  AND created_at > NOW() - make_interval(days := %s)
+                WHERE created_at > NOW() - make_interval(days := %s)
+                -- Deliberately NOT tenant-scoped: `bench_only` already
+                -- isolates benchmark rows by trigger_detail, and since
+                -- 2026-09-13 every graded task run executes as the
+                -- `benchmark-sandbox` tenant, so binding the owning tenant
+                -- here reported every agent's benchmark spend as zero.
                   AND {bench_only}
                 GROUP BY agent_id
                 """,  # noqa: S608
-                (tenant_id, days),
+                (days,),
             )
             benchmarks = {r["agent_id"]: dict(r) for r in cur.fetchall()}
         except Exception as e:
-            logger.warning("fleet benchmark spend query failed: %s", e)
+            logger.error(
+                "fleet benchmark break-out unreadable (%s): reporting UNKNOWN "
+                "rather than zero spend for every agent",
+                e,
+            )
+            benchmarks = None
             with contextlib.suppress(Exception):
                 conn.rollback()
 
@@ -664,10 +719,12 @@ def get_fleet_health(
     fleet_failed = 0
     fleet_cost = 0.0
 
-    fleet_benchmark_runs = 0
-    fleet_benchmark_cost = 0.0
+    fleet_benchmark_runs: int | None = 0 if benchmarks is not None else None
+    fleet_benchmark_cost: float | None = 0.0 if benchmarks is not None else None
 
-    def _benchmark_of(agent_id: str) -> tuple[int, float]:
+    def _benchmark_of(agent_id: str) -> tuple[int | None, float | None]:
+        if benchmarks is None:
+            return None, None
         b = benchmarks.get(agent_id) or {}
         return int(b.get("benchmark_runs") or 0), float(b.get("benchmark_cost_usd") or 0.0)
 
@@ -682,8 +739,10 @@ def get_fleet_health(
         fleet_completed += completed
         fleet_failed += failed
         fleet_cost += float(row["total_cost_usd"] or 0)
-        fleet_benchmark_runs += bench_runs
-        fleet_benchmark_cost += bench_cost
+        if fleet_benchmark_runs is not None and bench_runs is not None:
+            fleet_benchmark_runs += bench_runs
+        if fleet_benchmark_cost is not None and bench_cost is not None:
+            fleet_benchmark_cost += bench_cost
 
         agents.append(
             {
@@ -700,7 +759,7 @@ def get_fleet_health(
                 else None,
                 "last_run_at": str(row["last_run_at"]) if row.get("last_run_at") else None,
                 "benchmark_runs": bench_runs,
-                "benchmark_cost_usd": round(bench_cost, 6),
+                "benchmark_cost_usd": round(bench_cost, 6) if bench_cost is not None else None,
             }
         )
 
@@ -709,13 +768,15 @@ def get_fleet_health(
     # Dropping them silently is how "graded on nothing" stays invisible — list
     # them with zero production runs instead.
     seen = {a["agent_id"] for a in agents}
-    for agent_id, b in sorted(benchmarks.items()):
+    for agent_id, b in sorted((benchmarks or {}).items()):
         if agent_id in seen:
             continue
         bench_runs = int(b.get("benchmark_runs") or 0)
         bench_cost = float(b.get("benchmark_cost_usd") or 0.0)
-        fleet_benchmark_runs += bench_runs
-        fleet_benchmark_cost += bench_cost
+        if fleet_benchmark_runs is not None:
+            fleet_benchmark_runs += bench_runs
+        if fleet_benchmark_cost is not None:
+            fleet_benchmark_cost += bench_cost
         agents.append(
             {
                 "agent_id": agent_id,
@@ -743,7 +804,9 @@ def get_fleet_health(
             "success_rate": round(fleet_completed / fleet_total, 4) if fleet_total > 0 else None,
             "total_cost_usd": round(fleet_cost, 4),
             "benchmark_runs": fleet_benchmark_runs,
-            "benchmark_cost_usd": round(fleet_benchmark_cost, 4),
+            "benchmark_cost_usd": (
+                round(fleet_benchmark_cost, 4) if fleet_benchmark_cost is not None else None
+            ),
         },
         "benchmark_excluded": decontamination_enforced(),
         "period_days": days,

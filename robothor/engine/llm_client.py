@@ -35,6 +35,7 @@ import time
 import time as _time
 from collections.abc import Awaitable, Callable  # noqa: TC003
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import litellm
@@ -703,6 +704,32 @@ def _advance_without_blaming_the_model(e: Exception, model: str) -> bool:
         _sanitize(model),
     )
     return True
+
+
+def _streamed_shape(
+    rebuilt: Any,
+    accumulated_content: str,
+    has_tool_calls: bool,
+) -> CompletionShape:
+    """What the turn actually DELIVERED, not only what the rebuild says.
+
+    ``litellm.stream_chunk_builder`` can hand back a blank message for a stream
+    whose deltas already reached ``on_content`` — the operator has watched that
+    answer arrive. Judging emptiness from the rebuild alone would advance the
+    chain and replace a delivered turn with a different model's, and record a
+    failed attempt for a call that worked. The live locals are the truth about
+    delivery, so they override the rebuild; nothing else about the shape (the
+    finish reason, the token counts, the reasoning fields) is touched.
+    """
+    shape = describe_completion(rebuilt)
+    if not accumulated_content and not has_tool_calls:
+        return shape
+    return replace(
+        shape,
+        parsed=True,
+        content_present=bool(accumulated_content),
+        tool_calls_present=has_tool_calls,
+    )
 
 
 def _streamed_without_an_answer(model: str, shape: CompletionShape) -> EmptyCompletionError:
@@ -2363,7 +2390,7 @@ class LLMClient:
                     merge_streamed_reasoning_details(rebuilt, streamed_reasoning_details)
                     # One meaning for `duration_ms` on both paths: the provider
                     # attempt, never the token-counting prep before it.
-                    shape = describe_completion(rebuilt)
+                    shape = _streamed_shape(rebuilt, accumulated_content, has_tool_calls)
                     note_outcome(model, attempt_started, shape=shape)
                     if shape.no_answer:
                         last_error = _streamed_without_an_answer(model, shape)

@@ -25,6 +25,7 @@ The fix has four parts, each pinned below:
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -561,14 +562,21 @@ class TestCrmHandlerSandboxGate:
 
 
 class TestSuiteOptIn:
-    """A suite that declares no fixtures keeps today's behaviour exactly.
+    """A suite that declares no fixtures SEEDS nothing. It is still sandboxed.
 
-    The flag's blast radius has to stay confined to suites that opt in, or
-    turning it on silently re-points every other suite's READS at an empty
-    tenant and their grades move for reasons nobody chose.
+    This class used to read "keeps today's behaviour exactly", on the argument
+    that turning the flag on must not re-point another suite's reads at an
+    empty tenant. The 2026-09-13 audit is what that argument cost: 75 of 78
+    task runs executed as the production tenant, because the sandbox was
+    reached only as a side effect of seeding. Seeding and tenancy are now
+    separate decisions — ``_seed_task_fixtures`` still returns None here, while
+    ``_task_execution_tenant`` gives every child the sandbox (see
+    ``test_benchmark_child_tenant.py``). An empty tenant is the right
+    environment for suites that state their scenario in the prompt, and the
+    fleet honesty cases positively require it.
     """
 
-    def test_task_without_fixtures_or_checks_is_not_scoped(self) -> None:
+    def test_task_without_fixtures_or_checks_seeds_nothing(self) -> None:
         from robothor.engine.tools.handlers.benchmark import _seed_task_fixtures
 
         task = {"id": "legacy", "prompt": "p", "expected": {"must_contain": ["x"]}}
@@ -804,3 +812,363 @@ class TestSeedingSurvivesProductionRlsBinding:
             "these sandbox DB helpers take an unscoped connection, so seeding and "
             "read-back are rejected by production RLS: " + repr(unscoped)
         )
+
+
+# ---------------------------------------------------------------------------
+# The teardown sweep must cover everything a sandbox child can write
+# ---------------------------------------------------------------------------
+
+
+def _declared_tables() -> set[str]:
+    """Every table this schema actually declares, from the migration files.
+
+    Used to drop SQL aliases and prose out of the scan below without a
+    hand-maintained exclusion list.
+    """
+    import re as _re
+
+    names: set[str] = set()
+    root = Path(__file__).resolve().parents[3] / "crm" / "migrations"
+    for sql in root.glob("*.sql"):
+        names.update(
+            m.lower()
+            for m in _re.findall(
+                r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?([a-z_][a-z0-9_]*)",
+                sql.read_text(encoding="utf-8"),
+                _re.IGNORECASE,
+            )
+        )
+    return names
+
+
+def _tables_a_sandbox_child_can_write() -> set[str]:
+    """Derive, from the sources, the tables the sandbox write tools touch.
+
+    Static derivation rather than a list beside the thing it describes: the
+    hand-maintained twin is the drift that produced this instance's last four
+    isolation incidents. Walks each ``SANDBOX_WRITE_TOOLS`` handler for the DAL
+    functions it names, then follows those through ``crm/dal.py``, collecting
+    every INSERT/UPDATE/DELETE target.
+    """
+    import ast
+    import re as _re
+
+    handlers = Path(bs.__file__).resolve().parent / "tools" / "handlers"
+    referenced: set[str] = set()
+    for path in sorted(handlers.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        functions: dict[str, Any] = {}
+        tools: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            functions[node.name] = node
+            for decorator in node.decorator_list:
+                if (
+                    isinstance(decorator, ast.Call)
+                    and isinstance(decorator.func, ast.Name)
+                    and decorator.func.id == "_handler"
+                    and decorator.args
+                    and isinstance(decorator.args[0], ast.Constant)
+                ):
+                    tools[str(decorator.args[0].value)] = node.name
+        for tool, function in tools.items():
+            if tool not in bs.SANDBOX_WRITE_TOOLS:
+                continue
+            for sub in ast.walk(functions[function]):
+                if isinstance(sub, ast.Name):
+                    referenced.add(sub.id)
+                elif isinstance(sub, ast.Attribute):
+                    referenced.add(sub.attr)
+                elif isinstance(sub, ast.ImportFrom):
+                    referenced.update(a.asname or a.name for a in sub.names)
+
+    dal = Path(bs.__file__).resolve().parents[1] / "crm" / "dal.py"
+    tree = ast.parse(dal.read_text(encoding="utf-8"))
+    dal_functions = {
+        n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    write_re = _re.compile(
+        r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+([a-z_][a-z0-9_]*)", _re.IGNORECASE
+    )
+    declared = _declared_tables()
+    tables: set[str] = set()
+    seen: set[str] = set()
+    work = [name for name in referenced if name in dal_functions]
+    while work:
+        name = work.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for sub in ast.walk(dal_functions[name]):
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                tables.update(t.lower() for t in write_re.findall(sub.value))
+            if isinstance(sub, ast.Call):
+                func = sub.func
+                called = (
+                    func.id
+                    if isinstance(func, ast.Name)
+                    else (func.attr if isinstance(func, ast.Attribute) else None)
+                )
+                if called in dal_functions and called not in seen:
+                    work.append(called)
+    return {t for t in tables if t in declared}
+
+
+class TestTeardownSweepsWhatTheSandboxCanWrite:
+    """``_SWEEP_ORDER`` had no test at all — two references in the tree, the
+    definition and its one use. It now runs after EVERY task rather than after
+    every seeded task, so the day one entry moves out of ``MEMORY_WRITE_TOOLS``
+    into ``SANDBOX_WRITE_TOOLS`` (the scenario that constant's own docstring
+    contemplates), the sweep silently stops covering it and nothing goes red.
+    """
+
+    def test_the_scanner_finds_something(self) -> None:
+        """An inert derivation passes by matching nothing."""
+        found = _tables_a_sandbox_child_can_write()
+        assert len(found) >= 4, f"the table scan found only {found} — it is not scanning"
+
+    def test_every_table_a_sandbox_child_writes_is_swept(self) -> None:
+        missing = _tables_a_sandbox_child_can_write() - set(bs._SWEEP_ORDER)
+        assert not missing, (
+            f"a sandbox write tool writes {sorted(missing)}, which teardown_sandbox "
+            "never deletes — those rows become the next night's ambient state"
+        )
+
+    def test_children_are_swept_before_parents(self) -> None:
+        """FK order. A sweep that deletes crm_people first fails on the
+        dependent rows and leaves the tenant half-emptied."""
+        order = list(bs._SWEEP_ORDER)
+        for child, parent in (
+            ("crm_task_history", "crm_tasks"),
+            ("crm_tasks", "crm_people"),
+            ("timeline_activity", "crm_people"),
+            ("crm_messages", "crm_conversations"),
+            ("crm_people", "crm_companies"),
+        ):
+            assert order.index(child) < order.index(parent), (
+                f"{child} is swept after its parent {parent}"
+            )
+
+
+class TestNoMemoryResidueInTheSandbox:
+    """Why the CRM-only sweep is safe TODAY, pinned so it stays that way.
+
+    Every durable memory write a benchmark child could reach is denied in both
+    modes, so a week of fixture-less children leaves zero memory rows in the
+    sandbox tenant for the sweep to miss.
+    """
+
+    def test_every_memory_write_tool_is_denied_in_both_modes(self) -> None:
+        for sandbox in (False, True):
+            allowed = bs.benchmark_allowed_tools(sandbox=sandbox)
+            leaked = bs.MEMORY_WRITE_TOOLS & allowed
+            assert not leaked, (
+                f"sandbox={sandbox} allows {sorted(leaked)}, which writes memory rows "
+                "the teardown sweep does not cover — extend _SWEEP_ORDER first"
+            )
+
+    def test_no_sandbox_write_tool_is_a_memory_write_tool(self) -> None:
+        assert not (bs.SANDBOX_WRITE_TOOLS & bs.MEMORY_WRITE_TOOLS)
+
+    def test_the_sweep_covers_no_memory_table(self) -> None:
+        """If one ever appears here the pairing above has been broken, and this
+        test is the reminder to re-check the other half."""
+        memory_tables = {"memory_facts", "agent_memory_blocks", "memory_write_jobs"}
+        assert not (memory_tables & set(bs._SWEEP_ORDER))
+
+
+class TestSandboxTenantNameIsNamespaced:
+    """``teardown_sandbox`` hard-deletes 14 tables of whatever it is handed,
+    and now runs 78 times a night rather than 3. The old guard refused three
+    reserved names then required equality with ``sandbox_tenant_id()`` — which
+    is whatever ``ROBOTHOR_BENCHMARK_TENANT`` says, so a value typo'd onto a
+    real tenant id passed both checks.
+    """
+
+    def test_the_default_tenant_is_accepted(self, monkeypatch: Any) -> None:
+        monkeypatch.delenv("ROBOTHOR_BENCHMARK_TENANT", raising=False)
+        bs._assert_sandbox(bs.DEFAULT_SANDBOX_TENANT)
+
+    def test_a_namespaced_override_is_accepted(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("ROBOTHOR_BENCHMARK_TENANT", "benchmark-ci-7")
+        bs._assert_sandbox("benchmark-ci-7")
+
+    def test_an_override_onto_a_real_looking_tenant_is_refused(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("ROBOTHOR_BENCHMARK_TENANT", "acme-production")
+        with pytest.raises(bs.FixtureError, match="namespaced"):
+            bs._assert_sandbox("acme-production")
+
+    def test_the_reserved_names_are_still_refused(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("ROBOTHOR_BENCHMARK_TENANT", "robothor-primary")
+        with pytest.raises(bs.FixtureError):
+            bs._assert_sandbox("robothor-primary")
+
+
+class TestSandboxSuiteLockAgainstAFakePostgres:
+    """The lock itself, not the harness's use of it. Two callers share one fake
+    Postgres that implements ``pg_try_advisory_lock`` the way the real one does:
+    session-scoped, per key, released by ``pg_advisory_unlock`` or by the
+    session ending."""
+
+    @staticmethod
+    def _fake_postgres() -> tuple[Any, set[int]]:
+        """Returns a ``get_connection`` replacement and the shared lock table."""
+        from contextlib import contextmanager
+
+        held: set[int] = set()
+
+        class _Cursor:
+            def __init__(self, session: set[int]) -> None:
+                self._session = session
+                self._result: tuple[Any, ...] | None = None
+
+            def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+                key = params[0]
+                if "pg_try_advisory_lock" in sql:
+                    if key in held:
+                        self._result = (False,)
+                    else:
+                        held.add(key)
+                        self._session.add(key)
+                        self._result = (True,)
+                elif "pg_advisory_unlock" in sql:
+                    held.discard(key)
+                    self._session.discard(key)
+                    self._result = (True,)
+
+            def fetchone(self) -> tuple[Any, ...] | None:
+                return self._result
+
+        class _Conn:
+            def __init__(self) -> None:
+                self.session: set[int] = set()
+
+            def cursor(self) -> _Cursor:
+                return _Cursor(self.session)
+
+        @contextmanager
+        def _get_connection(autocommit: bool = False) -> Any:
+            conn = _Conn()
+            try:
+                yield conn
+            finally:
+                # A session that ends releases its advisory locks.
+                for key in list(conn.session):
+                    held.discard(key)
+
+        return _get_connection, held
+
+    def test_the_second_holder_is_refused_while_the_first_holds(self, monkeypatch: Any) -> None:
+        from robothor.db import connection as conn_mod
+
+        fake, held = self._fake_postgres()
+        monkeypatch.setattr(conn_mod, "get_connection", fake)
+
+        with bs.sandbox_suite_lock("benchmark-sandbox") as first:
+            assert first == bs.LOCK_ACQUIRED
+            assert held, "the fake never recorded the lock — it is not being taken"
+            with bs.sandbox_suite_lock("benchmark-sandbox") as second:
+                assert second == bs.LOCK_HELD_ELSEWHERE, (
+                    "two suites held the sandbox tenant at once"
+                )
+
+    def test_the_lock_is_released_on_the_way_out(self, monkeypatch: Any) -> None:
+        from robothor.db import connection as conn_mod
+
+        fake, held = self._fake_postgres()
+        monkeypatch.setattr(conn_mod, "get_connection", fake)
+
+        with bs.sandbox_suite_lock("benchmark-sandbox") as got:
+            assert got == bs.LOCK_ACQUIRED
+        assert held == set()
+        with bs.sandbox_suite_lock("benchmark-sandbox") as again:
+            assert again == bs.LOCK_ACQUIRED
+
+    def test_it_is_released_even_when_the_suite_raises(self, monkeypatch: Any) -> None:
+        """And the suite's OWN exception is what the caller sees.
+
+        This test used to raise ``RuntimeError`` and assert ``RuntimeError``,
+        which the bug satisfied: ``yield LOCK_ACQUIRED`` sat inside the ``try``
+        whose ``except Exception`` yields ``LOCK_UNAVAILABLE``, so an escaping
+        exception was thrown back in at that yield, caught, and the generator
+        yielded a SECOND time — which ``contextlib`` turns into
+        ``RuntimeError: generator didn't stop after throw()``. The original
+        exception and its traceback were destroyed at the boundary, and a false
+        "lock unavailable" ERROR sent the operator to the connection pool for
+        what was a typo in a suite file. A distinct exception class is the only
+        way to see that.
+        """
+
+        class SuiteExplodedError(Exception):
+            pass
+
+        from robothor.db import connection as conn_mod
+
+        fake, held = self._fake_postgres()
+        monkeypatch.setattr(conn_mod, "get_connection", fake)
+
+        with pytest.raises(SuiteExplodedError, match="a task had no id") as caught:
+            with bs.sandbox_suite_lock("benchmark-sandbox"):
+                raise SuiteExplodedError("a task had no id")
+
+        assert type(caught.value) is SuiteExplodedError, (
+            "the suite's exception was replaced at the lock boundary"
+        )
+        assert held == set(), "a crashed suite kept the sandbox locked for ever"
+
+    def test_a_crash_does_not_log_a_false_lock_failure(self, monkeypatch: Any, caplog: Any) -> None:
+        """The second half of the damage: the operator is told the lock was
+        unavailable when the lock was fine and the suite was not."""
+        import logging
+
+        class SuiteExplodedError(Exception):
+            pass
+
+        from robothor.db import connection as conn_mod
+
+        fake, _held = self._fake_postgres()
+        monkeypatch.setattr(conn_mod, "get_connection", fake)
+
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.benchmark_sandbox"):
+            with pytest.raises(SuiteExplodedError), bs.sandbox_suite_lock("benchmark-sandbox"):
+                raise SuiteExplodedError("boom")
+
+        assert not [r for r in caplog.records if "lock unavailable" in r.getMessage()], (
+            "a suite crash was reported as a lock failure"
+        )
+
+    def test_a_different_tenant_is_a_different_lock(self, monkeypatch: Any) -> None:
+        from robothor.db import connection as conn_mod
+
+        fake, _ = self._fake_postgres()
+        monkeypatch.setattr(conn_mod, "get_connection", fake)
+
+        with bs.sandbox_suite_lock("benchmark-sandbox") as first:
+            assert first == bs.LOCK_ACQUIRED
+            with bs.sandbox_suite_lock("benchmark-ci-7") as second:
+                assert second == bs.LOCK_ACQUIRED
+
+    def test_an_unavailable_lock_fails_closed(self, monkeypatch: Any, caplog: Any) -> None:
+        """The serialiser being down is not permission to run unserialised.
+
+        A refused suite is a visible absence; an unserialised one that loses the
+        race grades a swept sandbox as a plausible low score with no error
+        anywhere. Benchmark safety fails closed.
+        """
+        import logging
+
+        from robothor.db import connection as conn_mod
+
+        def _broken(autocommit: bool = False) -> Any:
+            raise RuntimeError("pool exhausted")
+
+        monkeypatch.setattr(conn_mod, "get_connection", _broken)
+        with caplog.at_level(logging.ERROR, logger="robothor.engine.benchmark_sandbox"):
+            with bs.sandbox_suite_lock("benchmark-sandbox") as got:
+                assert got == bs.LOCK_UNAVAILABLE
+        assert any("REFUSING" in r.getMessage() for r in caplog.records)
+
+    def test_the_three_outcomes_are_distinct(self) -> None:
+        """Two failures that mean different things must not collapse into one."""
+        assert len({bs.LOCK_ACQUIRED, bs.LOCK_HELD_ELSEWHERE, bs.LOCK_UNAVAILABLE}) == 3
