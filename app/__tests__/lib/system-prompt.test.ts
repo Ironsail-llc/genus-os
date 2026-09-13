@@ -5,7 +5,6 @@ vi.mock("@/lib/config", () => ({
   HELM_AGENT_ID: "helm-user",
   OWNER_NAME: "there",
   AI_NAME: "Robothor",
-  SESSION_KEY: "agent:main:webchat-user",
 }));
 
 import { getVisualCanvasPrompt, ROBOTHOR_SYSTEM_PROMPT } from "@/lib/system-prompt";

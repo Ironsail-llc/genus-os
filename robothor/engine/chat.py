@@ -106,6 +106,18 @@ def _resolve_webchat_identity(auth: Any) -> IdentityContext | None:
     return resolve_identity("webchat", auth.user_id, auth.tenant_id)
 
 
+def derive_user_session_key(agent_id: str, user_id: str) -> str:
+    """The session key one member's conversation with ``agent_id`` lives under.
+
+    The ONE place this shape is written. Two callers need it — the request path
+    below and :class:`~robothor.engine.channels.webchat.WebchatChannel`, which
+    has to write a delivery into the same session the member's own requests land
+    in. Derived twice, they would drift the first time either changed and a
+    briefing would land in a session nobody reads.
+    """
+    return f"agent:{agent_id or 'main'}:user:{user_id}"
+
+
 def _effective_session_key(auth: Any, requested_key: str) -> str:
     """Resolve the session key a chat request should actually operate on.
 
@@ -130,8 +142,16 @@ def _effective_session_key(auth: Any, requested_key: str) -> str:
     - ``observe`` mode returns ``requested_key`` unchanged (no behavior
       change) but logs the derivation that enforce mode WOULD have made, so
       the rollout can be evaluated before it changes anyone's session.
-    - ``off`` (the default) always returns ``requested_key`` unchanged.
+    - ``off`` always returns ``requested_key`` unchanged. It is the escape
+      hatch, not the default: ``enforce`` is what a fresh instance runs.
+
+    An EMPTY ``requested_key`` is the main session key. The Helm stopped
+    sending one at all (there is nothing a browser could say here that the
+    server does not already know better), and every rule below then applies to
+    that key exactly as it would to one that arrived over the wire — so
+    omitting the field is no more a way to choose a session than forging it is.
     """
+    requested_key = requested_key or get_main_session_key()
     if getattr(auth, "is_service", False):
         return requested_key
 
@@ -145,7 +165,7 @@ def _effective_session_key(auth: Any, requested_key: str) -> str:
 
     parts = requested_key.split(":")
     agent_id = parts[1] if len(parts) >= 2 else (_config.default_chat_agent if _config else "main")
-    derived = f"agent:{agent_id}:user:{auth.user_id}"
+    derived = derive_user_session_key(agent_id, auth.user_id)
 
     if mode == "observe":
         if derived != requested_key:
@@ -192,6 +212,15 @@ def get_shared_session(session_key: str) -> ChatSession:
     Used by telegram.py so both channels share one in-memory session.
     """
     return _get_session(session_key)
+
+
+def session_count() -> int:
+    """How many chat sessions this process is holding. Introspection, not control.
+
+    Public so ``channels/webchat.py``'s ``health()`` can report it without
+    reaching into ``_sessions`` from another module.
+    """
+    return len(_sessions)
 
 
 def get_main_session_key() -> str:
@@ -263,8 +292,8 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
     session_key: str = body.get("session_key", "")
     message: str = body.get("message", "")
 
-    if not session_key or not message:
-        return JSONResponse({"error": "session_key and message required"}, status_code=400)
+    if not message:
+        return JSONResponse({"error": "message required"}, status_code=400)
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -431,9 +460,6 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
 @router.get("/history")
 async def chat_history(request: Request, session_key: str = "", limit: int = 50) -> JSONResponse:
     """Return conversation history for a session."""
-    if not session_key:
-        return JSONResponse({"error": "session_key required"}, status_code=400)
-
     auth = _auth_context(request)
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -451,8 +477,8 @@ async def chat_inject(request: Request) -> JSONResponse:
     message: str = body.get("message", "")
     label: str = body.get("label", "")
 
-    if not session_key or not message:
-        return JSONResponse({"error": "session_key and message required"}, status_code=400)
+    if not message:
+        return JSONResponse({"error": "message required"}, status_code=400)
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -484,9 +510,6 @@ async def chat_abort(request: Request) -> JSONResponse:
     body = await request.json()
     session_key: str = body.get("session_key", "")
 
-    if not session_key:
-        return JSONResponse({"error": "session_key required"}, status_code=400)
-
     auth = _auth_context(request)
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -505,9 +528,6 @@ async def chat_clear(request: Request) -> JSONResponse:
     auth = _auth_context(request)
     body = await request.json()
     session_key: str = body.get("session_key", "")
-
-    if not session_key:
-        return JSONResponse({"error": "session_key required"}, status_code=400)
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -540,9 +560,6 @@ async def chat_export(request: Request) -> JSONResponse:
     """Export session as markdown or JSON."""
     session_key = request.query_params.get("session_key", "")
     format_ = request.query_params.get("format", "markdown")
-
-    if not session_key:
-        return JSONResponse({"error": "session_key required"}, status_code=400)
 
     auth = _auth_context(request)
     session_key = _effective_session_key(auth, session_key)
@@ -624,8 +641,8 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
     message: str = body.get("message", "")
     deep_plan: bool = body.get("deep_plan", False)
 
-    if not session_key or not message:
-        return JSONResponse({"error": "session_key and message required"}, status_code=400)
+    if not message:
+        return JSONResponse({"error": "message required"}, status_code=400)
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -806,8 +823,8 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     session_key: str = body.get("session_key", "")
     plan_id: str = body.get("plan_id", "")
 
-    if not session_key or not plan_id:
-        return JSONResponse({"error": "session_key and plan_id required"}, status_code=400)
+    if not plan_id:
+        return JSONResponse({"error": "plan_id required"}, status_code=400)
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -1093,8 +1110,8 @@ async def plan_reject(request: Request) -> JSONResponse:
     plan_id: str = body.get("plan_id", "")
     feedback: str = body.get("feedback", "")
 
-    if not session_key or not plan_id:
-        return JSONResponse({"error": "session_key and plan_id required"}, status_code=400)
+    if not plan_id:
+        return JSONResponse({"error": "plan_id required"}, status_code=400)
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -1136,10 +1153,8 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
     plan_id: str = body.get("plan_id", "")
     feedback: str = body.get("feedback", "")
 
-    if not session_key or not plan_id or not feedback:
-        return JSONResponse(
-            {"error": "session_key, plan_id, and feedback required"}, status_code=400
-        )
+    if not plan_id or not feedback:
+        return JSONResponse({"error": "plan_id and feedback required"}, status_code=400)
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -1302,9 +1317,6 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
 @router.get("/plan/status")
 async def plan_status(request: Request, session_key: str = "") -> JSONResponse:
     """Check plan state for a session."""
-    if not session_key:
-        return JSONResponse({"error": "session_key required"}, status_code=400)
-
     auth = _auth_context(request)
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -1356,8 +1368,8 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
     session_key: str = body.get("session_key", "")
     query: str = (body.get("query", "") or body.get("message", "")).strip()
 
-    if not session_key or not query:
-        return JSONResponse({"error": "session_key and query required"}, status_code=400)
+    if not query:
+        return JSONResponse({"error": "query required"}, status_code=400)
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -1503,9 +1515,6 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
 @router.get("/deep/status")
 async def deep_status(request: Request, session_key: str = "") -> JSONResponse:
     """Check deep reasoning state for a session."""
-    if not session_key:
-        return JSONResponse({"error": "session_key required"}, status_code=400)
-
     auth = _auth_context(request)
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)

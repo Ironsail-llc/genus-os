@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse  # noqa: TC003 - argparse.Namespace is used at runtime in signatures
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import sys
@@ -51,6 +52,11 @@ _ADDABLE: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("bot_token", "bot_token", "ROBOTHOR_SLACK_BOT_TOKEN"),
         ("app_token", "app_token", "ROBOTHOR_SLACK_APP_TOKEN"),
     ),
+    # Email has ONE credential. The host, port, user and from-address are
+    # settings below, not vault rows: they are not secrets, and putting them
+    # behind a master key would make them unreadable by the doctor on an
+    # instance that has no vault.
+    "email": (("smtp_password", "smtp_password", "ROBOTHOR_EMAIL_SMTP_PASSWORD"),),
 }
 
 #: Per-channel non-secret settings ``add`` can write. ``(flag attribute, group,
@@ -59,6 +65,24 @@ _ADDABLE_SETTINGS: dict[str, tuple[tuple[str, str, str, str], ...]] = {
     "slack": (
         ("verify_target", "channels", "slack_verify_target", "ROBOTHOR_SLACK_VERIFY_TARGET"),
     ),
+    "email": (
+        ("from_address", "channels", "email_from", "ROBOTHOR_EMAIL_FROM"),
+        ("smtp_host", "channels", "email_smtp_host", "ROBOTHOR_EMAIL_SMTP_HOST"),
+        ("smtp_port", "channels", "email_smtp_port", "ROBOTHOR_EMAIL_SMTP_PORT"),
+        ("smtp_starttls", "channels", "email_smtp_starttls", "ROBOTHOR_EMAIL_SMTP_STARTTLS"),
+        ("smtp_user", "channels", "email_smtp_user", "ROBOTHOR_EMAIL_SMTP_USER"),
+    ),
+}
+
+#: The flags that exist only to be REFUSED, per channel. A map rather than the
+#: hard-coded Slack pair this used to be: with one channel it read as a list of
+#: every credential flag the command has, and with two it was a list of Slack's
+#: — so an operator who put an SMTP password on a command line was told to
+#: export a Slack bot token instead, and the advice that mattered (rotate it)
+#: named the wrong console.
+_REFUSED_FLAGS: dict[str, tuple[tuple[str, str], ...]] = {
+    "slack": (("--bot-token", "bot_token"), ("--app-token", "app_token")),
+    "email": (("--smtp-password", "smtp_password"),),
 }
 
 
@@ -239,8 +263,18 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         )
         return 2
 
+    # ``--tenant`` reaches only a channel that declares it. The opt-out list the
+    # email channel clears ``--to`` against is per-tenant, and a channel that
+    # takes no tenant must not be handed one rather than be given a keyword it
+    # would reject — a verify that raises on an unrelated channel would be worse
+    # than the flag being ignored there.
+    tenant = (getattr(args, "tenant", None) or "").strip()
+    extra: dict[str, Any] = {}
+    if tenant and "tenant" in inspect.signature(verify).parameters:
+        extra["tenant"] = tenant
+
     try:
-        steps = asyncio.run(verify(getattr(args, "target", None)))
+        steps = asyncio.run(verify(getattr(args, "target", None), **extra))
     except Exception as exc:  # noqa: BLE001 — a broken channel is a report, not a traceback
         _err(f"Channel {name!r} raised while verifying: {type(exc).__name__}: {exc}")
         return 1
@@ -290,10 +324,10 @@ def _collect(args: argparse.Namespace, name: str) -> dict[str, tuple[str, str, s
     interactive = sys.stdin.isatty()
     resolved: dict[str, tuple[str, str, str]] = {}
     for attribute, field, env in _ADDABLE[name]:
-        # The environment layer of the ONE Slack credential reader. Deliberately
-        # not the full resolver: `add` is deciding what to STORE, and answering
-        # from the vault would have `--to env` copy a vault row into the
-        # instance env file — a credential moving somewhere nobody asked.
+        # The environment layer alone. Deliberately not the full secrets
+        # resolver: `add` is deciding what to STORE, and answering from the
+        # vault would have `--to env` copy a vault row into the instance env
+        # file — a credential moving somewhere nobody asked.
         value = environment_token(env)
         source = "environment"
         if not value and interactive:
@@ -322,25 +356,37 @@ def _refuse_command_line_tokens(args: argparse.Namespace, name: str) -> str:
     tokens to stderr, so removing them would leak the credential through the
     error message for a flag that no longer exists.
 
+    EVERY channel's flags are checked, not just the named channel's: the name
+    is checked after this, so a credential passed alongside a misspelled channel
+    must still be refused rather than reported as a typo.
+
     Checked before the channel name, because a misspelled name is a typo and a
     published credential is an incident.
     """
-    offenders = [
-        flag
-        for flag, attribute in (("--bot-token", "bot_token"), ("--app-token", "app_token"))
-        if (getattr(args, attribute, None) or "").strip()
-    ]
-    if not offenders:
+    offending: dict[str, list[str]] = {}
+    for channel, flags in _REFUSED_FLAGS.items():
+        for flag, attribute in flags:
+            if (getattr(args, attribute, None) or "").strip():
+                offending.setdefault(channel, []).append(flag)
+    if not offending:
         return ""
-    envs = ", ".join(sorted({env for _a, _f, env in _ADDABLE.get(name, _ADDABLE["slack"])}))
+    offenders = sorted({flag for flags in offending.values() for flag in flags})
+    # The safe environment names to NAME are the ones for the channel the
+    # operator is configuring; when the name is a typo, the ones belonging to
+    # the flags they actually used.
+    channels = [name] if name in _ADDABLE else sorted(offending)
+    envs = ", ".join(
+        sorted({env for channel in channels for _a, _f, env in _ADDABLE.get(channel, ())})
+    )
     return (
-        f"Refusing {' and '.join(offenders)}: a token on a command line is readable by "
-        "every account on this box through `ps` and /proc/<pid>/cmdline, and is already "
-        "in your shell history. Nothing this command does afterwards can take that back.\n"
-        "Run `genus channel add` with no token flag and paste it at the prompt (it is not "
-        f"echoed), or export it first ({envs}).\n"
-        "If the token has already been on a command line, rotate it in the Slack app "
-        "console rather than storing it."
+        f"Refusing {' and '.join(offenders)}: a credential on a command line is readable "
+        "by every account on this box through `ps` and /proc/<pid>/cmdline, and is "
+        "already in your shell history. Nothing this command does afterwards can take "
+        "that back.\n"
+        "Run `genus channel add` with no credential flag and paste it at the prompt (it "
+        f"is not echoed), or export it first ({envs}).\n"
+        "If it has already been on a command line, rotate it wherever it was issued "
+        "rather than storing it."
     )
 
 

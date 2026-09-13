@@ -928,9 +928,9 @@ class ChannelSettings(SettingsGroup):
         "genus.channels plugin is INERT until it is named here, the same rule "
         "ROBOTHOR_SANDBOX_BACKEND follows and for the same reason: a package "
         "that became the delivery surface merely by being installed could "
-        "intercept every briefing. Built-in channels (telegram, event_bus) are "
-        "always available and are not listed here. Provisional name until "
-        "adding a channel persists it to config.yaml.",
+        "intercept every briefing. Built-in channels (telegram, event_bus, "
+        "slack, webchat, email) are always available and are not listed here. "
+        "Provisional name until adding a channel persists it to config.yaml.",
         since="1.70.0",
     )
     telegram_bot_token: str = declare(
@@ -984,6 +984,55 @@ class ChannelSettings(SettingsGroup):
         "delivery never falls back to it, so an agent whose manifest names no "
         "target fails loudly instead of posting somewhere nobody chose.",
         since="1.70.0",
+    )
+    email_from: str = declare(
+        "",
+        "ROBOTHOR_EMAIL_FROM",
+        "Address the email channel sends FROM over SMTP, and the one an "
+        "operator will reply to. Required for the SMTP transport and unused by "
+        "the gws transport, which sends as whichever account the gws CLI is "
+        "authenticated to.",
+        since="1.74.0",
+    )
+    email_smtp_host: str = declare(
+        "",
+        "ROBOTHOR_EMAIL_SMTP_HOST",
+        "SMTP server the email channel falls back to when no gws CLI is "
+        "installed. Empty means the channel has no SMTP transport; on a box "
+        "without gws that makes `delivery.channel: email` answer "
+        "failed:email_no_transport rather than silently doing nothing.",
+        since="1.74.0",
+    )
+    email_smtp_port: int = declare(
+        587,
+        "ROBOTHOR_EMAIL_SMTP_PORT",
+        "SMTP port. 587 is submission with STARTTLS; 465 is implicit TLS and "
+        "the channel opens an SMTP_SSL connection for it instead.",
+        since="1.74.0",
+    )
+    email_smtp_starttls: bool = declare(
+        True,
+        "ROBOTHOR_EMAIL_SMTP_STARTTLS",
+        "Upgrade the SMTP connection with STARTTLS before authenticating. On "
+        "by default: a password sent over a cleartext session is a published "
+        "password. Ignored on port 465, which is already TLS.",
+        since="1.74.0",
+    )
+    email_smtp_user: str = declare(
+        "",
+        "ROBOTHOR_EMAIL_SMTP_USER",
+        "SMTP username. Empty means the channel does not authenticate, which "
+        "only a relay that accepts the sending host by address will allow.",
+        since="1.74.0",
+    )
+    email_smtp_password: str = declare(
+        "",
+        "ROBOTHOR_EMAIL_SMTP_PASSWORD",
+        "SMTP password. Read through the secrets accessor, so `genus channel "
+        "add email` may put it in this instance's vault instead of the "
+        "environment.",
+        secret=True,
+        since="1.74.0",
     )
     channel_access_default: str = declare(
         "pairing",
@@ -1291,6 +1340,18 @@ class FlagSettings(SettingsGroup):
         "Agent-manifest schema ladder position: observe logs and counts what "
         "enforcement would refuse, enforce refuses the manifest and reports "
         "the agent broken. off skips validation entirely.",
+    )
+    per_user_sessions: str = declare(
+        "enforce",
+        "ROBOTHOR_PER_USER_SESSIONS",
+        "Webchat session isolation: enforce (the default) gives every non-owner "
+        "member their own derived chat session, observe logs what it would "
+        "derive and changes nothing, off shares one session between every "
+        "caller — which also lets any same-tenant caller read any session_key. "
+        "The tenant owner keeps agent:main:primary in every mode, preserving "
+        "the operator's webchat<->Telegram continuity.",
+        governed=True,
+        since="1.74.0",
     )
     planner_enabled: bool = declare(
         True,

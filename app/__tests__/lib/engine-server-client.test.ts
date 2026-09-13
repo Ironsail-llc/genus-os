@@ -23,7 +23,7 @@ describe("EngineClient authentication", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await new EngineClient().chatSend("agent:main:primary", "hello");
+    await new EngineClient().chatSend("hello");
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0][1].headers).toEqual({
@@ -41,7 +41,7 @@ describe("EngineClient authentication", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await new EngineClient().chatHistory("agent:main:primary");
+    await new EngineClient().chatHistory();
 
     expect(fetchMock.mock.calls[0][1].headers).toEqual({
       Authorization: "Bearer signed-bridge-user-token",

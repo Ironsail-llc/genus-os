@@ -53,29 +53,60 @@ class FlagPatch(BaseModel):
     reason: str
 
 
-#: Flags whose unset default is NOT the bottom rung. A compliance control
-#: ships enforcing, so reporting "observe" for one nobody has written yet
-#: would have this page contradict the engine — an operator would read the
-#: opt-out as not-yet-on and go looking for why it never fired.
+#: Flags whose engine default deliberately differs from the value their settings
+#: field declares. ``ROBOTHOR_DNC_MODE`` is declared ``observe`` like every other
+#: ladder, and ``feature_flags.do_not_contact_mode`` floors it at ``enforce``
+#: because a compliance opt-out has no dark rung. Only that class of flag belongs
+#: here: an entry that merely repeats the declaration is dead weight, and
+#: ``test_controls_unset_defaults`` fails on one.
 _UNSET_DEFAULTS: dict[str, str] = {"ROBOTHOR_DNC_MODE": "enforce"}
 
 
+def _declared_default(name: str) -> str | None:
+    """What ``robothor/settings/model.py`` says this flag is when nobody sets it.
+
+    One source, read rather than restated. The registry is also where
+    ``GOVERNED_FLAGS`` itself comes from, so every flag this page can render has
+    a declared default by construction.
+    """
+    try:
+        from robothor.settings.registry import field_index
+
+        record = field_index().get(name)
+    except Exception:  # noqa: BLE001 — the page must render without the model
+        return None
+    if record is None:
+        return None
+    declared = record.get("default")
+    if isinstance(declared, bool):
+        return "true" if declared else "false"
+    text = str(declared or "").strip()
+    return text or None
+
+
 def _default_value_for(name: str) -> str:
-    """A flag-appropriate "unset" default.
+    """A flag-appropriate "unset" default — what the ENGINE runs, not a guess.
 
-    A boolean flag that has never been written defaults to "false", never
-    "observe" (which isn't even in its value set). Everything else starts on
-    its lowest rung, which is where a flag being promoted through a soak
-    genuinely starts — except the flags in ``_UNSET_DEFAULTS``, which ship
-    enforcing and must be reported as such.
+    Reached only when there is neither a DB row nor an environment variable
+    (``store.resolve`` covers both), so the answer is the flag's own hardcoded
+    default and this page must show exactly that. It is DERIVED from the settings
+    registry rather than inferred from the shape of the value set: the old rule
+    ("boolean → false, else observe") was right for every flag that starts dark
+    and gets promoted, and it silently became wrong the first time a governed
+    flag shipped at ``enforce``, so the page would have contradicted the engine
+    with no test noticing.
 
-    This must agree with the engine's own default for the same flag
-    (``robothor.engine.feature_flags``); the two are read by different people
-    for the same question, and only one of them is the truth.
+    ``_UNSET_DEFAULTS`` still wins, for the flags whose engine accessor
+    deliberately ignores the declared value. The heuristic survives only as the
+    last resort for a declaration that is empty or outside the value set —
+    ``ROBOTHOR_SANDBOX_DEFAULT_MODE`` declares ``""``.
     """
     if name in _UNSET_DEFAULTS:
         return _UNSET_DEFAULTS[name]
     valid = store.valid_values_for(name)
+    declared = _declared_default(name)
+    if declared is not None and declared in valid:
+        return declared
     return "false" if "false" in valid else "observe"
 
 
