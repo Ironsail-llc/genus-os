@@ -9,7 +9,11 @@ triggers:
     timezone: America/New_York
   - type: manual
 
-timeout_seconds: 1800
+# Must EXCEED one agent step's whole model-chain allowance — see
+# email-pipeline.yaml for the arithmetic. 1800 was exactly the floor, which is
+# not headroom: the floor bills the models after the primary a single attempt
+# each, and any one of them retrying puts the step over.
+timeout_seconds: 2400
 
 steps:
   - id: collect-jira

@@ -92,7 +92,7 @@ from robothor.engine.run_budget import (
 from robothor.engine.run_context import mark_benchmark_run
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import resolve_run_identity
-from robothor.engine.run_lifecycle import RunLifecycleMixin
+from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
 from robothor.engine.sanitize import sanitize_log as _sanitize
@@ -108,6 +108,7 @@ from robothor.engine.tools import get_registry
 from robothor.engine.toolset_prep import prepare_toolset
 from robothor.engine.tracking import create_run, update_run
 from robothor.engine.warmup_steps import record_warmup_steps
+from robothor.engine.workflow_budget import WorkflowDeadlineError, propagates_to_caller
 
 #: Tools whose work is several sub-agent runs, so the agent-level per-tool cap
 #: (120s by default) is far too short. Kept at a 600s floor.
@@ -223,11 +224,6 @@ def _resolve_tool_timeout(tool_name: str, configured: int) -> int:
         return max(configured, 600)
     return configured
 
-
-# Announce-mode runs that end with fewer characters than this are flagged
-# as "partial" — almost always a meta-confirmation ("briefing delivered")
-# rather than the real content the agent was supposed to broadcast.
-ANNOUNCE_MIN_OUTPUT_CHARS = 200
 
 # Init timeout: max seconds for agent setup before first LLM call.
 # Agents that hang during warmup, adapter loading, or tool registration
@@ -1390,19 +1386,7 @@ class AgentRunner(
                 reason = abort_reason or f"Stall watchdog: no progress for {stall_timeout}s"
                 logger.warning("Agent %s killed: %s", _sanitize(agent_id), _sanitize(reason))
                 session.record_error(reason)
-                # Trigger autoDream consolidation as post-stall cleanup
-                try:
-                    from robothor.engine.autodream import is_cooled_down, run_autodream
-
-                    if is_cooled_down():
-                        from robothor.engine.task_registry import get_task_registry
-
-                        get_task_registry().spawn(
-                            run_autodream(mode="post_stall"),
-                            name=f"autodream-post-stall:{agent_id}",
-                        )
-                except Exception as e:
-                    logger.warning("autoDream post_stall failed: %s", _sanitize(e))
+                spawn_post_stall_autodream(agent_id)
                 return self._finish_run(
                     session.timeout(reason=reason),
                     trace=trace,
@@ -1412,14 +1396,20 @@ class AgentRunner(
                 )
             # Cancelled from outside (circuit breaker, daemon shutdown,
             # or a caller-level wait_for). Name what we know.
+            # A WORKFLOW budget expiring mid-call is its own evidence: this
+            # run's clock never fired, and the exception already names the
+            # workflow, step and model. It outranks abort_reason, which would
+            # otherwise both mask the message and re-stamp the row a timeout.
+            _deadline = str(_cancel_exc) if isinstance(_cancel_exc, WorkflowDeadlineError) else ""
             _outcome = _cancel_outcome(
                 timed_out=isinstance(_cancel_exc, TimeoutError),
                 declared_timeout_seconds=agent_config.timeout_seconds,
                 effective_ceiling=effective_hard_timeout,
                 last_activity=watchdog.last_activity_desc,
                 waiting_on=watchdog.waiting_on,
+                workflow_deadline=_deadline,
             )
-            reason = abort_reason or _outcome.reason
+            reason = _deadline or abort_reason or _outcome.reason
             logger.warning("Agent %s cancelled: %s", _sanitize(agent_id), _sanitize(reason))
             session.record_error(reason)
             # Diagnostic dump for the noon-storm investigation. Captures
@@ -1430,7 +1420,7 @@ class AgentRunner(
             # finalization_budget's module docstring for what that cost.
             _finish = asyncio.to_thread(
                 self._finish_run,
-                terminal_run(session, _outcome, reason, diag, bool(abort_reason)),
+                terminal_run(session, _outcome, reason, diag, bool(abort_reason) and not _deadline),
                 trace=trace,
                 agent_config=agent_config,
                 session=session,
@@ -1454,7 +1444,12 @@ class AgentRunner(
             # watchdog (handled above) and its own hard cap (TimeoutError,
             # not CancelledError) still return a timed-out run, because for
             # those the deadline that fired was this run's to enforce.
-            if isinstance(_cancel_exc, asyncio.CancelledError):
+            #
+            # A workflow-budget kill propagates for the same reason with a
+            # different consumer: the row above is written, and only the
+            # workflow engine knows which STEP to mark. Swallowing it here is
+            # what made the step land `failed` with a circuit-breaker reason.
+            if propagates_to_caller(_cancel_exc):
                 raise
             return finished
         except Exception as e:

@@ -64,7 +64,12 @@ __all__ = [
 #: the member's own ``chat_sessions`` rows and inbox. A plugin able to claim the
 #: name could redirect every member-facing delivery into a surface of its own
 #: choosing, and the session it wrote to would still look like the member's.
-BUILTIN_CHANNELS = frozenset({"telegram", "event_bus", "slack", "webchat"})
+#:
+#: ``email`` is reserved on that stronger footing too: a plugin able to claim it
+#: would become the surface the ``crm_people.do_not_contact`` guard runs inside,
+#: and an opt-out control a package can replace merely by being installed is not
+#: a control.
+BUILTIN_CHANNELS = frozenset({"telegram", "event_bus", "slack", "webchat", "email"})
 
 #: How long plugin discovery may take before the daemon stops waiting for it.
 #: ``warm_channels`` sits between "all subsystems started" and ``READY=1``, and
@@ -148,6 +153,7 @@ def _ensure_builtins() -> None:
         if _builtins_registered:
             return
         try:
+            from robothor.engine.channels.email import EmailChannel
             from robothor.engine.channels.event_bus import EventBusChannel
             from robothor.engine.channels.slack import SlackChannel
             from robothor.engine.channels.telegram import TelegramChannel
@@ -164,6 +170,11 @@ def _ensure_builtins() -> None:
             # `failed:no_channel:slack` and send the operator looking for a
             # platform feature that is right here.
             register_channel("slack", SlackChannel(), builtin=True)
+            # Same rule again: an instance with neither the gws CLI nor an SMTP
+            # host gets `failed:email_no_transport` from the send, which names
+            # the missing piece, rather than `failed:no_channel:email` — which
+            # reads as "this platform cannot send email at all".
+            register_channel("email", EmailChannel(), builtin=True)
 
             # Sender shims too: a registration happens once, at bot start, so
             # a registry that forgot them would never get them back.

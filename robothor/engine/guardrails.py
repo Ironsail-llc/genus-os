@@ -153,15 +153,230 @@ _PLACEHOLDER_VALUES = frozenset(
         "redacted",
         "notasecret",
         "hunter2000",
+        # Documentation and fixture placeholders observed on CRM task text.
+        "your-token",
+        "your_token",
+        "yourtoken",
+        "your-api-key",
+        "your-api-key-here",
+        "your-secret",
+        "your-secret-here",
+        "your-password",
+        "token-here",
+        "secret-here",
+        "insert-token-here",
+        "replace-me",
+        "replaceme",
+        "tbd",
+        "todo",
     }
 )
+
+#: Tool results are scanned as `str(payload)`, which ESCAPES newlines and tabs
+#: — so a value at the end of a line arrives with a literal backslash-n glued
+#: to it, and the NAME on the next line arrives with one glued in front
+#: (`nACME_API_PASSWORD`, a variable that exists in no file, which is what
+#: the operator was shown). Stripped from both ends before anything is judged.
+_ESCAPE_EDGE = re.compile(r"^(?:\\[nrt])+|(?:\\[nrt])+$")
+
+#: A value whose secret material has been ELIDED: `ghp_...`, `sk-***********`,
+#: `Field(...`, `token…`. THREE or more, not two: `*` is a standard symbol in
+#: a generated password and `..` occurs inside real key material, so a pair
+#: exempted secrets it had no business exempting (`P4ss**w0rd**X9K2`,
+#: `a9f3..b2c1d0e5f4a8b7`). Every elision an author actually writes is an
+#: ellipsis — three dots, a row of stars, or the character itself.
+_ELIDED_VALUE = re.compile(r"\.{3,}|\*{3,}|…")
+
+#: Type, schema and label words. An assignment whose right-hand side is one of
+#: these is a DECLARATION (`api_key: "SecretStr"`, `access-token:
+#: opaque-bearer`) or a label repeated in prose — the name of a credential,
+#: not a credential. This is the same class of mistake as reading a JSON
+#: schema's `{"type": "string"}` as a value, one shape further out.
+_TYPE_AND_SCHEMA_WORDS = frozenset(
+    {
+        "str",
+        "string",
+        "secretstr",
+        "securestring",
+        "bytes",
+        "int",
+        "integer",
+        "float",
+        "number",
+        "bool",
+        "boolean",
+        "dict",
+        "object",
+        "array",
+        "list",
+        "json",
+        "uuid",
+        "text",
+        "varchar",
+        "any",
+        "optional",
+        "nullable",
+        "token",
+        "bearer",
+        "opaque-bearer",
+        "opaquebearer",
+        "basic",
+        "digest",
+        "jwt",
+        "oauth",
+        "oauth2",
+        "apikey",
+        "api-key",
+        "api_key",
+        "access-token",
+        "access_token",
+        "auth-token",
+        "auth_token",
+        "passwd",
+        "secret",
+        "credential",
+        "credentials",
+        "masked",
+        "hidden",
+    }
+)
+
+#: `ACME_API_PASSWORD`, i.e. an env-var NAME. A `.env.example` or a docs
+#: listing is a column of these, and `str(payload)` turns the column into one
+#: line, so the name on the NEXT line becomes this one's "value".
+#:
+#: What separates a name from uppercase KEY MATERIAL is where the digits sit:
+#: a real env-var name is words, optionally numbered at the end of a word
+#: (`OPENROUTER_API_KEY_2`, `S3_BUCKET`), while key material interleaves them
+#: (`X9K2M_4TQ7P_ZR31_WD8V`, `A7F3_B2C1_D0E5_F4A8`, `JBSWY3DPEHPK3PXP_…`). A
+#: length bound alone does not separate them — all of those fit inside any
+#: bound a name also fits inside — which is why digit placement is the rule.
+#:
+#: The 24-character bound is still here as well, on EVERY segment. Dropping it
+#: alongside the digit rule was incidental rather than required, and it
+#: exempted long all-caps runs (`ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEF_GH`) that
+#: both earlier revisions caught. No env-var name has a 33-character word.
+_ENV_VAR_NAME = re.compile(r"^[A-Z]{1,24}[0-9]{0,2}(?:_(?:[A-Z]{1,24}[0-9]{0,2}|[0-9]{1,3}))+$")
+
+#: `settings.db_password`, `config.get` — a reference to where the credential
+#: lives, which is exactly what an agent is supposed to be able to report.
+#:
+#: LOWERCASE only. Accepting mixed case here matched any unquoted value of two
+#: or more dot-separated chunks, which is also the shape of a JWT
+#: (`eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI5OSJ9.k3Qm…`) and of any random secret
+#: that happens to contain a dot (`Hj3k92mQx7.Zr41Tn8Pv`). An attribute path
+#: in the code an agent reads is snake_case.
+_ATTRIBUTE_PATH = re.compile(r"^[a-z_][a-z0-9_]{0,23}(?:\.[a-z_][a-z0-9_]{0,23})+$")
+
+#: `Field(`, `os.getenv(` — a call. Not anchored at the paren: the value
+#: pattern excludes `)` but not `(` or `=`, so a call WITH arguments arrives as
+#: `Field(repr=False` and an anchored pattern stopped one character short of
+#: recognising it. That miss was not merely a warning: the redactor rewrote
+#: `providerReference: SecretStr = Field(repr=False)` to
+#: `providerReference: SecretStr=[REDACTED: credential])`, handing an agent
+#: syntactically broken Python for a line holding no credential at all.
+#:
+#: The tail must then carry a SEPARATOR, because dropping the anchor outright
+#: exempted every value that merely contains a bracket — `Passw0rd(2024)Xk9`
+#: is an ordinary human password, not a call. A real call's arguments have a
+#: `=`, `,`, `.` or quote in them; key material after a `(` does not. The
+#: alternative (excluding `(` from the value charset) would truncate the
+#: capture and leave the redactor leaking the tail.
+_CALL_REFERENCE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,40}\((?:$|.*[^A-Za-z0-9])")
+
+#: A value with exactly one character class and no more characters than an
+#: ordinary English word is not key material — `required`, `undefined`,
+#: `unknown`. The bound is deliberately low: a single-class value LONGER than
+#: this is a plausible passphrase and still warns.
+_SINGLE_CLASS_WORD_MAX = 12
+
+
+def _value_core(value: str) -> str:
+    """The value with `str()` escapes and quoting stripped from its edges."""
+    core = _ESCAPE_EDGE.sub("", value.strip()).strip()
+    return core.strip("\"'`")
+
+
+def _is_elided_value(value: str) -> bool:
+    """`ghp_...`, `sk-***********`, `Field(...` — the value is not there."""
+    return _ELIDED_VALUE.search(_value_core(value)) is not None
+
+
+def _is_type_or_schema_word(value: str) -> bool:
+    """`str`, `SecretStr`, `opaque-bearer` — the TYPE of a credential."""
+    return _value_core(value).strip(".,;:").lower() in _TYPE_AND_SCHEMA_WORDS
+
+
+def _is_name_reference(value: str) -> bool:
+    """An env-var NAME or a reference to one, not the value behind it.
+
+    Only unquoted values reach this: a bare identifier in code or in a listing
+    is a reference, while the same characters inside quotes are a literal that
+    could be the credential itself.
+    """
+    core = _value_core(value).rstrip("=,;:")
+    return bool(
+        _ENV_VAR_NAME.match(core) or _ATTRIBUTE_PATH.match(core) or _CALL_REFERENCE.match(core)
+    )
+
+
+def _lacks_secret_entropy(value: str) -> bool:
+    """One character class, short enough to be an ordinary word."""
+    core = _value_core(value).strip(".,;:")
+    classes = sum(
+        (
+            any(c.islower() for c in core),
+            any(c.isupper() for c in core),
+            any(c.isdigit() for c in core),
+            any(not c.isalnum() for c in core),
+        )
+    )
+    return classes <= 1 and len(core) <= _SINGLE_CLASS_WORD_MAX
+
+
+def _is_credential_value(value: str, *, quoted: bool) -> bool:
+    """Whether an assignment's right-hand side is plausibly key material.
+
+    Measured on this instance in the 24h to 2026-09-13: 26 warnings on
+    `list_tasks`, 11 on `list_my_tasks`, 9 on `read_file` and several on
+    `search_records`, every one of them on the NAME of a credential, its TYPE,
+    or a documented placeholder for it — and the main agent narrated
+    "Credential exposure flagged this run" to the operator off the back of
+    them, twice in one day. A warning that fires on the word for a thing
+    rather than the thing teaches its reader to ignore it, which costs the
+    control exactly what it is for.
+
+    Each rejection below is a rule about the VALUE, so none of them can be
+    tripped by a real secret sitting next to one of these shapes: the scan
+    keeps going and the credential two lines down still warns.
+    """
+    if _is_placeholder(value):
+        return False
+    if _is_elided_value(value):
+        return False
+    if _is_type_or_schema_word(value):
+        return False
+    if not quoted and _is_name_reference(value):
+        return False
+    return not _lacks_secret_entropy(value)
+
+
+def _assigned_name(text: str, match: re.Match[str]) -> str:
+    r"""The identifier, without the `n` that `\n` leaves glued to its front."""
+    name = str(match.group("name"))
+    start = match.start("name")
+    if start > 0 and text[start - 1] == "\\" and name[:1] in ("n", "r", "t"):
+        stripped = name[1:]
+        if re.fullmatch(_CREDENTIAL_IDENTIFIER, stripped, re.IGNORECASE):
+            return stripped
+    return name
 
 
 def _first_assigned_credential(text: str) -> str | None:
     """The NAME of the first credential-shaped assignment, never the value."""
     for match in ASSIGNED_CREDENTIAL_PATTERN.finditer(text):
-        if not _is_placeholder(match.group("val")):
-            return str(match.group("name"))
+        if _is_credential_value(match.group("val"), quoted=bool(match.group("quote"))):
+            return _assigned_name(text, match)
     return None
 
 
@@ -171,12 +386,16 @@ def _redact_assigned_credentials(text: str) -> str:
     The agent still has to be able to say which file and which setting holds
     the credential; redacting the name as well would leave it unable to report
     anything actionable.
+
+    Driven by the same `_is_credential_value` predicate as the detector. Two
+    scanners with two opinions is a silent disagreement about what counts, and
+    the observable version of that was `password: "SecretStr" = "<secret>"`
+    losing the word `SecretStr` while keeping the credential.
     """
 
     def _sub(match: re.Match[str]) -> str:
-        val = match.group("val")
-        if _is_placeholder(val):
-            return match.group(0)
+        if not _is_credential_value(match.group("val"), quoted=bool(match.group("quote"))):
+            return str(match.group(0))
         quote = match.group("quote")
         return f"{match.group('name')}={quote}[REDACTED: credential]{quote}"
 

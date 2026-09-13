@@ -43,7 +43,12 @@ CAPS = {
     # had one). Seven lines: a four-line note and a two-line branch inside
     # execute(). There is no cohesive cluster to extract here — the write has
     # to happen where the run row is being assembled.
-    "robothor/engine/runner.py": 2519,
+    # 2522 -> 2520: the post-stall autoDream spawn left for run_lifecycle.py.
+    # 2520 -> 2514 on merge: that extraction and the host-state work landed
+    # independently, so the ratchet takes the merged actual rather than either
+    # branch's number -- a cap carried over from one side would bank the other
+    # side's savings as headroom.
+    "robothor/engine/runner.py": 2514,
     # 2545: a concurrent session ratcheted this to 2539 by lifting injection
     # screening and journal resume out of execute(); the deliverable guard's call
     # site adds the rest. Its 25 lines of logic went to loop_guards.py, so what
@@ -58,6 +63,13 @@ CAPS = {
     "robothor/engine/telegram_handlers.py": 1293,
     "robothor/engine/telegram_plan_mode.py": 900,
     "robothor/engine/run_finalizer.py": 1100,
+    # 937 (2026-09-13): every module the delivery path runs through was capped
+    # except the one that decides delivery. It was uncapped when the
+    # thin-announce fallback landed, so nothing but review stood between that
+    # feature and a god-object — the same gap `deliver()` itself had, which is
+    # why the fallback and the send are both helpers now rather than more
+    # inline branches.
+    "robothor/engine/delivery.py": 950,
     "robothor/engine/run_lifecycle.py": 800,
     "robothor/engine/run_llm_calls.py": 450,
     "robothor/engine/tool_admission.py": 400,
@@ -94,7 +106,11 @@ CAPS = {
     # untyped call in a typed context. The signature costs six lines and the
     # TYPE_CHECKING import four; trimming to fit would have meant deleting
     # the docstring that says why watchdog_fired overrides the status.
-    "robothor/engine/cancel_outcome.py": 86,
+    # 86 -> 83: learning a THIRD kind of evidence (a workflow budget expiring
+    # mid-call is a cancellation, not a timeout) was paid for by moving
+    # `propagates_to_caller` beside the exception that gave that rule its
+    # second member, and by deleting history the module docstring already told.
+    "robothor/engine/cancel_outcome.py": 83,
     # Fleet admission (2026-08-27): extracted from the scheduler rather than
     # growing it past its cap — the pool it drives had no production caller for
     # its whole existence, and the wiring is a cohesive unit of its own.

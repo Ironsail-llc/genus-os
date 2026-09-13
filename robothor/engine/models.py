@@ -708,6 +708,13 @@ class WorkflowStepStatus(StrEnum):
     # Reached, asked, and neither running nor finished. The step-level mirror
     # of RunStatus.AWAITING_APPROVAL.
     WAITING = "waiting"
+    # In flight when the WORKFLOW's budget ran out. The step-level mirror of
+    # RunStatus.TIMEOUT: without it, a step that never returned had to be left
+    # 'running' forever (the immortal-orphan shape the run-level finalizer
+    # exists to prevent) or deleted, and the 2026-09-13 diagnosis of
+    # email-pipeline had to reconstruct which step hung by joining agent_runs
+    # to workflow_runs on timestamps.
+    TIMEOUT = "timeout"
 
 
 @dataclass
