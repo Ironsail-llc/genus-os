@@ -22,6 +22,7 @@ import httpx
 
 from robothor.auth.tokens import issue_service_token
 from robothor.engine.auth import ENGINE_AUDIENCE
+from robothor.sanitize import sanitize_log
 from routers._operator import PLATFORM_TENANT
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,12 @@ async def engine_request(
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.request(method, url, json=json, headers=headers)
     except httpx.HTTPError as exc:
-        logger.warning("Engine call %s %s failed: %s", method, path, type(exc).__name__)
+        # ``path`` is sanitized because it is no longer always a literal: the
+        # agent-manifest routes build one from an id the caller supplied, and a
+        # newline in a log argument forges records.
+        logger.warning(
+            "Engine call %s %s failed: %s", method, sanitize_log(path), type(exc).__name__
+        )
         return 502, {"error": "engine unavailable"}
 
     try:

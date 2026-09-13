@@ -43,6 +43,7 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import yaml
 from deps import get_tenant_id
@@ -988,7 +989,12 @@ async def run_manifest(agent_id: str, request: Request) -> dict[str, Any]:
     """Fire the agent once, now. Proxied to the engine, which owns the runner."""
     require_operator(request)
     agent_id = _safe_id(agent_id)
-    status, body = await engine_request("POST", f"/api/agents/{agent_id}/trigger")
+    # Percent-encoded as well as identifier-validated. ``validate_identifier``
+    # already limits this to [a-z0-9-], so nothing can survive both — which is
+    # the point: this value is the only part of an engine URL that a caller
+    # chooses, and a URL a request is built from gets two locks, not one.
+    path = f"/api/agents/{quote(agent_id, safe='')}/trigger"
+    status, body = await engine_request("POST", path)
     # The engine's trigger route answers 200 with an ``error`` key for an agent
     # it cannot load, so the status code alone is not the verdict.
     refused = status >= 400 or (isinstance(body, dict) and body.get("error"))
