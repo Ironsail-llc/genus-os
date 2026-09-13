@@ -20,7 +20,12 @@ from pathlib import Path
 
 import robothor.engine
 from robothor.db.migrate import _discover
-from robothor.engine.models import RunStatus, TriggerType
+from robothor.engine.models import (
+    RunStatus,
+    TriggerType,
+    WorkflowStepStatus,
+    WorkflowStepType,
+)
 
 
 def _balanced_slice(text: str, open_paren_index: int) -> str:
@@ -149,4 +154,44 @@ class TestRunStatusConstraintDrift:
             f"agent_runs_status_check (newest definition: {source.name}). "
             "Terminal-state updates for these statuses will fail. Add a "
             "constraint migration (see crm/migrations/032_run_status_skipped.sql)."
+        )
+
+
+class TestWorkflowStepStatusConstraintDrift:
+    """The step-level mirror of the run-level guard above.
+
+    `workflow_run_steps` has drifted from its enum before and it was expensive:
+    migration 106's own comment records that `parallel` shipped as a step type
+    without ever reaching the CHECK, so `_persist_step` raised on every parallel
+    step and swallowed it into a `logger.warning` — "a feature that is built,
+    tested, documented, and invisible in the ledger". `WorkflowStepStatus` had
+    no such guard until `timeout` was added (migration 119); its three sibling
+    enums all did.
+    """
+
+    def test_every_step_status_member_is_allowed_by_the_check(self):
+        allowed, source = _newest_check_values("workflow_run_steps", "status")
+        missing = {s.value for s in WorkflowStepStatus} - set(allowed)
+        assert not missing, (
+            f"WorkflowStepStatus members {sorted(missing)} are not in "
+            f"workflow_run_steps_status_check (newest definition: {source.name}). "
+            "A status the CHECK rejects fails at terminal-update time, which is "
+            "the moment a step is trying to record what happened to it. Add a "
+            "constraint migration (see crm/migrations/119_workflow_step_timeout.sql)."
+        )
+
+    def test_the_check_allows_nothing_the_enum_cannot_produce(self):
+        """A spare value is a value nothing writes — either the enum lost a
+        member or the constraint was written from memory."""
+        allowed, source = _newest_check_values("workflow_run_steps", "status")
+        spare = set(allowed) - {s.value for s in WorkflowStepStatus}
+        assert not spare, f"{sorted(spare)} allowed by {source.name} but absent from the enum"
+
+    def test_every_step_type_member_is_allowed_by_the_check(self):
+        allowed, source = _newest_check_values("workflow_run_steps", "step_type")
+        missing = {s.value for s in WorkflowStepType} - set(allowed)
+        assert not missing, (
+            f"WorkflowStepType members {sorted(missing)} are not in "
+            f"workflow_run_steps_step_type_check (newest definition: {source.name}). "
+            "This is the exact shape of the `parallel` defect migration 106 fixed."
         )

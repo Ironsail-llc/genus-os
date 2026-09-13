@@ -37,15 +37,21 @@ that wants its own tests.
 from __future__ import annotations
 
 import contextlib
+import logging
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from robothor.engine.llm_budgets import in_place_retries, model_call_allowance
+from robothor.engine.sanitize import sanitize_log as _sanitize
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Callable, Iterator, Sequence
 
     from robothor.engine.models import WorkflowDef
+
+logger = logging.getLogger(__name__)
 
 #: Slice of the workflow budget held back from the last LLM call so the STEP
 #: fails first, with a message naming itself and the model in flight, instead
@@ -70,11 +76,43 @@ class WorkflowDeadlineError(TimeoutError):
         self.step_id = step_id
         self.model = model
         self.remaining = remaining
+        # ``model`` is the one the walk was REFUSED, not one in flight: by the
+        # time this is raised the previous call has returned. Saying "in
+        # flight" named a model that had already finished, and on a retry it
+        # named the wrong attempt (2026-09-13 review M5).
         super().__init__(
-            f"workflow {workflow_id!r} budget exhausted in step {step_id!r} "
-            f"with model {model!r} in flight ({remaining:.1f}s left of the "
-            f"workflow budget — not enough to start another model)"
+            f"workflow {workflow_id!r} budget exhausted in step {step_id!r}: "
+            f"{remaining:.1f}s left, not enough to start model {model!r}"
         )
+
+
+def propagates_to_caller(exc: BaseException) -> bool:
+    """Does this cancellation continue past ``runner.execute``?
+
+    Two kinds do, for the same reason: the run row is written first, and then
+    something ABOVE the runner has to act on the exception.
+
+    * ``CancelledError`` — an outer deadline is only a deadline if its
+      cancellation reaches the ``asyncio.timeout`` that raised it. Absorbed,
+      the cap silently does nothing (2026-08-24: a 3600s ceiling fired and the
+      sweep ran three more hours).
+    * ``WorkflowDeadlineError`` — only the workflow engine knows which STEP
+      this was. Absorbed, the step lands `failed` carrying a circuit-breaker
+      reason and every identifier this exception exists to carry is lost one
+      frame up.
+
+    A run's OWN hard cap is a plain ``TimeoutError`` and still returns a
+    finished run: for that one the deadline that fired was this run's to
+    enforce, and nobody above needs to hear about it.
+
+    It lives here, beside the exception that gave the rule its second member,
+    rather than in ``cancel_outcome`` beside the classification: ``runner``
+    already imports ``WorkflowDeadlineError`` from this module, so this adds no
+    edge to the import graph.
+    """
+    import asyncio
+
+    return isinstance(exc, asyncio.CancelledError | WorkflowDeadlineError)
 
 
 @dataclass(frozen=True)
@@ -162,6 +200,15 @@ def bound_call_timeout(per_call_timeout: float, model: str) -> float:
         return per_call_timeout
     remaining = deadline.remaining()
     if remaining <= 0:
+        # Say so on the same channel the chain walk uses for every other
+        # refusal. Without this the models the deadline prevents leave no trace
+        # at all — the walk raises instead of skipping, so "why did the chain
+        # stop at model 2 of 4" had no answer in the log.
+        logger.info(
+            "skipping %s — the workflow budget for step %s is spent",
+            _sanitize(model),
+            _sanitize(deadline.step_id or "unknown"),
+        )
         raise WorkflowDeadlineError(
             deadline.workflow_id, deadline.step_id or "unknown", model, remaining
         )
@@ -193,48 +240,65 @@ class BudgetIssue:
         )
 
 
-def model_call_allowance(model: str) -> int:
-    """Seconds one call to ``model`` may take on a workflow-triggered run.
-
-    Workflow and cron triggers are batch-shaped (``llm_client``'s
-    ``_BATCH_TRIGGER_TYPES``) and get the higher non-interactive per-model
-    timeout; the local tier gets its own, larger one. Same classification the
-    agent-side check uses, read from the same constants, so the two cannot
-    drift apart.
-    """
-    from robothor.engine.llm_client import LLM_REQUEST_TIMEOUT_BATCH, LLM_REQUEST_TIMEOUT_OLLAMA
-
-    if model.startswith(("ollama_chat/", "ollama/")):
-        return int(LLM_REQUEST_TIMEOUT_OLLAMA)
-    return int(LLM_REQUEST_TIMEOUT_BATCH)
-
-
 def step_chain_allowance(chain: Sequence[str]) -> int:
     """Worst-case wall-clock for ONE agent step's LLM chain, in seconds.
 
     The chain is walked once — every model gets its own per-call allowance —
-    plus one in-place transient retry (``TRANSIENT_RETRIES_PER_MODEL``) on the
-    primary, which is the leg that actually gets retried in practice: on
-    2026-09-13 the primary returned empty completions three times inside one
-    run before the chain advanced.
+    plus the in-place retries the walk grants the primary, which is the leg
+    that actually gets retried in practice: on 2026-09-13 the primary returned
+    empty completions three times inside one run before the chain advanced.
 
-    Deliberately the FLOOR of the worst case, not the ceiling. The true ceiling
-    multiplies every model by ``1 + TRANSIENT_RETRIES_PER_MODEL``, and a check
-    calibrated there would flag budgets that are merely tight rather than
-    incoherent. A warning from this number means the budget is definitely too
-    small, which is the only kind of warning anyone acts on.
+    Deliberately the FLOOR of the worst case for the models AFTER the primary,
+    not the ceiling: the true ceiling multiplies each of them by its own retry
+    count too, and a check calibrated there would flag budgets that are merely
+    tight rather than incoherent. A warning from this number means the budget
+    is definitely too small, which is the only kind of warning anyone acts on.
+    The primary is billed exactly, because under-counting there is how a
+    local-primary agent slips through entirely.
 
     For the chain that produced the incident —
     ``deepseek-v4.1-flash, mimo-v2.5, deepseek-v4-flash, ollama_chat/qwen3.8:27b``
     — this is ``300 + 300 + 300 + 600 + 300 = 1800`` against a 900s budget.
-    """
-    from robothor.engine.llm_client import TRANSIENT_RETRIES_PER_MODEL
 
+    Every number comes from ``llm_budgets``, the same leaf ``llm_client``
+    spends them out of, so the prediction and the runtime cannot drift.
+    """
     models = [m for m in chain if m]
     if not models:
         return 0
     total = sum(model_call_allowance(m) for m in models)
-    return total + TRANSIENT_RETRIES_PER_MODEL * model_call_allowance(models[0])
+    return total + in_place_retries(models[0]) * model_call_allowance(models[0])
+
+
+@dataclass(frozen=True)
+class BudgetReport:
+    """What the budget check managed to look at, and what it found.
+
+    The counts exist because the first version of this check was inert on the
+    platform's own repo and looked exactly like a clean one: every agent
+    manifest is gitignored, so every chain resolved to ``[]``,
+    ``step_chain_allowance([])`` returned 0, 0 is never greater than a budget,
+    and the loader printed nothing at all. Three layers of silence stacked —
+    an empty chain, a swallowed exception in the walk, and a swallowed
+    exception at the call site. A check that cannot say "I checked 2 of 6" can
+    never be told apart from one that had nothing to complain about.
+    """
+
+    workflow_id: str
+    agent_steps: int
+    checked: int
+    unresolved: tuple[str, ...]
+    issues: tuple[BudgetIssue, ...]
+
+    @property
+    def summary(self) -> str:
+        text = f"checked {self.checked} of {self.agent_steps} agent step(s)"
+        if self.unresolved:
+            text += (
+                f"; {len(self.unresolved)} chain(s) unresolved "
+                f"({', '.join(self.unresolved)}) — NOT checked"
+            )
+        return text
 
 
 def check_step_budgets(
@@ -254,17 +318,37 @@ def check_step_budgets(
     workflow still loads, because refusing to load it would take a pipeline
     offline over a budget that is merely optimistic. ``strict=True`` promotes
     the same finding to an error for the validation surfaces that want one.
+
+    Thin wrapper over :func:`report_step_budgets`, which is what callers that
+    need to know how much was actually checked should use.
+    """
+    return list(report_step_budgets(wf, resolve_chain, strict=strict).issues)
+
+
+def report_step_budgets(
+    wf: WorkflowDef,
+    resolve_chain: Callable[[str], Sequence[str]],
+    *,
+    strict: bool = False,
+) -> BudgetReport:
+    """As :func:`check_step_budgets`, but also says what it could not check.
+
+    An agent step whose chain will not resolve — a retired manifest, a renamed
+    agent, or simply a platform checkout where every manifest is gitignored —
+    is counted as UNRESOLVED rather than quietly treated as a zero-length chain
+    that trivially fits any budget.
     """
     from robothor.engine.models import WorkflowStepType
 
     budget = int(wf.timeout_seconds or 0)
-    if budget <= 0:
-        return []
-
     issues: list[BudgetIssue] = []
+    unresolved: list[str] = []
+    agent_steps = 0
+    checked = 0
     severity = "error" if strict else "warning"
 
     def _visit(steps: Sequence[object]) -> None:
+        nonlocal agent_steps, checked
         for step in steps:
             step_type = getattr(step, "type", None)
             agent_id = getattr(step, "agent_id", "")
@@ -273,12 +357,19 @@ def check_step_budgets(
                 _visit(nested)
             if step_type != WorkflowStepType.AGENT or not agent_id:
                 continue
+            agent_steps += 1
+            step_id = getattr(step, "id", "") or agent_id
             try:
-                chain = resolve_chain(agent_id)
-            except Exception:
+                chain = [m for m in (resolve_chain(agent_id) or []) if m]
+            except Exception as e:
+                logger.debug("Chain lookup failed for %s: %s", _sanitize(agent_id), e)
+                chain = []
+            if not chain:
+                unresolved.append(step_id)
                 continue
-            allowance = step_chain_allowance(chain or [])
-            if allowance > budget:
+            checked += 1
+            allowance = step_chain_allowance(chain)
+            if budget > 0 and allowance > budget:
                 issues.append(
                     BudgetIssue(
                         workflow_id=wf.id,
@@ -291,4 +382,10 @@ def check_step_budgets(
                 )
 
     _visit(wf.steps)
-    return issues
+    return BudgetReport(
+        workflow_id=wf.id,
+        agent_steps=agent_steps,
+        checked=checked,
+        unresolved=tuple(unresolved),
+        issues=tuple(issues),
+    )

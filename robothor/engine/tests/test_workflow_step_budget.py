@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -36,6 +37,7 @@ from robothor.engine.models import (
     AgentConfig,
     RunStatus,
     WorkflowStepStatus,
+    WorkflowStepType,
 )
 from robothor.engine.workflow import WorkflowEngine, parse_workflow
 from robothor.engine.workflow_budget import (
@@ -386,6 +388,352 @@ class TestRuntimeDeadline:
 
         assert run.status == RunStatus.TIMEOUT
         assert "classify" in (run.error_message or ""), run.error_message
+
+
+# ── 4. the deadline's identity survives every frame above it ───────────
+
+
+class TestTheDeadlineIdentitySurvives:
+    """Review C1: `WorkflowDeadlineError` subclasses `TimeoutError`, so
+    ``runner.execute``'s cancel arm caught it and ``_cancel_outcome`` rewrote
+    it as "Circuit-breaker hard timeout (3600s)". The step landed `failed`, the
+    run landed `failed`, `timeout` was never written, migration 119's new value
+    was unused on the primary path, and the agent run was stamped
+    ``RunStatus.TIMEOUT`` with a circuit-breaker reason — the exact metric
+    corruption ``GENUINE_TIMEOUT_SQL`` exists to prevent.
+    """
+
+    def test_a_workflow_deadline_is_not_a_circuit_breaker_timeout(self):
+        """The classification is made from evidence, and the evidence here is
+        that the agent's own clock never fired — the workflow's did."""
+        from robothor.engine.analytics import EXTERNAL_CANCEL_PREFIX
+        from robothor.engine.cancel_outcome import _cancel_outcome
+
+        deadline = WorkflowDeadlineError("email-pipeline", "classify", "openrouter/x", 0.0)
+        outcome = _cancel_outcome(
+            timed_out=True,
+            declared_timeout_seconds=0,
+            effective_ceiling=3600,
+            last_activity="llm_inflight:openrouter/x",
+            workflow_deadline=str(deadline),
+        )
+        assert outcome.status is RunStatus.CANCELLED, (
+            "a healthy agent cut short by its workflow's budget is not a timeout the "
+            "agent earned — counting it as one is what GENUINE_TIMEOUT_SQL forbids"
+        )
+        assert "Circuit-breaker" not in outcome.reason
+        assert not outcome.reason.startswith(EXTERNAL_CANCEL_PREFIX)
+        for fragment in ("email-pipeline", "classify", "openrouter/x"):
+            assert fragment in outcome.reason, outcome.reason
+
+    def test_a_watchdog_abort_reason_cannot_mask_the_deadline(self):
+        """`reason = abort_reason or _outcome.reason` and
+        `watchdog_fired=bool(abort_reason)` are two more places the deadline's
+        identity could be overwritten on its way to the row — and the second
+        would re-stamp it `timeout` after the classification said otherwise."""
+        from robothor.engine.cancel_outcome import terminal_run
+
+        deadline = str(WorkflowDeadlineError("email-pipeline", "classify", "openrouter/x", 0.0))
+        abort_reason = "watchdog: no progress for 300s"
+        # The runner's own precedence, as written at the call site.
+        reason = deadline or abort_reason
+        assert reason == deadline
+
+        session = MagicMock()
+        outcome = MagicMock()
+        outcome.status = RunStatus.CANCELLED
+        terminal_run(session, outcome, reason, None, bool(abort_reason) and not deadline)
+        session.cancelled.assert_called_once()
+        session.timeout.assert_not_called()
+
+    def test_the_deadline_propagates_to_the_caller_that_can_name_the_step(self):
+        """Only the workflow engine knows which step this was. The runner must
+        write its own row and then let the exception through, exactly as it
+        already does for an outer cancellation."""
+        from robothor.engine.workflow_budget import propagates_to_caller
+
+        assert propagates_to_caller(asyncio.CancelledError())
+        assert propagates_to_caller(WorkflowDeadlineError("wf", "s", "m", 0.0))
+        # A run's OWN hard cap still returns a finished run rather than raising.
+        assert not propagates_to_caller(TimeoutError("hard cap"))
+
+    @pytest.mark.asyncio
+    async def test_the_persisted_step_row_is_timeout_and_names_what_was_in_flight(self, no_alerts):
+        """The claim, read back off the wire rather than out of memory."""
+        deadline = WorkflowDeadlineError("budget-test-pipeline", "classify", INCIDENT_CHAIN[0], 0.0)
+
+        async def _blow_the_budget(**_kwargs):
+            raise deadline
+
+        runner = MagicMock()
+        runner.execute = AsyncMock(side_effect=_blow_the_budget)
+
+        data = _two_step_pipeline(timeout_seconds=900)
+        engine = _engine(data, runner=runner)
+
+        with (
+            patch(
+                "robothor.engine.config.load_agent_config_or_reason",
+                return_value=(_agent_config("classifier"), ""),
+            ),
+            patch("robothor.engine.delivery.deliver", new=AsyncMock()),
+            _capture_sql() as statements,
+        ):
+            run = await engine.execute(data["id"], trigger_type="cron")
+
+        assert run.status == RunStatus.TIMEOUT, (
+            f"the run recorded {run.status.value}, not timeout: {run.error_message}"
+        )
+        closed = [
+            params
+            for sql, params in _step_rows(statements)
+            if sql.startswith("UPDATE") and WorkflowStepStatus.TIMEOUT.value in params
+        ]
+        assert closed, "no workflow_run_steps row was written as 'timeout'"
+        written = " ".join(str(p) for p in closed[0])
+        for fragment in ("budget-test-pipeline", "classify", INCIDENT_CHAIN[0]):
+            assert fragment in written, f"{fragment!r} missing from the persisted row: {written}"
+        assert "Circuit-breaker" not in written
+
+        # The second step never runs: the budget that killed the first is the
+        # same budget the second would have to spend.
+        assert "respond" not in written
+
+    @pytest.mark.asyncio
+    async def test_the_run_is_not_recorded_as_a_plain_step_failure(self, no_alerts):
+        async def _blow_the_budget(**_kwargs):
+            raise WorkflowDeadlineError("budget-test-pipeline", "classify", "openrouter/x", 0.0)
+
+        runner = MagicMock()
+        runner.execute = AsyncMock(side_effect=_blow_the_budget)
+        data = _two_step_pipeline(timeout_seconds=900)
+        engine = _engine(data, runner=runner)
+
+        with (
+            patch(
+                "robothor.engine.config.load_agent_config_or_reason",
+                return_value=(_agent_config("classifier"), ""),
+            ),
+            patch("robothor.engine.delivery.deliver", new=AsyncMock()),
+            _capture_sql(),
+        ):
+            run = await engine.execute(data["id"], trigger_type="cron")
+
+        assert run.status == RunStatus.TIMEOUT
+        assert run.step_results[-1].status == WorkflowStepStatus.TIMEOUT
+        assert "classify" in (run.error_message or "")
+
+
+# ── 5. review follow-ups ───────────────────────────────────────────────
+
+
+class TestTheLoaderSaysWhatItCouldNotCheck:
+    """Review I3: on a platform checkout every agent manifest is gitignored,
+    so every chain resolved to `[]`, `step_chain_allowance([])` returned 0, and
+    the check produced no output at all — an inert control that looked exactly
+    like a clean one."""
+
+    def test_an_unresolvable_chain_is_reported_not_swallowed(self, tmp_path, caplog):
+        import yaml
+
+        wf_dir = tmp_path / "workflows"
+        wf_dir.mkdir()
+        (wf_dir / "pipeline.yaml").write_text(yaml.safe_dump(_two_step_pipeline(900)))
+
+        config = MagicMock()
+        config.tenant_id = TENANT
+        config.manifest_dir = tmp_path / "agents"  # deliberately empty
+        engine = WorkflowEngine(config, runner=MagicMock())
+
+        with (
+            patch("robothor.engine.config.load_agent_config", return_value=None),
+            caplog.at_level(logging.WARNING, logger="robothor.engine.workflow"),
+        ):
+            engine.load_workflows(wf_dir)
+
+        said = [r.getMessage() for r in caplog.records if "unresolved" in r.getMessage()]
+        assert said, f"an unresolvable chain was checked silently: {caplog.text}"
+        assert any("2" in line for line in said), said
+
+    def test_a_fully_resolved_workflow_reports_what_it_checked(self, tmp_path, caplog):
+        import yaml
+
+        wf_dir = tmp_path / "workflows"
+        wf_dir.mkdir()
+        (wf_dir / "pipeline.yaml").write_text(yaml.safe_dump(_two_step_pipeline(2400)))
+
+        config = MagicMock()
+        config.tenant_id = TENANT
+        config.manifest_dir = tmp_path / "agents"
+        engine = WorkflowEngine(config, runner=MagicMock())
+
+        with (
+            patch(
+                "robothor.engine.config.load_agent_config",
+                side_effect=lambda agent_id, *_a, **_k: _agent_config(agent_id),
+            ),
+            caplog.at_level(logging.INFO, logger="robothor.engine.workflow"),
+        ):
+            engine.load_workflows(wf_dir)
+
+        checked = [r.getMessage() for r in caplog.records if "agent step" in r.getMessage()]
+        assert checked, f"the loader did not say what it checked: {caplog.text}"
+        assert any("unresolved" not in line for line in checked)
+
+
+class TestTheAllowanceMatchesTheRuntime:
+    def test_the_local_primary_is_billed_its_own_retry_count(self):
+        """Review M4: `_call_llm` gives a LOCAL primary
+        ``1 + LOCAL_CAPACITY_RETRIES`` attempts, not ``1 +
+        TRANSIENT_RETRIES_PER_MODEL``. Billing it one retry under-counts by
+        three full Ollama allowances, which is a MISSED warning, not a
+        conservative one."""
+        from robothor.engine.llm_client import LOCAL_CAPACITY_RETRIES
+
+        chain = ["ollama_chat/qwen3.8:27b", "openrouter/cloud"]
+        # 600 (primary) + 300 (cloud) + LOCAL_CAPACITY_RETRIES x 600
+        assert step_chain_allowance(chain) == 600 + 300 + LOCAL_CAPACITY_RETRIES * 600
+
+    def test_static_and_runtime_agree_on_which_models_get_the_ollama_timeout(self):
+        """Review M3: the docstring claimed the two could not drift; they had.
+        `workflow_budget` matched `ollama/` too, the runtime did not."""
+        from robothor.engine.llm_client import LLM_REQUEST_TIMEOUT_BATCH, _per_call_timeout
+
+        for model in ("ollama/qwen3:8b", "ollama_chat/qwen3.8:27b", "openrouter/x"):
+            runtime = _per_call_timeout(model, float(LLM_REQUEST_TIMEOUT_BATCH))
+            assert workflow_budget.model_call_allowance(model) == int(runtime), model
+
+
+class TestTheShippedWorkflowsSatisfyTheShippedCheck:
+    """Review I4: `docs/workflows/*.yaml` are TRACKED platform files — only
+    `docs/workflows/delphi/` and `.../retired/` are gitignored. The first
+    version of this PR shipped a validator whose first three warnings fired
+    against files in the same commit, and left the incident's own 900s budget
+    in the platform tree on the grounds that it was instance data."""
+
+    def test_every_tracked_workflow_clears_the_floor_for_a_four_model_chain(self):
+        import yaml
+
+        from robothor.engine.workflow import parse_workflow
+
+        wf_dir = Path(__file__).resolve().parents[3] / "docs" / "workflows"
+        floor = step_chain_allowance(INCIDENT_CHAIN)
+        offenders = []
+        for path in sorted(wf_dir.glob("*.yaml")):
+            data = yaml.safe_load(path.read_text())
+            if not (data and isinstance(data, dict) and "id" in data):
+                continue
+            wf = parse_workflow(data)
+            if not any(s.type == WorkflowStepType.AGENT for s in wf.steps):
+                continue
+            if wf.timeout_seconds <= floor:
+                offenders.append(f"{path.name}: {wf.timeout_seconds}s <= {floor}s")
+        assert not offenders, (
+            "the platform ships workflows whose own budget its own check rejects: "
+            f"{offenders}. Raise the budget or say in docs/SYSTEM_ARCHITECTURE.md why not."
+        )
+
+
+class TestParallelBranchesDoNotOverwriteEachOther:
+    """Review M6: `_in_flight_step` was a single key on the shared
+    `run.context`, set and popped inside `_execute_single_step`, which
+    `_execute_parallel` calls concurrently under `asyncio.gather`. The last
+    branch to start overwrote the others and the first to finish popped the key
+    for all of them, so a timed-out parallel workflow named the wrong branch."""
+
+    @pytest.mark.asyncio
+    async def test_a_slow_branch_is_still_named_after_a_fast_one_finishes(self, no_alerts):
+        data = {
+            "id": "budget-test-parallel",
+            "name": "Parallel",
+            "timeout_seconds": 1,
+            "steps": [
+                {
+                    "id": "fan",
+                    "type": "parallel",
+                    # Order matters: the slow branch starts FIRST and is still
+                    # in flight when the quick one finishes and pops the key.
+                    "parallel_steps": [
+                        {"id": "slow", "type": "agent", "agent_id": "classifier"},
+                        {"id": "quick", "type": "transform", "expression": "'done'"},
+                    ],
+                }
+            ],
+        }
+
+        async def _hang(**_kwargs):
+            await asyncio.sleep(30)
+
+        runner = MagicMock()
+        runner.execute = AsyncMock(side_effect=_hang)
+        engine = _engine(data, runner=runner)
+
+        with (
+            patch(
+                "robothor.engine.config.load_agent_config_or_reason",
+                return_value=(_agent_config("classifier"), ""),
+            ),
+            patch("robothor.engine.delivery.deliver", new=AsyncMock()),
+            _capture_sql(),
+        ):
+            run = await engine.execute(data["id"], trigger_type="cron")
+
+        assert run.status == RunStatus.TIMEOUT
+        assert "slow" in (run.error_message or ""), (
+            f"the fast branch's completion erased the slow branch: {run.error_message}"
+        )
+
+
+class TestTheStreamingClampIsInsideItsRetryLoop:
+    """Review I1: `_call_llm` got the in-loop clamp, `_call_llm_streaming` did
+    not — the same hole, left open in the sibling. Workflow steps take the
+    non-streaming path today, which is luck, not a guard."""
+
+    def test_both_chain_walks_clamp_inside_their_retry_loop(self):
+        import ast
+        import inspect
+        import textwrap
+
+        from robothor.engine.llm_client import LLMClient
+
+        for name in ("_call_llm", "_call_llm_streaming"):
+            src = textwrap.dedent(inspect.getsource(getattr(LLMClient, name)))
+            tree = ast.parse(src)
+            clamps_in_loops = [
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.While)
+                for inner in ast.walk(node)
+                if isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Name)
+                and inner.func.id == "bound_call_timeout"
+            ]
+            assert clamps_in_loops, (
+                f"{name} clamps the workflow deadline OUTSIDE its retry loop: a "
+                "rotation or transient retry re-enters with a stale, possibly "
+                "already-elapsed timeout and the chain advances past the deadline"
+            )
+
+
+class TestTheMessageNamesTheModelItRefused:
+    def test_the_refused_model_is_named_and_the_skip_is_logged(self, caplog):
+        """Review M5: the message said a model was "in flight" when it was the
+        model the deadline REFUSED to dial, and the models the walk never
+        reached produced no log line at all."""
+        with (
+            workflow_budget.workflow_deadline("wf", 0.0),
+            workflow_budget.step_scope("classify"),
+            caplog.at_level(logging.INFO, logger="robothor.engine.workflow_budget"),
+        ):
+            with pytest.raises(WorkflowDeadlineError) as exc:
+                workflow_budget.bound_call_timeout(300.0, "openrouter/never-dialled")
+
+        assert "in flight" not in str(exc.value), str(exc.value)
+        assert "openrouter/never-dialled" in str(exc.value)
+        assert any(
+            "openrouter/never-dialled" in r.getMessage() and "skipping" in r.getMessage()
+            for r in caplog.records
+        ), f"the refused model produced no skip line: {caplog.text}"
 
 
 # ── helpers ────────────────────────────────────────────────────────────

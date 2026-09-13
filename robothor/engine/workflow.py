@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast as _ast
 import asyncio
+import contextlib
 import logging
 import operator as _op
 import re
@@ -55,10 +56,21 @@ from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-#: Run-context key naming the step currently in flight. A step cancelled by the
-#: workflow deadline leaves it behind on purpose — it is what lets the timeout
-#: finalizer say WHICH step ate the budget instead of "Timed out after 900s".
-IN_FLIGHT_STEP_KEY = "_in_flight_step"
+#: Run-context key listing the steps currently in flight. A step cancelled by
+#: the workflow deadline leaves its id behind on purpose — it is what lets the
+#: timeout finalizer say WHICH step ate the budget instead of "Timed out after
+#: 900s".
+#:
+#: A LIST, not a single id: parallel branches run concurrently under
+#: ``asyncio.gather`` and share one ``run.context``, so a single key meant the
+#: last branch to start overwrote the others and the first to finish erased the
+#: key for all of them.
+IN_FLIGHT_STEP_KEY = "_in_flight_steps"
+
+#: Run-context key recording which step ids have already been dispatched, so a
+#: first dispatch does not pay for a close-out UPDATE that can only ever match
+#: zero rows. Survives suspend/resume with the rest of the context.
+DISPATCHED_STEPS_KEY = "_dispatched_steps"
 
 
 # Safe expression evaluator for workflow templates/conditions. Replaces raw
@@ -397,12 +409,20 @@ class WorkflowEngine:
             return [cfg.model_primary, *cfg.model_fallbacks]
 
         try:
-            issues = workflow_budget.check_step_budgets(wf, _chain)
+            report = workflow_budget.report_step_budgets(wf, _chain)
         except Exception as e:  # pragma: no cover - defensive, load must not fail
-            logger.debug("Budget check failed for %s: %s", _sanitize(wf.id), e)
+            logger.warning("Budget check failed for %s: %s", _sanitize(wf.id), _sanitize(e))
             return
 
-        for issue in issues:
+        if not report.agent_steps:
+            return
+        # Say what was looked at even when nothing was wrong. A silent check
+        # and an inert one are indistinguishable otherwise, and on a platform
+        # checkout this check IS inert — every agent manifest is gitignored.
+        log = logger.warning if report.unresolved else logger.info
+        log("Workflow budgets [workflow:%s]: %s", _sanitize(wf.id), _sanitize(report.summary))
+
+        for issue in report.issues:
             logger.warning(
                 "Config validation [workflow:%s]: %s",
                 _sanitize(wf.id),
@@ -630,11 +650,13 @@ class WorkflowEngine:
         The in-flight step id survives its own cancellation in the run context
         precisely so this line can carry it.
         """
-        in_flight = run.context.get(IN_FLIGHT_STEP_KEY)
+        in_flight = run.context.get(IN_FLIGHT_STEP_KEY) or []
         base = f"Timed out after {wf.timeout_seconds}s"
         if not in_flight:
             return base
-        return f"{base} (step '{in_flight}' still in flight)"
+        named = ", ".join(f"'{s}'" for s in in_flight)
+        noun = "step" if len(in_flight) == 1 else "steps"
+        return f"{base} ({noun} {named} still in flight)"
 
     def _finalize_status(self, run: WorkflowRun, wf: WorkflowDef) -> None:
         """Stamp completion time and settle the run's terminal status."""
@@ -657,7 +679,8 @@ class WorkflowEngine:
         # fail for their own reasons right at the deadline.
         if run.status == RunStatus.FAILED and run.duration_ms >= wf.timeout_seconds * 1000:
             last = run.step_results[-1] if run.step_results else None
-            last_step = last.step_id if last else run.context.get(IN_FLIGHT_STEP_KEY, "unknown")
+            in_flight = run.context.get(IN_FLIGHT_STEP_KEY) or ["unknown"]
+            last_step = last.step_id if last else ", ".join(in_flight)
             last_error = (last.error_message if last else None) or run.error_message or ""
             run.status = RunStatus.TIMEOUT
             run.error_message = (
@@ -824,6 +847,15 @@ class WorkflowEngine:
                 )
                 return
 
+            # The workflow's own budget expired inside this step. Nothing later
+            # can run — the budget the next step would spend is the one that
+            # just ran out — and the step's message is the best account of what
+            # happened, so it becomes the run's.
+            if result.status == WorkflowStepStatus.TIMEOUT:
+                run.status = RunStatus.TIMEOUT
+                run.error_message = result.error_message
+                return
+
             # Handle failure
             if result.status == WorkflowStepStatus.FAILED:
                 if step.on_failure == "abort":
@@ -967,10 +999,14 @@ class WorkflowEngine:
 
         start = time.monotonic()
         # Visible while it runs, both in the DB and in the run's own context —
-        # the timeout finalizer reads the latter to name the step that was in
-        # flight when the budget expired.
-        self._persist_step_start(run, result)
-        run.context[IN_FLIGHT_STEP_KEY] = step.id
+        # the timeout finalizer reads the latter to name the step(s) that were
+        # in flight when the budget expired.
+        dispatched = run.context.setdefault(DISPATCHED_STEPS_KEY, [])
+        redispatch = step.id in dispatched
+        if not redispatch:
+            dispatched.append(step.id)
+        self._persist_step_start(run, result, redispatch=redispatch)
+        run.context.setdefault(IN_FLIGHT_STEP_KEY, []).append(step.id)
 
         try:
             # Inside this scope the step's LLM chain walk is clamped to what is
@@ -989,15 +1025,26 @@ class WorkflowEngine:
                     await self._run_approval_step(step, run, result)
                 elif step.type == WorkflowStepType.NOOP:
                     result.status = WorkflowStepStatus.COMPLETED
+        except workflow_budget.WorkflowDeadlineError as e:
+            # NOT a step failure: the step was healthy and the workflow ran out
+            # of budget underneath it. Recording it as FAILED is how the whole
+            # diagnosis ended up reading "Circuit-breaker hard timeout (3600s)"
+            # — a ceiling nothing in this run ever reached.
+            result.status = WorkflowStepStatus.TIMEOUT
+            result.error_message = str(e)
+            logger.warning("Step %s stopped by the workflow budget: %s", step.id, _sanitize(e))
         except Exception as e:
             result.status = WorkflowStepStatus.FAILED
             result.error_message = str(e)
             logger.error("Step %s failed: %s", step.id, e, exc_info=True)
 
         # Deliberately NOT in a `finally`: a step cancelled by the workflow
-        # deadline must leave this key behind, because it is the only record of
-        # which step was in flight when the budget expired.
-        run.context.pop(IN_FLIGHT_STEP_KEY, None)
+        # deadline must leave its id behind, because it is the only record of
+        # which step was in flight when the budget expired. Removing only THIS
+        # step's id (rather than clearing the key) is what keeps a fast
+        # parallel branch from erasing a slow sibling that is still running.
+        with contextlib.suppress(ValueError):
+            run.context.get(IN_FLIGHT_STEP_KEY, []).remove(step.id)
 
         result.duration_ms = int((time.monotonic() - start) * 1000)
         result.completed_at = datetime.now(UTC)
@@ -1592,7 +1639,9 @@ class WorkflowEngine:
         except Exception as e:
             logger.warning("Failed to persist workflow run end: %s", e)
 
-    def _persist_step_start(self, run: WorkflowRun, result: WorkflowStepResult) -> None:
+    def _persist_step_start(
+        self, run: WorkflowRun, result: WorkflowStepResult, *, redispatch: bool = False
+    ) -> None:
         """Write the step's row the moment it is dispatched, as ``running``.
 
         The row used to be written only when a step FINISHED. A step that never
@@ -1608,12 +1657,17 @@ class WorkflowEngine:
         # failed and the retry loop is going round again. Close it before
         # laying down the new one, or the final UPDATE (which matches on
         # status) would stamp every attempt with the last attempt's outcome.
-        self._close_running_steps(
-            run,
-            WorkflowStepStatus.FAILED,
-            "superseded by a retry of the same step",
-            step_id=result.step_id,
-        )
+        #
+        # Only on a REDISPATCH: on a first dispatch there is nothing to
+        # supersede, and issuing it anyway doubled the statement count for
+        # every step of every workflow to match zero rows.
+        if redispatch:
+            self._close_running_steps(
+                run,
+                WorkflowStepStatus.FAILED,
+                "superseded by a retry of the same step",
+                step_id=result.step_id,
+            )
         try:
             from robothor.db.connection import get_connection
 

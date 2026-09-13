@@ -12,7 +12,10 @@ triggers:
     cron: "0 10 1 * *"
     timezone: America/New_York
 
-timeout_seconds: 900
+# Must exceed one agent step's whole model-chain allowance — see
+# email-pipeline.yaml for the arithmetic (1800s for a four-model chain on a
+# workflow trigger).
+timeout_seconds: 2400
 
 steps:
   - id: review

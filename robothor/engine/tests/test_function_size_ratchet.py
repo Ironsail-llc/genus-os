@@ -46,7 +46,11 @@ KNOWN_LARGE: dict[str, int] = {
     # onto the signature (POST /api/admin/scheduler/reconcile has to act on
     # THIS process's job registry) instead of raising this number for it.
     "health.py::create_health_app": 1431,
-    "runner.py::execute": 990,  # +7: task_id propagated onto the run at INSERT time
+    # 990 -> 989: the post-stall autoDream spawn moved to
+    # run_lifecycle.spawn_post_stall_autodream ("recovery helper spawns" is
+    # that module's own contract), which is what paid for classifying a
+    # workflow-budget kill and letting it propagate.
+    "runner.py::execute": 989,  # +7: task_id propagated onto the run at INSERT time
     "runner.py::_run_loop": 775,
     # +12: run/tenant threaded onto the signature, and the do-not-contact
     # refusal at the head of both outbound-mail branches. The check itself
@@ -80,7 +84,10 @@ KNOWN_LARGE: dict[str, int] = {
     # timeout selection to _per_call_timeout. That is what paid for the
     # workflow-deadline clamp inside the attempt loop rather than raising
     # this number for it.
-    "llm_client.py::_call_llm": 242,
+    # 242 -> 240: _skip_model_reason now returns the pool it looked up, so the
+    # call site stopped needing its own _key_pool line — which is also what
+    # restored the lazy lookup for models the walk skips.
+    "llm_client.py::_call_llm": 240,
     "config.py::manifest_to_agent_config": 268,
     # scheduler.py::start is gone from this list: 266 -> 116. The three
     # hand-written registration blocks (heartbeat, worker, cron) became one
