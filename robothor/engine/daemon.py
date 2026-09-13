@@ -979,6 +979,37 @@ async def load_provider_secrets_at_startup() -> int:
     return result.slots
 
 
+async def _start_channels(runner: Any, config: Any, tasks: list[asyncio.Task[Any]]) -> Any | None:
+    """Bring up the non-Telegram channels and resolve the channel registry.
+
+    Two things that belong together and both used to sit inline in ``main()``.
+
+    Slack is env-gated here and ``start()`` self-gates on the tokens again.
+
+    The registry is warmed *now*, off the delivery path: plugin discovery runs
+    ``entry_points()`` and ``ep.load()``, which imports third-party modules, and
+    ``deliver()`` is async — left to resolve lazily, the first delivery naming a
+    plugin channel would block the event loop on a package import while a
+    briefing was going out. ``warm_channels`` never raises, so a broken
+    distribution cannot stop the daemon booting.
+
+    Returns:
+        The ``SlackBot`` if one was started, else None.
+    """
+    from robothor.engine.channels import warm_channels
+
+    slack_bot = None
+    if os.environ.get("ROBOTHOR_SLACK_BOT_TOKEN") and os.environ.get("ROBOTHOR_SLACK_APP_TOKEN"):
+        from robothor.engine.slack import SlackBot
+
+        slack_bot = SlackBot(runner, config)
+        tasks.append(asyncio.create_task(slack_bot.start(), name="slack"))
+        logger.info("Slack channel enabled (Socket Mode)")
+
+    await warm_channels()
+    return slack_bot
+
+
 async def main() -> int:
     """Start all engine subsystems. Returns the process exit code."""
     # Reject unsafe production authentication before touching the database,
@@ -1229,14 +1260,7 @@ async def main() -> int:
     if bot is not None:
         tasks.insert(0, asyncio.create_task(bot.start_polling(), name="telegram"))
 
-    # Slack channel (Socket Mode) — env-gated; start() self-gates on the tokens.
-    slack_bot = None
-    if os.environ.get("ROBOTHOR_SLACK_BOT_TOKEN") and os.environ.get("ROBOTHOR_SLACK_APP_TOKEN"):
-        from robothor.engine.slack import SlackBot
-
-        slack_bot = SlackBot(runner, config)
-        tasks.append(asyncio.create_task(slack_bot.start(), name="slack"))
-        logger.info("Slack channel enabled (Socket Mode)")
+    slack_bot = await _start_channels(runner, config, tasks)
 
     logger.info("All subsystems started")
     _sd_notify("READY=1")

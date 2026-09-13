@@ -57,6 +57,12 @@ _GROUPS = {
     # Sandbox runtimes. Unlike every other group here, an installed backend
     # is INERT until the operator names it — see sandbox.active_sandbox_backend.
     "genus.sandboxes": "sandboxes",
+    # Outbound/inbound surfaces. Genus reached people over exactly one, and the
+    # code said so: delivery's announce branch called _deliver_telegram. Also
+    # INERT until named, for the sandbox's reason — a package that became the
+    # delivery surface by merely being installed could intercept every briefing
+    # while nothing looked different. See channels.registry.get_channel.
+    "genus.channels": "channels",
     # Additional memory sources. Hermes ships eight providers and leads three
     # of four published models; its design rule is the one worth copying —
     # providers run ALONGSIDE built-in memory and never replace it.
@@ -92,6 +98,10 @@ class PluginSet:
     services: dict[str, Any] = field(default_factory=dict)
     commands: dict[str, Any] = field(default_factory=dict)
     sandboxes: dict[str, Any] = field(default_factory=dict)
+    #: Channel implementations, read by ``engine.channels.registry``. Named for
+    #: the GROUP like ``memory`` and ``doctor``, which is what
+    #: test_plugin_groups_are_consumed.py enforces.
+    channels: dict[str, Any] = field(default_factory=dict)
     memory: dict[str, Any] = field(default_factory=dict)
     #: Doctor checks. Named for the GROUP, not for the payload key -- the
     #: same convention `memory` follows, and the one
@@ -116,6 +126,7 @@ class PluginSet:
             "genus.services": self.services,
             "genus.commands": self.commands,
             "genus.sandboxes": self.sandboxes,
+            "genus.channels": self.channels,
             "genus.memory": self.memory,
             "genus.doctor": self.doctor,
         }[group]

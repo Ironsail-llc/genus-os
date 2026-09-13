@@ -52,7 +52,10 @@ KNOWN_LARGE: dict[str, int] = {
     # -26: structlog wiring extracted to _configure_structured_logging, which
     # is what made room for the startup provider-secrets load rather than
     # raising this number for it.
-    "daemon.py::main": 371,
+    # 371 -> 365: the Slack start block and the channel-registry warm-up both
+    # moved into _start_channels, which is what made room for the warm-up
+    # rather than raising this number for it.
+    "daemon.py::main": 365,
     "telegram.py::_run_interactive": 384,
     "tools/handlers/benchmark.py::_benchmark_run": 370,
     "analytics.py::get_agent_stats": 343,

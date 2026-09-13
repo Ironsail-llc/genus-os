@@ -921,6 +921,18 @@ class ChannelSettings(SettingsGroup):
 
     restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
 
+    enabled: str = declare(
+        "",
+        "ROBOTHOR_CHANNELS",
+        "Comma-separated names of plugin-provided channels to arm. An installed "
+        "genus.channels plugin is INERT until it is named here, the same rule "
+        "ROBOTHOR_SANDBOX_BACKEND follows and for the same reason: a package "
+        "that became the delivery surface merely by being installed could "
+        "intercept every briefing. Built-in channels (telegram, event_bus) are "
+        "always available and are not listed here. Provisional name until "
+        "adding a channel persists it to config.yaml.",
+        since="1.70.0",
+    )
     telegram_bot_token: str = declare(
         "",
         "ROBOTHOR_TELEGRAM_BOT_TOKEN",

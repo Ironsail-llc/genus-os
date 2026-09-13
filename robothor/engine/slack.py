@@ -12,6 +12,8 @@ import logging
 import os
 from typing import Any
 
+from robothor.engine.chunking import split_message
+
 logger = logging.getLogger(__name__)
 
 # Maximum message length for Slack
@@ -110,18 +112,7 @@ class SlackBot:
         # Register platform sender for delivery
         from robothor.engine.delivery import register_platform_sender
 
-        async def slack_send(channel_id: str, text: str) -> None:
-            if self._app and self._app.client:
-                # Split long messages
-                chunks = _split_text(text, MAX_SLACK_LENGTH)
-                for chunk in chunks:
-                    await self._app.client.chat_postMessage(
-                        channel=channel_id,
-                        text=chunk,
-                        mrkdwn=True,
-                    )
-
-        register_platform_sender("slack", slack_send)
+        register_platform_sender("slack", self.slack_send, chunk_size=MAX_SLACK_LENGTH)
 
         # Start Socket Mode handler
         handler = AsyncSocketModeHandler(app, app_token)
@@ -129,6 +120,57 @@ class SlackBot:
         await handler.start_async()
         self._started = True
         logger.info("Slack bot started (Socket Mode)")
+
+    async def slack_send(self, channel_id: str, text: str) -> list[Any]:
+        """Post to Slack and RETURN what landed, one entry per chunk.
+
+        A method, not a closure inside :meth:`start`, because a closure there is
+        unreachable from a test: the only test that called ``start()`` returned
+        before the definition, which is how this spent its whole life returning
+        ``None`` with nobody noticing.
+
+        Three properties decide whether an operator is told the truth about a
+        Slack briefing:
+
+        * **The return value is the only evidence anything landed.** Returning
+          ``None`` — what this did before ``delivery.channel: slack`` could
+          resolve — would record every successful briefing as
+          ``failed:slack_send`` and page the operator about a message that
+          arrived.
+        * **A failure partway through keeps what landed.** ``chat_postMessage``
+          raises ``SlackApiError``; letting it propagate turned a
+          ``partial:2/3`` into a total failure and lost the ids of the two
+          messages the operator can actually see. Each chunk is attempted and
+          the failures are logged, exactly as ``TelegramBot.send_message`` does.
+        * **It splits with** :func:`~robothor.engine.chunking.split_message`,
+          the same function the shim counts with (it is registered with
+          ``chunk_size=MAX_SLACK_LENGTH``). Two splitters would disagree about
+          how many messages a body becomes, and a truncated send would read as
+          a complete one.
+
+        Returns:
+            The ``SlackResponse`` for each chunk that posted, in send order.
+            Empty when nothing did. Slack's per-message id is ``ts``, which
+            :func:`~robothor.engine.channels.base.acknowledged_messages` reads
+            into ``platform_ids`` so ``channel_bus`` can map a reply back.
+        """
+        landed: list[Any] = []
+        if not (self._app and self._app.client):
+            logger.warning("Slack send requested before the app was started")
+            return landed
+
+        for chunk in _split_text(text, MAX_SLACK_LENGTH):
+            try:
+                landed.append(
+                    await self._app.client.chat_postMessage(
+                        channel=channel_id,
+                        text=chunk,
+                        mrkdwn=True,
+                    )
+                )
+            except Exception as e:  # noqa: BLE001 — one bad chunk is not a lost send
+                logger.error("Slack chunk rejected for %s: %s", channel_id, e)
+        return landed
 
     async def stop(self) -> None:
         """Stop the Slack bot."""
@@ -202,23 +244,15 @@ class SlackBot:
 
 
 def _split_text(text: str, max_length: int) -> list[str]:
-    """Split text into chunks that fit within Slack's message limit."""
-    if len(text) <= max_length:
-        return [text]
+    """Split text into chunks that fit within Slack's message limit.
 
-    chunks: list[str] = []
-    while text:
-        if len(text) <= max_length:
-            chunks.append(text)
-            break
-        # Try to split at a newline
-        split_at = text.rfind("\n", 0, max_length)
-        if split_at == -1:
-            split_at = max_length
-        chunks.append(text[:split_at])
-        text = text[split_at:].lstrip("\n")
-
-    return chunks
+    Delegates to the shared splitter. It had its own near-copy, which is fine
+    while nothing counts the chunks and wrong the moment something does: the
+    shim measures a body with ``split_message`` to decide whether every chunk
+    was acknowledged, and two splitters that disagree by one turn a truncated
+    briefing into a delivered one.
+    """
+    return split_message(text, max_length)
 
 
 def is_slack_configured() -> bool:

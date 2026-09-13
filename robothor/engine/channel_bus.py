@@ -2,10 +2,12 @@
 chat session so main has visibility of everything that reaches the user.
 
 Wired up at daemon startup via `HookEvent.POST_DELIVERY`. The hook handler
-is the single instrumentation point: `_deliver_telegram` in delivery.py
-dispatches POST_DELIVERY after a successful send, and this module's
-`on_post_delivery` decides whether to surface the message (non-main, opted in)
-and writes both the chat_messages row and the channel_message_map entries.
+is the single instrumentation point, and it stays single no matter which
+channel sent: `_finish_delivery` in delivery.py dispatches POST_DELIVERY once,
+after the channel's receipt and only when something was acknowledged, and this
+module's `on_post_delivery` decides whether to surface the message (non-main,
+opted in) and writes both the chat_messages row and the channel_message_map
+entries.
 
 Phase 1 scope (this module): write-only. No wake, no debounce.
 Phases 2-3 (reply resolution + CHANNEL_EVENT wake) extend this module.
@@ -212,8 +214,9 @@ async def on_post_delivery(ctx: HookContext) -> HookResult:
 
     ctx.metadata is expected to carry:
       chat_id: str                 — platform chat identifier
-      platform_message_ids: list   — Telegram message_ids returned by send
-      channel: str                 — e.g. "telegram"
+      platform_message_ids: list   — the ids the platform returned for the
+                                     chunks that actually landed
+      channel: str                 — the channel that sent, e.g. "telegram"
       author_display_name: str     — config.name
       surface_to_channel: bool     — per-agent kill switch (default True)
       tenant_id: str               — run tenant
