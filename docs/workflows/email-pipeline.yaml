@@ -11,7 +11,16 @@ triggers:
     cron: "0 6-22/6 * * *"
     timezone: America/New_York
 
-timeout_seconds: 900
+# One agent step's model chain may not be allowed more wall-clock than the
+# whole workflow. On a workflow trigger a four-model chain is allowed
+# 300 + 300 + 300 (cloud, LLM_REQUEST_TIMEOUT_BATCH) + 600 (the ollama_chat
+# local tail) plus one 300s in-place retry on the primary = 1800s. At 900 this
+# pipeline could only ever finish while the primary answered first try, and on
+# 2026-09-11 it stopped doing that: every run died at exactly 900s reading
+# `steps 0/2`, with 806 of those seconds spent in LLM generation. 2400 clears
+# the 1800s floor with headroom. robothor/engine/workflow_budget.py computes
+# this at load and names any step that does not fit.
+timeout_seconds: 2400
 
 steps:
   - id: classify

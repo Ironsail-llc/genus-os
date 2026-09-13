@@ -158,11 +158,6 @@ def _resolve_tool_timeout(tool_name: str, configured: int) -> int:
     return configured
 
 
-# Announce-mode runs that end with fewer characters than this are flagged
-# as "partial" — almost always a meta-confirmation ("briefing delivered")
-# rather than the real content the agent was supposed to broadcast.
-ANNOUNCE_MIN_OUTPUT_CHARS = 200
-
 # Init timeout: max seconds for agent setup before first LLM call.
 # Agents that hang during warmup, adapter loading, or tool registration
 # are killed immediately.  Prevents the "stuck in initialization"
@@ -175,6 +170,31 @@ INIT_TIMEOUT_SECONDS = 60
 # keeps a stale binding alive).
 
 logger = logging.getLogger(__name__)
+
+
+def spawn_post_stall_autodream(agent_id: str) -> None:
+    """Kick off memory consolidation after the stall watchdog kills a run.
+
+    Best-effort and deliberately silent on failure: this is cleanup on a path
+    that is already finalizing a dead run, and an autoDream import error must
+    not stop the terminal row being written.
+
+    Lives here rather than inline in ``runner.execute`` because "recovery
+    helper spawns" is this module's own contract, and the runner is the
+    god-object the decomposition ratchet exists to shrink.
+    """
+    try:
+        from robothor.engine.autodream import is_cooled_down, run_autodream
+
+        if is_cooled_down():
+            from robothor.engine.task_registry import get_task_registry
+
+            get_task_registry().spawn(
+                run_autodream(mode="post_stall"),
+                name=f"autodream-post-stall:{agent_id}",
+            )
+    except Exception as e:
+        logger.warning("autoDream post_stall failed: %s", _sanitize(e))
 
 
 class RunLifecycleMixin:

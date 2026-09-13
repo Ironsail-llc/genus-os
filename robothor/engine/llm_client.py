@@ -30,7 +30,6 @@ import contextlib
 import json
 import logging
 import math
-import os
 import random
 import time
 import time as _time
@@ -49,6 +48,38 @@ from robothor.engine.llm_attempts import (
     describe_completion,
     note_outcome,
 )
+
+# Explicit `as` re-exports: mypy runs with no_implicit_reexport, and callers
+# have imported these names from here for a long time. New readers should
+# import from llm_budgets directly — a module that only wants to know what 300
+# means should not have to load a provider SDK to find out.
+from robothor.engine.llm_budgets import (
+    BATCH_TRIGGER_TYPES as BATCH_TRIGGER_TYPES,
+)
+from robothor.engine.llm_budgets import (
+    LLM_REQUEST_TIMEOUT as LLM_REQUEST_TIMEOUT,
+)
+from robothor.engine.llm_budgets import (
+    LLM_REQUEST_TIMEOUT_BATCH as LLM_REQUEST_TIMEOUT_BATCH,
+)
+from robothor.engine.llm_budgets import (
+    LLM_REQUEST_TIMEOUT_OLLAMA as LLM_REQUEST_TIMEOUT_OLLAMA,
+)
+from robothor.engine.llm_budgets import (
+    LOCAL_CAPACITY_RETRIES as LOCAL_CAPACITY_RETRIES,
+)
+from robothor.engine.llm_budgets import (
+    TRANSIENT_RETRIES_PER_MODEL as TRANSIENT_RETRIES_PER_MODEL,
+)
+from robothor.engine.llm_budgets import (
+    _timeout_from_env as _timeout_from_env,
+)
+from robothor.engine.llm_budgets import (
+    is_local_model as is_local_model,
+)
+from robothor.engine.llm_budgets import (
+    uses_ollama_timeout as uses_ollama_timeout,
+)
 from robothor.engine.metrics import LLM_CALL_DURATION, LLM_CALLS_TOTAL, LLM_TOKENS_TOTAL
 from robothor.engine.model_breaker import _current_run_id_var, get_model_breaker
 from robothor.engine.reasoning_replay import (
@@ -60,6 +91,7 @@ from robothor.engine.reasoning_replay import (
 from robothor.engine.retry import retry_async
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.stall_watchdog import _active_watchdog_var
+from robothor.engine.workflow_budget import bound_call_timeout
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -97,39 +129,12 @@ def stream_chunk_timeout(model: str) -> float:
 # the whole request. Ollama gets more headroom for cold-start loads.
 
 
-def _timeout_from_env(name: str, default: int) -> int:
-    """Read a positive-integer timeout from the environment, or the default."""
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        logger.warning("%s=%r is not an integer — using default %ds", name, raw, default)
-        return default
-    return value if value > 0 else default
-
-
-LLM_REQUEST_TIMEOUT = _timeout_from_env("ROBOTHOR_LLM_TIMEOUT", 120)
-# Non-interactive (cron/workflow) runs get more headroom: nobody is waiting
-# on the reply, and a large classify context on a reasoning model can
-# legitimately take >120s of wall-clock generation (2026-08-20: all three
-# chain models were cancelled at exactly 120s while small concurrent calls
-# succeeded — the chain exhausted on slowness, not provider death).
-LLM_REQUEST_TIMEOUT_BATCH = _timeout_from_env("ROBOTHOR_LLM_TIMEOUT_BATCH", 300)
-LLM_REQUEST_TIMEOUT_OLLAMA = 600
-
-# Trigger types whose runs are batch-shaped (no human waiting on the reply)
-# and therefore get LLM_REQUEST_TIMEOUT_BATCH per model.
-#
-# `event` and `sub_agent` joined 2026-09-13 (DIAG §4.3). They were carrying 76
-# of the 86 timeout-straddling steps in a two-day window while capped at 120s:
-# an email-classifier run fired by an inbound mail, or a sub-agent spawned by
-# crm-dedup, is exactly as unattended as a cron. The 300s constant, the
-# plumbing and the rationale above all already existed — only the membership
-# was wrong. Interactive triggers (telegram/webchat/slack) keep the 120s
-# default, because there a human IS waiting.
-_BATCH_TRIGGER_TYPES = frozenset({"cron", "workflow", "event", "sub_agent"})
+# The per-call allowances and the retry counts live in `llm_budgets`, a leaf
+# that pulls in neither litellm nor the rest of the engine. Re-exported here
+# because this is where the fleet reads them from, and because the module that
+# PREDICTS these numbers (workflow_budget, for "can one step outspend its own
+# workflow?") must not have to import a provider SDK to see a 300.
+_BATCH_TRIGGER_TYPES = BATCH_TRIGGER_TYPES
 
 # Marker prepended to engine-injected context when it is rewritten from the
 # ``developer`` role to a user turn (Anthropic-family models only — see
@@ -137,17 +142,14 @@ _BATCH_TRIGGER_TYPES = frozenset({"cron", "workflow", "event", "sub_agent"})
 # model so it does not read engine context as operator speech.
 ENGINE_CONTEXT_PREFIX = "[engine] "
 
-# One in-place retry per model for transient failures (timeout / 5xx) before
-# advancing the fallback chain, with a short jitter so a provider blip is not
-# re-hit instantly. A transient 502 used to burn the model's only attempt and
-# exhaust the whole chain within minutes.
-TRANSIENT_RETRIES_PER_MODEL = 1
+# A short jitter on the in-place retry so a provider blip is not re-hit
+# instantly. The retry COUNT is in llm_budgets; only the timing is here.
 
 # One re-ask per model after a reasoning-only reply (DIAG 2026-09-13 §4.1),
-# counted separately from the transient budget above: a thinking model that
-# spent its budget before the answer started is not a flaky provider, and the
-# re-ask carries DIFFERENT kwargs (a smaller budget and a nudge), so spending
-# the transient retry on it would leave a genuine 502 with nothing.
+# counted separately from the transient budget: a thinking model that spent its
+# budget before the answer started is not a flaky provider, and the re-ask
+# carries DIFFERENT kwargs (a smaller budget and a nudge), so spending the
+# transient retry on it would leave a genuine 502 with nothing.
 REASONING_ONLY_RE_ASKS_PER_MODEL = 1
 TRANSIENT_RETRY_JITTER_MIN = 2.0
 TRANSIENT_RETRY_JITTER_MAX = 5.0
@@ -197,12 +199,7 @@ _PERIODIC_QUOTA_MARKERS = (
 )
 
 
-#: Extra in-place retries for the on-device tier when it answers "busy".
-#: Every agent's chain ends in one local model served with a small parallel
-#: slot count, so during a cloud outage the whole fleet arrives at once and
-#: the queue fills. That is backpressure, not death: it drains in seconds,
-#: and one retry throws away the only tier still answering.
-LOCAL_CAPACITY_RETRIES = 4
+#: Jitter on the on-device tier's capacity retry. The COUNT is in llm_budgets.
 LOCAL_CAPACITY_RETRY_JITTER = 3.0
 
 
@@ -239,9 +236,68 @@ def _record_execution_mode(model: str) -> None:
         logger.debug("Execution-mode signal failed for %s", model, exc_info=True)
 
 
-def is_local_model(model: str) -> bool:
-    """Is this served on-device, with no credential and no provider account?"""
-    return model.startswith(("ollama_chat/", "ollama/"))
+def _per_call_timeout(model: str, timeout_override: float | None) -> float:
+    """Seconds one provider call may take before the chain walk gives up on it.
+
+    Wraps each provider call so the runner cancels and falls through if the
+    provider hangs: the ``timeout`` kwarg already passed to litellm is
+    best-effort and was observed silently ignored, causing 1800s stalls against
+    codex/gpt-5.5 in the 2026-05-28 incident. The local tier gets its own,
+    larger value; ``timeout_override`` is how batch-shaped (cron/workflow) runs
+    get the higher non-interactive allowance.
+
+    Returns the constants UNWRAPPED. They are ints, they reach litellm as the
+    ``timeout`` kwarg and they are interpolated into every retry log line, so
+    coercing them to float would change both the wire and the operator-facing
+    text ("timeout after 600.0s") for no gain.
+    """
+    if uses_ollama_timeout(model):
+        return LLM_REQUEST_TIMEOUT_OLLAMA
+    return timeout_override if timeout_override is not None else LLM_REQUEST_TIMEOUT
+
+
+def _skip_model_reason(
+    model: str,
+    model_var: str | None,
+    dead_credentials: set[str],
+    breaker: Any,
+    pool_for: Callable[[str], KeyPool | None],
+) -> tuple[str | None, KeyPool | None]:
+    """Why this model must not be tried on this call, plus its credential pool.
+
+    Extracted from the chain walk so the admission decision is one readable
+    thing rather than three ``continue``s interleaved with the call itself.
+    Mutates ``dead_credentials`` on the exhausted-pool branch on purpose: that
+    is the record of what this call has already proven spent, and every later
+    model sharing the credential is skipped on the strength of it.
+
+    ``pool_for`` is a callable, not a pool, so the lookup stays where it was
+    before the extraction — AFTER the two cheap checks. It re-reads the
+    provider spec and the environment on every call, and hoisting it above them
+    put that (and a documented cold-path database read) onto models the walk
+    was about to skip anyway.
+    """
+    if model_var is not None and model_var in dead_credentials:
+        # Its credential was proven spent earlier in this same call. Trying it
+        # buys a guaranteed failure and a round trip. Guarded on `is not None`
+        # deliberately: a model with no pooled credential shares nothing with
+        # anyone, and treating them as a group would let one provider's quota
+        # error strand the local tier — the very outage this code exists to end.
+        return "it shares a credential already proven spent", None
+    if breaker.is_open(model):
+        # This model has failed repeatedly and is in cooldown. Skipping it here
+        # is the point: otherwise a dead provider costs the full per-call
+        # timeout on every run, forever (codex/* did exactly that for a month).
+        return "circuit breaker open", None
+    pool = pool_for(model)
+    if pool is not None and pool.exhausted():
+        # Every configured credential for this provider is retired. Calling
+        # anyway would omit api_key and hand litellm the very key the pool just
+        # proved dead, quietly undoing retirement.
+        if model_var is not None:
+            dead_credentials.add(model_var)
+        return "every configured credential for it is retired", pool
+    return None, pool
 
 
 async def _releasing_stream(stream: Any, cm: Any) -> Any:
@@ -1863,48 +1919,13 @@ class LLMClient:
             if broken_models and model in broken_models:
                 continue
             model_var = env_var_for_model(model)
-            if model_var is not None and model_var in dead_credentials:
-                # Its credential was proven spent earlier in this same call.
-                # Trying it buys a guaranteed failure and a round trip.
-                # Guarded on `is not None` deliberately: a model with no
-                # pooled credential shares nothing with anyone, and treating
-                # them as a group would let one provider's quota error strand
-                # the local tier — the very outage this code exists to end.
-                logger.info(
-                    "skipping %s — it shares a credential already proven spent",
-                    _sanitize(model),
-                )
+            skip, pool = _skip_model_reason(
+                model, model_var, dead_credentials, breaker, self._key_pool
+            )
+            if skip:
+                logger.info("skipping %s — %s", _sanitize(model), skip)
                 continue
-            if breaker.is_open(model):
-                # This model has failed repeatedly and is in cooldown. Skipping
-                # it here is the point: otherwise a dead provider costs the full
-                # per-call timeout on every run, forever (codex/* did exactly
-                # that for a month).
-                logger.info("skipping %s — circuit breaker open", _sanitize(model))
-                continue
-            # Per-call timeout (seconds) — wraps each provider call so the
-            # runner cancels and falls through if the provider hangs. The
-            # `timeout` kwarg already passed to litellm is best-effort and
-            # was observed silently ignored, causing 1800s stalls against
-            # codex/gpt-5.5 in the 2026-05-28 incident.
-            if model.startswith("ollama_chat/"):
-                per_call_timeout: float = LLM_REQUEST_TIMEOUT_OLLAMA
-            else:
-                per_call_timeout = (
-                    timeout_override if timeout_override is not None else LLM_REQUEST_TIMEOUT
-                )
-            pool = self._key_pool(model)
-            if pool is not None and pool.exhausted():
-                # Every configured credential for this provider is retired.
-                # Calling anyway would omit api_key and hand litellm the very
-                # key the pool just proved dead, quietly undoing retirement.
-                if model_var is not None:
-                    dead_credentials.add(model_var)
-                logger.info(
-                    "skipping %s — every configured credential for it is retired",
-                    _sanitize(model),
-                )
-                continue
+            per_call_timeout = _per_call_timeout(model, timeout_override)
             # Rotating through spare credentials must not eat the transient
             # retry budget: a key swap and a flaky provider are different
             # failures. They are counted separately so that configuring a
@@ -1924,6 +1945,20 @@ class LLMClient:
             nudge: str | None = None
             attempt = 0
             while attempt < attempts:
+                # Inside a workflow step, no call may be given more time than
+                # the WORKFLOW has left, and one whose budget is gone does not
+                # start at all — which is how one classify step stopped eating
+                # a whole 900s email-pipeline run (2026-09-13). INSIDE the loop
+                # so an in-place retry is bounded too, and raising outside the
+                # `try` so the deadline cannot buy itself a retry. Inert
+                # outside a workflow.
+                per_call_timeout = bound_call_timeout(per_call_timeout, model)
+                # …and no more than what is left of THIS model's own allowance,
+                # which all of its attempts share — the in-place retry and the
+                # reasoning-only re-ask included. The two clamps compose in this
+                # order: a workflow's remaining budget can only ever lower the
+                # allowance, never raise it, and neither can hand an attempt
+                # time the other has already spent.
                 attempt_timeout = _attempt_timeout(model_deadline, per_call_timeout)
                 if attempt_timeout < _attempt_floor(per_call_timeout):
                     logger.warning(
@@ -2127,15 +2162,9 @@ class LLMClient:
         for model in models:
             if broken_models and model in broken_models:
                 continue
-            # Per-call timeout for the initial stream-creation await.
-            # Subsequent chunk reads are guarded by STREAM_CHUNK_TIMEOUT
-            # in the consumption loop below. See _call_llm for context.
-            if model.startswith("ollama_chat/"):
-                per_call_timeout: float = LLM_REQUEST_TIMEOUT_OLLAMA
-            else:
-                per_call_timeout = (
-                    timeout_override if timeout_override is not None else LLM_REQUEST_TIMEOUT
-                )
+            # Bounds the initial stream-creation await; subsequent chunk reads
+            # are guarded by STREAM_CHUNK_TIMEOUT in the consumption loop below.
+            per_call_timeout = _per_call_timeout(model, timeout_override)
             pool = self._key_pool(model)
             skip = _streaming_skip_reason(model, pool)
             if skip:
@@ -2143,6 +2172,10 @@ class LLMClient:
                 continue
             rotations_left = (len(pool) - 1) if pool is not None else 0
             while True:
+                # INSIDE the loop, as in _call_llm: a rotation retry re-enters
+                # here and would otherwise reuse a stale, possibly elapsed
+                # timeout. After the skips, so it names only a dialled model.
+                per_call_timeout = bound_call_timeout(per_call_timeout, model)
                 attempt_key = None
                 attempt_started = time.monotonic()
                 try:

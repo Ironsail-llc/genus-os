@@ -233,6 +233,27 @@ Delivery agents can call these directly:
   resolve first, then fetch
 - `list_contact_messages(id=..., channel=?, limit=?)` — full bodies
 
+Every id argument is validated at the tool boundary before the query runs:
+person, company, note, task and notification ids must be UUIDs and
+conversation ids integers. A hallucinated id (`{"id": "jane@example.com"}`,
+`{"personId": "85105"}`) comes back as `{"error": "person id … is not a valid
+id — expected a UUID; use search_people or list_people to find real person
+ids"}` — a recoverable instruction to the model, where the unguarded call was
+an `InvalidTextRepresentation` crash. Surrounding whitespace is stripped
+rather than refused; the `urn:uuid:` form is refused, because Python parses it
+and Postgres does not. `get_contact_360` says so in its own error: it takes an
+email or phone as `identifier`, so it points there instead of at
+`search_people`.
+
+The check is `id_argument_error` in **`robothor/crm/tool_ids.py`**, and both
+dispatchers of these tools call it — the engine handlers
+(`robothor/engine/tools/handlers/crm.py`, in the decorator every handler
+passes through) and the MCP surface
+(`robothor/api/mcp.py::handle_tool_call`, which the operator's own Claude
+sessions use). The argument classification cannot drift: a test reads every
+`…Id` literal out of both modules and fails on any that is not classified as
+a uuid id, an integer id, or explicitly not an id.
+
 ## Testing
 
 **Every change is TDD.** Per-channel write-through tests live in

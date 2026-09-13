@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from robothor.secrets.redaction import PLACEHOLDER, redact
+from robothor.secrets.redaction import PLACEHOLDER, redact, redact_unrecognized_arguments
 
 #: Visibly fake, every one of them. This is platform code.
 SLACK_BOT = "xoxb-test-not-a-real-token"
@@ -89,6 +89,88 @@ class TestItLeavesAnErrorReadable:
         assert redact("") == ""
 
 
+class TestTheSMTPAuthLine:
+    """An SMTP password has no shape of its own; the AUTH line carrying it does.
+
+    ``smtplib`` quotes the server's reply back inside
+    ``SMTPAuthenticationError``, and a rejected ``AUTH PLAIN <base64>`` decodes
+    straight to the password.
+    """
+
+    #: Visibly fake. `AUTH LOGIN` sends the username and then the password as
+    #: two SEPARATE base64 lines, which is the half the first cut missed.
+    USERNAME_B64 = "dXNlcm5hbWVAZXhhbXBsZS5jb20="
+    PASSWORD_B64 = "bm90LWEtcmVhbC1zbXRwLXBhc3N3b3Jk"
+
+    def test_auth_plain_goes(self) -> None:
+        assert self.PASSWORD_B64 not in redact(f"AUTH PLAIN {self.PASSWORD_B64}")
+
+    def test_the_auth_login_conversation_goes_line_by_line(self) -> None:
+        """``redact("AUTH LOGIN\\n<user>\\n<password>")`` used to return
+        ``<redacted>\\n<user>\\n<password>``: the shape matched the first line
+        and stopped, leaving the credential on the next one."""
+        cleaned = redact(f"AUTH LOGIN\n{self.USERNAME_B64}\n{self.PASSWORD_B64}")
+
+        assert self.PASSWORD_B64 not in cleaned
+        assert self.USERNAME_B64 not in cleaned
+
+    def test_a_reply_quoting_the_auth_line_goes(self) -> None:
+        reply = (
+            f"(535, b'5.7.8 Username and Password not accepted: AUTH PLAIN {self.PASSWORD_B64}')"
+        )
+        assert self.PASSWORD_B64 not in redact(reply)
+
+    def test_prose_about_authentication_survives(self) -> None:
+        """A false positive here costs an operator their own error message."""
+        for innocent in (
+            "SMTP AUTH is required by this server",
+            "the AUTH LOGIN mechanism is not offered",
+            "AUTH extension unavailable",
+        ):
+            assert redact(innocent) == innocent
+
+
+class TestARejectedFlagsValueIsNotPrinted:
+    """argparse prints ``unrecognized arguments: --smtp-passwrd <value>`` for a
+    one-letter typo — from the very command that refuses credentials on a
+    command line. :func:`redact` catches the SHAPED credentials, and an SMTP
+    password has no shape, so the message itself has to be scrubbed.
+    """
+
+    #: No shape at all. That is the point: `redact` cannot see it.
+    SHAPELESS = "zzTOPSECRETzz-9999"
+
+    def test_the_value_of_an_unrecognized_flag_goes(self) -> None:
+        cleaned = redact_unrecognized_arguments(
+            f"unrecognized arguments: --smtp-passwrd {self.SHAPELESS}"
+        )
+
+        assert self.SHAPELESS not in cleaned
+        assert PLACEHOLDER in cleaned
+
+    def test_the_flag_name_survives_so_the_operator_can_see_the_typo(self) -> None:
+        cleaned = redact_unrecognized_arguments(
+            f"unrecognized arguments: --smtp-passwrd {self.SHAPELESS}"
+        )
+        assert "--smtp-passwrd" in cleaned
+
+    def test_the_equals_form_goes_too(self) -> None:
+        cleaned = redact_unrecognized_arguments(
+            f"unrecognized arguments: --smtp-passwrd={self.SHAPELESS}"
+        )
+
+        assert self.SHAPELESS not in cleaned
+        assert "--smtp-passwrd" in cleaned
+
+    def test_every_other_message_is_left_exactly_alone(self) -> None:
+        for innocent in (
+            "error: the following arguments are required: name",
+            "argument --to: invalid choice: 'vualt'",
+            "usage: genus channel add [-h] name",
+        ):
+            assert redact_unrecognized_arguments(innocent) == innocent
+
+
 class TestItIsSafeOnTheFailurePathItLivesOn:
     """Every caller is already reporting a failure. A redactor that could fail
     there would be the second bug in one line."""
@@ -96,3 +178,4 @@ class TestItIsSafeOnTheFailurePathItLivesOn:
     def test_it_never_raises_on_odd_input(self) -> None:
         for odd in ("%s %d {}", "\\x00binary\\xff", "a" * 100_000, "🔑 xoxb-emoji-adjacent"):
             assert isinstance(redact(odd), str)
+            assert isinstance(redact_unrecognized_arguments(odd), str)

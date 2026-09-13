@@ -201,8 +201,11 @@ knowing when reading `agent_run_steps` or the journal:
   `worst_case_dispatch_seconds(models, timeout)` and stays inside the 1800s
   `thread_pool.PENDING_EXPIRY_SECONDS` a sub-agent turn is expected to fit in.
   Inside a workflow step, `workflow_budget.bound_call_timeout` clamps the same
-  number again to what the workflow has left; the two compose — the workflow's
-  remaining budget can only ever lower the per-call allowance, never raise it.
+  number again to what the workflow has left, and refuses to start a call the
+  workflow cannot afford to finish. The two clamps compose in that order inside
+  the attempt loop: the workflow's remaining budget can only ever lower the
+  per-model allowance, never raise it, and a reasoning-only re-ask is a real
+  provider call that has to clear both.
 
 ---
 
@@ -972,6 +975,71 @@ A write that does not reconcile is a write that changes nothing, so every
 manifest writer calls it: `POST`/`PATCH`/`DELETE /api/agent-manifests`,
 `/api/installed-agents` install/update/remove, and `POST /api/setup/agent`.
 
+#### Workflow budgets and step visibility
+
+A workflow's `timeout_seconds` is one wall-clock budget shared by all of its
+steps, and an agent step spends it walking that agent's model chain — primary,
+one in-place transient retry, then each fallback, each leg with its own per-call
+allowance (`LLM_REQUEST_TIMEOUT_BATCH` for cloud models on a workflow or cron
+trigger, `LLM_REQUEST_TIMEOUT_OLLAMA` for the local tail). **No step may be
+allowed more wall-clock than the workflow that contains it.** `email-pipeline`
+carried a 900 s budget while its classify step's four-model chain was allowed
+`300 + 300 + 300 + 600` plus one 300 s retry — 1,800 s — so the run could only
+ever finish while the primary answered first try; when the primary began
+returning empty completions on 2026-09-11 every run died at exactly 900 s.
+`robothor/engine/workflow_budget.py` enforces this at both ends.
+`load_workflows` logs a `Config validation [workflow:…]` warning naming the
+step, its computed worst case and the budget — the same ladder as the
+agent-manifest check `_check_stall_budget_vs_llm_timeout`, which validates the
+identical inversion for stall budgets — and `scripts/validate_agents.py --ci`
+runs the same check with `strict=True`, so an inversion it can resolve fails
+the PR instead of scrolling past. Both surfaces report **how much they
+checked**: an unresolved chain must never be mistaken for a clean one. Because
+every agent manifest is gitignored, the CLI falls back to
+`llm_budgets.REFERENCE_CHAIN` — the four-model shape the platform ships — so
+the *tracked* `docs/workflows/*.yaml` budgets are genuinely checked on a clean
+checkout, and a green `validate-agents` job is evidence rather than an absence
+of it. Checking zero agent steps is itself reported as a failure. The arithmetic reads its constants from `robothor/engine/llm_budgets.py`,
+the same leaf `llm_client` spends them out of, so prediction and runtime cannot
+drift; that leaf is also why the check needs no provider SDK to run.
+
+At runtime the workflow publishes its deadline so each LLM call is clamped to
+what is actually left. The chain walk refuses to *start* a model the budget can
+no longer afford, raising `WorkflowDeadlineError` — which names the workflow,
+the step and the refused model, and which `runner.execute` classifies as a
+**cancellation, not a timeout**: the agent's own clock never fired, so counting
+it in the timeout rate would be the same corruption `GENUINE_TIMEOUT_SQL`
+exists to prevent. The runner writes its row and re-raises, because only the
+workflow engine knows which step to mark — and so does `ToolRegistry.execute`,
+since `spawn_agent` runs its child `runner.execute` inline in the parent's task
+and therefore inside the same deadline scope; left to the registry's broad
+`except TimeoutError` it became "Tool 'spawn_agent' timed out after 120s", a
+duration that never elapsed.
+
+Being a cancellation has one consequence worth stating. `cancelled` is in
+`RESUMABLE_STATUSES`, so without a second rule a restart would resume an agent
+run its workflow deliberately abandoned — outside any deadline, with no
+workflow left to report to, and spending the budget that was already exhausted.
+`resume.resumable()` therefore drops runs whose reason starts with
+`WORKFLOW_BUDGET_CANCEL_PREFIX`: the one `cancelled` that is a decision rather
+than a casualty.
+
+The deadline is one budget for the whole run, **not a per-step allowance**: it
+stops a step outspending its workflow, and does not stop a first step leaving
+the second one nothing. Dividing it would need a per-step budget in the YAML,
+which no workflow declares today.
+
+A step's `workflow_run_steps` row is written when the step is **dispatched**,
+as `running` with its `started_at`, and updated in place when it finishes. It
+used to be written only on completion, so a step that never returned left no row
+at all: timed-out runs read `steps 0/2` with an empty step table, and "the
+workflow never started" was indistinguishable from "step 1 has been running for
+fifteen minutes". Rows still `running` when the run ends are closed out as
+`timeout` (migration 119) rather than left immortal, and the run's own
+`error_message` names the step — or, for a parallel fan-out, the steps — that
+were in flight. `WorkflowStepStatus` is held against that CHECK constraint by
+`test_schema_drift.py`, the same guard its three sibling enums already had.
+
 #### Engine admin routes
 
 Everything under `/api/admin` requires the `engine:control` scope
@@ -1026,6 +1094,8 @@ another.
 | `failed:telegram_no_sender` / `failed:telegram_no_chat_id` / `failed:telegram_unexpanded_chat_id` | The same three for the built-in Telegram wrapper, under its historical names. |
 | `failed:telegram_no_config` / `failed:telegram_no_run` | A channel `send()` was called without the config or run it needs. Programming error, recorded rather than raised. |
 | `failed:slack_not_configured` / `failed:slack_unresolved_target` / `failed:slack_client:transport` / `failed:slack_client:dm_open` | The Slack channel is registered on every instance, configured or not. No bot token in the environment or the vault; a target that is not a Slack id (a `#name` cannot be posted to); the `slack_sdk` transport could not be built (usually the `channels` extra is not installed); or a `U…`/`W…` target could not be turned into a conversation. The reason is a CLOSED set of tokens, never the SDK's own text -- a status a query cannot match exactly is not a status, and an SDK error can carry a credential. See [the Slack channel page](channels/slack.md). |
+| `failed:email_dnc` / `failed:email_dnc_unreadable` | The email channel refused before any transport existed. The first is a recipient flagged `crm_people.do_not_contact` (migration 113), filed in `agent_guardrail_events`; the second is an opt-out list that could not be READ, which is deliberately a different token — "we could not check" is not "nobody opted out", and overloading the first would make a database outage look like a wave of unsubscribes. `ROBOTHOR_DNC_MODE=observe` lets the mail go for **these two only**: the first still files its row (`action = 'observed'`), the second leaves an ERROR line and no row, because that write goes to the database the lookup just failed on. |
+| `failed:email_no_transport` / `failed:email_send` / `failed:email_no_target` / `failed:email_unexpanded_target` / `failed:email_unresolved_target` / `failed:email_no_run` / `failed:email_benchmark` | The email channel is registered on every instance, configured or not. No `gws` CLI and no `ROBOTHOR_EMAIL_SMTP_HOST` + `ROBOTHOR_EMAIL_FROM` — or an SMTP configuration the channel refuses because it would send the password in the clear (`ROBOTHOR_EMAIL_SMTP_STARTTLS=false` on a submission port); a transport that refused, raised, or accepted the call without returning a message id; no `delivery.to`; a literal `${VAR}`; a target that is neither an address nor a `crm_people` id (or a person with no primary email); a send with no run, and so no tenant to scope the per-tenant opt-out list to; a benchmark run, which never mails because a sandbox tenant isolates the database and not the outside world. None of these is affected by `ROBOTHOR_DNC_MODE`. See [the email channel page](channels/email.md). |
 | `failed:webchat_no_target` / `failed:webchat_unexpanded_target` / `failed:webchat_unknown_user` | The webchat channel was given no `delivery.to`, one that still contains `${…}`, or one that is not an active `user_accounts` row in this tenant. Nothing is written in any of the three. |
 | `failed:webchat_no_session_write` / `failed:webchat_no_notification` / `failed:webchat_send` | A webchat send writes TWO rows — the assistant turn in the member's chat session and the notification in their inbox — so `expected` is 2 and these name which half is missing (the turn, the notification, or both). Half of a web-chat delivery is not a delivery; the halves are named separately because they have different fixes. See [the web chat page](channels/webchat.md). |
 | `failed:event_bus_publish` / `failed:event_bus_disabled` / `failed:event_bus_exception: <err>` / `failed:event_bus_no_run` | The publish did not happen. |
@@ -1042,6 +1112,43 @@ an unrecorded delivery is worse than a recorded failure. Production's
 `TelegramBot.send_message` returns its landed messages, so this only bites a
 replacement that does not: **a replacement must stamp `run.delivery_status`**
 (the simplest way is to call the original it replaced).
+
+**A thin announce reply falls back to the note the run wrote.** An announce
+agent sometimes finishes its work, saves the result as a CRM note
+(`create_note`, a 1,000+ character body) and then ends the run with a
+meta-confirmation — `"Briefing delivered."`, 19 characters — so the operator
+received a header with nothing under it. `run_finalizer._assess_outcome` has
+always *flagged* that (`Thin announce output (N chars) — likely
+meta-confirmation instead of full content`); `deliver()` now recovers from it.
+When the mode is ANNOUNCE and the final text is thin by the same predicate
+(`is_thin_announce_output` in `robothor/engine/thin_announce.py`, one threshold
+shared with the finalizer — a module gate fails if any other engine file defines
+it), the run's own steps are searched for a `create_note` call whose `body` is
+itself substantial by that threshold, and that body is delivered in place of the
+stub, under the header the channel already adds. With no such note the stub is
+delivered as before and the finalizer's note stands.
+
+The scope is exactly `create_note` steps whose `run_id` **is this run's**: an
+unattributed step (an empty `run_id` on either side) and a note from another run
+are both refused, and another tool's `body` argument is never eligible —
+`gws_gmail_send` has one too, and an outbound email addressed to a third party is
+not the operator's briefing. Where a run wrote several qualifying notes the
+**most recently authored one wins** (the highest `step_number`, not the longest
+body), so an agent that files a long research note and then the short final
+briefing broadcasts the briefing. A `create_note` whose *save failed* still
+supplies its body: the content is agent-authored and addressed to the operator,
+and losing it is the defect this exists to fix.
+
+`delivery_status` is recorded from the receipt exactly as for any other send, and
+the substitution is written to `outcome_notes` **after** the send, from what was
+actually checked — `substituted note body (saved) — delivered`,
+`substituted note body (note save failed) — delivered`, or
+`substituted note body — send failed: <status>` for anything the channel did not
+fully acknowledge (`partial:…`, any `failed:…`). It never reads `delivered` on a
+receipt that did not. One such note is kept per run: a later `deliver()` of the
+same run replaces it rather than appending a second, contradicting one. The note
+is what explains why the delivered text differs from `agent_runs.output_text`,
+which keeps the stub as evidence.
 
 Consumers must treat *only* `delivered` as reach: `analytics.py` counts it for
 the delivery success rate, and `scheduler._maybe_emit_heartbeat_status_ping`

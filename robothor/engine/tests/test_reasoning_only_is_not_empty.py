@@ -203,6 +203,92 @@ async def test_a_true_empty_keeps_todays_path() -> None:
     assert REASONING_ONLY_NUDGE not in str(second.kwargs["messages"])
 
 
+# ─── the re-ask respects the workflow deadline (merge with #529) ────────
+
+
+class _Clock:
+    """A monotonic clock the provider stub advances by hand."""
+
+    def __init__(self) -> None:
+        self.t = 1_000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+@pytest.mark.asyncio
+async def test_no_re_ask_once_the_workflow_deadline_has_elapsed() -> None:
+    """The re-ask is a real provider call and must not outlive its budget.
+
+    Two clamps now sit on the same variable inside the attempt loop:
+    `workflow_budget.bound_call_timeout` (what the WORKFLOW has left) and the
+    per-model allowance every attempt shares. Here the reasoning-only reply
+    itself spends the workflow's budget — the re-ask must be refused, not
+    bought on credit.
+    """
+    from robothor.engine.workflow_budget import WorkflowDeadlineError, workflow_deadline
+
+    clock = _Clock()
+    calls: list[float] = []
+
+    async def _acompletion(**kwargs: Any) -> Any:
+        calls.append(kwargs["timeout"])
+        clock.t += 25.0  # the whole 20s workflow budget, and then some
+        return _reasoning_only()
+
+    with (
+        patch("time.monotonic", clock),
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch("robothor.engine.llm_client.litellm.acompletion", new=_acompletion),
+        workflow_deadline("wf-1", 20.0),
+        pytest.raises(WorkflowDeadlineError),
+    ):
+        await LLMClient()._call_llm(
+            [{"role": "user", "content": "hi"}], [THINKING_MODEL], [], broken_models=set()
+        )
+    assert len(calls) == 1, "the re-ask must not start on a budget that is gone"
+    assert calls[0] <= 20.0
+
+
+@pytest.mark.asyncio
+async def test_a_spent_workflow_budget_refuses_the_first_call_too() -> None:
+    from robothor.engine.workflow_budget import WorkflowDeadlineError, workflow_deadline
+
+    acompletion = AsyncMock(side_effect=[_reasoning_only(), _response()])
+    with (
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch("robothor.engine.llm_client.litellm.acompletion", acompletion),
+        workflow_deadline("wf-1", 0.0),
+        pytest.raises(WorkflowDeadlineError),
+    ):
+        await LLMClient()._call_llm(
+            [{"role": "user", "content": "hi"}], [THINKING_MODEL], [], broken_models=set()
+        )
+    assert acompletion.call_count == 0, "the deadline refuses the call before it starts"
+
+
+@pytest.mark.asyncio
+async def test_the_re_ask_is_bounded_by_what_the_workflow_has_left() -> None:
+    """A live budget still allows the re-ask — the clamp lowers, never raises."""
+    from robothor.engine.workflow_budget import workflow_deadline
+
+    acompletion = AsyncMock(side_effect=[_reasoning_only(), _response()])
+    with (
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch("robothor.engine.llm_client.litellm.acompletion", acompletion),
+        workflow_deadline("wf-1", 45.0),
+    ):
+        result = await LLMClient()._call_llm(
+            [{"role": "user", "content": "hi"}], [THINKING_MODEL], [], broken_models=set()
+        )
+    assert getattr(result.choices[0].message, "content", None) == "an answer"
+    assert acompletion.call_count == 2
+    for call in acompletion.call_args_list:
+        assert call.kwargs["timeout"] <= 45.0, (
+            "no attempt may be given more time than the workflow has left"
+        )
+
+
 # ─── compaction re-asks instead of walking the chain ────────────────────
 
 

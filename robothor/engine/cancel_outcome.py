@@ -3,11 +3,11 @@
 Extracted from ``runner`` rather than growing it past its decomposition
 ratchet — the runner is the god-object the ratchet exists to shrink.
 
-Two bugs shared one branch here. The label was derived from
+Two bugs shared one branch here. The label came from
 ``agent_config.timeout_seconds``, which ``_defaults.yaml`` pins to 0
-fleet-wide, so a run that genuinely blew the 3600s fleet ceiling was filed as
-"Run cancelled externally" — and ``GENUINE_TIMEOUT_SQL`` then excluded it from
-the timeout rate. And both outcomes wrote ``status='timeout'``, which is why
+fleet-wide, so a run that genuinely blew the 3600s ceiling was filed as "Run
+cancelled externally" and ``GENUINE_TIMEOUT_SQL`` then excluded it from the
+timeout rate. And both outcomes wrote ``status='timeout'``, which is why
 ``resume`` (selecting ``status='running'``) recovered nothing from a graceful
 restart: the shutdown had already tombstoned the runs as timeouts.
 """
@@ -38,34 +38,31 @@ def _cancel_outcome(
     effective_ceiling: int,
     last_activity: str,
     waiting_on: str = "",
+    workflow_deadline: str = "",
 ) -> _CancelOutcome:
     """Classify a cancellation from EVIDENCE, not from a config value.
-
-    The old branch keyed on ``agent_config.timeout_seconds``, which
-    ``_defaults.yaml`` pins to 0 fleet-wide. So a run that genuinely blew the
-    3600s fleet ceiling was labelled "Run cancelled externally" and
-    ``GENUINE_TIMEOUT_SQL`` then excluded it from the timeout rate -- real
-    timeouts reported as deploy artifacts.
 
     ``timed_out`` says the run's own clock fired; anything else reaching the
     cancel arm came from outside. The reason names the ceiling that was
     actually applied, and the wait it died inside when there was one.
+
+    ``workflow_deadline`` outranks both: the enclosing WORKFLOW's budget
+    expired mid-call, so this run's clock never fired and calling it a timeout
+    would put a healthy run into the rate under a ceiling it never reached.
     """
     from robothor.engine.analytics import EXTERNAL_CANCEL_PREFIX
+
+    if workflow_deadline:
+        return _CancelOutcome(status=RunStatus.CANCELLED, reason=workflow_deadline)
 
     tail = f"; last activity: {last_activity}"
     if waiting_on:
         tail += f"; waiting on {waiting_on}"
     if timed_out:
         ceiling = declared_timeout_seconds if declared_timeout_seconds > 0 else effective_ceiling
-        return _CancelOutcome(
-            status=RunStatus.TIMEOUT,
-            reason=f"Circuit-breaker hard timeout ({ceiling}s){tail}",
-        )
-    return _CancelOutcome(
-        status=RunStatus.CANCELLED,
-        reason=f"{EXTERNAL_CANCEL_PREFIX}{tail}",
-    )
+        reason = f"Circuit-breaker hard timeout ({ceiling}s){tail}"
+        return _CancelOutcome(status=RunStatus.TIMEOUT, reason=reason)
+    return _CancelOutcome(status=RunStatus.CANCELLED, reason=f"{EXTERNAL_CANCEL_PREFIX}{tail}")
 
 
 def terminal_run(

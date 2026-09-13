@@ -122,6 +122,129 @@ def get_registered_tools() -> set[str]:
         return set()
 
 
+WORKFLOW_DIR = REPO_ROOT / "docs" / "workflows"
+
+
+def _agent_chain(manifest: dict) -> list[str]:
+    """The model chain an agent manifest declares, primary first.
+
+    Read straight off the YAML rather than through ``config.load_agent_config``
+    so this stays importable in a job whose entire dependency list is
+    ``pyyaml``. ``_defaults.yaml`` and the env last-resort model are NOT
+    applied, which makes this an UNDER-estimate — a chain that fails the check
+    here fails it on the box too, and never the other way round.
+    """
+    model = manifest.get("model")
+    if not isinstance(model, dict):
+        return []
+    chain = []
+    primary = model.get("primary")
+    if isinstance(primary, str) and primary and "${" not in primary:
+        chain.append(primary)
+    fallbacks = model.get("fallbacks")
+    if isinstance(fallbacks, list):
+        chain.extend(m for m in fallbacks if isinstance(m, str) and m and "${" not in m)
+    return chain
+
+
+def check_workflow_budgets(manifests: dict, *, strict: bool) -> int:
+    """Check every tracked workflow's budget against its steps' model chains.
+
+    Returns the number of FAILURES. Under ``strict`` a step whose chain can
+    outspend its own workflow is one; otherwise it is a warning.
+
+    Always reports how much it could actually check. On a platform checkout
+    every agent manifest is gitignored, so most chains will not resolve — and
+    an unresolved chain must not be mistaken for a clean one, which is exactly
+    what the first version of this check did by treating it as a zero-length
+    chain that fits any budget.
+    """
+    try:
+        from robothor.engine.llm_budgets import REFERENCE_CHAIN
+        from robothor.engine.workflow import parse_workflow
+        from robothor.engine.workflow_budget import report_step_budgets
+    except Exception as e:  # pragma: no cover - environment dependent
+        print(f"Workflow budgets: NOT CHECKED — engine not importable ({e})")
+        return 1 if strict else 0
+
+    if not WORKFLOW_DIR.is_dir():
+        print(f"Workflow budgets: NOT CHECKED — no {WORKFLOW_DIR.name}/ directory")
+        return 0
+
+    def _chain(agent_id: str) -> list[str]:
+        """This instance's chain if we can read it, else the platform's shape.
+
+        A gitignored manifest is not evidence of a small chain; it is no
+        evidence at all. Falling back to REFERENCE_CHAIN is what lets the
+        TRACKED workflow budgets be checked on a clean platform checkout, which
+        is the only place this job ever runs.
+        """
+        return _agent_chain(manifests.get(agent_id, {})) or list(REFERENCE_CHAIN)
+
+    failures = 0
+    totals = {"workflows": 0, "steps": 0, "declared": 0, "reference": 0}
+    for path in sorted(WORKFLOW_DIR.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text())
+        except yaml.YAMLError as e:
+            print(f"  [!] {path.name}: unparseable ({e})")
+            failures += 1
+            continue
+        if not (data and isinstance(data, dict) and "id" in data):
+            continue
+        wf = parse_workflow(data)
+        report = report_step_budgets(wf, _chain, strict=strict)
+        declared = sum(1 for s in _agent_step_ids(wf) if _agent_chain(manifests.get(s, {})))
+        # `report.checked` is the steps an allowance was actually computed for;
+        # `report.agent_steps` is the steps that EXIST. Summarising the second
+        # is how this gate could still report "1 agent step(s) checked" with an
+        # empty reference chain, having scored nothing at all.
+        declared = min(declared, report.checked)
+        totals["workflows"] += 1
+        totals["steps"] += report.checked
+        totals["declared"] += declared
+        totals["reference"] += report.checked - declared
+        for issue in report.issues:
+            icon = "!" if strict else "~"
+            print(f"  [{icon}] {path.name}: {issue.message}")
+            if strict:
+                failures += 1
+
+    detail = f"{totals['declared']} against declared chains"
+    if totals["reference"]:
+        detail += f", {totals['reference']} against the platform reference chain"
+    print(
+        f"Workflow budgets: {totals['workflows']} workflow(s), "
+        f"{totals['steps']} agent step(s) checked ({detail})"
+    )
+
+    # A job that checked NOTHING must not look like a job that found nothing.
+    # This is the whole reason the reference chain exists, so reaching zero
+    # here means the workflows or the fallback have gone missing, not that the
+    # instance is unusual.
+    if totals["workflows"] and not totals["steps"]:
+        print("  [!] no agent step was checked — this result is not evidence of anything")
+        failures += 1
+    return failures
+
+
+def _agent_step_ids(wf) -> list[str]:
+    """Every agent_id an agent step references, parallel branches included."""
+    from robothor.engine.models import WorkflowStepType
+
+    found: list[str] = []
+
+    def _visit(steps) -> None:
+        for step in steps:
+            if getattr(step, "parallel_steps", None):
+                _visit(step.parallel_steps)
+            if getattr(step, "type", None) == WorkflowStepType.AGENT and step.agent_id:
+                found.append(step.agent_id)
+
+    _visit(wf.steps)
+    return found
+
+
 def main():
     parser = argparse.ArgumentParser(description="Validate agent manifests against the Engine")
     parser.add_argument("--agent", "-a", help="Check a single agent by ID")
@@ -136,6 +259,13 @@ def main():
         "--chain",
         action="store_true",
         help="Run chain validation checks M-R in addition to A-L",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Promote advisory findings that have a definite answer — today, a "
+        "workflow step whose model chain can outspend its own workflow — from "
+        "warnings to failures. Implied by --ci.",
     )
     parser.add_argument(
         "--instance",
@@ -186,11 +316,18 @@ def main():
             f"{len(parse_failures)} manifest(s) could not be parsed — the agents "
             "they define DO NOT EXIST as far as the engine is concerned."
         )
+    # Workflow budgets are checked BEFORE the no-manifests early exit: the
+    # workflows are tracked platform files even when every agent manifest is
+    # gitignored, so this is the one surface that can say anything about them
+    # on a clean checkout. `--ci` implies strict — a budget inversion that CAN
+    # be resolved should fail the PR, not scroll past as a warning.
+    budget_failures = check_workflow_budgets(all_manifests, strict=args.ci or args.strict)
+
     if not all_manifests and not parse_failures:
         print(
             "OK: No tracked manifests found — agent manifests are instance config, not platform code."
         )
-        sys.exit(0)
+        sys.exit(1 if budget_failures else 0)
 
     # Load registered tools from Engine
     registered_tools = get_registered_tools()
@@ -333,7 +470,7 @@ def main():
 
     # A parse failure fails the run: the file names an agent that does not
     # exist as far as the engine is concerned, which is the 2026-08-23 outage.
-    sys.exit(1 if (total_fail > 0 or parse_failures) else 0)
+    sys.exit(1 if (total_fail > 0 or parse_failures or budget_failures) else 0)
 
 
 if __name__ == "__main__":

@@ -46,7 +46,11 @@ KNOWN_LARGE: dict[str, int] = {
     # onto the signature (POST /api/admin/scheduler/reconcile has to act on
     # THIS process's job registry) instead of raising this number for it.
     "health.py::create_health_app": 1431,
-    "runner.py::execute": 990,  # +7: task_id propagated onto the run at INSERT time
+    # 990 -> 989: the post-stall autoDream spawn moved to
+    # run_lifecycle.spawn_post_stall_autodream ("recovery helper spawns" is
+    # that module's own contract), which is what paid for classifying a
+    # workflow-budget kill and letting it propagate.
+    "runner.py::execute": 989,  # +7: task_id propagated onto the run at INSERT time
     "runner.py::_run_loop": 775,
     # +12: run/tenant threaded onto the signature, and the do-not-contact
     # refusal at the head of both outbound-mail branches. The check itself
@@ -75,13 +79,20 @@ KNOWN_LARGE: dict[str, int] = {
     # -7: rate-limit wait and the malformed-tool-call verdict extracted;
     # +4: review-requested comments on the malformed-tool-call branch (why the
     # re-roll spends `attempt`, and what skipping `_handle_model_error` costs)
-    # 267 -> 257: four verdicts left the chain walk —
-    # _spent_credit_leaves_someone_reachable, _rotate_credential, _retry_delay
-    # and _blame_model — which is what paid for the reasoning-only re-ask, the
-    # per-attempt telemetry and the shared per-model time allowance
-    # (DIAG 2026-09-13 §4.1/§4.4 and the review's I6) rather than raising this
-    # number for any of them.
-    "llm_client.py::_call_llm": 257,
+    # 267 -> 242: the per-model admission decision (spent credential, open
+    # breaker, retired pool) went to _skip_model_reason and the per-call
+    # timeout selection to _per_call_timeout. That is what paid for the
+    # workflow-deadline clamp inside the attempt loop rather than raising
+    # this number for it.
+    # 242 -> 240: _skip_model_reason now returns the pool it looked up, so the
+    # call site stopped needing its own _key_pool line — which is also what
+    # restored the lazy lookup for models the walk skips.
+    # 240 -> 236: four more verdicts left the walk — _rotate_credential,
+    # _retry_delay, _blame_model and _warn_if_chain_outgrows_its_budget — which
+    # is what paid for the reasoning-only re-ask, the per-attempt telemetry and
+    # the shared per-model time allowance (DIAG 2026-09-13 §4.1/§4.4, review I6)
+    # rather than raising this number for any of them.
+    "llm_client.py::_call_llm": 236,
     "config.py::manifest_to_agent_config": 268,
     # scheduler.py::start is gone from this list: 266 -> 116. The three
     # hand-written registration blocks (heartbeat, worker, cron) became one
@@ -92,14 +103,25 @@ KNOWN_LARGE: dict[str, int] = {
     # _emit_tool_call_events, which more than paid for accumulating the
     # streamed reasoning_details litellm's stream_chunk_builder drops and for
     # threading the rejected history into the replay digest.
-    "llm_client.py::_call_llm_streaming": 247,
+    # 247 -> 245: its own per-call timeout selection now shares
+    # _per_call_timeout with _call_llm, which more than paid for the same
+    # workflow-deadline clamp landing on this chain walk too.
+    # 245 -> 236: the streaming path's own admission checks (open breaker,
+    # retired pool) moved to _streaming_skip_reason, which is what paid for it
+    # recording its attempts — so `duration_ms` means the provider attempt on
+    # BOTH paths instead of one thing streamed and another not (review I5).
+    "llm_client.py::_call_llm_streaming": 236,
     "telegram.py::run_agent": 257,
     "tools/handlers/experiment.py::_experiment_commit": 256,
     "telegram.py::_handle_goal_command": 242,
     "managed_agents/runner.py::run_on_managed_agents": 241,
     "runner.py::execute_deep": 224,
     "chat.py::run_approved": 218,
-    "workflow.py::execute": 208,
+    # workflow.py::execute is gone from this list: 208 -> 179. The finalization
+    # cluster (completion stamp, terminal status, the failed->timeout
+    # reclassification) became _finalize_status, which is what paid for the
+    # workflow-deadline scope and the orphan-step close-out rather than raising
+    # this number for them.
 }
 
 

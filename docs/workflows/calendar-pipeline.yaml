@@ -17,7 +17,12 @@ triggers:
     cron: "0 6-22/6 * * *"
     timezone: America/New_York
 
-timeout_seconds: 600
+# Must exceed one agent step's whole model-chain allowance — see
+# email-pipeline.yaml for the arithmetic (1800s for a four-model chain on a
+# workflow trigger). At 600 this pipeline was surviving only because its
+# primary answered first try, which is the same footing email-pipeline was on
+# the day before it started timing out.
+timeout_seconds: 2400
 
 steps:
   - id: monitor
