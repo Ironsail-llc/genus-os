@@ -22,7 +22,7 @@ import contextlib
 from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection, read_every_tenant_in_transaction
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,55 @@ def production_run_filter(alias: str = "") -> str:
     return f"{prefix}parent_run_id IS NULL AND {exclude_benchmark_filter(alias)}"
 
 
+def _benchmark_spend(
+    conn: Any,
+    cur: Any,
+    agent_id: str,
+    window_sql: str,
+    window_params: tuple[Any, ...],
+) -> tuple[int, float]:
+    """One agent's benchmark-harness runs and spend. Never raises.
+
+    Deliberately NOT tenant-scoped. ``benchmark_run_filter()`` already isolates
+    benchmark rows by ``trigger_detail``, and since 2026-09-13 every graded task
+    run executes as the ``benchmark-sandbox`` tenant — so a query bound to the
+    owning tenant matched none of them and reported every agent's benchmark
+    spend as 0.0, which also silenced the decontamination rollout's observe rung
+    (``_report_contamination`` early-returns on a zero count).
+
+    The WHERE clause is only half of that: RLS filters the sandbox rows out
+    before the predicate is reached, so the transaction is relaxed for this one
+    read — see :func:`robothor.db.connection.read_every_tenant_in_transaction`.
+
+    Returns:
+        ``(benchmark_runs, benchmark_cost_usd)``, ``(0, 0.0)`` on any failure —
+        this is a break-out on someone else's stats call and must not cost the
+        caller its numbers.
+    """
+    bench_only = benchmark_run_filter()
+    try:
+        read_every_tenant_in_transaction(conn)
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(*) as benchmark_runs,
+                COALESCE(SUM(total_cost_usd), 0) as benchmark_cost_usd
+            FROM agent_runs
+            WHERE agent_id = %s
+              AND {window_sql}
+              AND {bench_only}
+            """,  # noqa: S608
+            (agent_id, *window_params),
+        )
+        row = cur.fetchone() or {}
+        return int(row.get("benchmark_runs") or 0), float(row.get("benchmark_cost_usd") or 0.0)
+    except Exception as e:
+        logger.warning("benchmark contamination query failed: %s", e)
+        with contextlib.suppress(Exception):
+            conn.rollback()
+        return 0, 0.0
+
+
 def _report_contamination(agent_id: str, benchmark_runs: int, tenant_id: str) -> None:
     """Record (and at the ``alert`` rung, escalate) benchmark contamination.
 
@@ -259,7 +308,6 @@ def get_agent_stats(
     # below is provably the same predicate.
     prod_filter = production_run_filter()
     prod_filter_r = production_run_filter("r")
-    bench_only = benchmark_run_filter()
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -548,27 +596,9 @@ def get_agent_stats(
         stats["benchmark_runs"] = 0
         stats["benchmark_cost_usd"] = 0.0
         stats["benchmark_excluded"] = decontamination_enforced()
-        try:
-            cur.execute(
-                f"""
-                SELECT
-                    COUNT(*) as benchmark_runs,
-                    COALESCE(SUM(total_cost_usd), 0) as benchmark_cost_usd
-                FROM agent_runs
-                WHERE agent_id = %s
-                  AND tenant_id = %s
-                  AND {window_sql}
-                  AND {bench_only}
-                """,  # noqa: S608
-                (agent_id, tenant_id, *window_params),
-            )
-            brow = cur.fetchone() or {}
-            stats["benchmark_runs"] = int(brow.get("benchmark_runs") or 0)
-            stats["benchmark_cost_usd"] = float(brow.get("benchmark_cost_usd") or 0.0)
-        except Exception as e:
-            logger.warning("benchmark contamination query failed: %s", e)
-            with contextlib.suppress(Exception):
-                conn.rollback()
+        runs, cost = _benchmark_spend(conn, cur, agent_id, window_sql, window_params)
+        stats["benchmark_runs"] = runs
+        stats["benchmark_cost_usd"] = cost
 
     _report_contamination(agent_id, stats["benchmark_runs"], tenant_id)
     return stats
@@ -617,6 +647,7 @@ def get_fleet_health(
         # Benchmark spend, per agent, kept OUT of the cost columns above.
         benchmarks: dict[str, dict[str, Any]] = {}
         try:
+            read_every_tenant_in_transaction(conn)
             cur.execute(
                 f"""
                 SELECT
@@ -624,12 +655,16 @@ def get_fleet_health(
                     COUNT(*) as benchmark_runs,
                     COALESCE(SUM(total_cost_usd), 0) as benchmark_cost_usd
                 FROM agent_runs
-                WHERE tenant_id = %s
-                  AND created_at > NOW() - make_interval(days := %s)
+                WHERE created_at > NOW() - make_interval(days := %s)
+                -- Deliberately NOT tenant-scoped: `bench_only` already
+                -- isolates benchmark rows by trigger_detail, and since
+                -- 2026-09-13 every graded task run executes as the
+                -- `benchmark-sandbox` tenant, so binding the owning tenant
+                -- here reported every agent's benchmark spend as zero.
                   AND {bench_only}
                 GROUP BY agent_id
                 """,  # noqa: S608
-                (tenant_id, days),
+                (days,),
             )
             benchmarks = {r["agent_id"]: dict(r) for r in cur.fetchall()}
         except Exception as e:

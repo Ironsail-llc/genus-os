@@ -25,6 +25,7 @@ import ast
 import json
 import uuid
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -522,3 +523,274 @@ class TestAnalyticsFilterParity:
             "analytics queries touching agent_runs without the shared "
             f"production filter: {offenders}"
         )
+
+
+# ─── (e) benchmark spend survives the children moving tenant ────────────────
+
+
+class TestBenchmarkSpendIsNotTenantScoped:
+    """Every "benchmark traffic, reported separately" query used to read
+    ``WHERE agent_id = %s AND tenant_id = %s AND <bench_only>`` with the
+    PRODUCTION tenant bound. From 2026-09-13 the harness executes every task
+    run as ``benchmark-sandbox``, so those rows match none of them and:
+
+    * ``/costs`` reports ``benchmark_cost_usd = 0.0`` for every agent — the
+      ~$30/month the break-out exists to surface simply disappears;
+    * fleet health rolls the same zeros up;
+    * ``analytics._report_contamination`` early-returns on
+      ``benchmark_runs <= 0``, so the decontamination rollout's observe and
+      alert rungs go permanently silent and the promotion evidence they exist
+      to produce becomes unobtainable.
+
+    ``bench_only`` already isolates benchmark rows by ``trigger_detail``, so
+    the tenant predicate inside that branch bought nothing and now costs the
+    measurement.
+    """
+
+    @staticmethod
+    def _bench_query(fn: Any) -> str:
+        """The SQL of the one query in ``fn`` that filters on ``bench_only``."""
+        import inspect
+        import re as _re
+
+        src = inspect.getsource(fn)
+        queries = _re.findall(r'f"""(.*?)"""', src, _re.DOTALL)
+        matching = [q for q in queries if "{bench_only}" in q]
+        assert matching, f"no bench_only query found in {fn.__name__}"
+        assert len(matching) == 1, f"{fn.__name__} has {len(matching)} bench_only queries"
+        return matching[0]
+
+    def test_analytics_agent_stats_bench_query_is_tenant_agnostic(self):
+        from robothor.engine.analytics import _benchmark_spend
+
+        assert "tenant_id" not in self._bench_query(_benchmark_spend)
+
+    def test_analytics_fleet_health_bench_query_is_tenant_agnostic(self):
+        from robothor.engine.analytics import get_fleet_health
+
+        assert "tenant_id" not in self._bench_query(get_fleet_health)
+
+    def test_tracking_agent_stats_bench_query_is_tenant_agnostic(self):
+        from robothor.engine.tracking import get_agent_stats
+
+        assert "tenant_id" not in self._bench_query(get_agent_stats)
+
+    def test_the_production_queries_keep_their_tenant_predicate(self):
+        """Only the benchmark break-out loses it. Dropping it anywhere else
+        would be a cross-tenant leak, not a fix."""
+        import inspect
+
+        from robothor.engine.analytics import get_agent_stats
+
+        src = inspect.getsource(get_agent_stats)
+        assert "AND tenant_id = %s" in src or "WHERE tenant_id = %s" in src
+
+    def test_the_bench_query_is_unbound_from_the_rls_tenant(self):
+        """A tenant-agnostic predicate is not enough when RLS is on: the
+        policy filters the sandbox rows out before the WHERE clause is
+        reached. Each bench query must relax the binding for its own
+        transaction, or this whole fix is inert on an RLS instance."""
+        import inspect
+
+        from robothor.engine import analytics, tracking
+
+        for fn in (
+            analytics._benchmark_spend,
+            analytics.get_fleet_health,
+            tracking.get_agent_stats,
+        ):
+            src = inspect.getsource(fn)
+            assert "read_every_tenant_in_transaction" in src, (
+                f"{fn.__module__}.{fn.__name__} reads benchmark rows while still "
+                "bound to one tenant — RLS hides the sandbox children"
+            )
+
+
+@pytest.mark.integration
+class TestBenchmarkSpendCountsSandboxChildren:
+    @staticmethod
+    def _seed(db_cursor, agent_id: str) -> None:
+        db_cursor.execute(
+            """
+            INSERT INTO crm_tenants (id, display_name, active)
+            VALUES ('benchmark-sandbox', 'Benchmark Sandbox', TRUE)
+            ON CONFLICT (id) DO NOTHING
+            """
+        )
+        db_cursor.execute(
+            """
+            INSERT INTO agent_runs
+                (id, tenant_id, agent_id, trigger_type, trigger_detail, status,
+                 total_cost_usd, duration_ms)
+            VALUES
+                (gen_random_uuid(), 'default', %s, 'cron', 'cron:daily',
+                 'completed', 0.25, 1000),
+                (gen_random_uuid(), 'benchmark-sandbox', %s, 'sub_agent',
+                 'benchmark:s1:t1', 'completed', 4.00, 2000),
+                (gen_random_uuid(), 'benchmark-sandbox', %s, 'sub_agent',
+                 'benchmark:s1:t2', 'completed', 2.00, 3000)
+            """,
+            (agent_id, agent_id, agent_id),
+        )
+
+    def test_analytics_sees_a_child_that_ran_in_the_sandbox(
+        self, db_cursor, db_conn, mock_get_connection, observe_decontamination
+    ):
+        from robothor.engine.analytics import get_agent_stats
+
+        agent_id = f"test-agent-{uuid.uuid4().hex[:8]}"
+        self._seed(db_cursor, agent_id)
+
+        stats = get_agent_stats(agent_id, days=1, tenant_id="default")
+
+        assert stats["benchmark_runs"] == 2, (
+            "benchmark children that ran in the sandbox tenant are invisible to "
+            "the spend break-out — $30/month of real money reported as zero"
+        )
+        assert float(stats["benchmark_cost_usd"]) == pytest.approx(6.00)
+
+    def test_tracking_costs_surface_sees_them_too(self, db_cursor, db_conn, mock_get_connection):
+        from robothor.engine.tracking import get_agent_stats
+
+        agent_id = f"test-agent-{uuid.uuid4().hex[:8]}"
+        self._seed(db_cursor, agent_id)
+
+        stats = get_agent_stats(agent_id, hours=24, tenant_id="default")
+
+        assert stats["benchmark_runs"] == 2
+        assert float(stats["benchmark_cost_usd"]) == pytest.approx(6.00)
+
+    def test_fleet_health_sees_them_too(
+        self, db_cursor, db_conn, mock_get_connection, observe_decontamination
+    ):
+        from robothor.engine.analytics import get_fleet_health
+
+        agent_id = f"test-agent-{uuid.uuid4().hex[:8]}"
+        self._seed(db_cursor, agent_id)
+
+        health = get_fleet_health(days=1, tenant_id="default")
+        row = next((a for a in health["agents"] if a["agent_id"] == agent_id), None)
+
+        assert row is not None
+        assert row["benchmark_runs"] == 2
+        assert float(row["benchmark_cost_usd"]) == pytest.approx(6.00)
+
+    def test_the_contamination_rung_still_reports(
+        self, db_cursor, db_conn, mock_get_connection, observe_decontamination, caplog
+    ):
+        """``observe`` exists to produce the promotion evidence. A count that
+        can only be zero is a rung that never reports."""
+        import logging
+
+        from robothor.engine.analytics import get_agent_stats
+
+        agent_id = f"test-agent-{uuid.uuid4().hex[:8]}"
+        self._seed(db_cursor, agent_id)
+
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.analytics"):
+            get_agent_stats(agent_id, days=1, tenant_id="default")
+
+        assert any("benchmark contamination" in r.getMessage() for r in caplog.records), (
+            "the decontamination observe rung went silent when the children moved tenant"
+        )
+
+
+# ─── (f) the runbook's own audit queries, run against an RLS fake ───────────
+
+
+class TestTheRunbookAuditQueriesActuallyWork:
+    """The verification a change ships to prove itself has to be probed too.
+
+    The lineage SQL self-joins ``agent_runs``: the parent lives in the owning
+    tenant, the children in ``benchmark-sandbox``. Migration 081 puts a
+    ``tenant_isolation`` policy on every table with a ``tenant_id`` column,
+    ``FORCE ROW LEVEL SECURITY`` included, and it applies to each *reference* in
+    a query — both aliases of a self-join. So from a connection bound to the
+    owning tenant the join drops every sandbox child, and "expect
+    benchmark-sandbox only" is unreachable: a clean night and a blind query both
+    return nothing.
+
+    These tests execute the queries **as written in the runbook** against a
+    sqlite fake of that policy: ``agent_runs`` is a view over the real rows,
+    filtered exactly the way the policy filters (permissive when the binding is
+    empty). One declared normalisation — Postgres' ``now() - interval '1 day'``
+    is rewritten to a fixed timestamp — because what is under test is the
+    visibility of the join, not date arithmetic.
+    """
+
+    RUNBOOK = Path(__file__).resolve().parents[3] / "docs" / "runbooks" / "BENCHMARK_SANDBOX.md"
+
+    @classmethod
+    def _runbook_query(cls, marker: str) -> str:
+        """The fenced ``sql`` block whose first line names ``marker``."""
+        import re as _re
+
+        blocks = _re.findall(r"```sql\n(.*?)```", cls.RUNBOOK.read_text(), _re.DOTALL)
+        matching = [b for b in blocks if marker in b.splitlines()[0]]
+        assert matching, f"no ```sql block in the runbook starts with {marker!r}"
+        assert len(matching) == 1, f"{len(matching)} blocks start with {marker!r}"
+        return matching[0].replace("now() - interval '1 day'", "'2000-01-01'")
+
+    @staticmethod
+    def _db(binding: str):
+        """A sqlite fake of migration 081's policy on ``agent_runs``.
+
+        One parent in the owning tenant, three children in the sandbox, and one
+        child deliberately leaked into the owning tenant.
+        """
+        import sqlite3
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE TABLE agent_runs_storage ("
+            " id TEXT, tenant_id TEXT, agent_id TEXT, parent_run_id TEXT,"
+            " trigger_detail TEXT, started_at TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO agent_runs_storage VALUES (?,?,?,?,?,?)",
+            [
+                ("p1", "acme-instance", "benchmark-runner", None, "cron:daily", "2026-09-13"),
+                ("c1", "benchmark-sandbox", "email-analyst", "p1", "benchmark:s1:t1", "2026-09-13"),
+                ("c2", "benchmark-sandbox", "email-analyst", "p1", "benchmark:s1:t2", "2026-09-13"),
+                ("c3", "benchmark-sandbox", "crm-dedup", "p1", "benchmark:s2:t1", "2026-09-13"),
+                ("c4", "acme-instance", "crm-hygiene", "p1", "benchmark:s3:t1", "2026-09-13"),
+            ],
+        )
+        # The policy: permissive on an empty binding, otherwise equality.
+        where = "1=1" if binding == "" else f"tenant_id = '{binding}'"
+        conn.execute(f"CREATE VIEW agent_runs AS SELECT * FROM agent_runs_storage WHERE {where}")
+        return conn
+
+    def test_unbound_the_audit_sees_every_child_and_names_the_leak(self):
+        rows = self._db("").execute(self._runbook_query("-- UNBOUND")).fetchall()
+        by_tenant = {(agent, tenant): n for agent, tenant, n in rows}
+        assert by_tenant.get(("email-analyst", "benchmark-sandbox")) == 2
+        assert by_tenant.get(("crm-dedup", "benchmark-sandbox")) == 1
+        assert by_tenant.get(("crm-hygiene", "acme-instance")) == 1, (
+            "the unbound audit did not surface the leaked child — it is the only "
+            "form that can, and the runbook sends the operator here"
+        )
+
+    def test_bound_to_the_owning_tenant_a_clean_night_is_empty(self):
+        """And the query the runbook gives for that binding says so."""
+        rows = self._db("acme-instance").execute(self._runbook_query("-- BOUND")).fetchall()
+        assert [r for r in rows if r[1] == "benchmark-sandbox"] == [], (
+            "a sandbox child was visible from a bound connection — the fake's "
+            "policy is not filtering, so this test proves nothing"
+        )
+        assert rows == [("crm-hygiene", "acme-instance", 1)], (
+            "the bound query must return exactly the leak, and nothing else"
+        )
+
+    def test_the_unbound_query_bound_would_hide_the_children(self):
+        """Why the runbook's two forms are not interchangeable: run the UNBOUND
+        query on a bound connection and the sandbox children vanish, which reads
+        identically to 'the benchmark never ran'."""
+        rows = self._db("acme-instance").execute(self._runbook_query("-- UNBOUND")).fetchall()
+        assert all(tenant != "benchmark-sandbox" for _, tenant, _ in rows)
+
+    def test_bound_to_the_sandbox_the_join_drops_everything(self):
+        """The parent is filtered out, so the JOIN returns nothing at all —
+        the third way to get an empty result that means nothing."""
+        rows = self._db("benchmark-sandbox").execute(self._runbook_query("-- UNBOUND")).fetchall()
+        assert rows == []

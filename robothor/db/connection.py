@@ -333,6 +333,45 @@ def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
         raise
 
 
+def read_every_tenant_in_transaction(conn: psycopg2.extensions.connection) -> None:
+    """Let THIS TRANSACTION read rows of every tenant, for one narrow purpose.
+
+    The RLS policy (migration 081) has a permissive branch for an empty
+    ``app.tenant_id``; this takes it, with ``set_config(..., is_local => true)``
+    so the relaxation is scoped to the current transaction and reverts on
+    commit or rollback. A pooled connection therefore cannot carry it to the
+    next borrower — the failure mode ``_apply_tenant_scope`` exists to prevent.
+
+    **Use this only for a query that is already restricted to rows no tenant
+    owns in the ordinary sense.** The one caller class today is the benchmark
+    spend break-out: from 2026-09-13 every graded task run executes as the
+    ``benchmark-sandbox`` tenant, so a query bound to the owning tenant cannot
+    see the fleet's own benchmark traffic at all — ``/costs`` reported
+    ``benchmark_cost_usd = 0.0`` and the decontamination rollout's observe rung
+    went silent. Widening the WHERE clause alone does not fix that: RLS filters
+    the rows before the predicate is reached, so without this the fix is inert
+    on exactly the instances that turned isolation on.
+
+    A no-op when RLS is disabled, and deliberately not suppressed on error: a
+    query that believes it can see every tenant and cannot returns a wrong
+    number silently.
+
+    Args:
+        conn: the connection whose current transaction is relaxed.
+    """
+    if not _rls_enabled():
+        return
+    if getattr(conn, "autocommit", False):
+        # Each statement is its own transaction, so a transaction-local setting
+        # reverts before the next one runs. Refuse rather than pretend.
+        raise RuntimeError(
+            "read_every_tenant_in_transaction requires a transactional "
+            "connection; on autocommit the relaxation reverts immediately"
+        )
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_config('app.tenant_id', '', true)")
+
+
 @contextmanager
 def get_connection(
     autocommit: bool = False,

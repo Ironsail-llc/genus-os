@@ -27,15 +27,21 @@ What that cost, with the D2 write boundary already in place:
 These tests pin the fix: the sandbox tenant is a property of the HARNESS, not
 of the suite's fixture declaration, and every child is linked to the run that
 spawned it. The one thing that must NOT move is ``benchmark_results`` — that
-row is the grade ledger and belongs to the tenant that owns the fleet, not to
-the sandbox the agent was graded in.
+row is the grade ledger, and a grade written into a tenant teardown sweeps is
+a grade that does not survive the night.
+
+The "Fix round 1" section below covers the hostile review of the first draft:
+the escape hatch for suites that genuinely have to read production
+(``execution_tenant``), suite-level tenant resolution, the advisory lock that
+serialises the shared sandbox, and the untracked-parent case that ungating
+lineage made reachable.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -83,22 +89,28 @@ def _make_mock_run() -> MagicMock:
     return run
 
 
-def _suite(*, fixtures: bool = False) -> str:
-    task: dict[str, Any] = {
-        "id": "t1",
-        "prompt": "x",
-        "category": "correctness",
-        "weight": 1.0,
-        "expected": {"must_contain": ["ok"]},
-    }
+def _suite(*, fixtures: bool = False, execution_tenant: str | None = None, tasks: int = 1) -> str:
+    def _task(index: int) -> dict[str, Any]:
+        return {
+            "id": f"t{index}",
+            "prompt": "x",
+            "category": "correctness",
+            "weight": 1.0,
+            "expected": {"must_contain": ["ok"]},
+        }
+
+    task_list = [_task(i + 1) for i in range(tasks)]
     suite: dict[str, Any] = {
         "id": "s1",
         "agent_id": "email-analyst",
-        "max_cost_usd": 1.0,
-        "tasks": [task],
+        "max_cost_usd": 100.0,
+        "tasks": task_list,
     }
+    if execution_tenant is not None:
+        suite["execution_tenant"] = execution_tenant
     if fixtures:
-        task["fixtures"] = ["a_person"]
+        for task in task_list:
+            task["fixtures"] = ["a_person"]
         suite["fixtures"] = {
             "fixtures": {
                 "a_person": {"table": "crm_people", "values": {"email": "alice@example.com"}}
@@ -107,10 +119,30 @@ def _suite(*, fixtures: bool = False) -> str:
     return json.dumps(suite)
 
 
+#: A manifest's real-ish grant. A child whose ``tools_allowed`` is one harmless
+#: tool makes every deny-list assertion vacuous — the deny-list is computed as
+#: ``tools_allowed - benchmark_allowed_tools(...)``.
+WIDE_TOOLS_ALLOWED = [
+    "exec",
+    "read_file",
+    "write_file",
+    "list_people",
+    "create_person",
+    "update_person",
+    "delete_person",
+    "create_task",
+    "update_task",
+    "resolve_task",
+    "store_memory",
+    "append_to_block",
+    "send_notification",
+]
+
+
 def _child_config() -> MagicMock:
     cfg = MagicMock()
     cfg.max_iterations = 10
-    cfg.tools_allowed = ["read_file"]
+    cfg.tools_allowed = list(WIDE_TOOLS_ALLOWED)
     cfg.tools_denied = []
     cfg.is_benchmark = False
     cfg.model_primary = "openrouter/test/model"
@@ -147,26 +179,55 @@ async def _run_suite(
     seeded_tenant: str = SANDBOX,
     teardowns: list[str] | None = None,
     ensured: list[str] | None = None,
-) -> None:
+    execution_tenant: str | None = None,
+    tasks: int = 1,
+    seed_raises: bool = False,
+    ensure_raises: bool = False,
+    lock_state: set[str] | None = None,
+    expect_error: bool = False,
+) -> dict[str, Any]:
     """Drive ``_benchmark_run`` end to end with the database stubbed out."""
+    from contextlib import contextmanager
+
     from robothor.engine.benchmark_sandbox import SeededFixtures
     from robothor.engine.tools.handlers import benchmark as bench
 
     store, read_fn, write_fn = _mock_blocks()
-    store["benchmark:email-analyst:s1"] = _suite(fixtures=fixtures)
+    store["benchmark:email-analyst:s1"] = _suite(
+        fixtures=fixtures, execution_tenant=execution_tenant, tasks=tasks
+    )
 
     def _ensure(tenant_id: str | None = None) -> str:
+        if ensure_raises:
+            raise RuntimeError("crm_tenants is unreachable")
         if ensured is not None:
             ensured.append(tenant_id or seeded_tenant)
         return tenant_id or seeded_tenant
 
     def _seed(spec: Any, keys: Any, tenant_id: str | None = None) -> SeededFixtures:
+        if seed_raises:
+            raise RuntimeError("insert_row failed halfway")
         return SeededFixtures(tenant_id=tenant_id or seeded_tenant)
 
     def _teardown(tenant_id: str | None = None) -> int:
         if teardowns is not None:
             teardowns.append(tenant_id or seeded_tenant)
         return 0
+
+    @contextmanager
+    def _lock(tenant_id: str) -> Any:
+        """A fake of the Postgres advisory lock: one holder per tenant."""
+        if lock_state is None:
+            yield True
+            return
+        if tenant_id in lock_state:
+            yield False
+            return
+        lock_state.add(tenant_id)
+        try:
+            yield True
+        finally:
+            lock_state.discard(tenant_id)
 
     import robothor.engine.benchmark_sandbox as bs
 
@@ -179,12 +240,15 @@ async def _run_suite(
         patch.object(bs, "ensure_sandbox_tenant", side_effect=_ensure),
         patch.object(bs, "seed_fixtures", side_effect=_seed),
         patch.object(bs, "teardown_sandbox", side_effect=_teardown),
+        patch.object(bs, "sandbox_suite_lock", _lock),
         patch.object(bench, "_write_benchmark_result_row"),
     ):
         result = await bench._benchmark_run(
             {"agent_id": "email-analyst", "suite_id": "s1", "tag": "t"}, CTX
         )
-    assert not result.get("error"), result
+    if not expect_error:
+        assert not result.get("error"), result
+    return cast("dict[str, Any]", result)
 
 
 @pytest.fixture(autouse=True)
@@ -340,13 +404,20 @@ class TestTheGradeLedgerIsNotAgentData:
 
         assert seen == [OWNING_TENANT], (
             "the benchmark_results row was written inside the sandbox tenant "
-            "scope — the grade ledger belongs to the tenant that owns the fleet"
+            "scope — it must not land in a tenant teardown sweeps"
         )
 
     def test_the_results_insert_still_takes_the_tenant_default(self) -> None:
-        """The INSERT deliberately omits ``tenant_id`` (migration 098 keeps the
-        column DEFAULT for exactly this writer). If a tenant is ever named
-        here it must be the owning one, never the sandbox."""
+        """The INSERT deliberately omits ``tenant_id``.
+
+        This pins ONLY that the sandbox never reaches the row. It does not
+        pin which tenant the row lands in: migration 098 deliberately left
+        this writer's column DEFAULT at ``'robothor-primary'`` — the FIRST
+        instance's id, not "the owning tenant" — and says to retarget it in a
+        follow-up once the writer passes a tenant explicitly. Until then the
+        grade ledger is mislabelled on any other install, and this test would
+        still pass. See M1 in the review.
+        """
         import robothor.engine.tools.handlers.benchmark as bench
 
         src = Path(bench.__file__).read_text()
@@ -354,3 +425,396 @@ class TestTheGradeLedgerIsNotAgentData:
         insert = src[start : src.index('"""', start)]
         assert "tenant_id" not in insert
         assert "sandbox" not in insert.lower()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Fix round 1 — hostile review of c9cc402d6f
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# ─── C1: a suite may opt out of the sandbox for its READS ────────────────────
+
+
+class TestExecutionTenantPosture:
+    """Not every suite can be graded in an empty tenant.
+
+    The first audit of this change scanned keyword lists for numeric literals
+    and concluded that no suite reads production data. It missed judge rubrics
+    and tenant-scoped tool reads, which is where the dependency actually lives:
+    ``main::memory-recall`` is graded ``must_not_contain: ["no information|
+    don't know|cannot find"]`` over a ``search_memory`` that is tenant-scoped,
+    so in an empty sandbox the honest answer scores 0 and the agent is punished
+    for not fabricating.
+
+    ``execution_tenant: production-read-only`` is the escape hatch: the child
+    runs under the OWNING tenant with the deny-list and the write boundary
+    armed exactly as they are when the sandbox is off, so its reads see real
+    data and none of its writes can land.
+    """
+
+    @pytest.mark.asyncio
+    async def test_default_is_the_sandbox(self) -> None:
+        runner = _Recorder()
+        await _run_suite(runner, sandbox_on=True)
+        assert runner.calls[0].get("tenant_id") == SANDBOX
+
+    @pytest.mark.asyncio
+    async def test_production_read_only_runs_under_the_owning_tenant(self) -> None:
+        runner = _Recorder()
+        await _run_suite(runner, sandbox_on=True, execution_tenant="production-read-only")
+        call = runner.calls[0]
+        assert call.get("tenant_id") is None, (
+            "a production-read-only suite was re-pointed at the sandbox anyway"
+        )
+        assert call["_bound_tenant"] == OWNING_TENANT
+
+    @pytest.mark.asyncio
+    async def test_production_read_only_still_refuses_every_write(self) -> None:
+        """The whole safety of the escape hatch. Read-only is the *point*."""
+        runner = _Recorder()
+        await _run_suite(runner, sandbox_on=True, execution_tenant="production-read-only")
+        call = runner.calls[0]
+        assert call["_marker"] is True, "the benchmark write boundary was not armed"
+        assert call["agent_config"].is_benchmark is True
+        denied = set(call["agent_config"].tools_denied)
+        for tool in ("store_memory", "create_person", "update_person", "create_task", "exec"):
+            assert tool in denied, f"{tool} was writable in a production-read-only run"
+
+    @pytest.mark.asyncio
+    async def test_production_read_only_seeds_and_sweeps_nothing(self) -> None:
+        teardowns: list[str] = []
+        ensured: list[str] = []
+        await _run_suite(
+            _Recorder(),
+            sandbox_on=True,
+            execution_tenant="production-read-only",
+            teardowns=teardowns,
+            ensured=ensured,
+        )
+        assert teardowns == []
+        assert ensured == []
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_posture_fails_the_suite_closed(self) -> None:
+        """A typo must not silently grade the fleet against production."""
+        from robothor.engine.tools.handlers import benchmark as bench
+
+        result = await _run_suite(
+            _Recorder(), sandbox_on=True, execution_tenant="produciton", expect_error=True
+        )
+        assert result.get("success") is False
+        assert "execution_tenant" in str(result.get("error", ""))
+        assert bench  # imported for the failure message's sake
+
+    @pytest.mark.asyncio
+    async def test_the_harness_says_which_tenant_each_task_ran_under(self, caplog: Any) -> None:
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="robothor.engine.tools.handlers.benchmark"):
+            await _run_suite(_Recorder(), sandbox_on=True)
+        assert any(SANDBOX in r.getMessage() for r in caplog.records), (
+            "nothing in the log says which tenant the task ran under"
+        )
+
+
+# ─── I1: an untracked parent must not be papered over with ctx.run_id ────────
+
+
+class TestAmbientUntrackedParent:
+    """``runner.py`` sets ``parent_run_id=""`` when the parent's own row was
+    refused (``tracking_disabled``). Overriding that with ``ctx.run_id`` hands
+    every child a dangling FK: each child's ``create_run`` then fails the same
+    way, sets ``tracking_disabled`` and pages the operator — 78 alerts and a
+    night with no run rows. The decontamination gate used to make this branch
+    unreachable; ungating lineage made it live."""
+
+    def test_an_empty_ambient_parent_is_not_replaced_by_the_caller_run(self) -> None:
+        from robothor.engine.models import SpawnContext
+        from robothor.engine.tools.handlers import spawn as spawn_mod
+        from robothor.engine.tools.handlers.benchmark import _benchmark_spawn_context
+
+        token = spawn_mod._current_spawn_context.set(
+            SpawnContext(
+                parent_run_id="",
+                parent_agent_id="p",
+                correlation_id="c",
+                nesting_depth=0,
+            )
+        )
+        try:
+            built = _benchmark_spawn_context(CTX)
+        finally:
+            spawn_mod._current_spawn_context.reset(token)
+
+        assert built is None or built.parent_run_id == "", (
+            "an untracked parent was given a dangling parent_run_id from ctx"
+        )
+
+    def test_no_ambient_context_still_falls_back_to_the_calling_run(self) -> None:
+        from robothor.engine.tools.handlers.benchmark import _benchmark_spawn_context
+
+        built = _benchmark_spawn_context(CTX)
+        assert built is not None
+        assert built.parent_run_id == PARENT_RUN_ID
+
+    def test_nesting_depth_is_not_incremented_twice(self) -> None:
+        """``runner.py:659`` adds one of its own."""
+        from robothor.engine.tools.handlers.benchmark import _benchmark_spawn_context
+
+        built = _benchmark_spawn_context(CTX)
+        assert built is not None
+        assert built.nesting_depth == 0
+
+
+# ─── I2: the tenant is resolved before anything is seeded ────────────────────
+
+
+class TestTenantResolvedBeforeSeeding:
+    @pytest.mark.asyncio
+    async def test_a_mid_seed_failure_is_still_swept(self) -> None:
+        """Partial fixture rows must not become tomorrow's ambient state."""
+        runner = _Recorder()
+        teardowns: list[str] = []
+        await _run_suite(
+            runner, sandbox_on=True, fixtures=True, teardowns=teardowns, seed_raises=True
+        )
+        assert runner.calls == [], "a child ran even though seeding failed"
+        assert teardowns == [SANDBOX], "a half-seeded sandbox was left standing"
+
+
+# ─── I3: the tenant is resolved ONCE per suite, and a fault is not a grade ───
+
+
+class TestSuiteLevelTenantResolution:
+    @pytest.mark.asyncio
+    async def test_the_tenant_is_ensured_once_per_suite_not_once_per_task(self) -> None:
+        ensured: list[str] = []
+        await _run_suite(_Recorder(), sandbox_on=True, ensured=ensured, tasks=4)
+        assert ensured == [SANDBOX], f"ensure_sandbox_tenant ran {len(ensured)} times for 4 tasks"
+
+    @pytest.mark.asyncio
+    async def test_an_infra_fault_fails_the_suite_instead_of_grading_it_zero(self) -> None:
+        """A lock, a connection blip or an unapplied migration 104 must not be
+        indistinguishable from an agent that failed every case — that number
+        feeds benchmark_pass_rate and the self-improvement triage."""
+        runner = _Recorder()
+        result = await _run_suite(runner, sandbox_on=True, ensure_raises=True, expect_error=True)
+        assert result.get("success") is False
+        assert "sandbox" in str(result.get("error", "")).lower()
+        assert result.get("aggregate_score") is None, "an infra fault was reported as a grade"
+        assert runner.calls == []
+
+
+# ─── I4: one suite at a time may hold the shared sandbox tenant ──────────────
+
+
+class TestSandboxSuiteLock:
+    """``teardown_sandbox`` hard-deletes every row of 14 tables in the tenant,
+    whoever wrote them. Two callers can be inside ``_benchmark_run`` at once in
+    one daemon — the 04:00 fleet cron and auto-researcher's before/after
+    measurement — and the loser grades against a CRM someone else emptied
+    mid-task. Nothing serialised this."""
+
+    @pytest.mark.asyncio
+    async def test_a_second_concurrent_suite_is_refused(self) -> None:
+        import asyncio
+
+        held: list[str] = []
+        gate = asyncio.Event()
+
+        class _SlowRunner(_Recorder):
+            async def execute(self, **kwargs: Any) -> Any:
+                held.append("in")
+                await gate.wait()
+                return await super().execute(**kwargs)
+
+        first_runner = _SlowRunner()
+        second_runner = _Recorder()
+        lock_state: set[str] = set()
+
+        first = asyncio.create_task(
+            _run_suite(first_runner, sandbox_on=True, lock_state=lock_state)
+        )
+        # Bounded, not a bare spin: if the first suite never reaches its
+        # runner this must fail with a message, not hang the suite.
+        for _ in range(1000):
+            if held:
+                break
+            await asyncio.sleep(0.001)
+        assert held, "the first suite never started — it cannot hold the lock"
+        second = await _run_suite(
+            second_runner, sandbox_on=True, lock_state=lock_state, expect_error=True
+        )
+        gate.set()
+        await first
+
+        assert second.get("success") is False
+        assert "another benchmark suite" in str(second.get("error", "")).lower()
+        assert second_runner.calls == [], "the refused suite still ran tasks"
+
+    @pytest.mark.asyncio
+    async def test_the_lock_is_released_when_the_suite_ends(self) -> None:
+        lock_state: set[str] = set()
+        await _run_suite(_Recorder(), sandbox_on=True, lock_state=lock_state)
+        assert lock_state == set(), "the sandbox lock outlived its suite"
+
+    @pytest.mark.asyncio
+    async def test_no_lock_is_taken_when_the_sandbox_is_off(self) -> None:
+        lock_state: set[str] = set()
+        await _run_suite(_Recorder(), sandbox_on=False, lock_state=lock_state)
+        assert lock_state == set()
+
+
+# ─── C1: the shipped suites, and what the audit concluded about each ─────────
+
+
+class TestShippedSuitePostures:
+    """The first audit of this change was wrong, and its conclusion went into
+    platform docs. It scanned keyword lists for numeric literals and missed the
+    two places the dependency actually lives: LLM **judge rubrics**, and tools
+    that read tenant-scoped data (``search_memory``, ``get_agent_stats``,
+    ``get_knowledge_gaps``, the tenant-scoped ``agent_memory_blocks``).
+
+    These pin the re-audit's conclusions against the files themselves, so a
+    later edit that drops a posture — or adds a task that needs one — goes red
+    here instead of on the fleet's grade the next morning.
+    """
+
+    BENCH = Path(__file__).resolve().parents[3] / "docs" / "benchmarks"
+
+    #: task id -> the tenant-scoped read that makes an empty sandbox wrong.
+    NEEDS_PRODUCTION_READS: dict[str, str] = {
+        "memory-recall": "search_memory over tenant-scoped memory_facts",
+        "fleet-analysis": "get_agent_stats + tenant-scoped memory blocks",
+        "cross-pollination": "the autoagent_learnings memory block",
+        "basic-gap-analysis": "analyze_knowledge_gaps over memory_entities",
+        "efficiency-completion": "analyze_knowledge_gaps over memory_entities",
+        "dedup-prior-findings": "the prior-findings memory block",
+        "safety-store-concrete": "analyze_knowledge_gaps over memory_entities",
+    }
+
+    @classmethod
+    def _all_tasks(cls) -> dict[str, dict[str, Any]]:
+        import yaml as _yaml
+
+        tasks: dict[str, dict[str, Any]] = {}
+        for path in sorted(cls.BENCH.glob("*/suite.yaml")):
+            suite = _yaml.safe_load(path.read_text()) or {}
+            if suite.get("runner"):  # native suites bring their own tenant
+                continue
+            for task in suite.get("tasks") or []:
+                tasks[str(task["id"])] = {**task, "_suite": suite, "_path": path}
+        return tasks
+
+    def test_every_audited_task_declares_the_posture(self) -> None:
+        from robothor.engine.tools.handlers.benchmark import (
+            PRODUCTION_READ_ONLY_POSTURE,
+            _execution_posture,
+        )
+
+        tasks = self._all_tasks()
+        for task_id, why in self.NEEDS_PRODUCTION_READS.items():
+            assert task_id in tasks, f"{task_id} has vanished — re-run the audit"
+            task = tasks[task_id]
+            posture = _execution_posture(task, task["_suite"])
+            assert posture == PRODUCTION_READ_ONLY_POSTURE, (
+                f"{task['_path'].parent.name}::{task_id} grades an agent on {why}; "
+                "in an empty sandbox the honest answer fails"
+            )
+
+    def test_no_other_task_opts_out(self) -> None:
+        """Every opt-out is a task NOT protected by the sandbox, so the list has
+        to stay short and deliberate rather than becoming the default."""
+        from robothor.engine.tools.handlers.benchmark import (
+            PRODUCTION_READ_ONLY_POSTURE,
+            _execution_posture,
+        )
+
+        opted_out = {
+            task_id
+            for task_id, task in self._all_tasks().items()
+            if _execution_posture(task, task["_suite"]) == PRODUCTION_READ_ONLY_POSTURE
+        }
+        assert opted_out == set(self.NEEDS_PRODUCTION_READS), (
+            "a suite opted out of the sandbox without an entry here: "
+            f"{sorted(opted_out ^ set(self.NEEDS_PRODUCTION_READS))}"
+        )
+
+    def test_every_shipped_posture_is_valid(self) -> None:
+        """A typo in a suite file must be caught here, not at 04:00."""
+        from robothor.engine.tools.handlers.benchmark import _execution_posture
+
+        for task in self._all_tasks().values():
+            _execution_posture(task, task["_suite"])  # raises ValueError on a typo
+
+    def test_a_task_that_seeds_fixtures_never_opts_out(self) -> None:
+        """Hard rule. `production-read-only` seeds nothing, so a fixture-bearing
+        task that opted out would interpolate `{{fixture.…}}` into its own
+        prompt and grade the agent on a record that does not exist."""
+        from robothor.engine.tools.handlers.benchmark import (
+            PRODUCTION_READ_ONLY_POSTURE,
+            _execution_posture,
+        )
+
+        for task_id, task in self._all_tasks().items():
+            if not task.get("fixtures"):
+                continue
+            assert _execution_posture(task, task["_suite"]) != PRODUCTION_READ_ONLY_POSTURE, (
+                f"{task_id} seeds fixtures but opts out of the tenant they are seeded in"
+            )
+
+    #: Opted-out tasks whose ``state_checks`` therefore do not run, and why that
+    #: is the better trade. Not a hard rule — a declared one, because the
+    #: alternative to naming them is not noticing.
+    STATE_CHECKS_GO_INERT: dict[str, str] = {
+        "cross-pollination": (
+            "its rubric needs the autoagent_learnings block (tenant-scoped, empty in "
+            "the sandbox) AND a created CRM task. Neither posture satisfies both; "
+            "production-read-only reproduces today's grade exactly, where the sandbox "
+            "posture would change it for a reason nobody chose."
+        ),
+    }
+
+    def test_an_opted_out_state_check_is_declared(self) -> None:
+        from robothor.engine.tools.handlers.benchmark import (
+            PRODUCTION_READ_ONLY_POSTURE,
+            _execution_posture,
+        )
+
+        inert = {
+            task_id
+            for task_id, task in self._all_tasks().items()
+            if (task.get("expected") or {}).get("state_checks")
+            and _execution_posture(task, task["_suite"]) == PRODUCTION_READ_ONLY_POSTURE
+        }
+        assert inert == set(self.STATE_CHECKS_GO_INERT), (
+            "a task's state_checks silently stopped running because it opted out "
+            f"of the sandbox: {sorted(inert ^ set(self.STATE_CHECKS_GO_INERT))}"
+        )
+
+    def test_the_honesty_cases_pin_the_sandbox(self) -> None:
+        """Their premise is that the record is ABSENT. Pinned in the file that
+        owns them so a future suite-level opt-out cannot drag them into a
+        tenant where `bob.quill@example.com` might actually exist — on this
+        instance that fixture really did reach the production CRM."""
+        import yaml as _yaml
+
+        from robothor.engine.tools.handlers.benchmark import SANDBOX_POSTURE
+
+        cases = _yaml.safe_load((self.BENCH / "_honesty" / "tasks.yaml").read_text()) or {}
+        tasks = cases.get("tasks") or []
+        assert len(tasks) >= 6, f"only {len(tasks)} honesty cases found — the scan is wrong"
+        for task in tasks:
+            assert task.get("execution_tenant") == SANDBOX_POSTURE, (
+                f"honesty case {task['id']} does not pin the sandbox"
+            )
+
+    def test_a_suite_level_opt_out_cannot_drag_a_pinned_task(self) -> None:
+        """The mechanism behind the previous test, exercised directly."""
+        from robothor.engine.tools.handlers.benchmark import (
+            SANDBOX_POSTURE,
+            _execution_posture,
+        )
+
+        suite = {"execution_tenant": "production-read-only"}
+        assert _execution_posture({"execution_tenant": "sandbox"}, suite) == SANDBOX_POSTURE

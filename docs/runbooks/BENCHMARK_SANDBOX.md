@@ -71,16 +71,60 @@ defect being fixed. What it does not change is how the run is **graded**.
 ### Every task run is the sandbox tenant, and names its parent
 
 With the sandbox on, **every** task run the harness launches executes as the
-sandbox tenant (`_task_execution_tenant`) and is linked to the benchmark
-runner's own run through a `SpawnContext`, whatever the suite declares. Seeding
-and tenancy are separate decisions: a suite with no `fixtures.yaml` seeds
-nothing and still runs in an empty sandbox, which is the right environment for
-suites that state their scenario inside the prompt and the required one for the
-fleet honesty cases, whose `missing_record` case is only valid while the record
-really is absent. Teardown sweeps the sandbox after every task, seeded or not,
-because a fixture-less child can still file its own CRM rows there. The grade
-ledger does **not** move: the `benchmark_results` row is written after the
-tenant scope closes and keeps the owning tenant.
+sandbox tenant (`_suite_execution_tenant`, resolved once per suite) and is
+linked to the benchmark runner's own run through a `SpawnContext`, whatever the
+suite declares — unless the task or suite declares
+`execution_tenant: production-read-only`, see below. Seeding and tenancy are
+separate decisions: a suite with no `fixtures.yaml` seeds nothing and still runs
+in an empty sandbox, which is the right environment for suites that state their
+scenario inside the prompt and the required one for the fleet honesty cases,
+whose `missing_record` case is only valid while the record really is absent.
+Teardown sweeps the sandbox after every task, seeded or not, because a
+fixture-less child can still file its own CRM rows there, and one suite at a
+time holds the tenant (`sandbox_suite_lock`) so a concurrent suite cannot sweep
+another's fixtures mid-task. The grade ledger does **not** move: the
+`benchmark_results` row is written after the tenant scope closes.
+
+### Suites that cannot be graded in an empty tenant
+
+An empty tenant is not neutral for every case, and the first version of this
+change claimed it was. That claim came from scanning `must_contain` /
+`must_not_contain` keyword lists for numeric literals — which misses the two
+places the dependency actually lives: **LLM judge rubrics**, and tools that read
+tenant-scoped data (`search_memory`, `get_agent_stats`, `get_knowledge_gaps`,
+and the tenant-scoped `agent_memory_blocks`). Seven tasks across three suites
+grade an agent on reading the instance's own data:
+
+| Task | What it reads | Why an empty sandbox breaks it |
+|---|---|---|
+| `main::memory-recall` | `search_memory` | graded `must_not_contain: ["no information\|don't know\|cannot find"]` — the honest answer scores 0 |
+| `agent-architect::fleet-analysis` | `get_agent_stats`, `performance_baselines`, `architect_evolution_log` | rubric demands stats for 3 underperforming agents; the sandbox has zero runs and zero blocks |
+| `agent-architect::cross-pollination` | `autoagent_learnings` block | rubric demands a specific pattern read out of it |
+| `curiosity-engine::basic-gap-analysis` | `analyze_knowledge_gaps()` over `memory_entities` | zero entities ⇒ zero gaps; the rubric requires several |
+| `curiosity-engine::efficiency-completion` | same | `must_contain: [finding, gap]` cannot be met honestly |
+| `curiosity-engine::dedup-prior-findings` | prior-findings block | an empty block makes every topic novel; the case stops measuring dedup |
+| `curiosity-engine::safety-store-concrete` | same gap analysis | no gap to find, so concreteness is never exercised |
+
+Each declares `execution_tenant: production-read-only` **on the task**, not the
+suite: `curiosity-engine::session-goal-alignment` seeds a fixture and the
+`_honesty` cases positively require an empty tenant, so a suite-wide flip would
+have broken them. Those cases run under the owning tenant with the deny-list and
+the write boundary armed exactly as when the sandbox is off — their reads are
+real, and none of their writes can land. That is today's behaviour for them, so
+their grades do not move.
+
+`agent-architect::cross-pollination` is the one case neither posture fits: its
+rubric needs a tenant-scoped block AND a created CRM task. It keeps
+`production-read-only` (today's grade exactly), and its `state_checks`
+consequently do not run — the harness logs a WARNING per task when that
+happens, and `TestShippedSuitePostures.STATE_CHECKS_GO_INERT` names it so the
+trade stays declared rather than discovered.
+
+**Adding a posture is not free.** An opted-out task is a task the sandbox is not
+protecting. The posture is validated on load — an unknown value fails the suite
+with `success: false` rather than silently grading against production — and
+`test_benchmark_child_tenant.py::TestShippedSuitePostures` fails the build if
+the shipped set drifts from the audited one.
 
 This used to depend on the suite: the sandbox was reached only as a side effect
 of seeding fixtures, so a suite declaring neither `fixtures:` nor
@@ -93,17 +137,61 @@ identifiers (`get_person {"id": "bob.quill@example.com"}` → an
 
 Lineage is not gated on the decontamination rollout — excluding benchmark
 traffic from production *metrics* is a judgement, recording which run spawned
-which is a fact. Audit a night by parent, not by time window:
+which is a fact. Audit a night by parent, not by time window.
+
+### Which connection you run the audit on decides what it can see
+
+Read this before running any query in this runbook. Migration `081` puts a
+`tenant_isolation` policy on **every** table with a `tenant_id` column —
+`agent_runs` included — with `FORCE ROW LEVEL SECURITY`, so the table owner is
+subject to it too. The policy applies to each *reference* in a query, both
+aliases of a self-join included. The parent run lives in the owning tenant and
+its children live in `benchmark-sandbox`, so a self-join sees them both only
+from a connection that is bound to neither.
+
+Run the audit the way the operator runs a migration: as the ledger owner, on a
+connection with **no tenant binding** (`psql` as the migration role, or
+`SELECT set_config('app.tenant_id', '', false);` first). The policy's
+permissive branch is an empty `app.tenant_id`, which is also what
+`_apply_tenant_scope` writes when there is no scope to bind.
 
 ```sql
--- every task run of last night's benchmark, and the tenant it ran as
+-- UNBOUND (psql as the ledger owner, app.tenant_id empty).
+-- Every task run of last night's benchmark, and the tenant it ran as.
 SELECT child.agent_id, child.tenant_id, count(*)
   FROM agent_runs child
   JOIN agent_runs parent ON parent.id = child.parent_run_id
  WHERE parent.agent_id = 'benchmark-runner'
    AND parent.started_at > now() - interval '1 day'
- GROUP BY 1, 2;                 -- expect tenant_id = 'benchmark-sandbox' only
+ GROUP BY 1, 2;
+-- PASS: every row reads tenant_id = 'benchmark-sandbox'
+--       (plus the production-read-only suites, which read the owning tenant
+--        by design — see "Suites that cannot be graded in an empty tenant").
+-- FAIL: any other tenant_id.
 ```
+
+From an engine connection you cannot get that answer, and the query that looks
+like it should is the one that misleads: bound to the **owning** tenant the
+join drops every sandbox child, so a clean night and a blind query both return
+nothing. Bound to the owning tenant, ask the opposite question — and read an
+empty result as the pass:
+
+```sql
+-- BOUND to the owning tenant (an ordinary engine connection, RLS on).
+-- Parent joined by id only; a sandbox child is invisible here BY DESIGN,
+-- so this can only ever return a LEAK.
+SELECT child.agent_id, child.tenant_id, count(*)
+  FROM agent_runs child
+  JOIN agent_runs parent ON parent.id = child.parent_run_id
+ WHERE parent.agent_id = 'benchmark-runner'
+   AND parent.started_at > now() - interval '1 day'
+   AND child.trigger_detail LIKE 'benchmark:%'
+ GROUP BY 1, 2;
+-- PASS: EMPTY. FAIL: any row — that child ran in the tenant you are bound to.
+```
+
+Empty is only the pass for the *bound* form. If the unbound query also returns
+nothing, the benchmark did not run — check the schedule, not the isolation.
 
 ## What a benchmark run may touch
 
@@ -222,25 +310,57 @@ belongs to an agent that can call the benchmark tools while the sandbox mode is
 
 ## Promotion evidence (required before `enforce`)
 
+**Run ONE suite before the fleet, and make it one of the three the audit
+touched** — `main`, `agent-architect` or `curiosity-engine`. They are the
+suites whose grades are most sensitive to the tenant their children read, and
+a per-task posture that is wrong shows up there first. Compare the per-task
+scores against the previous night's for the same suite: any task that moved and
+is not in the table under "Suites that cannot be graded in an empty tenant" is
+a finding, not noise.
+
 1. One full fleet night with `state_checks` recorded on `crm-hygiene`'s task
    results, hand-compared against the transcripts. Specifically: a task the
    agent genuinely completed must show **passing** read-backs. Zero passing
    checks means the mechanism is inert, not that the agent is bad — that is the
    "PROBE, don't trust silence" failure this instance keeps re-learning.
 2. `crm_people` / `crm_tasks` row counts in `benchmark-sandbox` back at **zero**
-   after each run (teardown works):
+   after each run (teardown works). **Unbound connection** — bound to the
+   owning tenant these counts are zero whether teardown works or not:
    ```sql
    SELECT 'people', count(*) FROM crm_people WHERE tenant_id = 'benchmark-sandbox'
    UNION ALL
    SELECT 'tasks',  count(*) FROM crm_tasks  WHERE tenant_id = 'benchmark-sandbox';
    ```
 3. Zero rows written to any other tenant by a benchmark run — walk the night by
-   `parent_run_id` (the lineage query above; there is no `is_benchmark` column,
-   the flag lives on the run object only, and `trigger_detail LIKE 'benchmark:%'`
-   is the fallback for a detached harness that invented its own label) and
-   confirm the CRM audit log shows no mutation outside `benchmark-sandbox`.
-   With the sandbox on, every one of those child rows must itself read
-   `tenant_id = 'benchmark-sandbox'`.
+   `parent_run_id` (the lineage queries above, on the binding each one names;
+   there is no `is_benchmark` column, the flag lives on the run object only, and
+   `trigger_detail LIKE 'benchmark:%'` is the fallback for a detached harness
+   that invented its own label) and confirm the CRM audit log shows no mutation
+   outside `benchmark-sandbox`. With the sandbox on, every child row of a
+   `sandbox`-posture suite must itself read `tenant_id = 'benchmark-sandbox'`.
+
+### What moves on the operator's surfaces the night you turn this on
+
+Expect these, and do not read them as regressions:
+
+* **Benchmark spend is no longer scoped to the owning tenant.** The children
+  execute as `benchmark-sandbox`, so the `benchmark_runs` /
+  `benchmark_cost_usd` break-out on `/costs`, in fleet health and in
+  `analytics.get_agent_stats` reads `agent_runs` without a tenant predicate and
+  relaxes its own transaction's RLS binding to do it
+  (`db.connection.read_every_tenant_in_transaction`). Without both halves those
+  numbers go to **0.0** — roughly $30/month on this instance — and
+  `analytics._report_contamination` early-returns on a zero count, silencing
+  the decontamination rollout's `observe` and `alert` rungs. If you see zero
+  benchmark spend after a night that ran, that is the symptom.
+* **Every task run now has a parent.** Children stop matching
+  `production_run_filter()`'s `parent_run_id IS NULL`, so production run counts
+  fall by however much benchmark traffic was being counted as production —
+  2,685 rows in 30 days when this was last measured. That is the contamination
+  being removed, not work disappearing.
+* **`agent_runs.tenant_id` changes for graded children**, so any hand-written
+  query of yours that filters `agent_runs` by the owning tenant will stop
+  seeing them. Use the lineage queries above.
 
 ## Rollback
 

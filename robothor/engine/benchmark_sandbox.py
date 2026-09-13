@@ -44,18 +44,24 @@ is this module's sandbox — see :mod:`robothor.engine.run_context`.
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import logging
 import re
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.feature_flags import benchmark_sandbox_mode
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -483,6 +489,18 @@ def render_fixture_refs(text: str, seeded: SeededFixtures) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: A sandbox tenant id must look like one. ``teardown_sandbox`` hard-deletes 14
+#: tables of whatever it is handed, and since 2026-09-13 it runs after every
+#: task rather than after every seeded task — so the blast radius of a typo in
+#: ``ROBOTHOR_BENCHMARK_TENANT`` went from 3 sweeps a night to 78. The old
+#: guard refused three reserved names and then required equality with
+#: ``sandbox_tenant_id()``, which is whatever that variable says: a value
+#: typo'd onto a real tenant id passed both checks. An override must now still
+#: be NAMESPACED as a benchmark tenant, so no real tenant id can be reached by
+#: a single mistyped environment variable.
+_SANDBOX_NAME_RE = re.compile(r"^benchmark[-_][A-Za-z0-9_-]+$")
+
+
 def _assert_sandbox(tenant_id: str) -> None:
     """Refuse to mutate anything that is not the dedicated sandbox tenant."""
     if not tenant_id or tenant_id in {DEFAULT_TENANT, "robothor-primary", "default"}:
@@ -491,6 +509,86 @@ def _assert_sandbox(tenant_id: str) -> None:
         raise FixtureError(
             f"tenant {tenant_id!r} is not the benchmark sandbox ({sandbox_tenant_id()!r})"
         )
+    if tenant_id != DEFAULT_SANDBOX_TENANT and not _SANDBOX_NAME_RE.match(tenant_id):
+        raise FixtureError(
+            f"refusing to seed or sweep {tenant_id!r}: a ROBOTHOR_BENCHMARK_TENANT "
+            f"override must be namespaced 'benchmark-<name>' so a typo cannot name "
+            f"a real tenant (default: {DEFAULT_SANDBOX_TENANT!r})"
+        )
+
+
+def _advisory_lock_key(tenant_id: str) -> int:
+    """A stable signed 64-bit key for ``pg_try_advisory_lock``."""
+    return int.from_bytes(
+        hashlib.blake2b(f"benchmark-suite:{tenant_id}".encode(), digest_size=8).digest(),
+        "big",
+        signed=True,
+    )
+
+
+@contextmanager
+def sandbox_suite_lock(tenant_id: str) -> Iterator[bool]:
+    """Hold the shared sandbox tenant for one suite. Yields whether we got it.
+
+    :func:`teardown_sandbox` hard-deletes **every** row of 14 tables in the
+    tenant, whoever wrote them — deliberately, so an agent's own rows cannot
+    become the next night's ambient state. That is safe for one suite at a time
+    and unsafe for two, and two is reachable in a single daemon: the 04:00
+    fleet cron (``_benchmark_run_fleet``) and auto-researcher's before/after
+    measurement (``experiment.py::_measure_benchmark``) both funnel into
+    ``_benchmark_run``. The loser of that race has its fixtures deleted
+    mid-task and grades against an empty CRM — a plausible-looking low score
+    with no error anywhere, which is exactly the failure ``state_checks`` were
+    built to catch.
+
+    A Postgres *session* advisory lock on a connection held for the suite, not
+    a transaction lock: a suite runs for minutes and must not hold a
+    transaction open. ``pg_try_advisory_lock`` rather than the blocking form,
+    because a benchmark that silently queues for an hour behind another is not
+    better than one that says it did not run.
+
+    If the lock machinery itself is unavailable (no connection, no such
+    function), this yields True and logs an ERROR. Refusing every suite because
+    the *serialiser* is down would turn a database hiccup into a dark night for
+    the whole fleet, which is a worse failure than an unserialised run that
+    almost certainly has no concurrent partner. The log line is the signal.
+
+    Args:
+        tenant_id: the sandbox tenant this suite will seed and sweep.
+
+    Yields:
+        True when this suite may proceed, False when another suite holds the
+        tenant and this one must refuse rather than grade.
+    """
+    from robothor.db.connection import get_connection
+
+    key = _advisory_lock_key(tenant_id)
+    try:
+        with get_connection(autocommit=True) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (key,))
+            row = cur.fetchone()
+            acquired = bool(row[0]) if row else False
+            if not acquired:
+                logger.warning(
+                    "benchmark sandbox %s is held by another suite; refusing this one",
+                    tenant_id,
+                )
+                yield False
+                return
+            try:
+                yield True
+            finally:
+                with contextlib.suppress(Exception):
+                    conn.cursor().execute("SELECT pg_advisory_unlock(%s)", (key,))
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        logger.error(
+            "benchmark sandbox lock unavailable for %s (%s): this suite runs "
+            "UNSERIALISED — a concurrent suite would sweep its fixtures mid-task",
+            tenant_id,
+            exc,
+        )
+        yield True
 
 
 def _check_identifier(name: str) -> str:

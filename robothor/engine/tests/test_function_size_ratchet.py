@@ -69,8 +69,14 @@ KNOWN_LARGE: dict[str, int] = {
     # deny-list, is_benchmark) moved to _shape_child_config, which is what paid
     # for resolving the child's execution tenant in here rather than raising
     # this number for it.
-    "tools/handlers/benchmark.py::_benchmark_run": 347,
-    "analytics.py::get_agent_stats": 343,
+    # 347 -> 220: the whole per-task loop moved to _execute_suite_tasks, so the
+    # suite-level concerns that now wrap it (resolve the execution tenant once,
+    # hold the sandbox advisory lock for the suite) are visible in one place.
+    "tools/handlers/benchmark.py::_benchmark_run": 220,
+    # 343 -> 325: the benchmark break-out moved to _benchmark_spend, which is
+    # what paid for un-scoping it from the production tenant (the graded
+    # children now run as benchmark-sandbox) rather than raising this number.
+    "analytics.py::get_agent_stats": 325,
     # 303 -> 301: the reconcile reporting moved to _log_reconcile, which is
     # what paid for reporting added/replaced as well as pruned.
     "daemon.py::_watchdog": 301,
