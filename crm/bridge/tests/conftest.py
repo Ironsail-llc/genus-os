@@ -33,10 +33,38 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 BRIDGE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BRIDGE_DIR))
 
+# And the repo root, so the containment fixture below imports whichever rootdir
+# this suite is invoked from. NOT wrapped in a suppress: the repo-root
+# conftest.py can afford to skip its optional integration fixtures when `tests`
+# is unimportable, and this cannot — a containment guard that silently does not
+# load is the failure it exists to prevent.
+REPO_ROOT = BRIDGE_DIR.parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
 import bridge_service  # noqa: E402
 from bridge_service import app  # noqa: E402
 
 from robothor.events.capabilities import load_capabilities, reset  # noqa: E402
+
+# Structural containment: no bridge test may reach a real workspace.
+#
+# The routers this suite exercises resolve their write paths from
+# `EngineConfig.from_env().workspace`, which falls back to `~/robothor` when
+# ROBOTHOR_WORKSPACE is unset — on a developer's box, the live fleet. The agent
+# builder writes `docs/agents/<id>.yaml` and `brain/<ID>.md`, which is the exact
+# file class the 2026-09-12 incident destroyed, and a per-test `workspace`
+# fixture protects only the tests that remember it.
+#
+# `contained_workspace` is autouse: it pins HOME/ROBOTHOR_WORKSPACE to a
+# throwaway directory AND checks a sentinel manifest byte-for-byte afterwards,
+# so the redirect is verified rather than assumed. Same wiring as
+# robothor/cli/tests/conftest.py and robothor/init/tests/conftest.py; one copy
+# of the fixture, because two copies of a guard drift invisibly.
+from tests.conftest_workspace_containment import (  # noqa: E402, F401 - pytest collects these
+    assert_contained,
+    contained_workspace,
+    env_workspace,
+)
 
 # Platform-owned test fixture — NOT the operator's live brain/agent_capabilities.json.
 # That file is instance-owned (CLAUDE.md rule 11) and gitignored, so it doesn't exist
@@ -57,6 +85,126 @@ def insecure_loopback_dev_mode(monkeypatch):
     load_capabilities()
     yield
     reset()
+
+
+#: Where a bridge test's engine call is allowed to go: nowhere.
+#:
+#: ``.invalid`` is reserved by RFC 2606 and guaranteed never to resolve, so even
+#: if every layer below were removed the call would fail DNS rather than reach
+#: somebody's engine.
+UNROUTABLE_HOST = "engine.invalid"
+UNROUTABLE_ENGINE = f"http://{UNROUTABLE_HOST}:1"
+
+#: The only two httpx transports that open a socket. Everything else — the ASGI
+#: one the test clients mount the app on, the mock one a test installs to stand
+#: in for a server, starlette's own TestClient transport, a WSGI one — stays in
+#: the process by construction.
+#:
+#: Enumerated this way round on purpose. Listing the SAFE transports meant a
+#: client using one nobody had thought of was reported as an escape, and
+#: starlette's TestClient (which does not use httpx.ASGITransport) was exactly
+#: that. Listing the two dangerous ones fails closed instead: a new in-process
+#: transport just works, and a new way to reach the network does not.
+#:
+#: Asking about the TRANSPORT rather than the host is what makes this airtight:
+#: 127.0.0.1 on a real transport is the operator's own engine on :18800, which
+#: is precisely the call that must not happen.
+_NETWORK_TRANSPORTS = (httpx.HTTPTransport, httpx.AsyncHTTPTransport)
+
+
+@pytest.fixture(autouse=True)
+def no_engine_calls_from_the_bridge_suite(monkeypatch):
+    """No bridge test may reach a real engine.
+
+    Several routers call the engine — the agent builder, the marketplace
+    installer, the first-run wizard, the provider wizard — and ``engine_request``
+    is a plain HTTP POST to whatever ``ROBOTHOR_ENGINE_URL`` resolves to. On a
+    developer's box that is their LIVE engine, so an unpatched test would
+    rebuild the operator's job set, or reload their provider keys, from a unit
+    suite.
+
+    Patched at the SINK, not at the callers. The first version of this fixture
+    named three attributes (``routers.agent_manifests.engine_request`` and two
+    ``reconcile_engine_schedules``), and every router imports those by value —
+    so ``routers.providers.engine_request`` and ``setup.py``'s two
+    function-local imports were untouched, and a router added tomorrow would be
+    unguarded by construction. That is precisely the failure mode this
+    docstring claims to be replacing, so it is worth saying twice: a guard
+    bound to the names that exist today is a guard that stops covering the code
+    written tomorrow.
+
+    ``engine_base_url`` is the one funnel every caller goes through, and the
+    ``httpx`` transports under it are a second lock for anything that builds a
+    URL another way. Per-test ``FakeEngine`` patches still win, because they
+    replace ``engine_request`` above both.
+
+    **What this does and does not cover.** Four httpx entry points are patched:
+    ``AsyncClient.request``/``send`` and the SYNC ``Client.request``/``send``.
+    The sync ones are not hypothetical — ``templates/hub_client.py`` uses
+    ``httpx.Client``, and ``POST /api/installed-agents/install`` reaches it. Not
+    covered: ``urllib.request.urlopen`` (``routers/setup.py`` uses it for the
+    Ollama probe) and anything using ``socket`` directly. So the honest claim is
+    "nothing in this suite reaches a real host over httpx, and the ENGINE seam
+    specifically is closed at its funnel" — not "a unit suite cannot dial
+    anything", which is what the assertion used to say and could not deliver.
+    """
+    monkeypatch.setenv("ROBOTHOR_ENGINE_URL", UNROUTABLE_ENGINE)
+
+    def _verdict(client, url):
+        """``None`` to allow, else the exception to raise."""
+        if not isinstance(getattr(client, "_transport", None), _NETWORK_TRANSPORTS):
+            return None
+        # A relative URL has no host of its own; it resolves against the
+        # client's base_url. Reading only the argument would report every such
+        # request as an escape to ''.
+        host = httpx.URL(url).host or client.base_url.host
+        if host == UNROUTABLE_HOST:
+            # Where the env pin above sends an unpatched engine call. Refused
+            # here rather than left to DNS: instant, and independent of what
+            # this box's resolver decides to do with an unknown name. The route
+            # sees the same ConnectError it would from a dead engine, so the
+            # "engine unreachable" branch stays exercised rather than mocked
+            # out of existence.
+            return httpx.ConnectError(f"refused by the bridge test suite: {host}")
+        return AssertionError(
+            f"a bridge test tried to reach {host!r} over a real httpx transport. "
+            "Patch the seam your route uses, or mount a fake — 127.0.0.1 is this "
+            "developer's own engine."
+        )
+
+    real_async_request = httpx.AsyncClient.request
+    real_async_send = httpx.AsyncClient.send
+    real_sync_request = httpx.Client.request
+    real_sync_send = httpx.Client.send
+
+    async def _async_request(self, method, url, *args, **kwargs):
+        refusal = _verdict(self, url)
+        if refusal is not None:
+            raise refusal
+        return await real_async_request(self, method, url, *args, **kwargs)
+
+    async def _async_send(self, request, *args, **kwargs):
+        refusal = _verdict(self, request.url)
+        if refusal is not None:
+            raise refusal
+        return await real_async_send(self, request, *args, **kwargs)
+
+    def _sync_request(self, method, url, *args, **kwargs):
+        refusal = _verdict(self, url)
+        if refusal is not None:
+            raise refusal
+        return real_sync_request(self, method, url, *args, **kwargs)
+
+    def _sync_send(self, request, *args, **kwargs):
+        refusal = _verdict(self, request.url)
+        if refusal is not None:
+            raise refusal
+        return real_sync_send(self, request, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", _async_request)
+    monkeypatch.setattr(httpx.AsyncClient, "send", _async_send)
+    monkeypatch.setattr(httpx.Client, "request", _sync_request)
+    monkeypatch.setattr(httpx.Client, "send", _sync_send)
 
 
 @pytest.fixture

@@ -37,6 +37,25 @@ describe("bridge proxy denylist", () => {
     }
   });
 
+  it("does not refuse the agent-manifest routes", () => {
+    // The agent builder lives entirely behind this proxy: the browser reads the
+    // fleet, validates as the operator types, and saves through these paths. A
+    // denylist edit that swallowed them would take the whole builder offline
+    // with a 404 that reads as a missing route rather than a policy decision.
+    // Nothing here answers with a credential — a manifest is configuration, and
+    // secret values in one are `${VAR}` references the engine expands at load.
+    for (const path of [
+      "/api/agent-manifests",
+      "/api/agent-manifests/demo-agent",
+      "/api/agent-manifests/validate",
+      "/api/agent-manifests/demo-agent/enable",
+      "/api/agent-manifests/demo-agent/disable",
+      "/api/agent-manifests/demo-agent/run",
+    ]) {
+      expect(isDeniedBridgePath(path)).toBe(false);
+    }
+  });
+
   it("still allows vault writes, which carry no secret back", () => {
     for (const path of ["/api/vault/set", "/api/vault/delete"]) {
       expect(isDeniedBridgePath(path)).toBe(false);

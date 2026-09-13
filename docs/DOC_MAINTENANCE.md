@@ -6,8 +6,8 @@ When infrastructure, agents, services, or cron jobs change, update docs as part 
 |--------|-------------------|
 | New systemd service | `SERVICES.md`, `docs/SYSTEM_ARCHITECTURE.md` (tunnel table if port-bearing) |
 | New cron job (system) | **Regenerate, do not hand-edit**: `python scripts/gen_cron_map.py > docs/CRON_MAP.md` (it reads the crontab, systemd timers and `agent_schedules`, and marks a missing target `MISSING`; the file is gitignored instance data, which is why the generator writes stdout and never the file). Then `brain/CRON_DESIGN.md` (if architectural), `SERVICES.md` |
-| New agent | `robothor agent scaffold <id>`, edit manifest + instruction file per contracts, the instance's fleet table + `brain/AGENTS.md` + `docs/CRON_MAP.md`, `scripts/validate_agents.py` |
-| Modified agent config | Agent manifest YAML (update first), then `scripts/validate_agents.py --agent <id>` |
+| New agent | `robothor agent scaffold <id>` **or** `POST /api/agent-manifests` (the Helm's agent builder — it scaffolds, validates and reconciles in one call), edit manifest + instruction file per contracts, the instance's fleet table + `brain/AGENTS.md` + `docs/CRON_MAP.md`, `scripts/validate_agents.py` |
+| Modified agent config | Agent manifest YAML (update first), then `scripts/validate_agents.py --agent <id>`. Editing through `PATCH /api/agent-manifests/{id}` does both, snapshots the previous version into the instance's `docs/agents/.history/`, and calls the engine reconcile — a hand edit still needs `POST /api/admin/scheduler/reconcile` (or a five-minute wait for the watchdog) before the new schedule fires |
 | New MCP/plugin tool | `docs/CONNECTORS.md` + the instance's `brain/AGENTS.md` tool list |
 | New Cloudflare route | `infra/tunnel/README.md`, `SERVICES.md` (external access table) |
 | New database table | `robothor/migrations/manifest.txt` + `docs/SYSTEM_ARCHITECTURE.md` |

@@ -18,6 +18,8 @@ from robothor.engine.models import TriggerType
 from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
+    from fastapi import FastAPI
+
     from robothor.engine.config import EngineConfig
     from robothor.engine.runner import AgentRunner
 
@@ -85,7 +87,43 @@ def _execution_mode_block() -> dict[str, Any]:
         return {"available": False}
 
 
-def _mount_subsystem_routers(app: Any, config: EngineConfig, runner: AgentRunner | None) -> None:
+def _install_engine_auth(app: FastAPI, config: EngineConfig) -> None:
+    """Attach the engine-wide authentication boundary.
+
+    NetworkPolicy/ClusterIP isolation remains defence in depth, but every
+    non-probe HTTP request must also carry a signed, scoped Genus identity.
+    Webhook POSTs are the sole exception, because the webhook handler
+    authenticates the exact raw payload with its channel-specific HMAC.
+
+    Lifted out of ``create_health_app`` rather than left inline: this is the
+    engine's whole authorization boundary, and it should be findable without
+    reading a 1,400-line function to locate the decorator.
+    """
+    from fastapi import HTTPException
+    from fastapi.responses import JSONResponse
+
+    @app.middleware("http")
+    async def _authenticate_engine_request(request: Request, call_next: Any) -> Any:
+        from robothor.engine.auth import authenticate_http_request
+
+        try:
+            context = authenticate_http_request(request, tenant_id=config.tenant_id)
+        except HTTPException as error:
+            return JSONResponse(
+                {"error": str(error.detail)},
+                status_code=error.status_code,
+            )
+        if context is not None:
+            request.state.auth = context
+        return await call_next(request)
+
+
+def _mount_subsystem_routers(
+    app: Any,
+    config: EngineConfig,
+    runner: AgentRunner | None,
+    scheduler: Any = None,
+) -> None:
     """Attach every subsystem that owns its own router.
 
     Lifted out of ``create_health_app`` so that adding a subsystem is one line
@@ -129,6 +167,13 @@ def _mount_subsystem_routers(app: Any, config: EngineConfig, runner: AgentRunner
 
     register_admin_providers(app)
 
+    # Scheduler reconcile + the registered tool list. The engine owns the job
+    # registry, so a manifest written anywhere else only takes effect through
+    # this route.
+    from robothor.engine.admin_scheduler import register as register_admin_scheduler
+
+    register_admin_scheduler(app, scheduler)
+
 
 async def _fleet_readiness(config: EngineConfig, details: dict[str, Any]) -> str:
     """Readiness for the agent fleet. Broken and absent are different answers.
@@ -171,35 +216,18 @@ async def _fleet_readiness(config: EngineConfig, details: dict[str, Any]) -> str
 
 
 def create_health_app(
-    config: EngineConfig, runner: AgentRunner | None = None, workflow_engine: Any = None
+    config: EngineConfig,
+    runner: AgentRunner | None = None,
+    workflow_engine: Any = None,
+    scheduler: Any = None,
 ) -> Any:
     """Create a lightweight FastAPI health app."""
-    from fastapi import FastAPI, HTTPException
-    from fastapi.responses import JSONResponse
+    from fastapi import FastAPI
 
     app = FastAPI(title="Genus OS Agent Engine", docs_url=None, redoc_url=None)
 
-    # ── Engine-wide authentication boundary ──────────────────────────────
-    # NetworkPolicy/ClusterIP isolation remains defence in depth, but every
-    # non-probe HTTP request must also carry a signed, scoped Genus identity.
-    # Webhook POSTs are the sole exception here because the webhook handler
-    # authenticates the exact raw payload with its channel-specific HMAC.
-    @app.middleware("http")
-    async def _authenticate_engine_request(request: Request, call_next: Any) -> Any:
-        from robothor.engine.auth import authenticate_http_request
-
-        try:
-            context = authenticate_http_request(request, tenant_id=config.tenant_id)
-        except HTTPException as error:
-            return JSONResponse(
-                {"error": str(error.detail)},
-                status_code=error.status_code,
-            )
-        if context is not None:
-            request.state.auth = context
-        return await call_next(request)
-
-    _mount_subsystem_routers(app, config, runner)
+    _install_engine_auth(app, config)
+    _mount_subsystem_routers(app, config, runner, scheduler)
 
     # ── Buddy / KAIROS / Extensions API routes ───────────────────────────
 
@@ -1621,14 +1649,24 @@ def create_health_app(
 
 
 async def serve_health(
-    config: EngineConfig, runner: AgentRunner | None = None, workflow_engine: Any = None
+    config: EngineConfig,
+    runner: AgentRunner | None = None,
+    workflow_engine: Any = None,
+    scheduler: Any = None,
 ) -> None:
-    """Start the health endpoint server."""
+    """Start the health endpoint server.
+
+    ``scheduler`` is the live :class:`CronScheduler` — threaded through so
+    ``POST /api/admin/scheduler/reconcile`` acts on THIS process's job registry
+    instead of answering 503 to a Helm that has just written a manifest.
+    """
     validate_engine_auth_configuration()
 
     import uvicorn
 
-    app = create_health_app(config, runner=runner, workflow_engine=workflow_engine)
+    app = create_health_app(
+        config, runner=runner, workflow_engine=workflow_engine, scheduler=scheduler
+    )
     uvi_config = uvicorn.Config(
         app,
         host=os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1"),

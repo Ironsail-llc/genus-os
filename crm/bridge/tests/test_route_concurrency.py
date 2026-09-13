@@ -78,6 +78,31 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("POST", "/api/setup/channel"),
         ("POST", "/api/setup/agent"),
         ("POST", "/api/setup/complete"),
+        # The agent-manifest routes await the engine over HTTP — the tool list
+        # for validation, the scheduler reconcile after every write, the manual
+        # trigger — and that is the bulk of what they do. Every blocking piece
+        # they own (the manifest-directory scan, the schema validation, the
+        # snapshot, the atomic write) goes through asyncio.to_thread inside the
+        # handler rather than making the route synchronous, because a `def`
+        # route cannot await the engine at all and a write that does not
+        # reconcile is a write that changes nothing.
+        ("GET", "/api/agent-manifests"),
+        ("GET", "/api/agent-manifests/{agent_id}"),
+        ("POST", "/api/agent-manifests/validate"),
+        ("POST", "/api/agent-manifests"),
+        ("PATCH", "/api/agent-manifests/{agent_id}"),
+        ("POST", "/api/agent-manifests/{agent_id}/enable"),
+        ("POST", "/api/agent-manifests/{agent_id}/disable"),
+        ("DELETE", "/api/agent-manifests/{agent_id}"),
+        ("POST", "/api/agent-manifests/{agent_id}/run"),
+        # The three install-state mutations. Each awaits the engine reconcile —
+        # without it the manifest the installer just wrote does not fire until
+        # the next restart — and hands its own blocking work (the hub download,
+        # the template installer, the removal) to asyncio.to_thread. The
+        # read-only listing and readiness routes stay `def`.
+        ("POST", "/api/installed-agents/install"),
+        ("POST", "/api/installed-agents/{agent_id}/update"),
+        ("DELETE", "/api/installed-agents/{agent_id}"),
     }
 
 

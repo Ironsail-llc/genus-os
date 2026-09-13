@@ -263,6 +263,12 @@ class AgentConfig:
 
     # Schedule
     cron_expr: str = ""
+    # Whether the scheduler registers this agent's jobs at all — cron,
+    # heartbeat and worker together. False is "silenced", not "retired": the
+    # manifest stays, reconcile drops the jobs. The ``agent_schedules.enabled``
+    # column that the Helm fleet view and the doctor have displayed since long
+    # before anything wrote a value other than True now carries this.
+    schedule_enabled: bool = True
     timezone: str = "America/New_York"
     timeout_seconds: int = 600
     session_target: str = "isolated"

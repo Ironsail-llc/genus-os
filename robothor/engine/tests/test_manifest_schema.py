@@ -329,3 +329,79 @@ class TestIssueShape:
         data["nope"] = 1
         del data["name"]
         assert _codes(validate(data, strict=True)) <= manifest_schema.ISSUE_CODES
+
+
+# ── "Never raises" is a promise, not a hope ─────────────────────────
+
+
+class TestValidateNeverRaises:
+    """The docstring says it, so it has to be true of ANY document.
+
+    It was not. Until the agent-manifest API shipped, every caller was the
+    manifest loader, handing this function a document PyYAML had just parsed
+    off disk — and a manifest that was wrong was usually wrong by having the
+    wrong VALUE, not the wrong SHAPE. `POST /api/agent-manifests/validate` is
+    the first caller to hand it an arbitrary HTTP body, and the promise became
+    load-bearing: a raise here does not lose a verdict, it hides the file from
+    the operator who needs to repair it.
+
+    The four comparisons below are membership tests against a frozenset, so an
+    unhashable value raises `TypeError: unhashable type` rather than being
+    reported as the wrong type it plainly is.
+    """
+
+    WRONG_SHAPES = {
+        "sandbox_is_a_mapping": ("v2", {"sandbox": {"enabled": True}}),
+        "sandbox_is_a_list": ("v2", {"sandbox": ["local"]}),
+        "guardrail_is_a_dict": ("v2", {"guardrails": [{"name": "x"}]}),
+        "guardrail_is_a_list": ("v2", {"guardrails": [["x"]]}),
+        "difficulty_is_a_mapping": ("v2", {"difficulty_class": {"tier": 1}}),
+        "difficulty_is_a_list": ("v2", {"difficulty_class": ["simple"]}),
+        "session_target_is_a_mapping": ("schedule", {"session_target": {"mode": "isolated"}}),
+        "session_target_is_a_list": ("schedule", {"session_target": ["isolated"]}),
+    }
+
+    def _with(self, section: str, overrides: dict) -> dict:
+        data = _valid()
+        data[section] = {**data.get(section, {}), **overrides}
+        return data
+
+    def test_an_unhashable_value_is_reported_not_raised(self):
+        for name, (section, overrides) in self.WRONG_SHAPES.items():
+            issues = validate(self._with(section, overrides))
+            assert issues, f"{name}: validated clean, which is worse than raising"
+
+    def test_the_finding_names_the_path_and_the_wrong_type(self):
+        issues = validate(self._with("v2", {"sandbox": {"enabled": True}}))
+
+        sandbox = [i for i in issues if i.path == "v2.sandbox"]
+        assert sandbox, [i.path for i in issues]
+        assert sandbox[0].code == "wrong_type"
+        assert "dict" in sandbox[0].message
+
+    def test_codes_stay_declared_for_the_wrong_shapes_too(self):
+        for section, overrides in self.WRONG_SHAPES.values():
+            assert _codes(validate(self._with(section, overrides))) <= manifest_schema.ISSUE_CODES
+
+    def test_a_document_that_is_not_a_mapping_at_all_is_reported(self):
+        for data in ([], "id: main", 7, None):
+            issues = validate(data)  # type: ignore[arg-type]
+            assert issues and issues[0].code == "wrong_type"
+
+    def test_a_check_that_raises_anyway_becomes_a_finding(self, monkeypatch):
+        """The backstop, probed rather than assumed.
+
+        The four comparisons above are fixed at the source, but the next check
+        someone adds will not be, and a promise this file makes to an HTTP
+        handler cannot depend on every future author remembering.
+        """
+
+        def _explode(*args, **kwargs):
+            raise RuntimeError("a future check did something unguarded")
+
+        monkeypatch.setattr(manifest_schema, "_check_semantics", _explode)
+
+        issues = validate(_valid())
+
+        assert any(i.code == "validator_error" for i in issues), issues
+        assert not any("unguarded" in i.message for i in issues), "the raise text leaked"

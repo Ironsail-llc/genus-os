@@ -68,6 +68,9 @@ ISSUE_CODES = frozenset(
         "unknown_difficulty_class",
         "unknown_sandbox_mode",
         "lifecycle_hook_invalid",
+        # The backstop for `validate`'s "never raises" promise. See
+        # `_membership` and the guard in `validate`.
+        "validator_error",
     }
 )
 
@@ -452,6 +455,39 @@ _KNOWN_SESSION_TARGETS = frozenset({"isolated", "persistent"})
 _CRON_RE = re.compile(r"^[\d\*\/\-\,\?\#LW\s]+$")
 
 
+def _validator_error(which: str, error: BaseException) -> ManifestIssue:
+    """A check that raised, as a finding. Type only — see :func:`validate`."""
+    return ManifestIssue(
+        path="",
+        code="validator_error",
+        message=(
+            f"the {which} checks could not judge this manifest "
+            f"({type(error).__name__}) — a value is the wrong shape"
+        ),
+        severity="error",
+    )
+
+
+def _membership(value: Any, known: frozenset[str], issues: list[ManifestIssue], path: str) -> bool:
+    """``value in known``, for a value that may not be hashable at all.
+
+    ``x not in frozenset()`` raises ``TypeError: unhashable type`` for a dict or
+    a list, so every enum-ish check below was one wrongly-shaped manifest away
+    from taking the whole validator down — and the function promises the
+    opposite. An unhashable value is not an unknown enum member, it is the wrong
+    type, so it is reported as one at its own path and the caller's enum check
+    is skipped rather than repeated.
+
+    Returns True when the value was judged here and the caller should stop.
+    """
+    try:
+        value in known  # noqa: B015 - the membership test IS the type probe
+    except TypeError:
+        _wrong_type(issues, path, value, "a string")
+        return True
+    return False
+
+
 def _warn(issues: list[ManifestIssue], path: str, code: str, message: str) -> None:
     """Semantic findings are advisory, exactly as they were before.
 
@@ -725,7 +761,9 @@ def _check_semantics(issues: list[ManifestIssue], data: dict[str, Any]) -> None:
     # Session target
     if isinstance(schedule, dict):
         target = schedule.get("session_target", "isolated")
-        if target not in _KNOWN_SESSION_TARGETS:
+        if _membership(target, _KNOWN_SESSION_TARGETS, issues, "schedule.session_target"):
+            pass
+        elif target not in _KNOWN_SESSION_TARGETS:
             _warn(
                 issues,
                 "schedule.session_target",
@@ -750,12 +788,16 @@ def _check_semantics(issues: list[ManifestIssue], data: dict[str, Any]) -> None:
         guardrails = v2.get("guardrails", [])
         if isinstance(guardrails, list):
             for g in guardrails:
+                if _membership(g, _KNOWN_GUARDRAILS, issues, "v2.guardrails"):
+                    continue
                 if g not in _KNOWN_GUARDRAILS:
                     _warn(issues, "v2.guardrails", "unknown_guardrail", f"Unknown guardrail: {g!r}")
 
         # Difficulty class
         dc = v2.get("difficulty_class", "")
-        if dc not in _KNOWN_DIFFICULTY_CLASSES:
+        if _membership(dc, _KNOWN_DIFFICULTY_CLASSES, issues, "v2.difficulty_class"):
+            pass
+        elif dc not in _KNOWN_DIFFICULTY_CLASSES:
             _warn(
                 issues,
                 "v2.difficulty_class",
@@ -765,7 +807,9 @@ def _check_semantics(issues: list[ManifestIssue], data: dict[str, Any]) -> None:
 
         # Sandbox
         sb = v2.get("sandbox", "local")
-        if sb not in _KNOWN_SANDBOX_MODES:
+        if _membership(sb, _KNOWN_SANDBOX_MODES, issues, "v2.sandbox"):
+            pass
+        elif sb not in _KNOWN_SANDBOX_MODES:
             _warn(issues, "v2.sandbox", "unknown_sandbox_mode", f"Unknown sandbox mode: {sb!r}")
 
         # Numeric ranges
@@ -822,9 +866,18 @@ def validate(data: dict[str, Any], *, strict: bool = False) -> list[ManifestIssu
     the template or a gap in the schema, whereas a live instance may
     legitimately carry a field a plugin reads.
 
-    Never raises — a broken schema file degrades to "no structural checks"
-    plus one `schema_unreadable` warning. Use :func:`raise_if_invalid` when a
-    caller wants the errors to stop the load.
+    Never raises, on ANY document — not merely on a well-formed one. A broken
+    schema file degrades to "no structural checks" plus one `schema_unreadable`
+    warning, a value of the wrong shape becomes a `wrong_type` finding, and a
+    check that raises anyway becomes a `validator_error` one. Use
+    :func:`raise_if_invalid` when a caller wants the errors to stop the load.
+
+    The promise used to be aspirational: every caller was the manifest loader,
+    handing this a document PyYAML had just parsed off disk, so `sandbox` as a
+    mapping (`x not in frozenset()` → `TypeError: unhashable type`) never came
+    up. `POST /api/agent-manifests/validate` hands it an arbitrary HTTP body,
+    and a raise there does not lose a verdict — it hides the broken file from
+    the operator who needs to repair it.
     """
     if not isinstance(data, dict):
         return [
@@ -836,10 +889,27 @@ def validate(data: dict[str, Any], *, strict: bool = False) -> list[ManifestIssu
             )
         ]
     issues: list[ManifestIssue] = []
-    _check_structure(issues, data, strict)
-    structural_error_paths = {i.path for i in issues if i.severity == "error"}
     semantic: list[ManifestIssue] = []
-    _check_semantics(semantic, data)
+    # The backstop for the promise above. The known unhashable comparisons are
+    # fixed at their source (see `_membership`), but "never raises" is now a
+    # contract with an HTTP handler — `POST /api/agent-manifests/validate` —
+    # and a contract that depends on every future check's author remembering is
+    # the inert-control shape. A raise becomes a finding; the issues each pass
+    # already appended survive, because both append as they go.
+    #
+    # The exception TYPE only: its text carries the manifest value that caused
+    # it, and these issues reach an operator's browser (rules 1 and 2).
+    try:
+        _check_structure(issues, data, strict)
+    except Exception as error:  # noqa: BLE001 - a validator may not take a caller down
+        logger.warning("Manifest structural check raised: %s", type(error).__name__)
+        issues.append(_validator_error("structural", error))
+    structural_error_paths = {i.path for i in issues if i.severity == "error"}
+    try:
+        _check_semantics(semantic, data)
+    except Exception as error:  # noqa: BLE001 - same
+        logger.warning("Manifest semantic check raised: %s", type(error).__name__)
+        semantic.append(_validator_error("semantic", error))
     # One defect, one finding. A non-numeric where the schema declares an
     # integer is caught structurally AND by the range checks, which each word
     # it differently ("should be integer" / "should be numeric") — two lines

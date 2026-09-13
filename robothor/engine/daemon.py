@@ -36,6 +36,7 @@ from robothor.plugins import reload_plugins
 
 if TYPE_CHECKING:
     from robothor.engine.resume import ResumeCandidate
+    from robothor.engine.schedule_reconcile import ReconcileResult
 
 logger = logging.getLogger(__name__)
 
@@ -1243,7 +1244,7 @@ async def main() -> int:
         asyncio.create_task(scheduler.start(), name="scheduler"),
         asyncio.create_task(hooks.start(), name="hooks"),
         asyncio.create_task(
-            serve_health(config, runner=runner, workflow_engine=workflow_engine),
+            serve_health(config, runner, workflow_engine, scheduler),
             name="health",
         ),
         asyncio.create_task(_watchdog(config, scheduler, workflow_engine), name="watchdog"),
@@ -1448,6 +1449,30 @@ def _daily_maintenance_due(now: float, last_run: float | None) -> bool:
     return last_run is None or (now - last_run) >= _DAILY_MAINTENANCE_INTERVAL_SECONDS
 
 
+def _log_reconcile(outcome: ReconcileResult) -> None:
+    """Report what a watchdog reconcile did, or refused to do.
+
+    Silence on a no-op pass, deliberately: this runs every five minutes for the
+    life of the process, and a line per pass is how a log stops being read. A
+    refusal is never silent — reconcile changing nothing because a manifest
+    will not parse is the 2026-08-23 shape, and the operator has to be able to
+    see it in the journal as well as on their phone.
+    """
+    if outcome.touched():
+        logger.info(
+            "Watchdog: reconciled schedules — added: %s replaced: %s refreshed: %s pruned: %s",
+            outcome.added,
+            outcome.replaced,
+            outcome.refreshed,
+            outcome.pruned,
+        )
+    if outcome.blocked:
+        logger.warning(
+            "Watchdog: reconcile changed nothing — %d agent(s) could not be read",
+            len(outcome.blocked),
+        )
+
+
 async def _watchdog(
     config: EngineConfig,
     scheduler: CronScheduler,
@@ -1528,11 +1553,9 @@ async def _watchdog(
         # Schedule reconciliation (every 10 ticks = 5 minutes)
         if tick_count % 10 == 0:
             try:
-                # reconcile() pages when a manifest cannot be read, and refuses
-                # to prune anything from an incomplete scan.
-                pruned = await scheduler.reconcile()
-                if pruned:
-                    logger.info("Watchdog: reconciled schedules, pruned: %s", pruned)
+                # reconcile() pages when a manifest cannot be read, and changes
+                # nothing at all from an incomplete scan.
+                _log_reconcile(await scheduler.reconcile())
             except Exception as e:
                 logger.warning("Watchdog: schedule reconciliation failed: %s", e)
 

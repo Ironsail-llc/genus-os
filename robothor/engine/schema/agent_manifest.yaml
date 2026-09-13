@@ -65,6 +65,16 @@ recommended:
     cron:
       type: string
       description: APScheduler cron expression. Empty for hook-only or interactive agents.
+    enabled:
+      type: boolean
+      default: true
+      description: >
+        Whether the scheduler registers this agent's jobs at all. false
+        removes the cron, heartbeat and worker jobs on the next reconcile
+        while leaving the manifest, its instructions and its history in
+        place — the way to silence an agent without retiring it. The
+        agent_schedules.enabled column the fleet view and the doctor read
+        carries this value.
     timezone:
       type: string
       default: UTC

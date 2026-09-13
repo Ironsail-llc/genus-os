@@ -29,6 +29,19 @@ from robothor.engine.dedup import release, try_acquire
 from robothor.engine.delivery import _beat_incomplete, _looks_like_mid_thought, deliver
 from robothor.engine.manifest_guard import alert_manifest_scan
 from robothor.engine.models import AgentConfig, AgentRun, RunStatus, TriggerType
+from robothor.engine.schedule_reconcile import (
+    CRON_ERROR_TEMPLATES,
+    KIND_AGENT,
+    KIND_HEARTBEAT,
+    KIND_WORKER,
+    JobSpec,
+    ReconcileResult,
+    RowLedger,
+    agent_job_specs,
+    blocked_reasons,
+    desired_job_specs,
+    job_matches,
+)
 from robothor.engine.task_registry import get_task_registry
 from robothor.engine.tracking import (
     delete_stale_schedules,
@@ -267,6 +280,7 @@ class CronScheduler:
         self.runner = runner
         self.workflow_engine = workflow_engine
         self.scheduler = AsyncIOScheduler(timezone=config.default_timezone)
+        self._rows = RowLedger()
 
     async def start(self) -> None:
         """Load manifests and start the scheduler."""
@@ -283,176 +297,27 @@ class CronScheduler:
 
         for manifest in manifests:
             agent_config = manifest_to_agent_config(manifest)
-
-            # Register heartbeat cron job if present
-            if agent_config.heartbeat and agent_config.heartbeat.cron_expr:
-                try:
-                    hb_trigger = CronTrigger.from_crontab(
-                        agent_config.heartbeat.cron_expr,
-                        timezone=agent_config.heartbeat.timezone,
-                    )
-                    hb_job_id = f"{agent_config.id}:heartbeat"
-                    self.scheduler.add_job(
-                        self._run_heartbeat,
-                        trigger=hb_trigger,
-                        args=[agent_config.id],
-                        id=hb_job_id,
-                        name=f"heartbeat:{agent_config.name}",
-                        max_instances=1,
-                        coalesce=True,
-                        misfire_grace_time=60,
-                    )
-
-                    # Upsert schedule state for heartbeat
-                    try:
-                        upsert_schedule(
-                            agent_id=hb_job_id,
-                            tenant_id=self.config.tenant_id,
-                            enabled=True,
-                            cron_expr=agent_config.heartbeat.cron_expr,
-                            timezone=agent_config.heartbeat.timezone,
-                            timeout_seconds=agent_config.heartbeat.timeout_seconds,
-                            model_primary=agent_config.model_primary,
-                            model_fallbacks=agent_config.model_fallbacks,
-                            delivery_mode=agent_config.heartbeat.delivery_mode.value,
-                            delivery_channel=agent_config.heartbeat.delivery_channel,
-                            delivery_to=agent_config.heartbeat.delivery_to,
-                            session_target=agent_config.heartbeat.session_target,
-                        )
-                        active_schedule_ids.add(hb_job_id)
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to upsert heartbeat schedule for %s: %s",
-                            agent_config.id,
-                            e,
-                        )
-
-                    loaded += 1
+            # ONE derivation of "which jobs does this manifest ask for",
+            # shared with reconcile. Two of them is how `main:worker` came to
+            # be pruned five minutes after every start — see
+            # schedule_reconcile's module header.
+            specs, cron_errors = agent_job_specs(agent_config)
+            self._log_cron_errors(cron_errors)
+            for spec in specs.values():
+                if spec.enabled and not self._add_job(spec):
+                    continue
+                # A disabled schedule gets no job but keeps its row, so the
+                # fleet view can say "off" — see JobSpec.enabled.
+                self._record_schedule_row(spec, active_schedule_ids)
+                if not spec.enabled:
+                    continue
+                loaded += 1
+                if spec.kind == KIND_AGENT:
+                    cron_agent_configs.append(agent_config)
+                else:
                     logger.info(
-                        "Registered heartbeat for %s: %s",
-                        agent_config.id,
-                        agent_config.heartbeat.cron_expr,
+                        "Registered %s for %s: %s", spec.kind, agent_config.id, spec.cron_expr
                     )
-                except Exception as e:
-                    logger.error(
-                        "Invalid heartbeat cron for %s: %s — %s",
-                        agent_config.id,
-                        agent_config.heartbeat.cron_expr,
-                        e,
-                    )
-
-            # Register worker cron job if present (drain cycle — symmetric to heartbeat)
-            if agent_config.worker and agent_config.worker.cron_expr:
-                try:
-                    w_trigger = CronTrigger.from_crontab(
-                        agent_config.worker.cron_expr,
-                        timezone=agent_config.worker.timezone,
-                    )
-                    w_job_id = f"{agent_config.id}:worker"
-                    self.scheduler.add_job(
-                        self._run_worker,
-                        trigger=w_trigger,
-                        args=[agent_config.id],
-                        id=w_job_id,
-                        name=f"worker:{agent_config.name}",
-                        max_instances=1,
-                        coalesce=True,
-                        misfire_grace_time=120,
-                    )
-
-                    try:
-                        upsert_schedule(
-                            agent_id=w_job_id,
-                            tenant_id=self.config.tenant_id,
-                            enabled=True,
-                            cron_expr=agent_config.worker.cron_expr,
-                            timezone=agent_config.worker.timezone,
-                            timeout_seconds=agent_config.worker.timeout_seconds,
-                            model_primary=agent_config.model_primary,
-                            model_fallbacks=agent_config.model_fallbacks,
-                            delivery_mode=agent_config.worker.delivery_mode.value,
-                            delivery_channel=agent_config.worker.delivery_channel,
-                            delivery_to=agent_config.worker.delivery_to,
-                            session_target=agent_config.worker.session_target,
-                        )
-                        active_schedule_ids.add(w_job_id)
-                    except Exception as e:
-                        logger.warning(
-                            "Failed to upsert worker schedule for %s: %s",
-                            agent_config.id,
-                            e,
-                        )
-
-                    loaded += 1
-                    logger.info(
-                        "Registered worker for %s: %s",
-                        agent_config.id,
-                        agent_config.worker.cron_expr,
-                    )
-                except Exception as e:
-                    logger.error(
-                        "Invalid worker cron for %s: %s — %s",
-                        agent_config.id,
-                        agent_config.worker.cron_expr,
-                        e,
-                    )
-
-            if not agent_config.cron_expr:
-                continue
-
-            # Parse cron expression
-            try:
-                trigger = CronTrigger.from_crontab(
-                    agent_config.cron_expr,
-                    timezone=agent_config.timezone,
-                )
-            except Exception as e:
-                logger.error(
-                    "Invalid cron expression for %s: %s — %s",
-                    agent_config.id,
-                    agent_config.cron_expr,
-                    e,
-                )
-                continue
-
-            # Add job — use APScheduler's misfire_grace_time for catch-up logic
-            if agent_config.catch_up == "skip_if_stale":
-                grace_time = agent_config.stale_after_minutes * 60
-            else:
-                grace_time = None  # always run missed fires
-            self.scheduler.add_job(
-                self._run_agent,
-                trigger=trigger,
-                args=[agent_config.id],
-                id=agent_config.id,
-                name=f"agent:{agent_config.name}",
-                max_instances=1,
-                coalesce=True,
-                misfire_grace_time=grace_time,
-            )
-            cron_agent_configs.append(agent_config)
-
-            # Upsert schedule state in database
-            try:
-                upsert_schedule(
-                    agent_id=agent_config.id,
-                    tenant_id=self.config.tenant_id,
-                    enabled=True,
-                    cron_expr=agent_config.cron_expr,
-                    timezone=agent_config.timezone,
-                    timeout_seconds=agent_config.timeout_seconds,
-                    model_primary=agent_config.model_primary,
-                    model_fallbacks=agent_config.model_fallbacks,
-                    delivery_mode=agent_config.delivery_mode.value,
-                    delivery_channel=agent_config.delivery_channel,
-                    delivery_to=agent_config.delivery_to,
-                    session_target=agent_config.session_target,
-                )
-                active_schedule_ids.add(agent_config.id)
-            except Exception as e:
-                logger.warning("Failed to upsert schedule for %s: %s", agent_config.id, e)
-
-            loaded += 1
 
         logger.info("Loaded %d scheduled agents from %d manifests", loaded, len(manifests))
 
@@ -535,6 +400,74 @@ class CronScheduler:
         while True:
             await asyncio.sleep(60)
             await self._tick_user_cronjobs()
+
+    # ─── One job, registered the same way at boot and at reconcile ─────
+
+    def _job_handler(self, kind: str) -> Any:
+        """The bound coroutine a job of this kind fires."""
+        return {
+            KIND_AGENT: self._run_agent,
+            KIND_HEARTBEAT: self._run_heartbeat,
+            KIND_WORKER: self._run_worker,
+        }[kind]
+
+    def _add_job(self, spec: JobSpec) -> bool:
+        """Register one job, replacing whatever held its id. True on success.
+
+        ``replace_existing=True`` where the three hand-written registrations
+        passed nothing: this is called from reconcile as well as from boot, and
+        an add that raises ``ConflictingIdError`` the second time is not a
+        reconcile, it is a one-shot.
+
+        One bad job costs that job and no other. An unguarded raise here would
+        take the whole scheduler task down at boot, and inside reconcile it
+        would discard the prune along with it — a manifest is operator input,
+        and operator input must not be able to stop the fleet.
+        """
+        try:
+            self.scheduler.add_job(
+                self._job_handler(spec.kind),
+                trigger=spec.trigger,
+                args=[spec.agent_id],
+                id=spec.job_id,
+                name=spec.name,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=spec.misfire_grace_time,
+                replace_existing=True,
+            )
+        except Exception as e:  # noqa: BLE001 - one job, not the fleet
+            logger.error("Could not schedule %s: %s", spec.job_id, e)
+            return False
+        return True
+
+    def _record_schedule_row(self, spec: JobSpec, active_ids: set[str] | None = None) -> None:
+        """Upsert the ``agent_schedules`` row for one job spec.
+
+        A failed DB write is a warning and nothing more: the job in memory is
+        what fires, and an agent left unscheduled because Postgres hiccuped
+        would be a far worse outcome than a stale row.
+        """
+        try:
+            upsert_schedule(
+                agent_id=spec.job_id,
+                tenant_id=self.config.tenant_id,
+                enabled=spec.enabled,
+                **spec.upsert,
+            )
+        except Exception as e:
+            logger.warning("Failed to upsert schedule for %s: %s", spec.job_id, e)
+            self._rows.forget(spec.job_id)
+            return
+        self._rows.record(spec)
+        if active_ids is not None:
+            active_ids.add(spec.job_id)
+
+    @staticmethod
+    def _log_cron_errors(errors: list[tuple[str, str, str, Exception]]) -> None:
+        """Report every cron a manifest declared and APScheduler refused."""
+        for kind, agent_id, cron_expr, error in errors:
+            logger.error(CRON_ERROR_TEMPLATES[kind], agent_id, cron_expr, error)
 
     # ─── Startup catch-up ──────────────────────────────────────────────
 
@@ -1290,8 +1223,14 @@ class CronScheduler:
         finally:
             await release(agent_id)
 
-    def _reconcile_from_scan(self, scan: ManifestScan) -> list[str]:
-        """Prune schedules that no longer have a manifest — from a CLEAN scan only.
+    def _reconcile_from_scan(self, scan: ManifestScan) -> ReconcileResult:
+        """Make the live job set agree with the manifests — from a CLEAN scan only.
+
+        Adds, replaces and prunes. It used to only prune, which meant nothing in
+        the engine ever registered a job after boot: the setup wizard's
+        ``POST /api/setup/agent`` and the Helm's agent install both wrote a
+        manifest and reported success, and the agent did not fire until someone
+        restarted the process.
 
         The interlock at the top is the whole point. On 2026-08-23 a YAML typo
         made main.yaml unparseable; the loader dropped it, this function could
@@ -1316,6 +1255,13 @@ class CronScheduler:
         Accepted cost: deleting an agent while a DIFFERENT manifest is broken
         is not reconciled until the break is fixed. That is correct, and the
         page says so.
+
+        The interlock covers the new half too. Adding a job is not destructive
+        the way pruning one is, but a scan that cannot see every manifest also
+        cannot be trusted about what a trigger *should* be, and reconciling
+        half a fleet from a partial view puts an agent on a schedule nobody can
+        account for. A dirty scan therefore adds nothing, replaces nothing and
+        prunes nothing, and says which agents it could not read.
         """
         if not scan.clean:
             if not scan.dir_readable:
@@ -1330,37 +1276,73 @@ class CronScheduler:
                     len(scan.failures),
                     ", ".join(f.filename for f in scan.failures),
                 )
-            return []
+            return ReconcileResult(blocked=blocked_reasons(scan), clean=False)
 
-        active_ids: set[str] = set()
-        for manifest in scan.manifests:
-            agent_config = manifest_to_agent_config(manifest)
-            if agent_config.cron_expr:
-                active_ids.add(agent_config.id)
-            if agent_config.heartbeat and agent_config.heartbeat.cron_expr:
-                active_ids.add(f"{agent_config.id}:heartbeat")
-            if agent_config.worker and agent_config.worker.cron_expr:
-                active_ids.add(f"{agent_config.id}:worker")
+        agents = [manifest_to_agent_config(manifest) for manifest in scan.manifests]
+        declared, cron_errors = desired_job_specs(agents)
+        self._log_cron_errors(cron_errors)
+        wanted = {job_id: spec for job_id, spec in declared.items() if spec.enabled}
+        live = {job.id: job for job in self.scheduler.get_jobs() if _is_agent_job(job.id)}
 
-        # Prune stale DB rows
-        pruned: list[str] = []
-        if active_ids:
+        result = ReconcileResult(clean=True)
+        for job_id, spec in wanted.items():
+            existing = live.get(job_id)
+            if existing is not None and job_matches(existing, spec):
+                # The job is right. The ROW may still not be: agent_schedules
+                # carries the model, the delivery target and the session
+                # target, none of which move the trigger, and the fleet view
+                # and gen_cron_map.py read exactly those columns.
+                if self._rows.needs_write(spec):
+                    self._record_schedule_row(spec)
+                    result.refreshed.append(job_id)
+                continue
+            if existing is not None:
+                # Cleared first rather than left to ``replace_existing``:
+                # before the scheduler is started APScheduler holds additions
+                # as *pending*, and pending jobs are not de-duplicated by
+                # ``replace_existing`` — the trap that once registered every
+                # plugin job twice (see register_plugin_jobs). Suppressed
+                # because all this has to establish is that the id is free;
+                # ``replace_existing`` covers the started case regardless.
+                with contextlib.suppress(Exception):
+                    self.scheduler.remove_job(job_id)
+            # Safe from the executor thread: AsyncIOScheduler.wakeup is
+            # @run_in_event_loop (it hands the call to call_soon_threadsafe)
+            # and _real_add_job takes _jobstores_lock, so a cross-thread add
+            # is serialised by apscheduler itself.
+            if not self._add_job(spec):
+                continue
+            self._record_schedule_row(spec)
+            (result.replaced if existing is not None else result.added).append(job_id)
+
+        # Prune stale DB rows. ``declared`` and not ``wanted``: a DISABLED
+        # schedule keeps its row so the fleet view can say "off" rather than
+        # making a silenced agent look deleted.
+        if declared:
             try:
-                pruned = delete_stale_schedules(active_ids, tenant_id=self.config.tenant_id)
+                result.pruned = delete_stale_schedules(
+                    set(declared), tenant_id=self.config.tenant_id
+                )
             except Exception as e:
                 logger.warning("Reconcile: failed to prune stale DB rows: %s", e)
 
-        # Remove orphaned APScheduler in-memory jobs
-        for job in self.scheduler.get_jobs():
-            if not _is_agent_job(job.id):
+        # Remove orphaned APScheduler in-memory jobs — including the jobs of an
+        # agent whose manifest is still there with schedule.enabled: false.
+        for job_id, job in live.items():
+            if job_id in wanted:
                 continue
-            if job.id not in active_ids:
-                logger.info("Reconcile: removing orphaned job %s", job.id)
-                job.remove()
-                if job.id not in pruned:
-                    pruned.append(job.id)
+            logger.info("Reconcile: removing orphaned job %s", job_id)
+            job.remove()
+            if job_id not in result.pruned:
+                result.pruned.append(job_id)
 
-        return pruned
+        # A disabled schedule gets no job but keeps its row saying so, on the
+        # same "only when it changed" rule as the live ones above.
+        for spec in declared.values():
+            if not spec.enabled and self._rows.needs_write(spec):
+                self._record_schedule_row(spec)
+
+        return result
 
     def register_plugin_jobs(self) -> int:
         """Schedule every job installed plugins contribute; return the count.
@@ -1406,16 +1388,21 @@ class CronScheduler:
             logger.info("Registered %d plugin job(s)", registered)
         return registered
 
-    def reconcile_schedules(self) -> list[str]:
+    def reconcile_schedules(self) -> ReconcileResult:
         """Reconcile DB + in-memory jobs against current manifests.
 
-        Synchronous and unchanged in signature so existing callers keep working.
-        It cannot page — see :meth:`reconcile` for the alerting wrapper the
-        watchdog uses. Either way, a dirty scan prunes nothing.
+        The synchronous entry point. It cannot page — see :meth:`reconcile` for
+        the alerting wrapper the watchdog uses. Either way, a dirty scan changes
+        nothing.
+
+        Returns a :class:`ReconcileResult` rather than the bare list of pruned
+        ids it used to: the list could not tell "nothing to do" from "refused to
+        act", which is the entire difference between a healthy fleet and a
+        manifest directory nobody can read.
         """
         return self._reconcile_from_scan(load_manifest_dir(self.config.manifest_dir))
 
-    async def reconcile(self) -> list[str]:
+    async def reconcile(self) -> ReconcileResult:
         """Reconcile, and page the operator when a manifest cannot be read.
 
         The watchdog's entry point. Reading manifests and the DB prune are both

@@ -368,9 +368,91 @@ Add conditional sections when the manifest enables them:
 
 ```bash
 python scripts/validate_agents.py --agent <agent-id>
-sudo systemctl restart robothor-engine
 robothor engine run <agent-id>   # test manually first
 ```
+
+A manifest the engine has not been told about does not fire. Reconcile rather
+than restart:
+
+```bash
+curl -XPOST localhost:18800/api/admin/scheduler/reconcile   # needs engine:control
+```
+
+The watchdog reconciles every five minutes anyway, so a restart is never
+required — it is just the impatient version of waiting.
+
+### Step 5 (or instead of 1–4): the Helm's agent builder
+
+`/api/agent-manifests` is the same flow from the browser, with no ssh session
+and no restart. It renders the same templates, runs the same validation, writes
+the same two files, and calls the engine reconcile itself.
+
+| Route | What it does |
+|-------|--------------|
+| `GET /api/agent-manifests` | The fleet, plus a `broken` list naming any manifest that will not load and its error type. One unreadable file lands in `broken`, never in a 500 — a fleet of twenty with one bad manifest lists nineteen |
+| `GET /api/agent-manifests/{id}` | The parsed document, its raw YAML, its instruction file, and its verdict. A broken manifest answers 200 with the verdict, not 404 — "absent" and "unreadable" have different fixes |
+| `POST /api/agent-manifests/validate` | Always 200; the verdict is the payload (`{ok, errors, warnings}`). Send `{manifest}` or `{yaml}` |
+| `POST /api/agent-manifests` | Scaffold + validate + write + reconcile. `409` on a colliding id, `422` carrying the validator's own codes on refusal |
+| `PATCH /api/agent-manifests/{id}` | Edits only the form-owned paths, bumps `version`, appends a changelog entry, snapshots the previous document, reconciles. Refused only on errors **this edit introduced** — see below |
+| `POST /api/agent-manifests/{id}/enable` \| `/disable` | Sets `schedule.enabled`. Disabling drops the cron, heartbeat and worker jobs on the next reconcile without retiring the agent |
+| `DELETE /api/agent-manifests/{id}` | Body `{"confirm": "<id>"}`. Moves the manifest to the instance's own `docs/agents/retired/` — nothing is unlinked, and the instruction file stays |
+| `POST /api/agent-manifests/{id}/run` | Fires one run now, via the engine's trigger route |
+
+Every write answers with a `reconcile` block. `applied: false` means the file is
+on disk and the engine has not picked it up yet — the watchdog will, within five
+minutes.
+
+**What an edit is refused for.** Only the errors it INTRODUCED. Every edit is
+validated twice — the document as it was, and as the edit leaves it — and the
+difference is what decides the 422. "A save must not break a manifest" and "a
+save is gated on the manifest being unbroken" are different promises, and the
+second locks the operator out of the file exactly when they need it: an agent
+with a bad cron, or one naming a tool a since-uninstalled plugin provided, could
+not be repaired AND could not be `disable`d, and `disable` is the stop control.
+A pre-existing fault comes back in `warnings` — and in `pre_existing`, so a UI
+can say "saved, still broken for these reasons" without diffing two lists — so
+"allowed through" does not read as "blessed". It is never a free pass for a
+second fault, including one of the *same kind*: a check that finds three
+unregistered tool names reports three findings, not one
+(`CheckResult.faults`), so adding a fourth is refused while **removing** one is
+a repair and is accepted, with the two that remain reported under
+`pre_existing`.
+
+**A save with `pre_existing` still reconciles.** The response carries
+`reconcile.applied: true` and an `added`/`replaced` entry beside the carried
+faults, and that is correct rather than a contradiction: the fault was already
+live before the edit, and the edit did not change what it does to the agent. The
+two classes differ —
+
+| Fault class | Loads? | Schedules? | Example |
+|-------------|--------|-----------|---------|
+| `manifest_checks` FAIL (`check.*`) | yes | yes | an unregistered tool name, a missing instruction file — the agent runs, and the tool is simply unavailable to it |
+| `bad_cron` / `not_loadable` / schema errors | no | no | an unparseable cron, a wrongly-typed block — `manifest_to_agent_config` or APScheduler refuses it, so reconcile has nothing to register |
+
+So `reconcile.applied: true` next to a populated `pre_existing` means "the write
+landed and the schedule is unchanged", not "the manifest is now clean". Read
+`pre_existing` before telling an operator their agent is fixed.
+
+**What a PATCH may change.** An edit sets only the paths the form owns
+(`routers/agent_manifests.FORM_OWNED_PATHS`: name, description, department,
+`model.primary`/`fallbacks`, the `schedule` and `delivery` blocks,
+`tools_allowed`/`tools_denied`, `instruction_file`, `version`, `changelog`).
+Everything else in the document survives untouched, including keys the platform
+has never heard of — a hand-written `model.temperature` or a plugin's own
+`v2.*` key is not collateral for renaming an agent. List-valued paths REPLACE
+rather than union, so removing a fallback model or a tool actually removes it.
+
+**Turning an agent off.** `schedule.enabled: false` is the switch:
+
+```yaml
+schedule:
+  cron: "0 9 * * *"
+  enabled: false      # default true; reconcile drops every job for this agent
+```
+
+It silences the agent's cron, heartbeat and worker together and keeps the
+manifest, the instructions and the `agent_schedules` row, which is what lets the
+fleet view show "off" instead of making a silenced agent look deleted.
 
 ---
 

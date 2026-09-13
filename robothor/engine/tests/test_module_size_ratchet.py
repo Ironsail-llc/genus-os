@@ -87,7 +87,45 @@ CAPS = {
     # ratchet did its job — it forced the extraction and made this residual
     # an explicit decision rather than drift. Do not raise again without
     # extracting something real.
-    "robothor/engine/scheduler.py": 1626,  # +19: catch-up stagger (paces spawns after downtime)
+    # 1626 -> 1600: the wanted-job-set derivation left for
+    # schedule_reconcile.py, and start()'s three hand-written registration
+    # blocks collapsed into one loop over it (266 -> 117 lines). That is what
+    # paid for reconcile learning to add and replace, rather than raising this.
+    # 1600 -> 1610: review round 1 added the row-refresh branch (a trigger can
+    # be unchanged while agent_schedules is not). Its bookkeeping went to
+    # schedule_reconcile.RowLedger; what is left here is the call site. This
+    # corrects a cap set hours earlier in the same PR, not a long-standing one,
+    # and is still 16 lines below where this module started.
+    "robothor/engine/scheduler.py": 1610,
+    # The job-set derivation reconcile and start() now share. Bounded from the
+    # day it lands: this is the module that would otherwise absorb every
+    # scheduling concern that does not fit in scheduler.py's cap.
+    # 300 -> 340: JobSpec.row() and RowLedger — the agent_schedules half of a
+    # spec, which decides whether the ROW needs rewriting where fingerprint()
+    # decides whether the JOB does. Conflating the two left a model-only edit
+    # reconciling to a no-op with a stale row; separating them is what kept the
+    # scheduler a call site rather than growing this logic there.
+    "robothor/engine/schedule_reconcile.py": 340,
+    # The bridge's agent builder. Not under robothor/, and that is the point:
+    # CAPS was a robothor/-only list, so the largest new file in the manifest-API
+    # change was unbounded while every engine file it touched was pinned to
+    # within 0.6%. The paths here are resolved against REPO_ROOT, so a crm/ entry
+    # costs nothing but the line — and one ratchet is right, because two copies
+    # of a guard drift and the drift is what nobody sees.
+    #
+    # 1,172 -> 1,049: the verdicts moved to _manifest_validation.py along a real
+    # seam (nothing there touches the filesystem, the engine or a request, which
+    # is what lets it take its inputs as parameters instead of importing the
+    # router's resolvers back).
+    "crm/bridge/routers/agent_manifests.py": 1060,
+    # 250 -> 260: `introduced` now carries the record of getting this wrong
+    # twice in opposite directions — keyed too loosely it missed an added
+    # fault, keyed too tightly it refused a partial repair — plus the per-fault
+    # loop that fixed it. Trimming to fit would mean deleting the explanation to
+    # satisfy a line count, which is the trade this repo has explicitly refused
+    # before (see runner.py's entry). The fix itself went UPSTREAM into
+    # CheckResult.faults rather than growing this file.
+    "crm/bridge/routers/_manifest_validation.py": 260,
 }
 
 

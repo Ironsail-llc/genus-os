@@ -126,7 +126,17 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
 # fleet's default model. Either one is enough on its own; a future "it is
 # tenant data, bridge:write covers it" entry would hand every member session
 # the ability to point the whole fleet at a model of their choosing.
-MUST_BE_GATED_PREFIXES = ("/api/vault", "/api/installed-agents", "/api/providers")
+#
+# ``/api/agent-manifests`` writes the files that decide which agents exist, what
+# model they dial, which tools they may call and when they fire. A member
+# session that reached it could give itself an agent with `exec` on the
+# appliance, so there is no tenant-scoping argument that could ever justify it.
+MUST_BE_GATED_PREFIXES = (
+    "/api/vault",
+    "/api/installed-agents",
+    "/api/providers",
+    "/api/agent-manifests",
+)
 
 
 def _all_routes() -> list[Any]:
@@ -190,14 +200,23 @@ EXPECTED_ROUTER_MODULES = frozenset(
         # so a mount that silently stopped contributing routes would take the
         # gate assertions on them with it and still leave the floor intact.
         "routers.providers",
+        # Manifest writes. Same reasoning: these are the only routes that decide
+        # which agents exist and what they may do, and a mount that stopped
+        # contributing them would leave both this floor and the per-route gate
+        # assertions vacuously green.
+        "routers.agent_manifests",
     }
 )
 
 
 def test_the_app_actually_exposes_mutation_routes() -> None:
     """Guard the guard: a partial enumeration would make every assertion vacuous."""
+    # 35 -> 60 (actual 63). The floor's whole job is to notice an enumeration
+    # collapse, and one set 28 routes below reality would have let nearly half
+    # the mutation surface disappear silently. Raise it whenever routes are
+    # added, the same way the module ratchets are kept tight.
     routes = _mutation_routes()
-    assert len(routes) >= 35, f"route enumeration collapsed — only found {len(routes)}"
+    assert len(routes) >= 60, f"route enumeration collapsed — only found {len(routes)}"
 
     seen = {route.endpoint.__module__ for route in routes}
     missing = EXPECTED_ROUTER_MODULES - seen

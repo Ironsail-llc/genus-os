@@ -37,7 +37,11 @@ KNOWN_LARGE: dict[str, int] = {
     # -29: every subsystem router mount extracted to _mount_subsystem_routers,
     # which is what made room for the /api/admin registration rather than
     # raising this number for it.
-    "health.py::create_health_app": 1448,
+    # 1448 -> 1431: the engine-wide auth middleware moved out to
+    # _install_engine_auth, which is what paid for threading the live scheduler
+    # onto the signature (POST /api/admin/scheduler/reconcile has to act on
+    # THIS process's job registry) instead of raising this number for it.
+    "health.py::create_health_app": 1431,
     "runner.py::execute": 990,  # +7: task_id propagated onto the run at INSERT time
     "runner.py::_run_loop": 775,
     # +12: run/tenant threaded onto the signature, and the do-not-contact
@@ -59,7 +63,9 @@ KNOWN_LARGE: dict[str, int] = {
     "telegram.py::_run_interactive": 384,
     "tools/handlers/benchmark.py::_benchmark_run": 370,
     "analytics.py::get_agent_stats": 343,
-    "daemon.py::_watchdog": 303,
+    # 303 -> 301: the reconcile reporting moved to _log_reconcile, which is
+    # what paid for reporting added/replaced as well as pruned.
+    "daemon.py::_watchdog": 301,
     "chat.py::plan_approve": 286,
     "compaction.py::compact": 276,
     # -7: rate-limit wait and the malformed-tool-call verdict extracted;
@@ -67,7 +73,11 @@ KNOWN_LARGE: dict[str, int] = {
     # re-roll spends `attempt`, and what skipping `_handle_model_error` costs)
     "llm_client.py::_call_llm": 267,
     "config.py::manifest_to_agent_config": 268,
-    "scheduler.py::start": 266,
+    # scheduler.py::start is gone from this list: 266 -> 116. The three
+    # hand-written registration blocks (heartbeat, worker, cron) became one
+    # loop over schedule_reconcile.agent_job_specs, which is also what
+    # reconcile consumes — the whole point of the extraction being that the
+    # engine derives its wanted job set ONCE.
     # 261 -> 247: the per-delta tool_use event emission moved to
     # _emit_tool_call_events, which more than paid for accumulating the
     # streamed reasoning_details litellm's stream_chunk_builder drops and for

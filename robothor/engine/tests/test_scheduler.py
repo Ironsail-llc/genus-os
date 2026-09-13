@@ -22,6 +22,18 @@ def _mock_tracking():
 
 
 @pytest.fixture
+def _no_schedule_row_writes():
+    """Reconcile records an ``agent_schedules`` row for every job it registers.
+
+    These tests are about the job registry, not Postgres. Without this the
+    upsert reaches a real connection and the warning it swallows is noise that
+    would hide a genuine failure.
+    """
+    with patch("robothor.engine.scheduler.upsert_schedule", return_value=True):
+        yield
+
+
+@pytest.fixture
 def heartbeat_manifest(tmp_path):
     """Write a manifest with a heartbeat section and return its directory."""
     manifest_dir = tmp_path / "docs" / "agents"
@@ -426,8 +438,9 @@ class TestStaleSchedulePruning:
         assert "worker" in active_ids
 
 
+@pytest.mark.usefixtures("_no_schedule_row_writes")
 class TestReconcileSchedules:
-    """reconcile_schedules() prunes orphaned DB rows and APScheduler jobs."""
+    """reconcile_schedules() adds, replaces and prunes DB rows and jobs."""
 
     def test_reconcile_prunes_stale_db_rows(self, no_heartbeat_manifest):
         """delete_stale_schedules is called with the correct active ID set."""
@@ -443,12 +456,12 @@ class TestReconcileSchedules:
 
         mock_delete = MagicMock(return_value=["supervisor"])
         with patch("robothor.engine.scheduler.delete_stale_schedules", mock_delete):
-            pruned = scheduler.reconcile_schedules()
+            result = scheduler.reconcile_schedules()
 
         mock_delete.assert_called_once()
         active_ids = mock_delete.call_args[0][0]
         assert "worker" in active_ids
-        assert "supervisor" in pruned
+        assert "supervisor" in result.pruned
 
     def test_reconcile_removes_stale_apscheduler_jobs(self, no_heartbeat_manifest):
         """Orphaned APScheduler jobs are removed; legitimate jobs are kept."""
@@ -472,11 +485,11 @@ class TestReconcileSchedules:
         scheduler.scheduler.get_jobs.return_value = [stale_job, legit_job]
 
         with patch("robothor.engine.scheduler.delete_stale_schedules", return_value=[]):
-            pruned = scheduler.reconcile_schedules()
+            result = scheduler.reconcile_schedules()
 
         stale_job.remove.assert_called_once()
         legit_job.remove.assert_not_called()
-        assert "supervisor" in pruned
+        assert "supervisor" in result.pruned
 
     def test_reconcile_keeps_worker_jobs(self, tmp_path):
         """Worker jobs (`{agent_id}:worker`) are part of active_ids and not pruned.
@@ -551,10 +564,10 @@ worker:
         scheduler.scheduler.get_jobs.return_value = [wf_job]
 
         with patch("robothor.engine.scheduler.delete_stale_schedules", return_value=[]):
-            pruned = scheduler.reconcile_schedules()
+            result = scheduler.reconcile_schedules()
 
         wf_job.remove.assert_not_called()
-        assert "workflow:daily-report" not in pruned
+        assert "workflow:daily-report" not in result.pruned
 
 
 class TestMisfireGraceTime:
@@ -1946,6 +1959,7 @@ def _job(job_id):
     return job
 
 
+@pytest.mark.usefixtures("_no_schedule_row_writes")
 class TestReconcileRefusesOnParseFailure:
     def test_reconcile_does_not_prune_when_a_manifest_fails_to_parse(self, _reconcile_manifests):
         """THE incident test.
@@ -1962,9 +1976,13 @@ class TestReconcileRefusesOnParseFailure:
 
         mock_delete = MagicMock(return_value=[])
         with patch("robothor.engine.scheduler.delete_stale_schedules", mock_delete):
-            pruned = scheduler.reconcile_schedules()
+            result = scheduler.reconcile_schedules()
 
-        assert pruned == []
+        assert result.pruned == []
+        # The other half of the interlock: a dirty scan may not ADD either.
+        assert result.added == []
+        assert result.replaced == []
+        assert result.clean is False
         mock_delete.assert_not_called()
         hb.remove.assert_not_called()
         worker_job.remove.assert_not_called()
@@ -1980,11 +1998,11 @@ class TestReconcileRefusesOnParseFailure:
         scheduler.scheduler.get_jobs = MagicMock(return_value=[stale, legit])
 
         with patch("robothor.engine.scheduler.delete_stale_schedules", MagicMock(return_value=[])):
-            pruned = scheduler.reconcile_schedules()
+            result = scheduler.reconcile_schedules()
 
         stale.remove.assert_called_once()
         legit.remove.assert_not_called()
-        assert "main:heartbeat" in pruned
+        assert "main:heartbeat" in result.pruned
 
     def test_reconcile_refuses_when_the_manifest_dir_is_unreadable(self, tmp_path):
         """One NFS hiccup or a stray chmod must not empty the job registry.
@@ -2004,13 +2022,16 @@ class TestReconcileRefusesOnParseFailure:
 
         mock_delete = MagicMock(return_value=[])
         with patch("robothor.engine.scheduler.delete_stale_schedules", mock_delete):
-            pruned = scheduler.reconcile_schedules()
+            result = scheduler.reconcile_schedules()
 
-        assert pruned == []
+        assert result.pruned == []
+        assert result.added == []
+        assert result.blocked == {"*": "manifest directory unreadable"}
         mock_delete.assert_not_called()
         hb.remove.assert_not_called()
 
 
+@pytest.mark.usefixtures("_no_schedule_row_writes")
 class TestReconcileKeepsSystemJobs:
     """Engine-owned infrastructure jobs are not agent schedules.
 
@@ -2031,10 +2052,11 @@ class TestReconcileKeepsSystemJobs:
         scheduler.scheduler.get_jobs = MagicMock(return_value=[system_job])
 
         with patch("robothor.engine.scheduler.delete_stale_schedules", MagicMock(return_value=[])):
-            pruned = scheduler.reconcile_schedules()
+            result = scheduler.reconcile_schedules()
 
         system_job.remove.assert_not_called()
-        assert job_id not in pruned
+        assert job_id not in result.pruned
+        assert job_id not in result.added + result.replaced
 
     def test_every_registered_job_id_is_agent_derived_or_system_prefixed(self):
         """Drift gate: the NEXT add_job must not re-introduce the bug.
@@ -2058,6 +2080,7 @@ class TestReconcileKeepsSystemJobs:
             )
 
 
+@pytest.mark.usefixtures("_no_schedule_row_writes")
 class TestReconcileAlwaysConsultsTheGuard:
     """The guard owns BOTH transitions, so it must be called unconditionally.
 

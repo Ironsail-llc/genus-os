@@ -32,7 +32,26 @@ BASIC_IO_TOOLS = {"exec", "read_file", "write_file"}
 
 
 class CheckResult:
-    """Result of a single validation check."""
+    """Result of a single validation check.
+
+    ``faults`` is the list of INDEPENDENT problems behind one result, one string
+    each. A check that finds three unregistered tool names is reporting three
+    faults, not one, and collapsing them into a single enumerated message makes
+    a caller unable to tell a partial repair from a new problem: dropping one of
+    the three changes the message, so the two that remain look introduced. The
+    Helm's agent builder refuses an edit on exactly that comparison, and it
+    refused a repair.
+
+    **Opt-in, never inferred.** It defaulted to ``details`` for one round, which
+    is right for the seven checks whose details are one string per problem and
+    wrong for the two whose details are prose — K keeps its computed list in the
+    MESSAGE and puts advice in details, so the list was thrown away; E puts two
+    lines of CONTEXT in details, so one problem became two findings and the
+    explanation was lost from both. A default that guesses right seven times out
+    of nine is what silently breaks the tenth, so it no longer guesses: a check
+    that enumerates says so, and an empty ``faults`` means "one result, one
+    problem — use the message".
+    """
 
     def __init__(self, check_id: str, name: str):
         self.check_id = check_id
@@ -40,17 +59,27 @@ class CheckResult:
         self.status = "PASS"
         self.message = ""
         self.details: list[str] = []
+        #: One string per independent problem, or empty for "this is one
+        #: problem". Set it wherever ``details`` enumerates; see the class
+        #: docstring for why it is not inferred from ``details``.
+        self.faults: list[str] = []
 
-    def fail(self, msg: str, details: list[str] | None = None) -> CheckResult:
+    def fail(
+        self, msg: str, details: list[str] | None = None, faults: list[str] | None = None
+    ) -> CheckResult:
         self.status = "FAIL"
         self.message = msg
         self.details = details or []
+        self.faults = list(faults or [])
         return self
 
-    def warn(self, msg: str, details: list[str] | None = None) -> CheckResult:
+    def warn(
+        self, msg: str, details: list[str] | None = None, faults: list[str] | None = None
+    ) -> CheckResult:
         self.status = "WARN"
         self.message = msg
         self.details = details or []
+        self.faults = list(faults or [])
         return self
 
     def skip(self, msg: str) -> CheckResult:
@@ -101,7 +130,7 @@ def check_schema_required(
         issues.append(f"department '{dept}' not in schema enum: {sorted(departments)}")
 
     if issues:
-        return result.fail("Schema violations (required)", issues)
+        return result.fail("Schema violations (required)", issues, faults=issues)
     return result
 
 
@@ -153,7 +182,7 @@ def check_structure(manifest: dict[str, Any], inherited_model: str = "") -> Chec
         )
 
     if issues:
-        return result.fail("Structure issues", issues)
+        return result.fail("Structure issues", issues, faults=issues)
     return result
 
 
@@ -179,8 +208,8 @@ def check_files(manifest: dict[str, Any], repo_root: Path) -> CheckResult:
     if issues:
         has_missing = any("not found" in i for i in issues)
         if has_missing:
-            return result.fail("Missing files", issues)
-        return result.warn("File issues", issues)
+            return result.fail("Missing files", issues, faults=issues)
+        return result.warn("File issues", issues, faults=issues)
     return result
 
 
@@ -206,11 +235,17 @@ def check_tools_registered(manifest: dict[str, Any], registered: set[str]) -> Ch
         agent_id = manifest.get("id", "")
         agent_adapters = get_adapters_for_agent(agent_id)
         if agent_adapters:
-            return result.warn(f"Unregistered tools (may be adapter-provided): {unknown}")
+            return result.warn(
+                f"Unregistered tools (may be adapter-provided): {unknown}",
+                faults=[f"unregistered tool: {name!r}" for name in unknown],
+            )
     except Exception:
         pass
 
-    return result.fail(f"Unknown tools in tools_allowed: {unknown}")
+    return result.fail(
+        f"Unknown tools in tools_allowed: {unknown}",
+        faults=[f"unknown tool in tools_allowed: {name!r}" for name in unknown],
+    )
 
 
 def check_status_file_tools(manifest: dict[str, Any]) -> CheckResult:
@@ -271,7 +306,7 @@ def check_relationships(manifest: dict[str, Any], all_manifests: dict[str, Any])
         issues.append(f"escalates_to '{escalates_to}' has no manifest")
 
     if issues:
-        return result.warn("Relationship targets incomplete", issues)
+        return result.warn("Relationship targets incomplete", issues, faults=issues)
     return result
 
 
@@ -283,7 +318,10 @@ def check_permission_coherence(manifest: dict[str, Any]) -> CheckResult:
     overlap = allowed & denied
 
     if overlap:
-        return result.warn(f"Tools in both allowed and denied: {sorted(overlap)}")
+        return result.warn(
+            f"Tools in both allowed and denied: {sorted(overlap)}",
+            faults=[f"tool in both allowed and denied: {name!r}" for name in sorted(overlap)],
+        )
     return result
 
 
@@ -296,7 +334,10 @@ def check_downstream(manifest: dict[str, Any], all_manifests: dict[str, Any]) ->
 
     invalid = [d for d in downstream if d not in all_manifests]
     if invalid:
-        return result.fail(f"Unknown downstream agents: {invalid}")
+        return result.fail(
+            f"Unknown downstream agents: {invalid}",
+            faults=[f"unknown downstream agent: {name!r}" for name in invalid],
+        )
     return result
 
 
@@ -315,7 +356,10 @@ def check_warmup_files(manifest: dict[str, Any], repo_root: Path) -> CheckResult
             missing.append(cf)
 
     if missing:
-        return result.warn(f"Warmup files not found (may be created at runtime): {missing}")
+        return result.warn(
+            f"Warmup files not found (may be created at runtime): {missing}",
+            faults=[f"warmup file not found: {name!r}" for name in missing],
+        )
     return result
 
 
@@ -356,7 +400,7 @@ def check_hooks(manifest: dict[str, Any]) -> CheckResult:
             issues.append(f"hooks[{i}]: missing 'event_type'")
 
     if issues:
-        return result.fail("Invalid hook entries", issues)
+        return result.fail("Invalid hook entries", issues, faults=issues)
     return result
 
 
@@ -377,6 +421,7 @@ def check_secret_refs(manifest: dict[str, Any]) -> CheckResult:
         return result.warn(
             f"Secret keys not in environment: {missing}",
             ["Keys may be loaded at runtime via EnvironmentFile — check secrets.env"],
+            faults=[f"secret key not in environment: {key!r}" for key in missing],
         )
     return result
 

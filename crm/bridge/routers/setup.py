@@ -65,6 +65,7 @@ from robothor.auth.tokens import TokenError
 from robothor.cli.agent import install_preset
 from robothor.setup_token import setup_complete
 from routers._audit import audited
+from routers.agent_manifests import reconcile_engine_schedules
 from routers.auth import BodyTooLarge, credential_body
 
 logger = logging.getLogger(__name__)
@@ -681,8 +682,13 @@ async def install_agents(request: Request, _gated: Ceremony, _claim: Claim) -> d
         installed=len(outcome["installed"]),
         failed=len(outcome["failed"]) or None,
     )
+    # The install wrote manifests; the engine is still holding the job set it
+    # derived at boot. Without this the wizard's last screen says the fleet is
+    # installed and not one agent fires until somebody restarts the process.
+    reconcile = await reconcile_engine_schedules()
     return {
         "preset": preset,
+        "reconcile": reconcile,
         "installed": outcome["installed"],
         # Ids only. The collected messages are exception strings and typically
         # carry an absolute path under `templates/agents/...`; the rest of this

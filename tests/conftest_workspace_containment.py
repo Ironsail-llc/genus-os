@@ -27,8 +27,12 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 #: What a test that escapes its workspace would overwrite. Shaped like the file
 #: the incident destroyed -- a manifest in ``docs/agents/`` -- so the guard
@@ -55,7 +59,9 @@ def _digest(path: Path) -> str | None:
 
 
 @pytest.fixture(autouse=True)
-def contained_workspace(tmp_path_factory, monkeypatch):
+def contained_workspace(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Path]:
     """Point every environment-resolved path at a throwaway, and prove it held.
 
     Autouse and unconditional. A test that genuinely needs a different
@@ -88,7 +94,7 @@ def contained_workspace(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture
-def env_workspace(contained_workspace):
+def env_workspace(contained_workspace: Path) -> Path:
     """The contained workspace, for a test that wants to assert on it."""
     return contained_workspace
 

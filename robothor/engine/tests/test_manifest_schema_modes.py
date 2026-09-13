@@ -399,10 +399,16 @@ class TestBrokenIsNotDeleted:
         scheduler.scheduler.get_jobs.return_value = [bob_job]
 
         mock_delete = MagicMock(return_value=[])
-        with patch("robothor.engine.scheduler.delete_stale_schedules", mock_delete):
-            pruned = scheduler.reconcile_schedules()
+        with (
+            patch("robothor.engine.scheduler.delete_stale_schedules", mock_delete),
+            patch("robothor.engine.scheduler.upsert_schedule", return_value=True),
+        ):
+            result = scheduler.reconcile_schedules()
 
-        assert pruned == []
+        assert result.pruned == []
+        # A dirty scan may not add a job either — the trigger it would use
+        # comes from a view of the fleet that is known to be incomplete.
+        assert result.added == []
         mock_delete.assert_not_called()
         bob_job.remove.assert_not_called()
 
@@ -420,8 +426,11 @@ class TestBrokenIsNotDeleted:
         scheduler.scheduler = MagicMock()
         scheduler.scheduler.get_jobs.return_value = [bob_job]
 
-        with patch("robothor.engine.scheduler.delete_stale_schedules", return_value=[]):
-            pruned = scheduler.reconcile_schedules()
+        with (
+            patch("robothor.engine.scheduler.delete_stale_schedules", return_value=[]),
+            patch("robothor.engine.scheduler.upsert_schedule", return_value=True),
+        ):
+            result = scheduler.reconcile_schedules()
 
-        assert pruned == ["bob"]
+        assert result.pruned == ["bob"]
         bob_job.remove.assert_called_once()

@@ -25,6 +25,8 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
+from robothor.sanitize import sanitize_log
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -65,12 +67,16 @@ def resolve_service_role(agent_id: str, declared: str | None) -> str:
     role = (declared or "").strip() or default_service_role()
     if role == ALLOW_ALL_ROLE and agent_id not in _warned:
         _warned.add(agent_id)
+        # Sanitized because `manifest_to_agent_config` — this function's only
+        # caller — is now reached from an HTTP body as well as from the
+        # manifest loader (POST /api/agent-manifests/validate), so the id here
+        # is not necessarily a filename stem any more.
         logger.warning(
             "Agent %s runs UNRESTRICTED: it declares no role, so it resolves to "
             "'%s', which migration 107 seeds as ('*', 'allow'). RBAC evaluates "
             "this agent and permits every tool. Set `role:` in its manifest, or "
             "move the whole fleet with %s.",
-            agent_id,
+            sanitize_log(agent_id),
             ALLOW_ALL_ROLE,
             DEFAULT_SERVICE_ROLE_ENV,
         )

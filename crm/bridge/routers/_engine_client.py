@@ -15,6 +15,7 @@ credential more authority than it had.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -22,6 +23,7 @@ import httpx
 
 from robothor.auth.tokens import issue_service_token
 from robothor.engine.auth import ENGINE_AUDIENCE
+from robothor.sanitize import sanitize_log
 from routers._operator import PLATFORM_TENANT
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,35 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 #: every proxied call, credential bodies included, into something httpx
 #: resolves somewhere nobody intended.
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
+
+
+#: The shape every engine path must have. The sibling of ``_ALLOWED_SCHEMES``,
+#: and newly load-bearing: paths used to be literals in this repo, and now the
+#: agent-manifest routes assemble one from an agent id a caller supplied. A
+#: path beginning ``//host`` or carrying a scheme, a query or a fragment would
+#: move the request to a different server, or past the engine's own
+#: ``/api/admin`` scope gate — neither of which is a thing a proxy should be
+#: able to be talked into. One check at the sink, so no caller has to remember.
+_SAFE_ENGINE_PATH = re.compile(r"/api/[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?")
+
+
+def _checked_path(path: str) -> str:
+    """Return *path* if it is a literal engine API path, else refuse.
+
+    ``.`` and ``..`` are rejected as whole segments and not left to the regex:
+    they are spelled out of characters the regex allows, and httpx NORMALISES
+    them before it dials — ``/api/admin/../../etc/passwd`` reaches the engine
+    as ``/etc/passwd``, which is outside every path ``engine/auth.py`` scopes.
+
+    Raises rather than answering the browser: every path here is constructed by
+    this repo's own code, so a value that fails this is a programming error,
+    and the same judgement ``engine_base_url`` already makes about a bad scheme.
+    """
+    if not _SAFE_ENGINE_PATH.fullmatch(path) or any(
+        segment in {".", ".."} for segment in path.split("/")
+    ):
+        raise ValueError("engine path must be a literal /api/... path")
+    return path
 
 
 def engine_base_url() -> str:
@@ -86,13 +117,18 @@ async def engine_request(
     than by re-raising, so a proxying route answers the browser with something
     actionable instead of a 500 and a traceback.
     """
-    url = f"{engine_base_url()}{path}"
+    url = f"{engine_base_url()}{_checked_path(path)}"
     headers = {"Authorization": f"Bearer {_engine_token()}"}
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.request(method, url, json=json, headers=headers)
     except httpx.HTTPError as exc:
-        logger.warning("Engine call %s %s failed: %s", method, path, type(exc).__name__)
+        # ``path`` is sanitized because it is no longer always a literal: the
+        # agent-manifest routes build one from an id the caller supplied, and a
+        # newline in a log argument forges records.
+        logger.warning(
+            "Engine call %s %s failed: %s", method, sanitize_log(path), type(exc).__name__
+        )
         return 502, {"error": "engine unavailable"}
 
     try:

@@ -455,10 +455,14 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
                 )
             )
         else:
+            # Sanitized because this function is no longer reached only from
+            # the manifest loader: POST /api/agent-manifests/validate hands it
+            # a document straight out of an HTTP body, so a hook entry
+            # containing a newline could forge log records.
             logger.warning(
                 "Invalid hook entry in %s (needs stream + event_type): %s",
-                manifest.get("id", "?"),
-                h,
+                _sanitize(manifest.get("id", "?")),
+                _sanitize(h),
             )
 
     # Parse heartbeat config
@@ -559,6 +563,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         model_primary=model.get("primary", ""),
         model_fallbacks=_with_last_resort(model.get("primary", ""), model.get("fallbacks", [])),
         cron_expr=schedule.get("cron", ""),
+        schedule_enabled=bool(schedule.get("enabled", True)),
         timezone=schedule.get("timezone", "America/New_York"),
         timeout_seconds=schedule.get("timeout_seconds", 600),
         max_iterations=schedule.get("max_iterations", 20),
