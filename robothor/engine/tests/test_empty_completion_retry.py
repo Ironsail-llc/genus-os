@@ -17,12 +17,24 @@ Only a response with neither text nor tool calls is empty.
 
 from __future__ import annotations
 
-from robothor.engine.llm_client import _is_empty_completion
+from robothor.engine.llm_attempts import describe_completion
+
+
+def _is_empty_completion(result) -> bool:
+    """The predicate this file pins, now read off the response's shape.
+
+    `llm_client._is_empty_completion` was replaced by
+    `llm_attempts.describe_completion(...).no_answer`, which reads the same
+    three fields and also says WHY a turn carried no answer (reasoning-only
+    versus a true provider empty). The six shapes below are unchanged: this is
+    the 2026-08-22 guard, and it still has to hold exactly.
+    """
+    return describe_completion(result).no_answer
 
 
 def _resp(content=None, tool_calls=None):
     msg = type("Msg", (), {"content": content, "tool_calls": tool_calls})()
-    choice = type("Choice", (), {"message": msg})()
+    choice = type("Choice", (), {"message": msg, "finish_reason": "stop"})()
     return type("Resp", (), {"choices": [choice]})()
 
 

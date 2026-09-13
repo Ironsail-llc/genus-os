@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.llm_attempts import is_attempt_step
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -91,6 +93,9 @@ async def _get_agent_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             for s in steps
         ],
         "step_count": len(steps),
+        # Rows written per retried LLM attempt, counted apart from the steps
+        # that are the agent's own work.
+        "llm_attempt_count": sum(1 for s in steps if is_attempt_step(s)),
     }
 
 
@@ -118,7 +123,16 @@ async def _classify_run_failure(args: dict[str, Any], ctx: ToolContext) -> dict[
 
     steps = await asyncio.to_thread(list_steps, run_id)
 
-    llm_steps = [s for s in steps if s.get("step_type") in ("llm_call", "llm_response")]
+    # An attempt row is one retried provider call, not a turn: counting them
+    # as llm_calls inflates the number the investigator agents reason about.
+    # They are reported separately under `llm_attempts_failed` so the retry is
+    # still visible, which is the whole point of writing them.
+    llm_steps = [
+        s
+        for s in steps
+        if s.get("step_type") in ("llm_call", "llm_response") and not is_attempt_step(s)
+    ]
+    failed_attempts = [s for s in steps if is_attempt_step(s)]
     llm_was_called = len(llm_steps) > 0
     last_step = steps[-1] if steps else None
 
@@ -154,6 +168,7 @@ async def _classify_run_failure(args: dict[str, Any], ctx: ToolContext) -> dict[
         "last_step_error": (last_step or {}).get("error_message"),
         "llm_was_called": llm_was_called,
         "total_llm_calls": len(llm_steps),
+        "llm_attempts_failed": len(failed_attempts),
         "total_steps": len(steps),
         "model_used": run.get("model_used"),
         "tokens_used": tokens_used,

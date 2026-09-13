@@ -422,8 +422,12 @@ class AgentSession:
             error_message=error_message,
         )
         self.run.steps.append(step)
-        if model and model not in self.run.models_attempted:
-            self.run.models_attempted.append(model)
+        # Deliberately NOT appended to ``models_attempted``: that column means
+        # "the models that actually served an LLM call" (detectors.py:879-881),
+        # and ``check_primary_model_unreached`` decides "reached" by membership
+        # alone. A primary that is dialled and always fails must never satisfy
+        # it, or the detector that catches a dead primary can never fire again.
+        # The failure is already fully described by this row.
         return step
 
     def record_tool_call(

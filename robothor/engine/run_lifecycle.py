@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 import logging
 from typing import Any
 
+from robothor.engine.llm_attempts import is_attempt_step
+
 # LLM dispatch/cost/streaming + the request-timeout constants now live in
 # llm_client.LLMClient (Phase A / Slice 1). AgentRunner delegates to an
 # instance of it; the historical method surface is preserved via thin
@@ -643,7 +645,14 @@ class RunLifecycleMixin:
                 verify_output,
             )
 
-            error_count = sum(1 for s in session.run.steps if s.error_message)
+            # Attempt rows are excluded: a retried LLM call that the same
+            # model then answered is latency, not a run error, and the default
+            # criteria ("… without errors") turns one into a failed verdict
+            # and a SECOND full agent loop. On event-triggered runs the
+            # reasoning-only retry is the common path, not an edge.
+            error_count = sum(
+                1 for s in session.run.steps if s.error_message and not is_attempt_step(s)
+            )
             result = await verify_output(
                 output_text or "",
                 agent_config.verification_prompt,

@@ -29,10 +29,9 @@ import pytest
 from robothor.engine import compaction, llm_client
 from robothor.engine.llm_attempts import (
     REASONING_ONLY_NUDGE,
-    REASONING_ONLY_RETRY_BUDGET,
     describe_completion,
 )
-from robothor.engine.llm_client import LLMClient, _is_empty_completion
+from robothor.engine.llm_client import _EFFORT_THINKING_SHARE, LLMClient
 from robothor.engine.model_breaker import ModelBreaker
 
 THINKING_MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
@@ -107,8 +106,8 @@ class TestDetection:
 
     def test_the_2026_08_22_guard_is_not_disarmed(self) -> None:
         """Content-blank with no reasoning is still empty."""
-        assert _is_empty_completion(_response(content="")) is True
-        assert _is_empty_completion(_response(content="hello")) is False
+        assert describe_completion(_response(content="")).no_answer is True
+        assert describe_completion(_response(content="hello")).no_answer is False
 
 
 # ─── the agent loop re-asks the same model ──────────────────────────────
@@ -138,7 +137,12 @@ async def test_reasoning_only_retries_the_same_model_with_a_lower_budget() -> No
     assert second.kwargs["thinking"]["budget_tokens"] < first.kwargs["thinking"]["budget_tokens"], (
         "an identical re-roll truncates identically"
     )
-    assert second.kwargs["thinking"]["budget_tokens"] == REASONING_ONLY_RETRY_BUDGET
+    # Strictly below the `low` rung's share, so the re-ask buys the ANSWER
+    # room rather than merely trying again.
+    assert (
+        second.kwargs["thinking"]["budget_tokens"]
+        <= _EFFORT_THINKING_SHARE["low"] * second.kwargs["max_tokens"]
+    )
     assert REASONING_ONLY_NUDGE in str(second.kwargs["messages"][-1])
 
 

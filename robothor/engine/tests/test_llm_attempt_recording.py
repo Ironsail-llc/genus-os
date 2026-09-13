@@ -18,6 +18,7 @@ its own step row with its own duration.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -63,6 +64,7 @@ def _response(
 
 @pytest.fixture(autouse=True)
 def _no_jitter_and_isolated_breaker(monkeypatch):
+    """Zero the backoff: a hand-advanced clock must not sleep for real."""
     monkeypatch.setattr(llm_client, "TRANSIENT_RETRY_JITTER_MIN", 0.0)
     monkeypatch.setattr(llm_client, "TRANSIENT_RETRY_JITTER_MAX", 0.0)
     fresh = ModelBreaker(on_open=None)
@@ -204,3 +206,158 @@ def test_the_success_outcome_is_named() -> None:
     """Both outcome names are public: the failed rows carry them verbatim."""
     assert OUTCOME_SUCCESS == "success"
     assert OUTCOME_EMPTY == "empty"
+
+
+# ─── the durations mean what they say (review I4) ───────────────────────
+
+
+class _Clock:
+    """A monotonic clock the provider stub advances by hand."""
+
+    def __init__(self) -> None:
+        self.t = 1_000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+@pytest.mark.asyncio
+async def test_the_success_row_does_not_cover_the_failed_attempt() -> None:
+    """§2.2's headline: `duration_ms` stops standing for the whole retry loop.
+
+    Pinned with a hand-advanced clock, because with mocks every real duration
+    is 0ms and the claim was true of nothing measurable — the first cut of
+    this fix could be reverted to `elapsed_ms` with the suite still green.
+    """
+    clock = _Clock()
+    err = Exception("HTTP 502")
+    err.status_code = 502
+
+    async def _acompletion(**_kwargs: Any) -> Any:
+        if not _acompletion.called:  # type: ignore[attr-defined]
+            _acompletion.called = True  # type: ignore[attr-defined]
+            clock.t += 5.0
+            raise err
+        clock.t += 0.5
+        return _response()
+
+    _acompletion.called = False  # type: ignore[attr-defined]
+
+    runner = _Runner()
+    session = AgentSession(agent_id="test-agent")
+    with (
+        patch("time.monotonic", clock),
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch("robothor.engine.llm_client.litellm.acompletion", new=_acompletion),
+    ):
+        _resp, _model, elapsed_ms, _msg = await runner._llm_call_and_record(
+            session, ["openrouter/primary"], [], None, set(), 0.3
+        )
+
+    failed, succeeded = [s for s in session.run.steps if s.step_type == StepType.LLM_CALL]
+    assert failed.duration_ms == 5_000
+    assert succeeded.duration_ms == 500, "the success row carries ITS attempt, not the loop"
+    assert elapsed_ms == 5_500, "the caller still sees the whole dispatch"
+
+
+# ─── the rows survive the failures they describe (review I2) ────────────
+
+
+@pytest.mark.asyncio
+async def test_attempt_rows_survive_a_spent_credential_raise() -> None:
+    """`_call_llm` re-raises on spent credit — the one failure with no row."""
+    spent = Exception("Insufficient credits: your account has no remaining balance")
+    spent.status_code = 402
+    runner = _Runner()
+    session = AgentSession(agent_id="test-agent")
+    with (
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch("robothor.engine.llm_client.litellm.acompletion", new=AsyncMock(side_effect=spent)),
+        pytest.raises(Exception, match="Insufficient credits"),
+    ):
+        await runner._llm_call_and_record(session, ["openrouter/only"], [], None, set(), 0.3)
+
+    rows = [s for s in session.run.steps if s.step_type == StepType.LLM_CALL]
+    assert rows, "the raise must not take the evidence with it"
+    assert "error_402" in (rows[0].error_message or "")
+
+
+# ─── one meaning for duration_ms on both paths (review I5) ──────────────
+
+
+class _Delta:
+    content = "hi"
+    tool_calls = None
+    reasoning_content = None
+
+
+class _Chunk:
+    choices = [SimpleNamespace(delta=_Delta(), finish_reason=None)]
+    usage = None
+
+
+class _Stream:
+    def __aiter__(self):
+        async def gen():
+            yield _Chunk()
+
+        return gen()
+
+
+@pytest.mark.asyncio
+async def test_the_streaming_path_times_the_attempt_too() -> None:
+    """`duration_ms` must not mean one thing streamed and another not.
+
+    Non-streaming times the provider attempt; streaming used to fall back to
+    the whole dispatch including `_prepare_llm_call`, so one column carried two
+    definitions depending on whether the run streamed.
+    """
+    clock = _Clock()
+
+    async def _prepare(*_args: Any, **_kwargs: Any) -> int:
+        clock.t += 30.0  # token counting / compaction check, before any call
+        return 100
+
+    async def _acompletion(**_kwargs: Any) -> Any:
+        clock.t += 2.0
+        return _Stream()
+
+    runner = _Runner()
+    session = AgentSession(agent_id="test-agent")
+    with (
+        patch("time.monotonic", clock),
+        patch.object(LLMClient, "_prepare_llm_call", new=_prepare),
+        patch("robothor.engine.llm_client.litellm.acompletion", new=_acompletion),
+        patch(
+            "robothor.engine.llm_client.litellm.stream_chunk_builder",
+            return_value=_response(),
+        ),
+    ):
+        await runner._llm_call_and_record(
+            session, ["openrouter/primary"], [], AsyncMock(), set(), 0.3
+        )
+
+    (row,) = [s for s in session.run.steps if s.step_type == StepType.LLM_CALL]
+    assert row.duration_ms == 2_000, "the provider attempt, not the prep before it"
+
+
+@pytest.mark.asyncio
+async def test_attempt_rows_survive_a_cancellation() -> None:
+    """A run-deadline cancel cuts straight through the recording line."""
+    err = Exception("HTTP 502")
+    err.status_code = 502
+    runner = _Runner()
+    session = AgentSession(agent_id="test-agent")
+    with (
+        patch.object(LLMClient, "_prepare_llm_call", new=AsyncMock(return_value=100)),
+        patch(
+            "robothor.engine.llm_client.litellm.acompletion",
+            new=AsyncMock(side_effect=[err, asyncio.CancelledError()]),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await runner._llm_call_and_record(session, ["openrouter/only"], [], None, set(), 0.3)
+
+    rows = [s for s in session.run.steps if s.step_type == StepType.LLM_CALL]
+    assert len(rows) == 1
+    assert "error_502" in (rows[0].error_message or "")

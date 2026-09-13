@@ -210,9 +210,40 @@ class LLMCallMixin:
         """
         start = time.monotonic()
         begin_attempts()
+        elapsed_ms = 0
+        success_ms = 0
 
-        if trace:
-            with trace.span("llm_call") as _span:
+        try:
+            if trace:
+                with trace.span("llm_call") as _span:
+                    response = await self._do_llm_call(
+                        session,
+                        models,
+                        tool_schemas,
+                        on_content,
+                        broken_models,
+                        temperature,
+                        on_stream_event=on_stream_event,
+                    )
+                    # GenAI semantic-convention attributes for OTel export.
+                    if response is not None:
+                        with contextlib.suppress(Exception):
+                            from robothor.engine.telemetry import gen_ai_attributes
+
+                            _usage = getattr(response, "usage", None)
+                            _finish = ""
+                            if getattr(response, "choices", None):
+                                _finish = getattr(response.choices[0], "finish_reason", "") or ""
+                            _span.attributes.update(
+                                gen_ai_attributes(
+                                    model=getattr(response, "model", None)
+                                    or (models[0] if models else ""),
+                                    input_tokens=getattr(_usage, "prompt_tokens", 0) or 0,
+                                    output_tokens=getattr(_usage, "completion_tokens", 0) or 0,
+                                    finish_reason=_finish,
+                                )
+                            )
+            else:
                 response = await self._do_llm_call(
                     session,
                     models,
@@ -222,39 +253,16 @@ class LLMCallMixin:
                     temperature,
                     on_stream_event=on_stream_event,
                 )
-                # GenAI semantic-convention attributes for OTel export.
-                if response is not None:
-                    with contextlib.suppress(Exception):
-                        from robothor.engine.telemetry import gen_ai_attributes
-
-                        _usage = getattr(response, "usage", None)
-                        _finish = ""
-                        if getattr(response, "choices", None):
-                            _finish = getattr(response.choices[0], "finish_reason", "") or ""
-                        _span.attributes.update(
-                            gen_ai_attributes(
-                                model=getattr(response, "model", None)
-                                or (models[0] if models else ""),
-                                input_tokens=getattr(_usage, "prompt_tokens", 0) or 0,
-                                output_tokens=getattr(_usage, "completion_tokens", 0) or 0,
-                                finish_reason=_finish,
-                            )
-                        )
-        else:
-            response = await self._do_llm_call(
-                session,
-                models,
-                tool_schemas,
-                on_content,
-                broken_models,
-                temperature,
-                on_stream_event=on_stream_event,
-            )
-
-        elapsed_ms = int((time.monotonic() - start) * 1000)
-        # Rows for the attempts that failed, and the duration of the one that
-        # did not — so the success row stops standing for the whole retry loop.
-        success_ms = record_attempt_steps(session, take_attempts()) or elapsed_ms
+        finally:
+            # `finally`, not the straight line: `_call_llm` RE-RAISES on a spent
+            # credential and a run-deadline cancellation cuts straight through
+            # here. Both are exactly the failures the attempt rows exist to
+            # describe, and on the straight-line version they produced zero
+            # rows and left the sink armed for the next call to drop.
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            # …and the duration of the attempt that worked, so the success row
+            # stops standing for the whole retry loop.
+            success_ms = record_attempt_steps(session, take_attempts()) or elapsed_ms
 
         # Touch stall watchdog — LLM responded, we're alive
         if self._active_watchdog:

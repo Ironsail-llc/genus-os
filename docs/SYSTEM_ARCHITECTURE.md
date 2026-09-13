@@ -164,22 +164,45 @@ knowing when reading `agent_run_steps` or the journal:
   `reasoning_only`, distinct from a true provider `empty` (no reasoning, no
   tool call). `compaction.py` does the same rather than walking its chain down
   to the local tier, which is how an 81k-token context once compacted to a
-  30-character summary. The thinking budget itself comes from the running
-  agent's `reasoning_effort` and is clamped so the answer keeps at least half
-  the completion; `temperature` is forced to 1.0 only for the Anthropic family,
-  which is the API that requires it.
+  30-character summary.
+- **The thinking budget is a share of the completion.** The running agent's
+  `reasoning_effort` picks the share (low 25% / medium 50% / high 75% / max
+  90%), capped so the answer always keeps `MIN_ANSWER_TOKENS`. A share, not a
+  token count: every `supports_thinking` model in the fleet requests the same
+  16,384 output, so absolute rungs all clamped to one number and three of the
+  four manifest settings reached the wire identically. `temperature` is forced
+  to 1.0 only for the Anthropic family, which is the API that requires it.
 - **Every attempt is recorded, not just the one that worked.** Each attempt
   writes its own `agent_run_steps` row with its own `duration_ms`; the failed
-  ones carry the outcome (`empty`, `reasoning_only`, `timeout`, `error_<status>`)
-  and the response's `finish_reason` and token counts in `error_message`.
-  Before this the surviving row's duration silently covered every retry and
-  every backoff, and a failed attempt left no row at all.
-- **Unattended triggers get the batch timeout.** `cron`, `workflow`, `event`
-  and `sub_agent` runs get `ROBOTHOR_LLM_TIMEOUT_BATCH` (300s) per model;
-  interactive triggers (`telegram`, `webchat`, `slack`) keep
-  `ROBOTHOR_LLM_TIMEOUT` (120s), because there a human is waiting. An
-  inbound-mail classification or a spawned sub-agent is as batch-shaped as a
-  cron, and capping those at 120s was the bulk of the fleet's timeouts.
+  ones carry the outcome (`empty`, `reasoning_only`, `reasoning_only_retry`,
+  `timeout`, `error_<status>`) and the response's `finish_reason` and token
+  counts in `error_message`. Before this the surviving row's duration silently
+  covered every retry and every backoff, and a failed attempt left no row at
+  all. `duration_ms` on an `llm_call` row means the **provider attempt** on both
+  the streaming and non-streaming paths — never the token-counting prep before
+  it — and the rows are written in a `finally`, so a spent credential or a
+  run-deadline cancellation keeps its evidence.
+- **An attempt row is telemetry, not a run error.** `record_llm_call` never
+  sets `error_message`, so an `llm_call` row that has one is an attempt row
+  (`llm_attempts.is_attempt_step`). They are excluded from the verifier's error
+  count, the goal judge's `tool_errors`, Buddy's error evidence, the
+  `total_llm_calls` / `request_count` turn counters, and from
+  `models_attempted` — that column means *the models that actually served*, and
+  the primary-model-dead detector decides "reached" by membership alone.
+- **Unattended triggers get the batch timeout, and retries share it.** `cron`,
+  `workflow`, `event` and `sub_agent` runs get `ROBOTHOR_LLM_TIMEOUT_BATCH`
+  (300s) per model; interactive triggers (`telegram`, `webchat`, `slack`, and
+  every other trigger by default) keep `ROBOTHOR_LLM_TIMEOUT` (120s), because
+  there a human is waiting. An inbound-mail classification or a spawned
+  sub-agent is as batch-shaped as a cron, and capping those at 120s was the
+  bulk of the fleet's timeouts. Every attempt on a model — the in-place retry
+  and the reasoning-only re-ask included — shares **one** allowance of that
+  length, so one dispatch is bounded by
+  `worst_case_dispatch_seconds(models, timeout)` and stays inside the 1800s
+  `thread_pool.PENDING_EXPIRY_SECONDS` a sub-agent turn is expected to fit in.
+  Inside a workflow step, `workflow_budget.bound_call_timeout` clamps the same
+  number again to what the workflow has left; the two compose — the workflow's
+  remaining budget can only ever lower the per-call allowance, never raise it.
 
 ---
 

@@ -42,17 +42,19 @@ logger = logging.getLogger(__name__)
 OUTCOME_SUCCESS: Final = "success"
 OUTCOME_EMPTY: Final = "empty"
 OUTCOME_REASONING_ONLY: Final = "reasoning_only"
+#: A reasoning-only reply the SAME model was immediately re-asked about, and
+#: which therefore cost latency and nothing else. Named apart from
+#: ``reasoning_only`` (which advanced the chain) because every consumer that
+#: asks "did this run go wrong?" must be able to tell a self-heal from a
+#: failure without parsing prose.
+OUTCOME_REASONING_ONLY_RETRY: Final = "reasoning_only_retry"
 OUTCOME_TIMEOUT: Final = "timeout"
 OUTCOME_ERROR: Final = "error"
 
-#: Thinking budget for the same-model re-ask after a reasoning-only reply.
-#: Deliberately the ``low`` rung of ``model_registry._REASONING_BUDGETS``: the
-#: previous turn proved this prompt reasons past its budget, so the re-ask has
-#: to buy the answer room, not merely try again.
-REASONING_ONLY_RETRY_BUDGET: Final = 2_000
-
 #: Reasoning effort for the same re-ask on paths that speak OpenAI's knob
-#: (compaction calls litellm directly and builds no thinking block).
+#: (compaction calls litellm directly and builds no thinking block). The agent
+#: loop reduces its own thinking budget instead — see
+#: ``llm_client._thinking_kwargs``.
 REASONING_ONLY_RETRY_EFFORT: Final = "low"
 
 REASONING_ONLY_NUDGE: Final = (
@@ -199,8 +201,14 @@ def note_outcome(
     *,
     shape: CompletionShape | None = None,
     error: BaseException | None = None,
+    self_healed: bool = False,
 ) -> None:
-    """Record the attempt that just finished. Diagnostics only — never raises."""
+    """Record the attempt that just finished. Diagnostics only — never raises.
+
+    ``self_healed`` marks a reasoning-only reply the caller is about to re-ask
+    on the same model, so the row says ``reasoning_only_retry`` rather than
+    ``reasoning_only``.
+    """
     duration_ms = max(0, int((time.monotonic() - started) * 1000))
     if error is not None:
         record_attempt(
@@ -213,15 +221,16 @@ def note_outcome(
         )
         return
     shape = shape if shape is not None else CompletionShape()
+    outcome = OUTCOME_REASONING_ONLY_RETRY if self_healed else shape.outcome
     record_attempt(
         LLMAttempt(
             model=model,
-            outcome=shape.outcome,
+            outcome=outcome,
             duration_ms=duration_ms,
             input_tokens=shape.input_tokens or 0,
             output_tokens=shape.output_tokens or 0,
             finish_reason=shape.finish_reason,
-            detail=None if shape.outcome == OUTCOME_SUCCESS else shape.describe(),
+            detail=None if outcome == OUTCOME_SUCCESS else shape.describe(),
         )
     )
 
@@ -232,6 +241,25 @@ def classify_error(error: BaseException) -> str:
         return OUTCOME_TIMEOUT
     status = getattr(error, "status_code", None)
     return f"{OUTCOME_ERROR}_{status}" if status else OUTCOME_ERROR
+
+
+def is_attempt_step(step: Any) -> bool:
+    """True for a failed-attempt row, in either a RunStep or a database row.
+
+    The invariant every consumer rests on: ``AgentSession.record_llm_call``
+    never sets ``error_message``, so an ``llm_call`` step that carries one was
+    written by ``record_llm_attempt`` and is telemetry about a retry — not a
+    step of the agent's work, not a turn, and NOT a run error. Counting these
+    as errors would hand the verifier and the goal judge a failure on the very
+    path this module exists to make visible (hostile review of #531, C1/I1).
+    """
+    if isinstance(step, dict):
+        step_type: Any = step.get("step_type")
+        error_message = step.get("error_message")
+    else:
+        step_type = getattr(step, "step_type", None)
+        error_message = getattr(step, "error_message", None)
+    return str(getattr(step_type, "value", step_type)) == "llm_call" and bool(error_message)
 
 
 def record_attempt_steps(session: AgentSession, attempts: list[LLMAttempt]) -> int:

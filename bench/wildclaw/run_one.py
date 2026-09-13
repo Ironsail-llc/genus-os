@@ -165,6 +165,8 @@ def main() -> int:
             fh.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
 
     _phase("transcript_written")
+    from robothor.engine.llm_attempts import is_attempt_step
+
     run = result["run"]
     usage = {
         "input_tokens": getattr(run, "input_tokens", 0) or 0,
@@ -172,7 +174,14 @@ def main() -> int:
         "cache_read_tokens": getattr(run, "cache_read_tokens", 0) or 0,
         "cache_write_tokens": getattr(run, "cache_creation_tokens", 0) or 0,
         "cost_usd": round(float(getattr(run, "total_cost_usd", 0.0) or 0.0), 4),
-        "request_count": len(getattr(run, "steps", []) or []),
+        # Retried LLM attempts get their own step rows; a published request
+        # count that includes them is no longer a turn count.
+        "request_count": sum(
+            1 for s in (getattr(run, "steps", []) or []) if not is_attempt_step(s)
+        ),
+        "llm_attempts_failed": sum(
+            1 for s in (getattr(run, "steps", []) or []) if is_attempt_step(s)
+        ),
         "elapsed_time": round(result["elapsed"], 2),
         "status": str(getattr(getattr(run, "status", ""), "value", "") or "error"),
         "model_used": getattr(run, "model_used", "") or "",

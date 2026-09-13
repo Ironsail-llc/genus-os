@@ -28,6 +28,31 @@ describe("RunsView", () => {
     expect(block.className).toMatch(/warning/i);
   });
 
+  it("marks a retried LLM attempt as an attempt, not a second call", async () => {
+    vi.spyOn(global, "fetch").mockImplementation((url: string | URL | Request) => {
+      const u = String(url);
+      if (u.endsWith("/api/runs")) {
+        return Promise.resolve({ ok: true, json: async () => [
+          { id: "r1", agent_id: "main", status: "completed" },
+        ] } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({
+        run: { id: "r1", agent_id: "main", status: "completed" },
+        steps: [
+          { step_number: 1, step_type: "llm_call", error_message: "reasoning_only_retry: finish_reason=length" },
+          { step_number: 2, step_type: "llm_call" },
+        ],
+        guardrail_events: [],
+      }) } as Response);
+    });
+    render(<RunsView visible />);
+    fireEvent.click(await screen.findByTestId("run-row-r1"));
+    const marker = await screen.findByTestId("attempt-1");
+    expect(marker.textContent).toMatch(/attempt failed/i);
+    expect(marker.textContent).toMatch(/reasoning_only_retry/);
+    expect(screen.queryByTestId("attempt-2")).toBeNull();
+  });
+
   it("does not fetch when hidden", () => {
     const spy = vi.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => [] } as Response);
     render(<RunsView visible={false} />);

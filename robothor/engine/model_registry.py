@@ -875,6 +875,16 @@ def set_reasoning_effort(effort: str) -> None:
     _reasoning_effort_ctx.set(effort or "medium")
 
 
+def current_reasoning_effort() -> str:
+    """The reasoning effort of the current run (``medium`` by default).
+
+    The EFFORT, not a token count: a thinking budget only means something
+    against the ``max_tokens`` of the call it rides on, and that is known to
+    the kwargs builder, not here. See ``llm_client._thinking_budget``.
+    """
+    return _reasoning_effort_ctx.get()
+
+
 def current_thinking_budget() -> int:
     """Thinking-token budget for the current run's reasoning effort."""
     return reasoning_budget_tokens(_reasoning_effort_ctx.get())

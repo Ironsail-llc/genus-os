@@ -184,9 +184,18 @@ class TestAnOwnWatchdogKillStillReturns:
         """
         agent_config.stall_timeout_seconds = 1
 
+        # A FAST provider failure, not a hang. 2026-09-13: every attempt on a
+        # model now shares one time allowance, so a call that burns the whole
+        # allowance gets no in-place retry — and the retry's backoff was the
+        # idle window this test used to stall in. A 502 that returns
+        # immediately leaves the allowance intact, the retry happens, and the
+        # watchdog fires in its backoff exactly as it always did. The branch
+        # under test (an own-watchdog kill returns a run) is unchanged.
+        transient = Exception("HTTP 502")
+        transient.status_code = 502
+
         async def slow_completion(**kwargs):
-            await asyncio.sleep(30)
-            return _response()
+            raise transient
 
         # The watchdog polls every 30s by default, which races pytest-timeout
         # and would make this test about scheduling rather than about the
