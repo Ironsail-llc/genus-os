@@ -619,6 +619,49 @@ class TestAskUserTool:
         assert store.rows["q-1"].target == WEBCHAT_USER
 
     @pytest.mark.asyncio
+    async def test_an_unknown_detail_prefix_yields_no_target(self, store, monkeypatch):
+        """The PREFIX half of the guard, pinned on its own.
+
+        ``_webchat_target`` checks two things — a prefix a webchat run actually
+        writes, and the ``:user:`` segment — and a test that only ever feeds it
+        well-formed keys proves one of them. Here the key is perfectly
+        webchat-shaped and the prefix is not one of the four, so the answer must
+        be "no target": a detail this code does not recognise is not a licence to
+        read an id out of the middle of it.
+        """
+        from robothor.engine.tools.handlers import ask_user as module
+
+        monkeypatch.setattr(
+            module.tracking,
+            "get_run",
+            lambda run_id: _run_row("webchat", f"canvas:agent:main:user:{WEBCHAT_USER}"),
+        )
+        channel = _RowIdChannel(answer=None)
+        with patch("robothor.engine.channels.get_channel", return_value=channel):
+            await _handler()({"question": "Which vendor?"}, _ctx())
+
+        assert store.rows["q-1"].target == ""
+
+    @pytest.mark.asyncio
+    async def test_a_webchat_prefix_without_a_user_segment_yields_no_target(
+        self, store, monkeypatch
+    ):
+        """And the SEGMENT half, with a prefix that IS in the set. Between this
+        and the test above, dropping either check reddens exactly one of them."""
+        from robothor.engine.tools.handlers import ask_user as module
+
+        monkeypatch.setattr(
+            module.tracking,
+            "get_run",
+            lambda run_id: _run_row("webchat", "plan-exec:agent:main:primary"),
+        )
+        channel = _RowIdChannel(answer=None)
+        with patch("robothor.engine.channels.get_channel", return_value=channel):
+            await _handler()({"question": "Which vendor?"}, _ctx())
+
+        assert store.rows["q-1"].target == ""
+
+    @pytest.mark.asyncio
     async def test_a_telegram_shaped_detail_is_not_read_as_a_webchat_target(
         self, store, monkeypatch
     ):
