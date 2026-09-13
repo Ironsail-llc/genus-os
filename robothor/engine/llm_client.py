@@ -42,6 +42,13 @@ import litellm
 from robothor.engine.codex_provider import CodexProviderError, is_codex_model
 from robothor.engine.codex_provider import acompletion as codex_acompletion
 from robothor.engine.key_pool import KeyPool, Retirement, env_var_for_model, keys_from_env
+from robothor.engine.llm_attempts import (
+    REASONING_ONLY_NUDGE,
+    REASONING_ONLY_RETRY_BUDGET,
+    CompletionShape,
+    describe_completion,
+    note_outcome,
+)
 from robothor.engine.metrics import LLM_CALL_DURATION, LLM_CALLS_TOTAL, LLM_TOKENS_TOTAL
 from robothor.engine.model_breaker import _current_run_id_var, get_model_breaker
 from robothor.engine.reasoning_replay import (
@@ -114,7 +121,15 @@ LLM_REQUEST_TIMEOUT_OLLAMA = 600
 
 # Trigger types whose runs are batch-shaped (no human waiting on the reply)
 # and therefore get LLM_REQUEST_TIMEOUT_BATCH per model.
-_BATCH_TRIGGER_TYPES = frozenset({"cron", "workflow"})
+#
+# `event` and `sub_agent` joined 2026-09-13 (DIAG §4.3). They were carrying 76
+# of the 86 timeout-straddling steps in a two-day window while capped at 120s:
+# an email-classifier run fired by an inbound mail, or a sub-agent spawned by
+# crm-dedup, is exactly as unattended as a cron. The 300s constant, the
+# plumbing and the rationale above all already existed — only the membership
+# was wrong. Interactive triggers (telegram/webchat/slack) keep the 120s
+# default, because there a human IS waiting.
+_BATCH_TRIGGER_TYPES = frozenset({"cron", "workflow", "event", "sub_agent"})
 
 # Marker prepended to engine-injected context when it is rewritten from the
 # ``developer`` role to a user turn (Anthropic-family models only — see
@@ -127,6 +142,13 @@ ENGINE_CONTEXT_PREFIX = "[engine] "
 # re-hit instantly. A transient 502 used to burn the model's only attempt and
 # exhaust the whole chain within minutes.
 TRANSIENT_RETRIES_PER_MODEL = 1
+
+# One re-ask per model after a reasoning-only reply (DIAG 2026-09-13 §4.1),
+# counted separately from the transient budget above: a thinking model that
+# spent its budget before the answer started is not a flaky provider, and the
+# re-ask carries DIFFERENT kwargs (a smaller budget and a nudge), so spending
+# the transient retry on it would leave a genuine 502 with nothing.
+REASONING_ONLY_RE_ASKS_PER_MODEL = 1
 TRANSIENT_RETRY_JITTER_MIN = 2.0
 TRANSIENT_RETRY_JITTER_MAX = 5.0
 _TRANSIENT_RETRY_STATUSES = frozenset({500, 502, 503, 504})
@@ -389,17 +411,129 @@ def _is_empty_completion(result: Any) -> bool:
     tool-using turn and must never be treated as empty -- retrying those would
     re-issue side-effectful calls. Anything we cannot parse is reported
     non-empty, so an unfamiliar response shape can never drive a retry loop.
+
+    Kept as the plain content-level predicate. The CAUSE of an answerless turn
+    -- a provider empty versus a thinking model that spent its budget before
+    the answer started -- is ``llm_attempts.describe_completion``, and the two
+    are handled differently in ``_call_llm`` (DIAG 2026-09-13 §4.1).
     """
-    try:
-        message = result.choices[0].message
-    except (AttributeError, IndexError, TypeError):
-        return False
-    if getattr(message, "tool_calls", None):
-        return False
-    content = getattr(message, "content", None)
-    if content is None:
+    return describe_completion(result).no_answer
+
+
+#: Answer room a thinking block must leave inside ``max_tokens``. Reasoning
+#: tokens count against the SAME ceiling on OpenRouter, so a turn that spends
+#: its budget before content starts comes back reasoning-only with
+#: ``finish_reason=length`` — measured 2026-09-13 as ~47 wasted generations a
+#: day, a median of 8s each. Nothing compared the two numbers before this.
+MIN_ANSWER_TOKENS = 4_096
+
+#: Anthropic rejects a thinking block below 1,024 tokens. An answer budget too
+#: small to host one gets no thinking block at all rather than an invalid one.
+MIN_THINKING_BUDGET = 1_024
+
+
+def _thinking_kwargs(
+    model: str,
+    max_tokens: int,
+    *,
+    budget_override: int | None = None,
+) -> dict[str, Any]:
+    """The thinking block for one call, sized against the answer it leaves room for.
+
+    ``budget_override`` is the re-ask after a reasoning-only reply; otherwise
+    the budget is the running agent's own ``reasoning_effort``
+    (``model_registry.current_thinking_budget``, set per run at
+    ``runner.py:628-630``). Until 2026-09-13 this read the bare
+    ``THINKING_BUDGET_TOKENS`` constant, so the per-agent setting reached
+    nothing and every agent on the fleet reasoned at ``medium``.
+
+    ``temperature`` is forced only for the Anthropic family, which is what the
+    API that requires it actually is. The comment saying so outlived its code
+    when ``supports_thinking`` was extended past Anthropic, and the fleet's
+    dedup and classification work has been sampling at maximum entropy since.
+    """
+    from robothor.engine.model_registry import current_thinking_budget
+
+    wanted = budget_override if budget_override is not None else current_thinking_budget()
+    # Two rules, whichever binds harder: the answer never gets less than half
+    # the completion, and it gets MIN_ANSWER_TOKENS outright wherever the
+    # ceiling is large enough to give them. On the fleet's 16,384 default that
+    # is 8,192 of thinking — where the unclamped `medium` budget was 10,000,
+    # i.e. 61% of the completion with nothing comparing the two numbers.
+    ceiling = max_tokens // 2
+    if max_tokens - MIN_ANSWER_TOKENS >= MIN_THINKING_BUDGET:
+        ceiling = min(ceiling, max_tokens - MIN_ANSWER_TOKENS)
+    budget = min(wanted, ceiling)
+    if budget < MIN_THINKING_BUDGET:
+        logger.debug(
+            "no thinking block for %s: max_tokens=%d leaves no usable budget",
+            _sanitize(model),
+            max_tokens,
+        )
+        return {}
+    block: dict[str, Any] = {"thinking": {"type": "enabled", "budget_tokens": budget}}
+    if LLMClient._is_anthropic_family(model):
+        block["temperature"] = 1.0  # Anthropic rejects thinking at any other value
+    return block
+
+
+def _spent_credit_leaves_someone_reachable(
+    models: list[str],
+    position: int,
+    model: str,
+    model_var: str | None,
+    dead_credentials: set[str],
+) -> bool:
+    """Record a spent credential and say whether the chain can still answer.
+
+    Every model sharing this credential will fail the same way, so they are
+    skipped rather than tried. But a model on a DIFFERENT credential — or none
+    at all, like the local ollama tier — is unaffected, and raising strands it.
+    On 2026-08-26 that is exactly what happened: main's chain ended in a local
+    Qwen that was up and answering in 9.8s, and a spent OpenRouter key meant
+    the chain never reached it.
+
+    True → fall through to the next reachable model. False → nobody can answer.
+    """
+    if model_var is not None:
+        dead_credentials.add(model_var)
+    # `position`, not models.index(model): a chain may list the same model
+    # twice, and the first index points behind the cursor at models already
+    # tried.
+    reachable = [
+        m
+        for m in models[position + 1 :]
+        if (v := env_var_for_model(m)) is None or v not in dead_credentials
+    ]
+    if reachable:
+        logger.warning(
+            "Model %s: the account's credit is exhausted — skipping every "
+            "model on the same key and falling through to %s.",
+            _sanitize(model),
+            _sanitize(reachable[0]),
+        )
         return True
-    return isinstance(content, str) and not content.strip()
+    logger.error(
+        "Model %s: the account's credit is exhausted — no model on this key "
+        "can answer. Top up or raise the limit; this is not a model failure.",
+        _sanitize(model),
+    )
+    return False
+
+
+def _log_reasoning_only(model: str, shape: CompletionShape) -> None:
+    """Name the reasoning-only case distinctly from a provider empty.
+
+    They read identically in the journal otherwise, which is how ~47 of 50
+    "returned no content" events a day went a week without a diagnosis.
+    """
+    logger.warning(
+        "Model %s returned reasoning_only (%s) — re-asking the same model once "
+        "with a %d-token thinking budget and a nudge for the answer",
+        _sanitize(model),
+        _sanitize(shape.describe()),
+        REASONING_ONLY_RETRY_BUDGET,
+    )
 
 
 def _is_transient_model_error(e: BaseException) -> bool:
@@ -1214,12 +1348,19 @@ class LLMClient:
         *,
         stream: bool = False,
         request_timeout: float | None = None,
+        thinking_budget: int | None = None,
+        nudge: str | None = None,
     ) -> dict[str, Any]:
         """Build kwargs dict for litellm.acompletion.
 
         ``request_timeout`` overrides the HTTP-level timeout so it stays in
         step with the caller's per-call ``asyncio.timeout`` budget (e.g. the
         batch timeout for cron/workflow runs).
+
+        ``thinking_budget`` and ``nudge`` are the re-ask after a reasoning-only
+        reply (DIAG 2026-09-13 §4.1): a smaller thinking budget and one extra
+        user turn asking for the answer, because an identical re-roll truncates
+        identically.
         """
         from robothor.engine.model_registry import (
             get_model_limits,
@@ -1294,6 +1435,11 @@ class LLMClient:
         # proxied Anthropic rejects with "model does not support prefill".
         messages = LLMClient._guard_trailing_assistant(messages)
 
+        if nudge:
+            # Appended after every hygiene pass so it cannot be hoisted out of
+            # the list or stripped as engine context.
+            messages = [*messages, {"role": "user", "content": nudge}]
+
         kwargs: dict[str, Any] = {
             "model": actual_model,
             "messages": messages,
@@ -1350,13 +1496,9 @@ class LLMClient:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
         if limits.supports_thinking:
-            from robothor.engine.model_registry import THINKING_BUDGET_TOKENS
-
-            kwargs["temperature"] = 1.0  # Required by Anthropic API
-            kwargs["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": THINKING_BUDGET_TOKENS,
-            }
+            kwargs.update(
+                _thinking_kwargs(model, kwargs["max_tokens"], budget_override=thinking_budget)
+            )
         return kwargs
 
     # ─── Model error handling ────────────────────────────────────────
@@ -1611,9 +1753,15 @@ class LLMClient:
             )
             rotations_left = (len(pool) - 1) if pool is not None else 0
             malformed_retries_left = MALFORMED_TOOL_ARGS_RETRIES
+            re_asks_left = REASONING_ONLY_RE_ASKS_PER_MODEL
+            # Set only for the re-ask after a reasoning-only reply.
+            thinking_budget: int | None = None
+            nudge: str | None = None
             attempt = 0
             while attempt < attempts:
                 attempt_key = None
+                attempt_started = time.monotonic()
+                noted = False
                 try:
                     kwargs = self._build_llm_kwargs(
                         model,
@@ -1622,6 +1770,8 @@ class LLMClient:
                         input_est,
                         temperature,
                         request_timeout=per_call_timeout,
+                        thinking_budget=thinking_budget,
+                        nudge=nudge,
                     )
                     if pool is not None:
                         # Bound per attempt so the failure handler retires the
@@ -1643,16 +1793,33 @@ class LLMClient:
                                     messages=kwargs.get("messages", []),
                                     kwargs=kwargs,
                                 )
-                    if _is_empty_completion(result):
+                    shape = describe_completion(result)
+                    note_outcome(model, attempt_started, shape=shape)
+                    noted = True
+                    if shape.no_answer:
+                        if shape.reasoning_only and re_asks_left > 0:
+                            re_asks_left -= 1
+                            thinking_budget = REASONING_ONLY_RETRY_BUDGET
+                            nudge = REASONING_ONLY_NUDGE
+                            _log_reasoning_only(model, shape)
+                            # Deliberately does not advance `attempt`: this is a
+                            # different request, not a re-roll of a flaky one.
+                            continue
                         # Not a finished answer. Raising routes this into the
                         # transient-retry path below rather than returning a
                         # run that silently produced nothing.
-                        raise EmptyCompletionError(f"{model} returned no content and no tool call")
+                        raise EmptyCompletionError(
+                            f"{model} returned no content and no tool call ({shape.describe()})"
+                        )
                     breaker.record_success(model)
                     _record_execution_mode(model)
                     return result
                 except Exception as e:
                     last_error = e
+                    # `noted` is already True when the response itself was the
+                    # failure (an empty), so it is never counted twice.
+                    if not noted:
+                        note_outcome(model, attempt_started, error=e)
                     is_timeout = isinstance(e, TimeoutError)
                     # A spent budget is not a busy provider: no wait fixes it,
                     # and every other model on the same key fails identically.
@@ -1683,41 +1850,11 @@ class LLMClient:
                             # swap is not a retry of a flaky provider.
                             continue
                     if spent:
-                        # Every model sharing this credential will fail the
-                        # same way, so they are skipped rather than tried.
-                        # But a model on a DIFFERENT credential — or none at
-                        # all, like the local ollama tier — is unaffected,
-                        # and raising here strands it. On 2026-08-26 that is
-                        # exactly what happened: main's chain ended in a
-                        # local Qwen that was up and answering in 9.8s, and
-                        # a spent OpenRouter key meant the chain never
-                        # reached it.
-                        if model_var is not None:
-                            dead_credentials.add(model_var)
-                        # `position`, not models.index(model): a chain may list
-                        # the same model twice, and the first index points
-                        # behind the cursor at models already tried.
-                        reachable = [
-                            m
-                            for m in models[position + 1 :]
-                            if (v := env_var_for_model(m)) is None or v not in dead_credentials
-                        ]
-                        if reachable:
-                            logger.warning(
-                                "Model %s: the account's credit is exhausted — "
-                                "skipping every model on the same key and "
-                                "falling through to %s.",
-                                _sanitize(model),
-                                _sanitize(reachable[0]),
-                            )
-                            break
-                        logger.error(
-                            "Model %s: the account's credit is exhausted — no "
-                            "model on this key can answer. Top up or raise the "
-                            "limit; this is not a model failure.",
-                            _sanitize(model),
-                        )
-                        raise
+                        if not _spent_credit_leaves_someone_reachable(
+                            models, position, model, model_var, dead_credentials
+                        ):
+                            raise
+                        break
                     if is_malformed_tool_arguments(e):
                         if malformed_retries_left > 0:
                             malformed_retries_left -= 1

@@ -161,7 +161,19 @@ def test_timeout_defaults():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("trigger", [TriggerType.CRON, TriggerType.WORKFLOW])
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        TriggerType.CRON,
+        TriggerType.WORKFLOW,
+        # Added 2026-09-13 (DIAG 4.3): `event` and `sub_agent` carried 76 of
+        # the 86 timeout-straddling steps in a two-day window — an inbound-mail
+        # classification and a spawned sub-agent have no human on the other end
+        # and are exactly as batch-shaped as a cron, but were capped at 120s.
+        TriggerType.EVENT,
+        TriggerType.SUB_AGENT,
+    ],
+)
 async def test_batch_triggers_get_batch_timeout(client, trigger):
     session = AgentSession(agent_id="test-agent", trigger_type=trigger)
     inner = AsyncMock(return_value=None)
@@ -171,8 +183,10 @@ async def test_batch_triggers_get_batch_timeout(client, trigger):
 
 
 @pytest.mark.asyncio
-async def test_interactive_trigger_keeps_default_timeout(client):
-    session = AgentSession(agent_id="test-agent", trigger_type=TriggerType.TELEGRAM)
+@pytest.mark.parametrize("trigger", [TriggerType.TELEGRAM, TriggerType.WEBCHAT, TriggerType.SLACK])
+async def test_interactive_trigger_keeps_default_timeout(client, trigger):
+    """A human is waiting on these: 120s, unchanged."""
+    session = AgentSession(agent_id="test-agent", trigger_type=trigger)
     inner = AsyncMock(return_value=None)
     with patch.object(LLMClient, "_call_llm", new=inner):
         await client._do_llm_call(session, ["openrouter/m"], [], None, set(), 0.3)

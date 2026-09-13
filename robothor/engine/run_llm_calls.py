@@ -29,6 +29,11 @@ from typing import Any
 # llm_client.LLMClient (Phase A / Slice 1). AgentRunner delegates to an
 # instance of it; the historical method surface is preserved via thin
 # delegators/aliases below so existing call sites keep working unchanged.
+from robothor.engine.llm_attempts import (  # noqa: E402
+    begin_attempts,
+    record_attempt_steps,
+    take_attempts,
+)
 from robothor.engine.llm_client import LLMClient  # noqa: E402
 from robothor.engine.reasoning_replay import (  # noqa: E402
     PRODUCER_MODEL_KEY,
@@ -194,8 +199,17 @@ class LLMCallMixin:
         trace: Any = None,
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> tuple[Any, str, int, dict[str, Any]]:
-        """Make an LLM call, record it in session, return (response, model, ms, msg_dict)."""
+        """Make an LLM call, record it in session, return (response, model, ms, msg_dict).
+
+        Every ATTEMPT the dispatch made gets its own ``agent_run_steps`` row —
+        the failed ones carry their outcome in ``error_message``. Before that
+        (DIAG 2026-09-13 §2.2) only the final success was recorded and its
+        ``duration_ms`` silently covered every retry and every backoff, so the
+        empty completion the fleet re-rolled ~50 times a day left no trace in
+        the database at all.
+        """
         start = time.monotonic()
+        begin_attempts()
 
         if trace:
             with trace.span("llm_call") as _span:
@@ -238,6 +252,9 @@ class LLMCallMixin:
             )
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
+        # Rows for the attempts that failed, and the duration of the one that
+        # did not — so the success row stops standing for the whole retry loop.
+        success_ms = record_attempt_steps(session, take_attempts()) or elapsed_ms
 
         # Touch stall watchdog — LLM responded, we're alive
         if self._active_watchdog:
@@ -305,7 +322,7 @@ class LLMCallMixin:
             output_tokens=output_tokens,
             cache_creation_tokens=cache_creation_tokens,
             cache_read_tokens=cache_read_tokens,
-            duration_ms=elapsed_ms,
+            duration_ms=success_ms,
             assistant_message=msg_dict,
         )
 

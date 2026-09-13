@@ -75,7 +75,11 @@ KNOWN_LARGE: dict[str, int] = {
     # -7: rate-limit wait and the malformed-tool-call verdict extracted;
     # +4: review-requested comments on the malformed-tool-call branch (why the
     # re-roll spends `attempt`, and what skipping `_handle_model_error` costs)
-    "llm_client.py::_call_llm": 267,
+    # 267 -> 260: the spent-credential verdict left for
+    # _spent_credit_leaves_someone_reachable, which is what paid for the
+    # reasoning-only re-ask and the per-attempt telemetry (DIAG 2026-09-13
+    # §4.1/§4.4) rather than raising this number for them.
+    "llm_client.py::_call_llm": 262,
     "config.py::manifest_to_agent_config": 268,
     # scheduler.py::start is gone from this list: 266 -> 116. The three
     # hand-written registration blocks (heartbeat, worker, cron) became one

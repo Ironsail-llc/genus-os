@@ -150,6 +150,37 @@ deployment are separate human-approved operations.
 | Kimi K2.5 | Triage worker, cron agent jobs |
 | Claude Opus 4.6 | Fallback for agent work, Claude Code sessions |
 
+### Model Dispatch (`robothor/engine/llm_client.py`)
+
+Every agent turn walks a fallback chain, and each model in it gets one in-place
+retry before the chain advances. Three properties of that loop are worth
+knowing when reading `agent_run_steps` or the journal:
+
+- **A reasoning-only reply is not an empty one.** A thinking model that spends
+  its budget before the answer starts returns blank `content` with
+  `reasoning_content` / `reasoning_details` on the message. That is re-asked
+  **once on the same model** with a smaller thinking budget and a nudge for the
+  answer — an identical re-roll truncates identically — and logged as
+  `reasoning_only`, distinct from a true provider `empty` (no reasoning, no
+  tool call). `compaction.py` does the same rather than walking its chain down
+  to the local tier, which is how an 81k-token context once compacted to a
+  30-character summary. The thinking budget itself comes from the running
+  agent's `reasoning_effort` and is clamped so the answer keeps at least half
+  the completion; `temperature` is forced to 1.0 only for the Anthropic family,
+  which is the API that requires it.
+- **Every attempt is recorded, not just the one that worked.** Each attempt
+  writes its own `agent_run_steps` row with its own `duration_ms`; the failed
+  ones carry the outcome (`empty`, `reasoning_only`, `timeout`, `error_<status>`)
+  and the response's `finish_reason` and token counts in `error_message`.
+  Before this the surviving row's duration silently covered every retry and
+  every backoff, and a failed attempt left no row at all.
+- **Unattended triggers get the batch timeout.** `cron`, `workflow`, `event`
+  and `sub_agent` runs get `ROBOTHOR_LLM_TIMEOUT_BATCH` (300s) per model;
+  interactive triggers (`telegram`, `webchat`, `slack`) keep
+  `ROBOTHOR_LLM_TIMEOUT` (120s), because there a human is waiting. An
+  inbound-mail classification or a spawned sub-agent is as batch-shaped as a
+  cron, and capping those at 120s was the bulk of the fleet's timeouts.
+
 ---
 
 ## Architecture Overview

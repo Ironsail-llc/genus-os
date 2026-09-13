@@ -24,6 +24,11 @@ from typing import Any
 # resolve the provider key from the environment, which on 2026-08-27 meant
 # this path kept hammering a credential the pool had already retired and
 # could not rotate to a spare. No-op for unpooled providers.
+from robothor.engine.llm_attempts import (
+    REASONING_ONLY_NUDGE,
+    REASONING_ONLY_RETRY_EFFORT,
+    describe_completion,
+)
 from robothor.engine.pooled_completion import acompletion as pooled_acompletion
 from robothor.engine.sanitize import sanitize_log
 
@@ -262,6 +267,45 @@ def deterministic_tail(messages: list[dict[str, Any]]) -> str:
     return "\n".join(lines)[:3500]
 
 
+async def _re_ask_for_the_answer(model: str, kwargs: dict[str, Any], started: float) -> Any:
+    """One same-model re-ask after a reasoning-only reply, or None.
+
+    Asks for less thinking and adds a nudge for the answer itself: an identical
+    re-roll reproduces an identical truncation. Every failure returns None so
+    the caller falls back to the chain walk it would have done anyway — this
+    can only save a walk, never cause one.
+    """
+    remaining = COMPACTION_WALK_BUDGET - (time.monotonic() - started)
+    if remaining <= 0:
+        return None
+    messages = [*kwargs.get("messages", []), {"role": "user", "content": REASONING_ONLY_NUDGE}]
+    try:
+        response = await asyncio.wait_for(
+            pooled_acompletion(
+                model=model,
+                **{
+                    **kwargs,
+                    "messages": messages,
+                    "reasoning_effort": REASONING_ONLY_RETRY_EFFORT,
+                },
+            ),
+            timeout=min(_timeout_for(model), remaining),
+        )
+    except Exception as e:  # noqa: BLE001 - the chain walk is the fallback
+        logger.warning(
+            "Compaction re-ask of %s failed (%s) — falling through to the chain",
+            sanitize_log(model),
+            sanitize_log(str(e)[:100]),
+        )
+        return None
+    if describe_completion(response).no_answer:
+        return None
+    logger.info(
+        "Compaction model %s answered on the re-ask — chain not walked", sanitize_log(model)
+    )
+    return response
+
+
 async def _acompletion_over_chain(models: str | list[str], **kwargs: Any) -> Any:
     """Call the first model in the chain that answers.
 
@@ -299,14 +343,25 @@ async def _acompletion_over_chain(models: str | list[str], **kwargs: Any) -> Any
         # as "nothing to retain" and move on silently, so stopping here would
         # lose the context just as thoroughly as an exception — without even
         # trying the tier below.
-        try:
-            content = response.choices[0].message.content
-        except (AttributeError, IndexError, TypeError):
-            content = None
-        if content:
+        shape = describe_completion(response)
+        if not shape.no_answer:
             return response
-        last = last or RuntimeError(f"{model} returned no content")
-        logger.warning("Compaction model %s returned nothing — trying the next", model)
+        # …unless the model reasoned and simply never reached the summary. That
+        # is a budget problem, not a dead model, and walking the chain for it
+        # cost 61 extractions a day — one measured walk ended at the local 27B
+        # tier and returned a 30-character summary of an 81k-token context
+        # (DIAG 2026-09-13 §1.5, §4.1). Re-ask THIS model for less thinking.
+        if shape.reasoning_only:
+            retried = await _re_ask_for_the_answer(model, kwargs, started)
+            if retried is not None:
+                return retried
+        last = last or RuntimeError(f"{model} returned no content ({shape.describe()})")
+        logger.warning(
+            "Compaction model %s returned %s (%s) — trying the next",
+            sanitize_log(model),
+            shape.outcome,
+            sanitize_log(shape.describe()),
+        )
     raise last if last is not None else RuntimeError("no compaction model configured")
 
 
