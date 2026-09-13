@@ -711,6 +711,21 @@ class TestCleartextCredentialsAreRefusedRatherThanSent:
         assert smtp.client.logins == [(SMTP_USER, FAKE_SMTP_PASSWORD)]
 
     @pytest.mark.asyncio
+    async def test_the_shared_probe_reports_the_refusal_not_absence(self, cleartext):
+        """``transport_probe`` is the ONE probe behind both ``genus channel
+        verify`` and the doctor's ``email.transport``. Falling through to the
+        "nothing is configured" sentence would tell an operator with a host, a
+        from-address and a password in their own config file that they had set
+        none of them — and send them after the wrong fix."""
+        problem = await _channel(gws_present=False).transport_probe()
+
+        assert problem is not None
+        assert "cleartext" in problem.lower()
+        assert "not both set" not in problem, (
+            "the probe reported a refused configuration as an absent one"
+        )
+
+    @pytest.mark.asyncio
     async def test_verify_names_the_refusal_rather_than_calling_it_unconfigured(self, cleartext):
         """Something IS configured and it is wrong. Reporting "never set up"
         would be exit 2 — an install gate would read it as a pass."""
@@ -725,26 +740,55 @@ class TestCleartextCredentialsAreRefusedRatherThanSent:
 
 
 class TestTheGuardrailWriteStaysOffTheEventLoop:
-    @pytest.mark.asyncio
-    async def test_the_guardrail_write_happens_in_a_worker_thread(self):
-        """``log_guardrail_event`` is psycopg2. Every other database call in the
-        module goes through ``asyncio.to_thread`` and the gws path files the
-        same event from inside a thread; this one blocked the loop."""
+    """Two blocking database calls sit on the refusal path, and they need two
+    assertions: the flag store resolves DB-first and ``log_guardrail_event`` is
+    psycopg2. One assertion covering both would leave the other free to move
+    back onto the loop unnoticed — which is the shape of defect this whole
+    campaign keeps finding.
+    """
+
+    @staticmethod
+    def _refuse(readers: list[int], writers: list[int]):
         import threading
 
-        writers: list[int] = []
+        def _mode() -> str:
+            readers.append(threading.get_ident())
+            return "enforce"
 
-        def _record(*_args: Any, **_kwargs: Any) -> None:
+        def _write(*_args: Any, **_kwargs: Any) -> None:
             writers.append(threading.get_ident())
+
+        return _mode, _write
+
+    @pytest.mark.asyncio
+    async def test_neither_database_call_on_the_refusal_path_runs_on_the_loop(self):
+        """``log_guardrail_event`` is psycopg2 and ``_dnc_mode`` reads the flag
+        store DB-first. Every other database call in the module goes through
+        ``asyncio.to_thread`` and the gws path files the same event from inside
+        a thread; both of these blocked the loop."""
+        import threading
+
+        from robothor.engine.channels import email as email_module
+
+        readers: list[int] = []
+        writers: list[int] = []
+        mode, write = self._refuse(readers, writers)
 
         with (
             patch("robothor.crm.dal.do_not_contact_emails", side_effect=_opt_out(FLAGGED)),
-            patch("robothor.engine.tracking.log_guardrail_event", side_effect=_record),
+            patch.object(email_module, "_dnc_mode", mode),
+            patch("robothor.engine.tracking.log_guardrail_event", side_effect=write),
         ):
             await _channel().send(FLAGGED, "hello", config=_config(), run=_run())
 
+        loop_thread = threading.get_ident()
+        assert readers, "the refusal never consulted ROBOTHOR_DNC_MODE"
+        assert readers[0] != loop_thread, (
+            "the do_not_contact MODE read ran on the event loop; the flag store "
+            "resolves DB-first, so a slow database stalls every other delivery"
+        )
         assert writers, "the refusal filed no guardrail event"
-        assert writers[0] != threading.get_ident(), (
+        assert writers[0] != loop_thread, (
             "the guardrail write ran on the event loop; a slow database now stalls "
             "every other delivery in the same process"
         )
@@ -788,6 +832,10 @@ class TestVerifyReadsTheRightTenantsOptOutList:
         )
         detail = {step: d for step, _ok, d in steps}["send"]
         assert TENANT in detail, "a wrong-tenant clear is indistinguishable from a right one"
+        # `{tenant!r}` already supplies the closing quote, so a possessive `'s`
+        # after it reads as `'tenant-a''s`. The tenant is the one thing in this
+        # sentence an operator has to read exactly.
+        assert "''" not in detail and '"s' not in detail, f"doubled quote in: {detail}"
 
     @pytest.mark.asyncio
     async def test_an_explicit_tenant_wins(self, pinned_tenant):

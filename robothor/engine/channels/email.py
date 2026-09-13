@@ -907,6 +907,12 @@ class EmailChannel:
         broken box helps nobody.
         """
         resolved = transport if transport is not None else self._transport()
+        if resolved.refusal:
+            # Configured, and REFUSED. Checked before the absence sentence
+            # below, which would otherwise tell an operator who has a host, a
+            # from-address and a password in their own config file that they had
+            # set none of them — and send them after the wrong fix.
+            return resolved.refusal
         if not resolved.kind:
             return (
                 "no email transport on this instance: the gws CLI is not installed "
@@ -1009,7 +1015,7 @@ class EmailChannel:
             step,
             True,
             "a message was sent and the transport returned its id; the address is "
-            f"not on tenant {tenant!r}'s opt-out list",
+            f"not on the opt-out list for tenant {tenant!r}",
         )
 
     # ── C8 / C10 ─────────────────────────────────────────────────────────
