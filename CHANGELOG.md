@@ -1,3 +1,9 @@
+## [1.71.0](https://github.com/Ironsail-llc/genus-os/compare/v1.70.0...v1.71.0) (2026-09-13)
+
+### Features
+
+* **engine:** agent manifest API and scheduler add/replace reconcile ([#518](https://github.com/Ironsail-llc/genus-os/issues/518)) ([2995ad7](https://github.com/Ironsail-llc/genus-os/commit/2995ad7dd66f072e1936ec96e8ddb1b3c93ac030))
+
 ## [1.70.0](https://github.com/Ironsail-llc/genus-os/compare/v1.69.2...v1.70.0) (2026-09-13)
 
 ### Features
