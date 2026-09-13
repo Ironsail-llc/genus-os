@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from psycopg2.extras import RealDictCursor
 
 from robothor.constants import DEFAULT_TENANT, SANDBOX_DENIAL_PREFIX, SANDBOX_DENIED_ERROR_TYPE
-from robothor.db.connection import get_connection
+from robothor.db.connection import get_connection, read_every_tenant_in_transaction
 from robothor.engine.analytics import GENUINE_TIMEOUT_SQL, INTERRUPTED_SQL
 
 if TYPE_CHECKING:
@@ -767,9 +767,13 @@ def get_agent_stats(
         row = cur.fetchone()
         stats = dict(row) if row else {}
 
-        stats["benchmark_runs"] = 0
-        stats["benchmark_cost_usd"] = 0.0
+        # None until read: "unknown" and "no benchmark spend" are different
+        # answers, and only one of them is worth acting on. See
+        # analytics._benchmark_spend.
+        stats["benchmark_runs"] = None
+        stats["benchmark_cost_usd"] = None
         try:
+            read_every_tenant_in_transaction(conn)
             cur.execute(
                 f"""
                 SELECT
@@ -777,16 +781,25 @@ def get_agent_stats(
                     COALESCE(SUM(total_cost_usd), 0) as benchmark_cost_usd
                 FROM agent_runs
                 WHERE agent_id = %s
-                  AND tenant_id = %s
+                -- Deliberately NOT tenant-scoped: `bench_only` already
+                -- isolates benchmark rows by trigger_detail, and since
+                -- 2026-09-13 every graded task run executes as the
+                -- `benchmark-sandbox` tenant, so binding the owning tenant
+                -- here reported every agent's benchmark spend as zero.
                   AND {bench_only}
                   AND created_at > NOW() - INTERVAL '%s hours'
                 """,  # noqa: S608
-                (agent_id, tenant_id, hours),
+                (agent_id, hours),
             )
             brow = cur.fetchone() or {}
             stats["benchmark_runs"] = int(brow.get("benchmark_runs") or 0)
             stats["benchmark_cost_usd"] = float(brow.get("benchmark_cost_usd") or 0.0)
         except Exception as e:
-            logger.warning("benchmark spend query failed: %s", e)
+            logger.error(
+                "benchmark break-out unreadable for %s (%s): /costs reports UNKNOWN "
+                "benchmark spend rather than zero",
+                agent_id,
+                e,
+            )
 
         return stats

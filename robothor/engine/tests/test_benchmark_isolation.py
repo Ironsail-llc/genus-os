@@ -403,13 +403,42 @@ def _context(*, is_benchmark: bool) -> Any:
 class TestBenchmarkRunClassification:
     def test_the_harness_labels_every_child_with_the_benchmark_prefix(self) -> None:
         """Read off the harness source rather than asserted in prose: the
-        ``trigger_detail`` every consumer filters on is built in one place."""
+        ``trigger_detail`` every consumer filters on is built in one place.
+
+        The scan follows both shapes — a literal at the ``trigger_detail=``
+        keyword, and the ``benchmark:`` literals inside the one builder that
+        now composes it. ``_task_trigger_detail`` appends the
+        ``production-read-only`` posture so the nightly audit can tell a
+        declared opt-out from a leak; either way the value must still start
+        with the prefix every SQL consumer filters on.
+        """
         from robothor.engine.analytics import BENCHMARK_TRIGGER_PREFIX
 
         source = Path(benchmark_handlers.__file__).read_text(encoding="utf-8")
-        details = re.findall(r'trigger_detail=f?"([^"{]*)', source)
+        details = [d for d in re.findall(r'trigger_detail=f?"([^"{]*)', source) if d]
+        start = source.index("def _task_trigger_detail(")
+        builder = source[start : source.index("\ndef ", start + 1)]
+        details += re.findall(r'f?"(benchmark:[^"]*)"', builder)
         assert details, "no trigger_detail literals found in the harness"
         assert all(d.startswith(BENCHMARK_TRIGGER_PREFIX) for d in details), details
+
+    def test_a_read_only_task_is_still_benchmark_traffic(self) -> None:
+        """The posture suffix must not hide a child from the spend break-out,
+        the decontamination filter, or the honesty of the run ledger."""
+        from robothor.engine.analytics import is_benchmark_run
+        from robothor.engine.tools.handlers.benchmark import (
+            PRODUCTION_READ_ONLY_POSTURE,
+            SANDBOX_POSTURE,
+            _task_trigger_detail,
+        )
+
+        sandboxed = _task_trigger_detail("main", "queue-zero", SANDBOX_POSTURE)
+        read_only = _task_trigger_detail("main", "memory-recall", PRODUCTION_READ_ONLY_POSTURE)
+
+        assert sandboxed == "benchmark:main:queue-zero"
+        assert read_only == "benchmark:main:memory-recall:production-read-only"
+        assert is_benchmark_run(sandboxed) is True
+        assert is_benchmark_run(read_only) is True
 
     def test_the_trigger_detail_string_still_classifies(self) -> None:
         from robothor.engine.analytics import is_benchmark_run
@@ -843,9 +872,14 @@ class TestTheMarkerIsActuallySet:
 
     @pytest.mark.asyncio
     async def test_the_harness_binds_the_marker_around_the_child_run(self) -> None:
-        """``_execute_task_run`` with ``seeded=None`` — the branch the incident
-        went through — must bind the marker before ``runner.execute`` and
-        restore it afterwards."""
+        """``_execute_task_run`` with ``tenant_id=None`` — the sandbox-off
+        branch the incident went through — must bind the marker before
+        ``runner.execute`` and restore it afterwards.
+
+        With the sandbox ON the child now also carries the sandbox tenant
+        (``_task_execution_tenant``); this is the branch where the marker is
+        the only thing standing between a fixture and production memory.
+        """
         from robothor.engine.run_context import in_benchmark_run
         from robothor.engine.tools.handlers.benchmark import _execute_task_run
 
@@ -865,7 +899,7 @@ class TestTheMarkerIsActuallySet:
             trigger_detail="benchmark:suite:1",
             child_config=SimpleNamespace(is_benchmark=True),
             spawn_context=None,
-            seeded=None,
+            tenant_id=None,
         )
 
         assert result == "ran"
@@ -921,7 +955,7 @@ class TestTheMarkerIsActuallySet:
             trigger_detail="benchmark:suite:1",
             child_config=SimpleNamespace(is_benchmark=True),
             spawn_context=None,
-            seeded=None,
+            tenant_id=None,
         )
         assert stored == [[]], "a benchmark child's memory write was not refused"
 

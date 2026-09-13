@@ -19,11 +19,29 @@ with nothing an operator recognises as a cause.
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from unittest.mock import MagicMock
 
 import pytest
 
 from robothor.engine.config import EngineConfig
+
+
+@contextmanager
+def _sandbox_lock_granted(_tenant_id: str):
+    """Hand the suite the sandbox lock without touching a database.
+
+    These helpers substitute a fake ``get_connection``, and the real
+    ``sandbox_suite_lock`` reads ``row = cur.fetchone()`` — which those fakes
+    answer with ``None``. It therefore concludes
+    ``sandbox_locked_by_another_suite`` and refuses the suite: the one refusal
+    that sends the reader hunting a concurrent run that does not exist. None of
+    these tests is about locking, so the lock is granted outright.
+    """
+    from robothor.engine.benchmark_sandbox import LOCK_ACQUIRED
+
+    yield LOCK_ACQUIRED
+
 
 BROKEN = """\
 id: bob
@@ -283,6 +301,7 @@ class TestBenchmark:
             patch("robothor.memory.blocks.write_block", side_effect=write_block),
             patch("robothor.db.connection.get_connection", get_connection),
             patch("robothor.engine.tools.handlers.spawn.get_runner", return_value=runner),
+            patch("robothor.engine.benchmark_sandbox.sandbox_suite_lock", _sandbox_lock_granted),
             patch("robothor.engine.config.load_agent_config", side_effect=refusal),
         ):
             out = await _benchmark_run(

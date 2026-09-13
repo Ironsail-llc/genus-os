@@ -44,18 +44,24 @@ is this module's sandbox — see :mod:`robothor.engine.run_context`.
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import logging
 import re
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.feature_flags import benchmark_sandbox_mode
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -483,6 +489,18 @@ def render_fixture_refs(text: str, seeded: SeededFixtures) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: A sandbox tenant id must look like one. ``teardown_sandbox`` hard-deletes 14
+#: tables of whatever it is handed, and since 2026-09-13 it runs after every
+#: task rather than after every seeded task — so the blast radius of a typo in
+#: ``ROBOTHOR_BENCHMARK_TENANT`` went from 3 sweeps a night to 78. The old
+#: guard refused three reserved names and then required equality with
+#: ``sandbox_tenant_id()``, which is whatever that variable says: a value
+#: typo'd onto a real tenant id passed both checks. An override must now still
+#: be NAMESPACED as a benchmark tenant, so no real tenant id can be reached by
+#: a single mistyped environment variable.
+_SANDBOX_NAME_RE = re.compile(r"^benchmark[-_][A-Za-z0-9_-]+$")
+
+
 def _assert_sandbox(tenant_id: str) -> None:
     """Refuse to mutate anything that is not the dedicated sandbox tenant."""
     if not tenant_id or tenant_id in {DEFAULT_TENANT, "robothor-primary", "default"}:
@@ -491,6 +509,157 @@ def _assert_sandbox(tenant_id: str) -> None:
         raise FixtureError(
             f"tenant {tenant_id!r} is not the benchmark sandbox ({sandbox_tenant_id()!r})"
         )
+    if tenant_id != DEFAULT_SANDBOX_TENANT and not _SANDBOX_NAME_RE.match(tenant_id):
+        raise FixtureError(
+            f"refusing to seed or sweep {tenant_id!r}: a ROBOTHOR_BENCHMARK_TENANT "
+            f"override must be namespaced 'benchmark-<name>' so a typo cannot name "
+            f"a real tenant (default: {DEFAULT_SANDBOX_TENANT!r})"
+        )
+
+
+def _advisory_lock_key(tenant_id: str) -> int:
+    """A stable signed 64-bit key for ``pg_try_advisory_lock``."""
+    return int.from_bytes(
+        hashlib.blake2b(f"benchmark-suite:{tenant_id}".encode(), digest_size=8).digest(),
+        "big",
+        signed=True,
+    )
+
+
+#: Outcomes of :func:`sandbox_suite_lock`. The two failures are distinguished
+#: because they mean different things to whoever reads the refusal: one says
+#: another suite is running, the other says this instance cannot serialise them
+#: at all.
+LOCK_ACQUIRED = "acquired"
+LOCK_HELD_ELSEWHERE = "sandbox_locked_by_another_suite"
+LOCK_UNAVAILABLE = "sandbox_lock_unavailable"
+
+
+def _try_take_sandbox_lock(tenant_id: str, key: int) -> tuple[str, tuple[Any, Any] | None]:
+    """Acquire the advisory lock, or say why not. Never raises.
+
+    Split out of :func:`sandbox_suite_lock` so the ``yield`` that hands control
+    to the suite sits outside every ``except``. It used to sit inside one:
+    ``@contextmanager`` throws an escaping exception back in at the yield, the
+    handler caught it and yielded a SECOND time, and ``contextlib`` turned that
+    into ``RuntimeError: generator didn't stop after throw()``. The suite's own
+    exception and its traceback were destroyed at the lock boundary, and the
+    operator got a false "lock unavailable" ERROR pointing at the connection
+    pool for what was a typo in a suite file.
+
+    Returns:
+        ``(status, holder)`` — ``holder`` is the ``(context manager,
+        connection)`` pair to release when the suite ends, and is None unless
+        the status is :data:`LOCK_ACQUIRED`.
+    """
+    from robothor.db.connection import get_connection
+
+    holder: tuple[Any, Any] | None = None
+    try:
+        manager = get_connection(autocommit=True)
+        conn = manager.__enter__()
+        holder = (manager, conn)
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (key,))
+        row = cur.fetchone()
+        if row and bool(row[0]):
+            return LOCK_ACQUIRED, holder
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        logger.error(
+            "benchmark sandbox lock unavailable for %s (%s): REFUSING the suite. "
+            "Running unserialised risks a concurrent suite sweeping its fixtures "
+            "mid-task, which grades as a plausible low score with no error.",
+            tenant_id,
+            exc,
+        )
+        _close_lock_holder(holder)
+        return LOCK_UNAVAILABLE, None
+
+    logger.warning("benchmark sandbox %s is held by another suite; refusing this one", tenant_id)
+    _close_lock_holder(holder)
+    return LOCK_HELD_ELSEWHERE, None
+
+
+def _close_lock_holder(holder: tuple[Any, Any] | None) -> None:
+    """Give the pooled connection back. Never raises."""
+    if holder is None:
+        return
+    manager, _conn = holder
+    with contextlib.suppress(Exception):
+        manager.__exit__(None, None, None)
+
+
+def _release_sandbox_lock(holder: tuple[Any, Any] | None, key: int, tenant_id: str) -> None:
+    """Unlock, then hand the connection back. Never raises.
+
+    A suite that has already failed must not have a second failure reported on
+    top of it, and the advisory lock is released by the session ending anyway —
+    so the unlock is best-effort and the connection return is unconditional.
+    """
+    if holder is None:
+        return
+    _manager, conn = holder
+    try:
+        with contextlib.suppress(Exception):
+            conn.cursor().execute("SELECT pg_advisory_unlock(%s)", (key,))
+    finally:
+        _close_lock_holder(holder)
+    logger.debug("benchmark sandbox lock released for %s", tenant_id)
+
+
+@contextmanager
+def sandbox_suite_lock(tenant_id: str) -> Iterator[str]:
+    """Hold the shared sandbox tenant for one suite. Yields the outcome.
+
+    :func:`teardown_sandbox` hard-deletes **every** row of 14 tables in the
+    tenant, whoever wrote them — deliberately, so an agent's own rows cannot
+    become the next night's ambient state. That is safe for one suite at a time
+    and unsafe for two, and two is reachable in a single daemon: the 04:00
+    fleet cron (``_benchmark_run_fleet``) and auto-researcher's before/after
+    measurement (``experiment.py::_measure_benchmark``) both funnel into
+    ``_benchmark_run``. The loser of that race has its fixtures deleted
+    mid-task and grades against an empty CRM — a plausible-looking low score
+    with no error anywhere, which is exactly the failure ``state_checks`` were
+    built to catch.
+
+    A Postgres *session* advisory lock on a connection held for the suite, not
+    a transaction lock: a suite runs for minutes and must not hold a
+    transaction open. ``pg_try_advisory_lock`` rather than the blocking form,
+    because a benchmark that silently queues for an hour behind another is not
+    better than one that says it did not run.
+
+    **This fails CLOSED.** If the lock machinery itself is unavailable — no
+    connection, no such function — the suite is refused, not run unserialised.
+    An earlier draft ran it anyway with an ERROR in the log, on the argument
+    that a dark fleet night is the worse failure. It is not, and the asymmetry
+    is the whole point: a refused suite is a visible absence someone chases,
+    while an unserialised suite that loses the race has its fixtures swept
+    mid-task and produces a plausible low score with no error anywhere. A wrong
+    number nobody can tell is wrong is the failure this repository keeps
+    re-learning. Benchmark safety fails closed.
+
+    Args:
+        tenant_id: the sandbox tenant this suite will seed and sweep.
+
+    Yields:
+        :data:`LOCK_ACQUIRED` when this suite may proceed;
+        :data:`LOCK_HELD_ELSEWHERE` when another suite holds the tenant;
+        :data:`LOCK_UNAVAILABLE` when the lock could not be attempted at all.
+        Only the first is permission to run.
+    """
+    key = _advisory_lock_key(tenant_id)
+    status, holder = _try_take_sandbox_lock(tenant_id, key)
+    if status is not LOCK_ACQUIRED:
+        # Nothing was acquired, so there is nothing to release and nothing the
+        # caller can do inside the block. Yielding here — OUTSIDE any `except`
+        # — is what keeps an exception raised by the suite body from being
+        # thrown back into a handler that would yield a second time.
+        yield status
+        return
+    try:
+        yield LOCK_ACQUIRED
+    finally:
+        _release_sandbox_lock(holder, key, tenant_id)
 
 
 def _check_identifier(name: str) -> str:

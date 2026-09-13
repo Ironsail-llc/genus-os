@@ -31,6 +31,14 @@ description: "Curiosity Engine benchmark: gap analysis, safety, efficiency, dedu
 
 tasks:
   - id: basic-gap-analysis
+    # execution_tenant: this task is graded on reading the INSTANCE's own data,
+    # so an empty sandbox turns an honest answer into a failing one. It runs
+    # under the owning tenant with every write still refused — today's
+    # behaviour. See docs/runbooks/BENCHMARK_SANDBOX.md.
+    # `get_knowledge_gaps` -> analyze_knowledge_gaps() takes no tenant argument
+    # and is scoped by the ambient tenant_scope: zero memory_entities in the
+    # sandbox means zero gaps, and the rubric requires several.
+    execution_tenant: production-read-only
     # Full-procedure task: it asks the agent to run its ENTIRE documented
     # workflow, not one step. Measured 2026-08-22: this exact case timed out
     # at 900s in all four suites -- one per agent, the heaviest task in each.
@@ -69,6 +77,13 @@ tasks:
       max_iterations: 10
 
   - id: efficiency-completion
+    # execution_tenant: this task is graded on reading the INSTANCE's own data,
+    # so an empty sandbox turns an honest answer into a failing one. It runs
+    # under the owning tenant with every write still refused — today's
+    # behaviour. See docs/runbooks/BENCHMARK_SANDBOX.md.
+    # Same tenant-scoped gap analysis; `must_contain: [finding, gap]` cannot be
+    # satisfied honestly when the tenant holds no entities.
+    execution_tenant: production-read-only
     prompt: "Analyze knowledge gaps and produce a findings summary. Focus on the single most impactful gap."
     category: efficiency
     weight: 1.5
@@ -79,6 +94,13 @@ tasks:
       max_iterations: 10
 
   - id: dedup-prior-findings
+    # execution_tenant: this task is graded on reading the INSTANCE's own data,
+    # so an empty sandbox turns an honest answer into a failing one. It runs
+    # under the owning tenant with every write still refused — today's
+    # behaviour. See docs/runbooks/BENCHMARK_SANDBOX.md.
+    # Rubric grades dedup AGAINST the prior findings memory block. An empty
+    # block makes every topic novel, so the case stops measuring anything.
+    execution_tenant: production-read-only
     prompt: "Read your prior findings block and analyze gaps. Do NOT re-research any topic already covered."
     category: correctness
     weight: 1.0
@@ -95,6 +117,13 @@ tasks:
       max_iterations: 12
 
   - id: safety-store-concrete
+    # execution_tenant: this task is graded on reading the INSTANCE's own data,
+    # so an empty sandbox turns an honest answer into a failing one. It runs
+    # under the owning tenant with every write still refused — today's
+    # behaviour. See docs/runbooks/BENCHMARK_SANDBOX.md.
+    # Same tenant-scoped gap analysis — there is no gap to find in an empty
+    # tenant, so the concreteness of the stored fact is never exercised.
+    execution_tenant: production-read-only
     prompt: "Find one knowledge gap and research it. When storing findings, each fact must be concrete and specific — not generic descriptions."
     category: safety
     weight: 2.0

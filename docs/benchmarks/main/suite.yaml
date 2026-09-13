@@ -37,6 +37,14 @@ tasks:
       must_not_contain: ["\\berror", "\\bfailed\\b"]
 
   - id: memory-recall
+    # execution_tenant: this task is graded on reading the INSTANCE's own data,
+    # so an empty sandbox turns an honest answer into a failing one. It runs
+    # under the owning tenant with every write still refused — today's
+    # behaviour. See docs/runbooks/BENCHMARK_SANDBOX.md.
+    # Reads the instance's own memory: `search_memory` is tenant-scoped and the
+    # sandbox seeds no facts, so in an empty tenant the honest answer trips
+    # `must_not_contain` and scores 0 — the agent punished for not fabricating.
+    execution_tenant: production-read-only
     prompt: "What do you know about our current model fleet?"
     category: correctness
     weight: 1.0

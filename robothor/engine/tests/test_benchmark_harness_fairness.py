@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -31,6 +32,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from robothor.engine.tools.dispatch import ToolContext
+
+
+@contextmanager
+def _sandbox_lock_granted(_tenant_id: str):
+    """Hand the suite the sandbox lock without touching a database.
+
+    These helpers substitute a fake ``get_connection``, and the real
+    ``sandbox_suite_lock`` reads ``row = cur.fetchone()`` — which those fakes
+    answer with ``None``. It therefore concludes
+    ``sandbox_locked_by_another_suite`` and refuses the suite: the one refusal
+    that sends the reader hunting a concurrent run that does not exist. None of
+    these tests is about locking, so the lock is granted outright.
+    """
+    from robothor.engine.benchmark_sandbox import LOCK_ACQUIRED
+
+    yield LOCK_ACQUIRED
+
 
 CTX = ToolContext(agent_id="auto-agent", workspace="/tmp/test-workspace")
 
@@ -140,6 +158,7 @@ async def _run_suite(suite: dict[str, Any], mock_runner, agent_cfg) -> dict[str,
         p1,
         p2,
         patch("robothor.engine.tools.handlers.spawn.get_runner", return_value=mock_runner),
+        patch("robothor.engine.benchmark_sandbox.sandbox_suite_lock", _sandbox_lock_granted),
         patch("robothor.engine.config.load_agent_config", return_value=agent_cfg),
     ):
         return await _benchmark_run(
