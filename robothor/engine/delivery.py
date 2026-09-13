@@ -28,7 +28,11 @@ from typing import TYPE_CHECKING, Any
 
 from robothor.engine.channels import SendReceipt, get_channel
 from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode
-from robothor.engine.thin_announce import note_body_fallback, record_note_fallback
+from robothor.engine.thin_announce import (
+    NoteSubstitution,
+    note_substitution,
+    record_substitution,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -469,6 +473,53 @@ def _verification_banner(run: AgentRun) -> str:
         return ""
 
 
+def _substitute_note_body(
+    config: AgentConfig, run: AgentRun, text: str, *, beat_reframed: bool
+) -> NoteSubstitution | None:
+    """The note body to announce in place of a thin ``text``, or None.
+
+    A thin announce reply ("Briefing delivered.", 19 chars) is a
+    meta-confirmation: the run did the work and saved it as a CRM note, and the
+    operator got a header with nothing under it. ``run.output_text`` keeps the
+    stub as evidence; only the delivered body changes.
+
+    Announce-only, and never over a reframed beat — that diagnostic says the run
+    did NOT finish, which a rescued body would contradict. What qualifies as a
+    substitution is decided in :mod:`robothor.engine.thin_announce`; recording
+    the outcome is the caller's job, once the receipt is in.
+    """
+    if config.delivery_mode != DeliveryMode.ANNOUNCE or beat_reframed:
+        return None
+    substitution = note_substitution(run, text)
+    if substitution:
+        logger.info(
+            "Thin announce output for %s (%d chars) replaced by the %d-char note "
+            "body this run wrote (note saved: %s)",
+            config.id,
+            len(text),
+            len(substitution.body),
+            substitution.saved,
+        )
+    return substitution
+
+
+async def _send_announcement(
+    config: AgentConfig, run: AgentRun, text: str, name: str, channel: Any
+) -> bool:
+    """Hand ``text`` to a resolved channel and record what it proved."""
+    try:
+        receipt = await channel.send(config.delivery_to, text, config=config, run=run)
+    except Exception as e:
+        # The protocol says a send reports failure as a receipt rather than
+        # raising, but a third-party channel is third-party code: a bug in one
+        # must not escape into run finalization, where it would look like the
+        # run itself failed. Recorded, not swallowed.
+        logger.error("Channel %s raised while delivering for %s: %s", name, config.id, e)
+        _mark_delivery_failed(run, name, f"failed:{name}_exception: {e}")
+        return False
+    return await _finish_delivery(config, run, text, name, receipt)
+
+
 async def deliver(config: AgentConfig, run: AgentRun) -> bool:
     """Deliver agent output based on the delivery mode.
 
@@ -578,27 +629,14 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
         await _persist_delivery_status(run)
         return True
 
-    # A thin announce reply ("Briefing delivered.") is a meta-confirmation, not
-    # the content the announce promised — the run did the work and saved it as a
-    # CRM note. Deliver that note body instead of the stub. Announce-only, and
-    # never over a reframed beat: that diagnostic says the run did NOT finish,
-    # which a rescued body would contradict. run.output_text keeps the stub as
-    # evidence; only the delivered body changes. See engine/thin_announce.py.
-    #
-    # After the trivial-output check for the same reason the banner below is:
-    # a beat that was meant to stay silent must not be resurrected by it.
-    announcing = config.delivery_mode == DeliveryMode.ANNOUNCE
-    note_body = note_body_fallback(run, text) if announcing and not beat_reframed else None
-    if note_body:
-        logger.info(
-            "Thin announce output for %s (%d chars) replaced by the %d-char note "
-            "body this run wrote",
-            config.id,
-            len(text),
-            len(note_body),
-        )
-        text = note_body
-        record_note_fallback(run)
+    # A thin announce reply is a meta-confirmation, not the content the announce
+    # promised. Swap in the note the run wrote — see _substitute_note_body, and
+    # engine/thin_announce.py for what qualifies. Placed after the trivial-output
+    # check for the same reason the banner below is: a beat that was meant to
+    # stay silent must not be resurrected by it.
+    substitution = _substitute_note_body(config, run, text, beat_reframed=beat_reframed)
+    if substitution:
+        text = substitution.body
 
     # Honest-failure banner. Appended AFTER the trivial-output check so it can
     # never resurrect a beat that was meant to stay silent, and to the
@@ -628,20 +666,13 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
                 name,
             )
             _mark_delivery_failed(run, name, f"failed:no_channel:{name}")
-            await _persist_delivery_status(run)
-            return False
-        try:
-            receipt = await channel.send(config.delivery_to, text, config=config, run=run)
-        except Exception as e:
-            # The protocol says a send reports failure as a receipt rather than
-            # raising, but a third-party channel is third-party code: a bug in
-            # one must not escape into run finalization, where it would look
-            # like the run itself failed. Recorded, not swallowed.
-            logger.error("Channel %s raised while delivering for %s: %s", name, config.id, e)
-            _mark_delivery_failed(run, name, f"failed:{name}_exception: {e}")
-            await _persist_delivery_status(run)
-            return False
-        result = await _finish_delivery(config, run, text, name, receipt)
+            result = False
+        else:
+            result = await _send_announcement(config, run, text, name, channel)
+        # AFTER the status is known, never before: the note states whether the
+        # operator was actually reached, and only `delivered` means that.
+        if substitution:
+            record_substitution(run, substitution, run.delivery_status)
         await _persist_delivery_status(run)
         return result
 

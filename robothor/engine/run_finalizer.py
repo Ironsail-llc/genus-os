@@ -56,6 +56,7 @@ from robothor.engine.sanitize import sanitize_log as _sanitize  # noqa: E402
 # runs are thin. Two constants would drift.
 from robothor.engine.thin_announce import (
     ANNOUNCE_MIN_OUTPUT_CHARS,  # noqa: F401 — re-exported: this was its home
+    NOTE_SEPARATOR,
     is_thin_announce_output,
 )
 from robothor.engine.tracking import create_step, create_steps_batch, update_run
@@ -915,7 +916,11 @@ class RunFinalizationMixin:
         kinds = payload.get("unsupported") or []
         label = "Unverified" if status == "unverified_claims" else "Failed verification for"
         note = f"{label} claims: {', '.join(str(k) for k in kinds) or 'unknown'}"
-        run.outcome_notes = f"{run.outcome_notes} | {note}" if run.outcome_notes else note
+        # One column, one separator: `loop_guards` and `thin_announce` both join
+        # with "; ", and a second convention here made the same field parse two
+        # ways depending on which writer ran.
+        joined = f"{run.outcome_notes}{NOTE_SEPARATOR}{note}"
+        run.outcome_notes = joined if run.outcome_notes else note
 
     def _persist_run_sync(self, run: AgentRun) -> None:
         """Synchronous DB persistence — update run + batch-insert steps + CRM task."""
