@@ -29,11 +29,13 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import random
 import time
 import time as _time
 from collections.abc import Awaitable, Callable  # noqa: TC003
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import litellm
@@ -41,6 +43,12 @@ import litellm
 from robothor.engine.codex_provider import CodexProviderError, is_codex_model
 from robothor.engine.codex_provider import acompletion as codex_acompletion
 from robothor.engine.key_pool import KeyPool, Retirement, env_var_for_model, keys_from_env
+from robothor.engine.llm_attempts import (
+    REASONING_ONLY_NUDGE,
+    CompletionShape,
+    describe_completion,
+    note_outcome,
+)
 
 # Explicit `as` re-exports: mypy runs with no_implicit_reexport, and callers
 # have imported these names from here for a long time. New readers should
@@ -137,6 +145,13 @@ ENGINE_CONTEXT_PREFIX = "[engine] "
 
 # A short jitter on the in-place retry so a provider blip is not re-hit
 # instantly. The retry COUNT is in llm_budgets; only the timing is here.
+
+# One re-ask per model after a reasoning-only reply (DIAG 2026-09-13 §4.1),
+# counted separately from the transient budget: a thinking model that spent its
+# budget before the answer started is not a flaky provider, and the re-ask
+# carries DIFFERENT kwargs (a smaller budget and a nudge), so spending the
+# transient retry on it would leave a genuine 502 with nothing.
+REASONING_ONLY_RE_ASKS_PER_MODEL = 1
 TRANSIENT_RETRY_JITTER_MIN = 2.0
 TRANSIENT_RETRY_JITTER_MAX = 5.0
 _TRANSIENT_RETRY_STATUSES = frozenset({500, 502, 503, 504})
@@ -446,24 +461,380 @@ class EmptyCompletionError(RuntimeError):
     """
 
 
-def _is_empty_completion(result: Any) -> bool:
-    """True when a response carries neither text nor a tool call.
+#: Answer room a thinking block must leave inside ``max_tokens``. Reasoning
+#: tokens count against the SAME ceiling on OpenRouter, so a turn that spends
+#: its budget before content starts comes back reasoning-only with
+#: ``finish_reason=length`` — measured 2026-09-13 as ~47 wasted generations a
+#: day, a median of 8s each. Nothing compared the two numbers before this.
+MIN_ANSWER_TOKENS = 4_096
 
-    A response with no text but WITH tool calls is the normal shape of every
-    tool-using turn and must never be treated as empty -- retrying those would
-    re-issue side-effectful calls. Anything we cannot parse is reported
-    non-empty, so an unfamiliar response shape can never drive a retry loop.
+#: Anthropic rejects a thinking block below 1,024 tokens. An answer budget too
+#: small to host one gets no thinking block at all rather than an invalid one.
+MIN_THINKING_BUDGET = 1_024
+
+
+#: Share of one completion each reasoning-effort rung may spend on thinking.
+#: A FRACTION, not a token count: every ``supports_thinking`` model in the
+#: fleet requests the same 16,384 default output, so absolute rungs
+#: (10k/24k/48k) all clamped to one ceiling and three of the four manifest
+#: settings were indistinguishable on the wire — the knob looked armed and
+#: moved nothing above ``low``.
+#: NOTE: on the current fleet `high` and `max` resolve to the SAME budget —
+#: 75% of 16,384 is already the MIN_ANSWER_TOKENS cap — so `max` buys nothing
+#: over `high` until a model with a larger default_output_tokens is registered.
+_EFFORT_THINKING_SHARE: dict[str, float] = {
+    "low": 0.25,
+    "medium": 0.50,
+    "high": 0.75,
+    "max": 0.90,
+}
+
+
+def _thinking_budget(max_tokens: int, effort: str, *, reduced: bool = False) -> int:
+    """Thinking tokens for one call: a share of ``max_tokens``, with headroom.
+
+    Monotone in BOTH arguments, which is the property that matters: a higher
+    effort never buys less thinking, and a larger completion ceiling never does
+    either. (The first cut clamped an absolute budget and managed to give
+    ``max_tokens=5120`` a SMALLER budget than 4096.)
+
+    ``reduced`` is the re-ask after a reasoning-only reply: half the share, and
+    never above the ``low`` rung, so it is strictly smaller than whatever the
+    attempt that came back answerless had asked for.
     """
-    try:
-        message = result.choices[0].message
-    except (AttributeError, IndexError, TypeError):
+    share = _EFFORT_THINKING_SHARE.get((effort or "medium").strip().lower(), 0.5)
+    if reduced:
+        share = min(share / 2, _EFFORT_THINKING_SHARE["low"])
+    # The answer keeps MIN_ANSWER_TOKENS, or half the completion when the
+    # ceiling is too small to give them — reasoning tokens count against the
+    # SAME ceiling on OpenRouter, and a turn that spends it before content
+    # starts comes back reasoning-only with `finish_reason=length`.
+    answer_floor = min(MIN_ANSWER_TOKENS, max_tokens // 2)
+    return max(0, min(int(share * max_tokens), max_tokens - answer_floor))
+
+
+def _thinking_kwargs(model: str, max_tokens: int, *, reduced: bool = False) -> dict[str, Any]:
+    """The thinking block for one call, sized against the answer it leaves room for.
+
+    The effort is the running agent's own (``model_registry``'s per-run
+    ContextVar, set at ``runner.py:628-630``). Until 2026-09-13 this read the
+    bare ``THINKING_BUDGET_TOKENS`` constant, so the per-agent setting reached
+    nothing and every agent on the fleet reasoned at ``medium``.
+
+    ``temperature`` is forced only for the Anthropic family, which is what the
+    API that requires it actually is. The comment saying so outlived its code
+    when ``supports_thinking`` was extended past Anthropic, and the fleet's
+    dedup and classification work had been sampling at maximum entropy since.
+    """
+    from robothor.engine.model_registry import current_reasoning_effort
+
+    budget = _thinking_budget(max_tokens, current_reasoning_effort(), reduced=reduced)
+    if budget < MIN_THINKING_BUDGET:
+        logger.debug(
+            "no thinking block for %s: max_tokens=%d leaves no usable budget",
+            _sanitize(model),
+            max_tokens,
+        )
+        return {}
+    block: dict[str, Any] = {"thinking": {"type": "enabled", "budget_tokens": budget}}
+    if LLMClient._is_anthropic_family(model):
+        block["temperature"] = 1.0  # Anthropic rejects thinking at any other value
+    return block
+
+
+#: Shortest attempt worth dialling. A model whose shared allowance has less
+#: than this left advances the chain instead: the call would be cancelled
+#: mid-generation and the wall clock spent for certain. Always read through
+#: :func:`_attempt_floor` — a deployment that sets a per-call timeout SHORTER
+#: than this (the test suite does, and so would a tuned interactive path) must
+#: still get its first attempt.
+MIN_ATTEMPT_SECONDS = 5.0
+
+#: Longest fallback chain the wall-clock arithmetic below is checked against.
+#: Not enforced — a chain is an operator's choice — but a longer one is logged,
+#: because the 1800s `thread_pool.PENDING_EXPIRY_SECONDS` a sub-agent turn is
+#: expected to fit inside is verified against exactly this number.
+MAX_CHAIN_MODELS_BUDGETED = 5
+
+
+def worst_case_dispatch_seconds(models: int, per_call_timeout: float) -> float:
+    """Ceiling on the wall clock one dispatch can spend.
+
+    Each model may spend at most ``per_call_timeout`` ACROSS all of its
+    attempts (see ``_attempt_timeout``) plus the jitter slept between them, so
+    the chain's worst case is that, times the number of models. Before the
+    shared allowance this was ``attempts × per_call_timeout`` per model — on a
+    batch trigger, 3 × 300s × 4 models = an hour for one dispatch, with the
+    run's wall-clock ceiling checked only BETWEEN loop iterations.
+    """
+    return models * (per_call_timeout + TRANSIENT_RETRIES_PER_MODEL * TRANSIENT_RETRY_JITTER_MAX)
+
+
+def _warn_if_chain_outgrows_its_budget(models: list[str]) -> None:
+    """Say so when a chain is longer than the wall-clock arithmetic assumes.
+
+    ``worst_case_dispatch_seconds`` is verified against
+    ``MAX_CHAIN_MODELS_BUDGETED``; a longer chain can outlast the
+    pending-expiry window a sub-agent turn is expected to fit inside, and an
+    unobservable assumption is how a budget stops being one.
+    """
+    if len(models) > MAX_CHAIN_MODELS_BUDGETED:
+        logger.warning(
+            "chain of %d models exceeds the %d the wall-clock budget is checked against",
+            len(models),
+            MAX_CHAIN_MODELS_BUDGETED,
+        )
+
+
+def _attempt_floor(per_call_timeout: float) -> float:
+    """Least time an attempt may be given before the chain advances instead."""
+    return min(MIN_ATTEMPT_SECONDS, per_call_timeout)
+
+
+def _attempt_timeout(model_deadline: float, per_call_timeout: float) -> float:
+    """Seconds this attempt may take: what is left of the model's allowance.
+
+    Whole seconds, whichever clamp binds. These numbers reach litellm as the
+    ``timeout`` kwarg and are interpolated into operator-facing log lines, and a
+    fifteen-decimal float there is not an improvement on "timeout after 600s".
+
+    ONE rule for both inputs — round up, then take the smaller. Up, because the
+    first attempt on a model must get its full allowance rather than the
+    microseconds less that reading the clock costs, and because a workflow
+    remainder of 0.4s has to stay a call that HAPPENS: bounded at a second and
+    cancelled, so the deadline surfaces named on the next pass through the loop
+    rather than the chain quietly ending with nothing tried. The overshoot is
+    under a second against budgets of minutes, and the workflow's own outer
+    timeout is still the backstop.
+    """
+    allowance = math.ceil(model_deadline - time.monotonic())
+    return float(min(math.ceil(per_call_timeout), allowance))
+
+
+def _retry_delay(
+    e: Exception,
+    model: str,
+    model_deadline: float,
+    per_call_timeout: float,
+) -> float | None:
+    """Seconds to wait before an in-place retry, or None for "do not retry".
+
+    None when the failure is not transient, and also when this model's shared
+    time allowance cannot fund another attempt — a second 300s call on a model
+    that has already spent 300s is how one dispatch outgrows the run ceiling.
+    """
+    if not _is_transient_model_error(e):
+        return None
+    if is_local_model(model) and is_capacity_error(e):
+        delay = _local_capacity_delay()
+    else:
+        delay = random.uniform(TRANSIENT_RETRY_JITTER_MIN, TRANSIENT_RETRY_JITTER_MAX)
+    # The allowance covers PROVIDER time; the backoff is counted separately by
+    # worst_case_dispatch_seconds. So the question is only whether another
+    # attempt could still say anything before this model's allowance runs out.
+    if _attempt_timeout(model_deadline, per_call_timeout) < _attempt_floor(per_call_timeout):
+        logger.warning(
+            "Model %s: its per-model time allowance is spent — advancing "
+            "instead of retrying in place",
+            _sanitize(model),
+        )
+        return None
+    return delay
+
+
+def _rotate_credential(
+    model: str,
+    pool: KeyPool,
+    attempt_key: str,
+    e: Exception,
+    *,
+    spent: bool,
+    rotations_left: int,
+) -> bool:
+    """Retire the credential this attempt carried; True when a spare took over.
+
+    The retirement happens either way — that is the record that this key is
+    dead. Only the rotation is conditional.
+    """
+    pool.retire(attempt_key, _retirement_reason(e, spent=spent))
+    if pool.exhausted() or rotations_left <= 0:
         return False
-    if getattr(message, "tool_calls", None):
+    logger.warning(
+        "Model %s: credential %s failed (%s) — rotating to the next key and "
+        "retrying the same model",
+        _sanitize(model),
+        pool.fingerprint(attempt_key),
+        "credit exhausted" if spent else "auth rejected",
+    )
+    return True
+
+
+def _streaming_skip_reason(model: str, pool: KeyPool | None) -> str | None:
+    """Why this model must not be dialled on the streaming path.
+
+    The breaker check is here for the same reason ``_call_llm`` has one: a dead
+    provider otherwise costs the full per-call timeout on every run, and
+    streaming is the INTERACTIVE path, so it was the operator's own chat paying
+    it against a provider the engine had already written off. Safe to consult
+    only because a streamed success now reaches the breaker too; otherwise an
+    open breaker could never clear from the one path that proves a model
+    healthy. An exhausted pool is the other: calling anyway would omit api_key
+    and let litellm resolve the very key the pool just proved dead.
+    """
+    if get_model_breaker().is_open(model):
+        return "circuit breaker open"
+    if pool is not None and pool.exhausted():
+        return "every configured credential for it is retired"
+    return None
+
+
+def _advance_without_blaming_the_model(e: Exception, model: str) -> bool:
+    """True when the chain must advance WITHOUT marking this model broken.
+
+    A rejected credential says nothing about the model. Blaming it blacklists a
+    healthy model, and because every model in the chain shares the key, a
+    four-deep chain blacklists all four — then keeps skipping them for the
+    breaker's cooldown after the key is fixed.
+    """
+    if not is_auth_failure(e):
         return False
-    content = getattr(message, "content", None)
-    if content is None:
+    logger.error(
+        "Model %s: the credential was rejected — advancing without marking the "
+        "model broken. Check the key, not the provider.",
+        _sanitize(model),
+    )
+    return True
+
+
+def _streamed_shape(
+    rebuilt: Any,
+    accumulated_content: str,
+    has_tool_calls: bool,
+) -> CompletionShape:
+    """What the turn actually DELIVERED, not only what the rebuild says.
+
+    ``litellm.stream_chunk_builder`` can hand back a blank message for a stream
+    whose deltas already reached ``on_content`` — the operator has watched that
+    answer arrive. Judging emptiness from the rebuild alone would advance the
+    chain and replace a delivered turn with a different model's, and record a
+    failed attempt for a call that worked. The live locals are the truth about
+    delivery, so they override the rebuild; nothing else about the shape (the
+    finish reason, the token counts, the reasoning fields) is touched.
+    """
+    shape = describe_completion(rebuilt)
+    if not accumulated_content and not has_tool_calls:
+        return shape
+    return replace(
+        shape,
+        parsed=True,
+        content_present=bool(accumulated_content),
+        tool_calls_present=has_tool_calls,
+    )
+
+
+def _streamed_without_an_answer(model: str, shape: CompletionShape) -> EmptyCompletionError:
+    """Advance the chain on a streamed reply that carried no answer.
+
+    The streaming path had NO emptiness check: it recorded the attempt and
+    returned the response, so one provider call left a failed-attempt row AND a
+    success row — the second claiming an answer that was never there. It also
+    handed the operator a blank turn where the non-streaming path would have
+    fallen through to the next model.
+
+    No in-place retry here, unlike ``_call_llm``: a retry after partial content
+    has already been emitted to ``on_content`` would show duplicated text. That
+    cannot arise for THIS branch — an answerless reply emitted no content — but
+    the rule stays simple, so the chain advances instead.
+    """
+    error = EmptyCompletionError(
+        f"{model} streamed no content and no tool call ({shape.describe()})"
+    )
+    logger.warning(
+        "Model %s streamed %s (%s) — advancing to the next model",
+        _sanitize(model),
+        shape.outcome,
+        _sanitize(shape.describe()),
+    )
+    get_model_breaker().record_failure(model, reason=f"streamed {shape.outcome}")
+    return error
+
+
+def _blame_model(breaker: Any, e: Exception, model: str, attempt_timeout: float) -> None:
+    """Record the failure against the model, once per chain advancement.
+
+    A retried-then-recovered blip must not count double toward the breaker
+    threshold, so this is called only where the chain actually advances.
+    """
+    if isinstance(e, TimeoutError):
+        breaker.record_failure(model, reason=f"timeout after {attempt_timeout}s")
+        logger.warning(
+            "LLM call to %s exceeded %ds — cancelling and falling back",
+            _sanitize(model),
+            attempt_timeout,
+        )
+    elif not (is_local_model(model) and is_capacity_error(e)):
+        # Local backpressure must not open the breaker: it would blind the
+        # fleet's only offline tier for the cooldown, during the outage it
+        # exists to cover.
+        breaker.record_failure(model, reason=str(e)[:120])
+
+
+def _spent_credit_leaves_someone_reachable(
+    models: list[str],
+    position: int,
+    model: str,
+    model_var: str | None,
+    dead_credentials: set[str],
+) -> bool:
+    """Record a spent credential and say whether the chain can still answer.
+
+    Every model sharing this credential will fail the same way, so they are
+    skipped rather than tried. But a model on a DIFFERENT credential — or none
+    at all, like the local ollama tier — is unaffected, and raising strands it.
+    On 2026-08-26 that is exactly what happened: main's chain ended in a local
+    Qwen that was up and answering in 9.8s, and a spent OpenRouter key meant
+    the chain never reached it.
+
+    True → fall through to the next reachable model. False → nobody can answer.
+    """
+    if model_var is not None:
+        dead_credentials.add(model_var)
+    # `position`, not models.index(model): a chain may list the same model
+    # twice, and the first index points behind the cursor at models already
+    # tried.
+    reachable = [
+        m
+        for m in models[position + 1 :]
+        if (v := env_var_for_model(m)) is None or v not in dead_credentials
+    ]
+    if reachable:
+        logger.warning(
+            "Model %s: the account's credit is exhausted — skipping every "
+            "model on the same key and falling through to %s.",
+            _sanitize(model),
+            _sanitize(reachable[0]),
+        )
         return True
-    return isinstance(content, str) and not content.strip()
+    logger.error(
+        "Model %s: the account's credit is exhausted — no model on this key "
+        "can answer. Top up or raise the limit; this is not a model failure.",
+        _sanitize(model),
+    )
+    return False
+
+
+def _log_reasoning_only(model: str, shape: CompletionShape) -> None:
+    """Name the reasoning-only case distinctly from a provider empty.
+
+    They read identically in the journal otherwise, which is how ~47 of 50
+    "returned no content" events a day went a week without a diagnosis.
+    """
+    logger.warning(
+        "Model %s returned reasoning_only (%s) — re-asking the same model once "
+        "with a reduced thinking budget and a nudge for the answer",
+        _sanitize(model),
+        _sanitize(shape.describe()),
+    )
 
 
 def _is_transient_model_error(e: BaseException) -> bool:
@@ -1278,12 +1649,19 @@ class LLMClient:
         *,
         stream: bool = False,
         request_timeout: float | None = None,
+        thinking_reduced: bool = False,
+        nudge: str | None = None,
     ) -> dict[str, Any]:
         """Build kwargs dict for litellm.acompletion.
 
         ``request_timeout`` overrides the HTTP-level timeout so it stays in
         step with the caller's per-call ``asyncio.timeout`` budget (e.g. the
         batch timeout for cron/workflow runs).
+
+        ``thinking_reduced`` and ``nudge`` are the re-ask after a reasoning-only
+        reply (DIAG 2026-09-13 §4.1): a smaller thinking budget and one extra
+        user turn asking for the answer, because an identical re-roll truncates
+        identically.
         """
         from robothor.engine.model_registry import (
             get_model_limits,
@@ -1358,6 +1736,11 @@ class LLMClient:
         # proxied Anthropic rejects with "model does not support prefill".
         messages = LLMClient._guard_trailing_assistant(messages)
 
+        if nudge:
+            # Appended after every hygiene pass so it cannot be hoisted out of
+            # the list or stripped as engine context.
+            messages = [*messages, {"role": "user", "content": nudge}]
+
         kwargs: dict[str, Any] = {
             "model": actual_model,
             "messages": messages,
@@ -1414,13 +1797,7 @@ class LLMClient:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
         if limits.supports_thinking:
-            from robothor.engine.model_registry import THINKING_BUDGET_TOKENS
-
-            kwargs["temperature"] = 1.0  # Required by Anthropic API
-            kwargs["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": THINKING_BUDGET_TOKENS,
-            }
+            kwargs.update(_thinking_kwargs(model, kwargs["max_tokens"], reduced=thinking_reduced))
         return kwargs
 
     # ─── Model error handling ────────────────────────────────────────
@@ -1616,6 +1993,7 @@ class LLMClient:
             _sanitize(broken_models or set()),
         )
         breaker = get_model_breaker()
+        _warn_if_chain_outgrows_its_budget(models)
         # Credentials proven spent during THIS call. A model whose key is
         # in here cannot succeed, so it is skipped rather than tried.
         dead_credentials: set[str] = set()
@@ -1638,8 +2016,16 @@ class LLMClient:
             attempts = 1 + (
                 LOCAL_CAPACITY_RETRIES if is_local_model(model) else TRANSIENT_RETRIES_PER_MODEL
             )
+            # Every attempt on this model — retries and the reasoning-only
+            # re-ask included — shares ONE allowance. Each getting its own is
+            # what made a batch-trigger dispatch worth an hour of wall clock.
+            model_deadline = time.monotonic() + per_call_timeout
             rotations_left = (len(pool) - 1) if pool is not None else 0
             malformed_retries_left = MALFORMED_TOOL_ARGS_RETRIES
+            re_asks_left = REASONING_ONLY_RE_ASKS_PER_MODEL
+            # Set only for the re-ask after a reasoning-only reply.
+            thinking_reduced = False
+            nudge: str | None = None
             attempt = 0
             while attempt < attempts:
                 # Inside a workflow step, no call may be given more time than
@@ -1650,7 +2036,22 @@ class LLMClient:
                 # `try` so the deadline cannot buy itself a retry. Inert
                 # outside a workflow.
                 per_call_timeout = bound_call_timeout(per_call_timeout, model)
+                # …and no more than what is left of THIS model's own allowance,
+                # which all of its attempts share — the in-place retry and the
+                # reasoning-only re-ask included. The two clamps compose in this
+                # order: a workflow's remaining budget can only ever lower the
+                # allowance, never raise it, and neither can hand an attempt
+                # time the other has already spent.
+                attempt_timeout = _attempt_timeout(model_deadline, per_call_timeout)
+                if attempt_timeout < _attempt_floor(per_call_timeout):
+                    logger.warning(
+                        "Model %s: its per-model time allowance is spent — advancing",
+                        _sanitize(model),
+                    )
+                    break
                 attempt_key = None
+                attempt_started = time.monotonic()
+                noted = False
                 try:
                     kwargs = self._build_llm_kwargs(
                         model,
@@ -1658,7 +2059,9 @@ class LLMClient:
                         tools,
                         input_est,
                         temperature,
-                        request_timeout=per_call_timeout,
+                        request_timeout=attempt_timeout,
+                        thinking_reduced=thinking_reduced,
+                        nudge=nudge,
                     )
                     if pool is not None:
                         # Bound per attempt so the failure handler retires the
@@ -1670,8 +2073,8 @@ class LLMClient:
                         attempt_key = pool.current()
                         if attempt_key is not None:
                             kwargs["api_key"] = attempt_key
-                    with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
-                        async with asyncio.timeout(per_call_timeout):
+                    with self._watchdog_wait(f"llm_inflight:{model}", attempt_timeout):
+                        async with asyncio.timeout(attempt_timeout):
                             if is_codex_model(model):
                                 result = await codex_acompletion(**kwargs)
                             else:
@@ -1680,16 +2083,45 @@ class LLMClient:
                                     messages=kwargs.get("messages", []),
                                     kwargs=kwargs,
                                 )
-                    if _is_empty_completion(result):
+                    shape = describe_completion(result)
+                    # Decided BEFORE the row is written: a reasoning-only reply
+                    # the same model is about to be re-asked about self-healed,
+                    # and only the row can tell that from one that gave up.
+                    re_ask = shape.reasoning_only and re_asks_left > 0
+                    note_outcome(model, attempt_started, shape=shape, self_healed=re_ask)
+                    noted = True
+                    if shape.no_answer:
+                        if re_ask:
+                            re_asks_left -= 1
+                            thinking_reduced = True
+                            nudge = REASONING_ONLY_NUDGE
+                            _log_reasoning_only(model, shape)
+                            # Deliberately does not advance `attempt`: this is a
+                            # different request, not a re-roll of a flaky one.
+                            continue
                         # Not a finished answer. Raising routes this into the
                         # transient-retry path below rather than returning a
                         # run that silently produced nothing.
-                        raise EmptyCompletionError(f"{model} returned no content and no tool call")
+                        raise EmptyCompletionError(
+                            f"{model} returned no content and no tool call ({shape.describe()})"
+                        )
                     breaker.record_success(model)
                     _record_execution_mode(model)
                     return result
+                except asyncio.CancelledError as ce:
+                    # A run-deadline cancel, a stall kill or an operator — not
+                    # a provider failure, and not an Exception, so the handler
+                    # below never saw it. The attempt still happened and still
+                    # cost the wall clock this row exists to account for.
+                    if not noted:
+                        note_outcome(model, attempt_started, error=ce)
+                    raise
                 except Exception as e:
                     last_error = e
+                    # `noted` is already True when the response itself was the
+                    # failure (an empty), so it is never counted twice.
+                    if not noted:
+                        note_outcome(model, attempt_started, error=e)
                     is_timeout = isinstance(e, TimeoutError)
                     # A spent budget is not a busy provider: no wait fixes it,
                     # and every other model on the same key fails identically.
@@ -1702,59 +2134,24 @@ class LLMClient:
                     spent = is_credit_exhausted(e)
                     if (spent or is_auth_failure(e)) and attempt_key is not None:
                         assert pool is not None
-                        pool.retire(
+                        if _rotate_credential(
+                            model,
+                            pool,
                             attempt_key,
-                            _retirement_reason(e, spent=spent),
-                        )
-                        if not pool.exhausted() and rotations_left > 0:
+                            e,
+                            spent=spent,
+                            rotations_left=rotations_left,
+                        ):
                             rotations_left -= 1
-                            logger.warning(
-                                "Model %s: credential %s failed (%s) — "
-                                "rotating to the next key and retrying "
-                                "the same model",
-                                _sanitize(model),
-                                pool.fingerprint(attempt_key),
-                                "credit exhausted" if spent else "auth rejected",
-                            )
                             # Deliberately does not advance `attempt`: a key
                             # swap is not a retry of a flaky provider.
                             continue
                     if spent:
-                        # Every model sharing this credential will fail the
-                        # same way, so they are skipped rather than tried.
-                        # But a model on a DIFFERENT credential — or none at
-                        # all, like the local ollama tier — is unaffected,
-                        # and raising here strands it. On 2026-08-26 that is
-                        # exactly what happened: main's chain ended in a
-                        # local Qwen that was up and answering in 9.8s, and
-                        # a spent OpenRouter key meant the chain never
-                        # reached it.
-                        if model_var is not None:
-                            dead_credentials.add(model_var)
-                        # `position`, not models.index(model): a chain may list
-                        # the same model twice, and the first index points
-                        # behind the cursor at models already tried.
-                        reachable = [
-                            m
-                            for m in models[position + 1 :]
-                            if (v := env_var_for_model(m)) is None or v not in dead_credentials
-                        ]
-                        if reachable:
-                            logger.warning(
-                                "Model %s: the account's credit is exhausted — "
-                                "skipping every model on the same key and "
-                                "falling through to %s.",
-                                _sanitize(model),
-                                _sanitize(reachable[0]),
-                            )
-                            break
-                        logger.error(
-                            "Model %s: the account's credit is exhausted — no "
-                            "model on this key can answer. Top up or raise the "
-                            "limit; this is not a model failure.",
-                            _sanitize(model),
-                        )
-                        raise
+                        if not _spent_credit_leaves_someone_reachable(
+                            models, position, model, model_var, dead_credentials
+                        ):
+                            raise
+                        break
                     if is_malformed_tool_arguments(e):
                         if malformed_retries_left > 0:
                             malformed_retries_left -= 1
@@ -1770,18 +2167,17 @@ class LLMClient:
                     if await self._wait_out_rate_limit(e, model, attempt, attempts):
                         attempt += 1
                         continue
-                    if attempt < attempts - 1 and _is_transient_model_error(e):
-                        if is_local_model(model) and is_capacity_error(e):
-                            delay = _local_capacity_delay()
-                        else:
-                            delay = random.uniform(
-                                TRANSIENT_RETRY_JITTER_MIN, TRANSIENT_RETRY_JITTER_MAX
-                            )
+                    delay = (
+                        _retry_delay(e, model, model_deadline, per_call_timeout)
+                        if attempt < attempts - 1
+                        else None
+                    )
+                    if delay is not None:
                         logger.warning(
                             "Model %s transient failure (%s) — retrying same model "
                             "in %.1fs (attempt %d/%d)",
                             _sanitize(model),
-                            _sanitize(f"timeout after {per_call_timeout}s" if is_timeout else e),
+                            _sanitize(f"timeout after {attempt_timeout}s" if is_timeout else e),
                             delay,
                             attempt + 1,
                             attempts,
@@ -1794,31 +2190,9 @@ class LLMClient:
                     # Giving up on this model — record the failure once per
                     # chain advancement (a retried-then-recovered blip must
                     # not count double toward the breaker threshold).
-                    if is_auth_failure(e):
-                        # A rejected credential says nothing about the model.
-                        # Blaming it blacklists a healthy model, and because
-                        # every model in the chain shares the key, a four-deep
-                        # chain blacklists all four — then keeps skipping them
-                        # for the breaker's cooldown after the key is fixed.
-                        logger.error(
-                            "Model %s: the credential was rejected — advancing "
-                            "without marking the model broken. Check the key, "
-                            "not the provider.",
-                            _sanitize(model),
-                        )
+                    if _advance_without_blaming_the_model(e, model):
                         break
-                    if is_timeout:
-                        breaker.record_failure(model, reason=f"timeout after {per_call_timeout}s")
-                        logger.warning(
-                            "LLM call to %s exceeded %ds — cancelling and falling back",
-                            _sanitize(model),
-                            per_call_timeout,
-                        )
-                    elif not (is_local_model(model) and is_capacity_error(e)):
-                        # Local backpressure must not open the breaker: it
-                        # would blind the fleet's only offline tier for the
-                        # cooldown, during the outage it exists to cover.
-                        breaker.record_failure(model, reason=str(e)[:120])
+                    _blame_model(breaker, e, model, attempt_timeout)
                     self._handle_model_error(e, model, broken_models, messages=messages)
                     if self._active_watchdog:
                         self._active_watchdog.touch(f"model_fallback:{model}")
@@ -1875,26 +2249,10 @@ class LLMClient:
             # Bounds the initial stream-creation await; subsequent chunk reads
             # are guarded by STREAM_CHUNK_TIMEOUT in the consumption loop below.
             per_call_timeout = _per_call_timeout(model, timeout_override)
-            if get_model_breaker().is_open(model):
-                # _call_llm has skipped open-breaker models for a long time,
-                # because a dead provider otherwise costs the full per-call
-                # timeout on every run. Streaming is the INTERACTIVE path, so
-                # it was the operator's own chat paying that timeout against a
-                # provider the engine had already written off. Safe to consult
-                # only because a streamed success now reaches the breaker too;
-                # otherwise an open breaker could never clear from the one
-                # path that proves a model healthy.
-                logger.info("skipping %s — circuit breaker open", _sanitize(model))
-                continue
             pool = self._key_pool(model)
-            if pool is not None and pool.exhausted():
-                # Every credential for this provider is retired; calling
-                # anyway would omit api_key and let litellm resolve the
-                # very key the pool just proved dead.
-                logger.info(
-                    "skipping %s — every configured credential for it is retired",
-                    _sanitize(model),
-                )
+            skip = _streaming_skip_reason(model, pool)
+            if skip:
+                logger.info("skipping %s — %s", _sanitize(model), skip)
                 continue
             rotations_left = (len(pool) - 1) if pool is not None else 0
             while True:
@@ -1903,6 +2261,7 @@ class LLMClient:
                 # timeout. After the skips, so it names only a dialled model.
                 per_call_timeout = bound_call_timeout(per_call_timeout, model)
                 attempt_key = None
+                attempt_started = time.monotonic()
                 try:
                     kwargs = self._build_llm_kwargs(
                         model,
@@ -1935,6 +2294,7 @@ class LLMClient:
                             }
                         )
                         await _emit({"type": "message_stop"})
+                        note_outcome(model, attempt_started, shape=describe_completion(result))
                         return result
 
                     stream_start = time.monotonic()
@@ -2026,15 +2386,23 @@ class LLMClient:
                     # Final progress tick — we have a complete response to return.
                     if self._active_watchdog:
                         self._active_watchdog.touch(f"stream_complete:{model}")
+                    rebuilt = litellm.stream_chunk_builder(chunks)
+                    merge_streamed_reasoning_details(rebuilt, streamed_reasoning_details)
+                    # One meaning for `duration_ms` on both paths: the provider
+                    # attempt, never the token-counting prep before it.
+                    shape = _streamed_shape(rebuilt, accumulated_content, has_tool_calls)
+                    note_outcome(model, attempt_started, shape=shape)
+                    if shape.no_answer:
+                        last_error = _streamed_without_an_answer(model, shape)
+                        break
                     # The interactive path proves a model healthy more often
                     # than any cron does; without this only failures ever
                     # reach the breaker, so it can open and never clear.
                     get_model_breaker().record_success(model)
                     _record_execution_mode(model)
-                    rebuilt = litellm.stream_chunk_builder(chunks)
-                    merge_streamed_reasoning_details(rebuilt, streamed_reasoning_details)
                     return rebuilt
                 except TimeoutError as te:
+                    note_outcome(model, attempt_started, error=te)
                     self._handle_model_error(te, model, broken_models, streaming=True)
                     last_error = te
                     # Model rotation is activity — don't let watchdog kill us mid-fallback
@@ -2042,33 +2410,24 @@ class LLMClient:
                         self._active_watchdog.touch(f"stream_timeout_fallback:{model}")
                     break
                 except Exception as e:
+                    note_outcome(model, attempt_started, error=e)
                     spent = is_credit_exhausted(e)
                     if (spent or is_auth_failure(e)) and attempt_key is not None:
                         assert pool is not None
-                        pool.retire(
+                        # Safe to retry in place: a credential error surfaces at
+                        # stream creation, before any chunk has reached
+                        # on_content, so nothing is duplicated.
+                        if _rotate_credential(
+                            model,
+                            pool,
                             attempt_key,
-                            _retirement_reason(e, spent=spent),
-                        )
-                        if not pool.exhausted() and rotations_left > 0:
+                            e,
+                            spent=spent,
+                            rotations_left=rotations_left,
+                        ):
                             rotations_left -= 1
-                            logger.warning(
-                                "Model %s: credential %s failed (%s) — rotating "
-                                "to the next key and retrying the same model",
-                                _sanitize(model),
-                                pool.fingerprint(attempt_key),
-                                "credit exhausted" if spent else "auth rejected",
-                            )
-                            # Safe to retry in place: a credential error
-                            # surfaces at stream creation, before any chunk has
-                            # reached on_content, so nothing is duplicated.
                             continue
-                    if is_auth_failure(e):
-                        # A rejected credential says nothing about the model.
-                        logger.error(
-                            "Model %s: the credential was rejected — advancing "
-                            "without marking the model broken.",
-                            _sanitize(model),
-                        )
+                    if _advance_without_blaming_the_model(e, model):
                         last_error = e
                         break
                     self._handle_model_error(

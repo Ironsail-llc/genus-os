@@ -340,7 +340,12 @@ def build_evidence(run_id: str, *, tenant_id: str = DEFAULT_TENANT) -> Evidence 
             """
             SELECT step_number, step_type, tool_name, error_message, duration_ms
             FROM agent_run_steps
-            WHERE run_id = %s AND (step_type = 'error' OR error_message IS NOT NULL)
+            -- `step_type <> 'llm_call'` keeps retried LLM attempts out of a
+            -- capped evidence list, where they would displace the real tool
+            -- errors this exists to surface.
+            WHERE run_id = %s
+              AND step_type <> 'llm_call'
+              AND (step_type = 'error' OR error_message IS NOT NULL)
             ORDER BY step_number
             LIMIT %s
             """,

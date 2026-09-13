@@ -57,7 +57,15 @@ LLM_REQUEST_TIMEOUT_OLLAMA = 600
 
 #: Trigger types whose runs are batch-shaped (no human waiting on the reply)
 #: and therefore get LLM_REQUEST_TIMEOUT_BATCH per model.
-BATCH_TRIGGER_TYPES = frozenset({"cron", "workflow"})
+#:
+#: `event` and `sub_agent` joined 2026-09-13 (DIAG §4.3). They were carrying 76
+#: of the 86 timeout-straddling steps in a two-day window while capped at 120s:
+#: an email-classifier run fired by an inbound mail, or a sub-agent spawned by
+#: crm-dedup, is exactly as unattended as a cron. The 300s constant, the
+#: plumbing and the rationale above all already existed — only the membership
+#: was wrong. Every other trigger keeps the 120s default, because there a human
+#: may be waiting; `test_llm_chain_retry` freezes the whole table.
+BATCH_TRIGGER_TYPES = frozenset({"cron", "workflow", "event", "sub_agent"})
 
 #: One in-place retry per model for transient failures (timeout / 5xx) before
 #: advancing the fallback chain. A transient 502 used to burn the model's only

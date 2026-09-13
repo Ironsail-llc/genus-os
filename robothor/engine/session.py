@@ -389,6 +389,47 @@ class AgentSession:
 
         return step
 
+    def record_llm_attempt(
+        self,
+        model: str,
+        *,
+        duration_ms: int = 0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        error_message: str | None = None,
+    ) -> RunStep:
+        """Record one FAILED LLM attempt (DIAG 2026-09-13 §2.2).
+
+        Until this existed, ``_do_llm_call`` wrote a single row built from the
+        final successful response, so a retried empty or timeout left no row at
+        all and the surviving row's ``duration_ms`` covered every attempt plus
+        every backoff. An attempt row is diagnostics: it carries the tokens the
+        attempt actually burned but is deliberately kept OUT of the run-level
+        aggregates, which are fed from the billed response the cost is computed
+        from. ``model_used`` is untouched — a failed attempt did not answer.
+        """
+        self._step_counter += 1
+        step = RunStep(
+            run_id=self.run_id,
+            step_number=self._step_counter,
+            step_type=StepType.LLM_CALL,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+            duration_ms=duration_ms,
+            error_message=error_message,
+        )
+        self.run.steps.append(step)
+        # Deliberately NOT appended to ``models_attempted``: that column means
+        # "the models that actually served an LLM call" (detectors.py:879-881),
+        # and ``check_primary_model_unreached`` decides "reached" by membership
+        # alone. A primary that is dialled and always fails must never satisfy
+        # it, or the detector that catches a dead primary can never fire again.
+        # The failure is already fully described by this row.
+        return step
+
     def record_tool_call(
         self,
         tool_name: str,

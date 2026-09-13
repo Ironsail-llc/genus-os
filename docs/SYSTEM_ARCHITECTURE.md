@@ -150,6 +150,78 @@ deployment are separate human-approved operations.
 | Kimi K2.5 | Triage worker, cron agent jobs |
 | Claude Opus 4.6 | Fallback for agent work, Claude Code sessions |
 
+### Model Dispatch (`robothor/engine/llm_client.py`)
+
+Every agent turn walks a fallback chain, and each model in it gets one in-place
+retry before the chain advances. Three properties of that loop are worth
+knowing when reading `agent_run_steps` or the journal:
+
+- **A reasoning-only reply is not an empty one.** A thinking model that spends
+  its budget before the answer starts returns blank `content` with
+  `reasoning_content` / `reasoning_details` on the message. That is re-asked
+  **once on the same model** with a smaller thinking budget and a nudge for the
+  answer — an identical re-roll truncates identically — and logged as
+  `reasoning_only`, distinct from a true provider `empty` (no reasoning, no
+  tool call). `compaction.py` does the same rather than walking its chain down
+  to the local tier, which is how an 81k-token context once compacted to a
+  30-character summary.
+- **The thinking budget is a share of the completion.** The running agent's
+  `reasoning_effort` picks the share (low 25% / medium 50% / high 75% / max
+  90%), capped so the answer always keeps `MIN_ANSWER_TOKENS`. A share, not a
+  token count: every `supports_thinking` model in the fleet requests the same
+  16,384 output, so absolute rungs all clamped to one number and three of the
+  four manifest settings reached the wire identically. On that 16,384 the
+  rungs are 4,096 / 8,192 / 12,288 — and `high` and `max` are **the same
+  number**, because 75% is already the `MIN_ANSWER_TOKENS` cap. They separate
+  only on a model with a larger `default_output_tokens`; today `max` buys
+  nothing over `high`. `temperature` is forced
+  to 1.0 only for the Anthropic family, which is the API that requires it.
+- **Every attempt is recorded, not just the one that worked.** Each attempt
+  writes its own `agent_run_steps` row with its own `duration_ms`; the failed
+  ones carry the outcome (`empty`, `reasoning_only`, `reasoning_only_retry`,
+  `timeout`, `error_<status>`) and the response's `finish_reason` and token
+  counts in `error_message`. Before this the surviving row's duration silently
+  covered every retry and every backoff, and a failed attempt left no row at
+  all. `duration_ms` on an `llm_call` row means the **provider attempt** on both
+  the streaming and non-streaming paths — never the token-counting prep before
+  it — and the rows are written in a `finally`, so a spent credential or a
+  run-deadline cancellation keeps its evidence (a cancelled in-flight attempt
+  records `cancelled` and the cancellation still stands). One provider call is
+  one row: a streamed reply that carries no answer advances the chain the way a
+  non-streamed one does, rather than returning a blank turn and recording both
+  a failure and a success for the same call. A reasoning-only reply the same
+  model is re-asked about is written as `reasoning_only_retry`, so a query can
+  tell a self-heal from a model that gave up.
+- **An attempt row is telemetry, not a run error.** `record_llm_call` never
+  sets `error_message`, so an `llm_call` row that has one is an attempt row
+  (`llm_attempts.is_attempt_step`). They are excluded from the verifier's error
+  count, the goal judge's `tool_errors`, Buddy's error evidence, the
+  `total_llm_calls` / `request_count` turn counters, and from
+  `models_attempted` — that column means *the models that actually served*, and
+  the primary-model-dead detector decides "reached" by membership alone.
+- **Unattended triggers get the batch timeout, and retries share it.** `cron`,
+  `workflow`, `event` and `sub_agent` runs get `ROBOTHOR_LLM_TIMEOUT_BATCH`
+  (300s) per model; interactive triggers (`telegram`, `webchat`, `slack`, and
+  every other trigger by default) keep `ROBOTHOR_LLM_TIMEOUT` (120s), because
+  there a human is waiting. An inbound-mail classification or a spawned
+  sub-agent is as batch-shaped as a cron, and capping those at 120s was the
+  bulk of the fleet's timeouts. Every attempt on a model — the in-place retry
+  and the reasoning-only re-ask included — shares **one** allowance of that
+  length, so one dispatch is bounded by
+  `worst_case_dispatch_seconds(models, timeout)`. At the batch timeout that is
+  305s per model, so a dispatch fits inside the 1800s
+  `thread_pool.PENDING_EXPIRY_SECONDS` a sub-agent turn is expected to fit in
+  **for chains of at most `MAX_CHAIN_MODELS_BUDGETED` (5) models** — the number
+  the arithmetic is tested against. A longer chain is an operator's choice and
+  is logged, not refused; the local tier's own 600s allowance is longer still,
+  so a chain ending there needs the same check made by hand.
+  Inside a workflow step, `workflow_budget.bound_call_timeout` clamps the same
+  number again to what the workflow has left, and refuses to start a call the
+  workflow cannot afford to finish. The two clamps compose in that order inside
+  the attempt loop: the workflow's remaining budget can only ever lower the
+  per-model allowance, never raise it, and a reasoning-only re-ask is a real
+  provider call that has to clear both.
+
 ---
 
 ## Architecture Overview

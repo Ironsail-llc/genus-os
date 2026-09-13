@@ -451,9 +451,18 @@ def _fetch_run_digest(cur: Any, run_id: str, tenant_id: str) -> RunDigest | None
     status, output_text, duration_ms = row[0], row[1] or "", row[2]
     trigger_type, trigger_detail = (row[3] or ""), (row[4] or "")
     cur.execute(
+        # `step_type <> 'llm_call'` excludes the per-attempt telemetry rows:
+        # `record_llm_call` never sets `error_message`, so an llm_call row that
+        # has one is a retried LLM attempt. Rendering those as `tool_errors`
+        # tells the goal judge a clean run had tool failures — the 2026-08-27
+        # shape, where deploys counted as agent timeouts and flipped main's
+        # goal FAIL->PASS. Behaviour-identical for every row written before
+        # attempt recording existed.
         """
         SELECT step_type, error_message
-        FROM agent_run_steps WHERE run_id = %s ORDER BY step_number
+        FROM agent_run_steps
+        WHERE run_id = %s AND step_type <> 'llm_call'
+        ORDER BY step_number
         """,
         (run_id,),
     )

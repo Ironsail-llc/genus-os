@@ -1263,7 +1263,11 @@ class TestThinkingAPI:
         call_kwargs = mock_llm.call_args.kwargs
         assert call_kwargs["temperature"] == 1.0
         assert call_kwargs["thinking"]["type"] == "enabled"
-        assert call_kwargs["thinking"]["budget_tokens"] == 10_000
+        # 8,192, not the 10,000 `medium` asks for: the budget is clamped so the
+        # answer keeps at least half the completion (DIAG 2026-09-13 §4.2 —
+        # 10,000 of a 16,384 max_tokens was 61% of the request).
+        assert call_kwargs["thinking"]["budget_tokens"] == 8_192
+        assert call_kwargs["thinking"]["budget_tokens"] < call_kwargs["max_tokens"]
         # Model should stay as OpenRouter path (no prefix stripping)
         assert call_kwargs["model"] == "openrouter/anthropic/claude-sonnet-4.6"
 

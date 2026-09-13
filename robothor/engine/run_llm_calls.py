@@ -29,6 +29,11 @@ from typing import Any
 # llm_client.LLMClient (Phase A / Slice 1). AgentRunner delegates to an
 # instance of it; the historical method surface is preserved via thin
 # delegators/aliases below so existing call sites keep working unchanged.
+from robothor.engine.llm_attempts import (  # noqa: E402
+    begin_attempts,
+    record_attempt_steps,
+    take_attempts,
+)
 from robothor.engine.llm_client import LLMClient  # noqa: E402
 from robothor.engine.reasoning_replay import (  # noqa: E402
     PRODUCER_MODEL_KEY,
@@ -189,11 +194,51 @@ class LLMCallMixin:
         trace: Any = None,
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> tuple[Any, str, int, dict[str, Any]]:
-        """Make an LLM call, record it in session, return (response, model, ms, msg_dict)."""
-        start = time.monotonic()
+        """Make an LLM call, record it in session, return (response, model, ms, msg_dict).
 
-        if trace:
-            with trace.span("llm_call") as _span:
+        Every ATTEMPT the dispatch made gets its own ``agent_run_steps`` row —
+        the failed ones carry their outcome in ``error_message``. Before that
+        (DIAG 2026-09-13 §2.2) only the final success was recorded and its
+        ``duration_ms`` silently covered every retry and every backoff, so the
+        empty completion the fleet re-rolled ~50 times a day left no trace in
+        the database at all.
+        """
+        start = time.monotonic()
+        begin_attempts()
+        elapsed_ms = 0
+        success_ms = 0
+
+        try:
+            if trace:
+                with trace.span("llm_call") as _span:
+                    response = await self._do_llm_call(
+                        session,
+                        models,
+                        tool_schemas,
+                        on_content,
+                        broken_models,
+                        temperature,
+                        on_stream_event=on_stream_event,
+                    )
+                    # GenAI semantic-convention attributes for OTel export.
+                    if response is not None:
+                        with contextlib.suppress(Exception):
+                            from robothor.engine.telemetry import gen_ai_attributes
+
+                            _usage = getattr(response, "usage", None)
+                            _finish = ""
+                            if getattr(response, "choices", None):
+                                _finish = getattr(response.choices[0], "finish_reason", "") or ""
+                            _span.attributes.update(
+                                gen_ai_attributes(
+                                    model=getattr(response, "model", None)
+                                    or (models[0] if models else ""),
+                                    input_tokens=getattr(_usage, "prompt_tokens", 0) or 0,
+                                    output_tokens=getattr(_usage, "completion_tokens", 0) or 0,
+                                    finish_reason=_finish,
+                                )
+                            )
+            else:
                 response = await self._do_llm_call(
                     session,
                     models,
@@ -203,36 +248,16 @@ class LLMCallMixin:
                     temperature,
                     on_stream_event=on_stream_event,
                 )
-                # GenAI semantic-convention attributes for OTel export.
-                if response is not None:
-                    with contextlib.suppress(Exception):
-                        from robothor.engine.telemetry import gen_ai_attributes
-
-                        _usage = getattr(response, "usage", None)
-                        _finish = ""
-                        if getattr(response, "choices", None):
-                            _finish = getattr(response.choices[0], "finish_reason", "") or ""
-                        _span.attributes.update(
-                            gen_ai_attributes(
-                                model=getattr(response, "model", None)
-                                or (models[0] if models else ""),
-                                input_tokens=getattr(_usage, "prompt_tokens", 0) or 0,
-                                output_tokens=getattr(_usage, "completion_tokens", 0) or 0,
-                                finish_reason=_finish,
-                            )
-                        )
-        else:
-            response = await self._do_llm_call(
-                session,
-                models,
-                tool_schemas,
-                on_content,
-                broken_models,
-                temperature,
-                on_stream_event=on_stream_event,
-            )
-
-        elapsed_ms = int((time.monotonic() - start) * 1000)
+        finally:
+            # `finally`, not the straight line: `_call_llm` RE-RAISES on a spent
+            # credential and a run-deadline cancellation cuts straight through
+            # here. Both are exactly the failures the attempt rows exist to
+            # describe, and on the straight-line version they produced zero
+            # rows and left the sink armed for the next call to drop.
+            elapsed_ms = int((time.monotonic() - start) * 1000)
+            # …and the duration of the attempt that worked, so the success row
+            # stops standing for the whole retry loop.
+            success_ms = record_attempt_steps(session, take_attempts()) or elapsed_ms
 
         # Touch stall watchdog — LLM responded, we're alive
         if self._active_watchdog:
@@ -300,7 +325,7 @@ class LLMCallMixin:
             output_tokens=output_tokens,
             cache_creation_tokens=cache_creation_tokens,
             cache_read_tokens=cache_read_tokens,
-            duration_ms=elapsed_ms,
+            duration_ms=success_ms,
             assistant_message=msg_dict,
         )
 

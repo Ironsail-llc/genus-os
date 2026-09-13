@@ -116,7 +116,19 @@ export function RunsView({ visible = true }: { visible?: boolean }) {
             </div>
             <ol className="mt-3 list-decimal pl-5 font-mono text-xs leading-6 text-muted-foreground">
               {detail.steps.map((s) => (
-                <li key={s.step_number}>{s.step_type}{s.tool_name ? `: ${s.tool_name}` : ""}</li>
+                /* An llm_call row carrying an error_message is a RETRIED attempt,
+                   not a second turn: the engine records one row per provider
+                   attempt. Without the marker an operator sees two identical
+                   `llm_call` lines and cannot tell a retry from duplicate
+                   telemetry. */
+                <li key={s.step_number}>
+                  {s.step_type}{s.tool_name ? `: ${s.tool_name}` : ""}
+                  {s.step_type === "llm_call" && s.error_message ? (
+                    <span data-testid={`attempt-${s.step_number}`} className="ml-1 text-warning">
+                      · attempt failed ({String(s.error_message).split(":")[0]})
+                    </span>
+                  ) : null}
+                </li>
               ))}
             </ol>
             <div className="mt-3 flex flex-col gap-1">

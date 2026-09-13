@@ -36,6 +36,10 @@ def _limits(**overrides):
     m.cache_write_cost_per_token = overrides.get("cache_write_cost_per_token", 0.0)
     m.cache_read_cost_per_token = overrides.get("cache_read_cost_per_token", 0.0)
     m.supports_thinking = overrides.get("supports_thinking", False)
+    # Real ints: the thinking block is now sized against the answer budget
+    # (DIAG 2026-09-13 §4.2), so `max_tokens` is arithmetic, not a MagicMock.
+    m.default_output_tokens = overrides.get("default_output_tokens", 16_384)
+    m.max_output_tokens = overrides.get("max_output_tokens", 64_000)
     return m
 
 
@@ -203,6 +207,18 @@ class TestBuildLLMKwargs:
             thinking=True,
         )
         assert kwargs["temperature"] == 1.0
+        assert kwargs["thinking"]["type"] == "enabled"
+
+    def test_a_non_anthropic_thinking_model_keeps_its_temperature(self):
+        """`temperature = 1.0  # Required by Anthropic API` was applied to every
+        thinking model, so the fleet's dedup and classification work sampled at
+        maximum entropy for a DeepSeek reason it never had (DIAG §4.2)."""
+        kwargs = self._build(
+            "openrouter/deepseek/deepseek-v4.1-flash",
+            [{"role": "user", "content": "hi"}],
+            thinking=True,
+        )
+        assert kwargs["temperature"] == 0.3  # the 0.3 _build passes through
         assert kwargs["thinking"]["type"] == "enabled"
 
     def test_codex_model_no_cache_control(self):
