@@ -19,18 +19,21 @@ Endpoints:
   POST /chat/deep/start   — Start deep reasoning (RLM), return SSE stream
   GET  /chat/deep/status  — Check active deep reasoning state
 
-TODO(per-user sessions): the in-memory ``_sessions`` dict is unbounded in
-number of keys — each session's *history* is capped at MAX_HISTORY, but with
-ROBOTHOR_PER_USER_SESSIONS=enforce every distinct member gets their own
-long-lived entry that is never evicted. Fine at current tenant scale; a
-large tenant will want LRU eviction (or a TTL sweep) over ``_sessions``
-itself, not just per-session history trimming. Future work, not this task.
+The in-memory ``_sessions`` dict is a bounded cache over the PostgreSQL store,
+not the truth. Each session's *history* is capped at MAX_HISTORY, and the
+number of sessions is capped at MAX_SESSIONS: creating a key past the cap
+evicts the least-recently-used session that has no running task, no pending
+plan and no deep run (the main session is never evicted). An evicted key is
+rehydrated from the store on its next message, so nothing a member said is
+lost — only the memory it occupied while idle. ``evict_idle_sessions`` is the
+TTL sweep for callers that want one.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -43,10 +46,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.engine.chat_store import (
     clear_plan_state_async,
     clear_session_async,
     load_all_sessions,
+    load_session,
     save_exchange_async,
     save_message_async,
     save_plan_state_async,
@@ -194,16 +199,86 @@ class ChatSession:
     plan_mode: bool = False
     active_plan: PlanState | None = None
     active_deep: DeepRunState | None = None
+    last_used: float = field(default_factory=time.monotonic)
 
 
-# In-memory session store
+# In-memory session cache over the PostgreSQL store (see module docstring).
 _sessions: dict[str, ChatSession] = {}
+# Keys this process evicted: the only ones whose next access consults the
+# store. A never-seen key is genuinely new (startup restored everything the
+# store had), so it must not cost a query.
+_evicted: set[str] = set()
+
+#: Cap on cached sessions. Live work is never dropped to honour it.
+MAX_SESSIONS = 500
+#: Idle age after which ``evict_idle_sessions`` drops a session (matches the
+#: store's own 7-day session TTL).
+SESSION_IDLE_TTL_S = 7 * 24 * 3600
+
+
+def _is_evictable(session_key: str, session: ChatSession) -> bool:
+    if session_key == get_main_session_key():
+        return False
+    if session.active_task is not None and not session.active_task.done():
+        return False
+    return session.active_plan is None and session.active_deep is None
+
+
+def _evict(session_key: str) -> None:
+    del _sessions[session_key]
+    _evicted.add(session_key)
+
+
+def _evict_to_cap() -> None:
+    """Make room for one more session; never drops live work to do it."""
+    while len(_sessions) >= MAX_SESSIONS:
+        candidates = [(s.last_used, k) for k, s in _sessions.items() if _is_evictable(k, s)]
+        if not candidates:
+            return
+        _evict(min(candidates)[1])
+
+
+def evict_idle_sessions(*, ttl_s: float | None = None, now: float | None = None) -> int:
+    """Drop every evictable session idle for longer than *ttl_s*. Returns the count."""
+    ttl = SESSION_IDLE_TTL_S if ttl_s is None else ttl_s
+    at = time.monotonic() if now is None else now
+    stale = [k for k, s in _sessions.items() if at - s.last_used > ttl and _is_evictable(k, s)]
+    for key in stale:
+        _evict(key)
+    return len(stale)
+
+
+def _rehydrate(session_key: str) -> ChatSession:
+    """A session this process evicted comes back from the store, history and all."""
+    session = ChatSession()
+    tenant = _config.tenant_id if _config is not None else DEFAULT_TENANT
+    try:
+        data = load_session(session_key, limit=MAX_HISTORY, tenant_id=tenant)
+    except Exception as exc:  # noqa: BLE001 - a store outage costs history, not the turn
+        logger.warning(
+            "chat session %s: rehydration failed: %s",
+            sanitize_log(session_key),
+            sanitize_log(str(exc)),
+        )
+        return session
+    history = data.get("history") if data else None
+    if history:
+        session.history = list(history)
+    model = data.get("model_override") if data else None
+    if model:
+        session.model_override = model
+    return session
 
 
 def _get_session(session_key: str) -> ChatSession:
-    if session_key not in _sessions:
-        _sessions[session_key] = ChatSession()
-    return _sessions[session_key]
+    session = _sessions.get(session_key)
+    if session is None:
+        _evict_to_cap()
+        session = _rehydrate(session_key) if session_key in _evicted else ChatSession()
+        _evicted.discard(session_key)
+        _sessions[session_key] = session
+    session.last_used = time.monotonic()
+    return session
 
 
 def get_shared_session(session_key: str) -> ChatSession:
