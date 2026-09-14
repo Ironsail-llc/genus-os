@@ -1600,11 +1600,18 @@ class LLMClient:
         """
         from robothor.engine.session import ENGINE_CONTEXT_ROLE
 
-        if not LLMClient._is_anthropic_family(model):
-            return messages
         if not any(m.get("role") == ENGINE_CONTEXT_ROLE for m in messages):
             return messages
 
+        # The prefix is for EVERY provider, not only Anthropic. Live on
+        # 2026-09-14 (DeepSeek via OpenRouter) the main agent opened every
+        # reply with a "security flag" that the operator's message "arrived
+        # wrapped in injected blocks" — the engine's own plan, working state
+        # and identity turns, folded next to the user text without a name on
+        # them. Behavioural rule 6 then made the agent report its own engine
+        # as an attacker. Only the ROLE rewrite stays Anthropic-specific.
+        to_user = LLMClient._is_anthropic_family(model)
+        marker = ENGINE_CONTEXT_PREFIX.strip()
         normalized: list[dict[str, Any]] = []
         converted = 0
         for msg in messages:
@@ -1613,15 +1620,20 @@ class LLMClient:
                 continue
             converted += 1
             rewritten = dict(msg)
-            rewritten["role"] = "user"
+            if to_user:
+                rewritten["role"] = "user"
             content = msg.get("content")
             if isinstance(content, list):
-                rewritten["content"] = [
-                    {"type": "text", "text": ENGINE_CONTEXT_PREFIX.strip()},
-                    *content,
-                ]
+                first = content[0] if content else None
+                already = isinstance(first, dict) and first.get("text") == marker
+                rewritten["content"] = (
+                    content if already else [{"type": "text", "text": marker}, *content]
+                )
             else:
-                rewritten["content"] = f"{ENGINE_CONTEXT_PREFIX}{content or ''}"
+                text = content or ""
+                rewritten["content"] = (
+                    text if str(text).startswith(marker) else f"{ENGINE_CONTEXT_PREFIX}{text}"
+                )
             normalized.append(rewritten)
 
         logger.debug(

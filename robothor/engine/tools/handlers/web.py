@@ -1429,6 +1429,25 @@ async def _browser_search_locked(query: str, cap: int, ctx: ToolContext) -> dict
     return out
 
 
+#: Attempts against Brave when it answers 429. The free tier allows one request
+#: per second; two searches a second apart hit it on the first live day
+#: (2026-09-14) and "fell through" to a dead scraped rung. A rate limit from
+#: the one reliable provider is a pause, not an outage.
+_BRAVE_MAX_ATTEMPTS = 3
+#: Wait when the 429 carries no Retry-After (the free tier's interval, plus a hair).
+_BRAVE_DEFAULT_BACKOFF_S = 1.1
+#: Never sleep longer than this on a server-named Retry-After.
+_BRAVE_MAX_BACKOFF_S = 5.0
+
+
+def _retry_after_seconds(resp: Any) -> float:
+    try:
+        value = float(str(resp.headers.get("Retry-After", "")).strip())
+    except (TypeError, ValueError, AttributeError):
+        return _BRAVE_DEFAULT_BACKOFF_S
+    return min(max(value, 0.0), _BRAVE_MAX_BACKOFF_S)
+
+
 async def _brave_search(query: str, limit: int) -> list[dict[str, str]] | None:
     """Brave Search API, if the operator configured a key. None = not available."""
     key = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
@@ -1436,17 +1455,29 @@ async def _brave_search(query: str, limit: int) -> list[dict[str, str]] | None:
         return None
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                BRAVE_API_URL,
-                params={"q": query, "count": max(1, min(limit, 20))},
-                headers={
-                    "X-Subscription-Token": key,
-                    "Accept": "application/json",
-                    "User-Agent": _USER_AGENT,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            for attempt in range(1, _BRAVE_MAX_ATTEMPTS + 1):
+                resp = await client.get(
+                    BRAVE_API_URL,
+                    params={"q": query, "count": max(1, min(limit, 20))},
+                    headers={
+                        "X-Subscription-Token": key,
+                        "Accept": "application/json",
+                        "User-Agent": _USER_AGENT,
+                    },
+                )
+                if resp.status_code == 429 and attempt < _BRAVE_MAX_ATTEMPTS:
+                    wait = _retry_after_seconds(resp)
+                    logger.info(
+                        "Brave rate-limited (attempt %d/%d), retrying in %.1fs",
+                        attempt,
+                        _BRAVE_MAX_ATTEMPTS,
+                        wait,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                break
     except Exception as e:
         logger.warning("Brave search failed, falling through: %s", e)
         return None

@@ -87,6 +87,10 @@ REQUIRED_KEYS=(
 # key for two days, because nothing on this path ever said the slot was empty.
 ADVISORY_KEYS=(
     "OPENROUTER_API_KEY_2"
+    # Without it web_search has no API provider and silently falls to scraped
+    # engines that data-center IPs get blocked from (whole chain dead
+    # 2026-09-14, nothing said why). Warn by name at every boot.
+    "BRAVE_SEARCH_API_KEY"
 )
 
 # Also advisory: the pager's own credentials. Telegram is an optional channel,

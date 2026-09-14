@@ -54,6 +54,16 @@ _VISION_TOOLS = frozenset(
 )
 
 
+def _sandbox_tenant() -> str:
+    """The benchmark sandbox tenant id; its runs never count toward outages."""
+    try:
+        from robothor.engine.benchmark_sandbox import sandbox_tenant_id
+
+        return str(sandbox_tenant_id())
+    except Exception:  # noqa: BLE001 - detectors must never fail on a config import
+        return "benchmark-sandbox"
+
+
 def _vision_service_disabled() -> bool:
     """True when the vision service is administratively disabled.
 
@@ -673,37 +683,45 @@ def check_tool_outage(
         cur.execute(
             """
             SELECT
-                tool_name,
+                e.tool_name,
                 COUNT(*) FILTER (
-                    WHERE created_at > NOW() - make_interval(hours => %(hours)s)
+                    WHERE e.created_at > NOW() - make_interval(hours => %(hours)s)
                 ) AS total,
                 COUNT(*) FILTER (
-                    WHERE created_at > NOW() - make_interval(hours => %(hours)s)
-                      AND NOT success
+                    WHERE e.created_at > NOW() - make_interval(hours => %(hours)s)
+                      AND NOT e.success
                 ) AS failures,
-                MODE() WITHIN GROUP (ORDER BY COALESCE(error_type, 'unknown'))
+                MODE() WITHIN GROUP (ORDER BY COALESCE(e.error_type, 'unknown'))
                     FILTER (
-                        WHERE created_at > NOW() - make_interval(hours => %(hours)s)
-                          AND NOT success
+                        WHERE e.created_at > NOW() - make_interval(hours => %(hours)s)
+                          AND NOT e.success
                     ) AS error_type,
-                MAX(created_at) FILTER (WHERE success) AS last_success_at,
+                MAX(e.created_at) FILTER (WHERE e.success) AS last_success_at,
                 EXTRACT(EPOCH FROM (NOW() - COALESCE(
-                    MAX(created_at) FILTER (WHERE success),
-                    MIN(created_at) FILTER (WHERE NOT success)
+                    MAX(e.created_at) FILTER (WHERE e.success),
+                    MIN(e.created_at) FILTER (WHERE NOT e.success)
                 ))) / 86400.0 AS outage_days
-            FROM agent_tool_events
-            WHERE created_at > NOW() - make_interval(days => %(lookback_days)s)
-              AND tool_name IS NOT NULL
-              AND (error_type IS NULL OR error_type <> %(sandbox_denied_type)s)
-            GROUP BY tool_name
+            FROM agent_tool_events e
+            LEFT JOIN agent_runs r ON r.id = e.run_id
+            WHERE e.created_at > NOW() - make_interval(days => %(lookback_days)s)
+              AND e.tool_name IS NOT NULL
+              AND (e.error_type IS NULL OR e.error_type <> %(sandbox_denied_type)s)
+              -- Benchmark children are graded on fixtures that do not exist
+              -- in production (resolve_identities "dead 13d": every call was
+              -- a harness task looking up a fixture person). Their failures
+              -- are the benchmark's business, not a tool outage to page on.
+              AND COALESCE(r.trigger_detail, '') NOT LIKE 'benchmark:%%'
+              AND COALESCE(r.tenant_id, '') <> %(sandbox_tenant)s
+            GROUP BY e.tool_name
             HAVING COUNT(*) FILTER (
-                WHERE created_at > NOW() - make_interval(hours => %(hours)s)
+                WHERE e.created_at > NOW() - make_interval(hours => %(hours)s)
             ) > 0
             """,
             {
                 "hours": window_hours,
                 "lookback_days": lookback_days,
                 "sandbox_denied_type": SANDBOX_DENIED_ERROR_TYPE,
+                "sandbox_tenant": _sandbox_tenant(),
             },
         )
         rows = [dict(r) for r in cur.fetchall()]
