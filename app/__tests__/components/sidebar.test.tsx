@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { Sidebar, type ViewId } from "@/components/layout/sidebar";
+import { Sidebar } from "@/components/layout/sidebar";
+import type { ViewId } from "@/components/layout/nav-config";
 
 // Mock next/image
 vi.mock("next/image", () => ({
@@ -17,7 +18,8 @@ vi.mock("@/components/ui/tooltip", () => ({
 function renderSidebar(overrides: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
   const defaults = {
     activeView: "dashboard" as ViewId,
-    onViewChange: vi.fn(),
+    activeSettingsPage: "providers" as const,
+    onNavigate: vi.fn(),
     chatOpen: false,
     onChatToggle: vi.fn(),
     reviewCount: 0,
@@ -51,15 +53,15 @@ describe("Sidebar", () => {
     expect(dashboardBtn.className).not.toContain("bg-primary/10");
   });
 
-  it("calls onViewChange when nav item clicked", () => {
-    const { onViewChange } = renderSidebar();
+  it("calls onNavigate when nav item clicked", () => {
+    const { onNavigate } = renderSidebar();
     fireEvent.click(screen.getByTestId("nav-agents"));
-    expect(onViewChange).toHaveBeenCalledWith("agents");
+    expect(onNavigate).toHaveBeenCalledWith("agents", undefined);
   });
 
-  it("calls onChatToggle when chat icon clicked", () => {
+  it("calls onChatToggle when the docked chat panel is toggled", () => {
     const { onChatToggle } = renderSidebar();
-    fireEvent.click(screen.getByTestId("nav-chat"));
+    fireEvent.click(screen.getByTestId("chat-panel-toggle"));
     expect(onChatToggle).toHaveBeenCalledOnce();
   });
 
@@ -88,9 +90,9 @@ describe("Sidebar", () => {
     expect(screen.getByTestId("badge-tasks").textContent).toBe("99+");
   });
 
-  it("highlights chat icon when chatOpen", () => {
+  it("highlights the docked chat toggle when chatOpen", () => {
     renderSidebar({ chatOpen: true });
-    const chatBtn = screen.getByTestId("nav-chat");
+    const chatBtn = screen.getByTestId("chat-panel-toggle");
     expect(chatBtn.className).toContain("bg-primary/10");
   });
 });

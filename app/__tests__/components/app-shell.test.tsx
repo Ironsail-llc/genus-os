@@ -86,6 +86,8 @@ import { AppShell } from "@/components/layout/app-shell";
 
 describe("AppShell", () => {
   beforeEach(() => {
+    // The active view lives in the query string now — reset it between tests.
+    window.history.replaceState(null, "", "/");
     mockUseTasks.mockReturnValue({
       tasks: [
         { id: "1", title: "Test Task", status: "REVIEW" },
@@ -122,7 +124,7 @@ describe("AppShell", () => {
 
   it("header shows current view title", () => {
     render(<AppShell />);
-    expect(screen.getByTestId("header-title")).toHaveTextContent("Dashboard");
+    expect(screen.getByTestId("header-title")).toHaveTextContent("Chat");
   });
 
   it("header title updates when view changes", () => {
@@ -144,12 +146,13 @@ describe("AppShell", () => {
     expect(screen.getByTestId("chat-panel")).toBeInTheDocument();
   });
 
-  it("defaults to dashboard view", () => {
+  it("defaults to the chat view, with the old dashboard one click away", () => {
     render(<AppShell />);
-    const dashView = screen.getByTestId("dashboard-view");
-    expect(dashView.style.display).toBe("flex");
-    const tasksView = screen.getByTestId("tasks-view");
-    expect(tasksView.style.display).toBe("none");
+    expect(screen.getByTestId("header-title")).toHaveTextContent("Chat");
+    expect(screen.getByTestId("dashboard-view").style.display).toBe("none");
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
+    expect(screen.getByTestId("dashboard-view").style.display).toBe("flex");
+    expect(screen.getByTestId("tasks-view").style.display).toBe("none");
   });
 
   it("switches to tasks view", () => {
@@ -165,16 +168,16 @@ describe("AppShell", () => {
     expect(screen.getByTestId("agents-view").style.display).toBe("flex");
   });
 
-  it("toggles chat panel", () => {
+  it("toggles the docked chat panel beside another view", () => {
     render(<AppShell />);
+    // The docked width only applies off the chat view, which owns the column.
+    fireEvent.click(screen.getByTestId("nav-dashboard"));
     const chatContainer = screen.getByTestId("chat-container");
     // Initially open (400px)
     expect(chatContainer.style.width).toBe("400px");
-    // Click chat toggle
-    fireEvent.click(screen.getByTestId("nav-chat"));
+    fireEvent.click(screen.getByTestId("chat-panel-toggle"));
     expect(chatContainer.style.width).toBe("0px");
-    // Click again to reopen
-    fireEvent.click(screen.getByTestId("nav-chat"));
+    fireEvent.click(screen.getByTestId("chat-panel-toggle"));
     expect(chatContainer.style.width).toBe("400px");
   });
 

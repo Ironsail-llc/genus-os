@@ -1,9 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LayoutDashboard, ListTodo, Bot, Store, ShieldAlert, Users, Activity, Workflow, HeartPulse, Sparkles, Moon, Search } from "lucide-react";
+import { Moon, Search } from "lucide-react";
 import { useTheme } from "next-themes";
-import type { ViewId } from "@/components/layout/sidebar";
+import {
+  visibleNavGroups,
+  type SettingsPageId,
+  type ViewId,
+} from "@/components/layout/nav-config";
 
 type Command = {
   id: string;
@@ -18,7 +22,13 @@ type Command = {
  * overlay + filtered list) instead of cmdk to stay dependency-free and
  * jsdom-testable.
  */
-export function CommandPalette({ onNavigate }: { onNavigate: (view: ViewId) => void }) {
+interface CommandPaletteProps {
+  onNavigate: (view: ViewId, settingsPage?: SettingsPageId) => void;
+  /** Session role — the palette shows exactly what the sidebar shows. UX gate only. */
+  role?: string | null;
+}
+
+export function CommandPalette({ onNavigate, role }: CommandPaletteProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -47,27 +57,25 @@ export function CommandPalette({ onNavigate }: { onNavigate: (view: ViewId) => v
     if (open) inputRef.current?.focus();
   }, [open]);
 
+  // Entries are derived from the one nav config the sidebar and the mobile
+  // sheet read, so the palette can never drift from the navigation.
   const commands = useMemo<Command[]>(() => {
-    const nav: Array<{ id: ViewId; label: string; icon: React.ReactNode }> = [
-      { id: "dashboard", label: "Go to Dashboard", icon: <LayoutDashboard className="size-4" /> },
-      { id: "tasks", label: "Go to Tasks", icon: <ListTodo className="size-4" /> },
-      { id: "agents", label: "Go to Agents", icon: <Bot className="size-4" /> },
-      { id: "marketplace", label: "Go to Marketplace", icon: <Store className="size-4" /> },
-      { id: "controls", label: "Go to Controls", icon: <ShieldAlert className="size-4" /> },
-      { id: "fleet", label: "Go to Fleet", icon: <Users className="size-4" /> },
-      { id: "runs", label: "Go to Runs", icon: <Activity className="size-4" /> },
-      { id: "workflows", label: "Go to Workflows", icon: <Workflow className="size-4" /> },
-      { id: "health", label: "Go to Health", icon: <HeartPulse className="size-4" /> },
-      { id: "canvas", label: "Go to Canvas", icon: <Sparkles className="size-4" /> },
-    ];
+    const nav = visibleNavGroups(role).flatMap((group) =>
+      group.items
+        .filter((item) => !item.soon)
+        .map((item) => ({
+          id: item.id,
+          label:
+            group.label === item.label
+              ? `Go to ${item.label}`
+              : `Go to ${group.label} \u203a ${item.label}`,
+          hint: "Navigate",
+          icon: <item.icon className="size-4" />,
+          run: () => onNavigate(item.view, item.sub),
+        }))
+    );
     return [
-      ...nav.map((n) => ({
-        id: n.id as string,
-        label: n.label,
-        hint: "Navigate",
-        icon: n.icon,
-        run: () => onNavigate(n.id),
-      })),
+      ...nav,
       {
         id: "toggle-theme",
         label: resolvedTheme === "light" ? "Switch to dark theme" : "Switch to light theme",
@@ -76,7 +84,7 @@ export function CommandPalette({ onNavigate }: { onNavigate: (view: ViewId) => v
         run: () => setTheme(resolvedTheme === "light" ? "dark" : "light"),
       },
     ];
-  }, [onNavigate, resolvedTheme, setTheme]);
+  }, [onNavigate, resolvedTheme, setTheme, role]);
 
   const visible = commands.filter((c) =>
     c.label.toLowerCase().includes(query.trim().toLowerCase())
