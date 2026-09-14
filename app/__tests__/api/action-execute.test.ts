@@ -237,9 +237,10 @@ describe("POST /api/actions/execute", () => {
     expect(JSON.stringify(body)).not.toContain("Connection refused");
   });
 
-  it("rate limits after 10 requests", async () => {
-    // Use a unique IP to avoid cross-test contamination
-    const ip = `rate-limit-test-${Date.now()}`;
+  it("never rate-limits a read: a page's mounts are not actions", async () => {
+    // Five Helm pages made eight such reads on the box and got 429s and empty
+    // task and agent lists. crm_health maps to a bridge GET.
+    const ip = `rate-limit-read-${Date.now()}`;
     const request = {
       json: () => Promise.resolve({ tool: "crm_health", params: {} }),
       headers: new Headers({ "x-forwarded-for": ip }),
@@ -252,6 +253,31 @@ describe("POST /api/actions/execute", () => {
       json: () => Promise.resolve({ status: "ok" }),
     });
 
+    for (let i = 0; i < 25; i++) {
+      const res = await POST(request);
+      expect(res.status).toBe(200);
+    }
+  });
+
+  it("rate limits mutations after 10 in a minute and says when to retry", async () => {
+    // Use a unique IP to avoid cross-test contamination
+    const ip = `rate-limit-test-${Date.now()}`;
+    const request = {
+      json: () =>
+        Promise.resolve({
+          tool: "create_note",
+          params: { content: "x", title: "t" },
+        }),
+      headers: new Headers({ "x-forwarded-for": ip }),
+      nextUrl: new URL("http://localhost/api/actions/execute"),
+    } as unknown as NextRequest;
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ id: "n1" }),
+    });
+
     // First 10 should succeed
     for (let i = 0; i < 10; i++) {
       const res = await POST(request);
@@ -261,5 +287,6 @@ describe("POST /api/actions/execute", () => {
     // 11th should be rate limited
     const res = await POST(request);
     expect(res.status).toBe(429);
+    expect(Number(res.headers.get("Retry-After"))).toBeGreaterThan(0);
   });
 });

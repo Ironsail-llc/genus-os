@@ -6,23 +6,22 @@
  *
  * Forwards the signed-in user's bridge token (Authorization: Bearer) for RBAC
  * enforcement at Bridge. A legacy agent header exists only in the explicit
- * loopback-only insecure development mode. Rate-limited to 10 actions per
- * minute per apparent client IP; production ingress must overwrite forwarded
+ * loopback-only insecure development mode. Mutations are rate-limited to 10
+ * per minute per apparent client IP (reads are not actions and never count —
+ * see lib/action-rate-limit.ts); production ingress must overwrite forwarded
  * IP headers and apply a distributed limit as defense in depth.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { ACTION_RATE_LIMIT, ActionRateLimiter, isMutation } from "@/lib/action-rate-limit";
 import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 import { getServiceUrl } from "@/lib/services/registry";
 
 const BRIDGE_URL = getServiceUrl("bridge") || "http://localhost:9100";
 
-// Simple in-memory rate limiter (10 actions/minute)
-const rateLimiter = new Map<string, { count: number; resetAt: number }>();
-const RATE_LIMIT = 10;
-const RATE_WINDOW_MS = 60_000;
-let lastCleanup = Date.now();
+// In-memory, per process: one budget of mutations per apparent client IP.
+const rateLimiter = new ActionRateLimiter();
 
 class ActionInputError extends Error {}
 
@@ -72,25 +71,6 @@ function resourceId(params: Record<string, unknown>, key: string): string {
     throw new ActionInputError(`Invalid '${key}'`);
   }
   return encodeURIComponent(id);
-}
-
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now();
-  // Purge expired entries periodically (every 5 min)
-  if (now - lastCleanup > 5 * 60_000) {
-    for (const [key, entry] of rateLimiter) {
-      if (now > entry.resetAt) rateLimiter.delete(key);
-    }
-    lastCleanup = now;
-  }
-  const entry = rateLimiter.get(ip);
-  if (!entry || now > entry.resetAt) {
-    rateLimiter.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
-    return true;
-  }
-  if (entry.count >= RATE_LIMIT) return false;
-  entry.count++;
-  return true;
 }
 
 /** Map tool names to Bridge HTTP calls */
@@ -230,14 +210,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "authentication required" }, { status: 401 });
     }
 
-    const ip = request.headers.get("x-forwarded-for") || "unknown";
-    if (!checkRateLimit(ip)) {
-      return NextResponse.json(
-        { error: "Rate limit exceeded (10 actions/minute)" },
-        { status: 429 }
-      );
-    }
-
     const body = await request.json();
     const { tool, params } = body as { tool?: string; params?: Record<string, unknown> };
 
@@ -251,6 +223,22 @@ export async function POST(request: NextRequest) {
         { error: `Unknown tool '${tool}'` },
         { status: 400 }
       );
+    }
+
+    // Only a request that changes something counts against the limit. The
+    // reads a page makes as it mounts are not actions, and refusing them left
+    // the task board and agent list empty with nothing to say why.
+    if (isMutation(route.method)) {
+      const ip = request.headers.get("x-forwarded-for") || "unknown";
+      if (!rateLimiter.allow(ip)) {
+        return NextResponse.json(
+          { error: `Rate limit exceeded (${ACTION_RATE_LIMIT} actions/minute)` },
+          {
+            status: 429,
+            headers: { "Retry-After": String(rateLimiter.retryAfterSeconds(ip)) },
+          }
+        );
+      }
     }
 
     const resolvedParams = actionParams(params);
