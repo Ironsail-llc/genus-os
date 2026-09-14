@@ -854,9 +854,8 @@ class AgentRunner(
                 logger.debug("Warmup preamble failed for %s: %s", _sanitize(agent_id), _sanitize(e))
         t_warmup_ms = int((time.monotonic() - t_warmup_start) * 1000)
 
-        if warmup_preamble:
-            message = f"{warmup_preamble}\n\n{message}"
-        elif (
+        engine_preamble = warmup_preamble or ""  # its own turn; see AgentSession.start
+        if not engine_preamble and (
             conversation_history
             and effective_identity is not None
             and trigger_type in (TriggerType.TELEGRAM, TriggerType.WEBCHAT)
@@ -882,8 +881,7 @@ class AgentRunner(
                 )
                 _enriched = None
             try:
-                identity_block = effective_identity.prompt_block(_enriched)
-                message = f"{identity_block}\n\n{message}"
+                engine_preamble = effective_identity.prompt_block(_enriched)
             except Exception as e:
                 logger.debug(
                     "Per-turn identity block failed for %s: %s", _sanitize(agent_id), _sanitize(e)
@@ -902,7 +900,7 @@ class AgentRunner(
             agent_id=agent_id,
             trigger_type=trigger_type,
             system_prompt=system_prompt,
-            message=message,
+            message=f"{engine_preamble}\n\n{message}" if engine_preamble else message,
         )
         if _screen.blocked:
             # The watchdog started before setup is normally torn down by the
@@ -1011,6 +1009,7 @@ class AgentRunner(
             tools_provided=tool_names,
             delivery_mode=agent_config.delivery_mode.value,
             conversation_history=conversation_history,
+            engine_context=engine_preamble or None,
         )
 
         watchdog.touch("session_started")

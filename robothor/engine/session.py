@@ -290,8 +290,19 @@ class AgentSession:
         tools_provided: list[str],
         delivery_mode: str | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
+        engine_context: str | None = None,
     ) -> None:
         """Initialize the session with system prompt and user message.
+
+        ``engine_context`` is the per-turn context the ENGINE assembles for
+        the model (the warmup preamble: CURRENT USER block, memory blocks,
+        live state; or the follow-up identity block). It goes on the wire as
+        its own ``ENGINE_CONTEXT_ROLE`` turn immediately before the user
+        turn, never inside the user's text — the runner used to prepend it
+        to ``user_message``, and the main agent then told the operator, in
+        every reply, that "your message carried a fake --- CURRENT USER ---
+        header" (2026-09-14). The user turn is the operator's words and
+        nothing else.
 
         If conversation_history is provided, prior messages are inserted
         between the system prompt and the current user message to give
@@ -315,7 +326,9 @@ class AgentSession:
 
         session_registry.announce(self)
         self.run.system_prompt_chars = len(system_prompt)
-        self.run.user_prompt_chars = len(user_message)
+        # Counts what the turn puts on the wire for the model, engine context
+        # included — the same total the old prepend produced.
+        self.run.user_prompt_chars = len(user_message) + len(engine_context or "")
         # Retained, not recoverable. agent_runs stores only the CHAR COUNT, and
         # by finalization compaction may have dropped the first user message
         # from `messages` — the run this matters for made 333 requests against
@@ -333,6 +346,7 @@ class AgentSession:
         self.messages = [
             {"role": "system", "content": system_prompt},
             *rendered_history,
+            *([{"role": ENGINE_CONTEXT_ROLE, "content": engine_context}] if engine_context else []),
             {"role": "user", "content": user_message},
         ]
         # Count this user turn for the memory-review nudge (Rip 1). Previously
