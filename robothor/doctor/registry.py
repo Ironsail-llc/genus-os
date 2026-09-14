@@ -60,6 +60,7 @@ CHECK_MODULES = (
     "database",
     "redis",
     "models",
+    "search",
     "channels",
     "services",
     "manifests",
