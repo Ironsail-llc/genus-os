@@ -23,14 +23,14 @@ from robothor.engine.tools.handlers.filesystem import _exec
 
 REFUSED_COMMANDS = [
     'cat /run/robothor/secrets.env | grep -i "CRM\\|BRIDGE\\|TOKEN" | head -10',
-    "grep -r 'PGPASSWORD\\|DB_PASS' /home/alice/robothor/.env",
+    "grep -r 'PGPASSWORD\\|DB_PASS' /srv/app/robothor/.env",
     "head -5 crm/.env",
     "sed -n 1,5p ~/.config/robothor/connectors.env",
     "cat ~/.ssh/id_rsa",
-    "cd /home/alice/robothor && cat .env",
-    "cat /home/alice/robothor/.env 2>/dev/null | grep -i database",
+    "cd /srv/app/robothor && cat .env",
+    "cat /srv/app/robothor/.env 2>/dev/null | grep -i database",
     "tail -n 20 /etc/robothor/secrets.enc.json",
-    "base64 /home/alice/.aws/credentials",
+    "base64 /srv/app/.aws/credentials",
     "less .env.production",
     "awk -F= '{print $2}' secrets.json",
     "printenv",
