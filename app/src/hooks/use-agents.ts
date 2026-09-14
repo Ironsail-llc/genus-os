@@ -22,6 +22,12 @@ export interface AgentRPG {
 
 export interface AgentInfo {
   name: string;
+  /**
+   * The manifest id this health row belongs to (`agentId` in the bridge's
+   * `agent_status`). The display `name` is an operator-renamable string; the id
+   * is the only key this row and a manifest row can be joined on.
+   */
+  agentId?: string;
   schedule: string;
   scheduleHuman?: string;
   lastRun?: string;
