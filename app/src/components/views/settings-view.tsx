@@ -3,6 +3,7 @@
 import { Loader2, Lock } from "lucide-react";
 import { PageHeader } from "@/components/business/page-header";
 import { ThemeToggle } from "@/components/business/theme-toggle";
+import { ErrorBoundary } from "@/components/error-boundary";
 import { ControlsView } from "@/components/views/controls-view";
 import { ProvidersPage } from "@/components/views/settings/providers-page";
 import {
@@ -65,6 +66,20 @@ function PageBody({ page }: { page: SettingsPage }) {
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+/** What a sub-page that threw leaves behind — the rest of Settings still works. */
+function PageFailed() {
+  return (
+    <div className="flex flex-col gap-2 p-4" data-testid="settings-page-error">
+      <p className="text-sm font-medium text-foreground">This page failed to render</p>
+      <p className="max-w-xl text-xs text-muted-foreground">
+        Something in it threw while drawing — usually an answer from the engine in a shape this
+        version of the dashboard does not know. Reload the Helm, or pick another page in the
+        sidebar; nothing has been changed by the failure.
+      </p>
     </div>
   );
 }
@@ -166,7 +181,14 @@ export function SettingsView({
           ))}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <PageBody page={active} />
+          {/*
+            Keyed on the page so switching away from a broken one clears the
+            failure: a boundary that latches would make one bad payload look
+            like a broken Settings screen forever.
+          */}
+          <ErrorBoundary key={active.id} fallback={<PageFailed />}>
+            <PageBody page={active} />
+          </ErrorBoundary>
         </div>
       </div>
     </div>

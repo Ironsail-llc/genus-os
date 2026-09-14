@@ -124,6 +124,16 @@ async function setupMocks(page: Page): Promise<Recorded> {
 
   // The provider surface itself.
   await page.route("**/api/bridge/api/providers", (route) => json(route, PROVIDERS));
+  await page.route("**/api/bridge/api/providers/defaults", (route) => {
+    if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON() as { model: string; fallbacks: string[] };
+      return json(route, { ...body, applied: true });
+    }
+    return json(route, {
+      primary: "openrouter/openai/gpt-5.4",
+      fallbacks: ["anthropic/claude-sonnet-4.6"],
+    });
+  });
   await page.route("**/api/bridge/api/models", (route) => json(route, MODELS));
   await page.route("**/api/bridge/api/providers/*/test", (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>;
@@ -160,6 +170,17 @@ test.describe("Settings › Providers", () => {
     );
     await expect(page.locator('[data-testid="provider-row-anthropic"]')).toContainText("read-only");
     await expect(page.locator('[data-testid="provider-remove-anthropic-1"]')).toBeDisabled();
+
+    // The fleet default form starts from what the fleet is actually running.
+    await expect(page.locator('[data-testid="fleet-default-model"]')).toHaveValue(
+      "openrouter/openai/gpt-5.4"
+    );
+    await expect(page.locator('[data-testid="fleet-fallback-0"]')).toHaveValue(
+      "anthropic/claude-sonnet-4.6"
+    );
+    await expect(page.locator('[data-testid="fleet-default-status"]')).toContainText(
+      "openrouter/openai/gpt-5.4"
+    );
 
     // Test connection on a stored credential.
     await page.locator('[data-testid="provider-test-openrouter"]').click();

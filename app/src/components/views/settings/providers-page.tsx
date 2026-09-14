@@ -72,6 +72,34 @@ interface DefaultsResult {
   applied: boolean;
 }
 
+/** `GET /api/providers/defaults` — the `model:` block of `_defaults.yaml`. */
+interface FleetDefaults {
+  primary: string | null;
+  fallbacks: string[];
+}
+
+/**
+ * A provider as this page may use it.
+ *
+ * `slots` is defended rather than trusted: the listing comes from a separately
+ * versioned engine through a proxy, and the Helm has no error boundary at the
+ * app router level, so one missing array in one provider does not break a
+ * table — it unmounts the whole dashboard.
+ */
+function normalizeProvider(provider: Provider): Provider {
+  return {
+    ...provider,
+    slots: Array.isArray(provider.slots) ? provider.slots : [],
+  };
+}
+
+/** Strip a value the operator typed out of anything bound for the screen. */
+function scrub(message: string, secret: string): string {
+  const trimmed = secret.trim();
+  if (trimmed.length < 4) return message;
+  return message.split(trimmed).join("[redacted]");
+}
+
 /** The server's own words, whenever it gave any. */
 async function readError(res: Response): Promise<string> {
   try {
@@ -146,6 +174,30 @@ function CellLabel({ children }: { children: string }) {
   );
 }
 
+interface ModelGroup {
+  id: string;
+  label: string;
+  models: ModelEntry[];
+}
+
+/** The catalog, as `<option>`s. One definition for the primary and every fallback. */
+function ModelOptions({ groups }: { groups: ModelGroup[] }) {
+  return (
+    <>
+      <option value="">Choose a model…</option>
+      {groups.map((group) => (
+        <optgroup key={group.id} label={group.label}>
+          {group.models.map((model) => (
+            <option key={model.id} value={model.id}>
+              {`${model.id} · ${formatContext(model.context_window)}`}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </>
+  );
+}
+
 const CELL =
   "flex items-start justify-between gap-3 px-3 py-1.5 text-sm md:table-cell md:py-2.5 md:align-top";
 
@@ -175,6 +227,8 @@ export function ProvidersPage() {
   const [primary, setPrimary] = useState("");
   const [fallbacks, setFallbacks] = useState<string[]>([]);
   const [savingDefaults, setSavingDefaults] = useState(false);
+  const [defaults, setDefaults] = useState<FleetDefaults | null>(null);
+  const [defaultsReadError, setDefaultsReadError] = useState<string | null>(null);
   const [defaultsResult, setDefaultsResult] = useState<DefaultsResult | null>(null);
   const [defaultsError, setDefaultsError] = useState<string | null>(null);
 
@@ -187,7 +241,7 @@ export function ProvidersPage() {
         return;
       }
       const body = (await res.json()) as { providers?: Provider[] };
-      setProviders(body.providers ?? []);
+      setProviders((body.providers ?? []).map(normalizeProvider));
       setListError(null);
     } catch {
       setListError("The dashboard could not reach the bridge. Check that the service is running.");
@@ -211,10 +265,40 @@ export function ProvidersPage() {
     }
   }, []);
 
+  /**
+   * What the fleet is running on right now, so the form starts from the truth
+   * rather than from an empty select that would write a change nobody asked
+   * for. The form is seeded only while the operator has not edited it — a
+   * refresh must not throw away a choice that is half made.
+   */
+  const loadDefaults = useCallback(async () => {
+    try {
+      const res = await fetch(`${BRIDGE}/api/providers/defaults`);
+      if (!res.ok) {
+        setDefaultsReadError(await readError(res));
+        return;
+      }
+      const body = (await res.json()) as Partial<FleetDefaults>;
+      const current: FleetDefaults = {
+        primary: body.primary ?? null,
+        fallbacks: Array.isArray(body.fallbacks) ? body.fallbacks : [],
+      };
+      setDefaults(current);
+      setDefaultsReadError(null);
+      setPrimary((prev) => (prev ? prev : (current.primary ?? "")));
+      setFallbacks((prev) => (prev.length ? prev : current.fallbacks));
+    } catch {
+      setDefaultsReadError(
+        "The dashboard could not reach the bridge to read the fleet default."
+      );
+    }
+  }, []);
+
   useEffect(() => {
     void loadProviders();
     void loadModels();
-  }, [loadProviders, loadModels]);
+    void loadDefaults();
+  }, [loadProviders, loadModels, loadDefaults]);
 
   const providerLabels = useMemo(() => {
     const labels: Record<string, string> = {};
@@ -279,6 +363,9 @@ export function ProvidersPage() {
 
   function openForm(provider: Provider) {
     setRowError(provider.id, null);
+    // Two armed destructive affordances at once is how the wrong one gets
+    // clicked: opening the key form disarms any pending removal.
+    setConfirming(null);
     setForm({
       providerId: provider.id,
       value: "",
@@ -305,7 +392,10 @@ export function ProvidersPage() {
         body: JSON.stringify({ api_key: form.value }),
       });
       if (!res.ok) {
-        const message = await readError(res);
+        // Scrubbed with the value the operator typed: no bridge route echoes a
+        // credential back today, and the page holds the only copy, so it can
+        // always take it out again before anything reaches the screen.
+        const message = scrub(await readError(res), form.value);
         setForm((prev) => (prev ? { ...prev, busy: null, error: message } : prev));
         return;
       }
@@ -330,7 +420,10 @@ export function ProvidersPage() {
         body: JSON.stringify({ api_key: form.value }),
       });
       if (!res.ok) {
-        const message = await readError(res);
+        // Scrubbed with the value the operator typed: no bridge route echoes a
+        // credential back today, and the page holds the only copy, so it can
+        // always take it out again before anything reaches the screen.
+        const message = scrub(await readError(res), form.value);
         setForm((prev) => (prev ? { ...prev, busy: null, error: message } : prev));
         return;
       }
@@ -386,6 +479,29 @@ export function ProvidersPage() {
 
   const rows = providers ?? [];
 
+  /**
+   * One sentence about the fleet default, in the order the operator cares
+   * about: what this screen just did, else why the current value is unknown,
+   * else what the fleet is actually running. "Unknown" and "none set" are
+   * deliberately different sentences — reporting a failed read as "no default"
+   * would invite an operator to set one that is already set.
+   */
+  const defaultsStatus = defaultsResult
+    ? defaultsResult.applied
+      ? `${defaultsResult.model} is in use by the fleet.`
+      : `${defaultsResult.model} was written to _defaults.yaml, but the engine did not confirm the reload — it may still be running the previous model.`
+    : defaultsReadError
+      ? `The bridge could not report the model the fleet is running on (${defaultsReadError}), so nothing is pre-selected here.`
+      : defaults
+        ? defaults.primary
+          ? `The fleet is running on ${defaults.primary}${
+              defaults.fallbacks.length
+                ? `, falling back to ${defaults.fallbacks.join(", ")}`
+                : " with no fallbacks"
+            }.`
+          : "No default is set on this instance — every agent runs on the model its own manifest pins."
+        : "Reading the fleet default…";
+
   return (
     <div className="flex flex-col gap-5 p-4" data-testid="settings-page-providers">
       <PageHeader
@@ -398,6 +514,7 @@ export function ProvidersPage() {
           onClick={() => {
             void loadProviders();
             void loadModels();
+            void loadDefaults();
           }}
           data-testid="providers-refresh"
         >
@@ -431,6 +548,11 @@ export function ProvidersPage() {
           >
             <p className="text-sm font-medium text-destructive">The provider listing failed</p>
             <p className="text-xs text-muted-foreground">{listError}</p>
+            {rows.length > 0 ? (
+              <p className="text-xs text-muted-foreground">
+                The table below is what the bridge last answered with, and may be out of date.
+              </p>
+            ) : null}
             <div>
               <Button variant="outline" size="sm" onClick={() => void loadProviders()}>
                 Try again
@@ -452,7 +574,7 @@ export function ProvidersPage() {
           </div>
         ) : null}
 
-        {!listError && rows.length > 0 ? (
+        {rows.length > 0 ? (
           <div className="overflow-x-auto rounded-lg border border-border bg-card">
             <table className="w-full border-collapse text-sm">
               <thead className="hidden md:table-header-group">
@@ -468,6 +590,9 @@ export function ProvidersPage() {
                 {rows.map((provider) => {
                   const verdict = verdicts[provider.id];
                   const rowError = rowErrors[provider.id];
+                  // `configured` is the engine's `bool(slots)`. Reading the
+                  // slots directly means the two can never disagree on screen.
+                  const configured = provider.slots.length > 0;
                   const sources = [...new Set(provider.slots.map((slot) => slot.source))];
                   const hasEnv = sources.includes("env");
                   const isOpen = form?.providerId === provider.id;
@@ -495,12 +620,12 @@ export function ProvidersPage() {
                             variant="outline"
                             data-testid={`provider-key-state-${provider.id}`}
                             className={
-                              provider.configured
+                              configured
                                 ? "border-success/30 bg-success/10 text-success"
                                 : "border-border bg-muted text-muted-foreground"
                             }
                           >
-                            {provider.configured ? "Set" : "Not set"}
+                            {configured ? "Set" : "Not set"}
                           </Badge>
                           {provider.slots.map((slot) => {
                             const confirmId = `${provider.id}:${slot.position}`;
@@ -517,16 +642,26 @@ export function ProvidersPage() {
                                     slot {slot.position}
                                   </span>
                                   <span className="font-mono text-xs text-foreground">
-                                    {slot.fingerprint}
+                                    {slot.fingerprint || "no digest reported"}
                                   </span>
                                   <Badge variant="outline" className={stateClass(slot.state)}>
-                                    {slot.state}
+                                    {slot.state || "state unknown"}
                                   </Badge>
                                   <Button
                                     variant="ghost"
                                     size="icon-xs"
                                     disabled={readOnly}
                                     aria-label={`Remove the ${provider.label} key in slot ${slot.position}`}
+                                    aria-describedby={
+                                      readOnly
+                                        ? `provider-remove-reason-${provider.id}-${slot.position}`
+                                        : undefined
+                                    }
+                                    title={
+                                      readOnly
+                                        ? `This key comes from ${provider.env_var} in the environment and cannot be removed here.`
+                                        : undefined
+                                    }
                                     data-testid={`provider-remove-${provider.id}-${slot.position}`}
                                     onClick={() => setConfirming(confirmId)}
                                   >
@@ -540,6 +675,7 @@ export function ProvidersPage() {
                                 ) : null}
                                 {readOnly ? (
                                   <span
+                                    id={`provider-remove-reason-${provider.id}-${slot.position}`}
                                     className="text-[11px] text-muted-foreground"
                                     data-testid={`provider-remove-reason-${provider.id}-${slot.position}`}
                                   >
@@ -549,7 +685,12 @@ export function ProvidersPage() {
                                   </span>
                                 ) : null}
                                 {confirming === confirmId ? (
-                                  <div className="flex flex-wrap items-center justify-end gap-2 rounded-md border border-border bg-background px-2 py-1.5 md:justify-start">
+                                  <div
+                                    role="alertdialog"
+                                    aria-live="assertive"
+                                    aria-label={`Remove the ${provider.label} key in slot ${slot.position}?`}
+                                    className="flex flex-wrap items-center justify-end gap-2 rounded-md border border-border bg-background px-2 py-1.5 md:justify-start"
+                                  >
                                     <span className="text-xs text-foreground">
                                       Remove slot {slot.position}? The key is deleted from the vault.
                                     </span>
@@ -658,8 +799,8 @@ export function ProvidersPage() {
                               data-testid={`provider-add-${provider.id}`}
                               onClick={() => (isOpen ? closeForm() : openForm(provider))}
                             >
-                              {provider.configured ? <KeyRound aria-hidden /> : <Plus aria-hidden />}
-                              {provider.configured ? "Rotate" : "Add key"}
+                              {configured ? <KeyRound aria-hidden /> : <Plus aria-hidden />}
+                              {configured ? "Rotate" : "Add key"}
                             </Button>
                           </div>
 
@@ -688,7 +829,16 @@ export function ProvidersPage() {
                                 value={form.value}
                                 onChange={(event) =>
                                   setForm((prev) =>
-                                    prev ? { ...prev, value: event.target.value, verdict: null } : prev
+                                    prev
+                                      ? {
+                                          ...prev,
+                                          value: event.target.value,
+                                          // A refusal describes the key that
+                                          // was sent, not the one being typed.
+                                          verdict: null,
+                                          error: null,
+                                        }
+                                      : prev
                                   )
                                 }
                               />
@@ -812,14 +962,20 @@ export function ProvidersPage() {
           their own manifest keep it — this changes nothing for them.
         </p>
         <p className="text-xs text-muted-foreground">
-          The bridge has no route that reports the model the fleet is running on right now, so
-          nothing is pre-selected here: what you choose below is written to{" "}
-          <span className="font-mono">_defaults.yaml</span> and reloaded.
+          What you choose here is written to <span className="font-mono">_defaults.yaml</span> and
+          reloaded by the engine.
         </p>
 
         {modelsError ? (
           <p className="text-xs text-destructive" data-testid="fleet-models-error">
             {modelsError}
+          </p>
+        ) : null}
+
+        {!modelsError && models.length === 0 ? (
+          <p className="text-xs text-warning" data-testid="fleet-models-empty">
+            The engine reports no models at all, so there is nothing to choose from. Its registry is
+            empty or no plugin has contributed one — check the engine before changing this.
           </p>
         ) : null}
 
@@ -837,16 +993,7 @@ export function ProvidersPage() {
             disabled={models.length === 0}
             onChange={(event) => setPrimary(event.target.value)}
           >
-            <option value="">Choose a model…</option>
-            {modelGroups.map((group) => (
-              <optgroup key={group.id} label={group.label}>
-                {group.models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {`${model.id} · ${formatContext(model.context_window)}`}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
+            <ModelOptions groups={modelGroups} />
           </NativeSelect>
         </div>
 
@@ -868,16 +1015,7 @@ export function ProvidersPage() {
                 )
               }
             >
-              <option value="">Choose a model…</option>
-              {modelGroups.map((group) => (
-                <optgroup key={group.id} label={group.label}>
-                  {group.models.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {`${model.id} · ${formatContext(model.context_window)}`}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
+              <ModelOptions groups={modelGroups} />
             </NativeSelect>
             <Button
               variant="ghost"
@@ -916,16 +1054,12 @@ export function ProvidersPage() {
           aria-live="polite"
           data-testid="fleet-default-status"
           className={
-            defaultsResult && !defaultsResult.applied
+            (defaultsResult && !defaultsResult.applied) || (!defaultsResult && defaultsReadError)
               ? "text-xs text-warning"
               : "text-xs text-muted-foreground"
           }
         >
-          {defaultsResult
-            ? defaultsResult.applied
-              ? `${defaultsResult.model} is in use by the fleet.`
-              : `${defaultsResult.model} was written to _defaults.yaml, but the engine did not confirm the reload — it may still be running the previous model.`
-            : "No change saved from this screen yet."}
+          {defaultsStatus}
         </span>
 
         {defaultsError ? (

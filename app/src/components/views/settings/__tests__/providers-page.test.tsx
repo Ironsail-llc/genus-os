@@ -114,6 +114,7 @@ function installFetch(routes: Record<string, Route> = {}) {
   const table: Record<string, Route> = {
     "GET /api/bridge/api/providers": { body: PROVIDERS },
     "GET /api/bridge/api/models": { body: MODELS },
+    "GET /api/bridge/api/providers/defaults": { body: { primary: null, fallbacks: [] } },
     ...routes,
   };
   const mock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -203,9 +204,70 @@ describe("ProvidersPage — the listing", () => {
     expect(error).toHaveTextContent("could not read the provider state");
   });
 
-  it("never shows a key, only a digest, whatever the listing carries", async () => {
-    await renderPage();
-    expect(document.body.innerHTML).not.toMatch(/sk-[A-Za-z0-9]/);
+  it("renders nothing from a listing field that carries key material", async () => {
+    // The bridge never sends this. If a future one did — or a compromised hop
+    // added it — the page must render the fields it knows and nothing else.
+    // Asserting against a fixture that contains no key at all would be a test
+    // that cannot fail.
+    const leaky = {
+      providers: [
+        { ...PROVIDERS.providers[2], api_key: "sk-live-should-never-render", value: "sk-live-2" },
+      ],
+    };
+    installFetch({ "GET /api/bridge/api/providers": { body: leaky } });
+    render(<ProvidersPage />);
+    await screen.findByTestId("provider-row-openai");
+    expect(document.body.innerHTML).not.toMatch(/sk-live/);
+  });
+
+  it("survives a provider payload with no slots at all", async () => {
+    // A dashboard talking to an older or newer engine gets a shape it did not
+    // expect. The table may be wrong; the Helm may not go blank.
+    const partial = {
+      providers: [
+        {
+          id: "openrouter",
+          label: "OpenRouter",
+          configured: true,
+          env_var: "OPENROUTER_API_KEY",
+          default_model: "openrouter/openai/gpt-5.4",
+        },
+      ],
+    };
+    installFetch({ "GET /api/bridge/api/providers": { body: partial } });
+    render(<ProvidersPage />);
+    const row = await screen.findByTestId("provider-row-openrouter");
+    expect(row).toHaveTextContent("OpenRouter");
+    expect(within(row).getByTestId("provider-key-state-openrouter")).toHaveTextContent(/not set/i);
+  });
+
+  it("reads the key state from the slots, not from a flag that can disagree", async () => {
+    const inconsistent = {
+      providers: [{ ...PROVIDERS.providers[2], configured: true, slots: [] }],
+    };
+    installFetch({ "GET /api/bridge/api/providers": { body: inconsistent } });
+    render(<ProvidersPage />);
+    await screen.findByTestId("provider-row-openai");
+    expect(screen.getByTestId("provider-key-state-openai")).toHaveTextContent(/not set/i);
+  });
+
+  it("keeps the table it already has when a refresh fails", async () => {
+    let attempt = 0;
+    installFetch({
+      "GET /api/bridge/api/providers": () => {
+        attempt += 1;
+        return attempt === 1
+          ? { body: PROVIDERS }
+          : { status: 502, body: { detail: "the bridge is unavailable" } };
+      },
+    });
+    render(<ProvidersPage />);
+    await screen.findByTestId("provider-row-openai");
+    fireEvent.click(screen.getByTestId("providers-refresh"));
+    await screen.findByTestId("providers-error");
+    // The rows are stale, not gone: an operator reading a digest must not lose
+    // it because a refresh bounced.
+    expect(screen.getByTestId("provider-row-openai")).toBeInTheDocument();
   });
 });
 
@@ -351,6 +413,54 @@ describe("ProvidersPage — add or rotate a key", () => {
     expect(error).toHaveTextContent(/fill slot 3 first/);
   });
 
+  it("drops a stale refusal as soon as the key is retyped", async () => {
+    await renderPage({
+      "PUT /api/bridge/api/providers/openai/keys/1": {
+        status: 503,
+        body: { detail: "the vault is down" },
+      },
+    });
+    fireEvent.click(screen.getByTestId("provider-add-openai"));
+    fireEvent.change(screen.getByTestId("provider-key-input-openai"), {
+      target: { value: "sk-first" },
+    });
+    fireEvent.click(screen.getByTestId("provider-key-save-openai"));
+    await screen.findByTestId("provider-key-error-openai");
+
+    fireEvent.change(screen.getByTestId("provider-key-input-openai"), {
+      target: { value: "sk-second" },
+    });
+    expect(screen.queryByTestId("provider-key-error-openai")).toBeNull();
+  });
+
+  it("scrubs the typed key out of a server message that echoes it", async () => {
+    // Defence in depth: no bridge route produces such a message today, and the
+    // page holds the only copy of the value, so it can always take it back out.
+    await renderPage({
+      "PUT /api/bridge/api/providers/openai/keys/1": {
+        status: 500,
+        body: { detail: "vault write failed for sk-live-echoed-back" },
+      },
+    });
+    fireEvent.click(screen.getByTestId("provider-add-openai"));
+    fireEvent.change(screen.getByTestId("provider-key-input-openai"), {
+      target: { value: "sk-live-echoed-back" },
+    });
+    fireEvent.click(screen.getByTestId("provider-key-save-openai"));
+
+    const error = await screen.findByTestId("provider-key-error-openai");
+    expect(error).toHaveTextContent(/vault write failed/);
+    expect(error.textContent).not.toContain("sk-live-echoed-back");
+  });
+
+  it("disarms a pending removal when the key form is opened", async () => {
+    await renderPage();
+    fireEvent.click(screen.getByTestId("provider-remove-openrouter-1"));
+    expect(screen.getByTestId("provider-remove-confirm-openrouter-1")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("provider-add-openrouter"));
+    expect(screen.queryByTestId("provider-remove-confirm-openrouter-1")).toBeNull();
+  });
+
   it("offers each occupied slot to rotate and one free slot to add", async () => {
     await renderPage();
     fireEvent.click(screen.getByTestId("provider-add-openrouter"));
@@ -405,6 +515,53 @@ describe("ProvidersPage — remove a key", () => {
 });
 
 describe("ProvidersPage — the fleet default model", () => {
+  it("shows the model the fleet is running on, and its fallbacks", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: {
+          primary: "openrouter/openai/gpt-5.4",
+          fallbacks: ["anthropic/claude-sonnet-4.6"],
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect((screen.getByTestId("fleet-default-model") as HTMLSelectElement).value).toBe(
+        "openrouter/openai/gpt-5.4"
+      );
+    });
+    expect((screen.getByTestId("fleet-fallback-0") as HTMLSelectElement).value).toBe(
+      "anthropic/claude-sonnet-4.6"
+    );
+    expect(screen.getByTestId("fleet-default-status")).toHaveTextContent(
+      /openrouter\/openai\/gpt-5\.4/
+    );
+  });
+
+  it("says plainly when the instance has no default set", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": { body: { primary: null, fallbacks: [] } },
+    });
+    expect(screen.getByTestId("fleet-default-status")).toHaveTextContent(/no default/i);
+    expect((screen.getByTestId("fleet-default-model") as HTMLSelectElement).value).toBe("");
+  });
+
+  it("does not pretend to know the default when the read fails", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        status: 404,
+        body: { detail: "Not found" },
+      },
+    });
+    const status = await screen.findByTestId("fleet-default-status");
+    expect(status).toHaveTextContent(/could not|unknown|not report/i);
+    expect(status.textContent).not.toMatch(/no default is set/i);
+  });
+
+  it("says so when the engine knows no models at all", async () => {
+    await renderPage({ "GET /api/bridge/api/models": { body: { models: [] } } });
+    expect(screen.getByTestId("fleet-defaults")).toHaveTextContent(/no models/i);
+  });
+
   it("groups the model select by provider and shows the context limit", async () => {
     await renderPage();
     const select = screen.getByTestId("fleet-default-model") as HTMLSelectElement;
