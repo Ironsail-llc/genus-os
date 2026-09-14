@@ -542,6 +542,29 @@ def _thinking_kwargs(model: str, max_tokens: int, *, reduced: bool = False) -> d
     return block
 
 
+def thinking_kwargs_for_call(
+    model: str, max_tokens: int, *, reduced: bool = False
+) -> dict[str, Any]:
+    """Thinking kwargs for one call, or ``{}`` when this model does not reason.
+
+    The gate and the block together — the only entry point any caller outside
+    this module should use. Compaction used to build its own re-ask knob, a
+    top-level ``reasoning_effort`` litellm maps per route: for
+    ``openrouter/xiaomi/mimo-v2.5`` it maps nothing, so the call raised
+    ``UnsupportedParamsError`` before it left the process and compaction fell
+    through to the chain walk its re-ask exists to prevent (journal 2026-09-13
+    19:45 ET). DeepSeek, which litellm does map, hid it. Asking here instead
+    means a model's reasoning support is read from the registry once and the
+    payload shape is whatever ``_thinking_kwargs`` emits — there is no second
+    implementation to drift.
+    """
+    from robothor.engine.model_registry import get_model_limits
+
+    if not get_model_limits(model).supports_thinking:
+        return {}
+    return _thinking_kwargs(model, max_tokens, reduced=reduced)
+
+
 #: Shortest attempt worth dialling. A model whose shared allowance has less
 #: than this left advances the chain instead: the call would be cancelled
 #: mid-generation and the wall clock spent for certain. Always read through
@@ -1796,8 +1819,9 @@ class LLMClient:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        if limits.supports_thinking:
-            kwargs.update(_thinking_kwargs(model, kwargs["max_tokens"], reduced=thinking_reduced))
+        kwargs.update(
+            thinking_kwargs_for_call(model, kwargs["max_tokens"], reduced=thinking_reduced)
+        )
         return kwargs
 
     # ─── Model error handling ────────────────────────────────────────
