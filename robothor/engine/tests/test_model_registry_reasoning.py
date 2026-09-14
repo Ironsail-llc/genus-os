@@ -80,3 +80,23 @@ def test_publication_only_widens(monkeypatch):
     )
     register_pricing_with_litellm()
     assert litellm.utils.supports_reasoning(probe)
+
+
+@pytest.mark.parametrize("flag_on", [False, True])
+def test_registering_models_litellm_does_not_know_is_quiet(monkeypatch, flag_on, caplog):
+    """We register pricing for models litellm's map lacks ON PURPOSE (a stealth
+    preview, a deprecated fallback kept for reference, a floating alias three
+    workers use). litellm's "not in built-in cost map" warning fired three
+    times at every engine start for exactly those — noise the operator reads
+    as trouble. The registration stays; the warning does not."""
+    import logging
+
+    monkeypatch.setenv("ROBOTHOR_RIP_17_ENABLED", "true" if flag_on else "false")
+    for model_id in list(_MODEL_REGISTRY):
+        litellm.model_cost.pop(model_id, None)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        register_pricing_with_litellm()
+
+    noisy = [r.getMessage() for r in caplog.records if "register_model" in r.getMessage()]
+    assert noisy == []
