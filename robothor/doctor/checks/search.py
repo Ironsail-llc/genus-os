@@ -14,15 +14,13 @@ nothing here because presence needs no network.
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING
 
 from robothor.doctor.model import Check, Result, fail, ok
+from robothor.engine.search_config import SEARCH_KEY_ENV, search_api_configured
 
 if TYPE_CHECKING:
     from robothor.doctor.context import DoctorContext
-
-SEARCH_KEY_ENV = "BRAVE_SEARCH_API_KEY"
 
 
 async def _provider(ctx: DoctorContext) -> Result:
@@ -34,7 +32,7 @@ async def _provider(ctx: DoctorContext) -> Result:
     the runtime does not say so. Not repairable here: the key is a credential
     the operator obtains and stores.
     """
-    if os.environ.get(SEARCH_KEY_ENV, "").strip():
+    if search_api_configured():
         return ok("Brave Search API key is set; web_search uses the API first")
     return fail(
         f"web_search has no API provider: {SEARCH_KEY_ENV} is not set, so every search "

@@ -1548,6 +1548,31 @@ async def _sweep_stale_questions() -> dict[str, int]:
     return {"prompts": prompts, "questions": questions}
 
 
+async def _run_outage_detectors(tenant_id: str) -> None:
+    """The slow, multi-day detectors the watchdog runs on its outage tick.
+
+    Each is best-effort: a query failure is logged and the tick moves on.
+    """
+    try:
+        from robothor.engine.detectors import (
+            primary_model_unreached_detector,
+            tool_outage_detector,
+        )
+        from robothor.engine.search_health import search_degradation_detector
+
+        fired = await tool_outage_detector()
+        if fired:
+            logger.info("Detectors: %d tool-outage alerts fired", fired)
+        fired = await primary_model_unreached_detector(tenant_id=tenant_id)
+        if fired:
+            logger.info("Detectors: %d primary-model-unreached alerts fired", fired)
+        fired = await search_degradation_detector()
+        if fired:
+            logger.info("Detectors: web search degraded alert fired")
+    except Exception as e:
+        logger.debug("Detectors: outage checks failed: %s", e)
+
+
 async def _watchdog(
     config: EngineConfig,
     scheduler: CronScheduler,
@@ -1721,24 +1746,7 @@ async def _watchdog(
             and (time.time() - outage_detectors_last) >= _OUTAGE_DETECTOR_INTERVAL_SECONDS
         ):
             outage_detectors_last = time.time()
-            try:
-                from robothor.engine.detectors import (
-                    primary_model_unreached_detector,
-                    tool_outage_detector,
-                )
-                from robothor.engine.search_health import search_degradation_detector
-
-                fired = await tool_outage_detector()
-                if fired:
-                    logger.info("Detectors: %d tool-outage alerts fired", fired)
-                fired = await primary_model_unreached_detector(tenant_id=config.tenant_id)
-                if fired:
-                    logger.info("Detectors: %d primary-model-unreached alerts fired", fired)
-                fired = await search_degradation_detector()
-                if fired:
-                    logger.info("Detectors: web search degraded alert fired")
-            except Exception as e:
-                logger.debug("Detectors: outage checks failed: %s", e)
+            await _run_outage_detectors(config.tenant_id)
 
         # Daily maintenance: chat-session TTL cleanup + data retention.
         # Wall-clock gated (>=24h since the persisted last run, checked every

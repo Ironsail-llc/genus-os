@@ -1458,7 +1458,9 @@ def _retry_after_seconds(resp: Any) -> float:
 
 async def _brave_search(query: str, limit: int) -> list[dict[str, str]] | None:
     """Brave Search API, if the operator configured a key. None = not available."""
-    key = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
+    from robothor.engine.search_config import brave_search_key
+
+    key = brave_search_key()
     if not key:
         return None
     try:

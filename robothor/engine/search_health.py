@@ -13,12 +13,12 @@ Runs from the daemon's outage-detector tick beside ``tool_outage_detector``.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
 from robothor.engine.detectors import _SLOW_DEDUP_TTL_SECONDS, _should_fire, detectors_enabled
+from robothor.engine.search_config import search_api_configured
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ def check_search_degradation(
         "degraded": degraded,
         "share": round(share, 3),
         "via_brave": int(row.get("via_brave") or 0),
-        "brave_key_set": bool(os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()),
+        "brave_key_set": search_api_configured(),
         "hours": hours,
     }
 
