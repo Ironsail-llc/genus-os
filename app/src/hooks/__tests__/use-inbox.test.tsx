@@ -37,6 +37,15 @@ function jsonResponse(body: unknown, status = 200) {
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
+/** jsdom has no tab to background, so the property is redefined and announced. */
+function setDocumentHidden(hidden: boolean) {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => (hidden ? "hidden" : "visible"),
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
 beforeEach(() => {
   fetchMock = vi.fn().mockResolvedValue(jsonResponse({ count: 2, pending: [QUESTION, APPROVAL] }));
   vi.stubGlobal("fetch", fetchMock);
@@ -45,6 +54,10 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => "visible",
+  });
 });
 
 describe("useInbox", () => {
@@ -57,7 +70,7 @@ describe("useInbox", () => {
     expect(result.current.isLoading).toBe(false);
   });
 
-  it("polls every 30 seconds while the view is on screen, and only then", async () => {
+  it("polls every 30 seconds while the view is on screen", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { result, rerender } = renderHook(
       ({ active }: { active: boolean }) => useInbox({ active }),
@@ -66,27 +79,95 @@ describe("useInbox", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
-    // Nothing on screen: the badge keeps the count it has rather than waking
-    // an operator-gated route every half minute behind a view nobody opened.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(90_000);
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-
     rerender({ active: true });
-    // Opening the view refreshes at once, then on the interval.
+    // Opening the view refreshes at once, then on the fast interval.
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(result.current.error).toBeNull();
+  });
 
-    rerender({ active: false });
+  it("drops to a minute while the operator is elsewhere — the badge still moves", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // The badge exists to say something is waiting while the operator is on
+    // another screen, so the poll slows down off-screen rather than stopping.
+    renderHook(() => useInbox({ active: false }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(result.current.error).toBeNull();
+  });
+
+  it("changes cadence when the view opens and closes, without a farewell fetch", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { rerender } = renderHook(
+      ({ active }: { active: boolean }) => useInbox({ active }),
+      { initialProps: { active: true } }
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    // Leaving the Inbox must not itself fetch; it only slows the interval.
+    rerender({ active: false });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops entirely while the document is hidden, and catches up on return", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderHook(() => useInbox({ active: true }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      setDocumentHidden(true);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(180_000);
+    });
+    // A backgrounded tab polls nothing: the answers would be read by nobody,
+    // and every one of them wakes an operator-gated route on the bridge.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      setDocumentHidden(false);
+    });
+    // Coming back to a tab that has been dark, the count is refreshed at once
+    // rather than after another half minute of showing a stale badge.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("tells a non-operator apart from a broken appliance", async () => {

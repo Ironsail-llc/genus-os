@@ -77,8 +77,11 @@ export function AppShell() {
 
   // One poll for the waiting queue, feeding the view AND both Inbox badges.
   // Mounted here rather than in the view because the badge has to be right on
-  // every screen, and two pollers on one operator-gated route would let the
-  // number beside the word disagree with the list behind it.
+  // every screen — which is also why `active` sets the poll's cadence rather
+  // than switching it off: a badge that only moved while its own screen was
+  // open would be telling the operator nothing, on every other screen. Two
+  // pollers on one operator-gated route would let the number beside the word
+  // disagree with the list behind it.
   const inbox = useInbox({ active: view === "inbox" });
 
   const reviewCount = tasks.filter((t) => t.status === "REVIEW").length;

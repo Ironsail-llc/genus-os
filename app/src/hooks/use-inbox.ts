@@ -20,19 +20,34 @@ import {
  * and would let the badge and the list disagree about what is waiting — which
  * is the one thing a badge exists to prevent.
  *
- * `active` is whether the Inbox view is the one on screen. The interval runs
- * only while it is: every view in this shell stays mounted behind
- * `display: none`, so an ungated interval would wake an operator-gated route
- * every thirty seconds for the whole session whatever the operator was looking
- * at. The count still arrives once on mount, so the badge is right on the
- * first paint, and again the moment the view is opened.
+ * `active` is whether the Inbox view is the one on screen, and it sets the
+ * CADENCE rather than switching the poll on and off. The badge exists to tell
+ * the operator something is waiting while they are somewhere else, so a poll
+ * that stopped off-screen would leave the number frozen at whatever it was on
+ * page load — the one thing a badge must not do. Thirty seconds while the
+ * Inbox is being read, sixty while it is not: the slower rate still keeps the
+ * badge honest without waking an operator-gated route twice a minute behind a
+ * view nobody has open.
+ *
+ * A HIDDEN DOCUMENT stops it completely. A backgrounded tab's answers are read
+ * by nobody, and a laptop left open for a day would otherwise spend it polling
+ * the bridge. Returning to the tab refreshes at once rather than showing a
+ * stale badge until the next tick.
  *
  * Role gating in the view is UX only: the bridge calls `require_operator` on
  * the listing and on every answer.
  */
 
 const BRIDGE = "/api/bridge";
-const POLL_MS = 30_000;
+
+/** While the Inbox is the view being read. */
+const ACTIVE_POLL_MS = 30_000;
+/** While the operator is elsewhere — slower, but never stopped. */
+const BACKGROUND_POLL_MS = 60_000;
+
+function documentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
 
 export interface UseInboxOptions {
   /** Whether the Inbox view is the one on screen. */
@@ -101,10 +116,37 @@ export function useInbox({ active = false }: UseInboxOptions = {}): UseInboxApi 
     wasActiveRef.current = active;
 
     if (firstMount || justOpened) void load();
-    if (!active) return;
 
-    const timer = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(timer);
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const stop = () => {
+      if (timer !== null) clearInterval(timer);
+      timer = null;
+    };
+
+    const start = () => {
+      stop();
+      if (documentHidden()) return;
+      timer = setInterval(() => void load(), active ? ACTIVE_POLL_MS : BACKGROUND_POLL_MS);
+    };
+
+    const onVisibilityChange = () => {
+      if (documentHidden()) {
+        stop();
+        return;
+      }
+      // The tab was dark for an unknown length of time, so the count in the
+      // badge is of unknown age: read it again before starting the clock.
+      void load();
+      start();
+    };
+
+    start();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [active, load]);
 
   const answer = useCallback(
