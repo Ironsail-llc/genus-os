@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { readBridgeReply } from "@/lib/bridge/read-reply";
 import {
   normalizePending,
-  readAnswerMessage,
+  routeCount,
   type AnswerBody,
   type AnswerOutcome,
   type PendingItem,
@@ -56,7 +57,10 @@ export interface UseInboxOptions {
 
 export interface UseInboxApi {
   items: PendingItem[];
+  /** What the ROUTE says is waiting — see `routeCount`. This is the badge. */
   count: number;
+  /** `count` minus the rows that actually rendered. Normally 0. */
+  unrenderable: number;
   isLoading: boolean;
   /** A listing that failed for a reason that is not "this is not your screen". */
   error: string | null;
@@ -68,6 +72,7 @@ export interface UseInboxApi {
 
 export function useInbox({ active = false }: UseInboxOptions = {}): UseInboxApi {
   const [items, setItems] = useState<PendingItem[]>([]);
+  const [count, setCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refusedAsNonOperator, setRefusedAsNonOperator] = useState(false);
@@ -76,9 +81,32 @@ export function useInbox({ active = false }: UseInboxOptions = {}): UseInboxApi 
   // answer — an operator who just settled a card would see it flicker back.
   const loadIdRef = useRef(0);
 
-  const load = useCallback(async () => {
+  /**
+   * Rows this session has settled, which the route may not have caught up with.
+   *
+   * `loadIdRef` above only orders loads against OTHER loads. It says nothing
+   * about the case the 30 s interval actually produces: a GET that left BEFORE
+   * an answer and lands AFTER it, carrying a listing minted while the row was
+   * still pending. Without this memo that answered card comes back — with its
+   * Approve and Reject buttons — and the badge goes up with it, until the next
+   * tick up to a minute later. Clicking it again gets "Already decided".
+   *
+   * An id is forgotten as soon as the route stops listing it, so the set
+   * tracks the route's lag rather than growing for the life of the session,
+   * and a genuinely new row that reuses an id is shown again.
+   */
+  const settledRef = useRef<Set<string>>(new Set());
+
+  /** Whether anything has been read yet; the spinner is for that and for Refresh. */
+  const hasLoadedRef = useRef(false);
+
+  const load = useCallback(async (options: { silent?: boolean } = {}) => {
     const id = ++loadIdRef.current;
-    setIsLoading(true);
+    // A background tick must not blank a populated screen: the view swaps the
+    // empty state for a spinner whenever the list is empty, so an unconditional
+    // setIsLoading(true) made an empty inbox blink every 30 seconds.
+    const quiet = options.silent === true && hasLoadedRef.current;
+    if (!quiet) setIsLoading(true);
     try {
       const res = await fetch(`${BRIDGE}/api/approvals`);
       if (id !== loadIdRef.current) return;
@@ -87,21 +115,38 @@ export function useInbox({ active = false }: UseInboxOptions = {}): UseInboxApi 
         if (res.status === 403) {
           setRefusedAsNonOperator(true);
           setItems([]);
+          setCount(0);
           setError(null);
           return;
         }
-        setError(await readAnswerMessage(res));
+        setError(await readBridgeReply(res));
         return;
       }
 
+      const body: unknown = await res.json();
+      const fresh = normalizePending(body);
+      const visible = fresh.filter((row) => !settledRef.current.has(row.id));
+
+      // Forget ids the route has stopped listing: the memo exists to cover its
+      // lag, not to blacklist an id for the life of the session.
+      const listed = new Set(fresh.map((row) => row.id));
+      for (const settledId of settledRef.current) {
+        if (!listed.has(settledId)) settledRef.current.delete(settledId);
+      }
+
       setRefusedAsNonOperator(false);
-      setItems(normalizePending(await res.json()));
+      setItems(visible);
+      // The route's own count, less the settled rows it is still listing.
+      setCount(Math.max(0, routeCount(body, fresh.length) - (fresh.length - visible.length)));
       setError(null);
     } catch {
       if (id !== loadIdRef.current) return;
       setError("The dashboard could not reach the bridge. Check that the service is running.");
     } finally {
-      if (id === loadIdRef.current) setIsLoading(false);
+      if (id === loadIdRef.current) {
+        hasLoadedRef.current = true;
+        if (!quiet) setIsLoading(false);
+      }
     }
   }, []);
 
@@ -127,7 +172,10 @@ export function useInbox({ active = false }: UseInboxOptions = {}): UseInboxApi 
     const start = () => {
       stop();
       if (documentHidden()) return;
-      timer = setInterval(() => void load(), active ? ACTIVE_POLL_MS : BACKGROUND_POLL_MS);
+      timer = setInterval(
+        () => void load({ silent: true }),
+        active ? ACTIVE_POLL_MS : BACKGROUND_POLL_MS
+      );
     };
 
     const onVisibilityChange = () => {
@@ -137,7 +185,7 @@ export function useInbox({ active = false }: UseInboxOptions = {}): UseInboxApi 
       }
       // The tab was dark for an unknown length of time, so the count in the
       // badge is of unknown age: read it again before starting the clock.
-      void load();
+      void load({ silent: true });
       start();
     };
 
@@ -165,7 +213,7 @@ export function useInbox({ active = false }: UseInboxOptions = {}): UseInboxApi 
         };
       }
 
-      if (!res.ok) return { settled: false, message: await readAnswerMessage(res) };
+      if (!res.ok) return { settled: false, message: await readBridgeReply(res) };
 
       const payload = (await res.json()) as { settled?: unknown; message?: unknown };
       if (payload?.settled !== true) {
@@ -180,9 +228,11 @@ export function useInbox({ active = false }: UseInboxOptions = {}): UseInboxApi 
 
       // Dropped locally rather than waited for: the next poll is up to thirty
       // seconds away, and a card that stays put after a successful answer
-      // reads as a failure. The poll is still the authority — a row that is
-      // somehow still pending comes back on it.
+      // reads as a failure. Recorded in the memo FIRST, so a GET that is
+      // already on the wire cannot land and put it back.
+      settledRef.current.add(id);
       setItems((prev) => prev.filter((item) => item.id !== id));
+      setCount((prev) => Math.max(0, prev - 1));
       return { settled: true, message: null };
     },
     []
@@ -190,7 +240,8 @@ export function useInbox({ active = false }: UseInboxOptions = {}): UseInboxApi 
 
   return {
     items,
-    count: items.length,
+    count,
+    unrenderable: Math.max(0, count - items.length),
     isLoading,
     error,
     refusedAsNonOperator,

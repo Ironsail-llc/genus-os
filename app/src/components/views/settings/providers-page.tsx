@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { readBridgeReply } from "@/lib/bridge/read-reply";
 
 /**
  * Providers: credentials in, digests out.
@@ -106,27 +107,6 @@ function scrub(message: string, secret: string): string {
   return message.split(trimmed).join("[redacted]");
 }
 
-/** The server's own words, whenever it gave any. */
-async function readError(res: Response): Promise<string> {
-  try {
-    const body: unknown = await res.json();
-    if (body && typeof body === "object") {
-      const detail = (body as { detail?: unknown }).detail;
-      if (typeof detail === "string" && detail.trim()) return detail;
-      if (Array.isArray(detail)) {
-        const messages = detail
-          .map((item) => (item && typeof item === "object" ? (item as { msg?: string }).msg : null))
-          .filter((msg): msg is string => Boolean(msg));
-        if (messages.length) return messages.join("; ");
-      }
-      const error = (body as { error?: unknown }).error;
-      if (typeof error === "string" && error.trim()) return error;
-    }
-  } catch {
-    // A non-JSON body is not a reason to lose the status code below.
-  }
-  return `The bridge refused the request (HTTP ${res.status}).`;
-}
 
 function stateClass(state: string): string {
   if (state === "active") return "border-success/30 bg-success/10 text-success";
@@ -254,7 +234,7 @@ export function ProvidersPage() {
     try {
       const res = await fetch(`${BRIDGE}/api/providers`);
       if (!res.ok) {
-        setListError(await readError(res));
+        setListError(await readBridgeReply(res));
         return;
       }
       const body = (await res.json()) as { providers?: Provider[] };
@@ -271,7 +251,7 @@ export function ProvidersPage() {
     try {
       const res = await fetch(`${BRIDGE}/api/models`);
       if (!res.ok) {
-        setModelsError(await readError(res));
+        setModelsError(await readBridgeReply(res));
         return;
       }
       const body = (await res.json()) as { models?: ModelEntry[] };
@@ -292,7 +272,7 @@ export function ProvidersPage() {
     try {
       const res = await fetch(`${BRIDGE}/api/providers/defaults`);
       if (!res.ok) {
-        setDefaultsReadError(await readError(res));
+        setDefaultsReadError(await readBridgeReply(res));
         return;
       }
       const body = (await res.json()) as Partial<FleetDefaults>;
@@ -366,7 +346,7 @@ export function ProvidersPage() {
         body: JSON.stringify({}),
       });
       if (!res.ok) {
-        setRowError(provider.id, await readError(res));
+        setRowError(provider.id, await readBridgeReply(res));
         return;
       }
       const verdict = (await res.json()) as TestVerdict;
@@ -412,7 +392,7 @@ export function ProvidersPage() {
         // Scrubbed with the value the operator typed: no bridge route echoes a
         // credential back today, and the page holds the only copy, so it can
         // always take it out again before anything reaches the screen.
-        const message = scrub(await readError(res), form.value);
+        const message = scrub(await readBridgeReply(res), form.value);
         setForm((prev) => (prev ? { ...prev, busy: null, error: message } : prev));
         return;
       }
@@ -440,7 +420,7 @@ export function ProvidersPage() {
         // Scrubbed with the value the operator typed: no bridge route echoes a
         // credential back today, and the page holds the only copy, so it can
         // always take it out again before anything reaches the screen.
-        const message = scrub(await readError(res), form.value);
+        const message = scrub(await readBridgeReply(res), form.value);
         setForm((prev) => (prev ? { ...prev, busy: null, error: message } : prev));
         return;
       }
@@ -462,7 +442,7 @@ export function ProvidersPage() {
         method: "DELETE",
       });
       if (!res.ok) {
-        setRowError(provider.id, await readError(res));
+        setRowError(provider.id, await readBridgeReply(res));
         return;
       }
       setConfirming(null);
@@ -483,7 +463,7 @@ export function ProvidersPage() {
         body: JSON.stringify({ model: primary, fallbacks: fallbacks.filter(Boolean) }),
       });
       if (!res.ok) {
-        setDefaultsError(await readError(res));
+        setDefaultsError(await readBridgeReply(res));
         return;
       }
       setDefaultsResult((await res.json()) as DefaultsResult);

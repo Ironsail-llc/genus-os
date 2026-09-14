@@ -32,6 +32,12 @@ export interface InboxViewProps {
   items: PendingItem[];
   isLoading: boolean;
   error: string | null;
+  /**
+   * Rows the route is counting that this screen could not render. Normally 0;
+   * rendered as a line rather than swallowed, because a badge reading 3 above
+   * a list of 2 is exactly the confusion a silent drop used to hide.
+   */
+  unrenderable: number;
   /** The bridge refused the listing as operator-only — not a broken appliance. */
   refusedAsNonOperator: boolean;
   onRefresh: () => void;
@@ -49,6 +55,7 @@ export function InboxView({
   items,
   isLoading,
   error,
+  unrenderable,
   refusedAsNonOperator,
   onRefresh,
   onAnswer,
@@ -73,7 +80,9 @@ export function InboxView({
           description="Approvals and agent questions, soonest deadline first."
         >
           <Button variant="outline" size="sm" data-testid="inbox-refresh" onClick={onRefresh}>
-            <RefreshCw aria-hidden />
+            {/* The loading card is suppressed once there are cards, so the
+                button itself has to show that a refresh is running. */}
+            <RefreshCw aria-hidden className={isLoading ? "animate-spin" : undefined} />
             Refresh
           </Button>
         </PageHeader>
@@ -128,6 +137,14 @@ export function InboxView({
               they are still on the Tasks screen.
             </p>
           </div>
+        ) : null}
+
+        {unrenderable > 0 ? (
+          <p className="text-xs text-warning" data-testid="inbox-unrenderable">
+            {unrenderable === 1
+              ? "One more row is waiting that this screen could not read, so it is not in the list below."
+              : `${unrenderable} more rows are waiting that this screen could not read, so they are not in the list below.`}
+          </p>
         ) : null}
 
         {items.length > 0 ? (

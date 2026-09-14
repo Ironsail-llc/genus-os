@@ -37,6 +37,9 @@ import {
  * the route regardless.
  */
 
+/** Roughly three lines of the detail's type size in a narrow card. */
+const CLAMP_AT_CHARS = 180;
+
 interface InboxCardProps {
   item: PendingItem;
   /** Whether to render the answer controls at all. UX gate only. */
@@ -71,6 +74,12 @@ export function InboxCard({ item, canWrite, onAnswer, onOpenRuns }: InboxCardPro
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
+  /** The note, only if there is one. An empty string is a note nobody wrote. */
+  function typedNote(): { note?: string } {
+    const trimmed = note.trim();
+    return trimmed ? { note: trimmed } : {};
+  }
+
   async function send(body: AnswerBody) {
     setBusy(true);
     setMessage(null);
@@ -85,6 +94,12 @@ export function InboxCard({ item, canWrite, onAnswer, onOpenRuns }: InboxCardPro
   }
 
   const runId = shortRunId(item.run_id);
+
+  // Whether the clamp would actually hide anything. A "more" that reveals
+  // nothing is noise on every card with a one-line detail, which is most of
+  // them; the threshold is a reading of the text, not a measurement, because
+  // the rendered line count is not knowable before paint.
+  const clampable = item.detail.length > CLAMP_AT_CHARS || item.detail.includes("\n");
 
   return (
     <article
@@ -113,27 +128,29 @@ export function InboxCard({ item, canWrite, onAnswer, onOpenRuns }: InboxCardPro
 
       <p
         data-testid={`inbox-question-${item.id}`}
-        className="text-sm font-medium text-foreground"
+        className={`text-sm font-medium ${item.question ? "text-foreground" : "text-muted-foreground italic"}`}
       >
-        {item.question}
+        {item.question || "(no prompt recorded)"}
       </p>
 
       {item.detail ? (
         <div className="flex flex-col items-start gap-1">
           <p
             data-testid={`inbox-detail-${item.id}`}
-            className={`text-xs text-muted-foreground ${detailOpen ? "" : "line-clamp-3"}`}
+            className={`text-xs text-muted-foreground ${clampable && !detailOpen ? "line-clamp-3" : ""}`}
           >
             {item.detail}
           </p>
-          <button
-            type="button"
-            data-testid={`inbox-detail-toggle-${item.id}`}
-            onClick={() => setDetailOpen((prev) => !prev)}
-            className="text-[11px] text-primary hover:underline"
-          >
-            {detailOpen ? "less" : "more"}
-          </button>
+          {clampable ? (
+            <button
+              type="button"
+              data-testid={`inbox-detail-toggle-${item.id}`}
+              onClick={() => setDetailOpen((prev) => !prev)}
+              className="text-[11px] text-primary hover:underline"
+            >
+              {detailOpen ? "less" : "more"}
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -213,7 +230,7 @@ export function InboxCard({ item, canWrite, onAnswer, onOpenRuns }: InboxCardPro
             size="xs"
             disabled={busy}
             data-testid={`inbox-approve-${item.id}`}
-            onClick={() => void send({ approved: true, note: note.trim() })}
+            onClick={() => void send({ approved: true, ...typedNote() })}
           >
             Approve
           </Button>
@@ -222,7 +239,7 @@ export function InboxCard({ item, canWrite, onAnswer, onOpenRuns }: InboxCardPro
             size="xs"
             disabled={busy}
             data-testid={`inbox-reject-${item.id}`}
-            onClick={() => void send({ approved: false, note: note.trim() })}
+            onClick={() => void send({ approved: false, ...typedNote() })}
           >
             Reject
           </Button>

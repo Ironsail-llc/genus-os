@@ -10,11 +10,11 @@ import { isOperatorRole } from "@/components/layout/nav-config";
 import type { AgentInfo } from "@/hooks/use-agents";
 import {
   describeCron,
-  readError,
   type BrokenManifest,
   type ManifestSummary,
   type ModelEntry,
 } from "@/lib/agents/manifests";
+import { readBridgeReply } from "@/lib/bridge/read-reply";
 
 import { AgentPanel } from "./agent-panel";
 
@@ -135,7 +135,7 @@ export function AgentManifests({
           setListError(null);
           return;
         }
-        setListError(await readError(res));
+        setListError(await readBridgeReply(res));
         return;
       }
       setRefusedAsNonOperator(false);
@@ -196,7 +196,7 @@ export function AgentManifests({
         ...init,
       });
       if (!res.ok) {
-        setRowError(id, await readError(res));
+        setRowError(id, await readBridgeReply(res));
         return;
       }
       onOk(await res.json());

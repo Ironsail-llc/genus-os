@@ -14,10 +14,15 @@
  *   nothing while showing a green tick, and the agent would wait for its own
  *   timeout to deny it. So the filter is positive — these two kinds, nothing
  *   else — instead of a blocklist that a third kind would walk straight past.
- * * `readAnswerMessage` reads `message` FIRST. Every refusal this router mints
- *   goes through `_refuse`, which answers `{settled: false, message}`; only
- *   FastAPI's own validation layer uses `detail`. A reader that knew about
- *   `detail` alone would turn "answer is required" into "HTTP 400".
+ * * It drops a row with no `id` and KEEPS a row with no `question`. The first
+ *   has nothing to POST an answer to; the second has something to answer and
+ *   merely nothing to print, and `workflow_approvals.prompt` is `TEXT NOT NULL`
+ *   — which permits `''`. Erasing such a row hid it from the list AND the
+ *   badge, and the run behind it then waited for its own timeout with no
+ *   visible cause. The card prints a placeholder instead.
+ *
+ * Refusals are read by `readBridgeReply` in `lib/bridge/read-reply.ts`, which
+ * is shared with the agents and providers pages.
  */
 
 /** The kinds this screen may render and answer. */
@@ -123,9 +128,8 @@ function optionalText(value: unknown): string | null {
 /**
  * The route's answer, defended rather than trusted.
  *
- * A row with no `id` or no `question` has nothing to render and nothing to
- * answer, so it is dropped rather than shown as an empty card the operator
- * cannot act on.
+ * A row with no `id` is dropped: there is no address to POST an answer to, so
+ * the card could only lie. A row with no `question` is KEPT — see the header.
  */
 export function normalizePending(body: unknown): PendingItem[] {
   const rows = (body as { pending?: unknown } | null)?.pending;
@@ -139,17 +143,20 @@ export function normalizePending(body: unknown): PendingItem[] {
     if (!ANSWERABLE_KINDS.includes(kind)) continue;
 
     const id = text(row.id);
-    const question = text(row.question);
-    if (!id || !question) continue;
+    if (!id) continue;
 
     out.push({
       kind: kind as PendingKind,
       id,
       run_id: text(row.run_id),
       agent_id: text(row.agent_id),
-      question,
+      question: text(row.question),
       detail: text(row.detail),
-      options: Array.isArray(row.options) ? row.options.filter((o): o is string => typeof o === "string") : [],
+      // A blank label would be an unlabelled button that POSTs an empty
+      // answer, which the route refuses with "answer is required".
+      options: Array.isArray(row.options)
+        ? row.options.filter((o): o is string => typeof o === "string" && Boolean(o.trim()))
+        : [],
       expires_at: optionalText(row.expires_at),
       created_at: optionalText(row.created_at),
     });
@@ -158,32 +165,16 @@ export function normalizePending(body: unknown): PendingItem[] {
 }
 
 /**
- * The sentence the server sent, whichever field it used.
+ * How many people the ROUTE says are waiting, which is the number the badge owes.
  *
- * `message` before `detail` because that is the router's own order: `_refuse`
- * writes `message`, and only FastAPI's request validation writes `detail`.
+ * Deliberately not `normalizePending(body).length`. The route counts rows this
+ * screen may have had to drop — an id-less row today, a third `kind` tomorrow —
+ * and a badge derived from what rendered would make every such row vanish
+ * twice: once from the list and once from the number that is supposed to admit
+ * the list is incomplete.
  */
-export async function readAnswerMessage(res: Response): Promise<string> {
-  try {
-    const body: unknown = await res.json();
-    if (body && typeof body === "object") {
-      const message = (body as { message?: unknown }).message;
-      if (typeof message === "string" && message.trim()) return message;
-
-      const detail = (body as { detail?: unknown }).detail;
-      if (typeof detail === "string" && detail.trim()) return detail;
-      if (Array.isArray(detail)) {
-        const messages = detail
-          .map((item) => (item && typeof item === "object" ? (item as { msg?: string }).msg : null))
-          .filter((msg): msg is string => Boolean(msg));
-        if (messages.length) return messages.join("; ");
-      }
-
-      const error = (body as { error?: unknown }).error;
-      if (typeof error === "string" && error.trim()) return error;
-    }
-  } catch {
-    // A non-JSON body is not a reason to lose the status code below.
-  }
-  return `The bridge refused the request (HTTP ${res.status}).`;
+export function routeCount(body: unknown, fallback: number): number {
+  const raw = (body as { count?: unknown } | null)?.count;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) return fallback;
+  return Math.floor(raw);
 }

@@ -281,6 +281,114 @@ describe("useInbox", () => {
     expect(result.current.count).toBe(2);
   });
 
+  it("does not let a GET already on the wire resurrect a card that was settled", async () => {
+    // The 30 s interval makes this routine: a poll leaves, the operator
+    // answers, the poll lands carrying a listing minted before the answer. The
+    // card must not come back, and the badge must not go back up with it.
+    const { result } = renderHook(() => useInbox({ active: true }));
+    await waitFor(() => expect(result.current.count).toBe(2));
+
+    let releaseStaleGet: () => void = () => {};
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          releaseStaleGet = () =>
+            resolve(jsonResponse({ count: 2, pending: [QUESTION, APPROVAL] }));
+        })
+    );
+
+    // A poll leaves and is held open.
+    let stalePoll: Promise<void> | undefined;
+    act(() => {
+      stalePoll = result.current.refresh();
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ settled: true, kind: "question", id: QUESTION.id })
+    );
+    await act(async () => {
+      await result.current.answer(QUESTION.id, "question", { answer: "Alice" });
+    });
+    expect(result.current.items.map((i) => i.id)).toEqual([APPROVAL.id]);
+    expect(result.current.count).toBe(1);
+
+    await act(async () => {
+      releaseStaleGet();
+      await stalePoll;
+    });
+
+    expect(result.current.items.map((i) => i.id)).toEqual([APPROVAL.id]);
+    expect(result.current.count).toBe(1);
+  });
+
+  it("forgets a settled id once the route stops listing it, so the memo cannot grow forever", async () => {
+    const { result } = renderHook(() => useInbox({ active: true }));
+    await waitFor(() => expect(result.current.count).toBe(2));
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ settled: true, kind: "question", id: QUESTION.id })
+    );
+    await act(async () => {
+      await result.current.answer(QUESTION.id, "question", { answer: "Alice" });
+    });
+
+    // The route catches up and drops the settled row.
+    fetchMock.mockResolvedValueOnce(jsonResponse({ count: 1, pending: [APPROVAL] }));
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    // A NEW row that happens to reuse the id (a fresh question on the same run)
+    // must be shown again — the memo is about one settled row, not the id forever.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ count: 2, pending: [QUESTION, APPROVAL] })
+    );
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.items.map((i) => i.id)).toEqual([QUESTION.id, APPROVAL.id]);
+    expect(result.current.count).toBe(2);
+  });
+
+  it("badges the route's own count, not the number of cards it could render", async () => {
+    // A row the browser cannot render is still a person waiting. The count
+    // comes off the wire so a silently unrenderable row cannot vanish from the
+    // badge as well as from the list.
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        count: 3,
+        pending: [QUESTION, APPROVAL, { kind: "escalation", id: "deadbeef", question: "?" }],
+      })
+    );
+    const { result } = renderHook(() => useInbox({ active: true }));
+
+    await waitFor(() => expect(result.current.count).toBe(3));
+    expect(result.current.items).toHaveLength(2);
+    expect(result.current.unrenderable).toBe(1);
+  });
+
+  it("falls back to the rows it can see when the route sends no count", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ pending: [QUESTION, APPROVAL] }));
+    const { result } = renderHook(() => useInbox({ active: true }));
+
+    await waitFor(() => expect(result.current.count).toBe(2));
+    expect(result.current.unrenderable).toBe(0);
+  });
+
+  it("takes the settled row off the route's count too", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ count: 2, pending: [QUESTION, APPROVAL] }));
+    const { result } = renderHook(() => useInbox({ active: true }));
+    await waitFor(() => expect(result.current.count).toBe(2));
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ settled: true, kind: "question", id: QUESTION.id })
+    );
+    await act(async () => {
+      await result.current.answer(QUESTION.id, "question", { answer: "Alice" });
+    });
+    expect(result.current.count).toBe(1);
+  });
+
   it("refreshes on demand", async () => {
     const { result } = renderHook(() => useInbox({ active: false }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));

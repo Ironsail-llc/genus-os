@@ -174,7 +174,15 @@ test.describe("Inbox › answering in place", () => {
     const card = page.locator(`[data-testid="inbox-card-${APPROVAL_ID}"]`);
     await expect(card).toBeVisible({ timeout: 15000 });
 
-    // Nothing overflows the viewport, and the answer field is full width.
+    // The claim that actually breaks at 390 px is sideways scroll on the
+    // document, not one card's box — a long run id or an unbreakable option
+    // label widens the page, not the card that contains it.
+    const metrics = await page.evaluate(() => ({
+      docScroll: document.documentElement.scrollWidth,
+      inner: window.innerWidth,
+    }));
+    expect(metrics.docScroll).toBeLessThanOrEqual(metrics.inner);
+
     const box = await card.boundingBox();
     expect(box).not.toBeNull();
     expect((box?.width ?? 0) + (box?.x ?? 0)).toBeLessThanOrEqual(391);

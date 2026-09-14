@@ -34,6 +34,7 @@ function renderView(overrides: Partial<React.ComponentProps<typeof InboxView>> =
     items: [QUESTION, APPROVAL],
     isLoading: false,
     error: null,
+    unrenderable: 0,
     refusedAsNonOperator: false,
     onRefresh: vi.fn(),
     onAnswer: vi.fn().mockResolvedValue({ settled: true, message: null }),
@@ -102,6 +103,55 @@ describe("InboxView", () => {
     );
   });
 
+  it("offers no more control for a detail short enough to be shown whole", () => {
+    // A "more" that reveals nothing is noise on every card that has a
+    // one-line detail, which is most of them.
+    const short = { ...APPROVAL, detail: "The draft sits on the run." };
+    renderView({ items: [short] });
+    expect(screen.getByTestId(`inbox-detail-${short.id}`).textContent).toBe(short.detail);
+    expect(screen.getByTestId(`inbox-detail-${short.id}`).className).not.toContain("line-clamp-3");
+    expect(screen.queryByTestId(`inbox-detail-toggle-${short.id}`)).toBeNull();
+  });
+
+  it("renders a row that carries no question, with its controls intact", () => {
+    // Somebody is waiting on this row. A blank card the operator can still
+    // answer beats a row that was silently erased from the queue.
+    const blank = { ...APPROVAL, question: "", detail: "" };
+    renderView({ items: [blank] });
+    expect(screen.getByTestId(`inbox-question-${blank.id}`).textContent).toMatch(
+      /no prompt recorded/i
+    );
+    expect(screen.getByTestId(`inbox-kind-${blank.id}`).textContent).toBe("Approval");
+    expect(screen.getByTestId(`inbox-run-id-${blank.id}`).textContent).toBe("99887766");
+    expect(screen.getByTestId(`inbox-approve-${blank.id}`)).toBeInTheDocument();
+  });
+
+  it("says so when the route is waiting on more rows than it could render", () => {
+    // A badge reading 2 above a list of 1 is the confusion the old silent
+    // drop hid. The line admits the list is short rather than quietly
+    // pretending the queue is what fits on screen.
+    renderView({ items: [QUESTION], unrenderable: 1 });
+    expect(screen.getByTestId("inbox-unrenderable").textContent).toMatch(/One more row/);
+
+    renderView({ items: [QUESTION], unrenderable: 3 });
+    expect(screen.getAllByTestId("inbox-unrenderable")[1].textContent).toMatch(/3 more rows/);
+  });
+
+  it("says nothing about unrenderable rows when the counts agree", () => {
+    renderView({ unrenderable: 0 });
+    expect(screen.queryByTestId("inbox-unrenderable")).toBeNull();
+  });
+
+  it("shows the Refresh control working while a populated list reloads", () => {
+    const { rerender, props } = renderView({ isLoading: true });
+    // The loading card is suppressed once there are cards, so the button
+    // itself has to say that something is happening.
+    expect(screen.queryByTestId("inbox-loading")).toBeNull();
+    expect(screen.getByTestId("inbox-refresh").querySelector(".animate-spin")).not.toBeNull();
+    rerender(<InboxView {...props} isLoading={false} />);
+    expect(screen.getByTestId("inbox-refresh").querySelector(".animate-spin")).toBeNull();
+  });
+
   it("offers no detail control for a card that has no detail", () => {
     renderView({ items: [QUESTION] });
     expect(screen.queryByTestId(`inbox-detail-${QUESTION.id}`)).toBeNull();
@@ -154,15 +204,26 @@ describe("InboxView", () => {
     );
   });
 
-  it("rejects, and a note is optional", async () => {
+  it("sends no note at all when none was typed", async () => {
+    // The brief says the note goes only when the operator wrote one; an empty
+    // string is a note the operator did not write.
     const onAnswer = vi.fn().mockResolvedValue({ settled: true, message: null });
     renderView({ onAnswer });
     fireEvent.click(screen.getByTestId(`inbox-reject-${APPROVAL.id}`));
     await waitFor(() =>
-      expect(onAnswer).toHaveBeenCalledWith(APPROVAL.id, "workflow", {
-        approved: false,
-        note: "",
-      })
+      expect(onAnswer).toHaveBeenCalledWith(APPROVAL.id, "workflow", { approved: false })
+    );
+  });
+
+  it("ignores a note of nothing but spaces", async () => {
+    const onAnswer = vi.fn().mockResolvedValue({ settled: true, message: null });
+    renderView({ onAnswer });
+    fireEvent.change(screen.getByTestId(`inbox-note-${APPROVAL.id}`), {
+      target: { value: "   " },
+    });
+    fireEvent.click(screen.getByTestId(`inbox-approve-${APPROVAL.id}`));
+    await waitFor(() =>
+      expect(onAnswer).toHaveBeenCalledWith(APPROVAL.id, "workflow", { approved: true })
     );
   });
 

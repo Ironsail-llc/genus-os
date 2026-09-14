@@ -4,7 +4,6 @@ import {
   absoluteTime,
   kindLabel,
   normalizePending,
-  readAnswerMessage,
   relativeTime,
   shortRunId,
   whoRaised,
@@ -131,7 +130,46 @@ describe("normalizePending", () => {
   it("survives a body that is not the shape it promised", () => {
     expect(normalizePending(null)).toEqual([]);
     expect(normalizePending({ pending: "nope" })).toEqual([]);
+    // No id: there is nothing to POST an answer to, so there is nothing to show.
     expect(normalizePending({ pending: [{ kind: "question" }] })).toEqual([]);
+  });
+
+  it("keeps a row that has an id but no question — somebody is still waiting on it", () => {
+    // `workflow_approvals.prompt` is TEXT NOT NULL, which permits ''. Dropping
+    // such a row erased it from the list AND the badge, leaving the run behind
+    // it to wait for its own timeout with no visible cause.
+    const rows = normalizePending({
+      count: 1,
+      pending: [
+        {
+          kind: "workflow",
+          id: "55555555-5555-4555-8555-555555555555",
+          run_id: "r9",
+          agent_id: "",
+          question: "",
+          detail: "The draft sits on the run.",
+          options: [],
+        },
+      ],
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].question).toBe("");
+    expect(rows[0].detail).toBe("The draft sits on the run.");
+  });
+
+  it("drops blank option labels, which would be unlabelled buttons sending an empty answer", () => {
+    const [row] = normalizePending({
+      pending: [
+        {
+          kind: "question",
+          id: "66666666-6666-4666-8666-666666666666",
+          question: "Which one?",
+          options: ["Alice", "", "   ", 7, "Bob"],
+        },
+      ],
+    });
+    expect(row.options).toEqual(["Alice", "Bob"]);
   });
 
   it("fills the optional fields rather than rendering undefined", () => {
@@ -144,41 +182,5 @@ describe("normalizePending", () => {
     expect(full.options).toEqual([]);
     expect(full.agent_id).toBe("");
     expect(full.expires_at).toBeNull();
-  });
-});
-
-describe("readAnswerMessage", () => {
-  function res(body: unknown, status = 400): Response {
-    return {
-      status,
-      json: () => Promise.resolve(body),
-    } as unknown as Response;
-  }
-
-  it("prefers the route's own sentence", async () => {
-    // `_refuse` answers with `message`, not `detail`.
-    expect(await readAnswerMessage(res({ settled: false, message: "malformed id" }))).toBe(
-      "malformed id"
-    );
-  });
-
-  it("falls back to a FastAPI detail", async () => {
-    expect(await readAnswerMessage(res({ detail: "answer is required" }))).toBe(
-      "answer is required"
-    );
-  });
-
-  it("reads a validation detail list", async () => {
-    expect(await readAnswerMessage(res({ detail: [{ msg: "field required" }] }, 422))).toBe(
-      "field required"
-    );
-  });
-
-  it("names the status when the body says nothing", async () => {
-    const message = await readAnswerMessage({
-      status: 503,
-      json: () => Promise.reject(new Error("not json")),
-    } as unknown as Response);
-    expect(message).toContain("503");
   });
 });

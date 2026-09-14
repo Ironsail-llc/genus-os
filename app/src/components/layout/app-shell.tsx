@@ -193,6 +193,7 @@ export function AppShell() {
                 items={inbox.items}
                 isLoading={inbox.isLoading}
                 error={inbox.error}
+                unrenderable={inbox.unrenderable}
                 refusedAsNonOperator={inbox.refusedAsNonOperator}
                 onRefresh={() => void inbox.refresh()}
                 onAnswer={inbox.answer}

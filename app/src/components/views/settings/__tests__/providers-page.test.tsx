@@ -204,6 +204,21 @@ describe("ProvidersPage — the listing", () => {
     expect(error).toHaveTextContent("could not read the provider state");
   });
 
+  it("renders a refusal that names itself `message` rather than `detail`", async () => {
+    // Several bridge routers answer `{message: …}` instead of `{detail: …}`.
+    // This page used to print "HTTP 503" over every one of them.
+    installFetch({
+      "GET /api/bridge/api/providers": {
+        status: 503,
+        body: { message: "the secret store is sealed" },
+      },
+    });
+    render(<ProvidersPage />);
+    expect(await screen.findByTestId("providers-error")).toHaveTextContent(
+      "the secret store is sealed"
+    );
+  });
+
   it("renders nothing from a listing field that carries key material", async () => {
     // The bridge never sends this. If a future one did — or a compromised hop
     // added it — the page must render the fields it knows and nothing else.

@@ -448,27 +448,6 @@ export function fieldForIssue(issue: ValidationIssue): string | null {
   return null;
 }
 
-/** The server's own sentence, whenever it gave one. */
-export async function readError(res: Response): Promise<string> {
-  try {
-    const body: unknown = await res.json();
-    if (body && typeof body === "object") {
-      const detail = (body as { detail?: unknown }).detail;
-      if (typeof detail === "string" && detail.trim()) return detail;
-      if (Array.isArray(detail)) {
-        const messages = detail
-          .map((item) => (item && typeof item === "object" ? (item as { msg?: string }).msg : null))
-          .filter((message): message is string => Boolean(message));
-        if (messages.length) return messages.join("; ");
-      }
-      const error = (body as { error?: unknown }).error;
-      if (typeof error === "string" && error.trim()) return error;
-    }
-  } catch {
-    // A non-JSON body is not a reason to lose the status code below.
-  }
-  return `The bridge refused the request (HTTP ${res.status}).`;
-}
 
 /**
  * The IANA zones this browser knows, with the operator's own first.
