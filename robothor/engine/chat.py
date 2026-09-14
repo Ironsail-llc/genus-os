@@ -47,6 +47,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
     clear_plan_state_async,
     clear_session_async,
@@ -202,13 +203,8 @@ class ChatSession:
     last_used: float = field(default_factory=time.monotonic)
 
 
-# In-memory session cache over the PostgreSQL store (see module docstring).
-_sessions: dict[str, ChatSession] = {}
-# Keys this process evicted: the only ones whose next access consults the
-# store. A never-seen key is genuinely new (startup restored everything the
-# store had), so it must not cost a query.
-_evicted: set[str] = set()
-
+# In-memory session cache over the PostgreSQL store (see module docstring and
+# robothor/engine/chat_session_cache.py for the policy).
 #: Cap on cached sessions. Live work is never dropped to honour it.
 MAX_SESSIONS = 500
 #: Idle age after which ``evict_idle_sessions`` drops a session (matches the
@@ -216,68 +212,28 @@ MAX_SESSIONS = 500
 SESSION_IDLE_TTL_S = 7 * 24 * 3600
 
 
-def _is_evictable(session_key: str, session: ChatSession) -> bool:
-    if session_key == get_main_session_key():
-        return False
-    if session.active_task is not None and not session.active_task.done():
-        return False
-    return session.active_plan is None and session.active_deep is None
+def _load_for_cache(session_key: str) -> dict[str, Any]:
+    tenant = _config.tenant_id if _config is not None else DEFAULT_TENANT
+    return load_session(session_key, limit=MAX_HISTORY, tenant_id=tenant)
 
 
-def _evict(session_key: str) -> None:
-    del _sessions[session_key]
-    _evicted.add(session_key)
-
-
-def _evict_to_cap() -> None:
-    """Make room for one more session; never drops live work to do it."""
-    while len(_sessions) >= MAX_SESSIONS:
-        candidates = [(s.last_used, k) for k, s in _sessions.items() if _is_evictable(k, s)]
-        if not candidates:
-            return
-        _evict(min(candidates)[1])
+_cache = SessionCache(
+    max_sessions=MAX_SESSIONS,
+    idle_ttl_s=SESSION_IDLE_TTL_S,
+    is_pinned=lambda key: key == get_main_session_key(),
+    loader=_load_for_cache,
+)
+_sessions: dict[str, ChatSession] = _cache.sessions
+_evicted: set[str] = _cache.evicted
 
 
 def evict_idle_sessions(*, ttl_s: float | None = None, now: float | None = None) -> int:
     """Drop every evictable session idle for longer than *ttl_s*. Returns the count."""
-    ttl = SESSION_IDLE_TTL_S if ttl_s is None else ttl_s
-    at = time.monotonic() if now is None else now
-    stale = [k for k, s in _sessions.items() if at - s.last_used > ttl and _is_evictable(k, s)]
-    for key in stale:
-        _evict(key)
-    return len(stale)
-
-
-def _rehydrate(session_key: str) -> ChatSession:
-    """A session this process evicted comes back from the store, history and all."""
-    session = ChatSession()
-    tenant = _config.tenant_id if _config is not None else DEFAULT_TENANT
-    try:
-        data = load_session(session_key, limit=MAX_HISTORY, tenant_id=tenant)
-    except Exception as exc:  # noqa: BLE001 - a store outage costs history, not the turn
-        logger.warning(
-            "chat session %s: rehydration failed: %s",
-            sanitize_log(session_key),
-            sanitize_log(str(exc)),
-        )
-        return session
-    history = data.get("history") if data else None
-    if history:
-        session.history = list(history)
-    model = data.get("model_override") if data else None
-    if model:
-        session.model_override = model
-    return session
+    return _cache.evict_idle(ttl_s=ttl_s, now=now)
 
 
 def _get_session(session_key: str) -> ChatSession:
-    session = _sessions.get(session_key)
-    if session is None:
-        _evict_to_cap()
-        session = _rehydrate(session_key) if session_key in _evicted else ChatSession()
-        _evicted.discard(session_key)
-        _sessions[session_key] = session
-    session.last_used = time.monotonic()
+    session: ChatSession = _cache.get(session_key, ChatSession)
     return session
 
 
