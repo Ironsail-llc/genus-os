@@ -75,4 +75,11 @@ describe("SettingsView", () => {
     expect(screen.getByTestId("settings-restricted")).toBeInTheDocument();
     expect(screen.queryByTestId("settings-subnav")).toBeNull();
   });
+
+  it("decides nothing while the session is still loading", () => {
+    renderSettings({ role: undefined, roleLoading: true });
+    expect(screen.queryByTestId("settings-restricted")).toBeNull();
+    expect(screen.queryByTestId("settings-subnav")).toBeNull();
+    expect(screen.getByTestId("settings-loading")).toBeInTheDocument();
+  });
 });

@@ -92,8 +92,6 @@ export interface SettingsPage {
   description: string;
   group: string;
   icon: LucideIcon;
-  /** False while the page is still a placeholder. */
-  built?: boolean;
 }
 
 export const settingsPages: SettingsPage[] = [
@@ -144,7 +142,6 @@ export const settingsPages: SettingsPage[] = [
     icon: Flag,
     description:
       "Platform controls and their rollout state — off, observe, or enforce — with the reason recorded for each change.",
-    built: true,
   },
   {
     id: "plugins",
@@ -161,7 +158,6 @@ export const settingsPages: SettingsPage[] = [
     icon: Palette,
     description:
       "Theme and density for this browser. These are personal preferences, not instance settings.",
-    built: true,
   },
 ];
 
@@ -176,6 +172,9 @@ export const navGroups: NavGroup[] = [
     label: "Workspace",
     items: [
       { id: "inbox", label: "Inbox", view: "inbox", icon: Inbox, soon: true },
+      // Tasks is not in the operator's Workspace list; it is here because the
+      // existing tasks view must stay reachable. Inbox is its successor, so
+      // this entry goes away when Inbox ships.
       { id: "tasks", label: "Tasks", view: "tasks", icon: ListTodo },
       { id: "agents", label: "Agents", view: "agents", icon: Bot },
       // "Automations" is the product name for the existing workflows view.

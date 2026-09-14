@@ -14,12 +14,10 @@ const PROMISES: Partial<Record<ViewId, string>> = {
 
 interface ComingSoonViewProps {
   view: ViewId;
-  visible?: boolean;
 }
 
-export function ComingSoonView({ view, visible = true }: ComingSoonViewProps) {
-  if (!visible) return null;
-
+/** Mounted only for the view that is showing — the shell does the switching. */
+export function ComingSoonView({ view }: ComingSoonViewProps) {
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-4" data-testid={`coming-soon-${view}`}>
       <PageHeader title={viewTitles[view]} />

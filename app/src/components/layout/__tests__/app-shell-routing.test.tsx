@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 
 vi.mock("@/hooks/use-visual-state", () => ({
   useVisualState: () => ({
@@ -48,9 +48,16 @@ vi.mock("@/lib/api/conversations", () => ({ fetchConversations: vi.fn().mockReso
 vi.mock("@/lib/api/memory", () => ({ searchMemory: vi.fn().mockResolvedValue([]) }));
 vi.mock("cronstrue", () => ({ default: { toString: (expr: string) => expr } }));
 
-const mockRole = vi.hoisted(() => ({ value: "owner" as string | undefined }));
+const mockSession = vi.hoisted(() => ({
+  role: "owner" as string | undefined,
+  status: "authenticated" as "authenticated" | "loading" | "unauthenticated",
+}));
 vi.mock("next-auth/react", () => ({
-  useSession: () => ({ data: { role: mockRole.value }, status: "authenticated", update: vi.fn() }),
+  useSession: () => ({
+    data: mockSession.status === "loading" ? undefined : { role: mockSession.role },
+    status: mockSession.status,
+    update: vi.fn(),
+  }),
   SessionProvider: ({ children }: { children: React.ReactNode }) => children,
   signOut: vi.fn(),
   signIn: vi.fn(),
@@ -77,7 +84,8 @@ async function renderShell() {
 
 describe("AppShell — URL-synced views", () => {
   beforeEach(() => {
-    mockRole.value = "owner";
+    mockSession.role = "owner";
+    mockSession.status = "authenticated";
     desktopViewport();
     window.history.replaceState(null, "", "/");
     global.fetch = vi.fn().mockResolvedValue({
@@ -117,15 +125,35 @@ describe("AppShell — URL-synced views", () => {
     expect(screen.getByTestId("header-title").textContent).toBe("Chat");
   });
 
-  it("follows back navigation", async () => {
+  it("follows real back navigation", async () => {
     await renderShell();
+    fireEvent.click(screen.getByTestId("nav-runs"));
     fireEvent.click(screen.getByTestId("nav-health"));
     expect(screen.getByTestId("header-title").textContent).toBe("Health");
     act(() => {
-      window.history.replaceState(null, "", "/?v=chat");
-      window.dispatchEvent(new PopStateEvent("popstate"));
+      window.history.back();
     });
-    expect(screen.getByTestId("header-title").textContent).toBe("Chat");
+    await waitFor(() =>
+      expect(screen.getByTestId("header-title").textContent).toBe("Runs")
+    );
+  });
+
+  it("does not stack history entries for the view already showing", async () => {
+    await renderShell();
+    fireEvent.click(screen.getByTestId("nav-runs"));
+    const push = vi.spyOn(window.history, "pushState");
+    fireEvent.click(screen.getByTestId("nav-runs"));
+    fireEvent.click(screen.getByTestId("nav-runs"));
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("decides nothing about settings while the session is loading", async () => {
+    mockSession.status = "loading";
+    window.history.replaceState(null, "", "/?v=settings&s=flags");
+    await renderShell();
+    // The owner must not be told the screen is not theirs before the role is known.
+    expect(screen.queryByTestId("settings-restricted")).toBeNull();
+    expect(screen.getByTestId("settings-loading")).toBeInTheDocument();
   });
 
   it("round-trips a settings sub-page", async () => {
@@ -146,7 +174,7 @@ describe("AppShell — URL-synced views", () => {
   });
 
   it("hides settings navigation from a non-operator", async () => {
-    mockRole.value = "viewer";
+    mockSession.role = "viewer";
     await renderShell();
     expect(screen.queryByTestId("nav-group-settings")).toBeNull();
   });

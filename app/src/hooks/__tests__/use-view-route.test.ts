@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { StrictMode } from "react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import {
   DEFAULT_SETTINGS_PAGE,
   DEFAULT_VIEW,
@@ -46,6 +47,17 @@ describe("parseViewRoute", () => {
     expect(parseViewRoute("?v=runs&s=flags").settingsPage).toBe(
       DEFAULT_SETTINGS_PAGE
     );
+  });
+
+  it("keeps links to the retired controls view working", () => {
+    expect(parseViewRoute("?v=controls")).toEqual({
+      view: "settings",
+      settingsPage: "flags",
+    });
+  });
+
+  it("keeps links to the retired canvas view working", () => {
+    expect(parseViewRoute("?v=canvas").view).toBe("chat");
   });
 });
 
@@ -113,13 +125,57 @@ describe("useViewRoute", () => {
     expect(window.location.search).toBe("?v=settings&s=channels");
   });
 
-  it("follows back/forward navigation", () => {
+  it("follows real back/forward navigation", async () => {
     const { result } = renderHook(() => useViewRoute());
     act(() => result.current.navigate("runs"));
+    act(() => result.current.navigate("health"));
+    expect(window.location.search).toBe("?v=health");
+
     act(() => {
-      window.history.replaceState(null, "", "/?v=health");
-      window.dispatchEvent(new PopStateEvent("popstate"));
+      window.history.back();
     });
-    expect(result.current.view).toBe("health");
+    await waitFor(() => expect(result.current.view).toBe("runs"));
+
+    act(() => {
+      window.history.forward();
+    });
+    await waitFor(() => expect(result.current.view).toBe("health"));
+  });
+
+  it("pushes one history entry per navigation under StrictMode", () => {
+    const push = vi.spyOn(window.history, "pushState");
+    const { result } = renderHook(() => useViewRoute(), { wrapper: StrictMode });
+    act(() => result.current.navigate("runs"));
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not push a duplicate entry for the route already showing", () => {
+    const { result } = renderHook(() => useViewRoute());
+    act(() => result.current.navigate("runs"));
+    const push = vi.spyOn(window.history, "pushState");
+    act(() => result.current.navigate("runs"));
+    act(() => result.current.navigate("runs"));
+    expect(push).not.toHaveBeenCalled();
+    expect(result.current.view).toBe("runs");
+  });
+
+  it("normalises an unknown view in the URL instead of leaving a bad link", async () => {
+    window.history.replaceState(null, "", "/?v=bogus");
+    const { result } = renderHook(() => useViewRoute());
+    expect(result.current.view).toBe("chat");
+    await waitFor(() => expect(window.location.search).toBe("?v=chat"));
+  });
+
+  it("rewrites a retired view link to where that screen lives now", async () => {
+    window.history.replaceState(null, "", "/?v=controls");
+    const { result } = renderHook(() => useViewRoute());
+    expect(result.current.view).toBe("settings");
+    await waitFor(() => expect(window.location.search).toBe("?v=settings&s=flags"));
+  });
+
+  it("leaves a bare URL alone", () => {
+    const { result } = renderHook(() => useViewRoute());
+    expect(result.current.view).toBe("chat");
+    expect(window.location.search).toBe("");
   });
 });

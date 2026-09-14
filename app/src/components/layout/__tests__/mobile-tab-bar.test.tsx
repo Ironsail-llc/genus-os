@@ -107,4 +107,51 @@ describe("MobileTabBar", () => {
     renderBar({ reviewCount: 4 });
     expect(screen.getByTestId("badge-more").textContent).toBe("4");
   });
+  it("marks the Inbox tab as not built yet while still reaching the placeholder", () => {
+    renderBar();
+    const tab = screen.getByTestId("mobile-tab-inbox");
+    expect(within(tab).getByTestId("mobile-soon-inbox").textContent?.toLowerCase()).toBe("soon");
+  });
+
+  it("closes the sheet on Escape and hands focus back to More", () => {
+    renderBar();
+    const more = screen.getByTestId("mobile-tab-more");
+    fireEvent.click(more);
+    expect(screen.getByTestId("mobile-more-sheet")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("mobile-more-sheet")).toBeNull();
+    expect(document.activeElement).toBe(more);
+  });
+
+  it("moves focus into the sheet and marks it modal", () => {
+    renderBar();
+    fireEvent.click(screen.getByTestId("mobile-tab-more"));
+    const sheet = screen.getByTestId("mobile-more-sheet");
+    expect(sheet).toHaveAttribute("aria-modal", "true");
+    expect(sheet.contains(document.activeElement)).toBe(true);
+  });
+
+  it("takes the tab bar behind the sheet out of the accessibility tree", () => {
+    renderBar();
+    const nav = screen.getByTestId("mobile-tab-bar");
+    expect(nav).not.toHaveAttribute("aria-hidden");
+    fireEvent.click(screen.getByTestId("mobile-tab-more"));
+    expect(nav).toHaveAttribute("aria-hidden", "true");
+    expect(nav).toHaveAttribute("inert");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(nav).not.toHaveAttribute("aria-hidden");
+  });
+
+  it("keeps Tab inside the open sheet", () => {
+    renderBar();
+    fireEvent.click(screen.getByTestId("mobile-tab-more"));
+    const sheet = screen.getByTestId("mobile-more-sheet");
+    const focusable = [...sheet.querySelectorAll<HTMLElement>("button:not([disabled])")];
+    const last = focusable[focusable.length - 1];
+    last.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(focusable[0]);
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
 });

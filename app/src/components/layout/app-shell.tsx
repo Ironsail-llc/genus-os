@@ -57,7 +57,12 @@ export function AppShell() {
   // The role the auth layer already exposes. Used for nav gating only — server
   // -side authorization of these screens is NOT this component's job and is
   // enforced independently by the bridge on every request.
-  const { data: session } = useSession();
+  //
+  // `status` matters: the first client render of a next-auth session is
+  // "loading" with no data, and an owner must not be told a screen is not
+  // theirs while the role is merely unknown.
+  const { data: session, status } = useSession();
+  const roleLoading = status === "loading";
   const role = session?.role;
 
   const [chatOpen, setChatOpen] = useState(true);
@@ -195,6 +200,7 @@ export function AppShell() {
                 page={settingsPage}
                 onPageChange={(page) => navigate("settings", page)}
                 role={role}
+                roleLoading={roleLoading}
               />
               {isComingSoonView(view) && <ComingSoonView view={view} />}
             </div>

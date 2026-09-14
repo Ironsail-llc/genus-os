@@ -1,6 +1,6 @@
 "use client";
 
-import { Lock } from "lucide-react";
+import { Loader2, Lock } from "lucide-react";
 import { PageHeader } from "@/components/business/page-header";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { ControlsView } from "@/components/views/controls-view";
@@ -17,6 +17,8 @@ interface SettingsViewProps {
   onPageChange: (page: SettingsPageId) => void;
   /** Session role. UX gate only — the bridge authorizes every settings route itself. */
   role?: string | null;
+  /** The session has not resolved yet, so the role is unknown — not "denied". */
+  roleLoading?: boolean;
 }
 
 /** Sub-navigation is grouped, not a tab strip: settings grow, tabs do not. */
@@ -59,8 +61,28 @@ function PageBody({ page }: { page: SettingsPage }) {
   );
 }
 
-export function SettingsView({ visible, page, onPageChange, role }: SettingsViewProps) {
+export function SettingsView({
+  visible,
+  page,
+  onPageChange,
+  role,
+  roleLoading,
+}: SettingsViewProps) {
   if (!visible) return null;
+
+  // Decide nothing until the session resolves: an owner deep-linking a settings
+  // page must never be told the screen is not theirs while it is still loading.
+  if (roleLoading) {
+    return (
+      <div
+        className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center"
+        data-testid="settings-loading"
+      >
+        <Loader2 aria-hidden className="size-5 animate-spin text-muted-foreground/60" />
+        <p className="text-xs text-muted-foreground">Checking your access…</p>
+      </div>
+    );
+  }
 
   // UX gate only. Real enforcement is server-side and is NOT part of this task:
   // every settings route on the bridge checks the caller's role independently.

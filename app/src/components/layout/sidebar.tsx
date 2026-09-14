@@ -25,10 +25,10 @@ interface SidebarProps {
   role?: string | null;
 }
 
-function SoonPill({ id, prefix = "soon" }: { id: string; prefix?: string }) {
+function SoonPill({ id }: { id: string }) {
   return (
     <span
-      data-testid={`${prefix}-${id}`}
+      data-testid={`soon-${id}`}
       className="ml-auto rounded-full border border-border bg-muted px-1.5 text-[9.5px] font-medium uppercase tracking-wide text-muted-foreground"
     >
       soon

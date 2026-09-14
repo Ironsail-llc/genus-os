@@ -33,6 +33,7 @@
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
   --color-brand-2: var(--brand-2);
+  --color-scrim: var(--scrim);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -102,6 +103,8 @@
   --sidebar-ring: oklch(0.5 0.17 295);
   --glass-bg: oklch(1 0 0 / 55%);
   --glass-border: oklch(0 0 0 / 8%);
+  /* Scrim behind modal surfaces (sheets, overlays). */
+  --scrim: oklch(0.16 0.009 280 / 40%);
   --mesh-a: oklch(0.5 0.17 295 / 6%);
   --mesh-b: oklch(0.56 0.12 185 / 5%);
   --motion-micro: 150ms;
@@ -149,6 +152,7 @@
   --sidebar-ring: oklch(0.66 0.17 290);
   --glass-bg: oklch(1 0 0 / 5%);
   --glass-border: oklch(1 0 0 / 8%);
+  --scrim: oklch(0.09 0.006 280 / 60%);
   --mesh-a: oklch(0.66 0.17 290 / 6%);
   --mesh-b: oklch(0.76 0.13 180 / 5%);
 }

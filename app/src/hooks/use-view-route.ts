@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ALL_VIEW_IDS,
   settingsPages,
@@ -32,6 +32,15 @@ const SUB_PARAM = "s";
 const viewIds = new Set<string>(ALL_VIEW_IDS);
 const settingsPageIds = new Set<string>(settingsPages.map((p) => p.id));
 
+/**
+ * Views that used to have their own id and no longer do. Links minted by the
+ * previous Helm keep working instead of silently landing on chat.
+ */
+const VIEW_ALIASES: Record<string, ViewRoute> = {
+  controls: { view: "settings", settingsPage: "flags" },
+  canvas: { view: DEFAULT_VIEW, settingsPage: DEFAULT_SETTINGS_PAGE },
+};
+
 function toParams(search: string): URLSearchParams {
   return new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
 }
@@ -40,6 +49,10 @@ function toParams(search: string): URLSearchParams {
 export function parseViewRoute(search: string): ViewRoute {
   const params = toParams(search);
   const rawView = params.get(VIEW_PARAM) ?? "";
+
+  const alias = VIEW_ALIASES[rawView];
+  if (alias) return alias;
+
   const view = viewIds.has(rawView) ? (rawView as ViewId) : DEFAULT_VIEW;
 
   const rawSub = params.get(SUB_PARAM) ?? "";
@@ -78,26 +91,55 @@ export function useViewRoute(): ViewRouteApi {
     settingsPage: DEFAULT_SETTINGS_PAGE,
   });
 
-  useEffect(() => {
-    const sync = () => setRoute(parseViewRoute(window.location.search));
-    sync();
-    window.addEventListener("popstate", sync);
-    return () => window.removeEventListener("popstate", sync);
+  // navigate() needs the route that is showing without depending on the render
+  // that produced it, so the callback stays stable and the history write stays
+  // out of the state updater (updaters must be pure — StrictMode runs them twice).
+  const routeRef = useRef(route);
+
+  const applyRoute = useCallback((next: ViewRoute) => {
+    routeRef.current = next;
+    setRoute(next);
   }, []);
 
-  const navigate = useCallback((view: ViewId, settingsPage?: SettingsPageId) => {
-    setRoute((prev) => {
+  useEffect(() => {
+    const sync = () => applyRoute(parseViewRoute(window.location.search));
+
+    // A link carrying an unknown or retired view is rewritten to where it
+    // actually landed, so the bad URL does not survive a copy or a reload. A
+    // bare URL is left alone — nothing to correct there.
+    const search = window.location.search;
+    if (toParams(search).has(VIEW_PARAM)) {
+      const canonical = formatViewRoute(parseViewRoute(search), search);
+      if (canonical !== search) {
+        window.history.replaceState(null, "", `${window.location.pathname}${canonical}`);
+      }
+    }
+    sync();
+
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, [applyRoute]);
+
+  const navigate = useCallback(
+    (view: ViewId, settingsPage?: SettingsPageId) => {
       const next: ViewRoute = {
         view,
-        settingsPage: settingsPage ?? prev.settingsPage,
+        settingsPage: settingsPage ?? routeRef.current.settingsPage,
       };
+
       if (typeof window !== "undefined") {
         const search = formatViewRoute(next, window.location.search);
-        window.history.pushState(null, "", `${window.location.pathname}${search}`);
+        // Re-selecting the view you are already on must not stack a history
+        // entry — otherwise Back does nothing visible for several presses.
+        if (search !== window.location.search) {
+          window.history.pushState(null, "", `${window.location.pathname}${search}`);
+        }
       }
-      return next;
-    });
-  }, []);
+
+      applyRoute(next);
+    },
+    [applyRoute]
+  );
 
   return { ...route, navigate };
 }

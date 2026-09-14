@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bot, Inbox, MessageSquare, MoreHorizontal, X } from "lucide-react";
 import {
   visibleNavGroups,
@@ -15,11 +15,18 @@ import {
  * lives behind More, which opens a sheet built from the same nav config the
  * sidebar uses.
  */
-const TABS: Array<{ id: string; label: string; view: ViewId; icon: typeof Bot }> = [
+const TABS: Array<{
+  id: string;
+  label: string;
+  view: ViewId;
+  icon: typeof Bot;
+  soon?: boolean;
+}> = [
   { id: "chat", label: "Chat", view: "chat", icon: MessageSquare },
-  // Inbox has no screen yet: the tab lands on the placeholder view rather than
-  // nowhere. In the sidebar and the More sheet the same entry is disabled.
-  { id: "inbox", label: "Inbox", view: "inbox", icon: Inbox },
+  // Inbox has no screen yet. A disabled tab would waste one of four slots, so
+  // the tab stays live and lands on the placeholder view (the brief asks for
+  // exactly that) while carrying the same "soon" marking as the sidebar entry.
+  { id: "inbox", label: "Inbox", view: "inbox", icon: Inbox, soon: true },
   { id: "agents", label: "Agents", view: "agents", icon: Bot },
 ];
 
@@ -45,6 +52,54 @@ export function MobileTabBar({
   role,
 }: MobileTabBarProps) {
   const [moreOpen, setMoreOpen] = useState(false);
+  const sheetRef = useRef<HTMLDivElement | null>(null);
+  const moreButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  // The sheet is a modal dialog, so it owns the keyboard while it is open:
+  // Escape closes it, Tab cycles inside it, and focus goes back where it came
+  // from on close. The bar behind it is inert so nothing there is reachable.
+  useEffect(() => {
+    if (!moreOpen) return;
+
+    // Whatever opened the sheet gets focus back; when nothing held focus (the
+    // sheet was opened by a pointer), that is the More button itself.
+    const active = document.activeElement as HTMLElement | null;
+    const opener = active && active !== document.body ? active : moreButtonRef.current;
+    const focusable = () =>
+      Array.from(sheetRef.current?.querySelectorAll<HTMLElement>("button:not([disabled])") ?? []);
+
+    focusable()[0]?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMoreOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const items = focusable();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      const inside = sheetRef.current?.contains(active ?? null) ?? false;
+
+      if (event.shiftKey && (!inside || active === first)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (!inside || active === last)) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      opener?.focus?.();
+    };
+  }, [moreOpen]);
 
   // Only Agents carries a badge in the bar itself; the review queue badges More,
   // which is where Tasks now lives.
@@ -67,13 +122,15 @@ export function MobileTabBar({
     <>
       {moreOpen && (
         <div
-          className="fixed inset-0 z-50 flex flex-col justify-end bg-black/40 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 flex flex-col justify-end bg-scrim backdrop-blur-[2px]"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) setMoreOpen(false);
           }}
         >
           <div
+            ref={sheetRef}
             role="dialog"
+            aria-modal="true"
             aria-label="More navigation"
             data-testid="mobile-more-sheet"
             className="max-h-[75vh] overflow-y-auto rounded-t-2xl border-t border-border bg-popover pb-14"
@@ -136,6 +193,8 @@ export function MobileTabBar({
 
       <nav
         aria-label="Primary"
+        aria-hidden={moreOpen || undefined}
+        inert={moreOpen}
         className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-around h-14 border-t border-border bg-background/95 backdrop-blur-md safe-area-bottom"
         data-testid="mobile-tab-bar"
       >
@@ -149,7 +208,13 @@ export function MobileTabBar({
               onClick={() => onNavigate(tab.view, undefined)}
               aria-current={isActive ? "page" : undefined}
               className={`${TAB_CLASS} ${
-                isActive ? "text-primary" : isChat ? "text-primary/60" : "text-muted-foreground"
+                isActive
+                  ? "text-primary"
+                  : isChat
+                    ? "text-primary/60"
+                    : tab.soon
+                      ? "text-muted-foreground/60"
+                      : "text-muted-foreground"
               }`}
               data-testid={`mobile-tab-${tab.id}`}
             >
@@ -163,6 +228,14 @@ export function MobileTabBar({
               <span className={`text-[10px] leading-tight ${isChat ? "font-medium" : ""}`}>
                 {tab.label}
               </span>
+              {tab.soon && (
+                <span
+                  data-testid={`mobile-soon-${tab.id}`}
+                  className="absolute top-0.5 right-0 rounded-full border border-border bg-muted px-1 text-[8px] font-medium uppercase tracking-wide text-muted-foreground"
+                >
+                  soon
+                </span>
+              )}
               {badge > 0 && (
                 <span
                   data-testid={`badge-${tab.id}`}
@@ -176,6 +249,7 @@ export function MobileTabBar({
         })}
 
         <button
+          ref={moreButtonRef}
           onClick={() => setMoreOpen((prev) => !prev)}
           aria-expanded={moreOpen}
           aria-haspopup="dialog"

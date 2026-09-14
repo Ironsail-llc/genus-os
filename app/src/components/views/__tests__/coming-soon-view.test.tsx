@@ -4,14 +4,14 @@ import { ComingSoonView } from "../coming-soon-view";
 
 describe("ComingSoonView", () => {
   it("names the view it stands in for and says it is not built yet", () => {
-    render(<ComingSoonView view="inbox" visible />);
+    render(<ComingSoonView view="inbox" />);
     const el = screen.getByTestId("coming-soon-inbox");
     expect(el.textContent).toMatch(/Inbox/);
     expect(el.textContent).toMatch(/soon/i);
   });
 
-  it("renders nothing when not visible", () => {
-    const { container } = render(<ComingSoonView view="memory" visible={false} />);
-    expect(container.firstChild).toBeNull();
+  it("describes each not-yet-built screen it stands in for", () => {
+    render(<ComingSoonView view="memory" />);
+    expect(screen.getByTestId("coming-soon-memory").textContent).toMatch(/Memory/);
   });
 });
