@@ -12,8 +12,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEPARTMENTS,
   describeCron,
   deriveAgentId,
+  fieldForIssue,
   fieldForPath,
   nextRunText,
 } from "../manifests";
@@ -105,5 +107,152 @@ describe("fieldForPath", () => {
   it("returns null for a path no field on this form owns", () => {
     expect(fieldForPath("v2.sandbox.image")).toBeNull();
     expect(fieldForPath("")).toBeNull();
+  });
+});
+
+/**
+ * Fix round 1 — the describer and the next-run line, judged against the thing
+ * that actually schedules these agents.
+ *
+ * The engine runs `APScheduler.CronTrigger.from_crontab`, which takes exactly
+ * five fields. `cron-parser` takes six (it has a seconds field) and refuses a
+ * day-of-month/month pair that never occurs, which APScheduler accepts. Both
+ * disagreements reached the screen: a six-field expression previewed green and
+ * then failed the save, and `0 0 30 2 *` — a real, schedulable manifest — was
+ * rendered in destructive red in the fleet list as "not a valid schedule".
+ *
+ * Every expectation below was probed against
+ * `/home/philip/robothor/.venv/bin/python -c "CronTrigger.from_crontab(...)"`
+ * first; this table is that probe's output, not this module's opinion.
+ */
+describe("describeCron — parity with APScheduler", () => {
+  const ACCEPTED = [
+    "0 9 * * *",
+    "0 9 * * 1-5",
+    "*/15 * * * *",
+    "0 9 * * MON-FRI",
+    // A day/month pair cron-parser refuses and APScheduler schedules. It fires
+    // rarely or never, which is the operator's business, not a syntax error.
+    "0 0 30 2 *",
+    "0 9 31 2 *",
+    "0 0 29 2 *",
+  ];
+
+  const REFUSED = [
+    // Six fields: cron-parser reads a seconds field the engine does not have.
+    "* * * * * *",
+    // Nicknames are a cron-parser extension; from_crontab wants five fields.
+    "@daily",
+    "nonsense",
+    "0 99 * * *",
+    "0 9 32 * *",
+    "0 9 * 13 *",
+    "0 9 * * 8",
+  ];
+
+  it.each(ACCEPTED)("phrases %s, because the engine schedules it", (expression) => {
+    const text = describeCron(expression);
+    expect(text).not.toBe("not a valid schedule");
+    expect(text.length).toBeGreaterThan(0);
+  });
+
+  it.each(REFUSED)("refuses %s, because the engine refuses it", (expression) => {
+    expect(describeCron(expression)).toBe("not a valid schedule");
+  });
+
+  it("never calls a schedulable expression broken in the fleet list", () => {
+    // The list row renders `describeCron` directly, so a false negative here
+    // shows a healthy agent to the operator as broken.
+    expect(describeCron("0 0 30 2 *")).toContain("February");
+  });
+});
+
+describe("nextRunText — never an instant in a zone nobody chose", () => {
+  it("returns null when no timezone has been given", () => {
+    // The engine's own default is America/New_York
+    // (robothor/engine/config.py), not UTC. Substituting UTC printed a
+    // fully-spelled instant four to five hours from the truth.
+    expect(nextRunText("0 9 * * *", "", new Date("2026-09-14T12:00:00Z"))).toBeNull();
+    expect(nextRunText("0 9 * * *", "   ", new Date("2026-09-14T12:00:00Z"))).toBeNull();
+  });
+
+  it("still answers for a zone that was given", () => {
+    expect(nextRunText("0 9 * * *", "UTC", new Date("2026-09-14T12:00:00Z"))).toContain("UTC");
+  });
+
+  it("returns null for an expression the engine would refuse", () => {
+    expect(nextRunText("* * * * * *", "UTC")).toBeNull();
+    expect(nextRunText("@daily", "UTC")).toBeNull();
+  });
+});
+
+describe("fieldForIssue — against verdicts the bridge really produces", () => {
+  // Every path/message pair below was taken from a real run of
+  // `_manifest_validation.validate` or read off
+  // `robothor/templates/manifest_checks.py`. The previous test asserted the
+  // map against its own declaration, which is how `check.*` — most real
+  // refusals — went unmapped.
+  const issue = (path: string, message: string) => ({ path, code: "x", message });
+
+  it("keys the whole-check findings to the field they are about", () => {
+    expect(fieldForIssue(issue("check.D", "unknown tool in tools_allowed: 'not_a_tool'"))).toBe(
+      "tools"
+    );
+    expect(fieldForIssue(issue("check.F", "Invalid cron expression '0 99 * * *': ..."))).toBe(
+      "cron"
+    );
+  });
+
+  it("reads the field out of a structure finding that names one", () => {
+    expect(
+      fieldForIssue(issue("check.B", "delivery.mode=announce but no delivery.channel"))
+    ).toBe("deliveryChannel");
+    expect(fieldForIssue(issue("check.B", "delivery.mode=announce but no delivery.to"))).toBe(
+      "deliveryTo"
+    );
+    expect(fieldForIssue(issue("check.B", "Invalid delivery.mode: sideways"))).toBe("deliveryMode");
+    expect(
+      fieldForIssue(
+        issue(
+          "check.B",
+          "No model.primary specified, and docs/agents/_defaults.yaml supplies none either"
+        )
+      )
+    ).toBe("model");
+    expect(fieldForIssue(issue("check.A", "department 'ops' not in schema enum: [...]"))).toBe(
+      "department"
+    );
+  });
+
+  it("leaves a finding about a field this form does not own in the list", () => {
+    expect(fieldForIssue(issue("check.B", "Invalid session_target: sideways"))).toBeNull();
+    expect(fieldForIssue(issue("check.L", "hook 0 missing event_type"))).toBeNull();
+    expect(fieldForIssue(issue("v2.sandbox.image", "no such image"))).toBeNull();
+  });
+
+  it("still maps the plain dotted paths the schema produces", () => {
+    expect(fieldForIssue(issue("schedule.cron", "five fields, not three"))).toBe("cron");
+    expect(fieldForIssue(issue("department", "department='ops' is not one of [...]"))).toBe(
+      "department"
+    );
+  });
+});
+
+describe("DEPARTMENTS", () => {
+  it("is the schema's closed enum, so the field cannot offer a value that 422s", () => {
+    // robothor/engine/schema/agent_manifest.yaml
+    expect(DEPARTMENTS).toEqual([
+      "email",
+      "calendar",
+      "operations",
+      "security",
+      "communications",
+      "crm",
+      "briefings",
+      "core",
+      "examples",
+      "system",
+      "custom",
+    ]);
   });
 });

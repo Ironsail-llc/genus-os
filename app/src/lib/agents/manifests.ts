@@ -78,6 +78,27 @@ export interface ModelEntry {
 
 export const DELIVERY_MODES = ["none", "announce", "log"] as const;
 
+/**
+ * The department enum, verbatim from `robothor/engine/schema/agent_manifest.yaml`.
+ *
+ * A closed list, so the field that collects it is a select. As free text it
+ * refused every natural answer an operator would type — ops, sales, finance,
+ * marketing are all 422s — with no hint on screen that there was a list at all.
+ */
+export const DEPARTMENTS = [
+  "email",
+  "calendar",
+  "operations",
+  "security",
+  "communications",
+  "crm",
+  "briefings",
+  "core",
+  "examples",
+  "system",
+  "custom",
+] as const;
+
 export const NO_SCHEDULE = "no schedule — this agent only runs when triggered";
 
 /**
@@ -98,26 +119,84 @@ export function deriveAgentId(name: string): string {
 }
 
 /**
+ * Would the ENGINE accept this cron expression?
+ *
+ * The engine schedules through `APScheduler.CronTrigger.from_crontab`, which
+ * takes exactly five fields. `cron-parser` is not that parser and disagrees
+ * with it in both directions:
+ *
+ * * it accepts six fields (it has a seconds column) and accepts `@daily`,
+ *   neither of which `from_crontab` will take;
+ * * it refuses a day-of-month/month pair that never occurs — `0 0 30 2 *` —
+ *   which `from_crontab` accepts and schedules quite happily.
+ *
+ * Both reached the screen. A six-field expression previewed green with a
+ * next-run time and then failed the save at `schedule.cron`; and because the
+ * fleet list renders this describer for every row, `0 0 30 2 *` showed a
+ * healthy, running agent to the operator in destructive red.
+ *
+ * So: five fields, then whole-expression parse, and on failure each field
+ * judged ON ITS OWN. If every field is individually in range, the only thing
+ * `cron-parser` can still be objecting to is the combination — the one case
+ * where APScheduler is the more permissive of the two. Probed to agree with
+ * `from_crontab` on the fifteen expressions in this module's test.
+ */
+export function cronIsValid(expression: string): boolean {
+  const cron = expression.trim();
+  if (!cron) return false;
+  const fields = cron.split(/\s+/);
+  // Exactly five. This is the whole of the six-field and `@daily` answer.
+  if (fields.length !== 5) return false;
+  try {
+    CronExpressionParser.parse(cron);
+    return true;
+  } catch {
+    // Wildcarding one field and keeping the rest would hide an out-of-range
+    // value in the field that was wildcarded; each field is checked alone.
+    for (let index = 0; index < 5; index += 1) {
+      const probe = ["*", "*", "*", "*", "*"];
+      probe[index] = fields[index];
+      try {
+        CronExpressionParser.parse(probe.join(" "));
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
+}
+
+/**
  * What a cron expression means, in words. Never throws.
  *
- * Judged by `cron-parser` — the same field semantics the engine schedules on —
- * before `cronstrue` is asked to phrase it, so an expression that reads nicely
- * but will never fire is still reported as invalid.
+ * Validity is `cronIsValid`'s answer — the engine's — and `cronstrue` is asked
+ * only to phrase an expression already judged schedulable. Where the two
+ * disagree the validity check wins: a describer that reads nicely is worth
+ * nothing next to one that agrees with the scheduler.
  */
 export function describeCron(expression: string): string {
   const cron = expression.trim();
   if (!cron) return NO_SCHEDULE;
+  if (!cronIsValid(cron)) return "not a valid schedule";
   try {
-    CronExpressionParser.parse(cron);
     return cronstrue.toString(cron, { verbose: false });
   } catch {
-    return "not a valid schedule";
+    // Schedulable, but this phrasing library will not say it out loud. The
+    // expression itself is a better answer than calling it invalid.
+    return cron;
   }
 }
 
 /**
  * When this expression next fires, in the agent's own zone. `null` when the
- * expression or the zone is one nothing can be computed from.
+ * expression, or the zone, is one nothing can be computed from.
+ *
+ * An absent zone answers `null` and never falls back to UTC. The engine's own
+ * default is `America/New_York` (`robothor/engine/config.py`), so substituting
+ * UTC printed a fully-specified instant, zone spelled out to three letters,
+ * four to five hours away from when the agent would actually run — and the
+ * unset zone is the state every manifest without an explicit
+ * `schedule.timezone` loads in, which is to say the common one.
  *
  * `now` is a parameter so a test can pin it; nothing in the app passes it.
  */
@@ -127,8 +206,9 @@ export function nextRunText(
   now: Date = new Date()
 ): string | null {
   const cron = expression.trim();
-  if (!cron) return null;
-  const zone = timezone.trim() || "UTC";
+  if (!cronIsValid(cron)) return null;
+  const zone = timezone.trim();
+  if (!zone) return null;
   try {
     const iterator = CronExpressionParser.parse(cron, { tz: zone, currentDate: now });
     const next = iterator.next().toDate();
@@ -185,6 +265,67 @@ export function fieldForPath(path: string): string | null {
   // one field: an error keyed to an index would render against nothing.
   const bare = path.trim().replace(/\[\d+\]/g, "");
   return FIELD_BY_PATH[bare] ?? null;
+}
+
+/**
+ * Checks whose every finding is about one field, whatever it says.
+ *
+ * `check_issues` keys each A–M check finding to `check.<id>`
+ * (`crm/bridge/routers/_manifest_validation.py`), so the path alone says which
+ * CHECK complained and not which field — and these are most of the refusals an
+ * operator will actually hit from the Advanced drawer.
+ */
+const FIELD_BY_CHECK: Record<string, string> = {
+  // D: tools_allowed entries not in the registry. K: missing basic I/O tools.
+  "check.D": "tools",
+  "check.K": "tools",
+  // F: CronTrigger.from_crontab refused the expression.
+  "check.F": "cron",
+};
+
+/**
+ * Dotted paths as they appear inside a check's MESSAGE, most specific first.
+ *
+ * Order is load-bearing. "delivery.mode=announce but no delivery.channel"
+ * names two paths and is about the second one: the mode is the premise, the
+ * missing channel is the fault. Matching `delivery.channel` and `delivery.to`
+ * before `delivery.mode` lands each of the three real check-B messages on the
+ * input that fixes it.
+ */
+const PATHS_IN_MESSAGE: Array<[string, string]> = [
+  ["delivery.channel", "deliveryChannel"],
+  ["delivery.to", "deliveryTo"],
+  ["delivery.mode", "deliveryMode"],
+  ["model.fallbacks", "fallbacks"],
+  ["model.primary", "model"],
+  ["schedule.cron", "cron"],
+  ["schedule.timezone", "timezone"],
+  ["tools_allowed", "tools"],
+  ["department", "department"],
+];
+
+/**
+ * The form field one verdict finding belongs under, or `null` to leave it in
+ * the list of things this form cannot fix.
+ *
+ * Path first, because a schema finding names its field exactly. Then the check
+ * id, for the checks that are about one field entire. Then the message, for
+ * `check.B` — "manifest structure" — which is five different faults sharing an
+ * id and is the only one that has to be read rather than looked up.
+ */
+export function fieldForIssue(issue: ValidationIssue): string | null {
+  const direct = fieldForPath(issue.path);
+  if (direct) return direct;
+
+  const path = issue.path.trim();
+  if (FIELD_BY_CHECK[path]) return FIELD_BY_CHECK[path];
+  if (!path.startsWith("check.")) return null;
+
+  const message = issue.message ?? "";
+  for (const [token, field] of PATHS_IN_MESSAGE) {
+    if (message.includes(token)) return field;
+  }
+  return null;
 }
 
 /** The server's own sentence, whenever it gave one. */

@@ -27,7 +27,7 @@ const MANIFESTS = {
       name: "Invoice Chaser",
       description: "Chases unpaid invoices every weekday morning.",
       version: "2026-09-01",
-      department: "finance",
+      department: "crm",
       cron: "0 9 * * 1-5",
       timezone: "UTC",
       enabled: true,
@@ -39,7 +39,7 @@ const MANIFESTS = {
       name: "Lead Scout",
       description: "Reads the inbound queue and files leads.",
       version: "2026-08-14",
-      department: "sales",
+      department: "operations",
       cron: "",
       timezone: "",
       enabled: false,
@@ -80,7 +80,7 @@ const DETAIL = {
     name: "Invoice Chaser",
     description: "Chases unpaid invoices every weekday morning.",
     version: "2026-09-01",
-    department: "finance",
+    department: "crm",
     instruction_file: "agents/invoice-chaser.md",
     model: { primary: "openrouter/openai/gpt-5.4", fallbacks: ["anthropic/claude-sonnet-4.6"] },
     schedule: { cron: "0 9 * * 1-5", timezone: "UTC", enabled: true },
@@ -461,11 +461,17 @@ describe("AgentManifests — the Advanced drawer", () => {
     expect(screen.getByTestId("agent-model-hint")).toHaveTextContent(/fleet default/i);
   });
 
-  it("previews the cron in words and names the next run", async () => {
+  it("previews the cron in words, and names the next run once a zone is chosen", async () => {
     await renderPage();
     await openAdvanced();
     fireEvent.change(screen.getByTestId("agent-field-cron"), { target: { value: "0 9 * * 1-5" } });
     expect(screen.getByTestId("agent-cron-preview")).toHaveTextContent(/Monday/i);
+    // Corrected in fix round 1: this used to assert a next-run line with no
+    // zone chosen, which is the C-1 bug — the panel was printing an instant in
+    // UTC while the engine's own default is America/New_York. The instant is
+    // owed only once the operator has said which clock they mean.
+    expect(screen.queryByTestId("agent-cron-next")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("agent-field-timezone"), { target: { value: "UTC" } });
     expect(screen.getByTestId("agent-cron-next")).toHaveTextContent(/20\d\d/);
   });
 
@@ -888,5 +894,277 @@ describe("AgentManifests — merged with fleet health", () => {
     render(<AgentManifests role="owner" roleLoading={false} health={[]} />);
     await screen.findByTestId("agent-row-invoice-chaser");
     expect(screen.getByTestId("agent-health-invoice-chaser")).toHaveTextContent(/no runs/i);
+  });
+});
+
+/**
+ * Fix round 1 — the findings the hostile review raised, each as the behaviour
+ * the operator sees rather than the shape of the code that produces it.
+ */
+describe("AgentManifests — C-1, the next-run line", () => {
+  async function openAdvancedOnCreate() {
+    fireEvent.click(screen.getByTestId("agent-new"));
+    await screen.findByTestId("agent-panel");
+    fireEvent.click(screen.getByTestId("agent-advanced-toggle"));
+    await screen.findByTestId("agent-advanced");
+  }
+
+  it("prints no instant while the timezone is the engine's own", async () => {
+    await renderPage();
+    await openAdvancedOnCreate();
+    fireEvent.change(screen.getByTestId("agent-field-cron"), { target: { value: "0 9 * * 1-5" } });
+    // The engine's default zone is America/New_York, and nothing on the bridge
+    // exposes it — so there is no instant this panel is entitled to print.
+    expect(screen.queryByTestId("agent-cron-next")).not.toBeInTheDocument();
+    expect(screen.getByTestId("agent-cron-zone-note")).toHaveTextContent(/engine's own zone/i);
+  });
+
+  it("prints the instant once the operator has named a zone", async () => {
+    await renderPage();
+    await openAdvancedOnCreate();
+    fireEvent.change(screen.getByTestId("agent-field-cron"), { target: { value: "0 9 * * 1-5" } });
+    fireEvent.change(screen.getByTestId("agent-field-timezone"), { target: { value: "UTC" } });
+    expect(screen.getByTestId("agent-cron-next")).toHaveTextContent("UTC");
+    expect(screen.queryByTestId("agent-cron-zone-note")).not.toBeInTheDocument();
+  });
+});
+
+describe("AgentManifests — C-2, a schedulable cron is never shown as broken", () => {
+  const FEBRUARY = {
+    ...MANIFESTS,
+    agents: [{ ...MANIFESTS.agents[0], id: "leap-audit", cron: "0 0 30 2 *" }],
+  };
+
+  it("phrases a day/month schedule the engine runs rather than reddening the row", async () => {
+    installFetch({ [LIST]: { body: FEBRUARY } });
+    render(<AgentManifests role="owner" roleLoading={false} />);
+    await screen.findByTestId("agent-row-leap-audit");
+    const human = screen.getByTestId("agent-cron-human-leap-audit");
+    expect(human).not.toHaveTextContent("not a valid schedule");
+    expect(human).toHaveTextContent(/February/i);
+  });
+
+  it("refuses a six-field expression in the preview instead of encouraging it", async () => {
+    await renderPage();
+    fireEvent.click(screen.getByTestId("agent-new"));
+    await screen.findByTestId("agent-panel");
+    fireEvent.click(screen.getByTestId("agent-advanced-toggle"));
+    fireEvent.change(screen.getByTestId("agent-field-cron"), { target: { value: "* * * * * *" } });
+    expect(screen.getByTestId("agent-cron-preview")).toHaveTextContent("not a valid schedule");
+    expect(screen.queryByTestId("agent-cron-next")).not.toBeInTheDocument();
+  });
+});
+
+describe("AgentManifests — I-1, 'leave as is' is a no-op", () => {
+  async function openEditAdvanced() {
+    fireEvent.click(screen.getByTestId("agent-open-invoice-chaser"));
+    await waitFor(() =>
+      expect(screen.getByTestId("agent-field-name")).toHaveValue("Invoice Chaser")
+    );
+    fireEvent.click(screen.getByTestId("agent-advanced-toggle"));
+    await screen.findByTestId("agent-advanced");
+  }
+
+  it("sends no delivery_mode when the operator clears the select back to blank", async () => {
+    await renderPage({
+      "PATCH /api/bridge/api/agent-manifests/invoice-chaser": {
+        body: { id: "invoice-chaser", manifest: {}, warnings: [], reconcile: { applied: true } },
+      },
+    });
+    await openEditAdvanced();
+    // The schema's delivery.mode enum is ['announce', 'log', 'none'] — an empty
+    // string is a 422, so a control that reads "leave it alone" must not send one.
+    fireEvent.change(screen.getByTestId("agent-field-deliveryMode"), { target: { value: "" } });
+    fireEvent.change(screen.getByTestId("agent-field-deliveryTo"), { target: { value: "ops-2" } });
+    fireEvent.click(screen.getByTestId("agent-save"));
+
+    await waitFor(() =>
+      expect(callsTo("PATCH", "/api/bridge/api/agent-manifests/invoice-chaser")).toHaveLength(1)
+    );
+    const body = callsTo("PATCH", "/api/bridge/api/agent-manifests/invoice-chaser")[0].body!;
+    expect(body).not.toHaveProperty("delivery_mode");
+    expect(body).toMatchObject({ delivery_to: "ops-2" });
+  });
+
+  it("does not count a blank delivery mode as an unsaved change on its own", async () => {
+    await renderPage();
+    await openEditAdvanced();
+    fireEvent.change(screen.getByTestId("agent-field-deliveryMode"), { target: { value: "" } });
+    expect(screen.getByTestId("agent-save")).toBeDisabled();
+  });
+
+  it("still sends a mode the operator actually chose", async () => {
+    await renderPage({
+      "PATCH /api/bridge/api/agent-manifests/invoice-chaser": {
+        body: { id: "invoice-chaser", manifest: {}, warnings: [], reconcile: { applied: true } },
+      },
+    });
+    await openEditAdvanced();
+    fireEvent.change(screen.getByTestId("agent-field-deliveryMode"), { target: { value: "log" } });
+    fireEvent.click(screen.getByTestId("agent-save"));
+    await waitFor(() =>
+      expect(callsTo("PATCH", "/api/bridge/api/agent-manifests/invoice-chaser")).toHaveLength(1)
+    );
+    expect(callsTo("PATCH", "/api/bridge/api/agent-manifests/invoice-chaser")[0].body).toEqual({
+      delivery_mode: "log",
+      change: "Edited via the Helm agent builder",
+    });
+  });
+});
+
+describe("AgentManifests — I-2, it asks the bridge nothing until it is on screen", () => {
+  it("makes no request at all while the view is hidden", async () => {
+    const mock = installFetch();
+    render(<AgentManifests role="owner" roleLoading={false} visible={false} />);
+    // Both routes are operator-gated and one scans the manifest directory; on
+    // every Helm page load, on every other view, that is pure cost.
+    expect(mock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("agent-row-invoice-chaser")).not.toBeInTheDocument();
+  });
+
+  it("asks once the view becomes visible", async () => {
+    installFetch();
+    const { rerender } = render(
+      <AgentManifests role="owner" roleLoading={false} visible={false} />
+    );
+    rerender(<AgentManifests role="owner" roleLoading={false} visible />);
+    expect(await screen.findByTestId("agent-row-invoice-chaser")).toBeInTheDocument();
+  });
+
+  it("tells a non-operator the listing is operator-only, not that it failed", async () => {
+    installFetch({
+      [LIST]: { status: 403, body: { detail: "operator role required" } },
+    });
+    render(<AgentManifests role="member" roleLoading={false} />);
+    await screen.findByTestId("agent-manifests-readonly");
+    // A red "the manifest listing failed" box tells a member their appliance is
+    // broken. It is not: they are simply not the operator.
+    expect(screen.queryByTestId("agent-manifests-error")).not.toBeInTheDocument();
+    expect(screen.getByTestId("agent-manifests-readonly")).toHaveTextContent(/owner or admin/i);
+  });
+
+  it("still shows a real failure as a failure", async () => {
+    installFetch({
+      [LIST]: { status: 502, body: { detail: "the engine did not answer" } },
+    });
+    render(<AgentManifests role="member" roleLoading={false} />);
+    expect(await screen.findByTestId("agent-manifests-error")).toHaveTextContent(
+      "the engine did not answer"
+    );
+  });
+});
+
+describe("AgentManifests — I-3, department is the schema's list", () => {
+  it("offers the eleven schema values and nothing else", async () => {
+    await renderPage();
+    fireEvent.click(screen.getByTestId("agent-new"));
+    await screen.findByTestId("agent-panel");
+    fireEvent.click(screen.getByTestId("agent-advanced-toggle"));
+    const select = await screen.findByTestId("agent-field-department");
+    expect(select.tagName).toBe("SELECT");
+    const values = within(select)
+      .getAllByRole("option")
+      .map((option) => (option as HTMLOptionElement).value);
+    // The empty option is "inherit / not set"; the rest are the enum verbatim.
+    expect(values).toEqual([
+      "",
+      "email",
+      "calendar",
+      "operations",
+      "security",
+      "communications",
+      "crm",
+      "briefings",
+      "core",
+      "examples",
+      "system",
+      "custom",
+    ]);
+  });
+
+  it("posts a chosen department", async () => {
+    await renderPage({
+      "POST /api/bridge/api/agent-manifests": {
+        status: 201,
+        body: { id: "vendor-follow-up", manifest: {}, warnings: [], reconcile: { applied: true } },
+      },
+    });
+    fireEvent.click(screen.getByTestId("agent-new"));
+    await screen.findByTestId("agent-panel");
+    fireEvent.click(screen.getByTestId("agent-advanced-toggle"));
+    fillThreeFields();
+    fireEvent.change(screen.getByTestId("agent-field-department"), {
+      target: { value: "operations" },
+    });
+    fireEvent.click(screen.getByTestId("agent-create"));
+    await waitFor(() => expect(callsTo("POST", "/api/bridge/api/agent-manifests")).toHaveLength(1));
+    expect(callsTo("POST", "/api/bridge/api/agent-manifests")[0].body).toMatchObject({
+      department: "operations",
+    });
+  });
+});
+
+describe("AgentManifests — I-4, a check finding lands on its field", () => {
+  async function refuseCreateWith(errors: Array<{ path: string; code: string; message: string }>) {
+    await renderPage({
+      "POST /api/bridge/api/agent-manifests": {
+        status: 422,
+        body: { detail: { ok: false, errors, warnings: [] } },
+      },
+    });
+    fireEvent.click(screen.getByTestId("agent-new"));
+    await screen.findByTestId("agent-panel");
+    fillThreeFields();
+    fireEvent.click(screen.getByTestId("agent-create"));
+  }
+
+  it("puts an unknown tool under the tool field and opens the drawer", async () => {
+    await refuseCreateWith([
+      { path: "check.D", code: "check_d", message: "unknown tool in tools_allowed: 'nope'" },
+    ]);
+    expect(await screen.findByTestId("agent-error-tools")).toHaveTextContent("'nope'");
+    expect(screen.getByTestId("agent-advanced")).toBeInTheDocument();
+  });
+
+  it("puts a missing announce channel under the channel field", async () => {
+    await refuseCreateWith([
+      {
+        path: "check.B",
+        code: "check_b",
+        message: "delivery.mode=announce but no delivery.channel",
+      },
+    ]);
+    expect(await screen.findByTestId("agent-error-deliveryChannel")).toHaveTextContent(
+      "delivery.channel"
+    );
+  });
+
+  it("keeps a finding it cannot place in the list, without promising a field", async () => {
+    await refuseCreateWith([
+      { path: "check.B", code: "check_b", message: "Invalid session_target: sideways" },
+    ]);
+    const other = await screen.findByTestId("agent-errors-other");
+    expect(other).toHaveTextContent("session_target");
+  });
+
+  it("no longer tells the operator the tool refusal carries a path", async () => {
+    await renderPage();
+    fireEvent.click(screen.getByTestId("agent-new"));
+    await screen.findByTestId("agent-panel");
+    fireEvent.click(screen.getByTestId("agent-advanced-toggle"));
+    expect(screen.getByTestId("agent-tools-hint")).not.toHaveTextContent(/path of the entry/i);
+  });
+});
+
+describe("AgentManifests — I-5, the panel is a sheet on a phone", () => {
+  it("covers the viewport below the tablet breakpoint and is inline above it", async () => {
+    await renderPage();
+    fireEvent.click(screen.getByTestId("agent-new"));
+    const panel = await screen.findByTestId("agent-panel");
+    // jsdom applies no media queries, so this asserts the class contract the
+    // Playwright spec then checks for real at 390px and 1440px.
+    expect(panel.className).toContain("fixed");
+    expect(panel.className).toContain("inset-0");
+    expect(panel.className).toContain("md:static");
   });
 });

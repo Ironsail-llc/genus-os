@@ -115,7 +115,12 @@ export function AgentsView({
           them into one table would make a manifest that will not load look
           like an agent that is merely unhealthy.
         */}
-        <AgentManifests role={role} roleLoading={roleLoading} health={agents} />
+        <AgentManifests
+          visible={visible}
+          role={role}
+          roleLoading={roleLoading}
+          health={agents}
+        />
       </div>
     </div>
   );

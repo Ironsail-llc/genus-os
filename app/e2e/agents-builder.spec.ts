@@ -29,7 +29,7 @@ const SEED: Manifest = {
   name: "Invoice Chaser",
   description: "Chases unpaid invoices every weekday morning.",
   version: "2026-09-01",
-  department: "finance",
+  department: "crm",
   cron: "0 9 * * 1-5",
   timezone: "UTC",
   enabled: true,
@@ -248,9 +248,23 @@ test.describe("Agents › the builder", () => {
     await page.locator('[data-testid="agent-open-vendor-follow-up"]').click();
     await expect(page.locator('[data-testid="agent-field-name"]')).toHaveValue("Vendor Follow Up");
     await page.locator('[data-testid="agent-advanced-toggle"]').click();
+
+    // Six fields is what `cron-parser` takes and what the engine's
+    // CronTrigger.from_crontab refuses. The preview must not encourage it.
+    await page.locator('[data-testid="agent-field-cron"]').fill("* * * * * *");
+    await expect(page.locator('[data-testid="agent-cron-preview"]')).toContainText(
+      "not a valid schedule"
+    );
+    await expect(page.locator('[data-testid="agent-cron-next"]')).toHaveCount(0);
+
     await page.locator('[data-testid="agent-field-cron"]').fill("0 9 * * 1-5");
     await expect(page.locator('[data-testid="agent-cron-preview"]')).toContainText("Monday");
+    // No zone chosen yet, so no instant is owed — the engine's own zone is not
+    // something this page can read.
+    await expect(page.locator('[data-testid="agent-cron-next"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="agent-cron-zone-note"]')).toBeVisible();
     await page.locator('[data-testid="agent-field-timezone"]').selectOption("UTC");
+    await expect(page.locator('[data-testid="agent-cron-next"]')).toContainText("UTC");
     await page.locator('[data-testid="agent-save"]').click();
 
     await expect(page.locator('[data-testid="agent-panel-result"]')).toContainText("2026-09-14b");
@@ -297,6 +311,15 @@ test.describe("Agents › the builder", () => {
     await page.locator('[data-testid="agent-advanced-toggle"]').click();
     await expect(page.locator('[data-testid="agent-advanced"]')).toBeVisible();
 
+    // The panel is a full-screen sheet here, not an inline card: the brief asks
+    // for it twice, and a fifteen-input drawer inlined into a 390px column is
+    // the thing it is asking not to happen.
+    const panel = page.locator('[data-testid="agent-panel"]');
+    expect(await panel.evaluate((el) => getComputedStyle(el).position)).toBe("fixed");
+    const box = await panel.boundingBox();
+    expect(box?.width).toBeGreaterThanOrEqual(389);
+    expect(box?.height).toBeGreaterThanOrEqual(779);
+
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth
     );
@@ -304,5 +327,7 @@ test.describe("Agents › the builder", () => {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     expect(await firstCell.evaluate((el) => getComputedStyle(el).display)).toBe("table-cell");
+    // And an inline card again above the breakpoint.
+    expect(await panel.evaluate((el) => getComputedStyle(el).position)).toBe("static");
   });
 });

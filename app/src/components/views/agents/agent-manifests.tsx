@@ -76,6 +76,16 @@ export interface AgentManifestsProps {
    * agent's failures on another agent's row the first time somebody did.
    */
   health?: AgentInfo[];
+  /**
+   * Whether the Agents view is the one on screen.
+   *
+   * `AppShell` mounts every view and hides them with `display: none`, so an
+   * effect with no gate here fires two operator-gated bridge calls — one of
+   * which scans the manifest directory — on every Helm page load, whatever the
+   * operator was actually looking at. `fleet-view` and `marketplace-view` both
+   * gate on this; this one now does too.
+   */
+  visible?: boolean;
 }
 
 /** Token classes per health tier, matching the pills elsewhere in the Helm. */
@@ -90,10 +100,15 @@ export function AgentManifests({
   role,
   roleLoading = false,
   health = [],
+  visible = true,
 }: AgentManifestsProps) {
   const [agents, setAgents] = useState<ManifestSummary[] | null>(null);
   const [broken, setBroken] = useState<BrokenManifest[]>([]);
   const [listError, setListError] = useState<string | null>(null);
+  // A 403 is not a failure of the appliance: it is the bridge saying this
+  // listing belongs to the operator. Told apart from every other refusal so a
+  // member is not shown a red box claiming their fleet is broken.
+  const [refusedAsNonOperator, setRefusedAsNonOperator] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const [models, setModels] = useState<ModelEntry[]>([]);
@@ -115,9 +130,15 @@ export function AgentManifests({
     try {
       const res = await fetch(`${BRIDGE}/api/agent-manifests`);
       if (!res.ok) {
+        if (res.status === 403) {
+          setRefusedAsNonOperator(true);
+          setListError(null);
+          return;
+        }
         setListError(await readError(res));
         return;
       }
+      setRefusedAsNonOperator(false);
       const body = (await res.json()) as { agents?: ManifestSummary[]; broken?: BrokenManifest[] };
       setAgents(body.agents ?? []);
       setBroken(Array.isArray(body.broken) ? body.broken : []);
@@ -142,9 +163,10 @@ export function AgentManifests({
   }, []);
 
   useEffect(() => {
+    if (!visible) return;
     void loadAgents();
     void loadModels();
-  }, [loadAgents, loadModels]);
+  }, [visible, loadAgents, loadModels]);
 
   function setRowError(id: string, message: string | null) {
     setRowErrors((prev) => {
@@ -251,14 +273,15 @@ export function AgentManifests({
         </div>
       </div>
 
-      {readOnly ? (
+      {readOnly || refusedAsNonOperator ? (
         <p className="text-xs text-muted-foreground" data-testid="agent-manifests-readonly">
-          You can see the fleet, but building, editing, running and retiring agents are the
-          operator&apos;s to do. Ask an owner or admin on this instance.
+          {refusedAsNonOperator
+            ? "The fleet listing is operator-only on this appliance, so there is nothing to show here. Ask an owner or admin on this instance."
+            : "You can see the fleet, but building, editing, running and retiring agents are the operator's to do. Ask an owner or admin on this instance."}
         </p>
       ) : null}
 
-      {loading && !agents ? (
+      {visible && loading && !agents && !refusedAsNonOperator ? (
         <div
           className="flex items-center gap-2 rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground"
           data-testid="agent-manifests-loading"
@@ -303,7 +326,7 @@ export function AgentManifests({
         />
       ) : null}
 
-      {!listError && !loading && rows.length === 0 ? (
+      {!listError && !refusedAsNonOperator && !loading && rows.length === 0 ? (
         <div
           className="rounded-lg border border-dashed border-border bg-card/40 p-4"
           data-testid="agent-manifests-empty"

@@ -9,9 +9,10 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import {
   DELIVERY_MODES,
+  DEPARTMENTS,
   deriveAgentId,
   describeCron,
-  fieldForPath,
+  fieldForIssue,
   nextRunText,
   readError,
   timezoneChoices,
@@ -131,7 +132,12 @@ export function changedFields(before: PanelFields, after: PanelFields): Record<s
   if (after.cron !== before.cron) body.cron = after.cron;
   if (after.timezone !== before.timezone) body.timezone = after.timezone;
   if (after.enabled !== before.enabled) body.enabled = after.enabled;
-  if (after.deliveryMode !== before.deliveryMode) body.delivery_mode = after.deliveryMode;
+  // A blank mode is the select's "leave it alone" option, not a value. The
+  // schema's enum is ['announce', 'log', 'none'] and `_merge_owned` writes what
+  // it is handed, so sending "" made a control labelled as a no-op fail the save.
+  if (after.deliveryMode && after.deliveryMode !== before.deliveryMode) {
+    body.delivery_mode = after.deliveryMode;
+  }
   if (after.deliveryChannel !== before.deliveryChannel) body.delivery_channel = after.deliveryChannel;
   if (after.deliveryTo !== before.deliveryTo) body.delivery_to = after.deliveryTo;
   if (!sameList(after.tools, before.tools)) body.tools_allowed = after.tools;
@@ -173,7 +179,7 @@ function refusalFromVerdict(errors: ValidationIssue[]): Refusal {
   const byField: Record<string, ValidationIssue[]> = {};
   const other: ValidationIssue[] = [];
   for (const issue of errors) {
-    const field = fieldForPath(issue.path);
+    const field = fieldForIssue(issue);
     if (field) (byField[field] ??= []).push(issue);
     else other.push(issue);
   }
@@ -211,11 +217,6 @@ async function refusalFrom(res: Response): Promise<Refusal> {
     if (messages.length) return { ...NO_REFUSAL, message: messages.join("; ") };
   }
   return { ...NO_REFUSAL, message: `The bridge refused the request (HTTP ${res.status}).` };
-}
-
-export interface ModelGroup {
-  id: string;
-  models: ModelEntry[];
 }
 
 export interface AgentPanelProps {
@@ -507,7 +508,10 @@ export function AgentPanel({ agentId, models, onClose, onSaved }: AgentPanelProp
   }
 
   const cronPreview = describeCron(fields.cron);
-  const cronNext = nextRunText(fields.cron, fields.timezone || "UTC");
+  // No zone substituted: `nextRunText` answers null for an unset zone, and the
+  // note below says whose clock the schedule is on instead of inventing one.
+  const cronNext = nextRunText(fields.cron, fields.timezone);
+  const cronSchedulable = cronPreview !== "not a valid schedule" && fields.cron.trim() !== "";
   const canCreate = Boolean(fields.name.trim()) && Boolean(effectiveId) && busy === null;
 
   function modelOptions(selected: string) {
@@ -533,9 +537,15 @@ export function AgentPanel({ agentId, models, onClose, onSaved }: AgentPanelProp
     <section
       data-testid="agent-panel"
       aria-label={editing ? `Edit ${agentId}` : "New agent"}
-      className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4"
+      // A phone has no room to put a fifteen-input drawer beside a table: below
+      // the tablet breakpoint this is a sheet over the page, and from `md` up it
+      // is the inline card it always was.
+      className={
+        "fixed inset-0 z-50 flex flex-col gap-3 overflow-y-auto border-border bg-card p-4 " +
+        "md:static md:z-auto md:rounded-lg md:border"
+      }
     >
-      <header className="flex flex-wrap items-center justify-between gap-2">
+      <header className="sticky top-0 z-10 -mx-4 -mt-4 flex flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-4 py-2 md:static md:mx-0 md:mt-0 md:border-b-0 md:px-0 md:py-0">
         <h3 className="text-sm font-medium text-foreground">
           {editing ? `Edit ${agentId}` : "New agent"}
         </h3>
@@ -733,12 +743,21 @@ export function AgentPanel({ agentId, models, onClose, onSaved }: AgentPanelProp
                 <label className={LABEL} htmlFor="agent-field-department">
                   Department
                 </label>
-                <Input
+                <NativeSelect
                   id="agent-field-department"
                   data-testid="agent-field-department"
                   value={fields.department}
                   onChange={(event) => set("department", event.target.value)}
-                />
+                >
+                  {/* A closed enum in the manifest schema. As free text every
+                      natural answer — ops, sales, finance — was a 422. */}
+                  <option value="">Not set</option>
+                  {DEPARTMENTS.map((department) => (
+                    <option key={department} value={department}>
+                      {department}
+                    </option>
+                  ))}
+                </NativeSelect>
                 <FieldErrors field="department" />
               </div>
 
@@ -836,6 +855,15 @@ export function AgentPanel({ agentId, models, onClose, onSaved }: AgentPanelProp
                     {`Next run ${cronNext}.`}
                   </span>
                 ) : null}
+                {!cronNext && cronSchedulable ? (
+                  <span
+                    className="text-[11px] text-muted-foreground"
+                    data-testid="agent-cron-zone-note"
+                  >
+                    This runs on the engine&apos;s own zone, which nothing here can read — choose a
+                    timezone below to see the next firing time.
+                  </span>
+                ) : null}
                 <FieldErrors field="cron" />
               </div>
 
@@ -886,7 +914,9 @@ export function AgentPanel({ agentId, models, onClose, onSaved }: AgentPanelProp
                   value={fields.deliveryMode}
                   onChange={(event) => set("deliveryMode", event.target.value)}
                 >
-                  <option value="">Leave as the manifest has it</option>
+                  <option value="">
+                    {editing ? "Leave as the manifest has it" : "Not set"}
+                  </option>
                   {DELIVERY_MODES.map((mode) => (
                     <option key={mode} value={mode}>
                       {mode}
@@ -959,9 +989,10 @@ export function AgentPanel({ agentId, models, onClose, onSaved }: AgentPanelProp
                     Add tool
                   </Button>
                 </div>
-                <span className="text-[11px] text-muted-foreground">
-                  Free text: the engine owns the tool list, and it refuses a name it does not know
-                  with the path of the entry to fix. An empty list leaves the manifest as it is.
+                <span className="text-[11px] text-muted-foreground" data-testid="agent-tools-hint">
+                  Free text: the engine owns the tool list. A name it does not know comes back as a
+                  refusal under this field, naming the tool. An empty list leaves the manifest as it
+                  is.
                 </span>
                 <FieldErrors field="tools" />
               </div>
