@@ -54,7 +54,7 @@ class _Sequence:
         return None
 
     async def get(self, url: str, **kwargs: Any) -> _Reply:
-        assert "api.search.brave.com" in url
+        assert url == web.BRAVE_API_URL
         self.calls += 1
         return self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
 
