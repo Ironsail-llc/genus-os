@@ -42,6 +42,15 @@ Programmatic audit access is available via the Bridge API:
 - **Agent containment**: Manifest allowlists, execution guardrails, lifecycle
   hooks, budget limits, and optional per-run container isolation reduce the
   agent execution boundary; operators must configure least privilege.
+- **Credential files are never read by agents**: `read_file` refuses `.env`
+  and `*.env` files, SOPS `*.enc.*`, key material (`*.pem`, `*.key`, SSH keys),
+  `.netrc`/`.pgpass`, cloud credential files and anything under `.ssh`, `.aws`,
+  `.kube`, `/run/robothor` or `/etc/robothor` before opening them
+  (`robothor/engine/secret_paths.py`), and `exec` refuses a command that would
+  print one (`cat`, `grep`, `head`, `sed` on the file, or a bare `printenv`)
+  while still allowing the file to be sourced for an authenticated command.
+  Tool output is still scanned and redacted, and every credential warning is
+  recorded in `agent_guardrail_events`.
 - **Recovery and payment minimization**: Encrypted, checksummed snapshots and
   token-only client/operational payment contracts are implemented mechanisms,
   not evidence of a deployed recovery objective or PCI compliance.

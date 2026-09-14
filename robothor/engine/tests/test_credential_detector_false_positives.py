@@ -400,3 +400,34 @@ class TestTheRedactorLeavesNonCredentialsAlone:
     ) -> None:
         out = str(redact_secrets(payload))
         assert secret not in out, f"{label}: the value survived redaction"
+
+
+class TestUrlValuedAssignments:
+    """A query parameter whose value is a URL is not a credential.
+
+    Live shape (10 warnings/day on ``gws_gmail_get``): Gmail's own
+    ``apikey_highlighted_url=https%3A%2F%2F...`` link parameter. The name
+    contains "apikey" and the value has plenty of entropy — but the value is
+    an address, and an address is not key material. A token *inside* a URL
+    query (``?access-token=<random>``) still warns.
+    """
+
+    def test_a_url_value_is_not_a_credential(self) -> None:
+        from robothor.engine.guardrails import _first_assigned_credential
+
+        assert (
+            _first_assigned_credential(
+                'href="https://mail.example.com/?apikey_highlighted_url='
+                'https%3A%2F%2Fexample.com%2Fdocs%2Fapi-keys&view=pt"'
+            )
+            is None
+        )
+        assert _first_assigned_credential("apikey_highlighted_url=https://example.com/x") is None
+
+    def test_a_token_inside_a_url_query_still_warns(self) -> None:
+        from robothor.engine.guardrails import _first_assigned_credential
+
+        assert (
+            _first_assigned_credential("https://api.example.com/v1?access-token=Qx9v2LmT7pRz4Kd1wq")
+            == "access-token"
+        )

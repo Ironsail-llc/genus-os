@@ -356,9 +356,25 @@ def _is_credential_value(value: str, *, quoted: bool) -> bool:
         return False
     if _is_type_or_schema_word(value):
         return False
+    if _is_url_value(value):
+        return False
     if not quoted and _is_name_reference(value):
         return False
     return not _lacks_secret_entropy(value)
+
+
+_URL_VALUE = re.compile(r"(https?(:|%3a)(//|%2f%2f)|%3a%2f%2f)", re.IGNORECASE)
+
+
+def _is_url_value(value: str) -> bool:
+    """An address is not key material.
+
+    Gmail's own link parameter ``apikey_highlighted_url=https%3A%2F%2F...``
+    fired ten times a day: "apikey" in the name, plenty of entropy in the
+    value, and the value is a URL. A token sitting INSIDE a URL's query is a
+    different assignment (``access-token=<random>``) and still warns.
+    """
+    return bool(_URL_VALUE.match(value.strip().strip("\"'")))
 
 
 def _assigned_name(text: str, match: re.Match[str]) -> str:

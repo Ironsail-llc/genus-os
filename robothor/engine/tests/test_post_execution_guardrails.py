@@ -179,3 +179,72 @@ def test_the_notice_does_not_instruct_operator_disclosure():
     assert "tell the user" not in content
     assert "do not commit" in content
     assert "redacted" in content
+
+
+# ── The warning is recorded for the operator ─────────────────────────────
+
+
+def _session_with_run(run_id="00000000-0000-4000-8000-000000000123"):
+    return SimpleNamespace(messages=[], run=SimpleNamespace(id=run_id, steps=[object(), object()]))
+
+
+def test_a_credential_warning_is_persisted_as_a_guardrail_event(monkeypatch):
+    """Measured 2026-09-14: 54 warnings a day in the journal and ZERO rows in
+    agent_guardrail_events, while the notice told the agent the platform had
+    recorded it for the operator. Now it has."""
+    calls = []
+    monkeypatch.setattr(
+        "robothor.engine.tracking.log_guardrail_event", lambda *a, **k: calls.append((a, k))
+    )
+    engine = _engine(action="warned", name="no_sensitive_data", reason="AWS key in config.py")
+    _apply(_session_with_run(), engine)
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == "00000000-0000-4000-8000-000000000123"
+    assert args[1:3] == ("no_sensitive_data", "warned")
+    assert kwargs["tool_name"] == "read_file"
+    assert kwargs["reason"] == "AWS key in config.py"
+    assert kwargs["step_number"] == 2
+
+
+def test_every_warning_is_persisted_not_just_the_first(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "robothor.engine.tracking.log_guardrail_event", lambda *a, **k: calls.append(1)
+    )
+    engine = _engine(action="warned", name="no_sensitive_data", reason="AWS key in config.py")
+    session, state = _session_with_run(), GuardState()
+    _apply(session, engine, state=state)
+    _apply(session, engine, state=state)
+    assert len(calls) == 2
+    assert len(session.messages) == 1
+
+
+def test_a_clean_result_persists_nothing(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "robothor.engine.tracking.log_guardrail_event", lambda *a, **k: calls.append(1)
+    )
+    _apply(_session_with_run(), _engine(action="allowed"))
+    assert calls == []
+
+
+def test_a_recording_failure_never_breaks_the_turn(monkeypatch):
+    def _boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("robothor.engine.tracking.log_guardrail_event", _boom)
+    engine = _engine(action="warned", name="no_sensitive_data", reason="AWS key in config.py")
+    session = _session_with_run()
+    _apply(session, engine)
+    assert len(session.messages) == 1, "the agent is still told even when the record fails"
+
+
+def test_a_session_without_a_run_row_is_not_recorded_and_not_broken(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "robothor.engine.tracking.log_guardrail_event", lambda *a, **k: calls.append(1)
+    )
+    engine = _engine(action="warned", name="no_sensitive_data", reason="AWS key in config.py")
+    _apply(_session(), engine)
+    assert calls == []
