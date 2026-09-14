@@ -34,7 +34,11 @@ from typing import Any
 
 from psycopg2.extras import RealDictCursor
 
-from robothor.constants import DEFAULT_TENANT, SANDBOX_DENIED_ERROR_TYPE
+from robothor.constants import (
+    DEFAULT_TENANT,
+    GUARDRAIL_BLOCKED_ERROR_TYPE,
+    SANDBOX_DENIED_ERROR_TYPE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -237,11 +241,11 @@ def check_tool_degradation(
             FROM agent_tool_events
             WHERE created_at > NOW() - make_interval(hours := %s)
               AND tool_name IS NOT NULL
-              AND (error_type IS NULL OR error_type <> %s)
+              AND (error_type IS NULL OR error_type NOT IN (%s, %s))
             GROUP BY tool_name
             HAVING COUNT(*) > 0
             """,
-            (hours, SANDBOX_DENIED_ERROR_TYPE),
+            (hours, SANDBOX_DENIED_ERROR_TYPE, GUARDRAIL_BLOCKED_ERROR_TYPE),
         )
         rows = [dict(r) for r in cur.fetchall()]
 
@@ -705,7 +709,10 @@ def check_tool_outage(
             LEFT JOIN agent_runs r ON r.id = e.run_id
             WHERE e.created_at > NOW() - make_interval(days => %(lookback_days)s)
               AND e.tool_name IS NOT NULL
-              AND (e.error_type IS NULL OR e.error_type <> %(sandbox_denied_type)s)
+              AND (
+                  e.error_type IS NULL
+                  OR e.error_type NOT IN (%(sandbox_denied_type)s, %(guardrail_blocked_type)s)
+              )
               -- Benchmark children are graded on fixtures that do not exist
               -- in production (resolve_identities "dead 13d": every call was
               -- a harness task looking up a fixture person). Their failures
@@ -721,6 +728,7 @@ def check_tool_outage(
                 "hours": window_hours,
                 "lookback_days": lookback_days,
                 "sandbox_denied_type": SANDBOX_DENIED_ERROR_TYPE,
+                "guardrail_blocked_type": GUARDRAIL_BLOCKED_ERROR_TYPE,
                 "sandbox_tenant": _sandbox_tenant(),
             },
         )
