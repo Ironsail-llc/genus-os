@@ -136,6 +136,25 @@ describe("describeCron — parity with APScheduler", () => {
     "0 0 30 2 *",
     "0 9 31 2 *",
     "0 0 29 2 *",
+
+    // ── Fix round 2 ──────────────────────────────────────────────────────
+    // The traps a blunt "reject any field containing L, W, # or ?" would fall
+    // into. Every one of these is ACCEPTED by from_crontab, and every one
+    // contains a banned character inside a token that is not the Quartz form:
+    "0 9 * JUL *", // the month July has an L in it
+    "0 9 * * WED", // Wednesday has a W in it
+    "0 9 last * *", // APScheduler spells the last-day form `last`, not `L`
+    "0 9 LAST * *",
+    "0 9 * * MON#2", // `#` after a day NAME is APScheduler's nth-weekday form
+    "0 9 * * mon#7", // and the occurrence after it is not a day-of-week number
+    // Day-of-week numbers that are in range, next to the ones that are not.
+    "0 9 * * 0,6",
+    "0 9 * * 0-6",
+    "0 9 * * */2",
+    // Named ranges that run the right way round in APScheduler's week, which
+    // starts on Monday.
+    "0 9 * * SAT-SUN",
+    "0 9 * * MON-SUN",
   ];
 
   const REFUSED = [
@@ -148,6 +167,32 @@ describe("describeCron — parity with APScheduler", () => {
     "0 9 32 * *",
     "0 9 * 13 *",
     "0 9 * * 8",
+
+    // ── Fix round 2 ──────────────────────────────────────────────────────
+    // cron-parser ACCEPTS all of these, so the per-field fallback never ran
+    // and every one of them previewed green before failing the save.
+    //
+    // Day-of-week runs 0-6 in APScheduler. cron-parser takes 0-7, reading 7 as
+    // a second Sunday — bare, in a range, in a list and in a step.
+    "0 9 * * 7",
+    "0 9 * * 0-7",
+    "0 9 * * 1,7",
+    "0 9 * * */7",
+    "0 9 * * 1-6/7",
+    // Quartz forms APScheduler has no expression for, in any field.
+    "0 9 L * *",
+    "0 9 W * *",
+    "0 9 15W * *",
+    "0 9 ? * *",
+    // `#` after a NUMBER, unlike `#` after a name, is Quartz and is refused.
+    "0 9 * * 5#3",
+    "0 9 * * 7#1",
+    // APScheduler's week is mon=0..sun=6; cron-parser's is sun=0..sat=6. They
+    // disagree about exactly the named ranges that touch the weekend, and a
+    // range the engine reads as backwards is a refusal, not a whole week.
+    "0 9 * * SUN-SAT",
+    "0 9 * * SUN-MON",
+    "0 9 * * WED-TUE",
   ];
 
   it.each(ACCEPTED)("phrases %s, because the engine schedules it", (expression) => {
