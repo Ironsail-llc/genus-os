@@ -6,6 +6,7 @@ so the engine adapts to each model's capabilities instead of hardcoding.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from contextvars import ContextVar
@@ -14,7 +15,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
 from robothor.engine.sanitize import sanitize_log
 
@@ -757,6 +758,25 @@ def _cache_control_from_litellm(model_id: str) -> bool:
         return False
 
 
+@contextlib.contextmanager
+def _quiet_litellm() -> Iterator[None]:
+    """Registering a model litellm's map lacks is the point; its warning is not.
+
+    ``litellm.register_model`` logs "not in built-in cost map" at WARNING for
+    every id it does not already know -- which is precisely the set we seed
+    (a stealth preview, a deprecated fallback kept for reference, a floating
+    alias). Three warnings at every engine start, read by the operator as
+    trouble. Real errors still surface: only WARNING and below are held.
+    """
+    lg = logging.getLogger("LiteLLM")
+    previous = lg.level
+    lg.setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        lg.setLevel(previous)
+
+
 def _register_reasoning_capability() -> None:
     """Tell litellm which curated models reason, so ``thinking`` is accepted.
 
@@ -796,7 +816,8 @@ def _register_reasoning_capability() -> None:
         if limits.supports_thinking and not model_id.startswith("codex/")
     }
     if payload:
-        litellm.register_model(payload)
+        with _quiet_litellm():
+            litellm.register_model(payload)
 
 
 def register_pricing_with_litellm() -> None:
@@ -816,35 +837,37 @@ def register_pricing_with_litellm() -> None:
     from robothor.engine.feature_flags import catalog_backed_models_enabled
 
     if catalog_backed_models_enabled():
-        litellm.register_model(
-            {
-                model_id: {
-                    "max_tokens": limits.max_input_tokens,
-                    "input_cost_per_token": limits.input_cost_per_token,
-                    "output_cost_per_token": limits.output_cost_per_token,
-                    "supports_reasoning": limits.supports_thinking,
+        with _quiet_litellm():
+            litellm.register_model(
+                {
+                    model_id: {
+                        "max_tokens": limits.max_input_tokens,
+                        "input_cost_per_token": limits.input_cost_per_token,
+                        "output_cost_per_token": limits.output_cost_per_token,
+                        "supports_reasoning": limits.supports_thinking,
+                    }
+                    for model_id, limits in _MODEL_REGISTRY.items()
+                    # codex is subscription-billed ($0) — leave it out of litellm pricing.
+                    if not model_id.startswith("codex/")
                 }
-                for model_id, limits in _MODEL_REGISTRY.items()
-                # codex is subscription-billed ($0) — leave it out of litellm pricing.
-                if not model_id.startswith("codex/")
-            }
-        )
+            )
     else:
         # Legacy block (verbatim prior behavior) — kept until Rip 17 is enabled.
-        litellm.register_model(
-            {
-                "openrouter/xiaomi/mimo-v2-pro": {
-                    "max_tokens": 1000000,
-                    "input_cost_per_token": 0.000001,
-                    "output_cost_per_token": 0.000003,
-                },
-                "openrouter/anthropic/claude-sonnet-4.6": {
-                    "max_tokens": 200000,
-                    "input_cost_per_token": 0.000003,
-                    "output_cost_per_token": 0.000015,
-                },
-            }
-        )
+        with _quiet_litellm():
+            litellm.register_model(
+                {
+                    "openrouter/xiaomi/mimo-v2-pro": {
+                        "max_tokens": 1000000,
+                        "input_cost_per_token": 0.000001,
+                        "output_cost_per_token": 0.000003,
+                    },
+                    "openrouter/anthropic/claude-sonnet-4.6": {
+                        "max_tokens": 200000,
+                        "input_cost_per_token": 0.000003,
+                        "output_cost_per_token": 0.000015,
+                    },
+                }
+            )
 
     # Last, so it is the final word on the capability under either branch.
     _register_reasoning_capability()
