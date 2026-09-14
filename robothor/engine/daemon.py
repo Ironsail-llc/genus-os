@@ -1726,6 +1726,7 @@ async def _watchdog(
                     primary_model_unreached_detector,
                     tool_outage_detector,
                 )
+                from robothor.engine.search_health import search_degradation_detector
 
                 fired = await tool_outage_detector()
                 if fired:
@@ -1733,6 +1734,9 @@ async def _watchdog(
                 fired = await primary_model_unreached_detector(tenant_id=config.tenant_id)
                 if fired:
                     logger.info("Detectors: %d primary-model-unreached alerts fired", fired)
+                fired = await search_degradation_detector()
+                if fired:
+                    logger.info("Detectors: web search degraded alert fired")
             except Exception as e:
                 logger.debug("Detectors: outage checks failed: %s", e)
 

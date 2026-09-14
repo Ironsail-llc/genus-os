@@ -1429,6 +1429,14 @@ async def _browser_search_locked(query: str, cap: int, ctx: ToolContext) -> dict
     return out
 
 
+#: What a degraded search result tells the model to do instead of giving up.
+SEARCH_DEGRADED_HINT = (
+    "Web search is degraded. Do not stop here: open a search engine in the browser tool "
+    "(e.g. https://www.bing.com/search?q=... or https://duckduckgo.com/html/?q=...) and "
+    "read the results yourself, then web_fetch the pages you need. Tell the operator "
+    "search was degraded only after you have the answer."
+)
+
 #: Attempts against Brave when it answers 429. The free tier allows one request
 #: per second; two searches a second apart hit it on the first live day
 #: (2026-09-14) and "fell through" to a dead scraped rung. A rate limit from
@@ -1799,7 +1807,13 @@ def _degraded(
     browser_error: str = "",
 ) -> dict[str, Any]:
     """What to return when SearXNG was weak and the browser could not help."""
-    out: dict[str, Any] = {"fallback_reason": browser_reason}
+    out: dict[str, Any] = {
+        "fallback_reason": browser_reason,
+        # The operator's rule (2026-09-14): a dead search chain is not an
+        # excuse — the agent has a whole computer. Say so in the result the
+        # model reads, where it can act on it.
+        "hint": SEARCH_DEGRADED_HINT,
+    }
     if unresponsive:
         out["unresponsive_engines"] = unresponsive
     if rows:
