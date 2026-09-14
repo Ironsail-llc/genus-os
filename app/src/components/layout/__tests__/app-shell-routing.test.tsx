@@ -178,4 +178,51 @@ describe("AppShell — URL-synced views", () => {
     await renderShell();
     expect(screen.queryByTestId("nav-group-settings")).toBeNull();
   });
+
+  it("shows the real Inbox at ?v=inbox rather than the coming-soon placeholder", async () => {
+    window.history.replaceState(null, "", "/?v=inbox");
+    await renderShell();
+    expect(screen.getByTestId("header-title").textContent).toBe("Inbox");
+    expect(screen.getByTestId("inbox-view")).toBeInTheDocument();
+    expect(screen.queryByTestId("coming-soon-inbox")).toBeNull();
+  });
+
+  it("badges the sidebar Inbox from the same poll the view reads", async () => {
+    // One hook in the shell feeds both, so a single GET has to serve them.
+    const pending = {
+      count: 1,
+      pending: [
+        {
+          kind: "question",
+          id: "11111111-1111-4111-8111-111111111111",
+          run_id: "abcdef12-3456-4789-8abc-def012345678",
+          agent_id: "invoice-chaser",
+          question: "Which vendor should I chase first?",
+          detail: "",
+          options: [],
+          expires_at: "2026-06-15T13:00:00Z",
+          created_at: "2026-06-15T11:30:00Z",
+        },
+      ],
+    };
+    global.fetch = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : String(input);
+      const body = url.includes("/api/approvals") ? pending : { messages: [], active: false };
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(JSON.stringify(body)),
+      });
+    }) as unknown as typeof fetch;
+
+    await renderShell();
+
+    await waitFor(() => expect(screen.getByTestId("badge-inbox").textContent).toBe("1"));
+
+    const approvalCalls = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([input]) => String(input).includes("/api/approvals")
+    );
+    expect(approvalCalls).toHaveLength(1);
+  });
 });

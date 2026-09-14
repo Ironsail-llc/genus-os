@@ -235,6 +235,18 @@ describe("AgentManifests — the listing", () => {
       "the engine did not answer"
     );
   });
+
+  it("renders a refusal that names itself `message` rather than `detail`", async () => {
+    // Several bridge routers answer `{message: …}` instead of `{detail: …}`.
+    // This page used to print "HTTP 503" over every one of them.
+    installFetch({
+      [LIST]: { status: 503, body: { message: "the manifest directory is not readable" } },
+    });
+    render(<AgentManifests role="owner" roleLoading={false} />);
+    expect(await screen.findByTestId("agent-manifests-error")).toHaveTextContent(
+      "the manifest directory is not readable"
+    );
+  });
 });
 
 describe("AgentManifests — creating", () => {

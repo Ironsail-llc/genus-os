@@ -152,6 +152,35 @@ describe("Bridge Proxy vault denylist", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("still forwards the approvals routes the Inbox answers on", async () => {
+    // The Helm's Inbox is the only surface an operator has for a workflow
+    // approval or an agent's question. A denylist that swallowed these would
+    // leave every waiting run stuck with no visible cause.
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: () => Promise.resolve({ count: 0, pending: [] }),
+    });
+
+    const list = await GET(makeRequest("GET", "api/approvals"), makeContext(["api", "approvals"]));
+    expect(list.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:9100/api/approvals",
+      expect.any(Object)
+    );
+
+    const answer = await POST(
+      makeRequest("POST", "api/approvals/question/abc", JSON.stringify({ answer: "Alice" })),
+      makeContext(["api", "approvals", "question", "abc"])
+    );
+    expect(answer.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "http://127.0.0.1:9100/api/approvals/question/abc",
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
   it("still forwards other vault-adjacent bridge paths", async () => {
     mockFetch.mockResolvedValue({
       ok: true,

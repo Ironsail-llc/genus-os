@@ -464,6 +464,7 @@ describe("Mobile UX — MobileTabBar", () => {
         onNavigate={vi.fn()}
         reviewCount={0}
         unhealthyCount={0}
+        inboxCount={0}
       />
     );
     const tabBar = screen.getByTestId("mobile-tab-bar");
@@ -479,6 +480,7 @@ describe("Mobile UX — MobileTabBar", () => {
         onNavigate={vi.fn()}
         reviewCount={0}
         unhealthyCount={0}
+        inboxCount={0}
       />
     );
     const tabs = screen.getByTestId("mobile-tab-bar").querySelectorAll("button");
@@ -494,6 +496,7 @@ describe("Mobile UX — MobileTabBar", () => {
         onNavigate={vi.fn()}
         reviewCount={5}
         unhealthyCount={2}
+        inboxCount={0}
       />
     );
     // Tasks now lives behind More, so the review queue badges that tab.
@@ -510,6 +513,7 @@ describe("Mobile UX — MobileTabBar", () => {
         onNavigate={vi.fn()}
         reviewCount={0}
         unhealthyCount={0}
+        inboxCount={0}
       />
     );
     const chatTab = screen.getByTestId("mobile-tab-chat");
@@ -527,6 +531,7 @@ describe("Mobile UX — MobileTabBar", () => {
         onNavigate={vi.fn()}
         reviewCount={0}
         unhealthyCount={0}
+        inboxCount={0}
       />
     );
     const chatTab = screen.getByTestId("mobile-tab-chat");

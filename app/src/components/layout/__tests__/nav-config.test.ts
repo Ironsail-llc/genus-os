@@ -64,9 +64,15 @@ describe("navGroups", () => {
       .flatMap((g) => g.items)
       .filter((i) => i.soon)
       .map((i) => i.view);
-    expect(soon.sort()).toEqual(["audit", "inbox", "logs", "memory"]);
+    expect(soon.sort()).toEqual(["audit", "logs", "memory"]);
     for (const view of soon) expect(isComingSoonView(view)).toBe(true);
     expect(isComingSoonView("agents")).toBe(false);
+  });
+
+  it("no longer marks Inbox as coming soon — it is a real screen now", () => {
+    const inbox = navGroups.flatMap((g) => g.items).find((i) => i.view === "inbox")!;
+    expect(inbox.soon).toBeFalsy();
+    expect(isComingSoonView("inbox")).toBe(false);
   });
 
   it("gives every nav item a unique id", () => {

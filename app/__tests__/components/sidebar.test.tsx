@@ -24,6 +24,7 @@ function renderSidebar(overrides: Partial<React.ComponentProps<typeof Sidebar>> 
     onChatToggle: vi.fn(),
     reviewCount: 0,
     unhealthyCount: 0,
+    inboxCount: 0,
     ...overrides,
   };
   return { ...render(<Sidebar {...defaults} />), ...defaults };

@@ -23,10 +23,7 @@ const TABS: Array<{
   soon?: boolean;
 }> = [
   { id: "chat", label: "Chat", view: "chat", icon: MessageSquare },
-  // Inbox has no screen yet. A disabled tab would waste one of four slots, so
-  // the tab stays live and lands on the placeholder view (the brief asks for
-  // exactly that) while carrying the same "soon" marking as the sidebar entry.
-  { id: "inbox", label: "Inbox", view: "inbox", icon: Inbox, soon: true },
+  { id: "inbox", label: "Inbox", view: "inbox", icon: Inbox },
   { id: "agents", label: "Agents", view: "agents", icon: Bot },
 ];
 
@@ -36,6 +33,8 @@ interface MobileTabBarProps {
   onNavigate: (view: ViewId, settingsPage?: SettingsPageId) => void;
   reviewCount: number;
   unhealthyCount: number;
+  /** What is waiting on a person, from the one inbox poll the shell holds. */
+  inboxCount: number;
   /** Session role — hides Settings in the sheet. UX gate only; the bridge authorizes. */
   role?: string | null;
 }
@@ -49,6 +48,7 @@ export function MobileTabBar({
   onNavigate,
   reviewCount,
   unhealthyCount,
+  inboxCount,
   role,
 }: MobileTabBarProps) {
   const [moreOpen, setMoreOpen] = useState(false);
@@ -101,9 +101,9 @@ export function MobileTabBar({
     };
   }, [moreOpen]);
 
-  // Only Agents carries a badge in the bar itself; the review queue badges More,
-  // which is where Tasks now lives.
-  const badgeCounts: Record<string, number> = { agents: unhealthyCount };
+  // Inbox and Agents carry badges in the bar itself; the review queue badges
+  // More, which is where Tasks now lives.
+  const badgeCounts: Record<string, number> = { inbox: inboxCount, agents: unhealthyCount };
 
   const inTabBar = new Set(TABS.map((t) => t.view));
   const sheetGroups = visibleNavGroups(role)

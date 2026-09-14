@@ -14,13 +14,13 @@ import {
   describeCron,
   fieldForIssue,
   nextRunText,
-  readError,
   timezoneChoices,
   type ManifestDetail,
   type ModelEntry,
   type ValidationIssue,
   type ValidationVerdict,
 } from "@/lib/agents/manifests";
+import { readBridgeReply } from "@/lib/bridge/read-reply";
 
 /**
  * The agent builder panel — three fields, and everything else behind Advanced.
@@ -262,7 +262,7 @@ export function AgentPanel({ agentId, models, onClose, onSaved }: AgentPanelProp
     try {
       const res = await fetch(`${BRIDGE}/api/agent-manifests/${encodeURIComponent(agentId)}`);
       if (!res.ok) {
-        setLoadError(await readError(res));
+        setLoadError(await readBridgeReply(res));
         return;
       }
       const body = (await res.json()) as ManifestDetail;
@@ -414,7 +414,7 @@ export function AgentPanel({ agentId, models, onClose, onSaved }: AgentPanelProp
         headers: { "Content-Type": "application/json" },
       });
       if (!res.ok) {
-        setResult(`Created ${id}, but the run was refused: ${await readError(res)}`);
+        setResult(`Created ${id}, but the run was refused: ${await readBridgeReply(res)}`);
         return;
       }
       setResult(`Created ${id} and triggered it once.`);
@@ -474,7 +474,7 @@ export function AgentPanel({ agentId, models, onClose, onSaved }: AgentPanelProp
       if (!res.ok) {
         setVerdict({
           ok: false,
-          errors: [{ path: "", code: "unreachable", message: await readError(res) }],
+          errors: [{ path: "", code: "unreachable", message: await readBridgeReply(res) }],
           warnings: [],
         });
         return;

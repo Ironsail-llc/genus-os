@@ -171,10 +171,12 @@ export const navGroups: NavGroup[] = [
     id: "workspace",
     label: "Workspace",
     items: [
-      { id: "inbox", label: "Inbox", view: "inbox", icon: Inbox, soon: true },
+      { id: "inbox", label: "Inbox", view: "inbox", icon: Inbox },
       // Tasks is not in the operator's Workspace list; it is here because the
-      // existing tasks view must stay reachable. Inbox is its successor, so
-      // this entry goes away when Inbox ships.
+      // existing tasks view must stay reachable. Inbox is its successor but
+      // does not carry review tasks yet — the approvals route behind it lists
+      // workflow approvals and agent questions only — so this entry stays
+      // until those move across.
       { id: "tasks", label: "Tasks", view: "tasks", icon: ListTodo },
       { id: "agents", label: "Agents", view: "agents", icon: Bot },
       // "Automations" is the product name for the existing workflows view.
@@ -233,7 +235,7 @@ export const viewTitles: Record<ViewId, string> = {
 };
 
 /** Views that have no screen behind them yet. */
-const COMING_SOON_VIEWS = new Set<ViewId>(["inbox", "memory", "audit", "logs"]);
+const COMING_SOON_VIEWS = new Set<ViewId>(["memory", "audit", "logs"]);
 
 export function isComingSoonView(view: ViewId): boolean {
   return COMING_SOON_VIEWS.has(view);
