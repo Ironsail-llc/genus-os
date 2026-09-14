@@ -1,16 +1,20 @@
 /**
  * E2E tests for conversation-driven dashboard generation.
  *
- * Home is the real-data dashboard and the generated canvas mounts only when
- * the operator asks for it — so a chat reply regenerates a canvas only while
- * that view is open. These specs pin both halves of that: silence by default,
- * regeneration once the AI view is up.
+ * Home is the chat view; the real-data dashboard is Workspace > Dashboard
+ * (`?v=dashboard`), and the generated canvas mounts only when the operator
+ * asks for it — so a chat reply regenerates a canvas only while that view is
+ * open. These specs pin both halves of that: silence by default, regeneration
+ * once the AI view is up. Every spec that is about the dashboard opens the
+ * dashboard explicitly rather than assuming it is what loads.
  *
  * Uses Playwright route interception to mock backend APIs for deterministic testing.
  */
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 const BASE_URL = "/";
+/** The dashboard is a view you navigate to now, not the landing screen. */
+const DASHBOARD_URL = "/?v=dashboard";
 
 /** Mock SSE stream for /api/chat/send */
 function mockChatSSE(events: Array<{ event: string; data: unknown }>): string {
@@ -195,7 +199,7 @@ test.describe("Conversation-Driven Dashboard", () => {
       dashboardHtml: '<div class="p-4"><h2>Contacts</h2><p>15 contacts</p></div>',
     });
 
-    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
 
     await sendChatMessage(page, "Show my contacts");
@@ -213,7 +217,7 @@ test.describe("Conversation-Driven Dashboard", () => {
       dashboardHtml: '<div class="p-4"><h2>Service Health</h2></div>',
     });
 
-    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
 
     await sendChatMessage(page, "How are the services running?");
@@ -232,7 +236,7 @@ test.describe("Conversation-Driven Dashboard", () => {
       if (req.url().includes("/api/dashboard/welcome")) welcomeCalls++;
     });
 
-    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
     expect(welcomeCalls).toBe(0);
 
@@ -255,7 +259,7 @@ test.describe("Conversation-Driven Dashboard", () => {
       welcomeHtml: '<div class="p-4"><h2>Welcome</h2></div>',
     });
 
-    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
     await openAiCanvas(page);
 
@@ -277,7 +281,7 @@ test.describe("Conversation-Driven Dashboard", () => {
       welcomeHtml: '<div class="p-4"><h2>Welcome Dashboard</h2></div>',
     });
 
-    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
     await openAiCanvas(page);
 
@@ -308,7 +312,7 @@ test.describe("Conversation-Driven Dashboard", () => {
       welcomeHtml: '<div class="p-4"><h2>Welcome</h2></div>',
     });
 
-    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
     await openAiCanvas(page);
 
@@ -358,7 +362,7 @@ test.describe("Conversation-Driven Dashboard", () => {
       welcomeHtml: '<div class="p-4"><h2>Welcome</h2></div>',
     });
 
-    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
     await openAiCanvas(page);
 

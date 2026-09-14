@@ -1,13 +1,16 @@
 /**
  * E2E smoke tests for the Robothor Helm dashboard.
  *
- * Home is the real-data dashboard: health, tasks and agents read from the BFF,
- * with no model call on load. The generated canvas is behind an explicit
- * control, so the iframe-sizing checks run after that control is used.
+ * Home is the chat view. The real-data dashboard is Workspace > Dashboard
+ * (`?v=dashboard`): health, tasks and agents read from the BFF, with no model
+ * call on load. The generated canvas is behind an explicit control, so the
+ * iframe-sizing checks run after that control is used.
  */
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 const BASE_URL = "/";
+/** The dashboard is a view you navigate to now, not the landing screen. */
+const DASHBOARD_URL = "/?v=dashboard";
 
 /** Open the AI canvas from Home and wait for the generated view to render. */
 async function openAiCanvas(page: Page) {
@@ -92,7 +95,7 @@ test.describe("Dashboard Layout", () => {
     page.on("request", (req) => {
       if (req.url().includes("/api/dashboard/welcome")) welcomeCalls++;
     });
-    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
 
     // App shell should exist
     const shell = page.locator('[data-testid="app-shell"]');
@@ -120,7 +123,7 @@ test.describe("Dashboard Layout", () => {
 
   test("the AI control mounts the generated canvas on click", async ({ page }) => {
     await setupMocks(page);
-    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
 
     await openAiCanvas(page);
@@ -132,7 +135,8 @@ test.describe("Dashboard Layout", () => {
 
   test("chat container has usable width", async ({ page }) => {
     await setupMocks(page);
-    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    // Beside a view the chat panel is the docked rail — that is the width under test.
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
 
     const chatContainer = page.locator('[data-testid="chat-container"]');
     await expect(chatContainer).toBeVisible({ timeout: 10000 });
@@ -148,7 +152,7 @@ test.describe("Dashboard Layout", () => {
 test.describe("Generated canvas (iframe sizing)", () => {
   test("generated dashboard renders and iframe is not cut off", async ({ page }) => {
     await setupMocks(page);
-    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
 
     // Sizing only means anything once the canvas is on screen, and reaching it
@@ -219,5 +223,37 @@ test.describe("Chat Panel", () => {
         chatBox.y + chatBox.height + 5
       );
     }
+  });
+});
+
+test.describe("Navigation", () => {
+  test("home is chat, and the dashboard is one deliberate step away", async ({ page }) => {
+    await setupMocks(page);
+    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+
+    // Landing on "/" gives the chat view, not the dashboard.
+    await expect(page.locator('[data-testid="header-title"]')).toHaveText("Chat");
+    await expect(page.locator('[data-testid="nav-chat"]')).toHaveAttribute("aria-current", "page");
+    await expect(page.locator('[data-testid="chat-panel"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="default-dashboard"]')).not.toBeVisible();
+
+    // The dashboard is reachable by URL...
+    await page.goto(DASHBOARD_URL, { waitUntil: "networkidle" });
+    await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="header-title"]')).toHaveText("Dashboard");
+    await expect(page.locator('[data-testid="nav-dashboard"]')).toHaveAttribute("aria-current", "page");
+  });
+
+  test("Workspace > Dashboard writes the view into the URL and Back returns to chat", async ({ page }) => {
+    await setupMocks(page);
+    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+
+    await page.locator('[data-testid="nav-dashboard"]').click();
+    await expect(page.locator('[data-testid="default-dashboard"]')).toBeVisible({ timeout: 10000 });
+    expect(new URL(page.url()).search).toBe("?v=dashboard");
+
+    await page.goBack();
+    await expect(page.locator('[data-testid="header-title"]')).toHaveText("Chat");
+    await expect(page.locator('[data-testid="default-dashboard"]')).not.toBeVisible();
   });
 });
