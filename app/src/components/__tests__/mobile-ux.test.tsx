@@ -150,16 +150,25 @@ describe("Mobile UX — AppShell", () => {
     expect(screen.queryByTestId("header-bar")).not.toBeInTheDocument();
   });
 
-  it("shows 4 tabs: Chat, Dashboard, Tasks, Agents (chat first)", async () => {
+  it("shows 4 tabs: Chat, Inbox, Agents, More (chat first)", async () => {
     const { AppShell } = await import("../layout/app-shell");
     render(<AppShell />);
     const tabBar = screen.getByTestId("mobile-tab-bar");
     const tabs = tabBar.querySelectorAll("button");
     // Chat should be the first tab
     expect(tabs[0]).toHaveAttribute("data-testid", "mobile-tab-chat");
-    expect(within(tabBar).getByTestId("mobile-tab-dashboard")).toBeInTheDocument();
-    expect(within(tabBar).getByTestId("mobile-tab-tasks")).toBeInTheDocument();
+    expect(within(tabBar).getByTestId("mobile-tab-inbox")).toBeInTheDocument();
     expect(within(tabBar).getByTestId("mobile-tab-agents")).toBeInTheDocument();
+    expect(within(tabBar).getByTestId("mobile-tab-more")).toBeInTheDocument();
+  });
+
+  it("reaches everything else through the More sheet", async () => {
+    const { AppShell } = await import("../layout/app-shell");
+    const { fireEvent } = await import("@testing-library/react");
+    render(<AppShell />);
+    fireEvent.click(screen.getByTestId("mobile-tab-more"));
+    fireEvent.click(screen.getByTestId("more-nav-dashboard"));
+    expect(screen.getByTestId("header-title").textContent).toBe("Dashboard");
   });
 
   it("tab buttons meet 44px minimum touch target", async () => {
@@ -183,12 +192,8 @@ describe("Mobile UX — AppShell", () => {
     expect(tabBar.className).toContain("bottom-0");
     expect(tabBar.className).toContain("z-50");
 
-    // Switch to dashboard — tab bar must persist
-    fireEvent.click(screen.getByTestId("mobile-tab-dashboard"));
-    expect(screen.getByTestId("mobile-tab-bar")).toBeInTheDocument();
-
-    // Switch to tasks — tab bar must persist
-    fireEvent.click(screen.getByTestId("mobile-tab-tasks"));
+    // Switch to inbox — tab bar must persist
+    fireEvent.click(screen.getByTestId("mobile-tab-inbox"));
     expect(screen.getByTestId("mobile-tab-bar")).toBeInTheDocument();
 
     // Switch to agents — tab bar must persist
@@ -209,8 +214,8 @@ describe("Mobile UX — AppShell", () => {
     const chatContainer = screen.getByTestId("chat-container");
     expect(chatContainer.className).toContain("pb-14");
 
-    // Switch to dashboard — main content should have pb-14
-    fireEvent.click(screen.getByTestId("mobile-tab-dashboard"));
+    // Switch to another view — main content should have pb-14
+    fireEvent.click(screen.getByTestId("mobile-tab-agents"));
     const mainContent = screen.getByTestId("header-bar").parentElement!;
     expect(mainContent.className).toContain("pb-14");
   });
@@ -455,7 +460,8 @@ describe("Mobile UX — MobileTabBar", () => {
     render(
       <MobileTabBar
         activeView="chat"
-        onViewChange={vi.fn()}
+        activeSettingsPage="providers"
+        onNavigate={vi.fn()}
         reviewCount={0}
         unhealthyCount={0}
       />
@@ -469,7 +475,8 @@ describe("Mobile UX — MobileTabBar", () => {
     render(
       <MobileTabBar
         activeView="chat"
-        onViewChange={vi.fn()}
+        activeSettingsPage="providers"
+        onNavigate={vi.fn()}
         reviewCount={0}
         unhealthyCount={0}
       />
@@ -483,15 +490,15 @@ describe("Mobile UX — MobileTabBar", () => {
     render(
       <MobileTabBar
         activeView="chat"
-        onViewChange={vi.fn()}
+        activeSettingsPage="providers"
+        onNavigate={vi.fn()}
         reviewCount={5}
         unhealthyCount={2}
       />
     );
-    const tasksTab = screen.getByTestId("mobile-tab-tasks");
-    expect(tasksTab.textContent).toContain("5");
-    const agentsTab = screen.getByTestId("mobile-tab-agents");
-    expect(agentsTab.textContent).toContain("2");
+    // Tasks now lives behind More, so the review queue badges that tab.
+    expect(screen.getByTestId("mobile-tab-more").textContent).toContain("5");
+    expect(screen.getByTestId("mobile-tab-agents").textContent).toContain("2");
   });
 
   it("highlights active tab with primary color", async () => {
@@ -499,15 +506,16 @@ describe("Mobile UX — MobileTabBar", () => {
     render(
       <MobileTabBar
         activeView="chat"
-        onViewChange={vi.fn()}
+        activeSettingsPage="providers"
+        onNavigate={vi.fn()}
         reviewCount={0}
         unhealthyCount={0}
       />
     );
     const chatTab = screen.getByTestId("mobile-tab-chat");
     expect(chatTab.className).toContain("text-primary");
-    const dashTab = screen.getByTestId("mobile-tab-dashboard");
-    expect(dashTab.className).toContain("text-muted-foreground");
+    const agentsTab = screen.getByTestId("mobile-tab-agents");
+    expect(agentsTab.className).toContain("text-muted-foreground");
   });
 
   it("chat tab has visual accent (background highlight) when active", async () => {
@@ -515,7 +523,8 @@ describe("Mobile UX — MobileTabBar", () => {
     render(
       <MobileTabBar
         activeView="chat"
-        onViewChange={vi.fn()}
+        activeSettingsPage="providers"
+        onNavigate={vi.fn()}
         reviewCount={0}
         unhealthyCount={0}
       />

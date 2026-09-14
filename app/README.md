@@ -30,6 +30,36 @@ card. Server-side data fetches for the generation prompt
 caller's bridge bearer token via `lib/bridge-auth.ts`; their TTL cache is
 partitioned per caller so one operator's rows never reach another's dashboard.
 
+## Navigation
+
+The Helm is a single client shell: every view is mounted in
+`components/layout/app-shell.tsx` and shown by a `visible` prop — there is no
+App Router route per view.
+
+- **The URL is the state.** `hooks/use-view-route.ts` keeps the active view in
+  the query string (`?v=<view>`, plus `&s=<page>` inside Settings), so a reload
+  or a pasted link lands on the same screen and back/forward move between
+  views. An unknown value falls back to the chat view rather than a blank shell.
+- **Chat is home.** Desktop and mobile both open on chat. Beside other views the
+  chat panel stays docked on the right (toggle at the foot of the sidebar); on
+  the chat view it takes the column and the AI canvas becomes an optional right
+  rail (the "Canvas" button in the header).
+- **One nav config.** `components/layout/nav-config.ts` is the only description
+  of the navigation — Chat, Workspace, Observe, Settings. The sidebar, the
+  mobile "More" sheet and the ⌘K palette all read it, so they cannot drift.
+  Entries whose screen is not built yet (Inbox, Memory, Audit, Logs) render as
+  disabled buttons with a "soon" pill instead of a dead link.
+- **Settings is a container view** with its own grouped sub-navigation. Its
+  pages are placeholders that say what will live there; Flags is the existing
+  controls screen and Appearance carries the theme toggle.
+- **Mobile** gets Chat · Inbox · Agents · More; More opens a sheet with
+  everything else, built from the same config.
+- **Role gating is UX only.** The sidebar, the sheet and the palette hide
+  Settings from anyone who is not `owner`/`admin`, read from the session the
+  auth layer already exposes. Authorization itself stays server-side: the
+  bridge checks the caller's role on every request regardless of what the nav
+  shows.
+
 ## Authentication
 
 Auth.js (next-auth v5) with two env-gated sign-in paths; each provider

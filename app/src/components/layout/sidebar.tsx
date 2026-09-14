@@ -1,73 +1,63 @@
 "use client";
 
-import { LayoutDashboard, ListTodo, Bot, MessageSquare, Store, ShieldAlert, Users, Activity, Workflow, HeartPulse, Sparkles, Zap } from "lucide-react";
-
-export type ViewId = "dashboard" | "tasks" | "agents" | "marketplace" | "controls" | "fleet" | "runs" | "workflows" | "health" | "canvas";
-
-interface NavItem {
-  id: ViewId | "chat";
-  icon: React.ReactNode;
-  label: string;
-}
-
-interface NavGroup {
-  label: string;
-  items: NavItem[];
-}
-
-const navGroups: NavGroup[] = [
-  {
-    label: "Workspace",
-    items: [
-      { id: "dashboard", icon: <LayoutDashboard className="w-4 h-4" />, label: "Dashboard" },
-      { id: "tasks", icon: <ListTodo className="w-4 h-4" />, label: "Tasks" },
-      { id: "agents", icon: <Bot className="w-4 h-4" />, label: "Agents" },
-      { id: "marketplace", icon: <Store className="w-4 h-4" />, label: "Marketplace" },
-    ],
-  },
-  {
-    label: "Operator",
-    items: [
-      { id: "controls", icon: <ShieldAlert className="w-4 h-4" />, label: "Controls" },
-      { id: "fleet", icon: <Users className="w-4 h-4" />, label: "Fleet" },
-      { id: "runs", icon: <Activity className="w-4 h-4" />, label: "Runs" },
-      { id: "workflows", icon: <Workflow className="w-4 h-4" />, label: "Workflows" },
-      { id: "health", icon: <HeartPulse className="w-4 h-4" />, label: "Health" },
-    ],
-  },
-  {
-    label: "AI",
-    items: [
-      { id: "canvas", icon: <Sparkles className="w-4 h-4" />, label: "Canvas" },
-    ],
-  },
-];
+import { MessageSquare, Zap } from "lucide-react";
+import {
+  visibleNavGroups,
+  type NavItem,
+  type SettingsPageId,
+  type ViewId,
+} from "./nav-config";
 
 interface SidebarProps {
   activeView: ViewId;
-  onViewChange: (view: ViewId) => void;
+  activeSettingsPage: SettingsPageId;
+  onNavigate: (view: ViewId, settingsPage?: SettingsPageId) => void;
   chatOpen: boolean;
   onChatToggle: () => void;
   reviewCount: number;
   unhealthyCount: number;
+  /**
+   * The signed-in role, straight from the session the auth layer already
+   * exposes. This hides Settings from non-operators — a UX gate only. Real
+   * authorization is server-side and is NOT part of this component: the bridge
+   * checks the caller's role on every settings route.
+   */
+  role?: string | null;
+}
+
+function SoonPill({ id, prefix = "soon" }: { id: string; prefix?: string }) {
+  return (
+    <span
+      data-testid={`${prefix}-${id}`}
+      className="ml-auto rounded-full border border-border bg-muted px-1.5 text-[9.5px] font-medium uppercase tracking-wide text-muted-foreground"
+    >
+      soon
+    </span>
+  );
 }
 
 export function Sidebar({
   activeView,
-  onViewChange,
+  activeSettingsPage,
+  onNavigate,
   chatOpen,
   onChatToggle,
   reviewCount,
   unhealthyCount,
+  role,
 }: SidebarProps) {
   const badgeCounts: Record<string, number> = {
     tasks: reviewCount,
     agents: unhealthyCount,
   };
 
+  const isActive = (item: NavItem) =>
+    item.view === activeView && (!item.sub || item.sub === activeSettingsPage);
+
   return (
     <nav
-      className="hidden md:flex flex-col w-[196px] shrink-0 bg-sidebar border-r border-sidebar-border px-2.5 py-3 gap-0.5"
+      aria-label="Primary"
+      className="hidden md:flex flex-col w-[196px] shrink-0 bg-sidebar border-r border-sidebar-border px-2.5 py-3 gap-0.5 overflow-y-auto"
       data-testid="sidebar"
     >
       {/* Brand lockup — bolt on a gradient tile */}
@@ -86,28 +76,37 @@ export function Sidebar({
 
       <div className="border-t border-sidebar-border mb-1" data-testid="sidebar-separator" />
 
-      {navGroups.map((group) => (
-        <div key={group.label} className="flex flex-col gap-0.5">
-          <div className="px-1.5 pt-3 pb-1 text-[10.5px] font-medium uppercase tracking-[0.09em] text-muted-foreground/70">
+      {visibleNavGroups(role).map((group) => (
+        <div key={group.id} className="flex flex-col gap-0.5">
+          <div
+            data-testid={`nav-group-${group.id}`}
+            className="px-1.5 pt-3 pb-1 text-[10.5px] font-medium uppercase tracking-[0.09em] text-muted-foreground/70"
+          >
             {group.label}
           </div>
           {group.items.map((item) => {
-            const isActive = activeView === item.id;
+            const active = isActive(item);
             const badge = badgeCounts[item.id] || 0;
             return (
               <button
                 key={item.id}
-                onClick={() => onViewChange(item.id as ViewId)}
+                onClick={() => onNavigate(item.view, item.sub)}
+                disabled={item.soon}
+                aria-disabled={item.soon ? true : undefined}
+                aria-current={active ? "page" : undefined}
                 className={`relative flex items-center gap-2.5 rounded-md border px-2 py-1.5 text-[13px] transition-colors ${
-                  isActive
-                    ? "border-primary/25 bg-primary/10 text-sidebar-foreground"
-                    : "border-transparent text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                  item.soon
+                    ? "border-transparent text-sidebar-foreground/35 cursor-not-allowed"
+                    : active
+                      ? "border-primary/25 bg-primary/10 text-sidebar-foreground"
+                      : "border-transparent text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
                 }`}
                 data-testid={`nav-${item.id}`}
               >
-                <span className={isActive ? "text-primary" : ""}>{item.icon}</span>
-                {item.label}
-                {badge > 0 && (
+                <item.icon className={`w-4 h-4 ${active && !item.soon ? "text-primary" : ""}`} />
+                <span className="truncate">{item.label}</span>
+                {item.soon && <SoonPill id={item.id} />}
+                {!item.soon && badge > 0 && (
                   <span
                     className="ml-auto flex h-4 min-w-[16px] items-center justify-center rounded-full bg-destructive px-1 font-mono text-[10px] font-medium text-white"
                     data-testid={`badge-${item.id}`}
@@ -125,18 +124,19 @@ export function Sidebar({
 
       <div className="border-t border-sidebar-border mb-1" />
 
-      {/* Chat toggle at bottom */}
+      {/* Docked chat panel — shown alongside any non-chat view. */}
       <button
         onClick={onChatToggle}
+        aria-pressed={chatOpen}
         className={`relative flex items-center gap-2.5 rounded-md border px-2 py-1.5 text-[13px] transition-colors ${
           chatOpen
             ? "border-primary/25 bg-primary/10 text-sidebar-foreground"
             : "border-transparent text-sidebar-foreground/65 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
         }`}
-        data-testid="nav-chat"
+        data-testid="chat-panel-toggle"
       >
         <MessageSquare className={`w-4 h-4 ${chatOpen ? "text-primary" : ""}`} />
-        Chat
+        Chat panel
       </button>
     </nav>
   );

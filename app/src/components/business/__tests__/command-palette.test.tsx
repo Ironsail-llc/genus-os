@@ -29,7 +29,7 @@ describe("CommandPalette", () => {
     render(<CommandPalette onNavigate={onNavigate} />);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     fireEvent.click(screen.getByTestId("command-item-runs"));
-    expect(onNavigate).toHaveBeenCalledWith("runs");
+    expect(onNavigate).toHaveBeenCalledWith("runs", undefined);
     expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 
@@ -40,6 +40,32 @@ describe("CommandPalette", () => {
     const input = screen.getByTestId("command-input");
     fireEvent.change(input, { target: { value: "health" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(onNavigate).toHaveBeenCalledWith("health");
+    expect(onNavigate).toHaveBeenCalledWith("health", undefined);
+  });
+  it("derives its entries from the nav config — no not-yet-built views", () => {
+    render(<CommandPalette onNavigate={vi.fn()} role="owner" />);
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(screen.queryByTestId("command-item-memory")).toBeNull();
+    expect(screen.queryByTestId("command-item-inbox")).toBeNull();
+    expect(screen.getByTestId("command-item-workflows").textContent).toContain("Automations");
+  });
+
+  it("offers settings pages to an operator only", () => {
+    const { unmount } = render(<CommandPalette onNavigate={vi.fn()} role="owner" />);
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(screen.getByTestId("command-item-settings-secrets")).toBeTruthy();
+    unmount();
+
+    render(<CommandPalette onNavigate={vi.fn()} role="viewer" />);
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(screen.queryByTestId("command-item-settings-secrets")).toBeNull();
+  });
+
+  it("navigates to a settings sub-page", () => {
+    const onNavigate = vi.fn();
+    render(<CommandPalette onNavigate={onNavigate} role="admin" />);
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    fireEvent.click(screen.getByTestId("command-item-settings-flags"));
+    expect(onNavigate).toHaveBeenCalledWith("settings", "flags");
   });
 });
