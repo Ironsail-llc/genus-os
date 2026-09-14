@@ -1,3 +1,9 @@
+## [1.77.2](https://github.com/Ironsail-llc/genus-os/compare/v1.77.1...v1.77.2) (2026-09-14)
+
+### Bug Fixes
+
+* **compaction:** the reasoning-only re-ask uses the provider-aware thinking kwargs ([#533](https://github.com/Ironsail-llc/genus-os/issues/533)) ([2783e77](https://github.com/Ironsail-llc/genus-os/commit/2783e776e7790f2ef0de1c98bbebc2f3608d7b87))
+
 ## [1.77.1](https://github.com/Ironsail-llc/genus-os/compare/v1.77.0...v1.77.1) (2026-09-13)
 
 ### Bug Fixes
