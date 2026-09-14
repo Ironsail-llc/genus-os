@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useVisualState } from "@/hooks/use-visual-state";
 import { useThrottle } from "@/hooks/use-throttle";
-import { MarkerInterceptor } from "@/lib/engine/marker-interceptor";
+import { MarkerInterceptor, stripMarkers } from "@/lib/engine/marker-interceptor";
 import { ChatAskCard } from "@/components/chat-ask-card";
 import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from "lucide-react";
 
@@ -42,18 +42,10 @@ interface ActiveAsk {
 }
 
 /** Strip any residual markers from messages (history or live).
- *  Handles both bracketed [RENDER:...] and un-bracketed RENDER:... forms
- *  since the agent sometimes omits the opening bracket. */
+ *  Delegates to the balanced walk in marker-interceptor: a regex that stops
+ *  at the first `}]` leaves everything after a nested array on screen. */
 function stripResidualMarkers(text: string): string {
-  return text
-    .replace(/\[DASHBOARD:\{[^]*?\}\]/g, "")
-    .replace(/\[RENDER:[a-z_]+:[^]*?\]/g, "")
-    // Un-bracketed variants (agent sometimes omits the opening [)
-    .replace(/\bRENDER:[a-z_]+:\{[^]*?\}\]?/g, "")
-    .replace(/\bDASHBOARD:\{[^]*?\}\]?/g, "")
-    // Strip plan markers
-    .replace(/\[PLAN_READY\]/g, "")
-    .trim();
+  return stripMarkers(text).trim();
 }
 
 interface ChatPanelProps {
