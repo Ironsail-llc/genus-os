@@ -1,3 +1,17 @@
+## [1.79.0](https://github.com/Ironsail-llc/genus-os/compare/v1.78.0...v1.79.0) (2026-09-14)
+
+### Features
+
+* **helm:** settings providers page with keys and test connection ([#546](https://github.com/Ironsail-llc/genus-os/issues/546)) ([33ce4b4](https://github.com/Ironsail-llc/genus-os/commit/33ce4b46f657e2bfcb00abd45cfc3a8e353cb01b)), closes [#545](https://github.com/Ironsail-llc/genus-os/issues/545) [#545](https://github.com/Ironsail-llc/genus-os/issues/545)
+* **providers:** the fleet default model block is readable, not only writable ([#545](https://github.com/Ironsail-llc/genus-os/issues/545)) ([e3bd91f](https://github.com/Ironsail-llc/genus-os/commit/e3bd91f4f9a17a1d8378546258c589900083b630))
+
+### Bug Fixes
+
+* **engine:** the warmup preamble is the engine's turn, not the user's words ([#547](https://github.com/Ironsail-llc/genus-os/issues/547)) ([f0d3f0f](https://github.com/Ironsail-llc/genus-os/commit/f0d3f0fb6e95bc378ad24647a156e1d3bd4af256)), closes [#540](https://github.com/Ironsail-llc/genus-os/issues/540) [#540](https://github.com/Ironsail-llc/genus-os/issues/540) [#540](https://github.com/Ironsail-llc/genus-os/issues/540)
+* **helm:** a page's reads are not actions, so they are not rate-limited ([#549](https://github.com/Ironsail-llc/genus-os/issues/549)) ([8d4b7e5](https://github.com/Ironsail-llc/genus-os/commit/8d4b7e5726b50fd0d9a4c4530490101165d016df))
+* **providers:** the engine remembers the last test of a stored key ([#550](https://github.com/Ironsail-llc/genus-os/issues/550)) ([5d56fdb](https://github.com/Ironsail-llc/genus-os/commit/5d56fdb2e5bafc88bfed3e50b43e09c94a77deb6))
+* **search:** the Brave quota is known in advance, not discovered by failing ([#548](https://github.com/Ironsail-llc/genus-os/issues/548)) ([1028a60](https://github.com/Ironsail-llc/genus-os/commit/1028a60151d0f024d11b4031eea94d0d46c3a08c))
+
 ## [1.78.0](https://github.com/Ironsail-llc/genus-os/compare/v1.77.5...v1.78.0) (2026-09-14)
 
 ### Features
