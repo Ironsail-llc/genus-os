@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { MetricGrid } from "@/components/business/metric-grid";
 import { AgentStatus } from "@/components/business/agent-status";
+import { AgentManifests } from "@/components/views/agents/agent-manifests";
 import type { AgentInfo, AgentSummary } from "@/hooks/use-agents";
 
 type SortMode = "score" | "health" | "name";
@@ -12,6 +13,13 @@ interface AgentsViewProps {
   agents: AgentInfo[];
   summary: AgentSummary;
   isLoading: boolean;
+  /**
+   * Session role, for the manifest builder below the health cards. UX gate
+   * only — the bridge authorizes every agent-manifest route itself.
+   */
+  role?: string | null;
+  /** The session has not resolved yet, so the role is unknown — not "denied". */
+  roleLoading?: boolean;
 }
 
 const tierOrder: Record<string, number> = {
@@ -22,7 +30,14 @@ const tierOrder: Record<string, number> = {
   sleeping: 4,
 };
 
-export function AgentsView({ visible, agents, summary, isLoading }: AgentsViewProps) {
+export function AgentsView({
+  visible,
+  agents,
+  summary,
+  isLoading,
+  role,
+  roleLoading,
+}: AgentsViewProps) {
   const [sortBy, setSortBy] = useState<SortMode>("score");
 
   const sortedAgents = useMemo(() => {
@@ -92,6 +107,20 @@ export function AgentsView({ visible, agents, summary, isLoading }: AgentsViewPr
         ) : (
           <AgentStatus agents={sortedAgents} summary={summary} />
         )}
+        {/*
+          Health above, manifests below: the top half is how the fleet is
+          DOING (runs, scores, tiers, from the engine) and the bottom half is
+          what the fleet IS (the manifests on disk, from the bridge). They are
+          two different sources of truth about the same agents, and merging
+          them into one table would make a manifest that will not load look
+          like an agent that is merely unhealthy.
+        */}
+        <AgentManifests
+          visible={visible}
+          role={role}
+          roleLoading={roleLoading}
+          health={agents}
+        />
       </div>
     </div>
   );

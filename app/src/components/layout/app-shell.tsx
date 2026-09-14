@@ -189,6 +189,8 @@ export function AppShell() {
                 agents={agents}
                 summary={agentSummary}
                 isLoading={agentsLoading}
+                role={role}
+                roleLoading={roleLoading}
               />
               <MarketplaceView visible={view === "marketplace"} />
               <FleetView visible={view === "fleet"} />
