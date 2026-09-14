@@ -122,7 +122,7 @@ describe("fieldForPath", () => {
  * rendered in destructive red in the fleet list as "not a valid schedule".
  *
  * Every expectation below was probed against
- * `/home/philip/robothor/.venv/bin/python -c "CronTrigger.from_crontab(...)"`
+ * `.venv/bin/python -c "CronTrigger.from_crontab(...)"`
  * first; this table is that probe's output, not this module's opinion.
  */
 describe("describeCron — parity with APScheduler", () => {
