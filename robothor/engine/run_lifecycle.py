@@ -697,7 +697,9 @@ class RunLifecycleMixin:
                 on_tool,
                 **loop_kwargs,
             )
-            return session.get_final_text()
+            # A retry that yields nothing must not turn a delivered report
+            # into nothing: the original output is still the best we have.
+            return session.get_final_text() or output_text
         except Exception as e:
             logger.debug("Verification failed: %s", _sanitize(e))
             return output_text
