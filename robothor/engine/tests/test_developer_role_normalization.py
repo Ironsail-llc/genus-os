@@ -136,26 +136,38 @@ class TestAnthropicDeveloperNormalization:
         assert any("retry with sources" in b["text"] for b in last["content"])
 
 
-class TestNonAnthropicUnchanged:
-    def test_mimo_payload_is_byte_identical(self) -> None:
-        """(b) MiMo keeps the developer role — payload must not change."""
+class TestNonAnthropicKeepsTheRole:
+    """(b) MiMo and DeepSeek keep the ``developer`` role; only the ``[engine]``
+    attribution is added, on every provider. Live on 2026-09-14 the main
+    agent (DeepSeek via OpenRouter) reported its own unlabelled plan and
+    working-state turns to the operator as injected instructions, so the
+    label is no longer an Anthropic-only courtesy."""
+
+    def test_mimo_keeps_the_developer_role_and_gains_the_label(self) -> None:
         messages = _tail_conversation()
         expected = copy.deepcopy(messages)
         kwargs = _build(MIMO_MODEL, messages)
-        assert kwargs["messages"] == expected
         assert kwargs["messages"][-1]["role"] == ENGINE_CONTEXT_ROLE
+        assert kwargs["messages"][-1]["content"].startswith("[engine]")
+        assert kwargs["messages"][:-1] == expected[:-1], "only the engine turn changes"
 
-    def test_mimo_list_object_passed_through_untouched(self) -> None:
-        """No defensive copy for the non-anthropic path — same list object."""
-        messages = _tail_conversation()
+    def test_a_conversation_without_engine_turns_is_the_same_list_object(self) -> None:
+        """No defensive copy when there is nothing to label — same list object."""
+        messages = [
+            {"role": "user", "content": "summarize the inbox"},
+            {"role": "assistant", "content": "done"},
+            {"role": "user", "content": "thanks"},
+        ]
         kwargs = _build(MIMO_MODEL, messages)
         assert kwargs["messages"] is messages
 
-    def test_deepseek_payload_is_byte_identical(self) -> None:
+    def test_deepseek_keeps_the_developer_role_and_gains_the_label(self) -> None:
         messages = _tail_conversation()
         expected = copy.deepcopy(messages)
         kwargs = _build("openrouter/deepseek/deepseek-chat", messages)
-        assert kwargs["messages"] == expected
+        assert kwargs["messages"][-1]["role"] == ENGINE_CONTEXT_ROLE
+        assert kwargs["messages"][-1]["content"].startswith("[engine]")
+        assert kwargs["messages"][:-1] == expected[:-1]
 
 
 class TestRepeatedTrailingAssistants:
