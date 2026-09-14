@@ -1,3 +1,9 @@
+## [1.80.0](https://github.com/Ironsail-llc/genus-os/compare/v1.79.0...v1.80.0) (2026-09-14)
+
+### Features
+
+* **helm:** agents create, edit, run and retire from three fields ([#551](https://github.com/Ironsail-llc/genus-os/issues/551)) ([4f34cb1](https://github.com/Ironsail-llc/genus-os/commit/4f34cb1d352217694e64dc96a86555871e56a3c4)), closes [#518](https://github.com/Ironsail-llc/genus-os/issues/518)
+
 ## [1.79.0](https://github.com/Ironsail-llc/genus-os/compare/v1.78.0...v1.79.0) (2026-09-14)
 
 ### Features
