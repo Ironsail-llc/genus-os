@@ -90,6 +90,10 @@ class FakeEngine:
                 200,
                 {"reloaded": True, "primary": None, "fallbacks": []},
             ),
+            ("GET", "/api/admin/defaults"): (
+                200,
+                {"primary": "openrouter/openai/gpt-5.4", "fallbacks": ["openrouter/x/y"]},
+            ),
         }
 
     async def __call__(self, method, path, *, json=None, timeout=30):
@@ -926,3 +930,30 @@ class TestTheBridgeWritesWhereTheEngineReads:
         )
         assert response.status_code == 200
         assert (admin_providers._manifest_dir() / "_defaults.yaml").exists()
+
+
+class TestDefaultsRead:
+    """``GET /api/providers/defaults``: the form can pre-select the current
+    default. The write route existed without a read route, so the first
+    Providers page shipped with the field blank (B6 review, 2026-09-14)."""
+
+    def test_an_operator_reads_the_current_default_block(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        response = controls_client_as_operator.get("/api/providers/defaults")
+        assert response.status_code == 200
+        assert response.json() == {
+            "primary": "openrouter/openai/gpt-5.4",
+            "fallbacks": ["openrouter/x/y"],
+        }
+        assert ("GET", "/api/admin/defaults", None) in fake_engine.calls
+
+    def test_a_viewer_cannot_read_it(self, controls_client_as_viewer) -> None:
+        assert controls_client_as_viewer.get("/api/providers/defaults").status_code == 403
+
+    def test_an_engine_error_is_proxied_not_swallowed(
+        self, controls_client_as_operator, fake_engine
+    ) -> None:
+        fake_engine.responses[("GET", "/api/admin/defaults")] = (503, {"detail": "engine busy"})
+        response = controls_client_as_operator.get("/api/providers/defaults")
+        assert response.status_code == 503
