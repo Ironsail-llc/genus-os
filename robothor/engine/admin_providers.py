@@ -441,6 +441,25 @@ def register(app: FastAPI) -> None:
         result = await asyncio.to_thread(key_pool.reload_provider_keys)
         return {"reloaded": result.reloaded, "slots": result.slots}
 
+    @router.get("/defaults")
+    async def read_defaults() -> dict[str, Any]:
+        """The fleet's current default model block, as ``_defaults.yaml`` has it.
+
+        The Providers page writes this block (``PATCH /api/providers/defaults``)
+        but had nothing to READ it from, so it could not pre-select the current
+        default; the first version shipped with the field blank (B6 review,
+        2026-09-14). A missing file is an instance with no defaults, not an
+        error.
+        """
+        from robothor.engine import config as engine_config
+
+        defaults = engine_config._load_defaults(_manifest_dir())
+        model_block = defaults.get("model") or {}
+        return {
+            "primary": model_block.get("primary"),
+            "fallbacks": list(model_block.get("fallbacks") or []),
+        }
+
     @router.post("/defaults/reload")
     async def reload_defaults() -> dict[str, Any]:
         """Re-read ``_defaults.yaml`` after the UI has rewritten it.

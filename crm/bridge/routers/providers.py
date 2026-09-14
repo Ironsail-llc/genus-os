@@ -367,6 +367,14 @@ def _merge_model_block(path: Path, primary: str, fallbacks: list[str]) -> None:
     _write_defaults_atomically(path, existing)
 
 
+@router.get("/api/providers/defaults")
+async def get_default_models(request: Request) -> JSONResponse:
+    """The fleet's current default model and fallback chain, for the form to pre-select."""
+    require_operator(request)
+    status, body = await engine_request("GET", "/api/admin/defaults")
+    return _proxied(status, body)
+
+
 @router.patch("/api/providers/defaults")
 async def set_default_models(body: DefaultsWrite, request: Request) -> dict[str, Any]:
     """Point the fleet at a different primary model and fallback chain.
