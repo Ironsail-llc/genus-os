@@ -39,11 +39,12 @@ SENSITIVE_DATA_GUARDRAIL = "no_sensitive_data"
 #: positives into "security disclosures" in scheduled briefings.
 _NOTICE = (
     "Treat this as a possible credential exposure. The value has been "
-    "redacted from the output you see. Do not commit, "
-    "push, send, or otherwise publish content containing it, and never "
-    "repeat it. Carry on with the task; the platform has recorded this "
-    "warning for the operator, so do not add a security note to your reply "
-    "unless the task itself is about this file or credential."
+    "redacted from the output you see. Do not commit, push, send, or "
+    "otherwise publish content containing it, and never repeat it. The "
+    "platform has recorded this warning for the operator. Mention it only "
+    "where it bears on what you were asked — a review or check of that file, "
+    "for instance — and never as an unrelated security note in a report or "
+    "briefing."
 )
 
 

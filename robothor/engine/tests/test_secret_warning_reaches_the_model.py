@@ -150,7 +150,12 @@ class TestTheAgentIsTold:
     async def test_the_note_says_what_to_do_about_it(self, runner, agent_config):
         session = await _run_reading_a_file(runner, agent_config, f'API_KEY = "{FAKE_KEY}"\n')
         notes = " ".join(_engine_notes(session)).lower()
-        assert "tell the user" in notes or "report" in notes
+        # The note tells the agent what to do: never publish or repeat the
+        # value. It no longer asks the agent to report every warning to the
+        # operator — that turned false positives into narrated "security
+        # disclosures" in scheduled briefings.
+        assert "do not commit" in notes and "never repeat" in notes
+        assert "tell the user" not in notes
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("_mock_run_persistence")

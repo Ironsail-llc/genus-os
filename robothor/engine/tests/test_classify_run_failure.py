@@ -29,7 +29,7 @@ async def test_missing_run_id(classify_handler) -> None:
 @pytest.mark.asyncio
 async def test_run_not_found(classify_handler) -> None:
     with patch("robothor.engine.tracking.get_run", return_value=None):
-        result = await classify_handler({"run_id": "missing"}, None)
+        result = await classify_handler({"run_id": "00000000-0000-4000-8000-00000000fffe"}, None)
     assert "error" in result
     assert "not found" in result["error"]
 
@@ -38,7 +38,7 @@ async def test_run_not_found(classify_handler) -> None:
 async def test_post_tool_crash_classification(classify_handler) -> None:
     started = datetime(2026, 4, 23, 12, 0, 0, tzinfo=UTC)
     run = {
-        "id": "run-1",
+        "id": "00000000-0000-4000-8000-000000000001",
         "agent_id": "buddy",
         "status": "timeout",
         "error_message": "Reaped by watchdog: runner crashed after tool log_interaction",
@@ -60,7 +60,7 @@ async def test_post_tool_crash_classification(classify_handler) -> None:
         patch("robothor.engine.tracking.get_run", return_value=run),
         patch("robothor.engine.tracking.list_steps", return_value=steps),
     ):
-        result = await classify_handler({"run_id": "run-1"}, None)
+        result = await classify_handler({"run_id": "00000000-0000-4000-8000-000000000001"}, None)
 
     assert result["agent_id"] == "buddy"
     assert result["status"] == "timeout"
@@ -78,7 +78,7 @@ async def test_daemon_restart_classification(classify_handler, monkeypatch) -> N
     monkeypatch.setenv("ROBOTHOR_DAEMON_START_TS", "2026-04-22T18:27:32+00:00")
     started = datetime(2026, 4, 22, 18, 15, 0, tzinfo=UTC)
     run = {
-        "id": "run-z",
+        "id": "00000000-0000-4000-8000-00000000000a",
         "agent_id": "calendar-monitor",
         "status": "timeout",
         "error_message": "Run cancelled externally",
@@ -91,7 +91,7 @@ async def test_daemon_restart_classification(classify_handler, monkeypatch) -> N
         patch("robothor.engine.tracking.get_run", return_value=run),
         patch("robothor.engine.tracking.list_steps", return_value=[]),
     ):
-        result = await classify_handler({"run_id": "run-z"}, None)
+        result = await classify_handler({"run_id": "00000000-0000-4000-8000-00000000000a"}, None)
 
     assert result["category"] == "daemon_restart"
     assert result["daemon_restart_in_window"] is True
@@ -104,7 +104,7 @@ async def test_no_steps_classification(classify_handler, monkeypatch) -> None:
     monkeypatch.delenv("ROBOTHOR_DAEMON_START_TS", raising=False)
     started = datetime(2026, 4, 23, 6, 13, 0, tzinfo=UTC)
     run = {
-        "id": "run-a",
+        "id": "00000000-0000-4000-8000-00000000000b",
         "agent_id": "auto-agent",
         "status": "timeout",
         "error_message": "Reaped",
@@ -117,7 +117,7 @@ async def test_no_steps_classification(classify_handler, monkeypatch) -> None:
         patch("robothor.engine.tracking.get_run", return_value=run),
         patch("robothor.engine.tracking.list_steps", return_value=[]),
     ):
-        result = await classify_handler({"run_id": "run-a"}, None)
+        result = await classify_handler({"run_id": "00000000-0000-4000-8000-00000000000b"}, None)
 
     assert result["category"] == "no_steps"
     assert result["llm_was_called"] is False

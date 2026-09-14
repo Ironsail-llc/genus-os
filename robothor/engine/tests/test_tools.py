@@ -354,7 +354,7 @@ class TestObservabilityTools:
         """list_agent_runs returns summarized run data."""
         mock_runs = [
             {
-                "id": "run-1",
+                "id": "00000000-0000-4000-8000-000000000001",
                 "agent_id": "vision-monitor",
                 "status": "completed",
                 "trigger_type": "cron",
@@ -389,7 +389,7 @@ class TestObservabilityTools:
     async def test_get_agent_run_with_steps(self):
         """get_agent_run returns run details and step audit trail."""
         mock_run = {
-            "id": "run-1",
+            "id": "00000000-0000-4000-8000-000000000001",
             "agent_id": "email-classifier",
             "status": "completed",
             "trigger_type": "cron",
@@ -425,7 +425,9 @@ class TestObservabilityTools:
             patch("robothor.engine.tracking.get_run", return_value=mock_run),
             patch("robothor.engine.tracking.list_steps", return_value=mock_steps),
         ):
-            result = await _execute_tool("get_agent_run", {"run_id": "run-1"})
+            result = await _execute_tool(
+                "get_agent_run", {"run_id": "00000000-0000-4000-8000-000000000001"}
+            )
         assert result["run"]["agent_id"] == "email-classifier"
         assert result["step_count"] == 2
         assert result["steps"][0]["tool_name"] == "read_file"

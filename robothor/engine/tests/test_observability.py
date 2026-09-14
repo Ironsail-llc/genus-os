@@ -22,7 +22,7 @@ class _FakeMessage:
 
 def _make_run(**kwargs: object) -> AgentRun:
     defaults: dict[str, object] = {
-        "id": "run-1",
+        "id": "00000000-0000-4000-8000-000000000001",
         "agent_id": "test",
         "status": RunStatus.COMPLETED,
         "output_text": "Hello",
@@ -158,7 +158,7 @@ class TestLogToolEvent:
         from robothor.engine.tracking import log_tool_event
 
         log_tool_event(
-            run_id="run-1",
+            run_id="00000000-0000-4000-8000-000000000001",
             tool_name="list_tasks",
             duration_ms=150,
             success=True,
@@ -172,7 +172,7 @@ class TestLogToolEvent:
         from robothor.engine.tracking import log_tool_event
 
         log_tool_event(
-            run_id="run-1",
+            run_id="00000000-0000-4000-8000-000000000001",
             tool_name="exec",
             duration_ms=5000,
             success=False,
@@ -189,7 +189,7 @@ class TestLogToolEvent:
         with patch("robothor.engine.tracking.get_connection", side_effect=Exception("DB down")):
             # Should not raise
             log_tool_event(
-                run_id="run-1",
+                run_id="00000000-0000-4000-8000-000000000001",
                 tool_name="read_file",
                 duration_ms=10,
                 success=True,
@@ -426,7 +426,7 @@ class TestClassifyRunFailureAgreesWithTheReaper:
         from robothor.engine.tools.handlers.observability import HANDLERS
 
         run = {
-            "id": "run-1",
+            "id": "00000000-0000-4000-8000-000000000001",
             "agent_id": "crm-hygiene",
             "status": "timeout",
             "started_at": started_iso,
@@ -442,7 +442,9 @@ class TestClassifyRunFailureAgreesWithTheReaper:
             patch("robothor.engine.tracking.list_steps", return_value=steps),
             patch.dict("os.environ", {"ROBOTHOR_DAEMON_START_TS": daemon_ts}),
         ):
-            return await HANDLERS["classify_run_failure"]({"run_id": "run-1"}, None)
+            return await HANDLERS["classify_run_failure"](
+                {"run_id": "00000000-0000-4000-8000-000000000001"}, None
+            )
 
     @pytest.mark.asyncio
     async def test_a_run_that_started_after_the_boot_is_not_in_the_window(self):
