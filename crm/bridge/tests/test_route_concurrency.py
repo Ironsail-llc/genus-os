@@ -53,6 +53,7 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("PUT", "/api/providers/{provider_id}/keys/{position}"),
         ("DELETE", "/api/providers/{provider_id}/keys/{position}"),
         ("POST", "/api/providers/{provider_id}/test"),
+        ("GET", "/api/providers/defaults"),
         ("PATCH", "/api/providers/defaults"),
         # The three channel-access MUTATIONS await the engine after the write:
         # the binding is a row this process owns, but the engine's belief about
