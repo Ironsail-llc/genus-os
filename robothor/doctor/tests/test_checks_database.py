@@ -328,3 +328,55 @@ def test_the_seed_migration_ships_with_this_install() -> None:
 def test_an_unknown_migration_name_raises_rather_than_seeding_nothing() -> None:
     with pytest.raises(FileNotFoundError):
         db_checks._migration_sql("999_not_a_migration.sql")
+
+
+# ── db.rls_coverage ──────────────────────────────────────────────────────────
+
+
+def test_full_rls_coverage_passes() -> None:
+    ctx = make_ctx(db_factory=fake_db([]))
+    result = _run("db.rls_coverage", ctx)
+    assert result.status == "pass"
+
+
+def test_bare_tenant_tables_fail_by_name_and_are_repairable() -> None:
+    ctx = make_ctx(db_factory=fake_db([("user_accounts",), ("face_identities",)]))
+    result = _run("db.rls_coverage", ctx)
+    assert result.status == "fail"
+    assert result.fixable is True
+    assert "user_accounts" in result.detail and "face_identities" in result.detail
+    assert db_checks.RLS_BACKSTOP_MIGRATION in result.detail
+
+
+def test_an_unreadable_catalog_is_a_failure_not_a_crash() -> None:
+    ctx = make_ctx(db_factory=fake_db([("x",)], error=RuntimeError("permission denied")))
+    result = _run("db.rls_coverage", ctx)
+    assert result.status == "fail"
+    assert "RuntimeError" in result.detail
+
+
+def test_the_rls_fix_executes_migration_120s_own_sql(monkeypatch) -> None:
+    from robothor.doctor.runner import run_sync
+
+    # First probe: one bare table. After the fix, the re-run sees none.
+    factory = fake_db([("user_accounts",)])
+    seen: list[str] = []
+    real = db_checks._migration_sql
+
+    def _spy(name: str) -> str:
+        sql = real(name)
+        seen.append(sql)
+        return sql
+
+    monkeypatch.setattr(db_checks, "_migration_sql", _spy)
+    report = run_sync(make_ctx(fix=True, db_factory=factory), checks=[_check("db.rls_coverage")])
+
+    assert len(seen) == 1
+    assert "CREATE POLICY tenant_isolation" in seen[0]
+    assert "FORCE ROW LEVEL SECURITY" in seen[0]
+    assert report.results[0].status == "pass"
+
+
+def test_the_backstop_migration_ships_with_this_install() -> None:
+    sql = db_checks._migration_sql(db_checks.RLS_BACKSTOP_MIGRATION)
+    assert "tenant_isolation" in sql

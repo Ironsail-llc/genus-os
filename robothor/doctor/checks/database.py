@@ -28,6 +28,26 @@ __all__ = ["CHECKS", "SERVICE_ROLE_MIGRATION"]
 #: repeatedly, and here the two disagreeing would mean the doctor "fixing" a
 #: database into a state no migration produces.
 SERVICE_ROLE_MIGRATION = "107_seed_service_role.sql"
+RLS_BACKSTOP_MIGRATION = "120_tenant_rls_cover_new_tables.sql"
+
+_BARE_TENANT_TABLES_SQL = """
+SELECT pt.tablename
+FROM pg_tables pt
+WHERE pt.schemaname = 'public'
+  AND EXISTS (
+      SELECT 1 FROM information_schema.columns c
+      WHERE c.table_schema = 'public'
+        AND c.table_name = pt.tablename
+        AND c.column_name = 'tenant_id'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM pg_policies p
+      WHERE p.schemaname = 'public'
+        AND p.tablename = pt.tablename
+        AND p.policyname = 'tenant_isolation'
+  )
+ORDER BY pt.tablename
+"""
 
 #: PostgreSQL's SQLSTATE for insufficient_privilege. Matched on the code rather
 #: than the exception class so this module never imports psycopg2 -- the doctor
@@ -270,6 +290,53 @@ async def _seed_service_role(ctx: DoctorContext) -> FixResult:
     return FixResult(changed=True, detail=f"executed {SERVICE_ROLE_MIGRATION}")
 
 
+async def _rls_coverage(ctx: DoctorContext) -> Result:
+    """Every tenant_id table carries the ``tenant_isolation`` policy.
+
+    Migration 081 policied the tenant tables that existed when it ran, and no
+    later one. Tables created afterwards -- identity tables among them, plus
+    tables the application creates itself -- had no policy on a production
+    database for months, so the tenant-isolation guarantee was partial on
+    exactly the rows it matters most for. This reads ``pg_policies`` on the
+    live database, which a static test cannot; ``--fix`` executes migration
+    120's own loop.
+    """
+
+    def _probe() -> list[str]:
+        with ctx.db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(_BARE_TENANT_TABLES_SQL)
+            rows = cursor.fetchall()
+        return [str(r[0] if not isinstance(r, dict) else next(iter(r.values()))) for r in rows]
+
+    try:
+        bare = await ctx.run_blocking(_probe)
+    except Exception as exc:  # noqa: BLE001 - an unreadable catalog is the answer
+        return fail(f"cannot read pg_policies: {type(exc).__name__}")
+    if bare:
+        return fail(
+            f"{len(bare)} tenant_id table(s) have no tenant_isolation policy, so tenant "
+            f"scoping does not apply to them: {', '.join(bare)} — apply "
+            f"{RLS_BACKSTOP_MIGRATION} (or 'genus doctor --fix')",
+            fixable=True,
+        )
+    return ok("every tenant_id table carries the tenant_isolation policy")
+
+
+async def _apply_rls_backstop(ctx: DoctorContext) -> FixResult:
+    """Run migration 120's own SQL. Idempotent -- it only touches bare tables."""
+
+    def _apply() -> None:
+        sql = _migration_sql(RLS_BACKSTOP_MIGRATION)
+        with ctx.db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql)
+            conn.commit()
+
+    await ctx.run_blocking(_apply)
+    return FixResult(changed=True, detail=f"executed {RLS_BACKSTOP_MIGRATION}")
+
+
 CHECKS: tuple[Check, ...] = (
     Check(
         id="db.connect",
@@ -293,5 +360,13 @@ CHECKS: tuple[Check, ...] = (
         severity="required",
         run=_service_role,
         fix=_seed_service_role,
+    ),
+    Check(
+        id="db.rls_coverage",
+        title="Every tenant table carries the tenant_isolation policy",
+        category="database",
+        severity="required",
+        run=_rls_coverage,
+        fix=_apply_rls_backstop,
     ),
 )

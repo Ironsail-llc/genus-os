@@ -340,7 +340,8 @@ their own check afterwards so the report says what the re-run found rather than
 what the repair claimed:
 
 - `db.migrations` — applies pending migrations, the same work as `genus migrate`;
-- `db.rbac_service_role` — seeds the `service` role.
+- `db.rbac_service_role` — seeds the `service` role;
+- `db.rls_coverage` — applies the `tenant_isolation` policy to any tenant table that lacks it.
 
 Everything else prints the command to run. `identity.owner_account` is
 deliberately never auto-fixed: minting a privileged account from a diagnostic

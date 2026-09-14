@@ -40,7 +40,11 @@ class FakeCursor:
         return self._rows.pop(0) if self._rows else None
 
     def fetchall(self) -> list[Any]:
-        rows, self._rows = self._rows, []
+        # Consume the SHARED queue in place (rebinding would leave the
+        # connection's list intact, so a re-run after a repair would see the
+        # pre-repair rows again and no fetchall-based fix could ever be proved).
+        rows = list(self._rows)
+        self._rows.clear()
         return rows
 
 
