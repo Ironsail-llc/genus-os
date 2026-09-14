@@ -566,6 +566,7 @@ class TestIdentityThreading:
             # Snapshot now — the runner mutates this same list object in
             # place (appends the assistant reply) after the call returns.
             captured["last_user_msg"] = kwargs["messages"][-1]["content"]
+            captured["messages"] = [dict(m) for m in kwargs["messages"]]
             return response
 
         with (
@@ -588,10 +589,17 @@ class TestIdentityThreading:
             )
 
         assert run.status == RunStatus.COMPLETED
-        last_user_msg = captured["last_user_msg"]
-        assert "--- CURRENT USER ---" in last_user_msg
-        assert "Bob" in last_user_msg
-        assert "Verified: yes" in last_user_msg
+        # The identity block is the ENGINE's turn, placed right before the
+        # operator's words — never inside them (main called it a "fake
+        # --- CURRENT USER --- header" in every reply, 2026-09-14).
+        from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+        engine_turn = captured["messages"][-2]
+        assert engine_turn["role"] == ENGINE_CONTEXT_ROLE
+        assert "--- CURRENT USER ---" in engine_turn["content"]
+        assert "Bob" in engine_turn["content"]
+        assert "Verified: yes" in engine_turn["content"]
+        assert captured["last_user_msg"] == "follow-up"
 
     @pytest.mark.asyncio
     async def test_per_turn_identity_enrichment_offloaded_to_executor(
@@ -670,6 +678,7 @@ class TestIdentityThreading:
 
         async def mock_completion(**kwargs):
             captured["last_user_msg"] = kwargs["messages"][-1]["content"]
+            captured["messages"] = [dict(m) for m in kwargs["messages"]]
             return response
 
         with (
@@ -692,8 +701,12 @@ class TestIdentityThreading:
             )
 
         assert run.status == RunStatus.COMPLETED
-        last_user_msg = captured["last_user_msg"]
-        assert last_user_msg.count("--- CURRENT USER ---") == 1
+        whole = "\n".join(
+            m["content"] for m in captured["messages"] if isinstance(m.get("content"), str)
+        )
+        assert whole.count("--- CURRENT USER ---") == 1
+        assert "CURRENT USER" not in captured["last_user_msg"]
+        assert captured["last_user_msg"] == "hello"
 
     @pytest.mark.asyncio
     async def test_no_identity_no_block_for_manual_trigger(
