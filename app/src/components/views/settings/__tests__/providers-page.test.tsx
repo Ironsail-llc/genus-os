@@ -311,9 +311,58 @@ describe("ProvidersPage — test connection", () => {
     expect(result).toHaveTextContent(/no auth credentials found/i);
   });
 
-  it("says a provider has not been tested in this session until it is", async () => {
+  it("says a provider has not been tested until it is", async () => {
     await renderPage();
     expect(screen.getByTestId("provider-test-result-openai")).toHaveTextContent(/not tested/i);
+  });
+
+  it("shows the last test the engine remembers, so a reload does not forget it", async () => {
+    const remembered = {
+      ...PROVIDERS,
+      providers: PROVIDERS.providers.map((p) =>
+        p.id === "openrouter"
+          ? {
+              ...p,
+              last_test: {
+                ok: true,
+                model: "openrouter/openai/gpt-5.4",
+                latency_ms: 812,
+                error_class: null,
+                message: "OpenRouter answered in 812ms.",
+                at: "2026-09-14T19:02:11+00:00",
+              },
+            }
+          : p,
+      ),
+    };
+    await renderPage({ "GET /api/bridge/api/providers": { body: remembered } });
+    const cell = screen.getByTestId("provider-test-result-openrouter");
+    expect(cell).toHaveTextContent(/812ms/);
+    expect(cell).toHaveTextContent(/openrouter\/openai\/gpt-5\.4/);
+    expect(cell).not.toHaveTextContent(/not tested/i);
+  });
+
+  it("shows a remembered failure by its class", async () => {
+    const remembered = {
+      ...PROVIDERS,
+      providers: PROVIDERS.providers.map((p) =>
+        p.id === "openrouter"
+          ? {
+              ...p,
+              last_test: {
+                ok: false,
+                model: "openrouter/openai/gpt-5.4",
+                latency_ms: 40,
+                error_class: "auth",
+                message: "the provider refused the key",
+                at: "2026-09-14T19:02:11+00:00",
+              },
+            }
+          : p,
+      ),
+    };
+    await renderPage({ "GET /api/bridge/api/providers": { body: remembered } });
+    expect(screen.getByTestId("provider-test-result-openrouter")).toHaveTextContent(/auth/);
   });
 });
 
