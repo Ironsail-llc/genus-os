@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.llm_attempts import is_attempt_step
@@ -21,6 +22,20 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         return fn
 
     return decorator
+
+
+def _uuid_error(value: Any, kind: str, hint: str) -> dict[str, Any] | None:
+    """Refuse a non-UUID id at the tool boundary.
+
+    LLM-fabricated short ids ("2c777e07", "run_abc123") used to reach the
+    uuid-typed SQL parameter verbatim and crash with psycopg2
+    InvalidTextRepresentation. Same guard the CRM handlers carry.
+    """
+    try:
+        uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return {"error": f"invalid {kind} {value!r} — expected a UUID; {hint}"}
+    return None
 
 
 @_handler("list_agent_runs")
@@ -60,6 +75,9 @@ async def _list_agent_runs(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 async def _get_agent_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tracking import get_run, list_steps
 
+    bad = _uuid_error(args.get("run_id"), "run id", "use list_agent_runs to find real run ids")
+    if bad:
+        return bad
     run = await asyncio.to_thread(get_run, args["run_id"])
     if not run:
         return {"error": "Run not found"}
@@ -116,6 +134,9 @@ async def _classify_run_failure(args: dict[str, Any], ctx: ToolContext) -> dict[
     run_id = args.get("run_id")
     if not run_id:
         return {"error": "run_id is required"}
+    bad = _uuid_error(run_id, "run id", "use list_agent_runs to find real run ids")
+    if bad:
+        return bad
 
     run = await asyncio.to_thread(get_run, run_id)
     if not run:
@@ -531,7 +552,10 @@ async def _get_agent_review(args: dict[str, Any], ctx: ToolContext) -> dict[str,
     """Fetch one full Buddy review by id, including full feedback + action items."""
     from robothor.db.connection import get_connection
 
-    review_id = args["review_id"]
+    review_id = args.get("review_id")
+    bad = _uuid_error(review_id, "review id", "use list_agent_reviews to find real review ids")
+    if bad:
+        return bad
 
     def _query() -> dict[str, Any]:
         with get_connection() as conn, conn.cursor() as cur:

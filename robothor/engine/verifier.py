@@ -21,7 +21,13 @@ from robothor.engine.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CRITERIA = "Task completed successfully without errors."
+DEFAULT_CRITERIA = (
+    "The task was carried out and the final output is the deliverable the "
+    "task calls for. Open items, pending decisions, blockers or problems the "
+    "agent reports to the operator are content of that deliverable, not "
+    "failures; judge only whether the deliverable itself is present and "
+    "coherent."
+)
 
 VERIFICATION_PROMPT = """Evaluate whether this agent's execution met the success criteria.
 
@@ -118,5 +124,12 @@ def format_verification_feedback(result: VerificationResult) -> str:
     if result.suggestions:
         lines.append("Suggestions:")
         lines.extend(f"  - {s}" for s in result.suggestions)
-    lines.append("Please address these issues and try again.")
+    lines.append(
+        "Your previous reply was judged against the success criteria above. "
+        "Respond now with the complete deliverable itself — the full report or "
+        "answer the task requires — revised to address the issues. Do not reply "
+        "to this feedback, do not discuss the verification, and do not summarize "
+        "or refer to what you already sent: the next message is what the "
+        "recipient receives."
+    )
     return "\n".join(lines)

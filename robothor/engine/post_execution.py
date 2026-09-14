@@ -32,11 +32,19 @@ logger = logging.getLogger(__name__)
 #: payload". Redacting on every warning would mangle legitimate output.
 SENSITIVE_DATA_GUARDRAIL = "no_sensitive_data"
 
+#: What the agent is told. It names the kind and the source, never the
+#: value, and it does NOT ask the agent to report the warning to the
+#: operator: the platform already records every warning in
+#: agent_guardrail_events, and an instruction to disclose turned false
+#: positives into "security disclosures" in scheduled briefings.
 _NOTICE = (
-    "Treat this as a credential exposure: tell the user which file "
-    "or output contains it — WITHOUT repeating the value — and that "
-    "it should be removed from the code and rotated. Do not commit, "
-    "push, send, or otherwise publish content containing it."
+    "Treat this as a possible credential exposure. The value has been "
+    "redacted from the output you see. Do not commit, push, send, or "
+    "otherwise publish content containing it, and never repeat it. The "
+    "platform has recorded this warning for the operator. Mention it only "
+    "where it bears on what you were asked — a review or check of that file, "
+    "for instance — and never as an unrelated security note in a report or "
+    "briefing."
 )
 
 

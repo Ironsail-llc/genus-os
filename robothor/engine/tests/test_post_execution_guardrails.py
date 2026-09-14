@@ -163,3 +163,19 @@ def test_only_a_warning_triggers_the_path(action):
     _apply(session, engine)
 
     assert session.messages == []
+
+
+def test_the_notice_does_not_instruct_operator_disclosure():
+    """The platform records the warning (agent_guardrail_events); the agent's
+    job is to not publish the value. Telling the agent to report every warning
+    to the operator turned false positives into 'security disclosures' in
+    scheduled briefings (live, 2026-09-13/14)."""
+    engine = _engine(action="warned", name="no_sensitive_data", reason="AWS key in config.py")
+    session = _session()
+
+    _apply(session, engine)
+
+    content = session.messages[0]["content"].lower()
+    assert "tell the user" not in content
+    assert "do not commit" in content
+    assert "redacted" in content
