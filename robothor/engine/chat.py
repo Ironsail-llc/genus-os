@@ -19,18 +19,21 @@ Endpoints:
   POST /chat/deep/start   — Start deep reasoning (RLM), return SSE stream
   GET  /chat/deep/status  — Check active deep reasoning state
 
-TODO(per-user sessions): the in-memory ``_sessions`` dict is unbounded in
-number of keys — each session's *history* is capped at MAX_HISTORY, but with
-ROBOTHOR_PER_USER_SESSIONS=enforce every distinct member gets their own
-long-lived entry that is never evicted. Fine at current tenant scale; a
-large tenant will want LRU eviction (or a TTL sweep) over ``_sessions``
-itself, not just per-session history trimming. Future work, not this task.
+The in-memory ``_sessions`` dict is a bounded cache over the PostgreSQL store,
+not the truth. Each session's *history* is capped at MAX_HISTORY, and the
+number of sessions is capped at MAX_SESSIONS: creating a key past the cap
+evicts the least-recently-used session that has no running task, no pending
+plan and no deep run (the main session is never evicted). An evicted key is
+rehydrated from the store on its next message, so nothing a member said is
+lost — only the memory it occupied while idle. ``evict_idle_sessions`` is the
+TTL sweep for callers that want one.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -43,10 +46,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
+from robothor.constants import DEFAULT_TENANT
+from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
     clear_plan_state_async,
     clear_session_async,
     load_all_sessions,
+    load_session,
     save_exchange_async,
     save_message_async,
     save_plan_state_async,
@@ -194,16 +200,41 @@ class ChatSession:
     plan_mode: bool = False
     active_plan: PlanState | None = None
     active_deep: DeepRunState | None = None
+    last_used: float = field(default_factory=time.monotonic)
 
 
-# In-memory session store
-_sessions: dict[str, ChatSession] = {}
+# In-memory session cache over the PostgreSQL store (see module docstring and
+# robothor/engine/chat_session_cache.py for the policy).
+#: Cap on cached sessions. Live work is never dropped to honour it.
+MAX_SESSIONS = 500
+#: Idle age after which ``evict_idle_sessions`` drops a session (matches the
+#: store's own 7-day session TTL).
+SESSION_IDLE_TTL_S = 7 * 24 * 3600
+
+
+def _load_for_cache(session_key: str) -> dict[str, Any]:
+    tenant = _config.tenant_id if _config is not None else DEFAULT_TENANT
+    return load_session(session_key, limit=MAX_HISTORY, tenant_id=tenant)
+
+
+_cache = SessionCache(
+    max_sessions=MAX_SESSIONS,
+    idle_ttl_s=SESSION_IDLE_TTL_S,
+    is_pinned=lambda key: key == get_main_session_key(),
+    loader=_load_for_cache,
+)
+_sessions: dict[str, ChatSession] = _cache.sessions
+_evicted: set[str] = _cache.evicted
+
+
+def evict_idle_sessions(*, ttl_s: float | None = None, now: float | None = None) -> int:
+    """Drop every evictable session idle for longer than *ttl_s*. Returns the count."""
+    return _cache.evict_idle(ttl_s=ttl_s, now=now)
 
 
 def _get_session(session_key: str) -> ChatSession:
-    if session_key not in _sessions:
-        _sessions[session_key] = ChatSession()
-    return _sessions[session_key]
+    session: ChatSession = _cache.get(session_key, ChatSession)
+    return session
 
 
 def get_shared_session(session_key: str) -> ChatSession:
