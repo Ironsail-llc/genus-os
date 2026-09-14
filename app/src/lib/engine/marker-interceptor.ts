@@ -286,3 +286,73 @@ export class MarkerInterceptor {
     return -1;
   }
 }
+
+
+/**
+ * `text` without any marker, wherever it sits. The streaming interceptor
+ * above handles the live path; this is for text that already exists in
+ * full — history rows and the assembled final reply — where a regex that
+ * stops at the first `}]` it meets (the end of the first nested array, on
+ * 2026-09-14) leaves the rest of the payload on screen.
+ *
+ * Walks the marker's JSON with a depth count that ignores string contents,
+ * drops an unterminated marker to the end of the text, removes a line the
+ * marker had to itself, and still clears the un-bracketed variants the
+ * model sometimes emits plus the plan marker.
+ */
+export function stripMarkers(text: string): string {
+  if (!text) return text;
+  const prefixes = [DASHBOARD_PREFIX, RENDER_PREFIX];
+  const sentinel = "\u0000";
+  let out = "";
+  let index = 0;
+  while (index < text.length) {
+    let hit = -1;
+    for (const prefix of prefixes) {
+      const pos = text.indexOf(prefix, index);
+      if (pos >= 0 && (hit < 0 || pos < hit)) hit = pos;
+    }
+    if (hit < 0) {
+      out += text.substring(index);
+      break;
+    }
+    out += text.substring(index, hit) + sentinel;
+    index = markerEnd(text, hit);
+  }
+  out = out
+    // Un-bracketed variants (the model sometimes omits the opening [)
+    .replace(/\bRENDER:[a-z_]+:\{[^]*?\}\]?/g, sentinel)
+    .replace(/\bDASHBOARD:\{[^]*?\}\]?/g, sentinel)
+    .replace(/\[PLAN_READY\]/g, sentinel);
+  const lines: string[] = [];
+  for (const line of out.split("\n")) {
+    if (line.includes(sentinel) && line.split(sentinel).join("").trim() === "") continue;
+    lines.push(line.split(` ${sentinel} `).join(" ").split(sentinel).join("").trimEnd());
+  }
+  while (lines.length && lines[0].trim() === "") lines.shift();
+  while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+  return lines.join("\n");
+}
+
+/** Index just past the marker opening at `start`, or `text.length` when it never closes. */
+function markerEnd(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "[" || ch === "{") depth++;
+    else if (ch === "]" || ch === "}") {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return text.length;
+}
