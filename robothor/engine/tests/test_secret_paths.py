@@ -63,6 +63,12 @@ NOT_SECRET = [
     "src/tokenizer.py",
     "data/environment_2026.csv",
     "docs/secrets.md",
+    # Operational state in the platform's runtime directories is not a secret;
+    # a week's replay of real commands showed these as the only false refusals.
+    "/run/robothor/model-breaker-alerts.json",
+    "/run/robothor/slo-state.json",
+    "/run/robothor/alerts.log",
+    "/etc/robothor/robothor.conf",
 ]
 
 

@@ -63,10 +63,11 @@ _SECRET_NAME_PATTERNS = tuple(
 _DOC_SUFFIXES = (".example", ".sample", ".template", ".md", ".txt", ".rst")
 
 #: Directory names anywhere in the path that hold nothing but credentials.
+#: The platform's own runtime directories (/run/robothor, /etc/robothor) are
+#: deliberately NOT here: they hold operational state too (alert and SLO
+#: JSON, logs), and a replay of a week of real commands showed those reads
+#: were the only false refusals. Their credential files are caught by name.
 _SECRET_DIRS = frozenset({".ssh", ".aws", ".gnupg", ".kube", ".docker"})
-
-#: Absolute directories this platform decrypts or stages secrets into.
-_SECRET_ROOTS = ("/run/robothor", "/etc/robothor")
 
 
 def is_secret_path(path: str | os.PathLike[str]) -> bool:
@@ -84,8 +85,6 @@ def is_secret_path(path: str | os.PathLike[str]) -> bool:
 
     parts = [part.lower() for part in p.parts]
     if any(part in _SECRET_DIRS for part in parts):
-        return True
-    if p.is_absolute() and any(str(p).startswith(root + "/") for root in _SECRET_ROOTS):
         return True
     # A dot-directory the platform reserves for instance secrets: .robothor/secrets*
     for i, part in enumerate(parts[:-1]):
