@@ -122,3 +122,47 @@ async def search_degradation_detector() -> int:
     if await alert_about_run(severity, "Web search degraded", _body(found)):
         return 1
     return 0
+
+
+# ── Quota: warn before the month runs out, page when it has ──────────────
+
+
+def _quota_body(described: dict[str, Any]) -> str:
+    return (
+        f"Brave Search has {described['month_remaining']} of {described['month_limit']} "
+        f"queries left this month; the window resets in {described['resets_in_days']} days.\n"
+        "When it runs out every search falls to the scraped engines (which block this "
+        "IP) and then the browser. The fix is a second provider key (Tavily or Exa) in "
+        "the secrets store, or a paid Brave plan — see docs/configuration.md."
+    )
+
+
+async def search_quota_detector(now: float | None = None) -> int:
+    """Warn at a tenth of the month left, page when it is gone. Returns alerts fired.
+
+    Reads the in-process quota the web_search tool records on every Brave
+    reply — no database, no extra Brave call. Silent until the first reply.
+    """
+    if not detectors_enabled():
+        return 0
+    from robothor.engine.search_quota import QUOTA
+
+    described = QUOTA.describe(now)
+    if described is None:
+        return 0
+    if described["exhausted"]:
+        severity, title = "critical", "Brave search quota exhausted"
+    elif QUOTA.low_water():
+        severity, title = "warning", "Brave search quota running low"
+    else:
+        return 0
+    # One alert per severity per reset window: the number changes every call,
+    # the situation does not.
+    reset_epoch = int(QUOTA.snapshot.month_reset_at) if QUOTA.snapshot else 0
+    if not _should_fire(f"search_quota:{severity}:{reset_epoch}", _SLOW_DEDUP_TTL_SECONDS):
+        return 0
+    from robothor.engine.alerts import alert_about_run
+
+    if await alert_about_run(severity, title, _quota_body(described)):
+        return 1
+    return 0

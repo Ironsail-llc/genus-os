@@ -400,6 +400,15 @@ block you.** The Brave Search API is the supported reliable path
 (`BRAVE_SEARCH_API_KEY`); the chain below is the best effort for an instance
 without a key.
 
+Brave's free plan is 2,000 queries per 30 days at one per second, and every
+reply carries the remaining quota. The engine reads it: a per-second limit is
+retried after the interval Brave names; a spent month is **not** retried — the
+tool skips Brave until the window resets and says so in its result
+(`brave_skipped`, `brave_quota`). A Brave answer carries `brave_quota` once
+fewer than a tenth of the month remains, and the `search_quota_detector` pages
+a warning at that point and a critical alert when the month is gone. The fix
+in either case is a second provider key or a paid plan.
+
 The `web_search` tool grades the answer it gets back. It scores results by the
 *rare* terms of the query — a term carried by nearly every result is what the
 results have in common, not evidence they answer the question — and always

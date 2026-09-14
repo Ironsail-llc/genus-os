@@ -45,6 +45,8 @@ deduped in-process (1h for fast signals, 24h for the sustained-outage ones).
 | `tool_degradation_detector` | 5 min | a tool spikes: ≥5 failures, or >50% of ≥10 calls, in an hour |
 | `tool_outage_detector` | 2 h | a tool is ~totally dead: ≥8 calls and ≥95% failures over 7 days |
 | `primary_model_unreached_detector` | 2 h | ≥50% of an agent's runs (≥10 in 7 days) never reached its configured primary model |
+| `search_degradation_detector` | 2 h | ≥50% of ≥3 `web_search` calls in 6 h came from a fallback or failed |
+| `search_quota_detector` | 2 h | Brave reports under a tenth of the month left (warning) or none (critical) |
 | `runaway_burn_detector` | 2 min | a running run has crossed 500K tokens |
 | `zombie_runner_detector` | 10 min | `running` >15 min with no step activity for 5 min |
 | `stuck_workflow_detector` | 10 min | `workflow_runs` running past timeout + grace |

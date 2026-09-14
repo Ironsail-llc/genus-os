@@ -103,3 +103,77 @@ async def test_the_detector_alerts_once_per_day_per_severity(monkeypatch) -> Non
     level, title, body = sent.call_args_list[0].args[:3]
     assert level == "critical" and "degraded" in title.lower()
     assert "BRAVE_SEARCH_API_KEY is NOT set" in body
+
+
+# ── Quota: warn before the month runs out, page when it has ──────────────
+
+
+def _quota(remaining: str, status: int, now: float = 1_000.0):
+    from robothor.engine.tools.handlers import web
+
+    web.QUOTA.reset()
+    web.QUOTA.record(
+        {
+            "x-ratelimit-limit": "1, 2000",
+            "x-ratelimit-remaining": remaining,
+            "x-ratelimit-reset": "1, 864000",
+        },
+        status=status,
+        now=now,
+    )
+    return web.QUOTA
+
+
+async def test_a_low_brave_quota_warns_once_per_reset_window() -> None:
+    from robothor.engine import detectors
+
+    quota = _quota("1, 150", status=200)
+    detectors._dedup.clear()
+    sent = AsyncMock(return_value=True)
+    try:
+        with patch("robothor.engine.alerts.alert_about_run", sent):
+            first = await search_health.search_quota_detector(now=1_000.0)
+            second = await search_health.search_quota_detector(now=1_000.0)
+    finally:
+        quota.reset()
+
+    assert (first, second) == (1, 0)
+    level, title, body = sent.call_args_list[0].args[:3]
+    assert level == "warning"
+    assert "quota" in title.lower()
+    assert "150" in body and "2000" in body and "10" in body  # remaining, limit, days to reset
+    assert "second" in body.lower()  # the fix is a second provider key, and it says so
+
+
+async def test_an_exhausted_brave_quota_is_critical() -> None:
+    from robothor.engine import detectors
+
+    quota = _quota("0, 0", status=429)
+    detectors._dedup.clear()
+    sent = AsyncMock(return_value=True)
+    try:
+        with patch("robothor.engine.alerts.alert_about_run", sent):
+            fired = await search_health.search_quota_detector(now=1_000.0)
+    finally:
+        quota.reset()
+
+    assert fired == 1
+    level, title, _body = sent.call_args_list[0].args[:3]
+    assert level == "critical"
+    assert "exhausted" in title.lower()
+
+
+async def test_a_healthy_or_unknown_quota_is_silent() -> None:
+    from robothor.engine.tools.handlers import web
+
+    web.QUOTA.reset()
+    sent = AsyncMock(return_value=True)
+    with patch("robothor.engine.alerts.alert_about_run", sent):
+        assert await search_health.search_quota_detector(now=0.0) == 0
+    quota = _quota("1, 1965", status=200, now=0.0)
+    try:
+        with patch("robothor.engine.alerts.alert_about_run", sent):
+            assert await search_health.search_quota_detector(now=0.0) == 0
+    finally:
+        quota.reset()
+    sent.assert_not_called()
