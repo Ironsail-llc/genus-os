@@ -9,6 +9,7 @@ function renderBar(overrides: Partial<React.ComponentProps<typeof MobileTabBar>>
     onNavigate: vi.fn(),
     reviewCount: 0,
     unhealthyCount: 0,
+    inboxCount: 0,
     role: "owner",
     ...overrides,
   };
@@ -49,7 +50,7 @@ describe("MobileTabBar", () => {
     }
   });
 
-  it("routes the Inbox tab to the placeholder view rather than nowhere", () => {
+  it("routes the Inbox tab to the inbox view", () => {
     const onNavigate = vi.fn();
     renderBar({ onNavigate });
     fireEvent.click(screen.getByTestId("mobile-tab-inbox"));
@@ -107,10 +108,20 @@ describe("MobileTabBar", () => {
     renderBar({ reviewCount: 4 });
     expect(screen.getByTestId("badge-more").textContent).toBe("4");
   });
-  it("marks the Inbox tab as not built yet while still reaching the placeholder", () => {
+  it("no longer marks the Inbox tab as not built yet — the screen exists", () => {
     renderBar();
     const tab = screen.getByTestId("mobile-tab-inbox");
-    expect(within(tab).getByTestId("mobile-soon-inbox").textContent?.toLowerCase()).toBe("soon");
+    expect(within(tab).queryByTestId("mobile-soon-inbox")).toBeNull();
+  });
+
+  it("badges Inbox with what is waiting on a person", () => {
+    renderBar({ inboxCount: 3 });
+    expect(screen.getByTestId("badge-inbox").textContent).toBe("3");
+  });
+
+  it("drops the Inbox badge when nothing is waiting", () => {
+    renderBar({ inboxCount: 0 });
+    expect(screen.queryByTestId("badge-inbox")).toBeNull();
   });
 
   it("closes the sheet on Escape and hands focus back to More", () => {

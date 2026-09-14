@@ -16,6 +16,8 @@ interface SidebarProps {
   onChatToggle: () => void;
   reviewCount: number;
   unhealthyCount: number;
+  /** What is waiting on a person, from the one inbox poll the shell holds. */
+  inboxCount: number;
   /**
    * The signed-in role, straight from the session the auth layer already
    * exposes. This hides Settings from non-operators — a UX gate only. Real
@@ -44,9 +46,11 @@ export function Sidebar({
   onChatToggle,
   reviewCount,
   unhealthyCount,
+  inboxCount,
   role,
 }: SidebarProps) {
   const badgeCounts: Record<string, number> = {
+    inbox: inboxCount,
     tasks: reviewCount,
     agents: unhealthyCount,
   };

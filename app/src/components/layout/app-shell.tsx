@@ -7,6 +7,7 @@ import { MobileTabBar } from "./mobile-tab-bar";
 import { isComingSoonView, viewGroupLabel, viewTitles } from "./nav-config";
 import { ChatPanel } from "@/components/chat-panel";
 import { DashboardView } from "@/components/views/dashboard-view";
+import { InboxView } from "@/components/views/inbox-view";
 import { TasksView } from "@/components/views/tasks-view";
 import { AgentsView } from "@/components/views/agents-view";
 import { MarketplaceView } from "@/components/views/marketplace-view";
@@ -22,6 +23,7 @@ import { ThemeToggle } from "@/components/business/theme-toggle";
 import { CommandPalette } from "@/components/business/command-palette";
 import { useTasks } from "@/hooks/use-tasks";
 import { useAgents } from "@/hooks/use-agents";
+import { useInbox } from "@/hooks/use-inbox";
 import { useScreenSize } from "@/hooks/use-mobile";
 import { useViewRoute } from "@/hooks/use-view-route";
 import { PanelRight, Zap } from "lucide-react";
@@ -73,6 +75,12 @@ export function AppShell() {
     useTasks({ live: true });
   const { agents, summary: agentSummary, isLoading: agentsLoading } = useAgents();
 
+  // One poll for the waiting queue, feeding the view AND both Inbox badges.
+  // Mounted here rather than in the view because the badge has to be right on
+  // every screen, and two pollers on one operator-gated route would let the
+  // number beside the word disagree with the list behind it.
+  const inbox = useInbox({ active: view === "inbox" });
+
   const reviewCount = tasks.filter((t) => t.status === "REVIEW").length;
   const unhealthyCount = agentSummary.degraded + agentSummary.failed;
   const allHealthy = agentSummary.failed === 0 && agentSummary.degraded === 0;
@@ -103,6 +111,7 @@ export function AppShell() {
           onChatToggle={() => setChatOpen((prev) => !prev)}
           reviewCount={reviewCount}
           unhealthyCount={unhealthyCount}
+          inboxCount={inbox.count}
           role={role}
         />
       )}
@@ -176,6 +185,18 @@ export function AppShell() {
               data-testid="views-container"
             >
               <DashboardView visible={view === "dashboard"} />
+              <InboxView
+                visible={view === "inbox"}
+                items={inbox.items}
+                isLoading={inbox.isLoading}
+                error={inbox.error}
+                refusedAsNonOperator={inbox.refusedAsNonOperator}
+                onRefresh={() => void inbox.refresh()}
+                onAnswer={inbox.answer}
+                onOpenRuns={() => navigate("runs")}
+                role={role}
+                roleLoading={roleLoading}
+              />
               <TasksView
                 visible={view === "tasks"}
                 tasks={tasks}
@@ -255,6 +276,7 @@ export function AppShell() {
           onNavigate={navigate}
           reviewCount={reviewCount}
           unhealthyCount={unhealthyCount}
+          inboxCount={inbox.count}
           role={role}
         />
       )}

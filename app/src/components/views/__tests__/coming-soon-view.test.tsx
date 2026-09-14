@@ -4,9 +4,9 @@ import { ComingSoonView } from "../coming-soon-view";
 
 describe("ComingSoonView", () => {
   it("names the view it stands in for and says it is not built yet", () => {
-    render(<ComingSoonView view="inbox" />);
-    const el = screen.getByTestId("coming-soon-inbox");
-    expect(el.textContent).toMatch(/Inbox/);
+    render(<ComingSoonView view="logs" />);
+    const el = screen.getByTestId("coming-soon-logs");
+    expect(el.textContent).toMatch(/Logs/);
     expect(el.textContent).toMatch(/soon/i);
   });
 

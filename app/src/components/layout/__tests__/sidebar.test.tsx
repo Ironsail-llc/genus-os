@@ -11,6 +11,7 @@ function renderSidebar(overrides: Partial<React.ComponentProps<typeof Sidebar>> 
     onChatToggle: vi.fn(),
     reviewCount: 0,
     unhealthyCount: 0,
+    inboxCount: 0,
     role: "owner",
     ...overrides,
   };
@@ -61,14 +62,24 @@ describe("Sidebar", () => {
   it("renders views that do not exist yet as disabled items with a soon pill", () => {
     const onNavigate = vi.fn();
     renderSidebar({ onNavigate });
-    for (const id of ["inbox", "memory", "audit", "logs"]) {
+    for (const id of ["memory", "audit", "logs"]) {
       const item = screen.getByTestId(`nav-${id}`);
       expect(item).toBeDisabled();
       expect(item).toHaveAttribute("aria-disabled", "true");
       expect(screen.getByTestId(`soon-${id}`).textContent?.toLowerCase()).toBe("soon");
     }
-    fireEvent.click(screen.getByTestId("nav-inbox"));
+    fireEvent.click(screen.getByTestId("nav-memory"));
     expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it("reaches the Inbox, which is built and no longer wears a soon pill", () => {
+    const onNavigate = vi.fn();
+    renderSidebar({ onNavigate });
+    const item = screen.getByTestId("nav-inbox");
+    expect(item).not.toBeDisabled();
+    expect(screen.queryByTestId("soon-inbox")).toBeNull();
+    fireEvent.click(item);
+    expect(onNavigate).toHaveBeenCalledWith("inbox", undefined);
   });
 
   it("hides the Settings group from non-operator roles", () => {
@@ -86,6 +97,16 @@ describe("Sidebar", () => {
     renderSidebar({ reviewCount: 3, unhealthyCount: 120 });
     expect(screen.getByTestId("badge-tasks").textContent).toBe("3");
     expect(screen.getByTestId("badge-agents").textContent).toBe("99+");
+  });
+
+  it("badges the Inbox with what is waiting on a person", () => {
+    renderSidebar({ inboxCount: 2 });
+    expect(screen.getByTestId("badge-inbox").textContent).toBe("2");
+  });
+
+  it("drops the Inbox badge when nothing is waiting", () => {
+    renderSidebar({ inboxCount: 0 });
+    expect(screen.queryByTestId("badge-inbox")).toBeNull();
   });
 
   it("keeps a docked chat panel toggle", () => {

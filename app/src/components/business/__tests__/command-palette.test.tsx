@@ -46,7 +46,9 @@ describe("CommandPalette", () => {
     render(<CommandPalette onNavigate={vi.fn()} role="owner" />);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     expect(screen.queryByTestId("command-item-memory")).toBeNull();
-    expect(screen.queryByTestId("command-item-inbox")).toBeNull();
+    expect(screen.queryByTestId("command-item-audit")).toBeNull();
+    // Inbox WAS in this list; it is a built screen now, so the palette reaches it.
+    expect(screen.getByTestId("command-item-inbox")).toBeTruthy();
     expect(screen.getByTestId("command-item-workflows").textContent).toContain("Automations");
   });
 

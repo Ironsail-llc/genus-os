@@ -6,7 +6,6 @@ import { viewTitles, type ViewId } from "@/components/layout/nav-config";
 
 /** What each not-yet-built view will hold, so the placeholder says something. */
 const PROMISES: Partial<Record<ViewId, string>> = {
-  inbox: "One queue for everything that wants the operator: agent questions, approvals, mail and alerts.",
   memory: "What the fleet remembers — facts, blocks and entities — with the provenance of every row.",
   audit: "The append-only record of who did what, from which channel, and what the platform decided.",
   logs: "Live engine and service logs, filtered by agent, run and severity.",
