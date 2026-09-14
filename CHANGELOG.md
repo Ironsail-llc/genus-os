@@ -1,3 +1,9 @@
+## [1.77.3](https://github.com/Ironsail-llc/genus-os/compare/v1.77.2...v1.77.3) (2026-09-14)
+
+### Bug Fixes
+
+* **engine:** the verification retry demands the deliverable, not a reply ([#534](https://github.com/Ironsail-llc/genus-os/issues/534)) ([360c2a3](https://github.com/Ironsail-llc/genus-os/commit/360c2a3a524f2fb6d8de827f5eb46970eac4debd)), closes [#527](https://github.com/Ironsail-llc/genus-os/issues/527)
+
 ## [1.77.2](https://github.com/Ironsail-llc/genus-os/compare/v1.77.1...v1.77.2) (2026-09-14)
 
 ### Bug Fixes
