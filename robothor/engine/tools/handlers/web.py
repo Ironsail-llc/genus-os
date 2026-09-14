@@ -22,6 +22,7 @@ import httpcore
 import httpx
 
 from robothor import __version__
+from robothor.engine.search_quota import QUOTA
 from robothor.engine.tools.dispatch import ToolContext, _audit_tool_call, _cfg
 
 if TYPE_CHECKING:
@@ -1463,6 +1464,10 @@ async def _brave_search(query: str, limit: int) -> list[dict[str, str]] | None:
     key = brave_search_key()
     if not key:
         return None
+    if QUOTA.skip_reason():
+        # The month is spent (Brave told us so on the last 429). Dialling again
+        # buys three backoffs and the same answer; the fallbacks are the answer.
+        return None
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             for attempt in range(1, _BRAVE_MAX_ATTEMPTS + 1):
@@ -1475,6 +1480,15 @@ async def _brave_search(query: str, limit: int) -> list[dict[str, str]] | None:
                         "User-Agent": _USER_AGENT,
                     },
                 )
+                QUOTA.record(getattr(resp, "headers", None) or {}, resp.status_code)
+                if resp.status_code == 429 and QUOTA.monthly_exhausted():
+                    # Not a one-second limit: the monthly budget is gone until
+                    # the window resets. No retry, no backoff.
+                    logger.warning(
+                        "Brave monthly quota exhausted; skipping Brave for %.1f days",
+                        (QUOTA.describe() or {}).get("resets_in_days", 0.0),
+                    )
+                    return None
                 if resp.status_code == 429 and attempt < _BRAVE_MAX_ATTEMPTS:
                     wait = _retry_after_seconds(resp)
                     logger.info(
@@ -1744,11 +1758,33 @@ async def _search_with_fallback(
     # An API provider, when the operator configured one, beats scraping — but
     # only when the caller left the choice open or asked for it. An explicit
     # provider="searxng" means SearXNG, not "whatever we think is best".
+    brave_skipped: str | None = None
     if provider in ("auto", "brave"):
         brave_rows = await _brave_search(query, limit)
         if brave_rows:
-            return {"results": brave_rows, "count": len(brave_rows), "provider": "brave"}
+            return _with_quota(
+                {"results": brave_rows, "count": len(brave_rows), "provider": "brave"}
+            )
+        brave_skipped = QUOTA.skip_reason()
 
+    out = await _scraped_search_with_fallback(query, limit, ctx)
+    if brave_skipped:
+        # The operator's rule: a dead rung is named, never silently walked past.
+        out["brave_skipped"] = brave_skipped
+        out["brave_quota"] = QUOTA.describe()
+    return out
+
+
+def _with_quota(out: dict[str, Any]) -> dict[str, Any]:
+    """A Brave answer carries its month only once the month is running low —
+    every result narrating a healthy quota would be noise the model reads."""
+    if QUOTA.low_water():
+        out["brave_quota"] = QUOTA.describe()
+    return out
+
+
+async def _scraped_search_with_fallback(query: str, limit: int, ctx: ToolContext) -> dict[str, Any]:
+    """SearXNG, graded, then the browser when SearXNG is weak."""
     rows: list[dict[str, str]] = []
     unresponsive: list[str] = []
     reason = ""

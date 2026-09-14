@@ -1558,7 +1558,10 @@ async def _run_outage_detectors(tenant_id: str) -> None:
             primary_model_unreached_detector,
             tool_outage_detector,
         )
-        from robothor.engine.search_health import search_degradation_detector
+        from robothor.engine.search_health import (
+            search_degradation_detector,
+            search_quota_detector,
+        )
 
         fired = await tool_outage_detector()
         if fired:
@@ -1569,6 +1572,9 @@ async def _run_outage_detectors(tenant_id: str) -> None:
         fired = await search_degradation_detector()
         if fired:
             logger.info("Detectors: web search degraded alert fired")
+        fired = await search_quota_detector()
+        if fired:
+            logger.info("Detectors: Brave quota alert fired")
     except Exception as e:
         logger.debug("Detectors: outage checks failed: %s", e)
 

@@ -142,3 +142,90 @@ async def test_the_search_tool_reports_brave_after_a_retried_429(monkeypatch, sl
     assert out["provider"] == "brave"
     assert out["count"] == 1
     assert "fallback_from" not in out
+
+
+# ── The month runs out (2026-09-14: free plan = 2,000 queries per 30 days) ──
+
+
+_MONTH_GONE = {
+    "x-ratelimit-limit": "1, 2000",
+    "x-ratelimit-remaining": "0, 0",
+    "x-ratelimit-reset": "1, 1398406",
+}
+_MONTH_LOW = {
+    "x-ratelimit-limit": "1, 2000",
+    "x-ratelimit-remaining": "1, 150",
+    "x-ratelimit-reset": "1, 1398406",
+}
+_MONTH_FINE = {
+    "x-ratelimit-limit": "1, 2000",
+    "x-ratelimit-remaining": "1, 1965",
+    "x-ratelimit-reset": "1, 1398406",
+}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_quota():
+    web.QUOTA.reset()
+    yield
+    web.QUOTA.reset()
+
+
+@pytest.mark.asyncio
+async def test_a_monthly_quota_429_is_not_retried_and_the_next_call_skips_brave(
+    monkeypatch, slept
+) -> None:
+    client = _Sequence([_Reply(429, headers=_MONTH_GONE)])
+    monkeypatch.setattr(web.httpx, "AsyncClient", client)
+
+    first = await web._brave_search("rockaway beach bakery", 3)
+    second = await web._brave_search("rockaway beach bakery", 3)
+
+    assert first is None and second is None
+    # One dial, no backoff: a month-long 429 is not a one-second one.
+    assert client.calls == 1
+    assert slept == []
+
+
+@pytest.mark.asyncio
+async def test_the_search_tool_says_why_brave_was_skipped(monkeypatch, slept) -> None:
+    client = _Sequence([_Reply(429, headers=_MONTH_GONE)])
+    monkeypatch.setattr(web.httpx, "AsyncClient", client)
+
+    async def _searxng_down(query: str, limit: int) -> dict[str, Any]:
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(web, "_searxng_search", _searxng_down)
+    monkeypatch.setattr(web, "_browser_fallback_enabled", lambda: False)
+    ctx = ToolContext(agent_id="main", workspace="/tmp/ws")
+
+    await web._web_search({"query": "rockaway beach bakery", "limit": 3}, ctx)
+    out = await web._web_search({"query": "rockaway beach bakery", "limit": 3}, ctx)
+
+    assert out["brave_skipped"] == "brave_monthly_quota_exhausted"
+    assert out["brave_quota"]["exhausted"] is True
+    assert "error" in out  # nothing else answered either — and it says so
+
+
+@pytest.mark.asyncio
+async def test_a_brave_answer_carries_the_quota_once_it_runs_low(monkeypatch, slept) -> None:
+    client = _Sequence([_Reply(200, _HIT, headers=_MONTH_LOW)])
+    monkeypatch.setattr(web.httpx, "AsyncClient", client)
+    ctx = ToolContext(agent_id="main", workspace="/tmp/ws")
+
+    out = await web._web_search({"query": "rockaway beach bakery", "limit": 3}, ctx)
+
+    assert out["provider"] == "brave"
+    assert out["brave_quota"]["month_remaining"] == 150
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_quota_is_not_narrated_on_every_result(monkeypatch, slept) -> None:
+    client = _Sequence([_Reply(200, _HIT, headers=_MONTH_FINE)])
+    monkeypatch.setattr(web.httpx, "AsyncClient", client)
+    ctx = ToolContext(agent_id="main", workspace="/tmp/ws")
+
+    out = await web._web_search({"query": "rockaway beach bakery", "limit": 3}, ctx)
+
+    assert out["provider"] == "brave"
+    assert "brave_quota" not in out
