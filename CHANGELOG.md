@@ -1,3 +1,15 @@
+## [1.78.0](https://github.com/Ironsail-llc/genus-os/compare/v1.77.5...v1.78.0) (2026-09-14)
+
+### Features
+
+* **helm:** url-synced views, sidebar groups, settings container ([#542](https://github.com/Ironsail-llc/genus-os/issues/542)) ([3c16561](https://github.com/Ironsail-llc/genus-os/commit/3c165610ff18f600ce5a36fe1764f73f1a2846cf))
+
+### Bug Fixes
+
+* **detectors:** a guardrail refusal is not a tool failure ([#544](https://github.com/Ironsail-llc/genus-os/issues/544)) ([7741df3](https://github.com/Ironsail-llc/genus-os/commit/7741df3fec59ce2c3bade16cff7de9e327749155))
+* **doctor:** search.provider looks where the engine looks for the key ([#543](https://github.com/Ironsail-llc/genus-os/issues/543)) ([6af4b95](https://github.com/Ironsail-llc/genus-os/commit/6af4b957733080b3735ce8912a311ce3c1b71ec1)), closes [#540](https://github.com/Ironsail-llc/genus-os/issues/540)
+* **engine:** search survives a Brave rate limit; engine context is attributed ([#540](https://github.com/Ironsail-llc/genus-os/issues/540)) ([53f3b79](https://github.com/Ironsail-llc/genus-os/commit/53f3b79c5a4ca87a66884fe2d17ea5be67daaf65))
+
 ## [1.77.5](https://github.com/Ironsail-llc/genus-os/compare/v1.77.4...v1.77.5) (2026-09-14)
 
 ### Bug Fixes
