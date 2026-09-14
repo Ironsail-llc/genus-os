@@ -180,11 +180,22 @@ interface ModelGroup {
   models: ModelEntry[];
 }
 
-/** The catalog, as `<option>`s. One definition for the primary and every fallback. */
-function ModelOptions({ groups }: { groups: ModelGroup[] }) {
+/**
+ * The catalog, as `<option>`s. One definition for the primary and every
+ * fallback.
+ *
+ * `unlisted` is the value currently selected that the catalog does not carry.
+ * Several providers' own default models are not registry entries, so a real
+ * instance can be running on a model this select has never heard of — and a
+ * select that silently falls back to "Choose a model…" while the status line
+ * names that model is telling the operator two different things about what
+ * their fleet runs.
+ */
+function ModelOptions({ groups, unlisted }: { groups: ModelGroup[]; unlisted?: string | null }) {
   return (
     <>
       <option value="">Choose a model…</option>
+      {unlisted ? <option value={unlisted}>{`${unlisted} (not in the catalog)`}</option> : null}
       {groups.map((group) => (
         <optgroup key={group.id} label={group.label}>
           {group.models.map((model) => (
@@ -478,6 +489,21 @@ export function ProvidersPage() {
   }
 
   const rows = providers ?? [];
+
+  const catalogIds = useMemo(() => new Set(models.map((model) => model.id)), [models]);
+
+  /**
+   * Selected model ids the catalog does not list.
+   *
+   * `PATCH /defaults` validates against exactly this catalog and answers 422
+   * for anything outside it, so sending one is a refusal the operator cannot
+   * resolve from this screen. They are shown, and they block the save, rather
+   * than being silently dropped — dropping a fallback the fleet is using would
+   * be a far worse answer than refusing to save.
+   */
+  const unlistedSelections = [primary, ...fallbacks].filter(
+    (value) => value && !catalogIds.has(value)
+  );
 
   /**
    * One sentence about the fleet default, in the order the operator cares
@@ -990,10 +1016,13 @@ export function ProvidersPage() {
             id="fleet-default-model"
             data-testid="fleet-default-model"
             value={primary}
-            disabled={models.length === 0}
+            disabled={models.length === 0 && !primary}
             onChange={(event) => setPrimary(event.target.value)}
           >
-            <ModelOptions groups={modelGroups} />
+            <ModelOptions
+              groups={modelGroups}
+              unlisted={primary && !catalogIds.has(primary) ? primary : null}
+            />
           </NativeSelect>
         </div>
 
@@ -1015,7 +1044,10 @@ export function ProvidersPage() {
                 )
               }
             >
-              <ModelOptions groups={modelGroups} />
+              <ModelOptions
+                groups={modelGroups}
+                unlisted={value && !catalogIds.has(value) ? value : null}
+              />
             </NativeSelect>
             <Button
               variant="ghost"
@@ -1041,7 +1073,7 @@ export function ProvidersPage() {
           </Button>
           <Button
             size="xs"
-            disabled={!primary || savingDefaults}
+            disabled={!primary || savingDefaults || unlistedSelections.length > 0}
             data-testid="fleet-default-save"
             onClick={() => void saveDefaults()}
           >
@@ -1061,6 +1093,16 @@ export function ProvidersPage() {
         >
           {defaultsStatus}
         </span>
+
+        {unlistedSelections.length > 0 ? (
+          <span className="text-xs text-warning" data-testid="fleet-default-blocked">
+            {`${unlistedSelections.join(", ")} ${
+              unlistedSelections.length > 1 ? "are" : "is"
+            } not in the engine's model catalog, so the fleet default cannot be saved while ${
+              unlistedSelections.length > 1 ? "they are" : "it is"
+            } selected — choose a listed model instead.`}
+          </span>
+        ) : null}
 
         {defaultsError ? (
           <span className="text-xs text-destructive" data-testid="fleet-default-error">

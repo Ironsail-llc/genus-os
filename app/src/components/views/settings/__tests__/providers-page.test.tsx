@@ -557,6 +557,74 @@ describe("ProvidersPage — the fleet default model", () => {
     expect(status.textContent).not.toMatch(/no default is set/i);
   });
 
+  it("keeps a default the catalog does not list, and says so", async () => {
+    // Several providers' default models are not registry entries, so this is
+    // the state a real instance is in. A select that silently shows "Choose a
+    // model…" while the status line names the model would be lying about what
+    // the fleet runs.
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: { primary: "openrouter/x-ai/grok-4", fallbacks: [] },
+      },
+    });
+    const select = screen.getByTestId("fleet-default-model") as HTMLSelectElement;
+    await vi.waitFor(() => expect(select.value).toBe("openrouter/x-ai/grok-4"));
+    const option = within(select).getByRole("option", { name: /grok-4/ });
+    expect(option.textContent).toMatch(/not in the catalog/i);
+
+    // And Save must not fire a PATCH the bridge will refuse with a 422 the
+    // operator cannot act on from this screen.
+    expect(screen.getByTestId("fleet-default-save")).toBeDisabled();
+    expect(screen.getByTestId("fleet-default-blocked")).toHaveTextContent(
+      /openrouter\/x-ai\/grok-4/
+    );
+  });
+
+  it("re-enables Save as soon as a catalog model is chosen", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: { primary: "openrouter/x-ai/grok-4", fallbacks: [] },
+      },
+      "PATCH /api/bridge/api/providers/defaults": {
+        body: { model: "anthropic/claude-sonnet-4.6", fallbacks: [], applied: true },
+      },
+    });
+    await vi.waitFor(() =>
+      expect(screen.getByTestId("fleet-default-save")).toBeDisabled()
+    );
+
+    fireEvent.change(screen.getByTestId("fleet-default-model"), {
+      target: { value: "anthropic/claude-sonnet-4.6" },
+    });
+    expect(screen.getByTestId("fleet-default-save")).toBeEnabled();
+    expect(screen.queryByTestId("fleet-default-blocked")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("fleet-default-save"));
+    const call = await vi.waitFor(() => {
+      const found = calls.find((c) => c.method === "PATCH");
+      expect(found).toBeDefined();
+      return found!;
+    });
+    expect(call.body).toEqual({ model: "anthropic/claude-sonnet-4.6", fallbacks: [] });
+  });
+
+  it("keeps an off-catalog fallback visible and blocks the save too", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: {
+          primary: "anthropic/claude-sonnet-4.6",
+          fallbacks: ["openrouter/x-ai/grok-4"],
+        },
+      },
+    });
+    const fallback = (await screen.findByTestId("fleet-fallback-0")) as HTMLSelectElement;
+    await vi.waitFor(() => expect(fallback.value).toBe("openrouter/x-ai/grok-4"));
+    expect(within(fallback).getByRole("option", { name: /grok-4/ }).textContent).toMatch(
+      /not in the catalog/i
+    );
+    expect(screen.getByTestId("fleet-default-save")).toBeDisabled();
+  });
+
   it("says so when the engine knows no models at all", async () => {
     await renderPage({ "GET /api/bridge/api/models": { body: { models: [] } } });
     expect(screen.getByTestId("fleet-defaults")).toHaveTextContent(/no models/i);
