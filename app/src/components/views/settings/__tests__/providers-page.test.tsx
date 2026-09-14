@@ -574,10 +574,29 @@ describe("ProvidersPage — the fleet default model", () => {
 
     // And Save must not fire a PATCH the bridge will refuse with a 422 the
     // operator cannot act on from this screen.
-    expect(screen.getByTestId("fleet-default-save")).toBeDisabled();
-    expect(screen.getByTestId("fleet-default-blocked")).toHaveTextContent(
-      /openrouter\/x-ai\/grok-4/
-    );
+    const save = screen.getByTestId("fleet-default-save");
+    const blocked = screen.getByTestId("fleet-default-blocked");
+    expect(save).toBeDisabled();
+    expect(blocked).toHaveTextContent(/openrouter\/x-ai\/grok-4/);
+    // A disabled button is not focusable, so the reason has to be announced and
+    // attached rather than merely printed beside it.
+    expect(blocked).toHaveAttribute("aria-live", "polite");
+    expect(blocked.id).toBeTruthy();
+    expect(save).toHaveAttribute("aria-describedby", blocked.id);
+  });
+
+  it("names a repeated off-catalog id once, not once per place it is used", async () => {
+    await renderPage({
+      "GET /api/bridge/api/providers/defaults": {
+        body: {
+          primary: "openrouter/x-ai/grok-4",
+          fallbacks: ["openrouter/x-ai/grok-4"],
+        },
+      },
+    });
+    const blocked = await screen.findByTestId("fleet-default-blocked");
+    const mentions = blocked.textContent!.match(/openrouter\/x-ai\/grok-4/g) ?? [];
+    expect(mentions).toHaveLength(1);
   });
 
   it("re-enables Save as soon as a catalog model is chosen", async () => {

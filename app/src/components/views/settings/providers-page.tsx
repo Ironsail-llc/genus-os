@@ -501,9 +501,11 @@ export function ProvidersPage() {
    * than being silently dropped — dropping a fallback the fleet is using would
    * be a far worse answer than refusing to save.
    */
-  const unlistedSelections = [primary, ...fallbacks].filter(
-    (value) => value && !catalogIds.has(value)
-  );
+  const unlistedSelections = [
+    // Deduped: the same id is commonly both the primary and a fallback, and
+    // naming it twice reads as two separate problems.
+    ...new Set([primary, ...fallbacks].filter((value) => value && !catalogIds.has(value))),
+  ];
 
   /**
    * One sentence about the fleet default, in the order the operator cares
@@ -1074,6 +1076,9 @@ export function ProvidersPage() {
           <Button
             size="xs"
             disabled={!primary || savingDefaults || unlistedSelections.length > 0}
+            // A disabled button is not focusable, so the reason it is disabled
+            // has to be attached to it rather than merely printed underneath.
+            aria-describedby={unlistedSelections.length > 0 ? "fleet-default-blocked" : undefined}
             data-testid="fleet-default-save"
             onClick={() => void saveDefaults()}
           >
@@ -1095,7 +1100,12 @@ export function ProvidersPage() {
         </span>
 
         {unlistedSelections.length > 0 ? (
-          <span className="text-xs text-warning" data-testid="fleet-default-blocked">
+          <span
+            id="fleet-default-blocked"
+            aria-live="polite"
+            className="text-xs text-warning"
+            data-testid="fleet-default-blocked"
+          >
             {`${unlistedSelections.join(", ")} ${
               unlistedSelections.length > 1 ? "are" : "is"
             } not in the engine's model catalog, so the fleet default cannot be saved while ${
