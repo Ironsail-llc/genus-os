@@ -1,3 +1,12 @@
+## [1.77.5](https://github.com/Ironsail-llc/genus-os/compare/v1.77.4...v1.77.5) (2026-09-14)
+
+### Bug Fixes
+
+* **chat:** the in-memory session map is a bounded LRU cache over the store ([#536](https://github.com/Ironsail-llc/genus-os/issues/536)) ([f99aeee](https://github.com/Ironsail-llc/genus-os/commit/f99aeeeb8c2c195436ca6ede607e5ce2c99b1036)), closes [#522](https://github.com/Ironsail-llc/genus-os/issues/522)
+* **engine:** registering models litellm does not know no longer warns ([#539](https://github.com/Ironsail-llc/genus-os/issues/539)) ([34b9314](https://github.com/Ironsail-llc/genus-os/commit/34b93149f89dc4574c57ea42d02bfbfef273137a))
+* **guardrails:** agents never read credential files; warnings are recorded ([#537](https://github.com/Ironsail-llc/genus-os/issues/537)) ([bc852f7](https://github.com/Ironsail-llc/genus-os/commit/bc852f7fc7e92c435238f6bbe7d5078211dd8779)), closes [#534](https://github.com/Ironsail-llc/genus-os/issues/534)
+* **guardrails:** runtime-directory files are secret by name, not by location ([#538](https://github.com/Ironsail-llc/genus-os/issues/538)) ([9df695b](https://github.com/Ironsail-llc/genus-os/commit/9df695b09189eceda63cd9d7adb9d5607dda2c5b))
+
 ## [1.77.4](https://github.com/Ironsail-llc/genus-os/compare/v1.77.3...v1.77.4) (2026-09-14)
 
 ### Bug Fixes
