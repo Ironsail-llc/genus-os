@@ -126,3 +126,24 @@ def test_app_role_cannot_bypass_rls(rls_db):
         rolsuper, rolbypassrls = cur.fetchone()
     assert not rolsuper, "robothor_app must not be a superuser or RLS is void"
     assert not rolbypassrls, "robothor_app must not have BYPASSRLS or RLS is void"
+
+
+def test_a_table_created_after_the_backstop_gets_the_policy_from_migration_120(rls_db):
+    """081 policied what existed when it ran. A table created afterwards was
+    bare — six were, on production — until 120 re-applies the loop."""
+    db, _ = rls_db
+    with db.cursor() as cur:
+        cur.execute("CREATE TABLE late_table (id serial primary key, tenant_id text not null)")
+        cur.execute(
+            "SELECT count(*) FROM pg_policies WHERE tablename = 'late_table' "
+            "AND policyname = 'tenant_isolation'"
+        )
+        assert cur.fetchone()[0] == 0, "the fixture already policies new tables?"
+        cur.execute(Path("crm/migrations/120_tenant_rls_cover_new_tables.sql").read_text())
+        cur.execute(
+            "SELECT count(*) FROM pg_policies WHERE tablename = 'late_table' "
+            "AND policyname = 'tenant_isolation'"
+        )
+        assert cur.fetchone()[0] == 1
+        cur.execute("SELECT relforcerowsecurity FROM pg_class WHERE relname = 'late_table'")
+        assert cur.fetchone()[0] is True

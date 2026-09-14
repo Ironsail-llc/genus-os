@@ -729,6 +729,8 @@ what the re-run found rather than what the repair claimed:
   `genus migrate`). Drift and a ledger row this checkout does not ship are
   **not** repairable; they need a human.
 - `db.rbac_service_role` — executes migration `107_seed_service_role.sql`.
+- `db.rls_coverage` — executes migration `120_tenant_rls_cover_new_tables.sql`, which
+  policies every `tenant_id` table that has no `tenant_isolation` policy yet.
 
 Everything else reports the command to run. `identity.owner_account` is
 deliberately not auto-fixable: minting a privileged account from a diagnostic
