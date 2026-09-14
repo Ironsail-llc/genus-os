@@ -47,6 +47,8 @@ export interface Provider {
   slots: ProviderSlot[];
   env_var: string;
   default_model: string;
+  /** The engine's memory of the last test made with the STORED key. */
+  last_test?: RememberedTest | null;
 }
 
 export interface ModelEntry {
@@ -64,6 +66,10 @@ interface TestVerdict {
   latency_ms: number;
   error_class: string | null;
   message?: string;
+}
+
+interface RememberedTest extends TestVerdict {
+  at: string;
 }
 
 interface DefaultsResult {
@@ -616,7 +622,10 @@ export function ProvidersPage() {
               </thead>
               <tbody className="block md:table-row-group">
                 {rows.map((provider) => {
-                  const verdict = verdicts[provider.id];
+                  // A verdict from this tab beats the engine's memory; the
+                  // engine's memory beats "not tested" — a reload used to
+                  // forget every test the operator had just run.
+                  const verdict = verdicts[provider.id] ?? provider.last_test ?? undefined;
                   const rowError = rowErrors[provider.id];
                   // `configured` is the engine's `bool(slots)`. Reading the
                   // slots directly means the two can never disagree on screen.
@@ -790,7 +799,7 @@ export function ProvidersPage() {
                               ? verdict.ok
                                 ? `Answered in ${verdict.latency_ms}ms on ${verdict.model}.`
                                 : `${verdict.error_class ?? "failed"} — ${verdict.message ?? "the provider refused the call."}`
-                              : "Not tested in this session."}
+                              : "Not tested since the engine started."}
                           </span>
                           {rowError ? (
                             <span

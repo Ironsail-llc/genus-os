@@ -32,6 +32,7 @@ import asyncio
 import logging
 import re
 import time
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field, SecretStr
@@ -55,6 +56,26 @@ TEST_TIMEOUT_SECONDS = 20
 TEST_PROMPT = "ping"
 
 _REDACTED = "[redacted]"
+
+#: The last test connection made with each provider's CONFIGURED credential,
+#: keyed by provider id. In-process on purpose: the engine is the only
+#: process that dials, and a restart forgetting it costs one click, not a
+#: wrong answer. A test made with a candidate key is never recorded here —
+#: it says nothing about the key that is actually stored.
+_LAST_TEST: dict[str, dict[str, Any]] = {}
+
+
+def forget_last_tests() -> None:
+    """Test hook: an empty memory of test connections."""
+    _LAST_TEST.clear()
+
+
+def _remember_test(provider_id: str, result: dict[str, Any]) -> None:
+    _LAST_TEST[provider_id] = {
+        **result,
+        "at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+
 
 #: Upstream error text can be a whole HTML page. The operator needs the first
 #: line, not the provider's stylesheet.
@@ -147,6 +168,7 @@ def _provider_payload(spec: key_pool.ProviderSpec, timestamps: dict[str, str]) -
         ],
         "env_var": spec.env_var,
         "default_model": spec.default_model,
+        "last_test": _LAST_TEST.get(spec.id),
     }
 
 
@@ -428,7 +450,12 @@ def register(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="unknown provider")
         if body.model:
             _validate_test_model(spec, body.model.strip())
-        return await _run_test_connection(spec, body)
+        result = await _run_test_connection(spec, body)
+        if body.api_key is None:
+            # Only a test of the STORED credential is worth remembering; a
+            # candidate key's verdict belongs to the form that typed it.
+            _remember_test(spec.id, result)
+        return result
 
     @router.get("/models")
     async def list_models() -> dict[str, Any]:

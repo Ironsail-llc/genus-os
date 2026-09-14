@@ -63,6 +63,7 @@ def _clean_provider_state(monkeypatch):
             )
     monkeypatch.setattr(key_pool, "_vault_export", dict)
     monkeypatch.setattr(admin_providers, "_timestamps_for_vault_slots", dict)
+    admin_providers.forget_last_tests()
     key_pool.reset_vault_availability()
     yield
     key_pool.reset_shared_pools()
@@ -899,3 +900,91 @@ class TestSighupDoesNotBlockTheLoop:
         monkeypatch.setattr(daemon, "_ACTIVE_SCHEDULER", None)
         assert daemon._handle_plugin_reload_signal() == 3
         assert calls == [1]
+
+
+class TestLastTestIsRemembered:
+    """The Providers page said "Not tested in this session" after every reload
+    (B6 review, 2026-09-14): the verdict lived only in the browser tab. The
+    engine now keeps the last test of the CONFIGURED credential per provider
+    and the listing carries it, so a reload shows what the appliance knows."""
+
+    @staticmethod
+    def _ok_response():
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "pong"
+        return response
+
+    def test_a_test_of_the_configured_key_shows_up_in_the_listing(
+        self, client, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", ENV_KEY)
+
+        async def _fake(messages, **kwargs):
+            return self._ok_response()
+
+        before = client.get("/api/admin/providers").json()["providers"]
+        assert next(p for p in before if p["id"] == "openrouter")["last_test"] is None
+
+        with patch("robothor.engine.llm_client.llm_call", new=_fake):
+            client.post("/api/admin/providers/openrouter/test", json={})
+
+        after = client.get("/api/admin/providers").json()["providers"]
+        remembered = next(p for p in after if p["id"] == "openrouter")["last_test"]
+        assert remembered["ok"] is True
+        assert remembered["model"] == "openrouter/openai/gpt-5.4"
+        assert isinstance(remembered["latency_ms"], int)
+        assert remembered["at"].endswith("+00:00")
+        # Another provider's slot is untouched.
+        assert next(p for p in after if p["id"] == "openai")["last_test"] is None
+
+    def test_a_failure_is_remembered_with_its_class_and_no_secret(
+        self, client, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", ENV_KEY)
+
+        async def _refuse(messages, **kwargs):
+            raise RuntimeError(f"AuthenticationError: invalid key {ENV_KEY}")
+
+        with patch("robothor.engine.llm_client.llm_call", new=_refuse):
+            client.post("/api/admin/providers/openrouter/test", json={})
+
+        listing = client.get("/api/admin/providers").json()
+        remembered = next(p for p in listing["providers"] if p["id"] == "openrouter")["last_test"]
+        assert remembered["ok"] is False
+        assert remembered["error_class"] == "auth"
+        _assert_no_secret(listing, ENV_KEY)
+
+    def test_a_candidate_key_test_says_nothing_about_the_stored_key(
+        self, client, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", ENV_KEY)
+
+        async def _fake(messages, **kwargs):
+            return self._ok_response()
+
+        with patch("robothor.engine.llm_client.llm_call", new=_fake):
+            client.post("/api/admin/providers/openrouter/test", json={"api_key": CANDIDATE_KEY})
+
+        listing = client.get("/api/admin/providers").json()
+        assert next(p for p in listing["providers"] if p["id"] == "openrouter")["last_test"] is None
+        _assert_no_secret(listing, CANDIDATE_KEY)
+
+    def test_the_newest_test_replaces_the_older_one(self, client, monkeypatch) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", ENV_KEY)
+
+        async def _fake(messages, **kwargs):
+            return self._ok_response()
+
+        async def _refuse(messages, **kwargs):
+            raise TimeoutError("slow")
+
+        with patch("robothor.engine.llm_client.llm_call", new=_fake):
+            client.post("/api/admin/providers/openrouter/test", json={})
+        with patch("robothor.engine.llm_client.llm_call", new=_refuse):
+            client.post("/api/admin/providers/openrouter/test", json={})
+
+        listing = client.get("/api/admin/providers").json()
+        remembered = next(p for p in listing["providers"] if p["id"] == "openrouter")["last_test"]
+        assert remembered["ok"] is False
+        assert remembered["error_class"] == "network"
