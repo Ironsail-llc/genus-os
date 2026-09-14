@@ -65,6 +65,7 @@ CHECK_MODULES = (
     "services",
     "manifests",
     "identity",
+    "memory",
     "secrets",
     "host",
 )
