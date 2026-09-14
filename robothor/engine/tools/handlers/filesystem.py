@@ -196,9 +196,16 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from pathlib import Path
 
     def _run() -> dict[str, Any]:
+        from robothor.engine.secret_paths import is_secret_path, refusal_for
+
         path = Path(args.get("path", "")).expanduser()
         if not path.is_absolute() and ctx.workspace:
             path = Path(ctx.workspace) / path
+        # Before touching the filesystem: the refusal must not reveal whether
+        # the file exists, and a credential file is never opened for a model
+        # (see robothor/engine/secret_paths.py for the live reads behind this).
+        if is_secret_path(path):
+            return {"error": refusal_for(path)}
         try:
             content = path.read_text()
             return {"content": content[:50000], "path": str(path), "chars": len(content)}

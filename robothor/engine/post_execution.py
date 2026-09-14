@@ -48,6 +48,29 @@ _NOTICE = (
 )
 
 
+def _record_warning(session: Any, tool_name: str, verdict: Any) -> None:
+    """Persist the warning as an ``agent_guardrail_events`` row. Best effort:
+    a session without a run row (unit tests, dry runs) records nothing, and a
+    database failure never breaks the turn."""
+    run = getattr(session, "run", None)
+    run_id = getattr(run, "id", None)
+    if not run_id:
+        return
+    try:
+        from robothor.engine import tracking
+
+        tracking.log_guardrail_event(
+            str(run_id),
+            str(verdict.guardrail_name),
+            "warned",
+            tool_name=tool_name,
+            reason=str(verdict.reason),
+            step_number=len(getattr(run, "steps", None) or []),
+        )
+    except Exception:  # noqa: BLE001 - recording is best effort
+        logger.debug("guardrail warning not recorded", exc_info=True)
+
+
 def apply_post_execution_guardrails(
     session: Any,
     guardrail_engine: Any,
@@ -74,6 +97,11 @@ def apply_post_execution_guardrails(
         return result
 
     from robothor.engine.guardrails import redact_secrets
+
+    # Every time, for the operator: the notice below tells the agent the
+    # platform has recorded this, so it must be true. Measured 2026-09-14:
+    # 54 warnings a day in the journal and zero rows in agent_guardrail_events.
+    _record_warning(session, tool_name, verdict)
 
     # Every time. The agent needs to know a credential is THERE — which file,
     # what kind — and never needs the characters.
