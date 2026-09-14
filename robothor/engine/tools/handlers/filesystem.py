@@ -55,6 +55,15 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if not command:
         return {"error": "No command provided"}
 
+    # Before the sandbox decision, so host and container paths refuse alike:
+    # a command that PRINTS a secrets file (or the environment) never runs.
+    # Sourcing the file to run an authenticated command is still allowed.
+    from robothor.engine.secret_paths import exec_reads_secret
+
+    refused = exec_reads_secret(command)
+    if refused:
+        return {"error": refused}
+
     timeout = resolve_exec_timeout(args)
 
     # An agent configured `sandbox: docker` must actually have its shell
