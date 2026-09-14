@@ -4,6 +4,7 @@ import { Loader2, Lock } from "lucide-react";
 import { PageHeader } from "@/components/business/page-header";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { ControlsView } from "@/components/views/controls-view";
+import { ProvidersPage } from "@/components/views/settings/providers-page";
 import {
   isOperatorRole,
   settingsPages,
@@ -33,6 +34,13 @@ function groupPages(pages: SettingsPage[]): Array<{ label: string; pages: Settin
 }
 
 function PageBody({ page }: { page: SettingsPage }) {
+  if (page.id === "providers") {
+    // The first real settings page. It renders only inside this container, so
+    // the role gate above is the only one it needs on the client — and the
+    // bridge checks the caller's role on every provider route regardless.
+    return <ProvidersPage />;
+  }
+
   if (page.id === "flags") {
     // The existing controls screen is the Flags page — same component, new home.
     return <ControlsView visible />;

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { SettingsView } from "../settings-view";
 
@@ -6,6 +6,17 @@ vi.mock("../controls-view", () => ({
   ControlsView: ({ visible }: { visible?: boolean }) =>
     visible ? <div data-testid="controls-view" /> : null,
 }));
+
+// The Providers page is real and fetches on mount. A request that never
+// settles leaves it in its loading state for the whole of this suite, which is
+// what these tests are about — the container, not the page.
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function renderSettings(overrides: Partial<React.ComponentProps<typeof SettingsView>> = {}) {
   const props: React.ComponentProps<typeof SettingsView> = {
@@ -74,6 +85,20 @@ describe("SettingsView", () => {
     renderSettings({ role: "viewer" });
     expect(screen.getByTestId("settings-restricted")).toBeInTheDocument();
     expect(screen.queryByTestId("settings-subnav")).toBeNull();
+  });
+
+  it("gives an operator the real Providers page, not a placeholder", () => {
+    renderSettings({ page: "providers" });
+    expect(screen.getByTestId("providers-page")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-page-providers").textContent).not.toMatch(/coming soon/i);
+  });
+
+  it("keeps the Providers page away from a non-operator", () => {
+    renderSettings({ page: "providers", role: "viewer" });
+    expect(screen.queryByTestId("providers-page")).toBeNull();
+    expect(screen.getByTestId("settings-restricted")).toBeInTheDocument();
+    // Not even the listing request is made for someone who may not see it.
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
   it("decides nothing while the session is still loading", () => {
