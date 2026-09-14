@@ -31,7 +31,7 @@ from robothor.engine.llm_attempts import (
     REASONING_ONLY_NUDGE,
     describe_completion,
 )
-from robothor.engine.llm_client import _EFFORT_THINKING_SHARE, LLMClient
+from robothor.engine.llm_client import _EFFORT_THINKING_SHARE, LLMClient, _thinking_kwargs
 from robothor.engine.model_breaker import ModelBreaker
 
 THINKING_MODEL = "openrouter/deepseek/deepseek-v4.1-flash"
@@ -323,9 +323,20 @@ async def test_compaction_re_ask_asks_for_less_thinking() -> None:
 
     with patch("robothor.engine.compaction.pooled_acompletion", new=_fake):
         await compaction._acompletion_over_chain(
-            THINKING_MODEL, messages=[{"role": "user", "content": "summarise"}]
+            THINKING_MODEL,
+            messages=[{"role": "user", "content": "summarise"}],
+            max_tokens=16_384,
         )
-    assert seen[1].get("reasoning_effort") == "low"
+    # Through the run path's own builder, not a top-level `reasoning_effort`:
+    # litellm maps that knob per route and maps nothing for the OpenRouter
+    # MiMo primary, so the re-ask died there before it left the process.
+    # See test_compaction_re_ask_thinking_kwargs.
+    assert "reasoning_effort" not in seen[1]
+    assert seen[1]["thinking"] == _thinking_kwargs(THINKING_MODEL, 16_384, reduced=True)["thinking"]
+    assert (
+        seen[1]["thinking"]["budget_tokens"]
+        < _thinking_kwargs(THINKING_MODEL, 16_384)["thinking"]["budget_tokens"]
+    ), "the re-ask must ask for LESS thinking than the attempt that failed"
     assert REASONING_ONLY_NUDGE in str(seen[1]["messages"][-1])
 
 

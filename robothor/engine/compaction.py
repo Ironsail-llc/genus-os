@@ -26,9 +26,12 @@ from typing import Any
 # could not rotate to a spare. No-op for unpooled providers.
 from robothor.engine.llm_attempts import (
     REASONING_ONLY_NUDGE,
-    REASONING_ONLY_RETRY_EFFORT,
     describe_completion,
 )
+
+# One thinking-kwargs builder for the whole engine: the agent loop's re-ask and
+# this one must put the same provider-aware payload on the wire.
+from robothor.engine.llm_client import thinking_kwargs_for_call
 from robothor.engine.pooled_completion import acompletion as pooled_acompletion
 from robothor.engine.sanitize import sanitize_log
 
@@ -273,21 +276,31 @@ async def _re_ask_for_the_answer(model: str, kwargs: dict[str, Any], started: fl
     Asks for less thinking and adds a nudge for the answer itself: an identical
     re-roll reproduces an identical truncation. Every failure returns None so
     the caller falls back to the chain walk it would have done anyway — this
-    can only save a walk, never cause one.
+    can only save a walk, never cause one. "Less thinking" is built by the same
+    provider-aware helper the agent loop's own re-ask uses
+    (``llm_client.thinking_kwargs_for_call``, ``reduced=True``) rather than a
+    top-level ``reasoning_effort``: litellm maps that knob per route and maps
+    nothing for ``openrouter/xiaomi/mimo-v2.5``, so on the fleet primary every
+    re-ask raised ``UnsupportedParamsError`` before it left the process and
+    this function returned None into the walk it exists to prevent — a
+    30-character summary of an 81k-token context (journal 2026-09-13 19:45 ET).
+    It happened to work on DeepSeek, which litellm does map, so the defect read
+    as a model quirk. Sharing the builder also means a model registered without
+    reasoning support is simply sent no thinking kwargs at all.
     """
     remaining = COMPACTION_WALK_BUDGET - (time.monotonic() - started)
     if remaining <= 0:
         return None
     messages = [*kwargs.get("messages", []), {"role": "user", "content": REASONING_ONLY_NUDGE}]
+    # Spread LAST: for the Anthropic family the block carries the temperature
+    # that family requires alongside thinking, and it must win over the 0.1
+    # every compaction call site passes.
+    thinking = thinking_kwargs_for_call(model, int(kwargs.get("max_tokens") or 0), reduced=True)
     try:
         response = await asyncio.wait_for(
             pooled_acompletion(
                 model=model,
-                **{
-                    **kwargs,
-                    "messages": messages,
-                    "reasoning_effort": REASONING_ONLY_RETRY_EFFORT,
-                },
+                **{**kwargs, "messages": messages, **thinking},
             ),
             timeout=min(_timeout_for(model), remaining),
         )

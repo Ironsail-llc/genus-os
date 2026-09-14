@@ -56,12 +56,6 @@ OUTCOME_TIMEOUT: Final = "timeout"
 OUTCOME_CANCELLED: Final = "cancelled"
 OUTCOME_ERROR: Final = "error"
 
-#: Reasoning effort for the same re-ask on paths that speak OpenAI's knob
-#: (compaction calls litellm directly and builds no thinking block). The agent
-#: loop reduces its own thinking budget instead — see
-#: ``llm_client._thinking_kwargs``.
-REASONING_ONLY_RETRY_EFFORT: Final = "low"
-
 REASONING_ONLY_NUDGE: Final = (
     "Your previous reply contained reasoning but no answer and no tool call. "
     "Think briefly, then reply with the answer itself (or the tool call) this time."
