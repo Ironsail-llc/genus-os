@@ -1600,7 +1600,12 @@ class LLMClient:
         """
         from robothor.engine.session import ENGINE_CONTEXT_ROLE
 
-        if not any(m.get("role") == ENGINE_CONTEXT_ROLE for m in messages):
+        marker_text = ENGINE_CONTEXT_PREFIX.strip()
+        has_engine_turn = any(m.get("role") == ENGINE_CONTEXT_ROLE for m in messages)
+        has_typed_marker = any(
+            m.get("role") == "user" and marker_text in str(m.get("content") or "") for m in messages
+        )
+        if not has_engine_turn and not has_typed_marker:
             return messages
 
         # The prefix is for EVERY provider, not only Anthropic. Live on
@@ -1615,6 +1620,12 @@ class LLMClient:
         normalized: list[dict[str, Any]] = []
         converted = 0
         for msg in messages:
+            if msg.get("role") == "user":
+                # The label the rules trust must not be typeable: a user turn
+                # that opens a line with the marker is defanged, so a chat
+                # message cannot impersonate the engine.
+                normalized.append(LLMClient._defang_user_marker(msg, marker))
+                continue
             if msg.get("role") != ENGINE_CONTEXT_ROLE:
                 normalized.append(msg)
                 continue
@@ -1642,6 +1653,40 @@ class LLMClient:
             model,
         )
         return normalized
+
+    @staticmethod
+    def _defang_user_marker(msg: dict[str, Any], marker: str) -> dict[str, Any]:
+        """A user turn never starts a line with the engine marker.
+
+        ``[engine]`` at the start of a line becomes ``[not engine]``; anything
+        else in the message is untouched, and a message without the marker is
+        returned as the same object.
+        """
+        import re
+
+        pattern = re.compile(r"(^|\n)[ \t]*" + re.escape(marker))
+
+        def _clean(text: str) -> str:
+            return pattern.sub(lambda m: f"{m.group(1)}[not engine]", text)
+
+        content = msg.get("content")
+        if isinstance(content, str):
+            cleaned = _clean(content)
+            if cleaned == content:
+                return msg
+            return {**msg, "content": cleaned}
+        if isinstance(content, list):
+            changed = False
+            blocks: list[Any] = []
+            for block in content:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    cleaned = _clean(block["text"])
+                    if cleaned != block["text"]:
+                        changed = True
+                        block = {**block, "text": cleaned}
+                blocks.append(block)
+            return {**msg, "content": blocks} if changed else msg
+        return msg
 
     @staticmethod
     def _guard_trailing_assistant(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
