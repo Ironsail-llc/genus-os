@@ -1,3 +1,9 @@
+## [1.77.4](https://github.com/Ironsail-llc/genus-os/compare/v1.77.3...v1.77.4) (2026-09-14)
+
+### Bug Fixes
+
+* **db:** every tenant table carries the tenant_isolation policy ([#535](https://github.com/Ironsail-llc/genus-os/issues/535)) ([9ae10c8](https://github.com/Ironsail-llc/genus-os/commit/9ae10c8a3e268d1749d5833ffccf837c33f86bb1))
+
 ## [1.77.3](https://github.com/Ironsail-llc/genus-os/compare/v1.77.2...v1.77.3) (2026-09-14)
 
 ### Bug Fixes
