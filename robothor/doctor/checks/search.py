@@ -18,7 +18,6 @@ than as configured. The check never prints a value.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -36,8 +35,17 @@ _MISSING = (
 
 
 def _runtime_secrets_file() -> Path:
-    """The file the services load as EnvironmentFile (same seam as load-secrets.sh)."""
-    root = os.environ.get("ROBOTHOR_SECRETS_ROOT", "").rstrip("/")
+    """The file the services load as EnvironmentFile (same seam as load-secrets.sh).
+
+    The root comes from the settings model (``secrets.backend_root``), the
+    same declared field the secrets checks use — not a raw environment read.
+    """
+    try:
+        from robothor.settings import get_settings
+
+        root = str(get_settings().secrets.backend_root or "").rstrip("/")
+    except Exception:  # noqa: BLE001 - a box whose settings do not load still gets the real path
+        root = ""
     return Path(f"{root}/run/robothor/secrets.env")
 
 

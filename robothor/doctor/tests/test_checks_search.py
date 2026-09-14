@@ -27,10 +27,14 @@ def _run(check_id: str = "search.provider"):
 @pytest.fixture
 def no_key(monkeypatch, tmp_path):
     """No key anywhere: shell env clean, an empty runtime root, vault says missing."""
+    from robothor.settings import reset_settings
+
     monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
     monkeypatch.setenv("ROBOTHOR_SECRETS_ROOT", str(tmp_path))
+    reset_settings()  # the check reads the root through the settings model
     monkeypatch.setattr("robothor.secrets.secret_source", lambda *_a, **_k: "missing")
-    return tmp_path
+    yield tmp_path
+    reset_settings()
 
 
 def test_a_missing_key_fails_by_name_and_says_where_to_get_one(no_key) -> None:
