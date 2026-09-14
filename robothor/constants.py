@@ -22,6 +22,13 @@ SANDBOX_DENIAL_PREFIX = "benchmark sandbox:"
 #: and detectors.py (which excludes it) so the label can't drift between them.
 SANDBOX_DENIED_ERROR_TYPE = "sandbox_denied"
 
+#: agent_tool_events.error_type value for a call a guardrail refused before it
+#: ran (allowlist denial, secret-file refusal, control-character refusal).
+#: Shared between tool_admission.py (which sets it) and detectors.py (which
+#: excludes it): a refusal is the platform working, not the tool failing, and
+#: counting refusals as failures paged "exec degraded all day" (2026-09-14).
+GUARDRAIL_BLOCKED_ERROR_TYPE = "guardrail_blocked"
+
 #: systemd unit the engine runs as, without the ``.service`` suffix. A
 #: constant, not a setting: an operator who renames the unit has already had to
 #: edit the unit file the installer wrote, and declaring an env var would add a

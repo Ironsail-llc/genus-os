@@ -31,6 +31,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from robothor.constants import GUARDRAIL_BLOCKED_ERROR_TYPE
 from robothor.engine.sanitize import sanitize_log as _sanitize
 
 if TYPE_CHECKING:
@@ -335,7 +336,7 @@ class ToolAdmissionMixin:
                 tool_name=tool_name,
                 duration_ms=0,
                 success=False,
-                error_type="guardrail_blocked",
+                error_type=GUARDRAIL_BLOCKED_ERROR_TYPE,
                 error_message=gr.reason,
             )
         except Exception as exc:  # noqa: BLE001
