@@ -61,7 +61,7 @@ from robothor.templates.safety import (
 from routers import _manifest_validation as validation
 from routers._audit import audited
 from routers._engine_client import engine_request
-from routers._manifest_rows import _block, _broken, _summary
+from routers._manifest_rows import _broken, _chat_fields, _summary
 from routers._operator import require_operator
 
 logger = logging.getLogger(__name__)
@@ -158,22 +158,31 @@ def _manifest_dir() -> Path:
     return EngineConfig.from_env().manifest_dir
 
 
-def _default_chat_agent() -> str:
-    """The agent id interactive chat lands on when nobody names one.
+def _main_agent_id() -> str:
+    """The agent whose conversation a chat request reaches by sending NO key.
 
-    Same authority as every other engine-derived value here, and for the same
-    reason ``_workspace`` gives: ``chat.py`` resolves an empty ``session_key``
-    to ``EngineConfig.main_session_key``, whose agent segment is this id. An
-    instance that set ``ROBOTHOR_DEFAULT_CHAT_AGENT`` and a bridge that spelled
-    it "main" would disagree about which agent the operator has been talking to
-    for the whole life of the appliance.
+    Read out of ``EngineConfig.main_session_key``, not ``default_chat_agent``.
+    They are two independent environment variables and they are free to
+    disagree, and only one of them answers the question the browser is asking.
+    ``chat.py::_effective_session_key`` substitutes ``main_session_key`` for an
+    empty key and then derives the agent as ``parts[1]``; this derives it the
+    same way, so the listing cannot name one agent while the engine runs
+    another. ``default_chat_agent`` says which agent an interactive turn is
+    *dispatched* to — a different question, and the wrong answer here.
+
+    A key that is not shaped ``agent:<id>:…`` leaves nothing to derive, and the
+    honest fallback is the other configured value rather than a guess.
 
     Resolved ONCE per listing by the caller: this builder reads the environment
     and touches the filesystem, and a fleet of twenty is twenty of those.
     """
     from robothor.engine.config import EngineConfig
 
-    return EngineConfig.from_env().default_chat_agent
+    config = EngineConfig.from_env()
+    parts = config.main_session_key.split(":")
+    if len(parts) >= 2 and parts[1]:
+        return parts[1]
+    return config.default_chat_agent
 
 
 def _refused(error: TemplateSecurityError) -> HTTPException:
@@ -332,11 +341,11 @@ def _snapshot(agent_id: str) -> None:
 
 # ─── Reading ─────────────────────────────────────────────────────────
 #
-# `_block`, `_summary` and `_broken` live in `_manifest_rows` and are
-# re-exported here: `automations.py` reads them off this module by name so
-# that the cron it shows is the one the fleet list shows, and moving them
-# was a decomposition, not a change of seam.
-__all__ = ["_block", "_broken", "_summary", "router"]
+# The row shapers — `_block`, `_summary`, `_chat_fields`, `_broken` — live in
+# `_manifest_rows`, which `automations.py` now imports from directly. The seam
+# is the module, not a re-export through this one: a name that exists here only
+# so another router can reach it reads as dead to every linter and every human,
+# and the first thing either does is delete it.
 
 
 def _scan() -> Any:
@@ -721,13 +730,13 @@ async def list_manifests(request: Request) -> dict[str, Any]:
     """
     require_operator(request)
     scan = await asyncio.to_thread(_scan)
-    default_agent = _default_chat_agent()
+    main_agent_id = _main_agent_id()
     agents: list[dict[str, Any]] = []
     undescribable: list[dict[str, str]] = []
     for manifest in scan.manifests:
         agent_id = str(manifest.get("id") or "")
         try:
-            agents.append(_summary(manifest, default_agent))
+            agents.append({**_summary(manifest), **_chat_fields(manifest, main_agent_id)})
         except Exception as error:  # noqa: BLE001 — one manifest, not the page
             logger.warning(
                 "Could not summarise %s: %s", sanitize_log(agent_id), type(error).__name__
@@ -745,7 +754,7 @@ async def list_manifests(request: Request) -> dict[str, Any]:
         # agent — that omission is what keeps the operator's shared main
         # session (webchat and Telegram, on purpose) exactly as it was — and a
         # browser that had to guess which id that is would guess "main".
-        "default_agent": default_agent,
+        "default_agent": main_agent_id,
     }
 
 

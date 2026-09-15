@@ -1,8 +1,15 @@
 import { getEngineClient } from "@/lib/engine/server-client";
-import { sessionKeyForAgent } from "@/lib/chat/agent-session";
+import { resolveChatAgent } from "@/lib/chat/agent-guard";
 
 export async function GET(req: Request) {
-  const sessionKey = sessionKeyForAgent(new URL(req.url).searchParams.get("agent"));
+  const chosen = await resolveChatAgent(new URL(req.url).searchParams.get("agent"));
+  if (!chosen.ok) {
+      return new Response(JSON.stringify({ error: chosen.error }), {
+        status: chosen.status,
+        headers: { "Content-Type": "application/json" },
+      });
+  }
+  const sessionKey = chosen.key;
   const client = getEngineClient();
 
   try {

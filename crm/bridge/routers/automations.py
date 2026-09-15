@@ -11,7 +11,7 @@ So this router joins them, and the join is the whole of what it is:
 
 ``_manifests``
     What the automation IS — name, cron, timezone, enabled, delivery target.
-    Read through ``agent_manifests._scan`` / ``_summary``, imported rather than
+    Read through ``agent_manifests._scan`` / ``_manifest_rows._summary``, imported rather than
     re-derived: a second reader of the manifest directory is a second set of
     rules about what a manifest means, and the two would drift.
 ``_schedule_rows``
@@ -52,6 +52,7 @@ from robothor.engine.sanitize import sanitize_log
 from robothor.engine.schedule_reconcile import KIND_AGENT, KIND_HEARTBEAT, KIND_WORKER
 from routers import agent_manifests
 from routers._audit import audited
+from routers._manifest_rows import _block, _summary
 from routers._operator import PLATFORM_TENANT, require_operator
 
 logger = logging.getLogger(__name__)
@@ -138,12 +139,12 @@ def _jobs_of(document: dict[str, Any]) -> list[dict[str, Any]]:
     everything else here is keyed by: the schedule row, the circuit breaker
     (``scheduler.py`` trips per dedup key) and therefore the reset.
     """
-    summary = agent_manifests._summary(document)
+    summary = _summary(document)
     agent_id = summary["id"]
     if not agent_id:
         return []
 
-    delivery = agent_manifests._block(document, "delivery")
+    delivery = _block(document, "delivery")
     base = {
         **summary,
         "agent_id": agent_id,
@@ -160,11 +161,11 @@ def _jobs_of(document: dict[str, Any]) -> list[dict[str, Any]]:
         jobs.append({**base, "id": agent_id, "kind": KIND_AGENT, "editable": True})
 
     for kind in (KIND_HEARTBEAT, KIND_WORKER):
-        block = agent_manifests._block(document, kind)
+        block = _block(document, kind)
         cron = block.get("cron")
         if not cron:
             continue
-        sub_delivery = agent_manifests._block(block, "delivery")
+        sub_delivery = _block(block, "delivery")
         jobs.append(
             {
                 **base,

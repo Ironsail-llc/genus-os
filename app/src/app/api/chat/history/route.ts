@@ -1,12 +1,19 @@
 import { NextResponse } from "next/server";
 import { getEngineClient } from "@/lib/engine/server-client";
 import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
-import { sessionKeyForAgent } from "@/lib/chat/agent-session";
+import { resolveChatAgent } from "@/lib/chat/agent-guard";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const limit = parseInt(url.searchParams.get("limit") || "50", 10);
-  const sessionKey = sessionKeyForAgent(url.searchParams.get("agent"));
+
+  // Checked server-side, like every other route here: reading another agent's
+  // conversation is as much a capability as writing to it.
+  const chosen = await resolveChatAgent(url.searchParams.get("agent"));
+  if (!chosen.ok) {
+    return NextResponse.json({ error: chosen.error }, { status: chosen.status });
+  }
+  const sessionKey = chosen.key;
 
   const client = getEngineClient();
 

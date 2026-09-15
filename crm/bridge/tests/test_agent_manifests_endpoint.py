@@ -430,7 +430,7 @@ class TestChattable:
     def test_the_configured_default_agent_is_chattable_however_it_schedules(
         self, client, manifest_dir, fake_engine, monkeypatch
     ):
-        monkeypatch.setenv("ROBOTHOR_DEFAULT_CHAT_AGENT", "concierge")
+        monkeypatch.setenv("ROBOTHOR_MAIN_SESSION_KEY", "agent:concierge:primary")
         self._write(manifest_dir, "concierge", session_target="isolated")
 
         row = self._rows(client)["concierge"]
@@ -442,7 +442,7 @@ class TestChattable:
     ):
         """With the default moved off "main", the agent literally named ``main``
         loses the exemption — only the CONFIGURED default keeps it."""
-        monkeypatch.setenv("ROBOTHOR_DEFAULT_CHAT_AGENT", "concierge")
+        monkeypatch.setenv("ROBOTHOR_MAIN_SESSION_KEY", "agent:concierge:primary")
         self._write(manifest_dir, "main", session_target="isolated")
         self._write(manifest_dir, "concierge", session_target="isolated")
 
@@ -457,12 +457,80 @@ class TestChattable:
         """The browser cannot know which id is the default, and it has to: the
         switcher defaults to that agent and sends NO session key for it, which
         is the whole reason the owner's shared main session survives this."""
-        monkeypatch.setenv("ROBOTHOR_DEFAULT_CHAT_AGENT", "concierge")
+        monkeypatch.setenv("ROBOTHOR_MAIN_SESSION_KEY", "agent:concierge:primary")
         self._write(manifest_dir, "concierge", session_target="isolated")
 
         body = client.get("/api/agent-manifests").json()
 
         assert body["default_agent"] == "concierge"
+
+    def test_the_default_agent_is_the_main_session_key_s_agent_not_the_chat_default(
+        self, client, manifest_dir, fake_engine, monkeypatch
+    ):
+        """``default_chat_agent`` and ``main_session_key`` are two independent
+        environment variables and they are free to disagree.
+
+        The browser needs exactly ONE thing from this field: which id must send
+        no ``session_key``. That is the agent segment of ``main_session_key``,
+        because that is the key ``_effective_session_key`` substitutes for an
+        empty one. ``default_chat_agent`` is which agent an interactive turn is
+        *dispatched* to, which is a different question — and when they diverge,
+        answering the wrong one names an agent in the switcher that is not the
+        one replying, and grants the chattable exemption to the wrong id.
+        """
+        monkeypatch.setenv("ROBOTHOR_DEFAULT_CHAT_AGENT", "dispatcher")
+        monkeypatch.setenv("ROBOTHOR_MAIN_SESSION_KEY", "agent:concierge:primary")
+        self._write(manifest_dir, "dispatcher", session_target="isolated")
+        self._write(manifest_dir, "concierge", session_target="isolated")
+
+        body = client.get("/api/agent-manifests").json()
+        rows = {row["id"]: row for row in body["agents"]}
+
+        assert body["default_agent"] == "concierge"
+        assert rows["concierge"]["chattable"] is True
+        assert rows["dispatcher"]["chattable"] is False
+
+    @pytest.mark.parametrize(
+        "session_key",
+        ["agent:main:primary", "agent:concierge:primary", "agent:a-b_c.d:primary"],
+    )
+    def test_the_listing_and_the_engine_cannot_disagree_about_the_no_key_session(
+        self, client, manifest_dir, fake_engine, monkeypatch, session_key
+    ):
+        """Whatever the engine's main session key is, the id the listing reports
+        is the one the engine would parse out of it — derived the same way
+        ``chat.py::_effective_session_key`` derives ``agent_id``, not guessed."""
+        monkeypatch.setenv("ROBOTHOR_MAIN_SESSION_KEY", session_key)
+
+        body = client.get("/api/agent-manifests").json()
+
+        assert body["default_agent"] == session_key.split(":")[1]
+
+    def test_a_session_key_the_engine_cannot_parse_falls_back_to_the_chat_default(
+        self, client, manifest_dir, fake_engine, monkeypatch
+    ):
+        """An operator can put anything in that variable. A key with no agent
+        segment leaves the bridge with nothing to report, and the honest
+        fallback is the other configured value rather than a guess."""
+        monkeypatch.setenv("ROBOTHOR_MAIN_SESSION_KEY", "nonsense")
+        monkeypatch.setenv("ROBOTHOR_DEFAULT_CHAT_AGENT", "dispatcher")
+
+        body = client.get("/api/agent-manifests").json()
+
+        assert body["default_agent"] == "dispatcher"
+
+    def test_an_automations_row_never_carries_a_chat_verdict(self, client, seeded, fake_engine):
+        """``automations.py`` shares ``_summary``. It has no main-agent id to
+        pass, so a shared ``chattable`` there would be ``False`` for every row
+        including the default agent — a wrong answer shipped into a second
+        endpoint by a default argument. The chat fields are added by the fleet
+        listing, not by the shared row builder."""
+        from routers._manifest_rows import _summary
+
+        row = _summary({"id": "demo-agent", "name": "Demo"})
+
+        assert "chattable" not in row
+        assert "session_target" not in row
 
     def test_the_default_agent_is_resolved_once_for_the_whole_listing(
         self, client, manifest_dir, fake_engine
@@ -474,7 +542,7 @@ class TestChattable:
 
         from routers import agent_manifests
 
-        with patch.object(agent_manifests, "_default_chat_agent", return_value="main") as resolved:
+        with patch.object(agent_manifests, "_main_agent_id", return_value="main") as resolved:
             client.get("/api/agent-manifests")
 
         assert resolved.call_count == 1

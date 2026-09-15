@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   CHAT_AGENT_STORAGE_KEY,
   readStoredChatAgent,
+  resolveAgentSessionKey,
   sessionKeyForAgent,
   storeChatAgent,
 } from "../agent-session";
@@ -30,12 +31,37 @@ describe("sessionKeyForAgent", () => {
     expect(sessionKeyForAgent("   ")).toBe("");
   });
 
-  it("refuses an id that would forge a differently-shaped key", () => {
+  it("refuses only what breaks the key's SHAPE, not what looks unusual", () => {
     // `agent:a:primary:b:primary` is not the shape `_effective_session_key`
-    // parses, and a browser is not the right place to find that out.
+    // parses, and neither is a key with a newline in the middle of it.
     expect(sessionKeyForAgent("a:primary:b")).toBe("");
-    expect(sessionKeyForAgent("../../etc")).toBe("");
     expect(sessionKeyForAgent("has space")).toBe("");
+    expect(sessionKeyForAgent("two\nlines")).toBe("");
+    expect(sessionKeyForAgent("x".repeat(129))).toBe("");
+  });
+
+  it("keys an id the appliance itself would list, however it is spelled", () => {
+    // Nothing validates manifest ids on the READ path, so `acme.bot` is a real
+    // listable agent. Refusing it here returned `""` — which means "the main
+    // session" — so a private message to a worker was appended to the
+    // operator's shared history. Failing closed is a refusal; this used to fail
+    // open, in the one direction that MERGES two conversations.
+    expect(sessionKeyForAgent("acme.bot")).toBe("agent:acme.bot:primary");
+    expect(sessionKeyForAgent("team/ops")).toBe("agent:team/ops:primary");
+    expect(sessionKeyForAgent("_internal")).toBe("agent:_internal:primary");
+  });
+
+  it("tells an absent choice apart from an unusable one", () => {
+    // The whole reason `resolveAgentSessionKey` exists: both produce `key: ""`,
+    // and only one of them may be sent as "no key".
+    expect(resolveAgentSessionKey(undefined)).toEqual({ chosen: false, key: "" });
+    expect(resolveAgentSessionKey("")).toEqual({ chosen: false, key: "" });
+    expect(resolveAgentSessionKey("   ")).toEqual({ chosen: false, key: "" });
+    expect(resolveAgentSessionKey("a:primary:b")).toEqual({ chosen: true, key: "" });
+    expect(resolveAgentSessionKey("scheduler")).toEqual({
+      chosen: true,
+      key: "agent:scheduler:primary",
+    });
   });
 
   it("refuses anything that is not a string", () => {

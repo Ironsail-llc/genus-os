@@ -108,11 +108,39 @@ export function ChatAskCard({
     isEscalation && typeof timeoutSeconds === "number" && timeoutSeconds > 0
       ? Math.floor(timeoutSeconds)
       : null;
-  /** Pinned once, so a re-render cannot restart the agent's clock. */
-  const [deadline] = useState<number | null>(
+  /** Pinned, so a re-render cannot restart the agent's clock — but re-pinned
+   * when the card is handed a different row (see below). */
+  const [deadline, setDeadline] = useState<number | null>(
     budget === null ? null : Date.now() + budget * 1000
   );
   const [secondsLeft, setSecondsLeft] = useState<number | null>(budget);
+
+  /** A different `id` is a different decision, so none of the state above may
+   * survive the swap.
+   *
+   * The panel renders ONE card slot, so React reuses this instance whenever the
+   * run raises a second approval. Without this reset, `settled`, `status` and
+   * the pinned `deadline` carried over: the second escalation appeared with its
+   * buttons already disabled and the previous answer still printed under it —
+   * "the operator saw Answered and the agent sat blocked until its timeout",
+   * which is the precise failure this card was written to remove, reintroduced
+   * for every approval after the first.
+   *
+   * The panel also passes `key={id}`, which would be enough for the panel. This
+   * is here as well because a component that is only correct for one caller's
+   * render discipline is a trap for the next caller. Adjusting state during
+   * render is React's documented way to derive from a changed prop; it costs
+   * one extra render pass and no effect round-trip. */
+  const [renderedId, setRenderedId] = useState(id);
+  if (renderedId !== id) {
+    setRenderedId(id);
+    setSettled(false);
+    setSending(false);
+    setStatus("");
+    setText("");
+    setDeadline(budget === null ? null : Date.now() + budget * 1000);
+    setSecondsLeft(budget);
+  }
 
   /** The engine's own clock, mirrored. When it runs out, so do the buttons.
    *

@@ -301,6 +301,59 @@ describe("ChatPanel — a tool-permission escalation on the stream", () => {
     });
   });
 
+  it("shows BOTH escalations when a run raises two — each holds a blocked coroutine", async () => {
+    // Probe C3 from the hostile review. A single `activeAsk` slot meant the
+    // second frame overwrote the first, and the overwritten one is not a card
+    // the operator can scroll back to: it is a coroutine blocked in the engine
+    // that now runs out its whole timeout and denies. Unlike a durable
+    // question, nothing recovers it.
+    const second = {
+      ...ESCALATION_EVENT,
+      data: { ...ESCALATION_EVENT.data, id: "esc-10", tool: "web_fetch" },
+    };
+    setupFetchMock({
+      send: () =>
+        sse([ESCALATION_EVENT, second, { event: "done", data: { text: "Waiting on you." } }]),
+    });
+    render(<ChatPanel />);
+    await typeAndSend("tidy the logs");
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("escalation-card")).toHaveLength(2);
+    });
+    expect(screen.getAllByTestId("escalation-tool").map((el) => el.textContent)).toEqual([
+      "exec",
+      "web_fetch",
+    ]);
+  });
+
+  it("answers each of two escalations at its own id", async () => {
+    const second = {
+      ...ESCALATION_EVENT,
+      data: { ...ESCALATION_EVENT.data, id: "esc-10", tool: "web_fetch" },
+    };
+    setupFetchMock({
+      send: () =>
+        sse([ESCALATION_EVENT, second, { event: "done", data: { text: "Waiting on you." } }]),
+    });
+    render(<ChatPanel />);
+    await typeAndSend("tidy the logs");
+    await waitFor(() => {
+      expect(screen.getAllByTestId("escalation-allow-once")).toHaveLength(2);
+    });
+
+    fireEvent.click(screen.getAllByTestId("escalation-deny")[1]);
+
+    await waitFor(() => {
+      const posted = (global.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(
+        (call) => String(call[0]),
+      );
+      expect(posted).toContain("/api/bridge/api/approvals/escalation/esc-10");
+    });
+    // The first card is untouched: one answer settles one decision.
+    expect(screen.getAllByTestId("escalation-allow-once")[0]).toHaveProperty("disabled", false);
+  });
+
   it("dismisses a settled card when the person sends the next message", async () => {
     render(<ChatPanel />);
     await typeAndSend("tidy the logs");

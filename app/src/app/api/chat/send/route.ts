@@ -1,14 +1,10 @@
 import { getEngineClient } from "@/lib/engine/server-client";
 import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
-import { sessionKeyForAgent } from "@/lib/chat/agent-session";
+import { resolveChatAgent } from "@/lib/chat/agent-guard";
 
 export async function POST(req: Request) {
   const body = await req.json();
   const message = body.message;
-  // The browser names an AGENT, never a session key — see `agent-session.ts`.
-  // An absent or unusable one produces no key, which is how the engine is told
-  // "the main session", exactly as this route has always told it.
-  const sessionKey = sessionKeyForAgent(body.agent);
 
   if (!message || typeof message !== "string") {
     return new Response(JSON.stringify({ error: "message required" }), {
@@ -16,6 +12,21 @@ export async function POST(req: Request) {
       headers: { "Content-Type": "application/json" },
     });
   }
+
+  // The browser names an AGENT, never a session key. An absent one produces no
+  // key — how the engine is told "the main session", exactly as this route has
+  // always told it. A NAMED one is checked against the caller's own fleet
+  // listing and refused outright if they may not address it; what must never
+  // happen is a dropped key falling through to "no key", because "no key" is
+  // the operator's shared conversation.
+  const chosen = await resolveChatAgent(body.agent);
+  if (!chosen.ok) {
+    return new Response(JSON.stringify({ error: chosen.error }), {
+      status: chosen.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  const sessionKey = chosen.key;
 
   const client = getEngineClient();
 

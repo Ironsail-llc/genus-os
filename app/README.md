@@ -35,15 +35,31 @@ partitioned per caller so one operator's rows never reach another's dashboard.
 The chat header carries an agent switcher when the appliance has more than one
 **chattable** agent — `GET /api/agent-manifests` marks an agent chattable when
 it holds its session between runs (`schedule.session_target: persistent`) or
-when it is the configured default, because an `isolated` worker would answer
-from a session it forgets the moment the run ends. Picking somebody else
+when it is the main agent, because an `isolated` worker would answer from a
+session it forgets the moment the run ends. The listing also reports
+`default_agent`, derived from the agent segment of the engine's
+`main_session_key` (not `default_chat_agent` — they are separate variables and
+only the session key answers "which id needs no key"). Picking somebody else
 reloads that agent's history and adds `agent: "<id>"` to every chat request,
 which the BFF turns into `session_key: "agent:<id>:primary"`; the engine's
-`_effective_session_key` does the rest for each role. The **default agent sends
-no key at all** — that omission is what keeps the operator's shared main
-session (webchat and Telegram, on purpose) exactly as it was, and the canvas
-prompt injection stays main-only for the same reason. The choice is remembered
-per browser in `localStorage`, never in the URL.
+`_effective_session_key` does the rest for each role. The **main agent sends no
+key at all** — that omission is what keeps the operator's shared main session
+(webchat and Telegram, on purpose) exactly as it was, so the switcher's first
+option always carries the empty string as its value rather than an id. The
+canvas prompt injection stays main-only for the same reason. The choice is
+remembered per browser in `localStorage`, never in the URL, and is not routed
+to until the listing has confirmed it is still chattable.
+
+`chattable` is presentation, not authorization. `chat.py` runs whichever agent
+the session key names for any authenticated caller, so every BFF chat route
+resolves a named `agent` through `lib/chat/agent-guard.ts` first: it re-fetches
+the operator-gated listing **with the caller's own bridge credentials** and
+answers 403 if that caller's listing does not offer the agent as chattable —
+which refuses every agent for a member, whose listing is refused outright. An
+`agent` that cannot form a well-shaped key is a 400. Neither ever falls back to
+"no key", because "no key" is the operator's own conversation. The guard is
+skipped entirely when no agent is named, so the default chat costs no extra
+round-trip.
 
 The same chat answers the two things an agent can block on. An `ask_user`
 question is a durable row settled at `POST /api/approvals/question/{id}`; a
@@ -54,7 +70,10 @@ settled at `POST /api/approvals/escalation/{id}` with **Allow once**
 Both arrive as the same `approval_required` SSE event and the card branches on
 its `kind`. An escalation shows the tool and a live countdown from
 `timeout_seconds`: when it runs out the engine has denied the tool itself, and
-the card says so rather than collecting a decision nobody is waiting for.
+the card says so rather than collecting a decision nobody is waiting for. A run
+that raises several approvals shows a card for each, keyed by id — an
+escalation that never reached the screen is not one the operator can scroll
+back to, it is a coroutine blocked in the engine that will time out and deny.
 
 ## Navigation
 

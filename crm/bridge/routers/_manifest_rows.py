@@ -32,35 +32,20 @@ def _block(document: dict[str, Any], key: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _summary(document: dict[str, Any], default_agent: str = "") -> dict[str, Any]:
+def _summary(document: dict[str, Any]) -> dict[str, Any]:
     """The fields one fleet-list row shows.
 
     A whole manifest per row would put every agent's tool list, warmup files
     and delivery target into a single response the list view never reads.
 
-    ``chattable`` is the one derived field: whether the Helm's chat may address
-    this agent. Sending it a message is nothing more than a ``session_key`` of
-    ``agent:<id>:primary``, but a key is only a CONVERSATION if the agent holds
-    its session between runs — ``schedule.session_target: persistent``. An
-    ``isolated`` worker starts fresh every run, so a reply would come from
-    somebody who has already forgotten the question.
-
-    The configured default agent is chattable whatever its manifest says: its
-    schedule block describes a heartbeat, while the session the operator has
-    been talking to all along is pinned by ``EngineConfig.main_session_key``.
-    The caller passes that id in; it is never spelled ``"main"`` here.
-
-    ``session_target`` reports what the manifest SAYS, empty included. Filling
-    in the engine's ``isolated`` default would put the engine's opinion in a
-    field an operator reads as their own words.
+    Shared with ``automations.py``, which is why the chat verdict is NOT here:
+    see :func:`_chat_fields`.
     """
     schedule = _block(document, "schedule")
     delivery = _block(document, "delivery")
     model = _block(document, "model")
-    agent_id = str(document.get("id") or "")
-    session_target = str(schedule.get("session_target") or "")
     return {
-        "id": agent_id,
+        "id": str(document.get("id") or ""),
         "name": document.get("name") or "",
         "description": document.get("description") or "",
         "version": str(document.get("version") or ""),
@@ -70,9 +55,41 @@ def _summary(document: dict[str, Any], default_agent: str = "") -> dict[str, Any
         "enabled": bool(schedule.get("enabled", True)),
         "delivery": delivery.get("mode") or "none",
         "model": model.get("primary") or "",
+    }
+
+
+def _chat_fields(document: dict[str, Any], main_agent_id: str) -> dict[str, Any]:
+    """Whether the Helm's chat may address this agent, and on what evidence.
+
+    Separate from :func:`_summary` rather than a defaulted parameter on it,
+    because ``_summary`` has a second caller. ``automations.py`` has no
+    main-agent id to pass and no use for the verdict, so a default argument
+    there would have shipped ``chattable: false`` into every automations row —
+    including the row for the one agent that is always chattable. A wrong
+    answer nobody asked for is worse than no answer, and a default argument is
+    how it travels.
+
+    Addressing an agent is nothing more than a ``session_key`` of
+    ``agent:<id>:primary``, but a key is only a CONVERSATION if the agent holds
+    its session between runs — ``schedule.session_target: persistent``. An
+    ``isolated`` worker starts fresh every run, so a reply would come from
+    somebody who has already forgotten the question.
+
+    The main agent is chattable whatever its manifest says: its schedule block
+    describes a heartbeat, while the session the operator has been talking to
+    all along is the one ``EngineConfig.main_session_key`` pins. The caller
+    passes that id in; it is never spelled ``"main"`` here.
+
+    ``session_target`` reports what the manifest SAYS, empty included. Filling
+    in the engine's ``isolated`` default would put the engine's opinion in a
+    field an operator reads as their own words.
+    """
+    agent_id = str(document.get("id") or "")
+    session_target = str(_block(document, "schedule").get("session_target") or "")
+    return {
         "session_target": session_target,
         "chattable": session_target == "persistent"
-        or (bool(agent_id) and agent_id == default_agent),
+        or (bool(agent_id) and agent_id == main_agent_id),
     }
 
 

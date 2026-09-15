@@ -144,6 +144,43 @@ describe("ChatAskCard — a tool-permission escalation", () => {
     expect(screen.getByTestId("escalation-deny")).toHaveProperty("disabled", true);
   });
 
+  it("answers the SECOND escalation of a run — a settled card cannot poison the next id", async () => {
+    // Probe C1 from the hostile review. One `ChatAskCard` instance is reused
+    // across ids (the panel renders one card slot), so `settled`, `status` and
+    // the pinned deadline used to survive the swap: the second escalation
+    // rendered with its buttons already disabled and the previous answer still
+    // on screen. That is the exact failure this feature exists to remove —
+    // "the operator saw Answered, the agent sat blocked until its timeout" —
+    // reintroduced for every escalation after the first.
+    const { rerender } = render(<ChatAskCard {...ESCALATION} id="esc-1" question="first" />);
+    fireEvent.click(screen.getByTestId("escalation-allow-once"));
+    await waitFor(() => expect(screen.getByTestId("ask-status")).toBeTruthy());
+
+    rerender(
+      <ChatAskCard {...ESCALATION} id="esc-2" question="second" tool="web_fetch" />
+    );
+
+    expect(screen.getByTestId("escalation-allow-once")).toHaveProperty("disabled", false);
+    expect(screen.queryByTestId("ask-status")).toBeNull();
+    expect(screen.getByTestId("escalation-countdown")).toBeTruthy();
+    expect(screen.getByTestId("escalation-tool").textContent).toContain("web_fetch");
+  });
+
+  it("answers an escalation that follows a settled question", async () => {
+    // Probe C2 from the hostile review: the two kinds share the card, so a
+    // settled question must not disable the escalation that comes after it.
+    const { rerender } = render(
+      <ChatAskCard id="q-1" question="Which vendor?" options={["Acme"]} />
+    );
+    fireEvent.click(screen.getByTestId("ask-option-0"));
+    await waitFor(() => expect(screen.getByTestId("ask-status")).toBeTruthy());
+
+    rerender(<ChatAskCard {...ESCALATION} id="esc-9" />);
+
+    expect(screen.getByTestId("escalation-allow-once")).toHaveProperty("disabled", false);
+    expect(screen.queryByTestId("ask-status")).toBeNull();
+  });
+
   it("leaves the buttons live when the answer never reached the bridge", async () => {
     global.fetch = vi.fn().mockRejectedValue(new Error("offline"));
     render(<ChatAskCard {...ESCALATION} />);

@@ -35,28 +35,72 @@
 export const CHAT_AGENT_STORAGE_KEY = "helm.chat.agent";
 
 /**
- * What a manifest id is allowed to look like here.
+ * What a manifest id must look like *for this one purpose*.
  *
- * Deliberately narrower than the bridge's `_safe_id`: this value is
- * interpolated into a colon-delimited key the engine then SPLITS on colons, so
- * the one character that must never appear is the delimiter. Letters, digits,
- * `-` and `_` cover every id `genus` will generate.
+ * This is not a charset policy for agent ids, and it must not become one.
+ * Nothing validates ids on the read path — `load_manifest_dir` returns the
+ * documents as written, `manifest_schema.py` has no charset rule, and the
+ * bridge's `validate_identifier` guards only the WRITE routes. So `acme.bot` is
+ * a real, listable, runnable agent.
+ *
+ * The earlier version here refused it and returned `""`, and `""` means "the
+ * main session". A browser refusing an id the appliance itself offered wrote a
+ * private message to a worker into the operator's shared history — failing
+ * "safe" in the one direction that merges two conversations. The allowlist is
+ * the listing; the only thing judged here is whether the id still fits the key
+ * shape `_effective_session_key` parses.
+ *
+ * Which is: no `:` (the key's own delimiter — an id carrying one produces
+ * `agent:a:primary:b:primary`, a shape nothing parses), and no whitespace or
+ * control characters, which no manifest id has and a header value must not.
  */
-const AGENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const UNKEYABLE = /[\s:\u0000-\u001f\u007f]/;
+const MAX_AGENT_ID = 128;
 
-/** The session key that reaches `agent`, or `""` for "let the engine decide". */
-export function sessionKeyForAgent(agent: unknown): string {
-  if (typeof agent !== "string") return "";
+/** Whether `agent` can be turned into a well-formed session key at all. */
+export function isKeyableAgentId(agent: unknown): boolean {
+  if (typeof agent !== "string") return false;
   const id = agent.trim();
-  if (!AGENT_ID.test(id)) return "";
-  return `agent:${id}:primary`;
+  return id.length > 0 && id.length <= MAX_AGENT_ID && !UNKEYABLE.test(id);
+}
+
+/**
+ * The session key that reaches `agent`, or `""` for "let the engine decide".
+ *
+ * `""` is returned ONLY for an absent choice. A non-empty id that cannot be
+ * keyed also returns `""` here, which is why no caller may use this alone to
+ * decide what to send: see `resolveAgentSessionKey`, which tells those two
+ * cases apart so a request that cannot be honoured is refused instead of
+ * silently landing on the main session.
+ */
+export function sessionKeyForAgent(agent: unknown): string {
+  if (!isKeyableAgentId(agent)) return "";
+  return `agent:${(agent as string).trim()}:primary`;
+}
+
+/**
+ * The same decision, with the two failure modes kept apart.
+ *
+ * - nothing chosen (absent, or an empty/blank string) →
+ *   `{ chosen: false, key: "" }`, send no key;
+ * - a usable id → `{ chosen: true, key: "agent:<id>:primary" }`;
+ * - anything else present — an unkeyable id, a number, an object — →
+ *   `{ chosen: true, key: "" }`, which every caller must treat as a refusal.
+ *   Falling through to the main session is the merge this module exists to
+ *   prevent, and "the field was the wrong type so we ignored it" lands there
+ *   just as squarely as a bad id does.
+ */
+export function resolveAgentSessionKey(agent: unknown): { chosen: boolean; key: string } {
+  const absent =
+    agent === undefined ||
+    agent === null ||
+    (typeof agent === "string" && agent.trim().length === 0);
+  return { chosen: !absent, key: sessionKeyForAgent(agent) };
 }
 
 /** The agent id a request should carry, or `""` when it must carry none. */
 export function normalizeAgentId(agent: unknown): string {
-  if (typeof agent !== "string") return "";
-  const id = agent.trim();
-  return AGENT_ID.test(id) ? id : "";
+  return isKeyableAgentId(agent) ? (agent as string).trim() : "";
 }
 
 /**

@@ -99,12 +99,23 @@ test.describe("Chat — another agent, and an escalation answered in place", () 
 
     const switcher = page.locator('[data-testid="agent-switcher"]');
     await expect(switcher).toBeVisible();
+    // The default option's value is the empty string — "send no key" — and its
+    // label is the main agent's name, so the header cannot name one agent while
+    // the message lands in another's session.
+    await expect(switcher).toHaveValue("");
     await switcher.selectOption("scheduler");
 
     await input.fill("what's on today?");
     await page.locator('[data-testid="send-button"]').click();
     await expect.poll(() => bodies.length).toBe(2);
     expect(bodies[1]).toEqual({ message: "what's on today?", agent: "scheduler" });
+
+    // And back: the operator can always return to their own conversation.
+    await switcher.selectOption("");
+    await input.fill("back to you");
+    await page.locator('[data-testid="send-button"]').click();
+    await expect.poll(() => bodies.length).toBe(3);
+    expect(bodies[2]).toEqual({ message: "back to you" });
   });
 
   test("an escalation on the stream is answered at the escalation route", async ({ page }) => {
@@ -131,8 +142,13 @@ test.describe("Chat — another agent, and an escalation answered in place", () 
 
     const card = page.locator('[data-testid="escalation-card"]');
     await expect(card).toBeVisible({ timeout: 15000 });
-    await expect(page.locator('[data-testid="escalation-tool"]')).toContainText("exec");
-    await expect(page.locator('[data-testid="escalation-countdown"]')).toContainText("s.");
+    await expect(page.locator('[data-testid="escalation-tool"]')).toHaveText("exec");
+    // A real number of seconds, counted down from `timeout_seconds`. `"s."`
+    // alone matched the sentence's full stop and would have passed on a
+    // countdown that never started.
+    await expect(page.locator('[data-testid="escalation-countdown"]')).toHaveText(
+      /denies this itself in \d+s/
+    );
 
     await page.locator('[data-testid="escalation-allow-once"]').click();
 

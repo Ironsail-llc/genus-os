@@ -1,10 +1,17 @@
 import { getEngineClient } from "@/lib/engine/server-client";
-import { sessionKeyForAgent } from "@/lib/chat/agent-session";
+import { resolveChatAgent } from "@/lib/chat/agent-guard";
 
 export async function POST(req: Request) {
   const body = await req.json();
   const query = body.query || body.message;
-  const sessionKey = sessionKeyForAgent(body.agent);
+  const chosen = await resolveChatAgent(body.agent);
+  if (!chosen.ok) {
+      return new Response(JSON.stringify({ error: chosen.error }), {
+        status: chosen.status,
+        headers: { "Content-Type": "application/json" },
+      });
+  }
+  const sessionKey = chosen.key;
 
   if (!query || typeof query !== "string") {
     return new Response(JSON.stringify({ error: "query required" }), {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useRuntimeConfig } from "@/components/runtime-config";
@@ -16,7 +16,11 @@ import { useVisualState } from "@/hooks/use-visual-state";
 import { useThrottle } from "@/hooks/use-throttle";
 import { MarkerInterceptor, stripMarkers } from "@/lib/engine/marker-interceptor";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
-import { readStoredChatAgent, storeChatAgent } from "@/lib/chat/agent-session";
+import {
+  isKeyableAgentId,
+  readStoredChatAgent,
+  storeChatAgent,
+} from "@/lib/chat/agent-session";
 import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from "lucide-react";
 
 interface ChatMessage {
@@ -75,7 +79,11 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
   const [activePlan, setActivePlan] = useState<ActivePlan | null>(null);
-  const [activeAsk, setActiveAsk] = useState<ActiveAsk | null>(null);
+  // A LIST, not a slot. A run can raise a second approval before the first
+  // is answered, and each escalation is a coroutine blocked in the engine:
+  // one that never reaches the screen is not a card the operator can scroll
+  // back to, it is a tool that runs out its whole timeout and denies.
+  const [activeAsks, setActiveAsks] = useState<ActiveAsk[]>([]);
   // Which agent the chat is pointed at, `""` meaning the appliance's default.
   //
   // `""` is load-bearing: it is what makes every request below carry NO `agent`
@@ -84,14 +92,14 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   // they have ever sent. `chattable` starts empty, so until the fleet listing
   // answers there is no switcher and the panel behaves exactly as it did.
   //
-  // Read from storage SYNCHRONOUSLY, before the first render, so the mount-time
-  // history load already knows which conversation to ask for. Waiting for the
-  // fleet listing first would put a manifest-directory scan in front of the
-  // chat opening for everybody, including the members whose listing is refused.
-  // The listing, when it lands, only has to correct a remembered agent that is
-  // no longer there. (No hydration risk: `readStoredChatAgent` answers `""` off
-  // the browser, and the first render draws no switcher either way.)
-  const [agent, setAgent] = useState(readStoredChatAgent);
+  // It starts at `""` and is only ever set to an id the fleet listing has
+  // CONFIRMED chattable. An earlier version seeded it synchronously from
+  // `localStorage` to save a round-trip, which meant the mount-time history,
+  // plan and deep requests all carried a key before anything could veto it —
+  // and for a member, whose listing is refused outright, no veto was coming.
+  // The saving was one read of the operator's own main history; the cost was a
+  // key on three requests for a session the caller may not be entitled to.
+  const [agent, setAgent] = useState("");
   const [chattable, setChattable] = useState<ChattableAgent[]>([]);
   const [defaultAgent, setDefaultAgent] = useState("");
   const [isPlanExecuting, setIsPlanExecuting] = useState(false);
@@ -114,8 +122,35 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const { notifyConversationUpdate, setRender } = useVisualState();
   const { aiName } = useRuntimeConfig();
 
-  /** `?agent=…`, or nothing at all for the default. */
+  /** `?agent=…`, or nothing at all for the main agent. */
   const agentQuery = agent ? `?agent=${encodeURIComponent(agent)}` : "";
+
+  /** Whether the listing left out the agent it named as the default.
+   *
+   * It happens: a YAML typo puts a manifest in the listing's `broken` bucket
+   * rather than in `agents`. The default option below is synthesised in that
+   * case, because the alternative — dropping it — leaves the `<select>` value
+   * matching no option, so the browser shows row 0 (some worker) while the
+   * panel is still on the main session, and nothing on screen gets the
+   * operator back. */
+  const defaultAgentMissing = Boolean(
+    defaultAgent && !chattable.some((row) => row.id === defaultAgent)
+  );
+
+  /** Every option the switcher offers. Index 0 is always the main agent.
+   *
+   * Its value is the EMPTY STRING, never an id. "Send no session key" is the
+   * property that keeps the operator's shared main session shared, and an id
+   * here is a value that can drift from that meaning — a listing that names no
+   * `default_agent` would leave the panel comparing against `""` and sending
+   * `agent: "main"` for the one choice that must send nothing. The label is
+   * where the agent's name goes. */
+  const agentOptions = useMemo(() => {
+    const others = chattable.filter((row) => row.id !== defaultAgent);
+    const named = chattable.find((row) => row.id === defaultAgent);
+    return [{ id: "", name: named?.name || defaultAgent || aiName }, ...others];
+  }, [chattable, defaultAgent, aiName]);
+
   const currentAgentName = chattable.find((row) => row.id === agent)?.name ?? aiName;
 
   // Scroll to bottom on new messages (throttled during streaming)
@@ -135,15 +170,21 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const handleApprovalRequired = useCallback((parsed: Record<string, unknown>) => {
     const id = typeof parsed.id === "string" ? parsed.id : "";
     if (!id) return;
-    setActiveAsk({
-      id,
-      kind: parsed.kind === "escalation" ? "escalation" : "question",
-      question: typeof parsed.question === "string" ? parsed.question : "",
-      options: Array.isArray(parsed.options) ? (parsed.options as string[]) : [],
-      expires_at: typeof parsed.expires_at === "string" ? parsed.expires_at : null,
-      tool: typeof parsed.tool === "string" ? parsed.tool : undefined,
-      timeout_seconds:
-        typeof parsed.timeout_seconds === "number" ? parsed.timeout_seconds : undefined,
+    setActiveAsks((current) => {
+      if (current.some((ask) => ask.id === id)) return current;
+      return [
+        ...current,
+        {
+          id,
+          kind: parsed.kind === "escalation" ? "escalation" : "question",
+          question: typeof parsed.question === "string" ? parsed.question : "",
+          options: Array.isArray(parsed.options) ? (parsed.options as string[]) : [],
+          expires_at: typeof parsed.expires_at === "string" ? parsed.expires_at : null,
+          tool: typeof parsed.tool === "string" ? parsed.tool : undefined,
+          timeout_seconds:
+            typeof parsed.timeout_seconds === "number" ? parsed.timeout_seconds : undefined,
+        },
+      ];
     });
   }, []);
 
@@ -191,26 +232,41 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         if (cancelled) return;
         const rows: ChattableAgent[] = Array.isArray(data?.agents)
           ? (data.agents as Array<Record<string, unknown>>)
-              .filter((row) => row.chattable === true && typeof row.id === "string" && row.id)
+              .filter(
+                (row) =>
+                  row.chattable === true &&
+                  typeof row.id === "string" &&
+                  // The listing is the allowlist for WHICH agents; this is the
+                  // only thing the browser judges for itself, and it judges one
+                  // thing: whether `agent:<id>:primary` still parses as that
+                  // shape. An id carrying the key's own delimiter does not, and
+                  // an option the appliance cannot honour must not be offered.
+                  isKeyableAgentId(row.id)
+              )
               .map((row) => ({ id: String(row.id), name: String(row.name || row.id) }))
           : [];
         const fallback = typeof data?.default_agent === "string" ? data.default_agent : "";
         setChattable(rows);
         setDefaultAgent(fallback);
-        // A remembered agent that has since been retired, made isolated, or
-        // taken off this appliance is not an error to show anybody — it is a
-        // conversation that no longer exists, so the chat goes home. Setting it
-        // to the value it already holds is a no-op, so the common path costs no
-        // second history load.
-        setAgent((current) =>
-          current && current !== fallback && rows.some((row) => row.id === current) ? current : ""
+        // The remembered agent is adopted HERE and nowhere earlier. Seeding it
+        // before the first render put a key on the mount-time history, plan and
+        // deep requests before this listing could veto it — and for a member,
+        // whose listing is refused outright, there is no veto coming at all.
+        // Under `ROBOTHOR_PER_USER_SESSIONS=observe|off` the engine honours a
+        // member's requested key verbatim, so "the default mode contains it" is
+        // not a property this panel gets to rely on.
+        const remembered = readStoredChatAgent();
+        setAgent(
+          remembered && remembered !== fallback && rows.some((row) => row.id === remembered)
+            ? remembered
+            : ""
         );
       })
       .catch(() => {
         // No listing means no switcher — and therefore no way back. A
-        // remembered agent left standing here would send every message to a
+        // remembered agent adopted here would send every message to a
         // conversation the person cannot see they are in, with no control on
-        // screen to leave it. Unreachable resolves to the main agent.
+        // screen to leave it. Unreachable stays on the main agent.
         if (!cancelled) setAgent("");
       });
     return () => {
@@ -226,22 +282,34 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
    * of it. */
   const switchAgent = useCallback(
     (next: string) => {
-      const chosen = next === defaultAgent ? "" : next;
+      // `next` is an option value, so `""` already means the main agent and
+      // there is no id to compare against. Anything else must be an agent the
+      // listing confirmed chattable; a `<select>` cannot produce another value,
+      // and if some future caller does, the main session is where it lands.
+      const chosen = chattable.some((row) => row.id === next) && next !== defaultAgent ? next : "";
       if (chosen === agent) return;
-      setActiveAsk(null);
+      setActiveAsks([]);
       setActivePlan(null);
       storeChatAgent(chosen);
       setAgent(chosen);
     },
-    [agent, defaultAgent]
+    [agent, chattable, defaultAgent]
   );
 
   // Load history on mount, and again whenever the chat is pointed elsewhere
+  //
+  // Cancelled on the way out, like the listing above it. Both the abandoned
+  // agent's request and the new one `setMessages([])` and then resolve whenever
+  // they resolve; without this token the ABANDONED transcript can land last and
+  // win, so the operator reads agent A's conversation under agent B's name and
+  // the next thing they type goes to B.
   useEffect(() => {
+    let cancelled = false;
     setMessages([]);
     fetch(`/api/chat/history${agentQuery}`)
       .then((res) => res.json())
       .then((data) => {
+        if (cancelled) return;
         if (data.messages?.length) {
           const loaded: ChatMessage[] = data.messages
             .filter(
@@ -272,13 +340,24 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       .catch(() => {
         // Engine not available on mount
       });
+    return () => {
+      cancelled = true;
+    };
   }, [agentQuery]);
 
   // Recover pending plan on page refresh
+  //
+  // Cancelled for a sharper reason than the transcript: a plan recovered from
+  // the ABANDONED agent's session would become `activePlan` while `agent` is
+  // somebody else, and Approve would then post that plan_id with the new
+  // agent's key — executing a plan against a session that never saw it, which
+  // is the thing threading the key through plan/approve exists to prevent.
   useEffect(() => {
+    let cancelled = false;
     fetch(`/api/chat/plan/status${agentQuery}`)
       .then((res) => res.json())
       .then((data) => {
+        if (cancelled) return;
         if (data.active && data.plan) {
           setActivePlan({
             plan_id: data.plan.plan_id,
@@ -292,6 +371,9 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       .catch(() => {
         // Engine not available
       });
+    return () => {
+      cancelled = true;
+    };
   }, [agentQuery]);
 
   // Keyboard shortcut: Ctrl/Cmd+Shift+P toggles plan mode, Ctrl/Cmd+Shift+D toggles deep+plan
@@ -326,14 +408,19 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
 
   // Recover active deep reasoning on page refresh
   useEffect(() => {
+    let cancelled = false;
     fetch(`/api/chat/deep/status${agentQuery}`)
       .then((res) => res.json())
       .then((data) => {
+        if (cancelled) return;
         if (data.active && data.deep?.status === "running") {
           setIsDeepReasoning(true);
         }
       })
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [agentQuery]);
 
   const sendPlanMessage = useCallback(async (overrideText?: string) => {
@@ -350,7 +437,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     // No claim that the Helm can bring a dropped card back: it has no approvals
     // view yet. The row stays answerable through the bridge's approvals endpoint
     // and a later turn sees the answer.
-    setActiveAsk(null);
+    setActiveAsks([]);
 
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -491,7 +578,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     const text = input.trim();
     if (!text || isStreaming) return;
 
-    setActiveAsk(null);
+    setActiveAsks([]);
 
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -896,21 +983,30 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         <span className={`font-semibold ${mobile ? "text-base" : "text-sm"}`}>
           {agent ? currentAgentName : aiName}
         </span>
-        {chattable.length > 1 && (
+        {agentOptions.length > 1 && (
           <select
-            value={agent || defaultAgent}
+            value={agent}
             onChange={(event) => switchAgent(event.target.value)}
             disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
             aria-label="Which agent to talk to"
             className="max-w-[9rem] truncate rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
             data-testid="agent-switcher"
           >
-            {chattable.map((row) => (
+            {agentOptions.map((row) => (
               <option key={row.id} value={row.id}>
                 {row.name}
               </option>
             ))}
           </select>
+        )}
+        {agentOptions.length > 1 && defaultAgentMissing && (
+          <span
+            className="text-[10px] text-muted-foreground"
+            title="Its manifest is missing or would not parse — check the fleet view."
+            data-testid="agent-switcher-note"
+          >
+            {defaultAgent} is not in the fleet listing
+          </span>
         )}
         {mobile && (
           <span className="text-xs text-muted-foreground ml-auto">Online</span>
@@ -999,17 +1095,25 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           ))}
 
           {/* The agent's own question — `approval_required` over the run's stream */}
-          {activeAsk && (
+          {/* `key={ask.id}` is load-bearing, not tidiness: without it React
+              reuses one card instance across ids, and the previous decision's
+              `settled`, status line and pinned deadline survive the swap — the
+              next approval renders with its buttons already disabled and the
+              old answer under it. That is exactly "the operator saw Answered
+              and the agent sat blocked until its timeout", which is the failure
+              this card was written to remove. */}
+          {activeAsks.map((ask) => (
             <ChatAskCard
-              id={activeAsk.id}
-              kind={activeAsk.kind}
-              question={activeAsk.question}
-              options={activeAsk.options}
-              expiresAt={activeAsk.expires_at}
-              tool={activeAsk.tool}
-              timeoutSeconds={activeAsk.timeout_seconds}
+              key={ask.id}
+              id={ask.id}
+              kind={ask.kind}
+              question={ask.question}
+              options={ask.options}
+              expiresAt={ask.expires_at}
+              tool={ask.tool}
+              timeoutSeconds={ask.timeout_seconds}
             />
-          )}
+          ))}
 
           {/* Plan approval card */}
           {activePlan && !isPlanExecuting && (
