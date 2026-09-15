@@ -212,6 +212,37 @@ MAX_SESSIONS = 500
 SESSION_IDLE_TTL_S = 7 * 24 * 3600
 
 
+def append_turn(
+    session: ChatSession,
+    *,
+    user_message: str,
+    assistant_text: str | None = None,
+) -> None:
+    """Record one exchange in a session's history, with credentials taken out.
+
+    The ONE place a turn enters ``ChatSession.history``, which is both the
+    replay handed to ``conversation_history=`` on the next run and the thing
+    ``save_session`` persists. So one redaction here closes both halves of the
+    2026-09-15 leak: the operator pastes a token, the model reads it and stores
+    it — that turn has to carry the value, or the assistant cannot do the job —
+    and from the next turn onward nothing does.
+
+    The TEXT is redacted, not the message: "here is the token: <redacted>"
+    keeps an operator's own history readable, which dropping the message would
+    not, and tells them plainly that the platform took the value out.
+
+    Also trims to ``MAX_HISTORY``, because a caller that remembered to append
+    and forgot to trim is how a session grows without bound.
+    """
+    from robothor.secrets.redaction import redact
+
+    session.history.append({"role": "user", "content": redact(user_message)})
+    if assistant_text:
+        session.history.append({"role": "assistant", "content": redact(assistant_text)})
+    if len(session.history) > MAX_HISTORY:
+        session.history[:] = session.history[-MAX_HISTORY:]
+
+
 def _load_for_cache(session_key: str) -> dict[str, Any]:
     tenant = _config.tenant_id if _config is not None else DEFAULT_TENANT
     return load_session(session_key, limit=MAX_HISTORY, tenant_id=tenant)
@@ -372,21 +403,14 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             )
 
             # Always record user message in session history
-            session.history.append({"role": "user", "content": message})
-            if run.output_text:
-                session.history.append({"role": "assistant", "content": run.output_text})
-            elif run.error_message:
-                # Record error so the next run knows what failed
-                session.history.append(
-                    {
-                        "role": "assistant",
-                        "content": f"[Run failed: {run.error_message}]",
-                    }
-                )
-
-            # Trim history (in-place slice for safety under concurrency)
-            if len(session.history) > MAX_HISTORY:
-                session.history[:] = session.history[-MAX_HISTORY:]
+            append_turn(
+                session,
+                user_message=message,
+                assistant_text=(
+                    run.output_text
+                    or (f"[Run failed: {run.error_message}]" if run.error_message else None)
+                ),
+            )
 
             # Persist to DB (fire-and-forget)
             if run.output_text and _config:
@@ -440,12 +464,10 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
         except Exception as e:
             logger.error("Chat agent error: %s", e, exc_info=True)
             # Record the failed attempt so next run has context
-            session.history.append({"role": "user", "content": message})
-            session.history.append(
-                {
-                    "role": "assistant",
-                    "content": f"[Internal error — run failed: {e}]",
-                }
+            append_turn(
+                session,
+                user_message=message,
+                assistant_text=f"[Internal error — run failed: {e}]",
             )
             if len(session.history) > MAX_HISTORY:
                 session.history[:] = session.history[-MAX_HISTORY:]
@@ -513,7 +535,11 @@ async def chat_inject(request: Request) -> JSONResponse:
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
-    session.history.append({"role": "system", "content": message})
+    # Operator-supplied text, so it gets the same pass `append_turn` gives a
+    # user turn: this row is persisted and replayed for the life of the session.
+    from robothor.secrets.redaction import redact as _redact_text
+
+    session.history.append({"role": "system", "content": _redact_text(message)})
 
     # Persist to DB (fire-and-forget)
     if _config:
@@ -737,11 +763,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
             plan_text = _extract_plan_text(run.output_text or "")
 
             # Accumulate history so revisions have full context
-            session.history.append({"role": "user", "content": message})
-            if run.output_text:
-                session.history.append({"role": "assistant", "content": run.output_text})
-            if len(session.history) > MAX_HISTORY:
-                session.history[:] = session.history[-MAX_HISTORY:]
+            append_turn(session, user_message=message, assistant_text=run.output_text)
             if run.output_text and _config:
                 asyncio.create_task(
                     save_exchange_async(
@@ -926,20 +948,18 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                 plan.execution_run_id = run.id
 
                 # Merge into history
-                session.history.append(
-                    {"role": "user", "content": f"[Deep plan executed] {plan.original_message}"}
+                append_turn(
+                    session,
+                    user_message=f"[Deep plan executed] {plan.original_message}",
+                    assistant_text=(
+                        run.output_text
+                        or (
+                            f"[Deep reasoning failed: {run.error_message}]"
+                            if run.error_message
+                            else None
+                        )
+                    ),
                 )
-                if run.output_text:
-                    session.history.append({"role": "assistant", "content": run.output_text})
-                elif run.error_message:
-                    session.history.append(
-                        {
-                            "role": "assistant",
-                            "content": f"[Deep reasoning failed: {run.error_message}]",
-                        }
-                    )
-                if len(session.history) > MAX_HISTORY:
-                    session.history[:] = session.history[-MAX_HISTORY:]
 
                 # Persist to DB
                 if run.output_text and _config:
@@ -1048,17 +1068,18 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                 plan.execution_run_id = run.id
 
                 # Merge execution result back into session history for continuity
-                session.history.append(
-                    {"role": "user", "content": f"[Plan executed] {plan.original_message}"}
+                append_turn(
+                    session,
+                    user_message=f"[Plan executed] {plan.original_message}",
+                    assistant_text=(
+                        run.output_text
+                        or (
+                            f"[Execution failed: {run.error_message}]"
+                            if run.error_message
+                            else None
+                        )
+                    ),
                 )
-                if run.output_text:
-                    session.history.append({"role": "assistant", "content": run.output_text})
-                elif run.error_message:
-                    session.history.append(
-                        {"role": "assistant", "content": f"[Execution failed: {run.error_message}]"}
-                    )
-                if len(session.history) > MAX_HISTORY:
-                    session.history[:] = session.history[-MAX_HISTORY:]
 
                 # Persist to DB
                 if run.output_text and _config:
@@ -1155,10 +1176,14 @@ async def plan_reject(request: Request) -> JSONResponse:
 
     # Inject rejection feedback into session so agent can learn
     if feedback:
+        from robothor.secrets.redaction import redact as _redact_text
+
         session.history.append(
             {
                 "role": "system",
-                "content": f"[PLAN REJECTED] The previous plan was rejected. Feedback: {feedback}",
+                "content": _redact_text(
+                    f"[PLAN REJECTED] The previous plan was rejected. Feedback: {feedback}"
+                ),
             }
         )
 
@@ -1266,11 +1291,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
             revised_plan_text = _extract_plan_text(run.output_text or "")
 
             # Update history
-            session.history.append({"role": "user", "content": feedback})
-            if run.output_text:
-                session.history.append({"role": "assistant", "content": run.output_text})
-            if len(session.history) > MAX_HISTORY:
-                session.history[:] = session.history[-MAX_HISTORY:]
+            append_turn(session, user_message=feedback, assistant_text=run.output_text)
 
             if revised_plan_text:
                 plan.plan_text = revised_plan_text
@@ -1462,15 +1483,14 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
                 )
 
             # Record in session history for continuity
-            session.history.append({"role": "user", "content": f"/deep {query}"})
-            if deep.response:
-                session.history.append({"role": "assistant", "content": deep.response})
-            elif deep.error:
-                session.history.append(
-                    {"role": "assistant", "content": f"[Deep reasoning failed: {deep.error}]"}
-                )
-            if len(session.history) > MAX_HISTORY:
-                session.history[:] = session.history[-MAX_HISTORY:]
+            append_turn(
+                session,
+                user_message=f"/deep {query}",
+                assistant_text=(
+                    deep.response
+                    or (f"[Deep reasoning failed: {deep.error}]" if deep.error else None)
+                ),
+            )
 
             # Persist to DB
             if run.output_text and _config:
