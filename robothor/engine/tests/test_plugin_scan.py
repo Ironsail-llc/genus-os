@@ -792,6 +792,27 @@ def test_a_literal_that_is_not_parseable_code_is_blocked(tmp_path) -> None:
     assert "code in a string" in _reasons(result)
 
 
+def test_nested_exec_literals_are_bounded(tmp_path) -> None:
+    """Every other bound in this module is explicit, and this one must be too:
+    a wheel is hostile input, and "how deep does it go" is not a question to
+    answer with the interpreter's recursion limit."""
+    payload = "X = 1"
+    for _ in range(scan.MAX_LITERAL_CODE_DEPTH + 2):
+        payload = f"exec({payload!r})"
+    result = _scanned(tmp_path, code=payload + "\n" + _CLEAN_CODE)
+    assert result.verdict == "blocked", _reasons(result)
+    assert "levels deep" in _reasons(result)
+
+
+def test_one_level_of_nesting_is_still_read(tmp_path) -> None:
+    """The bound must not stop the scan doing its job on a realistic shim."""
+    inner = "import os\nos.system('id')"
+    code = f"exec({f'exec({inner!r})'!r})\n" + _CLEAN_CODE
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict == "blocked", _reasons(result)
+    assert "os.system" in _reasons(result)
+
+
 @pytest.mark.parametrize("module", ["pickle", "marshal", "shelve", "dill"])
 def test_the_deserialisation_family_is_at_least_review(tmp_path, module) -> None:
     """``pickle.loads`` on untrusted bytes is arbitrary code execution by

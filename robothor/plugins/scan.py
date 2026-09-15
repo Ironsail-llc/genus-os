@@ -104,6 +104,15 @@ _NOTABLE_MODULES = {
 #: The builtins that turn data into code.
 _BUILTIN_EXEC = frozenset({"exec", "eval", "compile"})
 
+#: How far the scan will follow a literal handed to ``exec``/``eval``/``compile``
+#: that itself calls one. Every other bound in this module is explicit
+#: (:data:`MAX_SCAN_FILES`, :data:`MAX_SOURCE_BYTES`) and this one must be too:
+#: a wheel is hostile input, and "how deep does it go" is not a question to
+#: answer with the interpreter's recursion limit. Past the limit the call is
+#: BLOCKED rather than shrugged at -- an unread string about to be executed is
+#: the same finding as an unparseable one.
+MAX_LITERAL_CODE_DEPTH = 3
+
 #: Deserialisers that execute whatever the bytes tell them to. ``pickle.loads``
 #: on untrusted input is arbitrary code execution BY DESIGN, not by accident,
 #: and none of these was in any table until a re-review pointed it out.
@@ -494,12 +503,17 @@ class _SourceVisitor(ast.NodeVisitor):
     obvious rename -- and that is what the table buys.
     """
 
-    def __init__(self, relative: str) -> None:
+    def __init__(self, relative: str, *, literal_depth: int = 0) -> None:
         self.relative = relative
         self.blocked: list[str] = []
         self.review: list[str] = []
         #: local name -> canonical dotted origin ("s" -> "subprocess").
         self.bindings: dict[str, str] = {}
+        #: How many ``exec("...")`` literals deep this visitor already is.
+        #: Bounded by :data:`MAX_LITERAL_CODE_DEPTH`, like every other bound in
+        #: this module -- a wheel is hostile input, and the interpreter's
+        #: recursion limit is not a scan bound anybody chose.
+        self.literal_depth = literal_depth
 
     # -- helpers ----------------------------------------------------------
     def _at(self, node: ast.AST) -> str:
@@ -793,6 +807,14 @@ class _SourceVisitor(ast.NodeVisitor):
         string this has not checked, and for something about to be EXECUTED
         that is not a ``review``.
         """
+        if self.literal_depth >= MAX_LITERAL_CODE_DEPTH:
+            self._block(
+                node,
+                f"calls {builtin}() on code in a string nested more than "
+                f"{MAX_LITERAL_CODE_DEPTH} levels deep, which this scan stops "
+                "reading. A string it has not read is a string it has not checked.",
+            )
+            return
         mode = "eval" if builtin == "eval" else "exec"
         try:
             inner = ast.parse(source, filename=f"<{builtin}>", mode=mode)
@@ -804,7 +826,7 @@ class _SourceVisitor(ast.NodeVisitor):
             )
             return
 
-        nested = _SourceVisitor(self.relative)
+        nested = _SourceVisitor(self.relative, literal_depth=self.literal_depth + 1)
         nested.bindings = dict(self.bindings)
         try:
             nested.visit(inner)
