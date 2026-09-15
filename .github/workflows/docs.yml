@@ -31,6 +31,16 @@ on:
       - "SECURITY.md"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
+  # A release republishes the site, because the release commit itself cannot.
+  # semantic-release commits `chore(release): X [skip ci]` — which is also the
+  # commit that carries the freshly stamped scripts/install.sh — and GitHub
+  # honours that skip instruction, so the push trigger above never sees it. The
+  # release pipeline's own run is not skipped (it runs on the merge commit), so
+  # its completion is the signal.
+  workflow_run:
+    workflows: ["Release & Build"]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -42,9 +52,20 @@ concurrency:
 jobs:
   build:
     name: Build site
+    # A release pipeline that failed has nothing to publish.
+    if: |
+      github.event_name != 'workflow_run'
+      || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # A workflow_run hands us the TRIGGERING run's head sha — the merge
+          # commit, one commit before semantic-release stamped install.sh and
+          # bumped the version. main is where that commit landed. Empty for
+          # every other event, which keeps checkout's own defaults (the PR
+          # merge ref, the pushed sha).
+          ref: ${{ github.event_name == 'workflow_run' && 'main' || '' }}
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -75,7 +96,9 @@ jobs:
 
   deploy:
     name: Deploy to GitHub Pages
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: |
+      github.event_name == 'workflow_run'
+      || (github.event_name != 'pull_request' && github.ref == 'refs/heads/main')
     needs: build
     runs-on: ubuntu-latest
     permissions:

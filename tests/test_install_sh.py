@@ -719,6 +719,36 @@ def test_the_docs_site_publishes_the_script_it_documents() -> None:
     )
 
 
+def test_a_release_republishes_the_site_so_the_stamp_is_the_released_one() -> None:
+    """The release commit is `chore(release): X [skip ci]`, which skips Docs.
+
+    The stamp exists for the case where the releases API does not answer; a
+    site that keeps serving the previous release's stamp until some unrelated
+    push touches docs/ makes the stamp a lie exactly when it matters.
+    """
+    yaml = pytest.importorskip("yaml")
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "docs.yml").read_text(encoding="utf-8")
+    )
+    triggers = workflow.get("on", workflow.get(True))
+
+    assert "workflow_run" in triggers, "nothing republishes the site after a release"
+    assert "Release & Build" in triggers["workflow_run"]["workflows"]
+
+    checkout = next(
+        step
+        for step in workflow["jobs"]["build"]["steps"]
+        if str(step.get("uses", "")).startswith("actions/checkout")
+    )
+    # workflow_run hands the build the TRIGGERING run's head sha, which is the
+    # merge commit — one commit before semantic-release stamped install.sh.
+    assert "main" in str(checkout.get("with", {}).get("ref", "")), (
+        "the release-driven build checks out the commit before the stamp"
+    )
+    deploy_condition = str(workflow["jobs"]["deploy"]["if"])
+    assert "workflow_run" in deploy_condition, "a release-driven build never deploys"
+
+
 def test_the_quickstart_documents_the_one_liner() -> None:
     quickstart = (REPO_ROOT / "docs" / "quickstart.md").read_text(encoding="utf-8")
     assert "https://ironsail-llc.github.io/genus-os/install.sh" in quickstart
