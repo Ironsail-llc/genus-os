@@ -21,7 +21,7 @@ function Probe({
   url?: string;
   paused?: boolean;
 }) {
-  const { loading, error, forbidden, reload } = useBridgePoll({
+  const { loading, error, forbidden, status, reload } = useBridgePoll({
     visible,
     url,
     paused,
@@ -38,6 +38,7 @@ function Probe({
       <span data-testid="loading">{String(loading)}</span>
       <span data-testid="error">{error ?? ""}</span>
       <span data-testid="forbidden">{String(forbidden)}</span>
+      <span data-testid="status">{String(status)}</span>
       <span id="count" data-testid="count" />
       <button data-testid="reload" onClick={reload}>
         reload
@@ -57,6 +58,12 @@ function mockFetch(answer: (calls: number) => { status: number; body: unknown })
   return fetchMock;
 }
 
+/** jsdom's `document.hidden` is a read-only getter; stand one in and announce it. */
+function hide(hidden: boolean) {
+  Object.defineProperty(document, "hidden", { value: hidden, configurable: true });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
 });
@@ -65,6 +72,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  Object.defineProperty(document, "hidden", { value: false, configurable: true });
 });
 
 describe("useBridgePoll", () => {
@@ -128,6 +136,61 @@ describe("useBridgePoll", () => {
     const whenRepaused = fetchMock.mock.calls.length;
     await vi.advanceTimersByTimeAsync(600_000);
     expect(fetchMock).toHaveBeenCalledTimes(whenRepaused);
+  });
+
+  /**
+   * `status` exists so a caller can decide WHERE a refusal goes: a 422 names a
+   * query parameter the operator can fix and belongs beside that input, while
+   * a 500 belongs in a banner. It has to clear on the next success, or a page
+   * would keep a field marked red over data that loaded fine.
+   */
+  it("reports the kind of refusal, and clears it on the next success", async () => {
+    let fail = true;
+    mockFetch(() =>
+      fail
+        ? { status: 422, body: { detail: "since must be an ISO-8601 date" } }
+        : { status: 200, body: { count: 1 } }
+    );
+    render(<Probe visible />);
+    await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("422"));
+
+    fail = false;
+    screen.getByTestId("reload").click();
+    await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("null"));
+    expect(screen.getByTestId("error").textContent).toBe("");
+  });
+
+  it("says nothing about a status when the request never arrived", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      })
+    );
+    render(<Probe visible />);
+    await waitFor(() => expect(screen.getByTestId("error").textContent).toBe(BRIDGE_UNREACHABLE));
+    // There was no reply, so there is no status to report — not a stale one.
+    expect(screen.getByTestId("status").textContent).toBe("null");
+  });
+
+  /**
+   * `visible` is "this view is the one on screen in the Helm". It says nothing
+   * about whether the BROWSER TAB is on screen, and Logs is the first caller
+   * where each beat spawns a `journalctl` on the box — so a Helm left open
+   * behind another window was spawning one every ten seconds, for nobody.
+   */
+  it("stops beating while the browser tab is hidden, and resumes when it is back", async () => {
+    const fetchMock = mockFetch((n) => ({ status: 200, body: { count: n } }));
+    render(<Probe visible />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    hide(true);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    hide(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(1));
   });
 
   it("answers a refusal in the server's own words", async () => {

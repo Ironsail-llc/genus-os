@@ -131,8 +131,38 @@ export function useBridgePoll({
     if (!visible) return;
     void loadRef.current();
     if (paused) return;
-    const timer = setInterval(() => void loadRef.current(), intervalMs);
-    return () => clearInterval(timer);
+
+    /*
+      `visible` answers "is this the view on screen in the Helm"; it says
+      nothing about whether the browser TAB is on screen. Logs is the first
+      caller where one beat is one `journalctl` process on the box, and a Helm
+      left open behind another window was spawning one every ten seconds for
+      nobody to read. The beat follows `document.hidden` as well.
+
+      Deliberately no catch-up read when the tab comes back: the next tick is
+      at most one interval away, and a burst of reads the moment somebody
+      alt-tabs is the thing this is here to avoid.
+    */
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      if (timer !== null) clearInterval(timer);
+      timer = null;
+    };
+    const start = () => {
+      if (timer === null) timer = setInterval(() => void loadRef.current(), intervalMs);
+    };
+    const sync = () => (typeof document !== "undefined" && document.hidden ? stop() : start());
+
+    sync();
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", sync);
+    }
+    return () => {
+      stop();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", sync);
+      }
+    };
   }, [visible, url, intervalMs, paused]);
 
   return { loading, error, forbidden, status, reload };
