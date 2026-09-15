@@ -102,6 +102,36 @@ def forget_warnings() -> None:
 
 
 @dataclass(frozen=True)
+class LockSource:
+    """Where a distribution came from, when this platform installed it.
+
+    Its ABSENCE is the load-bearing half. A row with no source is one that
+    ``genus plugin sync`` recorded from a distribution somebody pip-installed
+    by hand, and ``genus plugin remove`` refuses those: uninstalling a package
+    the platform did not put there, because it happens to appear in the
+    platform's lockfile, is this platform reaching outside what it owns.
+
+    A frozen dataclass rather than a dict so a :class:`LockRow` stays hashable
+    and so the field names are one spelling rather than a convention.
+    """
+
+    #: ``registry`` or ``wheel``. Never a path -- an offline install's file
+    #: lives on the operator's disk, and the lockfile is read by an HTTP route.
+    origin: str = ""
+    index_url: str = ""
+    publisher_key_id: str = ""
+    installed_at: str = ""
+
+    def as_json(self) -> dict[str, Any]:
+        row: dict[str, Any] = {"origin": self.origin, "installed_at": self.installed_at}
+        if self.index_url:
+            row["index_url"] = self.index_url
+        if self.publisher_key_id:
+            row["publisher_key_id"] = self.publisher_key_id
+        return row
+
+
+@dataclass(frozen=True)
 class LockRow:
     """One distribution, as it was when the operator recorded it."""
 
@@ -112,15 +142,22 @@ class LockRow:
     enabled: bool = True
     kinds: tuple[str, ...] = ()
     recorded_at: str = ""
-    #: A hash of the distribution's own artifact. Not computed here -- an
-    #: installed distribution is a directory tree, and pinning it is the
-    #: install-and-scan task's problem. Empty means "not recorded", never
-    #: "verified empty".
+    #: A hash of the distribution's own artifact -- the wheel this platform
+    #: installed. Empty means "not recorded", never "verified empty": a row
+    #: recorded by ``sync`` over a hand-installed distribution has no artifact
+    #: to hash, because the installed form is a directory tree.
     dist_sha256: str = ""
+    #: Where this came from, or None for anything this platform did not
+    #: install. Added after the lockfile shipped, so it is written only when
+    #: set and read only when present -- an older lockfile parses unchanged,
+    #: which ``test_plugin_installer`` pins.
+    source: LockSource | None = None
 
     def as_json(self) -> dict[str, Any]:
         """The row as it is written. ``dist_sha256`` is omitted when unset so
-        that an empty string never reads as a hash of nothing."""
+        that an empty string never reads as a hash of nothing, and ``source``
+        for the same reason: an empty object would read as "installed by us,
+        from nowhere"."""
         row: dict[str, Any] = {
             "name": self.name,
             "version": self.version,
@@ -132,6 +169,8 @@ class LockRow:
         }
         if self.dist_sha256:
             row["dist_sha256"] = self.dist_sha256
+        if self.source is not None:
+            row["source"] = self.source.as_json()
         return row
 
 
@@ -319,6 +358,26 @@ def manifest_digest(dist: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()
 
 
+def _source_from_json(data: Any) -> LockSource | None:
+    """One row's ``source``, or None when it has none or it is unreadable.
+
+    Unreadable degrades to None, which means "we did not install this" -- the
+    conservative answer, because it makes ``remove`` refuse rather than
+    uninstall something on the strength of a field it could not parse.
+    """
+    if not isinstance(data, dict):
+        return None
+    origin = str(data.get("origin") or "").strip()
+    if not origin:
+        return None
+    return LockSource(
+        origin=origin,
+        index_url=str(data.get("index_url") or ""),
+        publisher_key_id=str(data.get("publisher_key_id") or ""),
+        installed_at=str(data.get("installed_at") or ""),
+    )
+
+
 def _row_from_json(data: Any) -> LockRow | None:
     if not isinstance(data, dict):
         return None
@@ -339,6 +398,7 @@ def _row_from_json(data: Any) -> LockRow | None:
         kinds=tuple(str(k) for k in kinds) if isinstance(kinds, list) else (),
         recorded_at=str(data.get("recorded_at") or ""),
         dist_sha256=str(data.get("dist_sha256") or ""),
+        source=_source_from_json(data.get("source")),
     )
 
 
@@ -628,6 +688,12 @@ def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
             kinds=tuple(sorted(groups.get(name, set()))),
             recorded_at=now,
             dist_sha256=previous.dist_sha256 if previous else "",
+            # Carried like `enabled` and `verdict`, and for the same reason:
+            # a rebuild that forgot WHERE a plugin came from would make every
+            # `genus plugin remove` refuse the next time, or -- worse, if the
+            # refusal were dropped instead -- let it uninstall a distribution
+            # the operator installed themselves.
+            source=previous.source if previous else None,
         )
         rows[name] = row
         if previous is None:
@@ -662,6 +728,76 @@ def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
     )
 
 
+def record_install(
+    name: str,
+    *,
+    version: str,
+    manifest_sha256: str,
+    kinds: tuple[str, ...],
+    verdict: str,
+    dist_sha256: str,
+    source: LockSource,
+    path: Path | None = None,
+) -> LockRow | None:
+    """Write the row for a distribution this platform just installed.
+
+    Called AFTER ``sync()``, and it upserts rather than requiring the row to
+    exist, because the two can legitimately disagree: ``sync`` walks
+    ``importlib.metadata`` in THIS process, and a wheel installed a moment ago
+    into ``--target`` -- or into an environment whose metadata cache this
+    process already built -- is not necessarily visible yet. Depending on
+    discovery to produce the row would mean the verdict and the source silently
+    vanished on exactly the installs that most need them recorded.
+
+    ``enabled`` is carried when a row already exists: reinstalling a plugin the
+    operator had turned off must not turn it back on.
+    """
+    resolved = path if path is not None else lockfile_path()
+    if resolved is None:
+        return None
+    lock = read_lockfile(resolved)
+    if lock.io_error is not None:
+        raise lock.io_error
+    previous = lock.rows.get(name)
+    row = LockRow(
+        name=name,
+        version=version,
+        manifest_sha256=manifest_sha256,
+        verdict=verdict,
+        enabled=previous.enabled if previous else True,
+        kinds=kinds,
+        recorded_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        dist_sha256=dist_sha256,
+        source=source,
+    )
+    rows = dict(lock.rows)
+    rows[name] = row
+    write_lockfile(rows, resolved)
+    return row
+
+
+def drop_row(name: str, path: Path | None = None) -> bool:
+    """Forget one distribution. True when a row was actually removed.
+
+    False rather than an exception for "there was no row": ``remove`` calls
+    this after uninstalling, and a missing row at that point means the file and
+    the environment had already diverged, which is not a reason to fail a
+    removal that has already happened.
+    """
+    resolved = path if path is not None else lockfile_path()
+    if resolved is None:
+        return False
+    lock = read_lockfile(resolved)
+    if lock.io_error is not None:
+        raise lock.io_error
+    if name not in lock.rows:
+        return False
+    rows = dict(lock.rows)
+    del rows[name]
+    write_lockfile(rows, resolved)
+    return True
+
+
 def set_enabled(name: str, enabled: bool, path: Path | None = None) -> LockRow | None:
     """Flip one row's ``enabled``, or None when there is no such row.
 
@@ -691,6 +827,7 @@ def set_enabled(name: str, enabled: bool, path: Path | None = None) -> LockRow |
         kinds=row.kinds,
         recorded_at=row.recorded_at,
         dist_sha256=row.dist_sha256,
+        source=row.source,
     )
     rows = dict(lock.rows)
     rows[name] = updated
