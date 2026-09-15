@@ -86,6 +86,12 @@ def _capped_turn(message: dict[str, Any]) -> dict[str, Any]:
     the writer's cap and take the tool calls with it. The turn is stored to
     explain the run, and the reasoning it explains is already in ``content``.
     """
+    # Belt to `record_llm_call`'s braces: this is the last thing between an
+    # assistant turn and a database row, and a caller that reaches it by
+    # another path must not write a credential into `agent_run_steps`.
+    from robothor.secrets.redaction import redact_assistant_turn
+
+    message = redact_assistant_turn(message)
     turn: dict[str, Any] = {
         key: deepcopy(value)
         for key, value in message.items()
@@ -140,12 +146,23 @@ def _render_history_for_llm(msg: dict[str, Any]) -> dict[str, Any]:
     replied to a surfaced message already carry the quote inline, so they
     are passed through verbatim.
     """
+    from robothor.secrets.redaction import redact
+
     role = msg.get("role", "")
     content = msg.get("content", "")
     author = msg.get("author_agent_id")
     if role == "assistant" and author and author != "main":
         display = msg.get("author_display_name") or author
         content = f"[@{display}] {content}"
+    # Redacted on the way OUT to the provider, not on the way in. The turn in
+    # which the operator pastes a credential has to carry it — an assistant
+    # that cannot read the token cannot store it — but every turn after that
+    # replays the same message, and a token that is already in the vault has no
+    # business being re-sent for the life of the session. `chat.append_turn`
+    # redacts at the source; this is the backstop for a history row written by
+    # an earlier release or a path that bypassed it.
+    if isinstance(content, str) and content:
+        content = redact(content)
     return {"role": role, "content": content}
 
 
@@ -402,8 +419,21 @@ class AgentSession:
         if model:
             self.run.model_used = model
 
-        # Append assistant message to conversation
+        # Append assistant message to conversation.
+        #
+        # Redacted first. This is where a credential actually enters the
+        # transcript: when the model calls `vault_set`, the provider's reply
+        # carries the value inside `tool_calls[].function.arguments`, and this
+        # list is re-sent to the provider on EVERY subsequent turn of the
+        # session, copied into this step's `tool_output` under
+        # ROBOTHOR_RECORD_ASSISTANT_TURNS, and serialised into the ShareGPT
+        # trajectory when sampling is on. Redacting `tool_input` in
+        # `record_tool_call` closed none of those — the value never travels
+        # that way.
         if assistant_message:
+            from robothor.secrets.redaction import redact_assistant_turn
+
+            assistant_message = redact_assistant_turn(assistant_message)
             self.messages.append(assistant_message)
             # The turn is the one part of the reasoning chain that is not
             # reconstructible from the other steps, so it is the only part

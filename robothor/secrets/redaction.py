@@ -31,6 +31,7 @@ downstream needs to know.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -38,6 +39,8 @@ __all__ = [
     "PLACEHOLDER",
     "SECRET_TOOL_ARGUMENTS",
     "redact",
+    "redact_assistant_turn",
+    "redact_message",
     "redact_tool_arguments",
     "redact_unrecognized_arguments",
 ]
@@ -187,12 +190,58 @@ def _redact_assignment(match: re.Match[str]) -> str:
     return f"{name}={PLACEHOLDER}"
 
 
+#: Vendor token formats, by the prefix their issuer publishes.
+#:
+#: Added 2026-09-15. Until then this module could only see a credential inside
+#: an ``NAME=value`` assignment or an ``Authorization`` header, which is right
+#: for a log line and wrong for the thing that now passes through here: a
+#: credential a PERSON typed into a chat message. The operator pastes
+#: ``ghp_…`` with no name beside it, and the message is persisted, replayed to
+#: the provider on every later turn, and exported into a fine-tuning corpus.
+#:
+#: This is a list of VENDOR formats, not of our own names — the distinction is
+#: what keeps it from being the drift defect. GitHub does not change what a PAT
+#: starts with when we add a setting.
+_VENDOR_TOKEN = (
+    # ``[A-Za-z0-9_]`` rather than ``[A-Za-z0-9]``: a real PAT carries no
+    # underscore after the prefix, but a redactor that stops at the first one
+    # leaves the tail of whatever was pasted visible, which is the
+    # ``public_key`` mistake again — redaction that neither protects nor
+    # informs. The prefix is distinctive enough to carry the wider class.
+    r"\bgh[pousr]_[A-Za-z0-9_]{16,}",
+    r"\bgithub_pat_[A-Za-z0-9_]{16,}",
+    r"\bglpat-[A-Za-z0-9_-]{16,}",
+    r"\bsk_(?:live|test)_[A-Za-z0-9_]{16,}",
+    r"\brk_live_[A-Za-z0-9]{16,}",
+    r"\bshpat_[A-Za-z0-9]{16,}",
+    r"\bdop_v1_[A-Za-z0-9]{16,}",
+    r"\bnpm_[A-Za-z0-9]{16,}",
+    r"\bhf_[A-Za-z0-9]{16,}",
+    r"\bpypi-[A-Za-z0-9_-]{16,}",
+    r"\bA(?:KIA|SIA)[A-Z0-9]{16,}",
+    r"\bAIza[A-Za-z0-9_-]{30,}",
+    r"\bya29\.[A-Za-z0-9_-]{20,}",
+    r"\bSG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}",
+    r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+)
+
+#: A URL carrying ``user:password@``. A DSN is the one credential shape that
+#: hides in a setting nobody calls secret: ``ROBOTHOR_DB_HOST`` accepts a full
+#: ``postgresql://alice:…@db/genus`` and the settings package builds a pool from
+#: it, so the name gate — which can only see the name — lets it into every
+#: agent's shell. Only the userinfo run is taken; the host and path stay
+#: readable, because an operator debugging a connection needs them.
+_URL_USERINFO = r"(?<=://)[^/@\s:]+:[^/@\s]+(?=@)"
+
 _SHAPES = (
     r"xox[abceprs]-[\w-]+",
     r"xapp-[\w-]+",
     r"Bearer\s+\S+",
     r"\b\d{5,}:[A-Za-z0-9_-]{30,}",
     _API_KEY,
+    _URL_USERINFO,
+    *_VENDOR_TOKEN,
     rf"{_AUTH_KEYWORD}(?:[ \t]+{_AUTH_BLOB})?(?:[ \t]*\r?\n{_AUTH_BLOB})+",
     rf"{_AUTH_KEYWORD}[ \t]+{_AUTH_BLOB}",
 )
@@ -296,6 +345,86 @@ def _argument_reads_as_a_credential(name: str) -> bool:
     """
     probe = f"{name}=placeholder-value-1234567890"
     return redact(probe) != probe
+
+
+def redact_assistant_turn(message: Any) -> Any:
+    """A copy of one chat message with any credential in its tool calls taken.
+
+    The credential does not reach the engine through ``tool_input``; it reaches
+    it through the assistant's own echo. When a model calls ``vault_set``, the
+    provider's reply carries ``tool_calls[].function.arguments`` as a JSON
+    string containing the value, and that message is appended to
+    ``session.messages`` — which is re-sent to the provider on every subsequent
+    turn, copied into the LLM_CALL step under ``ROBOTHOR_RECORD_ASSISTANT_TURNS``,
+    and serialised into the ShareGPT trajectory when sampling is on.
+
+    Arguments are parsed as JSON and redacted per argument, so the tool NAME
+    and the vault KEY survive: the verification pass and the run viewer read
+    this to say what the agent did, and a turn redacted wholesale says nothing.
+    Arguments that are not JSON get the ordinary text pass.
+
+    Never mutates its input.
+    """
+    if not isinstance(message, dict):
+        return message
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list) or not calls:
+        return message
+
+    cleaned_calls: list[Any] = []
+    changed = False
+    for call in calls:
+        function = call.get("function") if isinstance(call, dict) else None
+        raw = function.get("arguments") if isinstance(function, dict) else None
+        if not isinstance(raw, str) or not raw:
+            cleaned_calls.append(call)
+            continue
+        name = str(function.get("name", "") or "")
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            scrubbed = redact(raw)
+        else:
+            scrubbed = (
+                json.dumps(redact_tool_arguments(name, parsed))
+                if isinstance(parsed, dict)
+                else redact(raw)
+            )
+        if scrubbed == raw:
+            cleaned_calls.append(call)
+            continue
+        changed = True
+        cleaned_calls.append(
+            {**call, "function": {**function, "arguments": scrubbed}}  # type: ignore[dict-item]
+        )
+
+    if not changed:
+        return message
+    return {**message, "tool_calls": cleaned_calls}
+
+
+def redact_message(message: Any) -> Any:
+    """A copy of one chat message with credentials taken out of its text too.
+
+    For the messages a PERSON wrote. The operator pastes a token into Telegram;
+    the model has to see it once, or it cannot store it — but after that turn
+    the message is appended to the session history, persisted, and replayed to
+    the provider for as long as the session lives. So the rule is: the current
+    turn may see it, nothing after may, and this is what the "after" path
+    calls.
+
+    Redacts the text, not the message. "here is the token: <redacted>" keeps an
+    operator's own history readable, which a wholesale redaction would not.
+    """
+    if not isinstance(message, dict):
+        return message
+    cleaned = redact_assistant_turn(message)
+    content = cleaned.get("content")
+    if isinstance(content, str) and content:
+        scrubbed = redact(content)
+        if scrubbed != content:
+            cleaned = {**cleaned, "content": scrubbed}
+    return cleaned
 
 
 def redact_tool_arguments(tool_name: str, arguments: Any) -> Any:
