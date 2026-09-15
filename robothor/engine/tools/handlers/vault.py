@@ -21,10 +21,10 @@ WHICH token was stored meant printing it.
 rotation takes effect for cached readers immediately rather than at the next
 restart — which the assistant cannot perform.
 
-All four are operator-tier. The gate is the calling agent's own manifest
-``role``, which fails closed and which a spawned sub-agent cannot pass: the
-child runs under its OWN agent id, so its own manifest is what is read, and a
-worker that declares no role resolves to ``service``. There is deliberately no
+All of them need the operator credential tier — ``v2.credentials: operator``
+in the agent's own manifest, a key nothing else interprets. It fails closed and
+a spawned sub-agent cannot pass it: the child runs under its OWN agent id, so
+its own manifest is what is read. There is deliberately no
 ``vault_rotate_from_message`` tool — the assistant simply calls ``vault_set``
 with what it was handed, and the transcript redactor keeps the argument out of
 the stored step.
@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -45,13 +46,21 @@ logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {}
 
-#: Manifest ``role`` values that may touch credentials. The operator's own
-#: agent and the delivery agents that speak for them — nothing else. ``service``
-#: is deliberately absent even though migration 107 seeds it as ('*', 'allow'):
-#: that seed is what makes the DB-backed RBAC gate a no-op today, so a control
-#: that leaned on it would be a control in name only (the failure
-#: ``service_roles.py`` was written to make visible).
-OPERATOR_ROLES = frozenset({"main", "owner", "operator", "admin"})
+#: The manifest key that opens the vault tools, and the one value that does it.
+#:
+#: ``v2.credentials: operator``. Deliberately NOT the ``role:`` field, which is
+#: what the first cut used and what made the prescribed opt-in an outage: that
+#: field feeds ``resolve_service_role`` → ``check_tool_permission``, so setting
+#: it to ``main`` — a role no ``role_permissions`` row seeds — denied ``main``
+#: EVERY tool on a box running RBAC at enforce. An agent could not both keep
+#: its tools and hold the vault tools. Two postures, two fields.
+#:
+#: Read from the DECLARED manifest, never from the resolved service role:
+#: ``ROBOTHOR_DEFAULT_SERVICE_ROLE`` is a fleet-wide knob the SERVICE_ROLES
+#: runbook tells operators to set, and reading through it made that knob a
+#: one-line grant of ``vault_set`` to every sub-agent on the instance.
+CREDENTIAL_TIER_KEY = "credentials"
+OPERATOR_TIER = "operator"
 
 
 def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -62,37 +71,49 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     return decorator
 
 
-def manifest_role(agent_id: str, workspace: str = "") -> str:
-    """The ``role`` this agent's own manifest declares, or "" if it declares none.
+@lru_cache(maxsize=256)
+def credential_tier(agent_id: str) -> str:
+    """The tier ``agent_id``'s own manifest DECLARES, or "" if it declares none.
+
+    Reads the raw manifest rather than ``AgentConfig``, for one reason that
+    matters: ``AgentConfig`` fields can be filled in by fleet-wide defaults,
+    and a credential grant that a fleet-wide knob can supply is not a grant
+    anybody made. This reads what the file says.
 
     A seam as much as a lookup: the suite replaces it, so these handlers can be
     exercised without a manifest directory. Raising is meaningful — the caller
     turns it into a refusal, because an unreadable manifest is not evidence of
     an operator.
     """
-    from pathlib import Path
-
-    from robothor.engine.config import EngineConfig, load_agent_config
-
     if not agent_id:
         return ""
-    config = load_agent_config(agent_id, Path(EngineConfig.from_env().manifest_dir), workspace=None)
-    if config is None:
+    from pathlib import Path
+
+    from robothor.engine.config import EngineConfig, load_manifest
+
+    manifest = load_manifest(Path(EngineConfig.from_env().manifest_dir) / f"{agent_id}.yaml")
+    if not isinstance(manifest, dict):
         return ""
-    return str(getattr(config, "service_role", "") or "").strip().lower()
+    v2 = manifest.get("v2")
+    if not isinstance(v2, dict):
+        return ""
+    return str(v2.get(CREDENTIAL_TIER_KEY, "") or "").strip().lower()
 
 
 def _operator_denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
     """``None`` when this caller may use the vault tools, else the refusal.
 
     Fails closed on every uncertainty: no agent id, no manifest, an unreadable
-    manifest directory, a role that is not operator-tier. The alternative —
+    manifest directory, a tier that is not ``operator``. The alternative —
     allowing when we cannot tell — is how a sub-agent ends up holding the
-    instance's credentials.
+    instance's credentials. A spawned sub-agent runs under its OWN agent id, so
+    its own manifest is what is read here; that is the sub-agent refusal, and
+    it is a property of where the answer comes from rather than a check
+    somebody has to remember.
     """
     agent_id = getattr(ctx, "agent_id", "") or ""
     try:
-        role = manifest_role(agent_id, getattr(ctx, "workspace", "") or "")
+        tier = credential_tier(agent_id)
     except Exception as exc:  # noqa: BLE001 - uncertainty is a refusal, not a crash
         logger.warning(
             "vault tools: refusing %s for agent %s — its manifest could not be read (%s)",
@@ -100,18 +121,19 @@ def _operator_denial(ctx: ToolContext, tool: str) -> dict[str, Any] | None:
             agent_id or "<unattributed>",
             type(exc).__name__,
         )
-        role = ""
-    if role in OPERATOR_ROLES:
+        tier = ""
+    if tier == OPERATOR_TIER:
         return None
     return {
         "error": (
-            f"{tool} is operator-tier and this agent is not: its manifest declares "
-            f"role {role or '(none)'!r}, not one of {sorted(OPERATOR_ROLES)}. "
-            "Credentials are handled by the operator's own agent. Ask it to store, "
-            "test or rotate the credential, or use it through a tool that holds it "
-            "for you."
+            f"{tool} needs the operator credential tier and this agent does not have "
+            f"it (its manifest declares {tier or '(none)'!r}). An operator grants it "
+            f"by adding `{CREDENTIAL_TIER_KEY}: {OPERATOR_TIER}` under `v2:` in that "
+            "agent's manifest. Credentials are otherwise handled by the operator's "
+            "own agent: ask it to store, test or rotate this one, or use a tool that "
+            "holds the credential for you."
         ),
-        "denied_by": "operator_tier",
+        "denied_by": "credential_tier",
     }
 
 
@@ -189,7 +211,28 @@ async def _vault_set(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # need to ask for.
     await _reload_cached_readers()
 
-    return {"success": True, "key": key, "fingerprint": fingerprint(value)}
+    from robothor.vault.naming import env_names_for_vault_key, normalise_key
+
+    stored_at = normalise_key(key)
+    readers = env_names_for_vault_key(stored_at)
+    answer: dict[str, Any] = {
+        "success": True,
+        "key": stored_at,
+        "fingerprint": fingerprint(value),
+        "readable_as": list(readers),
+    }
+    if not readers:
+        # The row is real, encrypted and stored — and nothing in the platform
+        # will ever look at it. Silence here is the incident with a tool
+        # reporting success, so say it plainly and name a key that works.
+        answer["warning"] = (
+            f"stored, but no reader looks at {stored_at!r}: no environment variable "
+            "resolves to it, so the platform will not use this credential. Store it "
+            "under the variable name its reader uses (lower-cased), e.g. "
+            "`providers/<vendor>/api_key` for a provider or API token, "
+            "`channels/<channel>/<field>` for a channel setting."
+        )
+    return answer
 
 
 @_handler("vault_test")
@@ -233,10 +276,48 @@ async def _vault_test(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     outcome = await testers.probe(kind, value)
     return {
         "ok": outcome.ok,
-        "identity_hint": outcome.identity_hint,
+        "identity_hint": _safe_hint(outcome.identity_hint, value),
         "error_class": outcome.error_class,
         "kind": kind,
     }
+
+
+#: The shortest run of the credential that, appearing in a hint, means the hint
+#: is carrying key material. Short enough to catch a deliberate prefix, long
+#: enough that an ordinary word shared by chance is not a match.
+_HINT_OVERLAP_CHARS = 8
+
+
+def _safe_hint(hint: str | None, value: str) -> str | None:
+    """The identity hint, unless it is a way of reading the credential back.
+
+    ``identity_hint`` is whatever the vendor calls the account, and for
+    OpenRouter that is ``data.label`` — chosen by the key's OWNER, and commonly
+    set to a fragment of the key. So the one field this tool returns out of a
+    vendor's response body is a channel back to the value, and a probe found it
+    returning the key verbatim.
+
+    Two gates. The redactor, which catches a hint that is a recognisable
+    credential in its own right; and a substring check against the value we
+    dialled with, which catches the case the redactor cannot know about — a
+    label that carries part of THIS key inside an otherwise innocent string.
+    """
+    if not hint:
+        return None
+    from robothor.secrets.redaction import PLACEHOLDER, redact
+
+    cleaned = redact(hint)
+    if cleaned != hint:
+        return PLACEHOLDER
+    if value:
+        for start in range(0, max(1, len(value) - _HINT_OVERLAP_CHARS + 1)):
+            if value[start : start + _HINT_OVERLAP_CHARS] in cleaned:
+                logger.warning(
+                    "vault_test: the vendor's identity hint carried part of the "
+                    "credential; reporting it as redacted"
+                )
+                return PLACEHOLDER
+    return cleaned
 
 
 @_handler("vault_list")
@@ -273,9 +354,30 @@ async def _vault_delete(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     if tenant_id:
         kwargs["tenant_id"] = tenant_id
     deleted = await asyncio.to_thread(vault.delete, key, **kwargs)
-    if deleted:
-        await _reload_cached_readers()
-    return {"success": deleted, "key": key}
+    if not deleted:
+        return {"success": False, "key": key}
+
+    await _reload_cached_readers()
+    answer: dict[str, Any] = {"success": True, "key": key}
+
+    # Deleting the vault row does not delete the credential: the accessor falls
+    # through to the environment, so a reader that was being served the vault's
+    # value now gets whatever the box booted with — which may be the dead one
+    # this row replaced. A delete that silently restores a stale credential is
+    # the incident running backwards.
+    from robothor.secrets.status import status_for_key
+
+    after = await asyncio.to_thread(
+        status_for_key, key, tenant_id=getattr(ctx, "tenant_id", "") or ""
+    )
+    if after.configured and after.source == "env":
+        answer["warning"] = (
+            f"the vault row is gone, but the environment still holds a value for "
+            f"{after.name} ({after.fingerprint}), and readers are now served THAT. "
+            "If you meant to remove the credential entirely, it also has to come out "
+            "of the instance's secrets file."
+        )
+    return answer
 
 
 def _refuse_bootstrap(key: str, verb: str) -> dict[str, Any] | None:
@@ -288,9 +390,11 @@ def _refuse_bootstrap(key: str, verb: str) -> dict[str, Any] | None:
     that a tool result has no reason to carry.
     """
     from robothor.secrets.classification import is_bootstrap
-    from robothor.vault.naming import env_name
+    from robothor.vault.naming import env_name, normalise_key
 
-    if not is_bootstrap(env_name(str(key))):
+    # Normalised first: `'ROBOTHOR_DB_PASSWORD '` compared as a padded string
+    # is not the bootstrap name, and slipped straight past this refusal.
+    if not is_bootstrap(env_name(normalise_key(str(key)))):
         return None
     return {
         "error": (

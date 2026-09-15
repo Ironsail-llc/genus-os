@@ -22,6 +22,7 @@ from robothor.vault.dal import (
     list_keys,
     set_secret,
 )
+from robothor.vault.naming import normalise_key
 
 if TYPE_CHECKING:
     import builtins
@@ -30,20 +31,28 @@ if TYPE_CHECKING:
 def get(key: str, *, tenant_id: str = DEFAULT_TENANT) -> str | None:
     """Retrieve and decrypt a secret by key. Returns None if not found."""
     master_key = get_master_key()
-    return get_secret(key, master_key, tenant_id=tenant_id)
+    return get_secret(normalise_key(key), master_key, tenant_id=tenant_id)
 
 
 def set(  # noqa: A001
     key: str, value: str, *, category: str = "credential", tenant_id: str = DEFAULT_TENANT
 ) -> None:
-    """Encrypt and store a secret."""
+    """Encrypt and store a secret.
+
+    The key is normalised before it is stored. Without this,
+    ``'ROBOTHOR_DB_PASSWORD '`` — one trailing space — was a different key from
+    the same name without it: it slipped past the bootstrap refusal and landed
+    under a padded key that no reader would ever find. Harmless in isolation
+    and exactly the shape of a precedence bypass, so it is normalised at the
+    one door every write goes through.
+    """
     master_key = get_master_key()
-    set_secret(key, value, master_key, category=category, tenant_id=tenant_id)
+    set_secret(normalise_key(key), value, master_key, category=category, tenant_id=tenant_id)
 
 
 def delete(key: str, *, tenant_id: str = DEFAULT_TENANT) -> bool:
     """Delete a secret by key. Returns True if deleted."""
-    return delete_secret(key, tenant_id=tenant_id)
+    return delete_secret(normalise_key(key), tenant_id=tenant_id)
 
 
 def list(  # noqa: A001

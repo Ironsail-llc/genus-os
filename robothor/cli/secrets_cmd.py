@@ -133,7 +133,23 @@ def _migrate(args: argparse.Namespace) -> int:
     only = [name.strip() for name in (getattr(args, "only", None) or []) if name.strip()]
 
     index = field_index()
-    candidates = sorted(only) if only else sorted(environment_credential_names())
+    if only:
+        # An explicit `--only` still has to name a CREDENTIAL. `--only HOME PATH`
+        # wrote `home` and `path` rows into the vault, and a scan picked up
+        # GOOGLE_APPLICATION_CREDENTIALS — a file PATH, not a secret. A vault
+        # full of non-secrets is a status table nobody reads.
+        from robothor.engine.exec_env import looks_like_a_credential_name
+        from robothor.secrets.classification import declared_secret_names
+
+        declared = declared_secret_names()
+        candidates = sorted(n for n in only if n in declared or looks_like_a_credential_name(n))
+        for name in sorted(set(only) - set(candidates)):
+            print(
+                f"skipped  {name}  — not a credential name. `migrate` moves credentials; "
+                "use `genus vault set` for anything else."
+            )
+    else:
+        candidates = sorted(environment_credential_names())
 
     planned: list[tuple[str, str, str]] = []  # (name, vault key, fingerprint)
     refused: list[str] = []
