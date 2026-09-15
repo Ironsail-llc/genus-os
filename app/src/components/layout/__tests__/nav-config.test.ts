@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  ALL_VIEW_IDS,
+  isAuditReaderRole,
   isOperatorRole,
   navGroups,
   settingsPages,
@@ -59,14 +61,21 @@ describe("navGroups", () => {
     expect(settings.items.every((i) => i.view === "settings")).toBe(true);
   });
 
-  it("marks views that do not exist yet as coming soon", () => {
+  it("has no placeholder left in it — every nav item reaches a real screen", () => {
     const soon = navGroups
       .flatMap((g) => g.items)
       .filter((i) => i.soon)
       .map((i) => i.view);
-    expect(soon.sort()).toEqual(["audit", "logs", "memory"]);
-    for (const view of soon) expect(isComingSoonView(view)).toBe(true);
-    expect(isComingSoonView("agents")).toBe(false);
+    expect(soon).toEqual([]);
+    for (const view of ALL_VIEW_IDS) expect(isComingSoonView(view)).toBe(false);
+  });
+
+  it("no longer marks Memory, Audit and Logs as coming soon — all three are built", () => {
+    const byView = new Map(navGroups.flatMap((g) => g.items).map((i) => [i.view, i]));
+    for (const view of ["memory", "audit", "logs"] as const) {
+      expect(byView.get(view)!.soon).toBeFalsy();
+      expect(isComingSoonView(view)).toBe(false);
+    }
   });
 
   it("no longer marks Inbox as coming soon — it is a real screen now", () => {
@@ -104,6 +113,62 @@ describe("role gating", () => {
     expect(visibleNavGroups("viewer").map((g) => g.label)).not.toContain("Settings");
     expect(visibleNavGroups(undefined).map((g) => g.label)).not.toContain("Settings");
     expect(visibleNavGroups("owner").map((g) => g.label)).toContain("Settings");
+  });
+
+  /**
+   * Mirrors `crm/bridge/routers/_operator.py::AUDIT_ROLES`. The auditor exists
+   * so that "who did what, and who widened which guardrail" can be read by
+   * somebody who may not change anything and may not read the journal — the
+   * journal carries every value every process printed, which is a far wider
+   * surface than a record of decisions.
+   */
+  it("treats the auditor as an audit reader, and an operator as one too", () => {
+    expect(isAuditReaderRole("auditor")).toBe(true);
+    expect(isAuditReaderRole("owner")).toBe(true);
+    expect(isAuditReaderRole("admin")).toBe(true);
+    expect(isAuditReaderRole("member")).toBe(false);
+    expect(isAuditReaderRole(undefined)).toBe(false);
+    // An auditor is NOT an operator: Memory and Logs stay shut to them.
+    expect(isOperatorRole("auditor")).toBe(false);
+  });
+
+  function observeItems(role: string | undefined): string[] {
+    const observe = visibleNavGroups(role).find((g) => g.label === "Observe");
+    return observe ? observe.items.map((i) => i.id) : [];
+  }
+
+  it("shows an operator all three new Observe screens", () => {
+    for (const role of ["owner", "admin"]) {
+      expect(observeItems(role)).toEqual(["runs", "fleet", "memory", "audit", "logs", "health"]);
+    }
+  });
+
+  it("shows an auditor Audit, and neither Memory nor Logs", () => {
+    const items = observeItems("auditor");
+    expect(items).toContain("audit");
+    expect(items).not.toContain("memory");
+    expect(items).not.toContain("logs");
+    // The screens an auditor shared with everyone before are still there.
+    expect(items).toContain("runs");
+  });
+
+  it("shows a member none of the three", () => {
+    for (const role of ["member", "viewer", undefined]) {
+      const items = observeItems(role);
+      expect(items).not.toContain("memory");
+      expect(items).not.toContain("audit");
+      expect(items).not.toContain("logs");
+    }
+  });
+
+  it("drops a group whose every item the role may not see", () => {
+    // Settings is the group with a blanket gate; the per-item gate must not
+    // leave an empty heading behind on any other one either.
+    for (const role of ["member", "auditor", "owner", undefined]) {
+      for (const group of visibleNavGroups(role)) {
+        expect(group.items.length).toBeGreaterThan(0);
+      }
+    }
   });
 });
 

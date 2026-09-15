@@ -76,13 +76,23 @@ describe("MobileTabBar", () => {
     expect(screen.queryByTestId("mobile-more-sheet")).toBeNull();
   });
 
-  it("disables not-yet-built entries in the sheet", () => {
-    renderBar();
+  it("reaches the Observe pages from the sheet, with no soon pill left", () => {
+    const onNavigate = vi.fn();
+    renderBar({ onNavigate });
     fireEvent.click(screen.getByTestId("mobile-tab-more"));
     const item = screen.getByTestId("more-nav-memory");
-    expect(item).toBeDisabled();
-    expect(item).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByTestId("more-soon-memory").textContent?.toLowerCase()).toBe("soon");
+    expect(item).not.toBeDisabled();
+    expect(screen.queryByTestId("more-soon-memory")).toBeNull();
+    fireEvent.click(item);
+    expect(onNavigate).toHaveBeenCalledWith("memory", undefined);
+  });
+
+  it("hides Memory and Logs from an auditor, and keeps Audit", () => {
+    renderBar({ role: "auditor" });
+    fireEvent.click(screen.getByTestId("mobile-tab-more"));
+    expect(screen.getByTestId("more-nav-audit")).toBeTruthy();
+    expect(screen.queryByTestId("more-nav-memory")).toBeNull();
+    expect(screen.queryByTestId("more-nav-logs")).toBeNull();
   });
 
   it("hides Settings in the sheet from non-operator roles", () => {
