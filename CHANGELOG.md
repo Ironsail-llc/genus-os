@@ -1,3 +1,9 @@
+## [1.84.0](https://github.com/Ironsail-llc/genus-os/compare/v1.83.0...v1.84.0) (2026-09-15)
+
+### Features
+
+* **helm:** chat with any agent and answer escalations in place ([#561](https://github.com/Ironsail-llc/genus-os/issues/561)) ([4e72cc3](https://github.com/Ironsail-llc/genus-os/commit/4e72cc358e1c2f7acdd1a06afc56d89ac96675af))
+
 ## [1.83.0](https://github.com/Ironsail-llc/genus-os/compare/v1.82.1...v1.83.0) (2026-09-15)
 
 ### Features
