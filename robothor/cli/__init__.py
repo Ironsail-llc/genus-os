@@ -185,7 +185,23 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     # init
-    subparsers.add_parser("plugin", help="List installed plugins and why any were refused")
+    # plugin — what is installed, what is recorded, what is turned off.
+    # `genus plugin` with no verb still lists, which is what it did before the
+    # other verbs existed.
+    plugin_parser = subparsers.add_parser(
+        "plugin", help="List installed plugins, record them, and enable or disable one"
+    )
+    plugin_sub = plugin_parser.add_subparsers(dest="plugin_command")
+    plugin_sub.add_parser("list", help="Installed plugins, what they contribute, and any refusals")
+    plugin_info = plugin_sub.add_parser("info", help="Everything known about one distribution")
+    plugin_info.add_argument("name", help="Distribution name, e.g. genus-hostinfo")
+    plugin_enable = plugin_sub.add_parser("enable", help="Let a recorded plugin load again")
+    plugin_enable.add_argument("name", help="Distribution name")
+    plugin_disable = plugin_sub.add_parser("disable", help="Stop a plugin being imported at all")
+    plugin_disable.add_argument("name", help="Distribution name")
+    plugin_sub.add_parser("sync", help="Record the installed distributions in the lockfile")
+    plugin_doctor = plugin_sub.add_parser("doctor", help="The plugins category of `genus doctor`")
+    plugin_doctor.add_argument("--json", action="store_true", help="Machine-readable output")
     init_parser = subparsers.add_parser("init", help="Interactive setup wizard")
     init_parser.add_argument("--yes", "-y", action="store_true", help="Non-interactive mode")
     init_parser.add_argument("--docker", action="store_true", help="Use Docker for infrastructure")
@@ -1136,9 +1152,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Dispatch to submodules (lazy imports inside branches for fast startup)
     if args.command == "plugin":
-        from robothor.cli.plugins import cmd_plugin_list
+        from robothor.cli.plugins import cmd_plugin
 
-        return cmd_plugin_list()
+        return cmd_plugin(args)
 
     if args.command == "init":
         from robothor.cli.admin import cmd_init

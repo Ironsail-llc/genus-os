@@ -32,9 +32,61 @@ not here: a flag belongs to one command, a setting to the whole instance.
 
 ## `genus plugin`
 
-List installed plugins and why any were refused.
+List installed plugins, record them, and enable or disable one.
 
-Usage: `genus plugin`
+Usage: `genus plugin {list,info,enable,disable,sync,doctor}`
+
+### `genus plugin list`
+
+Installed plugins, what they contribute, and any refusals.
+
+Usage: `genus plugin list`
+
+### `genus plugin info`
+
+Everything known about one distribution.
+
+Usage: `genus plugin info <name>`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Distribution name, e.g. genus-hostinfo |
+
+### `genus plugin enable`
+
+Let a recorded plugin load again.
+
+Usage: `genus plugin enable <name>`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Distribution name |
+
+### `genus plugin disable`
+
+Stop a plugin being imported at all.
+
+Usage: `genus plugin disable <name>`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Distribution name |
+
+### `genus plugin sync`
+
+Record the installed distributions in the lockfile.
+
+Usage: `genus plugin sync`
+
+### `genus plugin doctor`
+
+The plugins category of `genus doctor`.
+
+Usage: `genus plugin doctor [--json]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--json` | — | off | Machine-readable output |
 
 ## `genus init`
 
