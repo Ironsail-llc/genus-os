@@ -137,3 +137,48 @@ def _reads_as_a_credential(tool: str, parameter: str) -> bool:
 @pytest.mark.parametrize("parameter", ["value", "token", "api_key", "password", "secret"])
 def test_the_guard_itself_recognises_the_shapes_it_claims_to(parameter):
     assert _reads_as_a_credential("vault_set", parameter)
+
+
+# ── the other stores a value could reach ─────────────────────────────────────
+
+
+def test_an_audit_row_cannot_carry_a_credential():
+    """An audit row outlives the run and is exported into a support bundle.
+
+    Tool ARGUMENTS were never written here — the row carries a tool name, an
+    actor and a tenant. The one field that could carry a value is ``error``,
+    which is sometimes the text of an exception somebody else raised, which is
+    the exact shape the redactor exists for.
+    """
+    from robothor.engine.tools import dispatch
+
+    recorded: list[dict] = []
+
+    class _Logger:
+        @staticmethod
+        def log_event(**kwargs):
+            recorded.append(kwargs)
+
+    import sys
+    import types
+
+    module = types.ModuleType("robothor.audit.logger")
+    module.log_event = _Logger.log_event
+    original = sys.modules.get("robothor.audit.logger")
+    sys.modules["robothor.audit.logger"] = module
+    try:
+        dispatch._audit_tool_call(
+            "vault_set",
+            "main",
+            "default",
+            status="error",
+            error=f"upstream refused: Bearer {FAKE_TOKEN}",
+        )
+    finally:
+        if original is not None:
+            sys.modules["robothor.audit.logger"] = original
+        else:
+            del sys.modules["robothor.audit.logger"]
+
+    assert recorded, "the audit call recorded nothing"
+    assert FAKE_TOKEN not in json.dumps(recorded, default=str)
