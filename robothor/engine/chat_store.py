@@ -74,6 +74,20 @@ def save_exchange(
     Returns the inserted chat_messages ids (order: [user_id, assistant_id])
     so the async caller can schedule embedding without re-querying.
     """
+    # Redacted at the door, not at each caller.
+    #
+    # `chat_messages` outlives the session, is exported into support bundles,
+    # and is read by `backfill_chat_embeddings` — which sends the text to an
+    # embedding model. The operator pastes a credential into Telegram; without
+    # this it lands in all three. Round 1 fixed the webchat call site and
+    # missed telegram.py, telegram_plan_mode.py, ide.py and
+    # channels/webchat.py, which is what a per-caller fix buys you: a list, and
+    # the entry that gets forgotten is the one that matters.
+    from robothor.secrets.redaction import redact
+
+    user_content = redact(user_content)
+    assistant_content = redact(assistant_content)
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
