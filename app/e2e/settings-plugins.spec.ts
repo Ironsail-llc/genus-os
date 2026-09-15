@@ -38,7 +38,8 @@ const HOSTINFO = {
   groups: ["genus.schemas", "genus.tools"],
   contributions: { tools: 1, schemas: 1 },
   failure_reason: null,
-  manifest: { contract_version: 1, declared: { handlers: ["hostinfo"] } },
+  // The real distribution: entry point `hostinfo`, declared handler `host_state`.
+  manifest: { contract_version: 1, declared: { handlers: ["host_state"] } },
 };
 
 const LEDGER = {

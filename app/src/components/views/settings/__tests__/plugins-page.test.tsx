@@ -39,7 +39,16 @@ const LOADED = {
   groups: ["genus.schemas", "genus.services", "genus.tools"],
   contributions: { tools: 1, schemas: 1, services: 1 },
   failure_reason: null,
-  manifest: { contract_version: 1, declared: { handlers: ["hostinfo"] } },
+  /*
+    The real `plugins/genus-hostinfo`, verbatim: the ENTRY POINT is `hostinfo`
+    (`[project.entry-points."genus.tools"] hostinfo = …`) and the manifest
+    declares `host_state`, the HANDLER it contributes. `loader.py` compares
+    `declared` against the payload's keys, so these are two different
+    namespaces — and `failures[].name` is an entry-point name. A fixture where
+    the two coincide (which the B15a contract sample also has) makes an
+    attribution rule that cannot work look like one that does.
+  */
+  manifest: { contract_version: 1, declared: { handlers: ["host_state"] } },
 };
 
 const OFF = {
@@ -181,7 +190,7 @@ describe("Settings › Plugins — the listing", () => {
     );
     const manifest = within(card).getByTestId("plugin-manifest-genus-hostinfo");
     expect(manifest.textContent).toContain("1");
-    expect(manifest.textContent).toContain("hostinfo");
+    expect(manifest.textContent).toContain("host_state");
 
     expect(screen.getByTestId("plugins-generation").textContent).toContain("3");
     expect(screen.getByTestId("plugins-lockfile").textContent).toContain("3");
@@ -651,6 +660,54 @@ describe("Settings › Plugins — reloading", () => {
     expect(screen.queryByTestId("plugins-reload-failure-genus-hostinfo")).toBeNull();
   });
 
+  /**
+   * The shape the box actually answers with.
+   *
+   * `manifest.declared` holds CONTRIBUTION names — `host_state` for
+   * `genus-hostinfo` — while `failures[].name` is the ENTRY-POINT name,
+   * `hostinfo`. So a manifest almost never names the failing entry point, and
+   * an attribution rule that let a manifest's silence disqualify a
+   * distribution from the name step sent every real refusal on a
+   * manifest-bearing plugin to the unattributed bucket: the operator gets
+   * "could not tie to an installed distribution" for the one plugin installed.
+   */
+  it("attributes a real failure on a plugin whose manifest declares other names", async () => {
+    const ONLY = {
+      ...LOADED,
+      state: "failed",
+      contributions: {},
+      failure_reason: "ImportError: No module named 'psutil'",
+    };
+    mockBridge({
+      listings: [
+        { ...LISTING, plugins: [ONLY] },
+        { ...LISTING, plugins: [ONLY] },
+      ],
+      reload: {
+        status: 200,
+        body: {
+          generation: 8,
+          loaded: 0,
+          failures: [
+            {
+              name: "hostinfo",
+              group: "genus.tools",
+              reason: "ImportError: No module named 'psutil'",
+            },
+          ],
+        },
+      },
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-genus-hostinfo");
+    fireEvent.click(screen.getByTestId("plugins-reload"));
+
+    const line = await screen.findByTestId("plugins-reload-failure-genus-hostinfo");
+    expect(line.textContent).toContain("ImportError: No module named 'psutil'");
+    expect(screen.queryByTestId("plugins-reload-unmatched")).toBeNull();
+  });
+
   it("prints the entry-point name and group beside an attributed line, so it can be checked", async () => {
     mockBridge({
       listings: [LISTING, LISTING],
@@ -693,7 +750,7 @@ describe("Settings › Plugins — reloading", () => {
       groups: ["genus.tools", "genus.services"],
       manifest: {
         contract_version: 1,
-        declared: { handlers: ["hostinfo"], services: ["hostinfo_probe"] },
+        declared: { handlers: ["host_state"], services: ["host_state"] },
       },
     };
     mockBridge({
@@ -708,7 +765,7 @@ describe("Settings › Plugins — reloading", () => {
           loaded: 0,
           failures: [
             { name: "hostinfo", group: "genus.tools", reason: "disabled by operator" },
-            { name: "hostinfo_probe", group: "genus.services", reason: "SyntaxError: bad code" },
+            { name: "hostinfo", group: "genus.services", reason: "SyntaxError: bad code" },
           ],
         },
       },
@@ -723,6 +780,23 @@ describe("Settings › Plugins — reloading", () => {
     const fault = screen.getByTestId("plugins-reload-failure-genus-hostinfo");
     expect(fault.textContent).toContain("SyntaxError: bad code");
     expect(fault.textContent).not.toContain("disabled by operator");
+  });
+
+  it("retires a reload report when a toggle changes what it described", async () => {
+    mockBridge({
+      listings: [LISTING, LISTING, LISTING],
+      toggle: { status: 200, body: { name: "genus-notes", enabled: true, reloaded: false } },
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-genus-notes");
+    fireEvent.click(screen.getByTestId("plugins-reload"));
+    await screen.findByTestId("plugins-reload-result");
+
+    // The report describes the set the engine loaded; a toggle changes what a
+    // reload would load next, so the old report is about a previous moment.
+    fireEvent.click(screen.getByTestId("plugin-switch-genus-notes"));
+    await waitFor(() => expect(screen.queryByTestId("plugins-reload-result")).toBeNull());
   });
 
   it("retires the recording report once a later act has its own answer", async () => {
