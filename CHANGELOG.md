@@ -1,3 +1,9 @@
+## [1.83.0](https://github.com/Ironsail-llc/genus-os/compare/v1.82.1...v1.83.0) (2026-09-15)
+
+### Features
+
+* **helm:** channels and users pages with verify, pairing and invites ([#560](https://github.com/Ironsail-llc/genus-os/issues/560)) ([7d6ab15](https://github.com/Ironsail-llc/genus-os/commit/7d6ab156e2de5d3b31854a878f9bc068843962e7))
+
 ## [1.82.1](https://github.com/Ironsail-llc/genus-os/compare/v1.82.0...v1.82.1) (2026-09-15)
 
 ### Bug Fixes
