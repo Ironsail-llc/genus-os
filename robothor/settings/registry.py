@@ -64,7 +64,7 @@ def field_index() -> dict[str, dict[str, Any]]:
     record carries: ``group``, ``field`` (the Python attribute path),
     ``env`` (the primary name), ``aliases``, ``default``, ``type``,
     ``description``, ``restart_required``, ``restart_units``, ``secret``,
-    ``since``, ``governed``.
+    ``bootstrap``, ``since``, ``governed``.
 
     Raises:
         ValueError: if two fields claim the same primary environment name.
@@ -99,6 +99,7 @@ def field_index() -> dict[str, dict[str, Any]]:
                 "restart_required": bool(extra.get("restart_required", True)),
                 "restart_units": _units(extra),
                 "secret": bool(extra.get("secret", False)),
+                "bootstrap": bool(extra.get("bootstrap", False)),
                 "since": extra.get("since") or "legacy",
                 "governed": bool(extra.get("governed", False)),
             }

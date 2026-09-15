@@ -48,6 +48,7 @@ def declare(
     restart_required: bool = True,
     restart_units: tuple[str, ...] | None = None,
     secret: bool = False,
+    bootstrap: bool = False,
     since: str = "legacy",
     governed: bool = False,
 ) -> Any:
@@ -75,6 +76,15 @@ def declare(
             reports applied and is not.
         secret: True for credentials -- redacted by the CLI and the doc
             generator, and never given a default.
+        bootstrap: True for the credentials that bring the instance UP, and so
+            keep environment-first precedence: the database password (the
+            vault's own rows live in that database), the session signing keys,
+            the substrate transport. Every OTHER credential is resolved
+            vault-first, so that a value the operator hands the assistant
+            beats the snapshot the box booted with -- see
+            :mod:`robothor.secrets.classification`. Only meaningful together
+            with ``secret``; ``genus secrets migrate`` refuses to copy a
+            bootstrap name into the vault and an agent may not be granted one.
         since: the release that introduced the setting, or ``"legacy"`` for
             everything that predates this registry.
         governed: True when the setting is a guardrail tracked in
@@ -89,6 +99,7 @@ def declare(
             "restart_required": restart_required,
             "restart_units": None if restart_units is None else list(restart_units),
             "secret": secret,
+            "bootstrap": bootstrap,
             "since": since,
             "aliases": list(aliases),
             "governed": governed,
@@ -356,6 +367,7 @@ class DatabaseSettings(SettingsGroup):
         "ROBOTHOR_DB_PASSWORD",
         "PostgreSQL password. Unset with a Unix-socket host (peer auth).",
         secret=True,
+        bootstrap=True,
     )
     ssl_mode: str = declare(
         "",
@@ -418,12 +430,14 @@ class DatabaseSettings(SettingsGroup):
         "Full libpq DSN CI points the suites at. Carries a password, so it is "
         "supplied by the workflow rather than committed anywhere.",
         secret=True,
+        bootstrap=True,
     )
     test_admin_dsn: str = declare(
         "",
         "ROBOTHOR_TEST_ADMIN_DSN",
         "Full libpq DSN for the administrative role CI creates and drops test databases with.",
         secret=True,
+        bootstrap=True,
     )
 
 
@@ -444,7 +458,7 @@ class RedisSettings(SettingsGroup):
         "so a plain pytest run cannot XADD onto live streams.",
     )
     password: str = declare(
-        "", "ROBOTHOR_REDIS_PASSWORD", "Redis password, if the server requires one.", secret=True
+        "", "ROBOTHOR_REDIS_PASSWORD", "Redis password, if the server requires one.", secret=True, bootstrap=True
     )
     maxmemory: str = declare(
         "2gb",
@@ -1241,6 +1255,7 @@ class AuthSettings(SettingsGroup):
         "Key session tokens are signed with; at least 32 bytes. Required in "
         "production, where startup fails without it.",
         secret=True,
+        bootstrap=True,
     )
     bridge_sso_secret: str = declare(
         "",
@@ -1248,6 +1263,19 @@ class AuthSettings(SettingsGroup):
         "Shared secret the dashboard and bridge exchange SSO assertions with. "
         "The two must match or every sign-in is refused.",
         secret=True,
+        bootstrap=True,
+    )
+    dashboard_session_secret: str = declare(
+        "",
+        "AUTH_SECRET",
+        "Key the dashboard's own session cookies are signed with. Read by the "
+        "Next.js app rather than by Python, and declared here so that the "
+        "platform classifies it: it is bootstrap (rotating it signs every "
+        "session out) and it is a credential, so the exec scrubber keeps it "
+        "out of every agent's shell.",
+        secret=True,
+        bootstrap=True,
+        since="1.91.0",
     )
     oidc_issuers: str = declare(
         "",
@@ -1808,6 +1836,7 @@ class SecretSettings(SettingsGroup):
         "Key that signs memory intents so a stored intent cannot be forged. "
         "Signing raises rather than falling back when it is unset.",
         secret=True,
+        bootstrap=True,
     )
     env_file: str = declare(
         "/etc/robothor/robothor.env",
@@ -1949,10 +1978,11 @@ class SubstrateSettings(SettingsGroup):
         "Held as a secret: the nats:// form accepts inline user:pass@ "
         "credentials, and instances do set it that way.",
         secret=True,
+        bootstrap=True,
     )
     nats_user: str = declare("", "ROBOTHOR_NATS_USER", "NATS account user.")
     nats_password: str = declare(
-        "", "ROBOTHOR_NATS_PASSWORD", "NATS account password.", secret=True
+        "", "ROBOTHOR_NATS_PASSWORD", "NATS account password.", secret=True, bootstrap=True
     )
     nats_config: str = declare(
         "/etc/nats/nats-server.conf",

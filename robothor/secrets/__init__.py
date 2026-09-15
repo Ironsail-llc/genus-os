@@ -8,7 +8,21 @@ and the rest was bare ``os.environ``. So "where does this instance keep that
 value?" had no single answer, and neither did the question an operator actually
 asks: why does the bridge think it is unset?
 
-The chain, in order:
+There is no longer ONE chain. Which store is asked first depends on what the
+credential is, and :mod:`robothor.secrets.classification` is where that is
+decided:
+
+* **bootstrap** credentials -- the ones that bring the instance up, including
+  the database password the vault's own rows live behind -- are resolved
+  environment first, vault second.
+* **application** credentials -- every third-party token an assistant is
+  handed, uses, proves and rotates -- are resolved VAULT first, environment
+  second. On 2026-09-15 an expired ``GH_TOKEN`` in the process environment
+  shadowed a fresh vault row the assistant had just written, and nothing short
+  of root editing the SOPS file and restarting the unit could clear it. A dead
+  environment value must never silently shadow a live vault row.
+
+The two stores, in either order:
 
 1. **the process environment** — which on systemd is
    ``/run/robothor/secrets.env`` loaded by ``EnvironmentFile=`` (written by
@@ -55,6 +69,7 @@ import time
 from typing import Literal, NamedTuple
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.secrets.classification import is_bootstrap
 from robothor.settings.env import process_env_get
 
 logger = logging.getLogger(__name__)
@@ -64,6 +79,7 @@ __all__ = [
     "ResolvedSecret",
     "SecretSource",
     "get_secret",
+    "is_bootstrap",
     "reset_vault_availability",
     "resolve_secret",
     "secret_source",
@@ -164,6 +180,24 @@ def _vault_read(
     return _clean(found), True
 
 
+def _absent_or(name: str, from_vault: str | None, available: bool) -> ResolvedSecret:
+    """The tail of both chains: a vault row, or why there is no value.
+
+    ``missing`` and ``unavailable`` stay apart here for the reason the module
+    docstring gives — ``tokens.signing_key()`` GENERATES a key on ``missing``
+    and its store is an upsert, so acting on a stale "nobody knows" would
+    overwrite the live signing key.
+    """
+    if from_vault is not None:
+        logger.debug("secrets: %s resolved from the vault", name)
+        return ResolvedSecret(from_vault, "vault")
+    if not available:
+        logger.debug("secrets: %s is not in the environment and the vault is unavailable", name)
+        return ResolvedSecret(None, "unavailable")
+    logger.debug("secrets: %s is not configured in the environment or the vault", name)
+    return ResolvedSecret(None, "missing")
+
+
 def resolve_secret(
     name: str,
     *,
@@ -190,20 +224,39 @@ def resolve_secret(
             recovered.
     """
     from_env = _clean(process_env_get(name, None))
-    if from_env is not None:
-        logger.debug("secrets: %s resolved from the process environment", name)
-        return ResolvedSecret(from_env, "env")
 
+    if is_bootstrap(name):
+        # Environment first, and the vault only as a fallback. These are the
+        # credentials the instance needs in order to HAVE a vault (the rows
+        # live in the database ``ROBOTHOR_DB_PASSWORD`` opens) or that
+        # rotating would lock everybody out of a running instance.
+        if from_env is not None:
+            logger.debug("secrets: %s (bootstrap) resolved from the process environment", name)
+            return ResolvedSecret(from_env, "env")
+        from_vault, available = _vault_read(name, vault_key, tenant_id, live=live)
+        return _absent_or(name, from_vault, available)
+
+    # Application credential: the vault is the store the operator and the
+    # assistant manage, so a row there beats whatever the box booted with.
     from_vault, available = _vault_read(name, vault_key, tenant_id, live=live)
     if from_vault is not None:
-        logger.debug("secrets: %s resolved from the vault", name)
+        logger.debug("secrets: %s resolved from the vault, ahead of the environment", name)
         return ResolvedSecret(from_vault, "vault")
-    if not available:
-        logger.debug("secrets: %s is not in the environment and the vault is unavailable", name)
-        return ResolvedSecret(None, "unavailable")
 
-    logger.debug("secrets: %s is not configured in the environment or the vault", name)
-    return ResolvedSecret(None, "missing")
+    if from_env is not None:
+        # Either the vault holds no such row, or it could not be read at all.
+        # Both fall through to the environment: failing closed on an
+        # unreadable vault would take every channel, provider and integration
+        # down with it, for credentials a root-owned file is still holding
+        # good copies of.
+        logger.debug(
+            "secrets: %s resolved from the process environment (the vault %s)",
+            name,
+            "holds no row" if available else "could not be read",
+        )
+        return ResolvedSecret(from_env, "env")
+
+    return _absent_or(name, None, available)
 
 
 def get_secret(

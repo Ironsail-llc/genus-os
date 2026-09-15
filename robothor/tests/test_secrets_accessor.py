@@ -8,8 +8,12 @@ env), the AES vault, SOPS, and a ``.env`` file — with ``auth/tokens.py``,
 instance keep that value?" had no single answer, so neither did "why does the
 bridge think it is unset?".
 
-The chain is environment, then vault, then nothing. Both halves are asserted
-here, and so are the two things that matter more than either:
+Which store answers FIRST is decided by
+:mod:`robothor.secrets.classification` and asserted in
+``test_secret_precedence.py``; ``GENUS_TEST_ACCESSOR_KEY`` is undeclared, so
+every test here exercises the APPLICATION chain: vault, then environment, then
+nothing. What this file asserts is the machinery underneath either order --
+and the two things that matter more than either:
 
 * a vault that cannot be read degrades to "unset" — it never raises into a
   caller and never turns an optional credential into a startup crash,
@@ -68,14 +72,23 @@ def _vault_holds(monkeypatch, mapping: dict[str, str]) -> list[str]:
     return asked
 
 
-# ── the environment comes first ──────────────────────────────────────────────
+# ── the environment, once the vault has had its turn ─────────────────────────
 
 
-def test_the_process_environment_answers_first(monkeypatch):
+def test_the_environment_answers_when_the_vault_holds_no_row(monkeypatch):
+    """The fall-through half of the application chain.
+
+    The vault is asked first and answers "no such row"; the environment is
+    what is left, and the source says so. (This test used to assert the vault
+    was never TOUCHED, which is no longer true and, once the vault went
+    first, would have passed anyway because an unreadable vault degrades
+    silently — a green test certifying the opposite of what it claimed.)
+    """
     monkeypatch.setenv(NAME, SENTINEL)
-    _vault_raises(monkeypatch, AssertionError("the vault must not be touched"))
+    asked = _vault_holds(monkeypatch, {})
     assert get_secret(NAME) == SENTINEL
     assert secret_source(NAME) == "env"
+    assert asked, "the vault must be asked first for an application credential"
 
 
 def test_an_empty_variable_is_unset_not_empty(monkeypatch):
@@ -91,7 +104,7 @@ def test_an_empty_variable_is_unset_not_empty(monkeypatch):
     assert secret_source(NAME) == "vault"
 
 
-# ── then the vault ───────────────────────────────────────────────────────────
+# ── the vault ────────────────────────────────────────────────────────────────
 
 
 def test_the_vault_answers_under_the_exported_environment_name(monkeypatch):
