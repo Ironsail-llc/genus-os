@@ -136,7 +136,16 @@ _PROVIDER_TOKEN_ENV = re.compile(r"^(?P<provider>[A-Z0-9][A-Z0-9_]*?)(?:_API)?_T
 #: ``channels/intent/hmac_secret``: the prefix alone cannot tell a channel from
 #: any other ``ROBOTHOR_*`` setting, and inventing a channel is how a row lands
 #: somewhere nothing reads.
-CHANNELS: tuple[str, ...] = ("telegram", "slack", "email", "sms", "twilio", "whatsapp", "webchat")
+CHANNELS: tuple[str, ...] = (
+    "telegram",
+    "slack",
+    "email",
+    "sms",
+    "twilio",
+    "whatsapp",
+    "webchat",
+    "teams",
+)
 
 #: Vendors the platform (and the vendor) spell more than one way. Two entries,
 #: both published by the vendor itself: GitHub documents ``GH_TOKEN`` and
@@ -172,6 +181,29 @@ def vault_keys_for_env_name(name: str) -> tuple[str, ...]:
         if key not in candidates:
             candidates.append(key)
 
+    # The channel rule is EXCLUSIVE, and it goes first.
+    #
+    # ``ROBOTHOR_SLACK_BOT_TOKEN`` matched the ``<VENDOR>_TOKEN`` rule and
+    # canonicalised to ``providers/robothor_slack_bot/api_key`` — a row the
+    # Slack daemon never looks at, because ``slack_credentials`` passes
+    # ``vault_key="channels/slack/bot_token"`` explicitly and the setup wizard
+    # writes that key. So ``migrate`` filed the channel tokens where nothing
+    # reads them while ``status`` and ``readable_as`` attested they were served
+    # from the vault, and the runbook's next step — delete the migrated entries
+    # from the SOPS file — would have left the daemon with no token at all.
+    #
+    # Exclusive rather than merely first, because a provider candidate anywhere
+    # in the list is a row some reader may find and serve. And correct on its
+    # own terms: ``ROBOTHOR_`` is this platform's prefix, so what follows it is
+    # never a vendor name.
+    for channel in CHANNELS:
+        prefix = f"ROBOTHOR_{channel.upper()}_"
+        if upper.startswith(prefix):
+            with contextlib.suppress(ValueError):
+                _add(channel_field(channel, upper[len(prefix) :]))
+            _add(cleaned.lower())
+            return tuple(candidates)
+
     api_key = _PROVIDER_API_KEY_ENV.match(upper)
     if api_key:
         # A component the key path cannot carry is not an error: the literal
@@ -184,13 +216,6 @@ def vault_keys_for_env_name(name: str) -> tuple[str, ...]:
     if token:
         with contextlib.suppress(ValueError):
             _add(provider_key(_vendor(token.group("provider"))))
-
-    for channel in CHANNELS:
-        prefix = f"ROBOTHOR_{channel.upper()}_"
-        if upper.startswith(prefix):
-            with contextlib.suppress(ValueError):
-                _add(channel_field(channel, upper[len(prefix) :]))
-            break
 
     _add(cleaned.lower())
     return tuple(candidates)

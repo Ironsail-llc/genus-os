@@ -98,3 +98,62 @@ def test_padding_and_case_do_not_create_a_second_spelling():
     depending on row order — the defect ``validate_component`` exists for."""
     assert vault_keys_for_env_name("  GITHUB_TOKEN  ") == vault_keys_for_env_name("GITHUB_TOKEN")
     assert vault_keys_for_env_name("github_token") == vault_keys_for_env_name("GITHUB_TOKEN")
+
+
+# ── R2: a channel variable is never a provider row ───────────────────────────
+
+#: Every declared channel secret, with the key its READER actually looks under.
+#: `slack_credentials` passes `vault_key=channels/slack/bot_token` explicitly,
+#: and the setup wizard writes `channels/telegram/bot_token`, so these are not a
+#: convention this module is free to choose — they are where the values are.
+CHANNEL_SPELLINGS = [
+    ("ROBOTHOR_SLACK_BOT_TOKEN", "channels/slack/bot_token"),
+    ("ROBOTHOR_SLACK_APP_TOKEN", "channels/slack/app_token"),
+    ("ROBOTHOR_TELEGRAM_BOT_TOKEN", "channels/telegram/bot_token"),
+    ("ROBOTHOR_EMAIL_SMTP_PASSWORD", "channels/email/smtp_password"),
+    ("ROBOTHOR_TWILIO_AUTH_TOKEN", "channels/twilio/auth_token"),
+    ("ROBOTHOR_TEAMS_APP_PASSWORD", "channels/teams/app_password"),
+]
+
+
+@pytest.mark.parametrize(("env", "key"), CHANNEL_SPELLINGS)
+def test_a_channel_variable_canonicalises_to_its_channel_row(env, key):
+    """The canonical candidate is what ``migrate`` and ``vault_set`` write.
+
+    ``ROBOTHOR_SLACK_BOT_TOKEN`` matched the ``<VENDOR>_TOKEN`` rule first and
+    canonicalised to ``providers/robothor_slack_bot/api_key`` — a row the Slack
+    daemon's explicit-key reader never looks at. So ``migrate`` filed the token
+    where nothing reads it, ``genus secrets status`` and ``readable_as``
+    attested it was served from the vault, and after the runbook's "delete the
+    migrated entries" the Slack daemon had no token at all.
+    """
+    assert vault_keys_for_env_name(env)[0] == key
+
+
+@pytest.mark.parametrize(("env", "_key"), CHANNEL_SPELLINGS)
+def test_a_channel_variable_offers_no_provider_candidate(env, _key):
+    """Exclusive, not merely first. A provider candidate anywhere in the list is
+    a row a later reader may find and serve, and ``ROBOTHOR_*`` is a platform
+    prefix — it is never a vendor name."""
+    offered = vault_keys_for_env_name(env)
+    assert not [k for k in offered if k.startswith("providers/")], (
+        f"{env} still offers a provider row: {offered}"
+    )
+
+
+@pytest.mark.parametrize(("env", "key"), CHANNEL_SPELLINGS)
+def test_the_channel_row_claims_its_variable_back(env, key):
+    assert env in env_names_for_vault_key(key)
+
+
+def test_a_provider_row_does_not_claim_a_channel_variable():
+    """The dual has to agree, or ``vault_set``'s ``readable_as`` tells an
+    assistant that a row the channel reader cannot see is readable by it."""
+    claimed = env_names_for_vault_key("providers/robothor_slack_bot/api_key")
+    assert "ROBOTHOR_SLACK_BOT_TOKEN" not in claimed
+
+
+def test_a_real_vendor_token_still_gets_its_provider_row():
+    """The channel rule must not eat the shape C4 was about."""
+    assert vault_keys_for_env_name("GITHUB_TOKEN")[0] == "providers/github/api_key"
+    assert vault_keys_for_env_name("JIRA_API_TOKEN")[0] == "providers/jira/api_key"
