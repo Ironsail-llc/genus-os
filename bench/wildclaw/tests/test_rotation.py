@@ -212,3 +212,79 @@ class TestEnvFallbacks:
         monkeypatch.delenv("WILDCLAW_OUT", raising=False)
         with pytest.raises(SystemExit):
             resolve_paths(None, None, None)
+
+
+class TestEnsureImages:
+    """bench/ is bind-mounted from the host into an image whose robothor
+    package is frozen at build time. Live, 2026-09-15: the host's run_one.py
+    imported a module added on 09-13 into an image built 08-26 and every task
+    died at import. An image built from a different commit than the checkout
+    is a different platform than the one the ledger claims to measure."""
+
+    def _record(self, monkeypatch, labels, head="abc123"):
+        import subprocess as sp
+
+        from bench.wildclaw import rotation
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(list(cmd))
+            if cmd[:2] == ["git", "rev-parse"]:
+                return sp.CompletedProcess(cmd, 0, stdout=head + "\n", stderr="")
+            if cmd[:3] == ["podman", "image", "inspect"]:
+                name = cmd[3]
+                if name not in labels:
+                    return sp.CompletedProcess(cmd, 125, stdout="", stderr="no such image")
+                return sp.CompletedProcess(cmd, 0, stdout=(labels[name] or "") + "\n", stderr="")
+            return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(rotation.subprocess, "run", fake_run)
+        return rotation, calls
+
+    def _builds(self, calls):
+        return [c for c in calls if c[:2] == ["podman", "build"]]
+
+    def test_images_built_from_head_are_left_alone(self, monkeypatch):
+        rotation, calls = self._record(
+            monkeypatch,
+            {
+                "localhost/genus-bench:latest": "abc123",
+                "localhost/genus-bench-tools:latest": "abc123",
+            },
+        )
+        rotation.ensure_images()
+        assert self._builds(calls) == []
+
+    def test_a_stale_image_is_rebuilt_with_the_head_label(self, monkeypatch):
+        rotation, calls = self._record(
+            monkeypatch,
+            {
+                "localhost/genus-bench:latest": "old999",
+                "localhost/genus-bench-tools:latest": "old999",
+            },
+        )
+        rotation.ensure_images()
+        builds = self._builds(calls)
+        assert len(builds) == 2, "base then tools"
+        joined = [" ".join(b) for b in builds]
+        assert "Dockerfile.python" in joined[0] and "genus-bench:latest" in joined[0]
+        assert "bench/wildclaw/Dockerfile" in joined[1] and "genus-bench-tools:latest" in joined[1]
+        assert all("genus.commit=abc123" in j for j in joined)
+
+    def test_a_missing_or_unlabelled_image_is_rebuilt(self, monkeypatch):
+        rotation, calls = self._record(monkeypatch, {"localhost/genus-bench:latest": ""})
+        rotation.ensure_images()
+        assert len(self._builds(calls)) == 2
+
+    def test_a_current_base_but_stale_tools_image_rebuilds_only_tools(self, monkeypatch):
+        rotation, calls = self._record(
+            monkeypatch,
+            {
+                "localhost/genus-bench:latest": "abc123",
+                "localhost/genus-bench-tools:latest": "old999",
+            },
+        )
+        rotation.ensure_images()
+        builds = self._builds(calls)
+        assert len(builds) == 1 and "genus-bench-tools:latest" in " ".join(builds[0])

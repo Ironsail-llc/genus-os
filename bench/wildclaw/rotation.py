@@ -179,6 +179,77 @@ _DB_ENV = {
 #: The containers the harness needs inside the pod, besides the infra one.
 _MEMBERS = ("gb-pg", "gb-redis")
 
+#: The images the harness runs, in build order, with the file each is built
+#: from. ``bench/`` is bind-mounted from the host into the tools image, so an
+#: image whose ``robothor`` package predates the checkout is a different
+#: platform than the one the ledger claims to measure — and, on 2026-09-15,
+#: one whose harness could not even import.
+_BASE_IMAGE = "localhost/genus-bench:latest"
+_TOOLS_IMAGE = "localhost/genus-bench-tools:latest"
+_COMMIT_LABEL = "genus.commit"
+
+
+def _repo_head() -> str:
+    probe = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
+    return probe.stdout.strip() if probe.returncode == 0 else ""
+
+
+def _image_commit(image: str) -> str | None:
+    """The commit an image was built from, "" when unlabelled, None when absent."""
+    probe = subprocess.run(
+        [
+            "podman",
+            "image",
+            "inspect",
+            image,
+            "--format",
+            '{{index .Config.Labels "' + _COMMIT_LABEL + '"}}',
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode != 0:
+        return None
+    return probe.stdout.strip()
+
+
+def _build(image: str, dockerfile: str, head: str, *extra: str) -> None:
+    print(f"building {image} from {head[:10]}")
+    subprocess.run(
+        [
+            "podman",
+            "build",
+            *extra,
+            "-f",
+            dockerfile,
+            "--label",
+            f"{_COMMIT_LABEL}={head}",
+            "-t",
+            image,
+            ".",
+        ],
+        check=True,
+    )
+
+
+def ensure_images() -> None:
+    """Rebuild whichever bench image was not built from the checkout's HEAD.
+
+    The base image carries the platform; the tools image layers the toolchain
+    the tasks assume on top of it, so a rebuilt base always means a rebuilt
+    tools image. A missing label counts as stale: an image nobody can date is
+    an image nobody can trust a score to.
+    """
+    head = _repo_head()
+    if not head:
+        print("not a git checkout — leaving the bench images as they are")
+        return
+    base_stale = _image_commit(_BASE_IMAGE) != head
+    if base_stale:
+        _build(_BASE_IMAGE, "Dockerfile.python", head, "--target", "production")
+    if base_stale or _image_commit(_TOOLS_IMAGE) != head:
+        _build(_TOOLS_IMAGE, "bench/wildclaw/Dockerfile", head)
+
 
 def _member_running(name: str) -> bool:
     """True only when podman says the container exists AND is running."""
@@ -300,6 +371,7 @@ def main() -> int:
     if skipped:
         print(f"not in rotation (no staged data): {', '.join(skipped)}")
 
+    ensure_images()
     ensure_pod()
 
     now = _dt.datetime.now(_dt.UTC)
