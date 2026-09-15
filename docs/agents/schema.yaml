@@ -641,6 +641,19 @@ optional:
         sandbox-by-default for host-trusted agents (RBAC + exec allowlist
         still apply); under ROBOTHOR_SANDBOX_DEFAULT_MODE=enforce,
         exec-holding agents without "host" get a Docker sandbox.
+    credentials:
+      type: string
+      enum: [operator, ""]
+      default: ""
+      description: >
+        Credential tier. "operator" lets this agent use the vault tools
+        (vault_get/set/test/list/delete) to keep, prove and rotate the
+        credentials the operator hands it. Empty (the default) refuses them.
+        Deliberately NOT the `role:` field: that one feeds RBAC, and setting
+        it to a value no role_permissions row seeds denies the agent every
+        tool. Grant this to the operator's own agent and its delivery agents;
+        never to a worker, because a spawned sub-agent runs under its own id
+        and reads its own manifest.
     lifecycle_hooks:
       type: list[LifecycleHook]
       description: >

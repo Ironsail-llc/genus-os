@@ -251,14 +251,26 @@ same write-only shape the Helm Secrets page uses.
 
 The write takes effect immediately. No restart, and nothing for you to do.
 
-The three vault tools are **operator-tier**: granted to agents whose manifest
-declares `role: main` (or `owner`/`operator`/`admin`) and refused for everything
-else, including any sub-agent one of them spawns. A spawned child runs under its
-own agent id, so its own manifest is what is checked.
+The vault tools are **operator-tier**. An operator grants the tier explicitly:
+
+```yaml
+id: main
+v2:
+  credentials: operator
+```
+
+Everything else is refused, including any sub-agent one of them spawns — a
+spawned child runs under its own agent id, so its own manifest is what is
+checked.
+
+This is deliberately **not** the `role:` field. `role:` feeds RBAC, and setting
+it to a value no `role_permissions` row seeds (`main`, `operator`) denies that
+agent *every* tool under `ROBOTHOR_RBAC_MODE=enforce`. Two postures, two
+fields; `ROBOTHOR_DEFAULT_SERVICE_ROLE` cannot grant the credential tier either.
 
 ### What a sub-agent sees
 
-Nothing, unless its own manifest says so. An agent's `exec` commands used to
+Nothing *inherited*, unless its own manifest says so. An agent's `exec` commands used to
 inherit the engine's whole process environment — all ~50 credentials. The child
 environment is now built from an allowlist: the process essentials (`PATH`,
 `HOME`, `LANG`, `LC_*`, `TERM`, `TZ`, `TMPDIR`, `ROBOTHOR_WORKSPACE`,
@@ -290,6 +302,38 @@ default for an existing install) changes nothing and logs per agent exactly what
 what your agents actually need, then promote. New installs start at `enforce`.
 Grants apply on every rung, so promoting is never what first gives an agent a
 credential.
+
+#### What the scrub is not
+
+It removes **ambient inheritance**. It is not a process boundary, and it is
+worth knowing exactly where the line is:
+
+- The credentials are still in the **engine's own** environment. On Linux,
+  `/proc/<pid>/environ` of a dumpable process is readable by any process of the
+  same uid — and an `exec` child is one, with the engine as its parent. Genus
+  sets `PR_SET_DUMPABLE=0` at startup so those entries become root-only, and
+  `secret_paths` refuses `/proc/*/environ`, `set` and `declare -p`; the first is
+  a real kernel boundary, the second is a denylist.
+- **The remedy is to stop holding them there.** Run the migration and shrink the
+  SOPS file (below): once the engine's environment carries only bootstrap
+  credentials, that is all procfs can leak.
+- **The boundary for an agent you do not trust is the sandbox.** `sandbox: docker`
+  gives the container no host environment at all — which is also why a `secrets:`
+  grant does not reach a sandboxed agent, and the tool result says so.
+
+#### `gh` and other HOME-based logins
+
+Taking `GH_TOKEN` out of the child does not make `gh` fail — it makes it fall
+back to `~/.config/gh/hosts.yml`, so an ungranted agent would run as whoever ran
+`gh auth login`. That is usually the operator personally, which is a *wider*
+identity than the instance's token, not a narrower one.
+
+So under `enforce` Genus points `GH_CONFIG_DIR` at an empty per-run directory
+unless the agent is granted `GITHUB_TOKEN`: an ungranted agent's `gh` is logged
+out, and a granted one acts as the instance. Reading the login files directly
+(`gh auth token`, `cat ~/.config/gh/hosts.yml`, `~/.config/gcloud`) is refused
+by `secret_paths`. Grant `GITHUB_TOKEN` to the agents that genuinely need
+GitHub.
 
 ### Moving out of the environment
 

@@ -32,10 +32,14 @@ FAKE_TOKEN = "ghp_FAKE0000_never_returned_to_a_model_0000"
 
 @pytest.fixture(autouse=True)
 def _operator_agent(monkeypatch):
-    """The three vault tools are operator-tier; most tests run as one."""
+    """The vault tools need the operator credential tier; most tests hold it.
+
+    The tier is ``v2.credentials: operator`` in the agent's OWN manifest, a key
+    RBAC does not read — see ``test_credential_tier.py`` for why that matters.
+    """
     import robothor.engine.tools.handlers.vault as vault_tools
 
-    monkeypatch.setattr(vault_tools, "manifest_role", lambda agent_id, workspace="": "main")
+    monkeypatch.setattr(vault_tools, "credential_tier", lambda agent_id: "operator")
 
 
 @pytest.fixture
@@ -145,17 +149,17 @@ async def test_a_key_with_no_known_tester_says_so(stored, monkeypatch):
 
 @pytest.mark.parametrize("tool", ["vault_get", "vault_set", "vault_test", "vault_delete"])
 @pytest.mark.asyncio
-async def test_a_service_role_agent_is_refused(stored, monkeypatch, tool):
+async def test_an_agent_without_the_tier_is_refused(stored, monkeypatch, tool):
     """A spawned sub-agent runs under its OWN agent id, and its own manifest
-    declares no operator role -- so this is the sub-agent refusal, stated as
+    declares no credential tier -- so this is the sub-agent refusal, stated as
     the rule that produces it."""
     import robothor.engine.tools.handlers.vault as vault_tools
 
-    monkeypatch.setattr(vault_tools, "manifest_role", lambda agent_id, workspace="": "service")
+    monkeypatch.setattr(vault_tools, "credential_tier", lambda agent_id: "")
     args = {"key": "providers/github/api_key", "value": "ghp_FAKE9999"}
     result = await HANDLERS[tool](args, _ctx(agent_id="worker"))
-    assert "error" in result, f"{tool} was not refused for a service-role agent"
-    assert "operator" in result["error"].lower()
+    assert "error" in result, f"{tool} was not refused for an agent without the tier"
+    assert result["denied_by"] == "credential_tier"
 
 
 @pytest.mark.asyncio
@@ -163,10 +167,8 @@ async def test_a_sub_agent_cannot_write_the_vault(stored, monkeypatch):
     """The specific case, run rather than reasoned about."""
     import robothor.engine.tools.handlers.vault as vault_tools
 
-    roles = {"main": "main", "researcher": "service"}
-    monkeypatch.setattr(
-        vault_tools, "manifest_role", lambda agent_id, workspace="": roles.get(agent_id, "service")
-    )
+    tiers = {"main": "operator", "researcher": ""}
+    monkeypatch.setattr(vault_tools, "credential_tier", lambda agent_id: tiers.get(agent_id, ""))
     refused = await HANDLERS["vault_set"](
         {"key": "providers/github/api_key", "value": "ghp_FAKE9999"}, _ctx(agent_id="researcher")
     )
@@ -178,10 +180,10 @@ async def test_a_sub_agent_cannot_write_the_vault(stored, monkeypatch):
 async def test_an_unreadable_manifest_fails_closed(stored, monkeypatch):
     import robothor.engine.tools.handlers.vault as vault_tools
 
-    def boom(agent_id, workspace=""):
+    def boom(agent_id):
         raise RuntimeError("manifest directory is gone")
 
-    monkeypatch.setattr(vault_tools, "manifest_role", boom)
+    monkeypatch.setattr(vault_tools, "credential_tier", boom)
     result = await HANDLERS["vault_set"](
         {"key": "providers/github/api_key", "value": "ghp_FAKE9999"}, _ctx()
     )
@@ -270,3 +272,56 @@ async def test_a_reader_inside_the_vault_failure_cooldown_still_sees_the_write(s
         "ghp_FAKE4444_the_replacement",
         "vault",
     ), "a reader inside the vault failure cooldown was still served the stale environment value"
+
+
+# ── I7: the identity hint is not a second way to read the key ────────────────
+
+
+@pytest.mark.asyncio
+async def test_an_identity_hint_that_is_the_key_itself_is_refused(stored, monkeypatch):
+    """Review finding I7.
+
+    ``identity_hint`` is whatever the vendor calls the account, and for
+    OpenRouter that is ``data.label`` — a string the KEY'S OWNER chose, which
+    people commonly set to a fragment of the key itself. So the one field
+    ``vault_test`` returns from the vendor's body is a channel back to the
+    value, and the probe returned ``sk-or-v1-abcd...wxyz`` verbatim.
+    """
+    import robothor.secrets.testers as testers
+
+    async def fake_probe(kind, value):
+        return testers.TestOutcome(ok=True, identity_hint=value, error_class=None)
+
+    monkeypatch.setattr(testers, "probe", fake_probe)
+    result = await HANDLERS["vault_test"]({"key": "providers/github/api_key"}, _ctx())
+    assert FAKE_TOKEN not in _flatten(result)
+    assert result["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_hint_sharing_a_long_run_with_the_value_is_refused(stored, monkeypatch):
+    """Not just equality: a label like ``prod-ghp_FAKE0000_never…`` carries the
+    key inside a longer string, and a hint that merely CONTAINS key material is
+    key material."""
+    import robothor.secrets.testers as testers
+
+    async def fake_probe(kind, value):
+        return testers.TestOutcome(ok=True, identity_hint=f"prod-{value[:20]}-eu", error_class=None)
+
+    monkeypatch.setattr(testers, "probe", fake_probe)
+    result = await HANDLERS["vault_test"]({"key": "providers/github/api_key"}, _ctx())
+    assert FAKE_TOKEN[:20] not in _flatten(result)
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_hint_survives(stored, monkeypatch):
+    """The hint is the whole value of ``vault_test`` over a bare ok/failed:
+    it is what catches a token that works but belongs to the wrong account."""
+    import robothor.secrets.testers as testers
+
+    async def fake_probe(kind, value):
+        return testers.TestOutcome(ok=True, identity_hint="octocat", error_class=None)
+
+    monkeypatch.setattr(testers, "probe", fake_probe)
+    result = await HANDLERS["vault_test"]({"key": "providers/github/api_key"}, _ctx())
+    assert result["identity_hint"] == "octocat"
