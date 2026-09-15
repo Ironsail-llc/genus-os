@@ -40,6 +40,9 @@ const HOSTINFO = {
   failure_reason: null,
   // The real distribution: entry point `hostinfo`, declared handler `host_state`.
   manifest: { contract_version: 1, declared: { handlers: ["host_state"] } },
+  // Nothing recorded a source: `sync` found a package somebody else installed,
+  // so `remove` refuses it and the page offers no button.
+  source: null,
 };
 
 const LEDGER = {
@@ -54,19 +57,24 @@ const LEDGER = {
   contributions: { services: 2 },
   failure_reason: null,
   manifest: null,
+  source: null,
 };
+
+const INDEX = "https://plugins.example.org/index.json";
 
 /** Before `genus plugin sync` has ever run: no file, no rows, no verdicts. */
 const FRESH = {
   generation: 1,
-  lockfile: { path_configured: true, present: false, malformed: false, rows: 0 },
+  indexes: [INDEX],
+  lockfile: { path_configured: true, present: false, malformed: false, rows: 0, problem: null },
   plugins: [HOSTINFO, LEDGER],
 };
 
 /** After recording: a row each, and `verdict` is the placeholder it always is. */
 const RECORDED = {
   generation: 1,
-  lockfile: { path_configured: true, present: true, malformed: false, rows: 2 },
+  indexes: [INDEX],
+  lockfile: { path_configured: true, present: true, malformed: false, rows: 2, problem: null },
   plugins: [
     { ...HOSTINFO, recorded: true, verdict: "unscanned" },
     { ...LEDGER, recorded: true, verdict: "unscanned" },
@@ -76,7 +84,8 @@ const RECORDED = {
 /** After the reload: the engine has acted on the row the operator wrote. */
 const AFTER_RELOAD = {
   generation: 2,
-  lockfile: { path_configured: true, present: true, malformed: false, rows: 2 },
+  indexes: [INDEX],
+  lockfile: { path_configured: true, present: true, malformed: false, rows: 2, problem: null },
   plugins: [
     { ...HOSTINFO, recorded: true, verdict: "unscanned" },
     {
@@ -144,9 +153,14 @@ async function setupMocks(page: Page): Promise<Recorded> {
         generation: 2,
         loaded: 1,
         failures: [
-          // The ENTRY-POINT name, not the distribution's — which is why the
-          // page matches this back through the listing's groups.
-          { name: "ledger", group: "genus.services", reason: "disabled by operator" },
+          // `name` is the ENTRY POINT, `distribution` the package: the page
+          // files the line under the second and never infers it from the first.
+          {
+            name: "ledger",
+            group: "genus.services",
+            reason: "disabled by operator",
+            distribution: "genus-ledger",
+          },
         ],
       });
     }
@@ -233,6 +247,145 @@ test.describe("Settings › Plugins", () => {
   });
 
   /**
+   * Install from the registry, end to end: preview, read the findings, accept
+   * them, install, and be told the engine has not loaded it yet.
+   *
+   * `review` is the verdict this drives, because it is the COMMON one — `safe`
+   * means "contributes tools and touches nothing outside this process", so
+   * anything that imports `os` lands here. The property worth the e2e is that
+   * Install is genuinely dead until the checkbox is ticked: a plan the operator
+   * has not accepted must not be installable by pressing the obvious button.
+   */
+  test("previews a plan, refuses to install it unaccepted, then installs it", async ({ page }) => {
+    await setupMocks(page);
+
+    const PLAN = {
+      name: "genus-weather",
+      version: "1.4.0",
+      origin: "registry",
+      index_url: INDEX,
+      publisher_key_id: "genus-2026",
+      filename: "genus_weather-1.4.0-py3-none-any.whl",
+      sha256: "abc123def456" + "0".repeat(52),
+      size: 8192,
+      summary: "Weather as a tool",
+      verdict: "review",
+      reasons: ["genus_weather/__init__.py:4: imports os"],
+      prompt_scan: "static-only",
+      groups: ["genus.tools"],
+      files_scanned: 3,
+      members_accounted: 11,
+      accept_review: false,
+    };
+    const INSTALLED = {
+      ...HOSTINFO,
+      name: "genus-weather",
+      version: "1.4.0",
+      recorded: true,
+      verdict: "review",
+      groups: ["genus.tools"],
+      contributions: { tools: 1 },
+      manifest: { contract_version: 1, declared: { handlers: ["weather_now"] } },
+      source: {
+        origin: "registry",
+        installed_at: "2099-01-01T00:00:00+00:00",
+        index_url: INDEX,
+        publisher_key_id: "genus-2026",
+      },
+    };
+
+    let installed = false;
+    // Registered after setupMocks, so these win over its catch-alls.
+    await page.route("**/api/bridge/api/plugins/install", async (route) => {
+      const body = JSON.parse(route.request().postData() ?? "{}") as Record<string, unknown>;
+      if (body.dry_run === true) {
+        return json(route, {
+          plan: PLAN,
+          installed: false,
+          dry_run: true,
+          row: null,
+          reload_hint: "reload the engine (SIGHUP) or restart to apply",
+          note: "",
+        });
+      }
+      installed = true;
+      return json(route, {
+        plan: { ...PLAN, accept_review: true },
+        installed: true,
+        dry_run: false,
+        row: {
+          name: "genus-weather",
+          version: "1.4.0",
+          manifest_sha256: "1".repeat(64),
+          verdict: "review",
+          enabled: true,
+          kinds: ["genus.tools"],
+          recorded_at: "2099-01-01T00:00:00+00:00",
+          members_accounted: 11,
+          source: INSTALLED.source,
+        },
+        reload_hint: "reload the engine (SIGHUP) or restart to apply",
+        note: "",
+      });
+    });
+    await page.route("**/api/bridge/api/plugins", (route) =>
+      json(route, {
+        ...RECORDED,
+        plugins: installed ? [...RECORDED.plugins, INSTALLED] : RECORDED.plugins,
+      })
+    );
+
+    await page.goto(PLUGINS_URL, { waitUntil: "networkidle" });
+    await expect(page.locator('[data-testid="settings-page-plugins"]')).toBeVisible({
+      timeout: 15000,
+    });
+
+    const card = page.locator('[data-testid="plugins-install-card"]');
+    await expect(card).toBeVisible();
+    // One configured index is not a choice, so there is no picker to make.
+    await expect(page.locator('[data-testid="plugins-install-index"]')).toHaveCount(0);
+    // A local wheel is a CLI act, and the card says where rather than hiding it.
+    await expect(card).toContainText("genus plugin install ./x.whl --sha256");
+
+    await page.locator('[data-testid="plugins-install-name"]').fill("genus-weather");
+    await page.locator('[data-testid="plugins-install-preview"]').click();
+
+    const plan = page.locator('[data-testid="plugins-install-plan"]');
+    await expect(plan).toBeVisible();
+    await expect(plan).toContainText("genus_weather-1.4.0-py3-none-any.whl");
+    await expect(plan).toContainText("abc123def456");
+    await expect(plan).toContainText("genus-2026");
+    await expect(page.locator('[data-testid="plugins-install-verdict"]')).toHaveAttribute(
+      "data-verdict",
+      "review"
+    );
+    await expect(page.locator('[data-testid="plugins-install-reasons"]')).toContainText(
+      "genus_weather/__init__.py:4: imports os"
+    );
+
+    // Dead until the findings are accepted out loud.
+    await expect(page.locator('[data-testid="plugins-install-submit"]')).toBeDisabled();
+    await page.locator('[data-testid="plugins-install-accept"]').check();
+    await expect(page.locator('[data-testid="plugins-install-submit"]')).toBeEnabled();
+
+    await page.locator('[data-testid="plugins-install-submit"]').click();
+    await expect(page.locator('[data-testid="plugins-install-result"]')).toContainText(
+      "genus-weather"
+    );
+
+    // Installing is not loading: the bar is the page saying so.
+    await expect(page.locator('[data-testid="plugins-reload-bar"]')).toBeVisible();
+    // The listing was re-read, and the new card carries where it came from and
+    // the only Remove on the page.
+    await expect(page.locator('[data-testid="plugin-genus-weather"]')).toBeVisible();
+    await expect(page.locator('[data-testid="plugin-source-genus-weather"]')).toContainText(
+      "registry"
+    );
+    await expect(page.locator('[data-testid="plugin-remove-genus-weather"]')).toBeVisible();
+    await expect(page.locator('[data-testid="plugin-remove-genus-hostinfo"]')).toHaveCount(0);
+  });
+
+  /**
    * The strings on this screen are not the page's own: a `failure_reason` is a
    * Python exception, and those carry dotted module paths and `snake_case`
    * names that no browser breaks by default. A 30-character fixture reason
@@ -282,6 +435,10 @@ test.describe("Settings › Plugins", () => {
     const screen = page.locator('[data-testid="settings-page-plugins"]');
     await expect(screen).toBeVisible({ timeout: 15000 });
     await expect(page.locator('[data-testid="plugins-record"]')).toBeVisible();
+    // The install form is two inputs and a button on one row at 1440 px; at
+    // 390 px they have to wrap rather than push the pane sideways.
+    await expect(page.locator('[data-testid="plugins-install-name"]')).toBeVisible();
+    await expect(page.locator('[data-testid="plugins-install-preview"]')).toBeVisible();
     await expect(page.locator('[data-testid="plugin-genus-hostinfo"]')).toBeVisible();
     await expect(page.locator('[data-testid="plugin-switch-genus-hostinfo"]')).toBeVisible();
 
