@@ -13,12 +13,13 @@ flip; one distribution routinely publishes into several groups (the shipped
 make "is this plugin on?" a question with three answers.
 
 The load state is measured by actually loading, per distribution, through the
-real loader — which is what makes ``disabled`` here mean the same thing it
-means in the daemon, gate and all. The honest limit: a per-distribution load
-passes no ``reserved_names``, so a plugin refused in production solely for
-shadowing a built-in of one particular registry reports as ``loaded`` here. The
-registries each own a different reserved set, and inventing a union of them
-would be a fourth list to drift.
+real loader with the real reserved names — ``loader.builtin_names(group)``,
+derived from the same live registries the enforcing callers read. That is what
+makes ``disabled``, ``failed`` and the reason string here mean exactly what
+they mean in the daemon. The first version passed ``reserved_names=set()``, so
+a distribution the engine refuses for shadowing ``web_fetch`` was reported as
+``loaded`` by every operator surface and passed a ``required`` doctor check
+whose whole purpose is to catch that case.
 """
 
 from __future__ import annotations
@@ -113,7 +114,11 @@ def status_for(name: str, dist: Any, eps: list[Any]) -> PluginStatus:
 
     lock = lockfile.read_lockfile()
     row = lock.row(name)
-    loaded = load_plugins(entry_points=eps, reserved_names=set())
+    # No `reserved_names`: the default is the per-group built-in set, which is
+    # what every enforcing caller passes. Passing `set()` here is what made a
+    # distribution the engine refuses for shadowing `web_fetch` report as
+    # `loaded` on every operator surface, the `required` doctor check included.
+    loaded = load_plugins(entry_points=eps)
 
     contributions = {
         kind: len(getattr(loaded, kind, {}) or {}) for kind in KINDS if getattr(loaded, kind, None)

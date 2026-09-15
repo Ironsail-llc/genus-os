@@ -47,6 +47,8 @@ def _lockfile_state() -> dict[str, Any]:
         "path": lock.path,
         "present": lock.present,
         "malformed": lock.malformed,
+        "problem": lock.problem,
+        "bad_rows": len(lock.bad_rows),
         "rows": len(lock.rows),
         "disabled": sum(1 for row in lock.rows.values() if not row.enabled),
         "mode": None,
@@ -71,9 +73,21 @@ async def _lockfile(ctx: DoctorContext) -> Result:
         )
     if state["malformed"]:
         return fail(
-            "the plugin lockfile does not parse as JSON, so it is being ignored "
-            "and every installed plugin loads unconditionally. Run "
-            "`genus plugin sync` to rewrite it."
+            f"the plugin lockfile {state['problem']}, so it is being ignored and "
+            "every installed plugin loads unconditionally. Repair the file if you "
+            "can — `genus plugin sync --force` rebuilds it from what is installed "
+            "and loses every disable it recorded."
+        )
+    if state["bad_rows"]:
+        # Not "sync to fix it": the readable rows still govern, and a plain
+        # sync REFUSES here precisely so it cannot erase the decisions the
+        # reader could not make out. Pointing the operator at --force without
+        # saying what it costs is how the first version walked them into it.
+        return fail(
+            f"the plugin lockfile {state['problem']} — those plugins are no longer "
+            "governed by it and `genus plugin sync` will refuse until the file is "
+            "repaired. Fix the row(s) by hand, or `genus plugin sync --force` to "
+            "rebuild and lose whatever they recorded."
         )
     mode = state["mode"]
     if mode is not None and mode & 0o077:
@@ -99,10 +113,26 @@ def _load_state() -> list[dict[str, Any]]:
     ]
 
 
+async def _inventory(ctx: DoctorContext) -> list[dict[str, Any]]:
+    """The inventory, measured once per doctor run.
+
+    ``plugins.load`` and ``plugins.drift`` both need it, and discovery walks
+    every distribution on ``sys.path`` and imports the plugins — about 32 ms
+    and a round of third-party imports apiece. Cached on the context, which is
+    per-run, so a ``--fix`` re-run still measures the repaired state.
+    """
+    cached = ctx._plugin_inventory  # noqa: SLF001 - the context's own per-run cache
+    if cached is None:
+        cached = await ctx.run_blocking(_load_state)
+        ctx._plugin_inventory = cached  # noqa: SLF001
+    rows: list[dict[str, Any]] = list(cached)
+    return rows
+
+
 async def _load(ctx: DoctorContext) -> Result:
     """Every installed plugin either loaded or is disabled on purpose."""
     try:
-        rows = await ctx.run_blocking(_load_state)
+        rows = await _inventory(ctx)
     except Exception as error:  # noqa: BLE001 - a broken registry is a skip, not a crash
         return skip(f"plugin discovery failed ({type(error).__name__})")
 
@@ -123,7 +153,7 @@ async def _load(ctx: DoctorContext) -> Result:
 async def _drift(ctx: DoctorContext) -> Result:
     """No recorded plugin's manifest has changed since it was recorded."""
     try:
-        rows = await ctx.run_blocking(_load_state)
+        rows = await _inventory(ctx)
     except Exception as error:  # noqa: BLE001 - a broken registry is a skip, not a crash
         return skip(f"plugin discovery failed ({type(error).__name__})")
 

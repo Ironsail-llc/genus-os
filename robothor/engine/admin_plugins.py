@@ -25,16 +25,29 @@ Three rules this module is built around:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from collections.abc import Callable
+
     from fastapi import FastAPI
+
+#: What the offloaded call gives back — so a handler keeps the return type of
+#: the function it hands to the worker instead of flattening to ``Any``.
+_T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["plugin_listing", "register", "reload_plugin_stack", "set_plugin_enabled"]
+__all__ = [
+    "plugin_listing",
+    "register",
+    "reload_plugin_stack",
+    "set_plugin_enabled",
+    "sync_lockfile",
+]
 
 #: What a distribution name may look like. PyPI names are letters, digits and
 #: ``.-_`` separated runs; this reaches a filename comparison and an audit
@@ -83,6 +96,34 @@ def set_plugin_enabled(name: str, enabled: bool) -> dict[str, Any] | None:
     return payload
 
 
+class LockfileRefusedError(Exception):
+    """``sync`` declined to write, and why. Becomes a 409, never a traceback."""
+
+
+def sync_lockfile(force: bool = False) -> dict[str, Any]:
+    """Record every installed distribution, and report what changed.
+
+    Raises :class:`LockfileRefusedError` rather than writing when the existing file
+    holds intent it cannot read — rewriting it would silently re-enable every
+    plugin the operator had turned off. The reason never names the path: which
+    distributions are installed is a platform fact, where the file lives is not.
+    """
+    from robothor.plugins.lockfile import sync
+
+    result = sync(force=force)
+    if not result.ok:
+        raise LockfileRefusedError(result.refused or "the lockfile could not be written")
+    return {
+        "recorded": [row.name for row in result.recorded],
+        "added": list(result.added),
+        "updated": list(result.updated),
+        "removed": list(result.removed),
+        # Recording is not applying. The running engine keeps serving the set
+        # it discovered until something reloads it.
+        "reloaded": False,
+    }
+
+
 def reload_plugin_stack() -> dict[str, Any]:
     """Re-run discovery and report what the new set holds.
 
@@ -94,6 +135,8 @@ def reload_plugin_stack() -> dict[str, Any]:
     from robothor.plugins.loader import load_plugins
 
     gen = daemon.perform_plugin_reload()
+    # The bare call takes the per-group built-in reserved names, so this
+    # answers with the refusals production actually applies.
     result = load_plugins()
     return {
         "generation": gen,
@@ -120,20 +163,52 @@ def register(app: FastAPI) -> None:
             raise HTTPException(status_code=422, detail="not a distribution name")
         return name
 
+    async def _write(fn: Callable[..., _T], *args: Any) -> _T:
+        """Run one blocking plugin operation off the loop, reporting OSError.
+
+        Everything in this module walks ``importlib.metadata`` over every
+        distribution on ``sys.path``, reads files, and — on a reload, and on a
+        listing that meets a distribution installed since boot — runs
+        ``ep.load()``, which executes third-party module bodies with no bound
+        at all. ``admin_providers`` hands exactly this class of work to
+        ``asyncio.to_thread``; doing it inline here meant one slow package
+        stalled every other request the engine was serving.
+        """
+        try:
+            return await asyncio.to_thread(fn, *args)
+        except LockfileRefusedError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except OSError as exc:
+            # A lockfile path that is a directory, a read-only filesystem, a
+            # full disk. The message names the error class, never the path.
+            raise HTTPException(
+                status_code=503,
+                detail=f"the plugin lockfile could not be written ({type(exc).__name__})",
+            ) from exc
+
     @router.get("/plugins")
     async def list_plugins() -> dict[str, Any]:
         """What is installed, what loaded, and what the lockfile records."""
-        return plugin_listing()
+        return await _write(plugin_listing)
 
     @router.post("/plugins/reload")
     async def reload() -> dict[str, Any]:
         """Re-discover plugins without restarting. The SIGHUP body, by HTTP."""
-        return reload_plugin_stack()
+        return await _write(reload_plugin_stack)
+
+    @router.post("/plugins/sync")
+    async def sync() -> dict[str, Any]:
+        """Record the installed distributions. What makes the Helm page usable
+        on a fresh install, where nothing is recorded and every enable is a
+        404. Deliberately not ``force``: an operator discarding recorded
+        disables should have read the doctor line first, so that escape lives
+        on the CLI."""
+        return await _write(sync_lockfile)
 
     @router.post("/plugins/{name}/enable")
     async def enable(name: str) -> dict[str, Any]:
         """Let a recorded plugin load again on the next reload."""
-        row = set_plugin_enabled(_checked(name), True)
+        row = await _write(set_plugin_enabled, _checked(name), True)
         if row is None:
             raise HTTPException(status_code=404, detail="no lockfile row for that plugin")
         return row
@@ -141,7 +216,7 @@ def register(app: FastAPI) -> None:
     @router.post("/plugins/{name}/disable")
     async def disable(name: str) -> dict[str, Any]:
         """Stop a plugin being imported at all, from the next reload on."""
-        row = set_plugin_enabled(_checked(name), False)
+        row = await _write(set_plugin_enabled, _checked(name), False)
         if row is None:
             raise HTTPException(status_code=404, detail="no lockfile row for that plugin")
         return row

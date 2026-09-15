@@ -149,6 +149,20 @@ class Lockfile:
     present: bool = False
     malformed: bool = False
     rows: dict[str, LockRow] = field(default_factory=dict)
+    #: Positions of rows the reader could not make sense of -- a non-object, or
+    #: an object with no ``name``. They are NOT dropped in silence: a row that
+    #: cannot be read is an operator decision that cannot be honoured, and the
+    #: first version of this file skipped them, leaving ``malformed`` false and
+    #: all three doctor checks green while a plugin the operator had turned off
+    #: went back to loading.
+    bad_rows: tuple[int, ...] = ()
+    #: What is wrong with the file, in the words the operator gets told -- "is
+    #: not valid JSON", "cannot be read (IsADirectoryError)". Empty when it is
+    #: fine. Carried rather than re-derived so that the log line, the ``sync``
+    #: refusal and the doctor all say the same thing about the same file; the
+    #: first version re-derived it and told an operator whose lockfile path was
+    #: a DIRECTORY that their JSON did not parse.
+    problem: str = ""
 
     def row(self, name: str) -> LockRow | None:
         return self.rows.get(name)
@@ -156,8 +170,26 @@ class Lockfile:
     @property
     def usable(self) -> bool:
         """Whether the loader may act on this file. A malformed or missing one
-        constrains nothing -- today's behaviour, exactly."""
+        constrains nothing -- today's behaviour, exactly.
+
+        Unreadable ROWS do not make the file unusable, and that is deliberate:
+        the alternative discards the rows that ARE readable, so one bad hand
+        edit would put every other disabled plugin back into service. The
+        readable decisions stand; the unreadable ones are reported loudly by
+        :mod:`robothor.doctor.checks.plugins` and block ``sync``.
+        """
         return self.present and not self.malformed
+
+    @property
+    def trustworthy(self) -> bool:
+        """Whether this file can be carried forward by a rewrite.
+
+        Stricter than :attr:`usable`. ``sync`` rebuilds every row from what is
+        installed and keeps only ``enabled`` and ``verdict`` from what it reads
+        -- so a file it cannot fully read is one whose intent it would silently
+        discard, which is the single thing ``sync`` must never do.
+        """
+        return self.usable and not self.bad_rows
 
 
 @dataclass(frozen=True)
@@ -169,6 +201,14 @@ class SyncResult:
     added: tuple[str, ...] = ()
     updated: tuple[str, ...] = ()
     removed: tuple[str, ...] = ()
+    #: Why nothing was written, or "". A refusal is not a failure to be
+    #: retried: it means the file holds intent this command cannot read and
+    #: would therefore destroy.
+    refused: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return not self.refused
 
 
 def lockfile_path() -> Path | None:
@@ -188,13 +228,31 @@ def lockfile_path() -> Path | None:
     except Exception as exc:  # noqa: BLE001 - settings that do not resolve are not a plugin fault
         logger.debug("Plugin lockfile path: settings unavailable (%s)", type(exc).__name__)
         configured = ""
-    if configured:
-        return Path(configured).expanduser()
-
     from robothor.settings.sources import config_yaml_path
 
     config_file = config_yaml_path()
-    return None if config_file is None else config_file.parent / LOCKFILE_NAME
+    config_dir = None if config_file is None else config_file.parent
+
+    if configured:
+        candidate = Path(configured).expanduser()
+        if candidate.is_absolute():
+            return candidate
+        # A RELATIVE value resolves against the config directory, never the
+        # process's working directory. The engine runs with systemd's WorkingDirectory
+        # and the operator runs `genus plugin disable` from wherever they happen to
+        # be standing, so a CWD-relative path meant the two read different files:
+        # the disable reported success and the daemon never saw it. An inert
+        # control with a success message is the failure this whole file exists
+        # to stop shipping.
+        if config_dir is None:
+            logger.warning(
+                "ROBOTHOR_PLUGIN_LOCKFILE is relative and no workspace resolves; "
+                "ignoring it. Set an absolute path."
+            )
+            return None
+        return config_dir / candidate
+
+    return None if config_dir is None else config_dir / LOCKFILE_NAME
 
 
 def dist_name(dist: Any) -> str:
@@ -277,29 +335,52 @@ def read_lockfile(path: Path | None = None) -> Lockfile:
     except FileNotFoundError:
         return Lockfile(path=resolved, present=False)
     except OSError as exc:
-        _warn_once(resolved, f"cannot be read ({type(exc).__name__})")
-        return Lockfile(path=resolved, present=True, malformed=True)
+        problem = f"cannot be read ({type(exc).__name__})"
+        _warn_once(resolved, problem)
+        return Lockfile(path=resolved, present=True, malformed=True, problem=problem)
 
     try:
         data = json.loads(raw)
     except ValueError as exc:
-        _warn_once(resolved, f"is not valid JSON ({exc.__class__.__name__})")
-        return Lockfile(path=resolved, present=True, malformed=True)
+        problem = f"is not valid JSON ({exc.__class__.__name__})"
+        _warn_once(resolved, problem)
+        return Lockfile(path=resolved, present=True, malformed=True, problem=problem)
 
     if not isinstance(data, dict) or not isinstance(data.get("plugins"), list):
-        _warn_once(resolved, "does not hold a 'plugins' list")
-        return Lockfile(path=resolved, present=True, malformed=True)
+        problem = "does not hold a 'plugins' list"
+        _warn_once(resolved, problem)
+        return Lockfile(path=resolved, present=True, malformed=True, problem=problem)
 
     rows: dict[str, LockRow] = {}
-    for entry in data["plugins"]:
+    bad: list[int] = []
+    for index, entry in enumerate(data["plugins"]):
         row = _row_from_json(entry)
-        if row is not None:
-            rows[row.name] = row
-    return Lockfile(path=resolved, present=True, malformed=False, rows=rows)
+        if row is None:
+            bad.append(index)
+            continue
+        rows[row.name] = row
+    problem = ""
+    if bad:
+        problem = (
+            f"holds {len(bad)} row(s) that cannot be read "
+            f"(position(s) {', '.join(str(i) for i in bad)})"
+        )
+        _warn_once(resolved, problem)
+    return Lockfile(
+        path=resolved,
+        present=True,
+        malformed=False,
+        rows=rows,
+        bad_rows=tuple(bad),
+        problem=problem,
+    )
 
 
 def _warn_once(path: Path, problem: str) -> None:
-    key = str(path)
+    # Keyed on the problem as well as the path: a file that is both unreadable
+    # in one row and re-broken in a different way later has two things to say,
+    # and "once" means once per thing, not once per file forever.
+    key = f"{path}|{problem}"
     if key in _warned:
         return
     _warned.add(key)
@@ -378,19 +459,41 @@ def entry_point_groups() -> dict[str, set[str]]:
     return groups
 
 
-def sync(path: Path | None = None) -> SyncResult:
+def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
     """Record every installed plugin distribution, keeping recorded intent.
 
     Upserts a row per distribution and drops rows for distributions that are no
     longer installed. ``enabled`` is carried over -- a sync must never quietly
     re-enable something an operator turned off, which is the one way this
     command could undo a decision it exists to record.
+
+    **It REFUSES over a file it cannot fully read**, and that refusal is the
+    whole reason this signature grew a ``force``. The first version read a
+    corrupt file as ``{}`` and cheerfully rebuilt every row with
+    ``enabled=True`` -- so the command whose docstring promises never to undo a
+    disable undid every one of them, reporting them as ``added``. Worse, the
+    doctor's own remedy for a corrupt lockfile was "run `genus plugin sync`",
+    so the platform walked the operator into it.
+
+    ``force`` is the escape for an operator who has read what will be lost and
+    wants the file rebuilt from what is installed anyway.
     """
     resolved = path if path is not None else lockfile_path()
     if resolved is None:
-        return SyncResult(path=None)
+        return SyncResult(path=None, refused="no lockfile path resolves")
 
-    existing = read_lockfile(resolved).rows
+    lock = read_lockfile(resolved)
+    if not force and lock.present and not lock.trustworthy:
+        return SyncResult(
+            path=resolved,
+            refused=(
+                f"the lockfile {lock.problem}, so which plugins you disabled cannot be "
+                "read. Rewriting it now would silently re-enable every one of "
+                "them. Repair the file, or re-run with --force to rebuild it "
+                "from what is installed and accept losing those decisions."
+            ),
+        )
+    existing = lock.rows
     groups = entry_point_groups()
     now = datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -420,7 +523,16 @@ def sync(path: Path | None = None) -> SyncResult:
             updated.append(name)
 
     removed = sorted(set(existing) - set(rows))
-    write_lockfile(rows, resolved)
+    try:
+        write_lockfile(rows, resolved)
+    except OSError as exc:
+        # A path that is a directory, a read-only filesystem, a full disk. The
+        # caller turns this into exit 2 or a 5xx with a sentence; a traceback
+        # out of `genus plugin sync` helps nobody.
+        return SyncResult(
+            path=resolved,
+            refused=f"could not write the lockfile ({type(exc).__name__}: {exc.strerror or exc})",
+        )
     return SyncResult(
         path=resolved,
         recorded=tuple(rows[name] for name in sorted(rows)),
@@ -457,17 +569,23 @@ def set_enabled(name: str, enabled: bool, path: Path | None = None) -> LockRow |
     )
     rows = dict(lock.rows)
     rows[name] = updated
+    # An OSError here is a real answer for the caller, not a traceback: the
+    # engine route turns it into a 5xx with a sentence and the CLI into exit 2.
     write_lockfile(rows, resolved)
     return updated
 
 
-def refusal_for(dist: Any, lock: Lockfile) -> str | None:
+def refusal_for(dist: Any, lock: Lockfile, digests: dict[int, str] | None = None) -> str | None:
     """Why this distribution must not be imported, or None.
 
     The loader's gate, kept here so that the rule and the record it reads have
     one home. Order matters: a disabled plugin is reported as disabled even if
     its manifest has also drifted, because the operator's own decision is the
     more useful answer and re-syncing would not change it.
+
+    ``digests`` is an optional per-load memo keyed on the distribution object,
+    so a package publishing into five groups hashes its manifest once rather
+    than five times.
     """
     if not lock.usable:
         return None
@@ -477,6 +595,13 @@ def refusal_for(dist: Any, lock: Lockfile) -> str | None:
         return None
     if not row.enabled:
         return DISABLED_REASON
-    if row.manifest_sha256 != manifest_digest(dist):
+    if digests is None:
+        digest = manifest_digest(dist)
+    else:
+        key = id(dist)
+        if key not in digests:
+            digests[key] = manifest_digest(dist)
+        digest = digests[key]
+    if row.manifest_sha256 != digest:
         return DRIFT_REASON
     return None

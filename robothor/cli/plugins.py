@@ -118,10 +118,27 @@ def cmd_plugin_list() -> int:
     else:
         print("Loaded: nothing (every entry point was refused — see below)")
 
-    if result.failures:
+    # A deliberate disable is not a refusal, and printing it under a heading
+    # that ends "fix the cause or uninstall the distribution" told an operator
+    # their own decision was a fault they should undo.
+    from robothor.plugins.lockfile import DISABLED_REASON
+
+    turned_off = [f for f in result.failures if f.reason == DISABLED_REASON]
+    refused = [f for f in result.failures if f.reason != DISABLED_REASON]
+
+    if turned_off:
+        print()
+        print("Disabled:")
+        for f in turned_off:
+            print(f"  {f.name} [{f.group}]: {DISABLED_REASON}")
+        print()
+        print("  Turn one back on with `genus plugin enable <name>` (the")
+        print("  DISTRIBUTION name — `genus plugin list` shows it above).")
+
+    if refused:
         print()
         print("Refused:")
-        for f in result.failures:
+        for f in refused:
             print(f"  {f.name} [{f.group}]: {f.reason}")
         print()
         print(
@@ -184,9 +201,19 @@ def cmd_plugin_info(name: str) -> int:
 def _set_enabled(name: str, enabled: bool) -> int:
     from robothor.plugins.lockfile import set_enabled
 
-    updated = set_enabled(name, enabled)
+    verb = "enable" if enabled else "disable"
+    try:
+        updated = set_enabled(name, enabled)
+    except OSError as exc:
+        # A path that is a directory, a read-only filesystem, a full disk. A
+        # traceback out of `genus plugin disable` helps nobody.
+        print(
+            f"genus plugin {verb}: could not write the lockfile for {name!r} "
+            f"({type(exc).__name__}: {exc.strerror or exc}).",
+            file=sys.stderr,
+        )
+        return 2
     if updated is None:
-        verb = "enable" if enabled else "disable"
         print(
             f"genus plugin {verb}: no lockfile row for {name!r}. Run "
             "`genus plugin sync` to record the installed distributions, then "
@@ -198,17 +225,27 @@ def _set_enabled(name: str, enabled: bool) -> int:
     return 0
 
 
-def cmd_plugin_sync() -> int:
+def cmd_plugin_sync(force: bool = False) -> int:
     """Record every installed plugin distribution in the lockfile."""
     from robothor.plugins.lockfile import sync
 
-    result = sync()
+    try:
+        result = sync(force=force)
+    except OSError as exc:  # pragma: no cover - sync reports these itself
+        print(f"genus plugin sync: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
     if result.path is None:
         print(
             "genus plugin sync: no workspace resolves, so there is nowhere to "
-            "write the lockfile. Set ROBOTHOR_WORKSPACE or ROBOTHOR_PLUGIN_LOCKFILE.",
+            "write the lockfile. Set ROBOTHOR_WORKSPACE or ROBOTHOR_PLUGIN_LOCKFILE "
+            "to an absolute path.",
             file=sys.stderr,
         )
+        return 2
+    if not result.ok:
+        # Exit non-zero: a sync that wrote nothing must not look like one that
+        # succeeded, least of all in a script.
+        print(f"genus plugin sync: {result.refused}", file=sys.stderr)
         return 2
 
     print(f"recorded {len(result.recorded)} plugin distribution(s)")
@@ -246,7 +283,7 @@ def cmd_plugin(args: argparse.Namespace) -> int:
     if command == "list":
         return cmd_plugin_list()
     if command == "sync":
-        return cmd_plugin_sync()
+        return cmd_plugin_sync(bool(getattr(args, "force", False)))
     if command == "doctor":
         return cmd_plugin_doctor(bool(getattr(args, "json", False)))
     name = str(getattr(args, "name", "") or "").strip()

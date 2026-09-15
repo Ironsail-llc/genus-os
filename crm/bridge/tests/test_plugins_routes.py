@@ -58,6 +58,14 @@ ENGINE_ROW = {
 
 ENGINE_RELOAD = {"generation": 4, "loaded": 1, "failures": []}
 
+ENGINE_SYNC = {
+    "recorded": ["acme-tools"],
+    "added": ["acme-tools"],
+    "updated": [],
+    "removed": [],
+    "reloaded": False,
+}
+
 
 class FakeEngine:
     """Stands in for the engine's ``/api/admin/plugins`` surface."""
@@ -70,6 +78,8 @@ class FakeEngine:
         self.calls.append((method, path, json))
         if path.endswith("/reload"):
             return self.status, ENGINE_RELOAD
+        if path.endswith("/sync"):
+            return self.status, ENGINE_SYNC
         if path.endswith(("/enable", "/disable")):
             return self.status, ENGINE_ROW
         return self.status, ENGINE_LISTING
@@ -93,6 +103,7 @@ def fake_engine():
         ("post", "/api/plugins/acme-tools/disable"),
         ("post", "/api/plugins/acme-tools/enable"),
         ("post", "/api/plugins/reload"),
+        ("post", "/api/plugins/sync"),
     ],
 )
 def test_a_non_operator_is_refused_before_the_engine_is_called(
@@ -145,6 +156,30 @@ def test_reload_proxies(controls_client_as_operator, fake_engine):
     assert ("POST", "/api/admin/plugins/reload", None) in fake_engine.calls
 
 
+def test_sync_proxies(controls_client_as_operator, fake_engine):
+    """The action the Plugins page opens with on a fresh install.
+
+    Until this existed the page was read-only until somebody SSHed in: nothing
+    is recorded, so every enable and disable is a 404.
+    """
+    response = controls_client_as_operator.post("/api/plugins/sync")
+    assert response.status_code == 200
+    assert response.json() == ENGINE_SYNC
+    assert ("POST", "/api/admin/plugins/sync", None) in fake_engine.calls
+
+
+def test_a_refused_sync_keeps_the_engines_409(controls_client_as_operator, fake_engine):
+    """A sync the engine declined must not read as one that worked."""
+    fake_engine.status = 409
+    assert controls_client_as_operator.post("/api/plugins/sync").status_code == 409
+
+
+def test_sync_is_not_confused_with_a_plugin_named_sync(controls_client_as_operator, fake_engine):
+    """`/{name}/enable` must not swallow the literal path."""
+    controls_client_as_operator.post("/api/plugins/sync")
+    assert fake_engine.calls[0][1] == "/api/admin/plugins/sync"
+
+
 def test_an_unknown_plugin_keeps_the_engines_404(controls_client_as_operator, fake_engine):
     fake_engine.status = 404
     assert controls_client_as_operator.post("/api/plugins/nope/disable").status_code == 404
@@ -168,6 +203,7 @@ def test_each_act_writes_one_audit_event_with_identifiers_only(
         ("/api/plugins/acme-tools/disable", "plugin.disable"),
         ("/api/plugins/acme-tools/enable", "plugin.enable"),
         ("/api/plugins/reload", "plugin.reload"),
+        ("/api/plugins/sync", "plugin.sync"),
     ):
         with patch("routers.plugins.audited") as audited:
             controls_client_as_operator.post(path)

@@ -199,7 +199,15 @@ def _build_parser() -> argparse.ArgumentParser:
     plugin_enable.add_argument("name", help="Distribution name")
     plugin_disable = plugin_sub.add_parser("disable", help="Stop a plugin being imported at all")
     plugin_disable.add_argument("name", help="Distribution name")
-    plugin_sub.add_parser("sync", help="Record the installed distributions in the lockfile")
+    plugin_sync = plugin_sub.add_parser(
+        "sync", help="Record the installed distributions in the lockfile"
+    )
+    plugin_sync.add_argument(
+        "--force",
+        action="store_true",
+        help="Rebuild even when the existing lockfile cannot be read, accepting "
+        "the loss of every disable it recorded",
+    )
     plugin_doctor = plugin_sub.add_parser("doctor", help="The plugins category of `genus doctor`")
     plugin_doctor.add_argument("--json", action="store_true", help="Machine-readable output")
     init_parser = subparsers.add_parser("init", help="Interactive setup wizard")

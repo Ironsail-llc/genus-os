@@ -89,6 +89,32 @@ async def list_plugins(request: Request) -> JSONResponse:
     return _proxied(status, body)
 
 
+@router.post("/sync")
+async def sync_plugins(request: Request) -> JSONResponse:
+    """Record the installed distributions in the lockfile.
+
+    The action a fresh install opens with: until a sync has run, nothing is
+    recorded, the lockfile governs nothing, and every enable/disable is a 404 —
+    so without this route the Plugins page was read-only until somebody got a
+    shell on the box.
+
+    No ``force``. The engine refuses when the existing file holds intent it
+    cannot read, and an operator discarding recorded disables should be reading
+    the doctor's line about what it costs first; that escape stays on the CLI.
+
+    Declared before ``/{name}/...`` so the literal path is matched as itself.
+    """
+    require_operator(request)
+    status, body = await engine_request("POST", "/api/admin/plugins/sync")
+    audited(
+        request,
+        "plugin.sync",
+        action="sync",
+        status="ok" if status < 400 else "error",
+    )
+    return _proxied(status, body)
+
+
 @router.post("/reload")
 async def reload_plugins(request: Request) -> JSONResponse:
     """Re-discover plugins in the running engine, without a restart.

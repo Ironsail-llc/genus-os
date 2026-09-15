@@ -81,6 +81,7 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         # implementation of "which plugins are installed" here would answer
         # from a different view of site-packages.
         ("GET", "/api/plugins"),
+        ("POST", "/api/plugins/sync"),
         ("POST", "/api/plugins/reload"),
         ("POST", "/api/plugins/{name}/enable"),
         ("POST", "/api/plugins/{name}/disable"),

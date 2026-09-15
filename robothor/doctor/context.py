@@ -114,6 +114,12 @@ class DoctorContext:
     #: by argument let ``--fix`` overshoot the deadline by about twice
     #: ``timeout_s``, because the fix and the recheck each got a fresh one.
     _deadline: float | None = field(default=None, repr=False)
+    #: The plugin inventory, memoized for the run. ``plugins.load`` and
+    #: ``plugins.drift`` both need it, and measuring it walks every
+    #: distribution on ``sys.path`` and imports the plugins -- twice per run
+    #: when each check asked independently. Per-RUN rather than per-process, so
+    #: a ``--fix`` re-run still measures the repaired state.
+    _plugin_inventory: Any = field(default=None, repr=False)
 
     def budget(self) -> float:
         """Seconds the next thing may take: the per-check box, narrowed by

@@ -391,7 +391,7 @@ reading `safe` because no scanner ran would be worse than no field at all.
 |---|---|
 | `genus plugin list` | what is installed, what it contributes, what is disabled, what was refused |
 | `genus plugin info <name>` | one distribution: manifest, groups, contributions, lock row, load state |
-| `genus plugin sync` | upsert a row per installed distribution; drop rows for ones that are gone |
+| `genus plugin sync [--force]` | upsert a row per installed distribution; drop rows for ones that are gone |
 | `genus plugin enable <name>` | let a recorded plugin load again |
 | `genus plugin disable <name>` | stop it being imported at all |
 | `genus plugin doctor [--json]` | the `plugins` category of `genus doctor` |
@@ -416,16 +416,32 @@ means anything:
 
 That last one is the important one. **The lockfile is opt-in**: it constrains
 what it has been told about, so a fresh install behaves as it always has and
-`genus plugin sync` is what turns the control on. A lockfile that does not
-parse is treated as absent, logged once, and reported by the doctor — a
-governance file that could brick an engine would be deleted by the first
-operator it bricked.
+`genus plugin sync` is what turns the control on.
+
+### When the file is damaged
+
+Two different cases, and they are handled differently on purpose:
+
+* **The whole file** does not parse, or cannot be read at all. It is treated as
+  absent — logged once, reported by `plugins.lockfile`, and nothing is
+  refused. A governance file that could brick an engine would be deleted by the
+  first operator it bricked.
+* **One row** does not parse (not an object, or missing `name`). The rows that
+  *do* parse still govern — discarding them would put every other disabled
+  plugin straight back into service — and the unreadable ones are counted,
+  logged once with their position, and reported by `plugins.lockfile`. They are
+  never dropped in silence.
+
+In both cases `genus plugin sync` **refuses**, because it carries `enabled`
+forward from what it reads and a file it cannot read is one whose disables it
+would erase. `--force` rebuilds from what is installed and accepts that loss;
+the doctor says so rather than sending you to a plain `sync`.
 
 ### The doctor
 
 | check | severity | what it asks |
 |---|---|---|
-| `plugins.lockfile` | recommended | present, parseable, mode 0600 |
+| `plugins.lockfile` | recommended | present, parseable, every row readable, mode 0600 |
 | `plugins.load` | required | every installed plugin loaded, or is disabled on purpose |
 | `plugins.drift` | required | no recorded manifest differs from what is on disk |
 
@@ -443,6 +459,7 @@ acts with identifiers only.
 | route (bridge) | engine | what it does |
 |---|---|---|
 | `GET /api/plugins` | `GET /api/admin/plugins` | generation, lockfile state, one row per distribution |
+| `POST /api/plugins/sync` | `POST /api/admin/plugins/sync` | record what is installed; 409 when the existing file cannot be read (`--force` is CLI-only) |
 | `POST /api/plugins/{name}/enable` | `POST /api/admin/plugins/{name}/enable` | flip the row; 404 if unrecorded; does **not** reload |
 | `POST /api/plugins/{name}/disable` | `POST /api/admin/plugins/{name}/disable` | as above |
 | `POST /api/plugins/reload` | `POST /api/admin/plugins/reload` | runs the SIGHUP body; returns `{generation, loaded, failures}` |

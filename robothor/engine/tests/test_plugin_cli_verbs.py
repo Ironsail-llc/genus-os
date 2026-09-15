@@ -130,6 +130,37 @@ class TestList:
         out = capsys.readouterr().out
         assert lockfile.DISABLED_REASON in out
 
+    def test_a_deliberate_disable_is_not_listed_as_a_fault(self, installed, capsys):
+        """The operator's own decision must not come back as "fix the cause".
+
+        It was printed under `Refused:`, whose footer says "Fix the cause or
+        uninstall the distribution" — advice to undo a choice they had just
+        made on purpose.
+        """
+        cmd_plugin(_args("sync"))
+        cmd_plugin(_args("disable", name="acme-tools"))
+        capsys.readouterr()
+        cmd_plugin(_args("list"))
+        out = capsys.readouterr().out
+
+        assert "Disabled:" in out
+        assert "genus plugin enable" in out
+        assert "uninstall the distribution" not in out
+        assert "Refused:" not in out
+
+    def test_a_real_refusal_still_says_fix_or_uninstall(self, monkeypatch, capsys):
+        monkeypatch.setenv("ROBOTHOR_PLUGIN_MANIFEST_MODE", "enforce")
+
+        class _Broken(_EP):
+            def load(self):
+                return {"genus_contract_version": "0.1", "handlers": {"x": lambda: None}}
+
+        with patch.object(loader, "_discover", lambda: [_Broken("probe", "genus.tools")]):
+            cmd_plugin(_args("list"))
+        out = capsys.readouterr().out
+        assert "Refused:" in out
+        assert "uninstall the distribution" in out
+
     def test_no_subcommand_still_lists(self, installed, capsys):
         assert cmd_plugin(argparse.Namespace()) == 0
         assert "acme-tools" in capsys.readouterr().out

@@ -342,7 +342,11 @@ writes channel credentials, by design.
 installed distributions the operator accepted, what each one's manifest looked
 like when it was recorded, and which are disabled. Empty (the default) means
 `<workspace>/.robothor/plugins.lock`, beside `config.yaml`, and the file is
-written mode `0600`.
+written mode `0600`. **Give it an absolute path.** A relative value resolves
+against that same config directory rather than the working directory, because
+the engine runs under systemd's `WorkingDirectory` and you run `genus plugin
+disable` from wherever you happen to be standing — a CWD-relative path would
+mean the two read different files and the disable would never reach the daemon.
 
 Three things follow from it, and none of them is on until `genus plugin sync`
 has run once: an installed plugin can be turned off without uninstalling it, a

@@ -83,6 +83,7 @@ describe("bridge proxy denylist", () => {
     // response deliberately carries no filesystem path at all.
     for (const path of [
       "/api/plugins",
+      "/api/plugins/sync",
       "/api/plugins/reload",
       "/api/plugins/genus-hostinfo/enable",
       "/api/plugins/genus-hostinfo/disable",

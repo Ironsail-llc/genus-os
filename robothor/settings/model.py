@@ -166,10 +166,12 @@ class PathsSettings(SettingsGroup):
     plugin_lockfile: str = declare(
         "",
         "ROBOTHOR_PLUGIN_LOCKFILE",
-        "Path of the plugin lockfile: which installed distributions the "
-        "operator accepted, what their manifest looked like when they were "
+        "Absolute path of the plugin lockfile: which installed distributions "
+        "the operator accepted, what their manifest looked like when they were "
         "recorded, and which are disabled. Empty means "
-        "<workspace>/.robothor/plugins.lock.",
+        "<workspace>/.robothor/plugins.lock. A relative value resolves against "
+        "that same config directory, never the working directory — the engine "
+        "and an operator's shell must read the same file.",
         since="unreleased",
     )
     manifest_dir: str = declare(
