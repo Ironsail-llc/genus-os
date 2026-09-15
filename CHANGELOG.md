@@ -1,3 +1,14 @@
+## [1.91.0](https://github.com/Ironsail-llc/genus-os/compare/v1.90.0...v1.91.0) (2026-09-15)
+
+### Features
+
+* **agents:** bundle export, install from a path or url, and a share route ([#574](https://github.com/Ironsail-llc/genus-os/issues/574)) ([d48661d](https://github.com/Ironsail-llc/genus-os/commit/d48661d463e3b176536154e5d53af0f0e5997ecd))
+* **channels:** microsoft teams as a plugin channel ([#573](https://github.com/Ironsail-llc/genus-os/issues/573)) ([b7cb9a7](https://github.com/Ironsail-llc/genus-os/commit/b7cb9a7161b59fc4bd431015db23cdf7db034ec5))
+
+### Bug Fixes
+
+* **engine:** the read short-circuit answers short after its first resend ([#575](https://github.com/Ironsail-llc/genus-os/issues/575)) ([e276d16](https://github.com/Ironsail-llc/genus-os/commit/e276d16e25720a5e25de5a97c8cf4cc4d9fae3ae))
+
 ## [1.90.0](https://github.com/Ironsail-llc/genus-os/compare/v1.89.0...v1.90.0) (2026-09-15)
 
 ### Features
