@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-375 settings in 13 groups.
+378 settings in 13 groups.
 
 ## paths
 
@@ -377,12 +377,12 @@ Where and how the instance runs: host accounts, federation, backups.
 | `GENUS_OS_DEPLOYED_AT` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Timestamp the Helm chart stamps onto every pod, so a running container can say when it was deployed rather than when it booted. |
 | `GENUS_OS_DEPLOYED_FROM_PR` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | PR number a staging deployment came from, stamped by the Helm chart. Empty on a production release, which comes from a tag. |
 | `GENUS_OS_IMAGE_TAG` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Container image tag the Helm chart stamped onto the pod. Production pins an exact vX.Y.Z; staging pins pr-N-sha-<short>. |
-| `GENUS_OWNER_EMAIL` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | Operator email the one-line installer passes to `genus init --owner-email`. Required with --yes, for the same reason. |
-| `GENUS_OWNER_NAME` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | Operator name the one-line installer passes to `genus init --owner-name`. Required with --yes, because a non-interactive install has nowhere to ask. |
+| `GENUS_OWNER_EMAIL` | str | _(empty)_ | no | no | unreleased | Operator email the one-line installer passes to `genus init --owner-email`. Required with --yes, for the same reason. |
+| `GENUS_OWNER_NAME` | str | _(empty)_ | no | no | unreleased | Operator name the one-line installer passes to `genus init --owner-name`. Required with --yes, because a non-interactive install has nowhere to ask. |
 | `GENUS_PRODUCTION_URL` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Repository variable supplying the production base URL the release workflow smoke-tests. Empty falls back to the workflow's default. |
 | `GENUS_SNAPSHOT_REPOSITORY` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Default repository `genus snapshot` reads and writes when --repository is not given. |
 | `GENUS_URL` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Base URL the release workflow smoke-tests after a deploy, calling /api/live and /api/ready on it. |
-| `GENUS_VERSION` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | Release the one-line installer (scripts/install.sh) installs when --version is not given. Empty asks the GitHub releases API, and falls back to the version the script was stamped with at release time. Read by the installer only; nothing in the running platform resolves its own version from the environment. |
+| `GENUS_VERSION` | str | _(empty)_ | no | no | unreleased | Release the one-line installer (scripts/install.sh) installs when --version is not given. Empty asks the GitHub releases API, and falls back to the version the script was stamped with at release time. Read by the installer only; nothing in the running platform resolves its own version from the environment. |
 | `ROBOTHOR_BACKUP_GROUP` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Which backup group a templated base-backup unit instance handles. |
 | `ROBOTHOR_BOOT_LOOP_LIMIT` | int | `3` | `robothor-engine`, `robothor-bridge` | no | legacy | Restarts within the boot-loop window before the guard stops restarting and pages instead. |
 | `ROBOTHOR_BOOT_LOOP_WINDOW` | int | `900` | `robothor-engine`, `robothor-bridge` | no | legacy | Seconds the boot-loop counter spans. |

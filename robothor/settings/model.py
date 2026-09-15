@@ -2088,6 +2088,8 @@ class SubstrateSettings(SettingsGroup):
         "time. Read by the installer only; nothing in the running platform "
         "resolves its own version from the environment.",
         since="unreleased",
+        restart_required=False,
+        restart_units=(),
     )
     installer_owner_name: str = declare(
         "",
@@ -2096,6 +2098,8 @@ class SubstrateSettings(SettingsGroup):
         "--owner-name`. Required with --yes, because a non-interactive "
         "install has nowhere to ask.",
         since="unreleased",
+        restart_required=False,
+        restart_units=(),
     )
     installer_owner_email: str = declare(
         "",
@@ -2103,6 +2107,8 @@ class SubstrateSettings(SettingsGroup):
         "Operator email the one-line installer passes to `genus init "
         "--owner-email`. Required with --yes, for the same reason.",
         since="unreleased",
+        restart_required=False,
+        restart_units=(),
     )
 
 
