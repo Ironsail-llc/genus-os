@@ -120,9 +120,16 @@ _CREDENTIAL_NAME = (
 #: One ``name: value`` line whose name means credential and whose value is a
 #: literal. ``null``, ``~``, an empty string and a bare env reference are all
 #: "no value here", which is what a correctly exported bundle looks like.
+#:
+#: A value that OPENS A COLLECTION is excluded too, and that one is not a
+#: nicety: ``requires.secrets: [BILLING_API_KEY]`` is the bundle's own list of
+#: variable NAMES, so a rule that read it as a credential would make every
+#: correctly declared bundle unexportable. A credential is a scalar — no
+#: provider has ever issued a list.
 _MAPPING_CREDENTIAL = re.compile(
     rf"^\s*(?:-\s*)?[\"']?[A-Za-z0-9_-]{{0,40}}{_CREDENTIAL_NAME}[\"']?\s*:\s*"
     r"(?![\"']?(?:null|~|EnvRef|BearerEnvRef)[\"']?\s*$)"
+    r"(?![\[{|>&*#])"
     r"[\"']?\S",
     re.IGNORECASE,
 )

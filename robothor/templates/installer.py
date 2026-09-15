@@ -154,11 +154,21 @@ def install(
         repo_root = _find_repo_root()
     repo_root = repo_root.resolve(strict=True)
 
-    if source not in {"local", "hub"}:
+    if source not in {"local", "hub", "bundle"}:
         raise TemplateSecurityError(f"Unsupported agent install source: {source}")
     if source == "hub":
         source_ref = validate_identifier(source_ref, label="hub bundle slug")
         source_sha256 = validate_sha256(source_sha256, label="hub bundle SHA-256")
+    if source == "bundle":
+        # An agent bundle an operator named themselves. The ID is still strict
+        # — it becomes a filename under ``docs/agents/`` — but the digest is
+        # OPTIONAL rather than mandatory, because a bundle handed over as a
+        # directory has no archive bytes to hash. When there IS an archive the
+        # caller has already verified it against the hash the operator pinned;
+        # what is recorded here is provenance, not the check.
+        source_ref = validate_identifier(source_ref, label="agent bundle ID")
+        if source_sha256 is not None:
+            source_sha256 = validate_sha256(source_sha256, label="agent bundle SHA-256")
 
     try:
         bundle = trusted_directory(template_path, label="template bundle")
@@ -313,7 +323,10 @@ def install(
 
     # Record installation
     recorded_source = str(bundle)
-    if source == "hub":
+    if source in {"hub", "bundle"}:
+        # Never the on-disk path. For a hub install that path is a temporary
+        # download; for a bundle install it is the staging copy the caller is
+        # about to delete. The strict ID is the only durable thing either has.
         assert source_ref is not None  # validated before any bundle files were read
         recorded_source = source_ref
     instance.record_install(
