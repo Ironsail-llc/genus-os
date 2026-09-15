@@ -561,3 +561,17 @@ def test_missing_docker_is_named_rather_than_assumed(installer, tmp_path) -> Non
     assert result.returncode != 0
     assert "docker" in result.stderr.lower()
     assert "compose" in result.stderr.lower()
+
+
+# --------------------------------------------------------------------------
+# the gate that keeps the script honest
+# --------------------------------------------------------------------------
+
+
+def test_ci_runs_shellcheck_over_the_shell_scripts() -> None:
+    """A shell script nothing lints is a shell script nobody reviews twice."""
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "shellcheck" in ci, "CI does not lint the shell in scripts/"
+    assert re.search(r"shellcheck[^\n]*scripts/\*\.sh", ci), (
+        "the shellcheck step does not cover scripts/*.sh"
+    )

@@ -56,7 +56,11 @@ ARCHIVE_DIR="${ROBOTHOR_WAL_ARCHIVE_DIR:-/var/lib/postgresql/wal_archive}"
 BASEBACKUP_DIR="${ROBOTHOR_BASEBACKUP_DIR:-/mnt/robothor-backup/robothor/basebackup}"
 REMOTE="${ROBOTHOR_OFFSITE_REMOTE:-}"
 DB="${ROBOTHOR_DB_NAME:-robothor_memory}"
-# Keep WAL for this many days beyond the newest base backup.
+# Documented knob, read by nothing yet: pruning below the newest base backup
+# is what actually bounds the archive today, so this is the ceiling it will
+# gain, not a value in force. Left declared rather than deleted so the name
+# an operator may already have exported keeps its meaning.
+# shellcheck disable=SC2034
 KEEP_DAYS="${ROBOTHOR_WAL_KEEP_DAYS:-8}"
 
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
