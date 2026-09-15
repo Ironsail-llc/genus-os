@@ -20,6 +20,7 @@ The invariants under test are the platform's, not Teams':
 from __future__ import annotations
 
 import time
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -223,8 +224,38 @@ class TestSend:
         assert receipt.complete
 
         activity = recorder.requests[-1]
-        assert str(activity.url) == f"{SERVICE_URL}v3/conversations/{CONVERSATION}/activities"
+        # The conversation id is percent-encoded into the path: it comes from an
+        # activity body, and a `/` in it would move this POST — bearer token
+        # attached — somewhere the sender chose.
+        assert (
+            str(activity.url)
+            == f"{SERVICE_URL}v3/conversations/{quote(CONVERSATION, safe='')}/activities"
+        )
         assert activity.headers["authorization"] == f"Bearer {TOKEN_RESPONSE['access_token']}"
+
+    @pytest.mark.asyncio
+    async def test_a_conversation_id_cannot_escape_its_path_segment(self, transport, monkeypatch):
+        """A hostile conversation id, reachable by any tenant that installs the
+        bot: without quoting, `a/../../b` moves the request."""
+        from robothor.engine.channels.conversations import ConversationRef
+
+        monkeypatch.setattr(
+            channel_module.conversations,
+            "reference_for_target",
+            lambda *_a, **_kw: ConversationRef(
+                channel="teams",
+                native_id=ALICE,
+                conversation_id="19:x/../../v3/conversations/19:someone-else/activities",
+                service_url=SERVICE_URL,
+            ),
+        )
+        recorder = transport(_ok_handler())
+        await TeamsChannel().send(ALICE, "hello")
+
+        posted = str(recorder.requests[-1].url)
+        assert posted.startswith(f"{SERVICE_URL}v3/conversations/")
+        assert posted.endswith("/activities")
+        assert posted.count("/activities") == 1, f"the id escaped its segment: {posted}"
 
     @pytest.mark.asyncio
     async def test_a_target_with_no_recorded_reference_fails_loudly(

@@ -51,11 +51,33 @@ def _checks() -> dict[str, Any]:
         return {}
 
 
+class _Plugin(dict[str, Any]):
+    """The contribution map, with ``checks`` built on first read.
+
+    ``PLUGIN["checks"] = _checks()`` at import time meant a transient failure
+    inside the doctor's own imports — at that one instant — left the checks
+    permanently empty, silently, for the life of the process. The diagnostics
+    that exist to tell an operator why the channel is not working are the last
+    thing that should be decided by a race at import.
+    """
+
+    def __missing__(self, key: str) -> Any:
+        if key != "checks":
+            raise KeyError(key)
+        built = _checks()
+        if built:
+            # Cached only once it is real: an empty answer is retried, never
+            # remembered.
+            self["checks"] = built
+        return built
+
+
 #: What this distribution contributes: the channel, and the two diagnostics that
 #: answer "is this actually configured, and is its endpoint reachable" without
 #: the operator having to send themselves a test message.
-PLUGIN: dict[str, Any] = {
-    "genus_contract_version": "1.0",
-    "channels": {"teams": CHANNEL},
-    "checks": _checks(),
-}
+PLUGIN: dict[str, Any] = _Plugin(
+    {
+        "genus_contract_version": "1.0",
+        "channels": {"teams": CHANNEL},
+    }
+)

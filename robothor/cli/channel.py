@@ -486,6 +486,8 @@ def _cmd_add(args: argparse.Namespace) -> int:
     for line in settings_written:
         print(line)
 
+    _note_if_not_installed(name)
+
     print(
         f"\nWrote {len(resolved)} credential(s) for {name!r} to the "
         f"{'vault' if destination == 'vault' else 'instance env file'}. "
@@ -497,6 +499,33 @@ def _cmd_add(args: argparse.Namespace) -> int:
             "(or re-run `genus config apply`) before the change takes effect."
         )
     return 0
+
+
+def _note_if_not_installed(name: str) -> None:
+    """Say so when the credentials are for a channel this instance cannot use.
+
+    ``add`` knows a channel that ships as a PLUGIN (``teams``), because the
+    alternative is an operator exporting its credentials by hand. But storing a
+    credential for something that is not installed looks exactly like a working
+    setup right up until the first delivery records ``failed:no_channel:…``, so
+    the command says which step is still missing rather than printing nothing.
+
+    Never fails the command: the write succeeded, and the vault row is correct
+    and useful the moment the distribution is installed.
+    """
+    try:
+        from robothor.engine.channels import list_channels
+
+        if name in list_channels():
+            return
+    except Exception:  # noqa: BLE001 - a diagnosis that cannot run is not an error
+        return
+    print(
+        f"\nNote: {name!r} is not available on this instance yet, so nothing can "
+        f"deliver to it. It ships as a plugin: install it (`genus plugin install "
+        f"genus-{name}`) and arm it (add {name!r} to ROBOTHOR_CHANNELS), then "
+        f"`genus channel verify {name}`."
+    )
 
 
 def _write_settings(args: argparse.Namespace, name: str) -> list[str]:

@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from genus_teams.credentials import APP_ID_ENV, APP_PASSWORD_ENV, teams_credentials
 from genus_teams.tokens import TokenError, TokenSource, build_client
@@ -536,9 +537,14 @@ class TeamsChannel:
         self, reference: Any, token: str, activity: dict[str, Any]
     ) -> dict[str, Any] | None:
         """One activity. ``None`` when the platform did not accept it."""
+        # The conversation id is quoted with nothing safe: it comes from an
+        # activity body, and a `/` in it would move the POST — bearer token
+        # attached — to a path the sender chose. Reachable only by a caller
+        # holding a valid Bot Framework token, which is any tenant that installs
+        # the bot.
         url = (
             f"{str(reference.service_url).rstrip('/')}"
-            f"/v3/conversations/{reference.conversation_id}/activities"
+            f"/v3/conversations/{quote(str(reference.conversation_id), safe='')}/activities"
         )
         async with build_client() as client:
             response = await client.post(

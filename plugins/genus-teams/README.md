@@ -42,3 +42,10 @@ suite generates.
 ```bash
 PYTHONPATH=<repo>:<repo>/plugins/genus-teams pytest plugins/genus-teams
 ```
+
+Type checking needs the platform on the path too — this distribution imports
+`robothor.engine.channels.*`, and without it three returns widen to `Any`:
+
+```bash
+MYPYPATH=<repo> mypy genus_teams --ignore-missing-imports
+```

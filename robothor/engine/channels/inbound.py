@@ -91,6 +91,13 @@ class InboundResult:
     failed: bool = False
     identity: IdentityContext | None = None
     run: Any | None = None
+    #: WHICH of the four outcomes this is: ``refused``, ``answer``,
+    #: ``no_output`` or ``failed``. Named rather than inferred, because a
+    #: channel that reconstructed it by comparing ``reply`` against the two
+    #: sentence constants would answer differently the day an agent's output
+    #: happens to be one of them — and Slack renders the four shapes
+    #: differently (a chunked mrkdwn post, a plain sentence, a bare refusal).
+    kind: str = "refused"
 
 
 def run_as(identity: IdentityContext | None, channel: str, native_id: str) -> str:
@@ -162,7 +169,7 @@ async def handle_message(
         mode=mode,
     )
     if not decision.allowed:
-        return InboundResult(reply=decision.refusal, ran=False)
+        return InboundResult(reply=decision.refusal, ran=False, kind="refused")
 
     identity = decision.identity
     resolved_tenant = identity.tenant_id if identity else tenant_id
@@ -197,7 +204,9 @@ async def handle_message(
         # Logged with a traceback here, where it reaches the journal; the
         # SENDER gets FAILED_REPLY, which names nothing.
         logger.exception("channel %s could not run an inbound message", channel)
-        return InboundResult(reply=FAILED_REPLY, ran=False, failed=True, identity=identity)
+        return InboundResult(
+            reply=FAILED_REPLY, ran=False, failed=True, identity=identity, kind="failed"
+        )
 
     output = str(getattr(run, "output_text", "") or "")
     return InboundResult(
@@ -205,4 +214,5 @@ async def handle_message(
         ran=True,
         identity=identity,
         run=run,
+        kind="answer" if output else "no_output",
     )

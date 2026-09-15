@@ -135,6 +135,26 @@ sudo systemctl restart robothor-engine
 | `ROBOTHOR_TEAMS_VERIFY_TARGET` | — | The conversation `verify` and the doctor aim at. Never a delivery fallback |
 | `ROBOTHOR_CHANNELS` | — | Must name `teams`, or the channel stays inert |
 
+### The two migrations
+
+This channel adds `channel_conversation_refs` (121) and widens the
+`agent_runs.trigger_type` CHECK (122). Look at the ledger before you apply
+anything:
+
+```bash
+genus migrate --status
+```
+
+`genus migrate` applies **everything pending**, in prefix order. On an instance
+that is behind — and instances are, routinely — that is a much larger change
+than the one you are making, and it is not the change you are here to review. If
+121 and 122 are the only two pending, run it; if they are not, apply the backlog
+deliberately (`robothor.db.migrate.apply` takes a selector) and separately from
+this channel's install.
+
+Both are idempotent (`CREATE TABLE IF NOT EXISTS`, `CREATE UNIQUE INDEX IF NOT
+EXISTS`, and 122's `DO $$ … IF EXISTS`), so re-running them costs nothing.
+
 ## Prove it works
 
 ```bash
@@ -220,11 +240,19 @@ longer than that routinely.
 ## Questions the agent asks you
 
 `ask_user` over Teams sends an **Adaptive Card**: the options as buttons, or a
-text box when there are none. The question is bound to the conversation *and* to
-the person it was asked of — an answer from anyone else is refused and logged,
+text box when there are none. It goes to the conversation the run came from, not
+to wherever that person spoke most recently.
+
+**Who may answer it.** The question is bound to the conversation *and* to the
+person it was asked of, and an answer from anyone else is refused and logged —
 which matters because everyone in a channel can see the card and press its
-buttons. Nobody answering returns nothing; a timeout never picks an option for
-you.
+buttons. A question raised with no particular addressee (an escalation, which is
+the operator's) falls back to the platform's own authorization: only a paired
+identity holding a privileged role can settle it. Either way the sender is
+re-checked against the access gate at the moment they answer, so somebody
+revoked since the card went out cannot use it.
+
+Nobody answering returns nothing; a timeout never picks an option for you.
 
 ## What gets recorded
 

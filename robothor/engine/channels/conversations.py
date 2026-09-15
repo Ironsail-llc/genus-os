@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "COLUMNS",
+    "MAX_REFS_PER_CHANNEL",
     "TABLE",
     "ConversationRef",
     "record",
@@ -63,6 +64,19 @@ __all__ = [
 
 #: The table. Named once so a test can prove every statement stays inside it.
 TABLE = "channel_conversation_refs"
+
+#: How many references one (tenant, channel) may accumulate before the coldest
+#: are dropped.
+#:
+#: A row is written for every AUTHENTICATED sender, before the access gate runs
+#: — it has to be, because the pairing code the gate mints is a message and this
+#: row is where it goes. So on a large tenant every member who ever greets the
+#: bot leaves one, and nothing pruned them. Dropping the least recently used is
+#: safe in a way that dropping an identity would not be: a forgotten reference
+#: costs that person one message to re-create, and costs them nothing they had
+#: been granted. The same bound ``identities.prune_oldest`` applies to its own
+#: in-memory tracking, for the same reason.
+MAX_REFS_PER_CHANNEL = 5000
 
 #: Every column this module reads or writes. Deliberately inspectable: the
 #: invariant "a reference carries no grant" is checkable rather than asserted in
@@ -139,6 +153,28 @@ def record(
                     updated_at      = NOW()""",  # noqa: S608 - TABLE is a module constant
             (tenant_id, channel, native_id, conversation, url, display_name or ""),
         )
+        _prune(cur, tenant_id, channel)
+
+
+def _prune(cur: Any, tenant_id: str, channel: str) -> None:
+    """Drop the coldest references beyond :data:`MAX_REFS_PER_CHANNEL`.
+
+    On the caller's cursor, inside the same transaction as the upsert that made
+    the table one row bigger. A no-op until the bound is crossed, and the row it
+    drops is the one nobody has spoken from for longest — which is the row least
+    likely to be the one a briefing is about to be delivered to.
+    """
+    cur.execute(
+        f"""DELETE FROM {TABLE}
+            WHERE tenant_id = %s AND channel = %s
+              AND id IN (
+                SELECT id FROM {TABLE}
+                WHERE tenant_id = %s AND channel = %s
+                ORDER BY updated_at DESC
+                OFFSET %s
+              )""",  # noqa: S608 - TABLE is a module constant
+        (tenant_id, channel, tenant_id, channel, MAX_REFS_PER_CHANNEL),
+    )
 
 
 def _row_to_ref(row: dict[str, Any] | None) -> ConversationRef | None:

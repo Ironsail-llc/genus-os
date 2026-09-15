@@ -8,10 +8,12 @@ Shares sessions with Telegram and web chat via the existing session system.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from typing import Any
 
+from robothor.engine.channels import inbound as inbound_replies
 from robothor.engine.channels.slack_credentials import (
     APP_TOKEN_ENV,
     BOT_TOKEN_ENV,
@@ -296,12 +298,32 @@ class SlackBot:
             mode=self._access_mode(),
         )
 
-        # "" is send nothing — a suppressed pairing reply, or an unknown sender
-        # in a room, who must not learn that anybody is listening.
-        if not result.reply:
-            return
-        for chunk in _split_text(result.reply, MAX_SLACK_LENGTH):
-            await say(text=chunk, mrkdwn=True)
+        # The four call shapes, exactly as this method sent them before the
+        # pipeline was extracted: a refusal is `say(text=…)` with no markdown
+        # flag, an answer is chunked `say(text=…, mrkdwn=True)`, and the two
+        # sentences are positional. All four are pinned by
+        # `test_slack_say_shapes.py`; the refactor was not allowed to change
+        # anything a workspace can observe, and three of them had drifted.
+        #
+        # Inside the try for the reason the original was: a `say` that raises
+        # used to be answered with the failure sentence, and letting it
+        # propagate hands Bolt an exception and the person nothing.
+        try:
+            if result.kind == "answer":
+                for chunk in _split_text(result.reply, MAX_SLACK_LENGTH):
+                    await say(text=chunk, mrkdwn=True)
+            elif result.kind == "no_output":
+                await say(inbound_replies.NO_OUTPUT_REPLY)
+            elif result.kind == "failed":
+                await say(inbound_replies.FAILED_REPLY)
+            elif result.reply:
+                # "" is send nothing — a suppressed pairing reply, or an unknown
+                # sender in a room, who must not learn anybody is listening.
+                await say(text=result.reply)
+        except Exception:
+            logger.exception("Slack reply failed")
+            with contextlib.suppress(Exception):
+                await say(inbound_replies.FAILED_REPLY)
 
 
 def _run_as(identity: Any, user_id: str) -> str:

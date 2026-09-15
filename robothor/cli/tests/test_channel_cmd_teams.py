@@ -126,6 +126,27 @@ class TestTheThreeValuesLandWhereTheyBelong:
         assert "ROBOTHOR_TEAMS_APP_PASSWORD" in capsys.readouterr().err
 
 
+class TestItSaysWhenTheChannelIsNotInstalled:
+    def test_storing_a_credential_for_an_uninstalled_channel_says_so(self, vault, exported, capsys):
+        """`add` knows a channel that ships as a plugin, because the
+        alternative is exporting its credentials by hand. Storing one for
+        something that is not installed looks exactly like a working setup until
+        the first delivery records failed:no_channel:teams."""
+        assert cmd_channel(_teams_add_args()) == 0
+        out = capsys.readouterr().out
+        assert "not available on this instance yet" in out
+        assert "ROBOTHOR_CHANNELS" in out
+
+    def test_an_installed_and_armed_channel_gets_no_such_note(
+        self, vault, exported, capsys, monkeypatch
+    ):
+        from robothor.engine import channels as channels_module
+
+        monkeypatch.setattr(channels_module, "list_channels", lambda: {"teams": object()})
+        assert cmd_channel(_teams_add_args()) == 0
+        assert "not available on this instance" not in capsys.readouterr().out
+
+
 class TestItIsATableAndNotABranch:
     def test_teams_is_one_row_in_the_same_two_tables_slack_and_email_use(self):
         from robothor.cli.channel import _ADDABLE, _ADDABLE_SETTINGS, _REFUSED_FLAGS

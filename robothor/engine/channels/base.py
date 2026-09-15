@@ -258,13 +258,18 @@ class Channel(Protocol):
     ``name`` is the value a manifest's ``delivery.channel`` has to match, and
     the key the registry stores the channel under.
 
-    ``inbound_router`` is the slot for the receiving half. It is ``None`` for
-    every channel in this release: the inbound pipeline still lives in
-    ``engine/telegram.py`` and ``engine/slack.py``, which duplicate
-    authorize → resolve identity → session key → ``runner.execute`` → reply.
-    Unifying those needs a second real inbound surface to generalise against,
-    so the slot is declared and left empty rather than filled with a
-    single-caller abstraction.
+    ``inbound_router`` is the slot for the receiving half, and it is **no longer
+    empty**. ``genus-teams`` fills it with a FastAPI router that the engine
+    mounts under ``/api/channels/<name>`` — and only for a channel the operator
+    has armed; see ``robothor/engine/channels/routers.py``. Every built-in still
+    leaves it ``None``: Telegram and Slack own their own transports, and moving
+    them behind it would be a rewrite with no caller asking for one.
+
+    The second real inbound surface this module said was needed before the
+    duplicated pipelines could be unified is that plugin, and the unification
+    happened with it: ``channels/inbound.py`` now owns gate → identity →
+    session → ``runner.execute`` → reply, and ``engine/slack.py`` calls it.
+    ``engine/telegram.py`` has not moved yet.
     """
 
     name: str
