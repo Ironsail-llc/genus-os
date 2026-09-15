@@ -558,8 +558,13 @@ jobs:
           VERSION="$(python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
 
-      # cache-from only: the compose job owns these cache scopes, and two
-      # writers racing on one scope is how a cache stops being one.
+      # This job and `compose` build the same two images and run in parallel,
+      # which roughly doubles the gate's build minutes on a cold cache. The
+      # alternative — `needs: [compose]` — halves the minutes and doubles the
+      # wall clock on a gate that is already 25 minutes per job, on a signal
+      # nobody waits for if it is slow. So: parallel, reading BOTH scopes so a
+      # warm compose-job layer is reused when there is one, and writing only
+      # its own so two `mode=max` writers never race one scope.
       - name: Build the python image from this branch
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -567,7 +572,10 @@ jobs:
           file: ./Dockerfile.python
           target: production
           load: true
-          cache-from: type=gha,scope=install-gate-python
+          cache-from: |
+            type=gha,scope=install-gate-install-sh-python
+            type=gha,scope=install-gate-python
+          cache-to: type=gha,scope=install-gate-install-sh-python,mode=max
           tags: ghcr.io/ironsail-llc/genus-os/python:${{ steps.version.outputs.tag }}
 
       - name: Build the dashboard image from this branch
@@ -577,7 +585,10 @@ jobs:
           file: ./Dockerfile.app
           target: production
           load: true
-          cache-from: type=gha,scope=install-gate-app
+          cache-from: |
+            type=gha,scope=install-gate-install-sh-app
+            type=gha,scope=install-gate-app
+          cache-to: type=gha,scope=install-gate-install-sh-app,mode=max
           tags: ghcr.io/ironsail-llc/genus-os/app:${{ steps.version.outputs.tag }}
 
       # The installer builds its OWN virtualenv and runs pip inside it, so the

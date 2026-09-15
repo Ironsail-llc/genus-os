@@ -123,8 +123,9 @@ passing `--workspace .`:
 ```bash
 pip install genusos
 mkdir -p ~/genus && cd ~/genus
-curl -fsSLO https://raw.githubusercontent.com/Ironsail-llc/genus-os/main/infra/docker-compose.yml
-curl -fsSLO https://raw.githubusercontent.com/Ironsail-llc/genus-os/main/infra/docker-compose.apps.yml
+GENUS_TAG="v$(genus --version | awk '{print $NF}')"
+curl -fsSLO "https://raw.githubusercontent.com/Ironsail-llc/genus-os/$GENUS_TAG/infra/docker-compose.yml"
+curl -fsSLO "https://raw.githubusercontent.com/Ironsail-llc/genus-os/$GENUS_TAG/infra/docker-compose.apps.yml"
 export ROBOTHOR_DB_PASSWORD=choose-a-password
 export OPENROUTER_API_KEY=sk-your-key
 genus init --substrate compose --yes --workspace . --owner-name "Ada Lovelace" --owner-email ada@example.com
@@ -132,6 +133,11 @@ export ROBOTHOR_WORKSPACE="$PWD"
 genus doctor --json
 ```
 <!-- /install-gate -->
+
+The compose files are fetched at the tag of the CLI you just installed, not at
+`main`. That is not caution for its own sake: the substrate writes
+`v<this CLI's version>` into `genus.env` as the image tag, so compose files
+from `main` would describe a stack that the pinned images do not match.
 
 CI replays this block on a fresh machine every night.
 
