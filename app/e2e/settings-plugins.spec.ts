@@ -368,10 +368,18 @@ test.describe("Settings › Plugins", () => {
     await page.locator('[data-testid="plugins-install-accept"]').check();
     await expect(page.locator('[data-testid="plugins-install-submit"]')).toBeEnabled();
 
+    // The plan names the index that answered, which is what makes the picker's
+    // claim checkable rather than assumed.
+    await expect(plan).toContainText(INDEX);
+
     await page.locator('[data-testid="plugins-install-submit"]').click();
     await expect(page.locator('[data-testid="plugins-install-result"]')).toContainText(
       "genus-weather"
     );
+    // One install is one install: `pip install` twice over is how a half-written
+    // distribution happens, and the operator's only other signal is one line of
+    // text below the fold.
+    await expect(page.locator('[data-testid="plugins-install-submit"]')).toBeDisabled();
 
     // Installing is not loading: the bar is the page saying so.
     await expect(page.locator('[data-testid="plugins-reload-bar"]')).toBeVisible();

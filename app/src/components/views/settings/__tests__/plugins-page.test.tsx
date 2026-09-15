@@ -1170,11 +1170,7 @@ describe("Settings › Plugins — installing from the registry", () => {
     const recorded = await preview();
 
     const posted = recorded.posts.find((p) => p.url.endsWith("/install"));
-    expect(posted?.body).toMatchObject({
-      name: "genus-weather",
-      accept_review: false,
-      dry_run: true,
-    });
+    expect(posted?.body).toMatchObject({ name: "genus-weather", dry_run: true });
 
     const plan = screen.getByTestId("plugins-install-plan");
     expect(plan.textContent).toContain("genus_weather-1.4.0-py3-none-any.whl");
@@ -1348,6 +1344,223 @@ describe("Settings › Plugins — installing from the registry", () => {
     const card = await screen.findByTestId("plugins-install-card");
     expect(card.textContent).toContain("genus plugin install ./x.whl --sha256");
   });
+
+  /** Plan B: a DIFFERENT wheel, with findings nobody has read yet. */
+  const PLAN_B = {
+    ...REVIEW_PLAN.plan,
+    version: "9.9.9",
+    sha256: "ffffffffffff" + "1".repeat(52),
+    filename: "genus_weather-9.9.9-py3-none-any.whl",
+    reasons: ["genus_weather/net.py:2: opens a socket", "genus_weather/run.py:9: calls subprocess"],
+  };
+
+  /**
+   * The accept-review gate is the one binding constraint of this card, and
+   * pressing the obvious button twice used to walk straight past it.
+   *
+   * `changed()` cleared the acceptance on an EDIT, which is the rarer gesture:
+   * `version` left blank means "latest", so re-Previewing is exactly how an
+   * operator re-checks before committing. A second Preview left the checkbox
+   * bearing an acceptance of a different wheel's findings.
+   */
+  it("clears the acceptance when a second Preview answers with a different plan", async () => {
+    const recorded = mockBridge({
+      listings: [LISTING, LISTING],
+      install: [
+        { status: 200, body: REVIEW_PLAN },
+        { status: 200, body: { ...REVIEW_PLAN, plan: PLAN_B } },
+      ],
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugins-install-card");
+    fireEvent.change(screen.getByTestId("plugins-install-name"), {
+      target: { value: "genus-weather" },
+    });
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+    await screen.findByTestId("plugins-install-plan");
+    fireEvent.click(screen.getByTestId("plugins-install-accept"));
+    expect(screen.getByTestId("plugins-install-submit")).toBeEnabled();
+
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+    await waitFor(() =>
+      expect(screen.getByTestId("plugins-install-plan").textContent).toContain("9.9.9")
+    );
+
+    expect(screen.getByTestId("plugins-install-accept")).not.toBeChecked();
+    expect(screen.getByTestId("plugins-install-submit")).toBeDisabled();
+    expect(recorded.posts.filter((p) => p.body.dry_run === false)).toHaveLength(0);
+
+    // And it is reachable again, for the findings that are now on screen.
+    fireEvent.click(screen.getByTestId("plugins-install-accept"));
+    expect(screen.getByTestId("plugins-install-submit")).toBeEnabled();
+  });
+
+  it("never sends accept_review for a plan other than the one on screen", async () => {
+    const recorded = mockBridge({
+      listings: [LISTING, LISTING],
+      install: [
+        { status: 200, body: REVIEW_PLAN },
+        { status: 200, body: { ...REVIEW_PLAN, plan: PLAN_B } },
+        { status: 200, body: INSTALLED_REPLY },
+      ],
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugins-install-card");
+    fireEvent.change(screen.getByTestId("plugins-install-name"), {
+      target: { value: "genus-weather" },
+    });
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+    await screen.findByTestId("plugins-install-plan");
+    fireEvent.click(screen.getByTestId("plugins-install-accept"));
+
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+    await waitFor(() =>
+      expect(screen.getByTestId("plugins-install-plan").textContent).toContain("9.9.9")
+    );
+    fireEvent.click(screen.getByTestId("plugins-install-accept"));
+    fireEvent.click(screen.getByTestId("plugins-install-submit"));
+
+    await screen.findByTestId("plugins-install-result");
+    // The acceptance is bound to a HASH, not to a checkbox: the request can
+    // only carry it for the plan whose findings were the ones displayed.
+    const real = recorded.posts.filter((p) => p.body.dry_run === false);
+    expect(real).toHaveLength(1);
+    expect(real[0].body).toMatchObject({ name: "genus-weather", accept_review: true });
+  });
+
+  it("will not fire a second real install once one has been answered", async () => {
+    const recorded = mockBridge({
+      listings: [LISTING, LISTING],
+      install: [
+        { status: 200, body: REVIEW_PLAN },
+        { status: 200, body: INSTALLED_REPLY },
+      ],
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugins-install-card");
+    fireEvent.change(screen.getByTestId("plugins-install-name"), {
+      target: { value: "genus-weather" },
+    });
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+    await screen.findByTestId("plugins-install-plan");
+    fireEvent.click(screen.getByTestId("plugins-install-accept"));
+    fireEvent.click(screen.getByTestId("plugins-install-submit"));
+    await screen.findByTestId("plugins-install-result");
+
+    // `pip install` twice over is how a half-written distribution happens, and
+    // the only signal the act already ran is one line below the fold on a
+    // phone. The button is the wrong place to leave armed.
+    expect(screen.getByTestId("plugins-install-submit")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("plugins-install-submit"));
+    expect(recorded.posts.filter((p) => p.body.dry_run === false)).toHaveLength(1);
+  });
+
+  it("posts nothing more than the preview needs", async () => {
+    const recorded = await preview();
+    // `accept_review` on a dry run is a field the preview has no business
+    // sending: nothing can be accepted before the findings exist.
+    expect(Object.keys(recorded.posts[0].body).sort()).toEqual(["dry_run", "name"]);
+  });
+
+  it("posts the index the picker is showing, not whichever one the engine tries first", async () => {
+    const SECOND = "https://acme.example.com/plugins/index.json";
+    const recorded = mockBridge({
+      listings: [{ ...LISTING, indexes: [INDEX, SECOND] }, LISTING],
+      install: [{ status: 200, body: REVIEW_PLAN }],
+    });
+    render(<PluginsPage visible />);
+
+    // The operator touches nothing: the select shows the first index, and an
+    // omitted `index` makes the engine search ALL of them in order — so the
+    // wheel can come from a different one than the control names.
+    await screen.findByTestId("plugins-install-index");
+    fireEvent.change(screen.getByTestId("plugins-install-name"), {
+      target: { value: "genus-weather" },
+    });
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+
+    await screen.findByTestId("plugins-install-plan");
+    expect(recorded.posts[0].body).toMatchObject({ index: INDEX });
+  });
+
+  it("prints the index the plan actually came from", async () => {
+    await preview();
+    // The one field that answers "where did this wheel come from" on a card
+    // whose premise is that provenance is checkable.
+    expect(screen.getByTestId("plugins-install-plan").textContent).toContain(INDEX);
+  });
+
+  it("offers no index it could not post, and says why", async () => {
+    const HTTP = "http://internal.invalid/index.json";
+    mockBridge({ listings: [{ ...LISTING, indexes: [INDEX, HTTP] }] });
+    render(<PluginsPage visible />);
+
+    const card = await screen.findByTestId("plugins-install-card");
+    // `install` refuses a non-https index with a 422, so offering one is
+    // offering a choice that cannot work.
+    expect(screen.queryByTestId("plugins-install-index")).toBeNull();
+    expect(card.textContent).toContain(HTTP);
+    expect(card.textContent).toMatch(/https/i);
+  });
+
+  it("does not claim a hash is copied once a different one is on screen", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    mockBridge({
+      listings: [LISTING, LISTING],
+      install: [
+        { status: 200, body: REVIEW_PLAN },
+        { status: 200, body: { ...REVIEW_PLAN, plan: PLAN_B } },
+      ],
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugins-install-card");
+    fireEvent.change(screen.getByTestId("plugins-install-name"), {
+      target: { value: "genus-weather" },
+    });
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+    await screen.findByTestId("plugins-install-plan");
+
+    fireEvent.click(screen.getByTestId("plugins-install-copy-sha"));
+    await waitFor(() =>
+      expect(screen.getByTestId("plugins-install-copy-sha").textContent).toMatch(/copied/i)
+    );
+
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+    await waitFor(() =>
+      expect(screen.getByTestId("plugins-install-plan").textContent).toContain("ffffffffffff")
+    );
+    // The clipboard still holds plan A's hash. On the one control whose purpose
+    // is comparing a hash, a stale affirmative is worse than no affordance.
+    expect(screen.getByTestId("plugins-install-copy-sha").textContent).not.toMatch(/copied/i);
+  });
+
+  it("renders the route's note on an install that was not clean", async () => {
+    const note = "the distribution was installed, but its lockfile row could not be recorded";
+    mockBridge({
+      listings: [LISTING, LISTING],
+      install: [
+        { status: 200, body: REVIEW_PLAN },
+        { status: 200, body: { ...INSTALLED_REPLY, note } },
+      ],
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugins-install-card");
+    fireEvent.change(screen.getByTestId("plugins-install-name"), {
+      target: { value: "genus-weather" },
+    });
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+    await screen.findByTestId("plugins-install-plan");
+    fireEvent.click(screen.getByTestId("plugins-install-accept"));
+    fireEvent.click(screen.getByTestId("plugins-install-submit"));
+
+    expect((await screen.findByTestId("plugins-install-result")).textContent).toContain(note);
+  });
 });
 
 describe("Settings › Plugins — removing what the platform installed", () => {
@@ -1418,5 +1631,120 @@ describe("Settings › Plugins — removing what the platform installed", () => 
     fireEvent.click(await screen.findByTestId("plugin-remove-yes-genus-weather"));
 
     expect((await screen.findByTestId("plugin-error-genus-weather")).textContent).toContain(detail);
+  });
+
+  it("renders the route's note when the removal was not clean", async () => {
+    const note =
+      "pip reported the distribution was not installed; the lockfile row was dropped anyway";
+    mockBridge({
+      listings: [WITH_SOURCE, { ...LISTING, plugins: [LOADED] }],
+      remove: {
+        status: 200,
+        body: {
+          name: "genus-weather",
+          removed: false,
+          row_dropped: true,
+          reload_hint: "reload the engine (SIGHUP) or restart to apply",
+          note,
+        },
+      },
+    });
+    render(<PluginsPage visible />);
+
+    fireEvent.click(await screen.findByTestId("plugin-remove-genus-weather"));
+    fireEvent.click(await screen.findByTestId("plugin-remove-yes-genus-weather"));
+
+    // The card is gone once the listing is re-read, so a row-scoped note would
+    // be invisible: a partial removal has to be reported by the page.
+    const result = await screen.findByTestId("plugins-remove-result");
+    expect(result.textContent).toContain(note);
+    expect(result.textContent).toMatch(/genus-weather/);
+  });
+
+  it("closes an open confirmation as soon as another act starts", async () => {
+    const recorded = mockBridge({
+      listings: [WITH_SOURCE, WITH_SOURCE],
+      install: [{ status: 200, body: REVIEW_PLAN }],
+    });
+    render(<PluginsPage visible />);
+
+    fireEvent.click(await screen.findByTestId("plugin-remove-genus-weather"));
+    await screen.findByTestId("plugin-remove-confirm-genus-weather");
+
+    fireEvent.change(screen.getByTestId("plugins-install-name"), {
+      target: { value: "genus-weather" },
+    });
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+    await screen.findByTestId("plugins-install-plan");
+
+    // A destructive confirmation sitting under a fresh install plan is one
+    // mis-click from an act the operator has moved on from.
+    expect(screen.queryByTestId("plugin-remove-confirm-genus-weather")).toBeNull();
+    expect(recorded.posts.filter((p) => p.url.endsWith("/remove"))).toHaveLength(0);
+  });
+});
+
+/**
+ * `lockfile.problem` for damaged ROWS.
+ *
+ * `read_lockfile` leaves `malformed` FALSE when the file parses but individual
+ * rows do not: the readable rows still govern, and the unreadable ones are
+ * decisions that cannot be honoured — so whatever they turned off is loading
+ * right now. The engine says so in `problem`; a page that rendered `problem`
+ * only under `malformed` dropped exactly that sentence and reported a healthy
+ * file with a row count beside it.
+ */
+describe("Settings › Plugins — a lockfile with unreadable rows", () => {
+  const DAMAGED_ROWS = {
+    ...LISTING,
+    lockfile: {
+      path_configured: true,
+      present: true,
+      malformed: false,
+      rows: 1,
+      problem: "holds 1 row(s) that cannot be read (position(s) 1)",
+    },
+  };
+
+  it("prints the engine's sentence although the file itself parsed", async () => {
+    mockBridge({ listings: [DAMAGED_ROWS] });
+    render(<PluginsPage visible />);
+
+    const warning = await screen.findByTestId("plugins-lockfile-rows-damaged");
+    expect(warning.textContent).toContain("holds 1 row(s) that cannot be read (position(s) 1)");
+    // Not the whole-file card: in this state the readable rows DO still govern,
+    // and saying otherwise would be the opposite lie.
+    expect(screen.queryByTestId("plugins-lockfile-malformed")).toBeNull();
+    expect(warning.className).not.toContain("destructive");
+  });
+
+  it("does not report a partly unreadable lockfile as a healthy row count", async () => {
+    mockBridge({ listings: [DAMAGED_ROWS] });
+    render(<PluginsPage visible />);
+
+    const chip = await screen.findByTestId("plugins-lockfile");
+    expect(chip.textContent).toMatch(/could not be read|unreadable|damaged/i);
+  });
+
+  it("keeps the whole-file card for whole-file damage", async () => {
+    mockBridge({
+      listings: [
+        {
+          ...LISTING,
+          lockfile: {
+            path_configured: true,
+            present: true,
+            malformed: true,
+            rows: 0,
+            problem: "is not valid JSON (JSONDecodeError)",
+          },
+        },
+      ],
+    });
+    render(<PluginsPage visible />);
+
+    const warning = await screen.findByTestId("plugins-lockfile-malformed");
+    expect(warning.textContent).toContain("is not valid JSON (JSONDecodeError)");
+    expect(screen.queryByTestId("plugins-lockfile-rows-damaged")).toBeNull();
   });
 });
