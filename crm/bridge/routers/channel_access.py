@@ -20,9 +20,21 @@ is waiting and when their code dies. ``role`` is capped at the roles pairing may
 grant, mirroring ``accounts.JIT_PROVISIONABLE_ROLES``: a flow whose first step
 is "a stranger sent a message" never ends in an admin.
 
-Every route is ``def``, not ``async def``. All the work is psycopg2, which
+Beside the pairing decisions live the two routes the Channels page opens with:
+``GET /api/channels`` (what can deliver, and is it set up) and ``POST
+/api/channels/{name}/verify`` (prove it — which may really send a message, so
+it is audited like the mutations even though it writes no row here). Both are
+the engine's answers —
+a channel is an object in THAT process, holding that process's credentials —
+composed here with the two facts the engine knows nothing about: the access
+mode in force and how many senders are waiting on a decision. They live in this
+module rather than a second channels router so that the tenant gate, the name
+validation and the pairing DAL have one home apiece.
+
+Most routes are ``def``, not ``async def``. All the work is psycopg2, which
 belongs in FastAPI's worker threadpool rather than on the event loop — see
-``crm/bridge/tests/test_route_concurrency.py``.
+``crm/bridge/tests/test_route_concurrency.py``. The exceptions are the ones
+that await the engine, and each says so where it is defined.
 """
 
 from __future__ import annotations
@@ -36,9 +48,10 @@ from typing import Any
 import psycopg2
 from deps import get_tenant_id
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
-from robothor.engine.channels import identities
+from robothor.engine.channels import access, identities
 from routers._audit import audited
 from routers._engine_client import engine_request
 from routers._operator import require_operator
@@ -179,6 +192,141 @@ def _unavailable(exc: psycopg2.Error) -> HTTPException:
     """
     logger.warning("channel access route could not reach the database: %s", type(exc).__name__)
     return HTTPException(status_code=503, detail="the identity store is unavailable")
+
+
+#: A verify may open an SMTP session or post to Slack, and the engine caps its
+#: own attempt at 20s — so the proxy has to outlast that or it reports a
+#: timeout the engine never saw. Same reasoning as the provider test connection.
+_VERIFY_TIMEOUT_SECONDS = 30.0
+
+#: The longest ``target`` that may be forwarded. An email address caps at 320
+#: octets (RFC 5321); the engine checks this again at the sink.
+_MAX_TARGET_CHARS = 320
+
+
+class VerifyRequest(BaseModel):
+    """What to aim a verify at. Absent means the channel's own default."""
+
+    target: str | None = Field(default=None, max_length=_MAX_TARGET_CHARS)
+
+
+def _target(value: str | None) -> str | None:
+    """A forwardable target, or a 422.
+
+    Checked HERE as well as in the engine because this is where a browser's
+    value enters the appliance, and because what it becomes downstream is a
+    header in somebody else's protocol: a newline in a Slack channel id or an
+    SMTP envelope address is the header-splitting shape, not a typo.
+    """
+    if value is None:
+        return None
+    clean = value.strip()
+    if not clean:
+        return None
+    if len(clean) > _MAX_TARGET_CHARS or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in clean):
+        raise HTTPException(status_code=422, detail="that is not a delivery target")
+    return clean
+
+
+def _local_channel_state(names: list[str]) -> dict[str, dict[str, Any]]:
+    """The two facts the ENGINE cannot answer, for each channel it listed.
+
+    Blocking (psycopg2 + the settings resolver), so the route hands the whole
+    loop to one thread rather than making N hops.
+
+    ``pending_pairings`` is ``None``, never ``0``, when the rows could not be
+    read: "nobody is waiting to be let in" is a claim, and a status page that
+    makes it because the database was down is the same class of lie as a
+    delivery receipt derived from not raising.
+    """
+    state: dict[str, dict[str, Any]] = {}
+    for name in names:
+        if not _CHANNEL_NAME.match(name or ""):
+            continue
+        try:
+            mode: str | None = access.access_mode(name)
+        except Exception:  # noqa: BLE001 — a status page reports, it does not fail
+            logger.warning("could not resolve the access mode for channel %s", name, exc_info=True)
+            mode = None
+        pending: int | None
+        try:
+            pending = len(identities.list_pending(name))
+        except (psycopg2.Error, OSError):
+            logger.warning("could not count pending pairings for channel %s", name)
+            pending = None
+        state[name] = {"access_mode": mode, "pending_pairings": pending}
+    return state
+
+
+@router.get("")
+async def list_channels(request: Request) -> dict[str, Any]:
+    """What can deliver, whether it is configured, and who is waiting on it.
+
+    ``async`` because it awaits the engine: a channel object lives in that
+    process and nothing here can ask one anything. The psycopg2 half goes
+    through ``asyncio.to_thread``.
+
+    Operator-gated like every write beside it, and for a read that is not
+    obvious: the listing enumerates which channels this appliance has
+    credentials for, which is exactly the map an attacker with a member session
+    would want before deciding where to send anything.
+    """
+    require_operator(request)
+    status, body = await engine_request("GET", "/api/admin/channels")
+    if status >= 400 or not isinstance(body, dict):
+        raise HTTPException(status_code=502, detail="could not read the channel state")
+
+    entries = [entry for entry in (body.get("channels") or []) if isinstance(entry, dict)]
+    local = await asyncio.to_thread(
+        _local_channel_state, [str(entry.get("name") or "") for entry in entries]
+    )
+    return {
+        "channels": [
+            {
+                **entry,
+                **local.get(
+                    str(entry.get("name") or ""),
+                    {"access_mode": None, "pending_pairings": None},
+                ),
+            }
+            for entry in entries
+        ]
+    }
+
+
+@router.post("/{name}/verify")
+async def verify_channel(name: str, body: VerifyRequest, request: Request) -> JSONResponse:
+    """Prove one channel reaches somebody, step by step.
+
+    ``async`` for the same reason as the listing: the proof is a real auth
+    test, a real post or a real SMTP session, and only the engine can make one.
+    Audited because it is an act with an effect outside this box — it may send
+    a message — even though it writes nothing here.
+    """
+    require_operator(request)
+    channel = _channel(name)
+    aimed = _target(body.target)
+
+    status, result = await engine_request(
+        "POST",
+        f"/api/admin/channels/{channel}/verify",
+        json={"target": aimed},
+        timeout=_VERIFY_TIMEOUT_SECONDS,
+    )
+    steps = result.get("steps") or [] if isinstance(result, dict) else []
+    audited(
+        request,
+        "channel.verify",
+        action=channel,
+        status="ok" if status < 400 else "error",
+        # Counts, never the step details: an upstream error string is the one
+        # place a token has historically come back (a 401 echoes the credential)
+        # and the audit log is exported to a SIEM.
+        step_count=len(steps),
+        failed_steps=sum(1 for step in steps if isinstance(step, dict) and not step.get("ok")),
+        aimed=bool(aimed),
+    )
+    return JSONResponse(content=result, status_code=status)
 
 
 @router.get("/{name}/pending")

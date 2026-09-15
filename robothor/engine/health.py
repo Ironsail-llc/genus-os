@@ -167,6 +167,13 @@ def _mount_subsystem_routers(
 
     register_admin_providers(app)
 
+    # Channel status and verify. A channel is an object in THIS process holding
+    # this process's credentials, so nothing outside it can ask one whether it
+    # is configured or make it prove it works.
+    from robothor.engine.admin_channels import register as register_admin_channels
+
+    register_admin_channels(app)
+
     # Scheduler reconcile + the registered tool list. The engine owns the job
     # registry, so a manifest written anywhere else only takes effect through
     # this route.

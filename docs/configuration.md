@@ -280,6 +280,25 @@ also have a home of their own, named in the row:
 | `ROBOTHOR_DECLARED_TOOL_OUTAGES` | `tool:reason,tool:reason` — outages the operator has already decided about, so the tool-outage detector stops alerting on them |
 | `GENUS_WORKSPACE`, `GENUS_ENV_FILE`, `GENUS_UID`, `GENUS_GID` | These configure the **compose file**, not the platform, so `genus config` does not know them. (`GENUS_IMAGE_TAG` looks like one of them but *is* declared, in the `substrate` group.) See [Deployment](deployment.md#docker-compose) |
 
+## Channels
+
+Which channels exist, and whether each one is actually set up, is visible over
+the API as well as from `genus channel list` / `genus channel verify`. Two
+operator-only routes on the Bridge, both proxying the engine — a channel is an
+object in the engine process holding that process's credentials, so nothing
+else can ask one anything:
+
+| Route | What it answers |
+|-------|-----------------|
+| `GET /api/channels` | Every channel a manifest's `delivery.channel` could resolve to: whether it is built in, whether it reports itself configured, its (redacted) health report, whether it can be verified, the access mode in force (`pairing` / `allowlist` / `open`) and how many senders are waiting on a pairing decision. A `pending_pairings` of `null` means the pairing rows could not be read, which is not the same claim as `0`. |
+| `POST /api/channels/{name}/verify` | Runs the channel's own `verify()` and returns each step. A channel that declares none gets `steps: []` and `verify_available: false` — never a fabricated pass. Aimed with an optional `{"target": "..."}`, and it may really send a message. |
+
+Neither route writes a credential, and neither returns one: a token, a chat id
+or anything else secret-shaped in a health report comes back as a `sha256:`
+fingerprint. **Adding a channel's token is still `genus channel add` on the
+box** (and `genus init --telegram-token` for Telegram) — there is no API that
+writes channel credentials, by design.
+
 ## Authentication
 
 Three sign-in methods, and a deployment needs at least one. Local
@@ -320,6 +339,25 @@ What the settings do not tell you:
   sign-in method, and the `CF_ACCESS_*` variables are dashboard-only, so
   neither can answer "is there another way in". Set
   `GENUS_OWNER_MFA_REQUIRED=false` to opt out explicitly.
+
+### Users & roles over the API
+
+`genus user add` / `genus user list` are not the only way to administer
+accounts any more. Six operator-only Bridge routes, all scoped to the caller's
+own tenant — an account in another tenant answers 404, never 403:
+
+| Route | What it does |
+|-------|--------------|
+| `GET /api/auth/roles` | The roles an account may hold, with one sentence each. Served from `robothor.auth.tokens.HUMAN_ROLES`, which `genus user` and the token layer now share rather than each keeping a copy. |
+| `GET /api/users` | Every account in the tenant: id, address, display name, role, status, whether it is bound to an identity provider, whether MFA is enrolled, last sign-in. Never a password hash, an MFA secret or an IdP subject. |
+| `POST /api/users` | Creates the account `genus user add` creates. `{"sso": true}` also arms a one-shot SSO binding grant and returns its id and expiry. |
+| `PATCH /api/users/{id}` | Role, display name, `status: active\|disabled`. Refuses (409) demoting or disabling the last active owner, and refuses a caller doing either to themselves. Disabling also revokes that account's live sessions — without that, a refresh token keeps working for up to thirty days. |
+| `POST /api/users/{id}/binding-grant` | Arms a fresh one-hour binding grant for an existing account. |
+| `GET /api/users/{id}/binding-grants` | Every grant armed for that account, live or spent. |
+
+Not here, and still `genus user` on the box: setting a password, resetting a
+second factor, and deleting an account. Nothing on this surface sends mail, so
+an invited person has to be told out of band.
 
 ### The forwarded client address needs two allowlists to agree
 

@@ -95,11 +95,13 @@ genus channel access revoke  slack <identity-id>
 Or from the Helm, operator-gated and audited:
 
 ```
+GET    /api/channels                                  the mode and pending count per channel
 GET    /api/channels/{name}/pending
 POST   /api/channels/{name}/pairings/{code}/approve   {"user_id"|"email", "role"}
 POST   /api/channels/{name}/pairings/{code}/deny
 GET    /api/channels/{name}/identities
 DELETE /api/channels/{name}/identities/{id}
+POST   /api/channels/{name}/verify                    {"target"?}
 ```
 
 `GET /pending` returns neither the code nor the native id — only that somebody is

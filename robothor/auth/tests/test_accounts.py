@@ -434,3 +434,109 @@ def test_bootstrap_owner_account_uses_lower_too():
     ):
         accounts.bootstrap_owner_account()
     assert cur.execute.call_args[0][1][1] == "straße@example.com"
+
+
+# ── the administration surface (the Helm's Users & roles page) ───────
+
+
+def test_the_admin_projection_never_selects_a_credential_column():
+    """The rest of this module reads ``SELECT *``, correctly — sign-in needs the
+    password hash and the MFA secret. The administration reads answer a
+    BROWSER, so the projection is the lock, and it has to hold for a column
+    somebody adds to the table next year as well as for today's."""
+    assert "*" not in accounts._ADMIN_COLUMNS
+    for forbidden in ("password_hash", "mfa_secret_enc"):
+        assert forbidden not in accounts._ADMIN_COLUMNS
+    # idp_subject appears only inside the computed boolean, never as a column.
+    assert "idp_subject AS" not in accounts._ADMIN_COLUMNS
+    assert "sso_bound" in accounts._ADMIN_COLUMNS
+
+
+def test_list_accounts_is_scoped_to_one_tenant():
+    conn, cur = _mock_conn([])
+    cur.fetchall.return_value = []
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        accounts.list_accounts("acme-corp")
+    sql, params = cur.execute.call_args[0]
+    assert "WHERE tenant_id = %s" in sql
+    assert params == ("acme-corp",)
+
+
+def test_get_admin_account_requires_both_id_and_tenant():
+    """A read that could be called without the tenant would answer for any
+    account on the appliance the moment one caller forgot."""
+    conn, cur = _mock_conn([None])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        assert accounts.get_admin_account("uid-1", "acme-corp") is None
+    sql, params = cur.execute.call_args[0]
+    assert "WHERE id = %s AND tenant_id = %s" in sql
+    assert params == ("uid-1", "acme-corp")
+
+
+def test_create_account_stores_the_canonical_address():
+    conn, cur = _mock_conn([{"id": "uid-1", "email": "alice@example.com"}])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        accounts.create_account(
+            tenant_id="default",
+            email="  Alice@Example.COM ",
+            display_name="Alice",
+            role="member",
+            status="invited",
+        )
+    assert cur.execute.call_args[0][1][1] == "alice@example.com"
+    conn.commit.assert_called()
+
+
+def test_create_account_answers_none_for_a_duplicate():
+    """``ON CONFLICT DO NOTHING`` returns no row. A duplicate is an ordinary
+    answer to "invite this person", and the caller turns it into a 409."""
+    conn, _cur = _mock_conn([None])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        assert (
+            accounts.create_account(
+                tenant_id="default",
+                email="alice@example.com",
+                display_name="Alice",
+                role="member",
+                status="invited",
+            )
+            is None
+        )
+
+
+def test_update_account_writes_only_the_fields_it_was_given():
+    conn, cur = _mock_conn([{"id": "uid-1", "role": "viewer"}])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        accounts.update_account("uid-1", tenant_id="default", role="viewer")
+    sql, params = cur.execute.call_args[0]
+    assert "role = %s" in sql
+    assert "display_name" not in sql.split("WHERE")[0]
+    assert "status" not in sql.split("WHERE")[0]
+    assert params == ("viewer", "uid-1", "default")
+
+
+def test_update_account_carries_the_tenant_into_the_statement_itself():
+    """Not a read-then-write. The window between a check and an update is one
+    where the row could move tenants, and the predicate closes it."""
+    conn, cur = _mock_conn([None])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        assert accounts.update_account("uid-1", tenant_id="acme-corp", status="disabled") is None
+    assert "WHERE id = %s AND tenant_id = %s" in cur.execute.call_args[0][0]
+
+
+def test_update_account_with_nothing_to_change_does_not_write():
+    conn, cur = _mock_conn([None])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        accounts.update_account("uid-1", tenant_id="default")
+    assert "UPDATE" not in " ".join(str(c[0][0]) for c in cur.execute.call_args_list)
+
+
+def test_active_owner_count_can_exclude_the_account_being_changed():
+    """The question a demotion asks: is there another owner BESIDES this one."""
+    conn, cur = _mock_conn([(0,)])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        assert accounts.active_owner_count("default", excluding_id="uid-1") == 0
+    sql, params = cur.execute.call_args[0]
+    assert "role = 'owner'" in sql
+    assert "status = 'active'" in sql
+    assert params == ("default", "uid-1", "uid-1")

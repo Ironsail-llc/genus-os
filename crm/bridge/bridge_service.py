@@ -59,6 +59,7 @@ from routers.runs import router as runs_router
 from routers.setup import router as setup_router
 from routers.system_health import router as system_health_router
 from routers.tenants import router as tenants_router
+from routers.users import router as users_router
 from routers.workflows import router as workflows_router
 
 from robothor.credential_errors import install_credential_safe_validation
@@ -185,6 +186,9 @@ app.include_router(approvals_router)
 # way a pairing code is ever spent over the network -- the channel that issued
 # it can never spend it.
 app.include_router(channel_access_router)
+# Accounts and roles. Operator-gated end to end, the reads included: the listing
+# enumerates every account on this appliance and what each of them may do.
+app.include_router(users_router)
 # First-run setup. Every route here refuses with 404 once an owner account
 # exists, so on a claimed appliance this router is mounted and unreachable --
 # the gate is asked per request rather than at import, because "has an owner"

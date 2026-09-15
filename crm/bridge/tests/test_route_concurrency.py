@@ -64,6 +64,15 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("POST", "/api/channels/{name}/pairings/{code}/approve"),
         ("POST", "/api/channels/{name}/pairings/{code}/deny"),
         ("DELETE", "/api/channels/{name}/identities/{identity_id}"),
+        # The two channel-status routes await the engine over HTTP, and that is
+        # the whole of what they do: a channel is an object in the ENGINE
+        # process holding that process's credentials, so nothing here can ask
+        # one whether it is configured or make it prove it works. The listing's
+        # own blocking half — the access mode and the pending-code count — goes
+        # through a single asyncio.to_thread for the whole set rather than one
+        # hop per channel.
+        ("GET", "/api/channels"),
+        ("POST", "/api/channels/{name}/verify"),
         # The doctor route awaits asyncio.to_thread and nothing else. Every
         # check underneath it is synchronous -- psycopg2, urllib, a subprocess
         # -- and run_sync opens its own event loop, which it cannot do on the
