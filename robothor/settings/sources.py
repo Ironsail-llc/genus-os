@@ -33,7 +33,7 @@ from pydantic_settings import PydanticBaseSettingsSource
 # come from" and "how is one written back" have the same address. The
 # implementation lives in a pydantic-free module because `robothor.cli` imports
 # it at import time -- see robothor/settings/config_file.py.
-from robothor.settings.config_file import write_setting
+from robothor.settings.config_file import write_setting, write_settings
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pydantic.fields import FieldInfo
@@ -48,6 +48,7 @@ __all__ = [
     "unknown_config_keys",
     "workspace_path",
     "write_setting",
+    "write_settings",
 ]
 
 logger = logging.getLogger(__name__)
