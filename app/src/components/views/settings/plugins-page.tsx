@@ -212,9 +212,30 @@ function squash(name: string): string {
   return name.toLowerCase().replace(/[-_.]/g, "");
 }
 
-/** Every name this distribution's manifest declares, squashed for comparison. */
+/**
+ * Every name this distribution's manifest declares, squashed for comparison.
+ *
+ * These are CONTRIBUTION names, not entry-point names — two different
+ * namespaces. `plugins/genus-hostinfo` publishes the entry point `hostinfo`
+ * and declares the handler `host_state`, and `loader.py` compares `declared`
+ * against the keys of the imported payload, never against the entry point. So
+ * a manifest that does not name the failing entry point says nothing at all
+ * about whether this distribution owns it, and must never be read as a denial.
+ */
 function declaredNames(plugin: Plugin): string[] {
   return (plugin.manifest?.declared ?? []).flatMap((entry) => entry.names.map(squash));
+}
+
+/**
+ * Whether a distribution's own name could carry this entry point.
+ *
+ * `genus-hostinfo` publishes `hostinfo`; a distribution and its entry points
+ * are named by the same hand, so this is the strongest signal the payload
+ * actually offers for a refusal that is not `disabled by operator`.
+ */
+function nameCouldOwn(plugin: Plugin, wanted: string): boolean {
+  const own = squash(plugin.name);
+  return own === wanted || own.endsWith(wanted) || wanted.endsWith(own);
 }
 
 /**
@@ -237,14 +258,22 @@ function declaredNames(plugin: Plugin): string[] {
  *    draws as enabled cannot be its owner, whatever it is called. If precisely
  *    one candidate is off, that is the owner; if none is, the page says nothing
  *    rather than accusing a running plugin.
- * 3. **`manifest.declared`.** The only field in the payload that names entry
- *    points at all. It used to be consulted last, behind a squashed suffix match
- *    on the DISTRIBUTION name, which is how `acme-nightly-notes` got reported as
- *    the plugin somebody had turned off.
- * 4. **The distribution's own name**, and only for candidates whose manifest
- *    declares nothing — a manifest that names other entry points and not this
- *    one is evidence AGAINST, so being alone in the group does not make a
- *    distribution the culprit.
+ * 3. **The distribution's own name.** `genus-hostinfo` publishes `hostinfo`:
+ *    the same hand names both, so a squashed prefix/suffix relation is real
+ *    evidence. Applied to EVERY candidate. An earlier round restricted this
+ *    step to candidates whose manifest declared nothing, on the belief that a
+ *    manifest names entry points — it does not (see `declaredNames`), so that
+ *    rule disqualified every manifest-bearing plugin from the only step that
+ *    can match it, and a genuine ImportError on the one plugin installed
+ *    rendered as "could not be tied to an installed distribution".
+ * 4. **`manifest.declared`**, as a tiebreaker when the name step is silent or
+ *    ambiguous. It matches only when a contribution happens to share its entry
+ *    point's name, which does happen and is worth using — but it is a
+ *    coincidence, so it never outranks the name.
+ *
+ * Being alone in the group is still not a verdict: with no name relation and no
+ * declared match, the failure goes to the unattributed bucket with its group
+ * and entry-point name, for the operator to place.
  */
 export function attributeFailure(failure: ReloadFailure, plugins: Plugin[]): string | null {
   let candidates = plugins.filter((p) => p.groups.includes(failure.group));
@@ -257,18 +286,14 @@ export function attributeFailure(failure: ReloadFailure, plugins: Plugin[]): str
   }
 
   const wanted = squash(failure.name);
-  const byDeclared = candidates.filter((p) => declaredNames(p).includes(wanted));
-  if (byDeclared.length === 1) return byDeclared[0].name;
-  if (byDeclared.length > 1) return null;
+  const byName = candidates.filter((p) => nameCouldOwn(p, wanted));
+  if (byName.length === 1) return byName[0].name;
 
-  const silent = candidates.filter((p) => declaredNames(p).length === 0);
-  const byName = silent.filter(
-    (p) =>
-      squash(p.name) === wanted ||
-      squash(p.name).endsWith(wanted) ||
-      wanted.endsWith(squash(p.name))
-  );
-  return byName.length === 1 ? byName[0].name : null;
+  // Ambiguous by name: let the manifest break the tie between those. Silent by
+  // name: let it speak for the whole field. Either way it only ever narrows.
+  const pool = byName.length > 1 ? byName : candidates;
+  const byDeclared = pool.filter((p) => declaredNames(p).includes(wanted));
+  return byDeclared.length === 1 ? byDeclared[0].name : null;
 }
 
 function statePill(state: string): { label: string; className: string } {
@@ -348,8 +373,9 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
    * Recording, toggling and reloading each answer about a different moment, and
    * the reports used to stack: a sync report from two acts ago sat above a
    * reload report describing a set the sync had not seen. A page whose job is
-   * saying what is true now cannot describe three moments at once, so every act
-   * retires the last one's answer before it starts.
+   * saying what is true now cannot describe three moments at once, so all three
+   * acts — the toggle included, since it changes what the next reload will load
+   * — retire the last one's answer before they start.
    */
   const retireReports = useCallback(() => {
     setSyncReport(null);
@@ -423,6 +449,10 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
   const toggle = useCallback(
     (plugin: Plugin) => {
       const verb = plugin.enabled ? "disable" : "enable";
+      // A toggle is an act like the other two, so it retires their answers as
+      // they retire each other's: a reload report describes the set the engine
+      // loaded, and this changes what the next reload would load.
+      retireReports();
       void act(
         plugin.name,
         `${BRIDGE}/api/plugins/${encodeURIComponent(plugin.name)}/${verb}`,
@@ -474,7 +504,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
         }
       );
     },
-    [act, setRowNote, setRowError]
+    [act, setRowNote, setRowError, retireReports]
   );
 
   /** The reload report's failures, filed under the distribution each belongs to. */

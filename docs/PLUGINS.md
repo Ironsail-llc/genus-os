@@ -484,7 +484,13 @@ installed plugins** when no file exists yet — the switches are dead until then
 because a toggle with no row to flip is a 404 — and afterwards shows one card
 per distribution: its state (`loaded` as a fact, `disabled` as a decision,
 `failed` as a fault), a drift badge carrying the engine's own sentence, the
-entry-point groups, what it contributes as `kind × n`, and its manifest.
+entry-point groups, what it contributes as `kind × n`, and its manifest. A
+reload's failures name ENTRY POINTS, not distributions, so the page ties them
+back through the listing — the group, then `enabled` for a `disabled by
+operator` refusal, then the distribution's own name, with `declared` only as a
+tiebreaker (it holds contribution names, which are a different namespace) — and
+prints `group/entry-point` beside every line so the match can be checked. What
+it cannot place, it says it cannot place.
 Turning one off writes the row and nothing else, exactly as `genus plugin
 disable` does, so the card says the engine is still running it and a bar offers
 **one** reload after however many toggles; `disabled by operator` comes back in
