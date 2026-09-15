@@ -476,6 +476,36 @@ No response carries a filesystem path. Which distributions are installed is a
 platform fact; where an instance keeps its files is not, so the listing answers
 `path_configured` and `present` and never *where*.
 
+### From the Helm
+
+**Settings › Plugins** drives those five routes, and it is what makes the
+lockfile reachable on a box nobody has a shell on. It opens with **Record
+installed plugins** when no file exists yet — the switches are dead until then,
+because a toggle with no row to flip is a 404 — and afterwards shows one card
+per distribution: its state (`loaded` as a fact, `disabled` as a decision,
+`failed` as a fault), a drift badge carrying the engine's own sentence, the
+entry-point groups, what it contributes as `kind × n`, and its manifest. A
+reload's failures name ENTRY POINTS, not distributions, so the page ties them
+back through the listing — the group, then `enabled` for a `disabled by
+operator` refusal, then the distribution's own name, with `declared` only as a
+tiebreaker (it holds contribution names, which are a different namespace) — and
+prints `group/entry-point` beside every line so the match can be checked. What
+it cannot place, it says it cannot place.
+Turning one off writes the row and nothing else, exactly as `genus plugin
+disable` does, so the card says the engine is still running it and a bar offers
+**one** reload after however many toggles; `disabled by operator` comes back in
+that reload's failure list and is rendered as the operator's own decision, not
+as something to fix. Two things it deliberately does not do: it never renders
+`verdict`, because nothing scans a plugin yet and a placeholder printed on the
+screen where third-party code is turned on reads as a clearance; and it offers
+no `--force`, pointing at `genus plugin sync --force` on the box instead — and
+only when the engine's own refusal names it, since a 409 also answers "no
+lockfile path resolves", where there is nothing to force. A file the engine
+found **unreadable** is reported as governing nothing at all, because that is
+what `usable` means: the page says every plugin that was turned off is loading
+again, and sends the operator to Record, whose refusal distinguishes damaged
+contents (409) from an unwritable path (503).
+
 ## A worked example
 
 `plugins/genus-hostinfo` is a first-party plugin carried in this repo: host

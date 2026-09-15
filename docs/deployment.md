@@ -855,6 +855,17 @@ was reached, not that there is nothing else to find, and the filter is applied
 to the **redacted** message — so the pane cannot be used to confirm a value it
 will not show.
 
+### Using the Plugins page
+
+**Settings › Plugins** is not an Observe page and does not sit on the routes
+above — it is the operator screen over `/api/plugins`, and it is named here
+because it is the other place the Helm writes to the box. It lists one card per
+installed distribution, records the lockfile on a box nobody has shelled into,
+turns a plugin off, and reloads the engine once afterwards. A damaged lockfile
+is reported as what it is: the engine ignores such a file entirely, so every
+plugin that was turned off is loading again. See
+[Disabling and the lockfile](PLUGINS.md#disabling-and-the-lockfile).
+
 ## Health Endpoints
 
 | Service | Endpoint | Expected |

@@ -7,6 +7,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { ChannelsPage } from "@/components/views/settings/channels-page";
 import { ConfigPage } from "@/components/views/settings/config-page";
 import { FlagsPage } from "@/components/views/settings/flags-page";
+import { PluginsPage } from "@/components/views/settings/plugins-page";
 import { ProvidersPage } from "@/components/views/settings/providers-page";
 import { UsersPage } from "@/components/views/settings/users-page";
 import {
@@ -80,6 +81,14 @@ function PageBody({
     // standalone Controls view; `?v=controls` still lands here, via
     // `use-view-route.ts`'s alias table.
     return <FlagsPage visible role={role} />;
+  }
+
+  if (page.id === "plugins") {
+    // What this instance loads from third-party distributions, and the three
+    // acts over it: record, enable/disable, reload. `visible` keeps its listing
+    // — a walk of every installed distribution's entry points, on the engine's
+    // side — off every other settings page.
+    return <PluginsPage visible />;
   }
 
   return (
