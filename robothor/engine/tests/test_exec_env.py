@@ -418,3 +418,47 @@ def test_a_second_agent_still_gets_its_own_line(boxlike_env, caplog):
     lines = [r for r in caplog.records if "would lose" in r.getMessage()]
     assert len(lines) == 2
     exec_env._observed_at.clear()
+
+
+# ── R7: one agent's gh login must not log the others in ──────────────────────
+
+
+def test_each_agent_gets_its_own_empty_config_dir(boxlike_env):
+    """A shared writable directory was a way to grant every agent at once:
+    `gh auth login` inside one ungranted agent's command would write a
+    hosts.yml that every other ungranted agent then read."""
+    import robothor.engine.exec_env as exec_env
+
+    exec_env._CONFIG_DIRS.clear()
+    one = build_exec_env(agent_id="a", mode=MODE_ENFORCE, base=boxlike_env).env["GH_CONFIG_DIR"]
+    two = build_exec_env(agent_id="b", mode=MODE_ENFORCE, base=boxlike_env).env["GH_CONFIG_DIR"]
+    assert one != two
+    exec_env._CONFIG_DIRS.clear()
+
+
+def test_the_empty_config_dir_is_not_writable(boxlike_env):
+    """Unwritable is what makes per-agent enough: there is nothing to
+    accumulate, and nothing one command can leave for the next."""
+    import os
+    import stat
+
+    import robothor.engine.exec_env as exec_env
+
+    exec_env._CONFIG_DIRS.clear()
+    made = build_exec_env(agent_id="a", mode=MODE_ENFORCE, base=boxlike_env).env["GH_CONFIG_DIR"]
+    mode = stat.S_IMODE(os.stat(made).st_mode)
+    assert not mode & stat.S_IWUSR, f"the empty config dir is writable ({mode:04o})"
+    assert os.listdir(made) == []
+    exec_env._CONFIG_DIRS.clear()
+
+
+def test_the_same_agent_reuses_its_directory(boxlike_env):
+    """Per agent, not per exec: a box does hundreds of execs a day and a
+    directory each would litter the temp filesystem."""
+    import robothor.engine.exec_env as exec_env
+
+    exec_env._CONFIG_DIRS.clear()
+    first = build_exec_env(agent_id="a", mode=MODE_ENFORCE, base=boxlike_env).env["GH_CONFIG_DIR"]
+    again = build_exec_env(agent_id="a", mode=MODE_ENFORCE, base=boxlike_env).env["GH_CONFIG_DIR"]
+    assert first == again
+    exec_env._CONFIG_DIRS.clear()

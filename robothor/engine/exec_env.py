@@ -68,9 +68,11 @@ first gives an agent a credential.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 
 from robothor.constants import DEFAULT_TENANT
 
@@ -169,18 +171,37 @@ def looks_like_a_credential_value(value: str) -> bool:
     return bool(candidate) and redact(candidate) != candidate
 
 
-@lru_cache(maxsize=1)
-def _empty_config_dir() -> str:
-    """A directory that exists and holds nothing, for pointing a CLI at.
+#: One empty config directory per agent. See :func:`_empty_config_dir`.
+_CONFIG_DIRS: dict[str, str] = {}
 
-    Cached, not per-call: it is the same empty directory every time, and
-    creating one per `exec` would litter the temp filesystem on a box doing
-    hundreds of them a day. Created lazily so a process that never runs an
-    `exec` never makes it.
+
+def _empty_config_dir(agent_id: str) -> str:
+    """A directory holding nothing, for pointing a logged-out CLI at.
+
+    Per AGENT, and mode 0500 — read and traverse, no write.
+
+    One shared WRITABLE directory was a way to grant every agent at once:
+    ``gh auth login`` inside one ungranted agent's command would have written a
+    ``hosts.yml`` that every other ungranted agent then read, so the first agent
+    to authenticate would have logged in all of them. Review R7.
+
+    Not per-RUN, because that would leak a directory per ``exec`` on a box doing
+    hundreds a day. Per agent is the granularity the grant itself has, and the
+    directory is unwritable — so there is nothing to accumulate, and nothing one
+    agent can leave behind for the next.
     """
+    import stat
     import tempfile
 
-    return tempfile.mkdtemp(prefix="genus-no-credentials-")
+    cached = _CONFIG_DIRS.get(agent_id)
+    if cached is not None and Path(cached).is_dir():
+        return cached
+
+    made = tempfile.mkdtemp(prefix=f"genus-no-credentials-{agent_id or 'unattributed'}-")
+    with contextlib.suppress(OSError):
+        Path(made).chmod(stat.S_IRUSR | stat.S_IXUSR)
+    _CONFIG_DIRS[agent_id] = made
+    return made
 
 
 #: One observe line per agent per hour. The rung's job is to let an operator
@@ -347,7 +368,7 @@ def build_exec_env(
     # keeps the real one and acts as the instance. `secret_paths` refuses
     # reading the login files directly.
     if rung == MODE_ENFORCE and not {"GH_TOKEN", "GITHUB_TOKEN"} & set(granted):
-        child["GH_CONFIG_DIR"] = _empty_config_dir()
+        child["GH_CONFIG_DIR"] = _empty_config_dir(agent_id)
 
     built = ExecEnvironment(
         env=child,
