@@ -154,7 +154,14 @@ def output_digest(tool_name: str, result: dict[str, Any]) -> str:
 #: Only consulted for a tool with no declared projection above, so that a future
 #: guarded tool fails safe (annotations stripped) rather than silently inert.
 _ENGINE_ANNOTATIONS: frozenset[str] = frozenset(
-    {"timeout_note", "unchanged_since_step", "repeat_guard", "refused", "reason"}
+    {
+        "timeout_note",
+        "timeout_seconds",
+        "unchanged_since_step",
+        "repeat_guard",
+        "refused",
+        "reason",
+    }
 )
 
 
@@ -313,7 +320,13 @@ class RepeatGuard:
             f"identical to your read at step {previous.step}; the content is "
             "unchanged on disk since then"
         )
-        result: dict[str, Any] = {"unchanged_since_step": previous.step, "note": note}
+        # `repeat_guard` is the marker the runner keys on to record this as
+        # neither a failure nor progress — the tool did not run.
+        result: dict[str, Any] = {
+            "unchanged_since_step": previous.step,
+            "note": note,
+            "repeat_guard": "answered",
+        }
         if not self._still_in_context(previous.payload):
             # Compaction took the earlier result out of the conversation, so a
             # pointer to it would point at nothing. Send the content again.
@@ -321,6 +334,7 @@ class RepeatGuard:
                 **previous.result,
                 "unchanged_since_step": previous.step,
                 "note": f"{note}, and is repeated here because it is no longer in your context",
+                "repeat_guard": "answered",
             }
         return GuardDecision("answered", tool_name, note, result)
 

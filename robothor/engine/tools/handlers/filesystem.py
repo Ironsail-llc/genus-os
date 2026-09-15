@@ -116,13 +116,20 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "exit_code": proc.returncode,
             }
         except subprocess.TimeoutExpired:
+            # The limit rides in its OWN field, never inside the message. When
+            # the run's remaining budget is clamping this call, that number
+            # changes every call — and the repeat guard digests `error`, so a
+            # limit baked into the text put the wall clock back inside the
+            # digest and made six identical timeouts look like six different
+            # results. The agent still reads the number: it is in the result.
             return {
                 "error": (
-                    f"Command timed out ({timeout}s limit). Ask for more time with "
-                    f"the `timeout` parameter (up to {MAX_EXEC_TIMEOUT}s) rather "
-                    "than backgrounding the command — a backgrounded child is "
+                    "Command timed out. Ask for more time with the `timeout` "
+                    f"parameter (up to {MAX_EXEC_TIMEOUT}s) rather than "
+                    "backgrounding the command — a backgrounded child is "
                     "killed when exec returns."
-                )
+                ),
+                "timeout_seconds": timeout,
             }
         except Exception as e:
             return {"error": f"Command failed: {e}"}

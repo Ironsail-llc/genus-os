@@ -733,7 +733,15 @@ class TestOnlyASpeakingCommandIsRefused:
 
 class TestIdenticalErrorsAreCountedToo:
     ARGS = {"command": "python3 slow.py", "timeout": 900}
-    TIMEOUT = {"error": "Command timed out (212s limit). Ask for more time with the `timeout`..."}
+    #: The result `_exec` actually builds on a timeout. The limit is NOT in the
+    #: text: an earlier version pinned a frozen "(212s limit)" constant here and
+    #: certified an inert control, because in a real run the clamp moves that
+    #: number every call. TestSixIdenticalTimeoutsUnderAMovingClock drives the
+    #: real handler with a moving clock; this class keeps the unit-level rules.
+    TIMEOUT = {
+        "error": "Command timed out. Ask for more time with the `timeout` parameter...",
+        "timeout_seconds": 212,
+    }
 
     def test_five_identical_timeouts_are_noted_and_refused(self, tmp_path: Path) -> None:
         """~1060s of a 1200s budget. Clamping makes timeouts MORE frequent, so
@@ -746,6 +754,21 @@ class TestIdenticalErrorsAreCountedToo:
             if decision is not None and decision.result is not None:
                 continue
             guard.after("exec", self.ARGS, self.TIMEOUT, workspace=tmp_path)
+        assert actions[2] == "noted", actions
+        assert actions[4] == "refused", actions
+
+    def test_a_moving_clamp_does_not_change_that(self, tmp_path: Path) -> None:
+        """The limit moves with the budget; the decision may not."""
+        guard = _guard()
+        actions = []
+        for i in range(6):
+            decision = guard.before("exec", self.ARGS, workspace=tmp_path)
+            actions.append(None if decision is None else decision.action)
+            if decision is not None and decision.result is not None:
+                continue
+            guard.after(
+                "exec", self.ARGS, {**self.TIMEOUT, "timeout_seconds": 212 - i}, workspace=tmp_path
+            )
         assert actions[2] == "noted", actions
         assert actions[4] == "refused", actions
 
@@ -940,3 +963,271 @@ class TestTheNoteReadsCorrectlyWhereItLands:
         assert decision is not None
         assert "has now run 3 times" in decision.note
         assert "about to run" not in decision.note
+
+
+# ── The clock must not reach the digest by ANY door ─────────────────────────
+
+
+class TestNoEngineNumberReachesTheDigest:
+    """C5, and it is C1 again through a second door.
+
+    The clamp's `timeout_note` was taken out of the digest, but `_exec` baked
+    the CLAMPED seconds into the timeout error text — "Command timed out (5s
+    limit)" then "(6s limit)" as the clock moved — and `error` is in the exec
+    projection, so the wall clock re-entered the digest anyway. Six identical
+    clamped timeouts under a moving clock produced NO note and NO refusal,
+    while a frozen clock gave note@3/refusal@5. The round-1 test pinned the
+    frozen constant and therefore certified the inert state, exactly as the
+    round-0 suite had.
+
+    The rule this class holds: the digest sees the tool's own answer and never
+    a number the engine computed for this call.
+    """
+
+    def test_the_timeout_error_carries_no_per_call_number(self) -> None:
+        import subprocess
+        from types import SimpleNamespace
+
+        from robothor.engine.tools.handlers.filesystem import HANDLERS
+
+        real = subprocess.run
+
+        def _timeout(*a: Any, **kw: Any) -> Any:
+            raise subprocess.TimeoutExpired(cmd="x", timeout=kw.get("timeout", 1))
+
+        subprocess.run = _timeout  # type: ignore[assignment]
+        try:
+            import asyncio
+
+            first = asyncio.run(
+                HANDLERS["exec"](  # type: ignore[arg-type]
+                    {"command": "sleep 99", "timeout": 11},
+                    SimpleNamespace(workspace="/tmp", run_id=""),
+                )
+            )
+            second = asyncio.run(
+                HANDLERS["exec"](  # type: ignore[arg-type]
+                    {"command": "sleep 99", "timeout": 12},
+                    SimpleNamespace(workspace="/tmp", run_id=""),
+                )
+            )
+        finally:
+            subprocess.run = real  # type: ignore[assignment]
+
+        assert first["error"] == second["error"], "the limit is still inside the error text"
+        # The number the agent needs is still there — in its own field, which
+        # the digest allow-list does not name.
+        assert first["timeout_seconds"] == 11
+        assert second["timeout_seconds"] == 12
+
+    def test_the_sandboxed_branch_says_the_same_thing(self) -> None:
+        """Both branches or neither: a sandboxed agent is the one whose
+        `exec` most needs this, and the two were written separately."""
+        import pathlib
+
+        import robothor.engine.sandbox as m
+
+        body = pathlib.Path(m.__file__).read_text(encoding="utf-8")
+        assert "Command timed out ({timeout}s limit)" not in body
+        assert 'f"Command timed out ({timeout}s limit)"' not in body
+        assert '"timeout_seconds": timeout' in body
+
+    def test_two_timeouts_at_different_limits_digest_equal(self) -> None:
+        import asyncio
+        import subprocess
+        from types import SimpleNamespace
+
+        from robothor.engine.repeat_guard import output_digest
+        from robothor.engine.tools.handlers.filesystem import HANDLERS
+
+        real = subprocess.run
+
+        def _timeout(*a: Any, **kw: Any) -> Any:
+            raise subprocess.TimeoutExpired(cmd="x", timeout=kw.get("timeout", 1))
+
+        subprocess.run = _timeout  # type: ignore[assignment]
+        try:
+            results = [
+                asyncio.run(
+                    HANDLERS["exec"](  # type: ignore[arg-type]
+                        {"command": "sleep 99", "timeout": limit},
+                        SimpleNamespace(workspace="/tmp", run_id=""),
+                    )
+                )
+                for limit in (5, 6, 7)
+            ]
+        finally:
+            subprocess.run = real  # type: ignore[assignment]
+        digests = {output_digest("exec", r) for r in results}
+        assert len(digests) == 1, digests
+
+    def test_any_extra_engine_field_is_invisible_to_the_digest(self) -> None:
+        """The general rule, not a list of today's offenders.
+
+        `timeout_note` was the first engine-computed value to reach a result
+        and `error`'s embedded limit was the second. The allow-list is what
+        stops the third, so it is pinned here directly rather than by naming
+        fields as they are discovered.
+        """
+        from robothor.engine.repeat_guard import output_digest
+
+        base = {"stdout": "same\n", "stderr": "", "exit_code": 1}
+        varied = [
+            {**base, "timeout_note": f"timeout clamped to {n}s: the run has {n + 30}s left"}
+            for n in (5, 6, 7)
+        ]
+        varied += [{**base, "elapsed_ms": n} for n in (10, 20, 30)]
+        varied += [{**base, "pid": n} for n in (111, 222)]
+        varied += [{**base, "tmp_path": f"/tmp/run-{n}"} for n in (1, 2)]
+        varied += [{**base, "timeout_seconds": n} for n in (5, 6)]
+        assert len({output_digest("exec", r) for r in [base, *varied]}) == 1
+
+    def test_what_the_command_actually_said_still_counts(self) -> None:
+        """The narrowing must not have made the digest blind."""
+        from robothor.engine.repeat_guard import output_digest
+
+        base = {"stdout": "same\n", "stderr": "", "exit_code": 1}
+        assert output_digest("exec", base) != output_digest("exec", {**base, "stdout": "other\n"})
+        assert output_digest("exec", base) != output_digest("exec", {**base, "exit_code": 0})
+        assert output_digest("exec", base) != output_digest("exec", {**base, "stderr": "warn"})
+        assert output_digest("exec", {"error": "a"}) != output_digest("exec", {"error": "b"})
+
+
+class TestSixIdenticalTimeoutsUnderAMovingClock:
+    """The round-1 test for I4 fed a frozen error constant straight to the
+    guard. This one drives the real `_execute_tool` with a watchdog whose
+    clock advances between calls, which is the only shape that would have
+    caught C5 — and the only shape a real run has.
+    """
+
+    @staticmethod
+    def _six(tmp_path: Path, moving: bool) -> Any:
+        import asyncio
+        import subprocess
+        from types import SimpleNamespace
+
+        import robothor.engine.feature_flags as ff
+        import robothor.engine.permissions as perms
+        from robothor.engine import session_registry
+        from robothor.engine.stall_watchdog import _active_watchdog_var
+        from robothor.engine.tools import dispatch
+
+        session = _Session()
+        session.run_id = f"run-timeout-{moving}"  # type: ignore[attr-defined]
+        session.step_efficiency_mode = "enforce"  # type: ignore[attr-defined]
+        real_perm = perms.check_tool_permission
+        real_mode = ff.step_efficiency_mode
+        real_run = subprocess.run
+
+        def _timeout(*a: Any, **kw: Any) -> Any:
+            raise subprocess.TimeoutExpired(cmd="x", timeout=kw.get("timeout", 1))
+
+        perms.check_tool_permission = lambda *a, **kw: None  # type: ignore[assignment]
+        ff.step_efficiency_mode = lambda: "enforce"  # type: ignore[assignment]
+        subprocess.run = _timeout  # type: ignore[assignment]
+        # 40s left: the clamp bites hard enough that its numbers move every call.
+        watchdog = SimpleNamespace(elapsed_seconds=1160.0, _hard_timeout=1200.0)
+        token = _active_watchdog_var.set(watchdog)
+        session_registry.register(session)  # type: ignore[arg-type]
+        try:
+
+            async def _calls() -> list[dict[str, Any]]:
+                out = []
+                for _ in range(6):
+                    res = await dispatch._execute_tool(
+                        "exec",
+                        {"command": "python3 slow.py", "timeout": 900},
+                        run_id=str(session.run_id),  # type: ignore[attr-defined]
+                        workspace=str(tmp_path),
+                    )
+                    session.record(res)
+                    out.append(res)
+                    if moving:
+                        watchdog.elapsed_seconds += 1.0
+                return out
+
+            results = asyncio.run(_calls())
+        finally:
+            _active_watchdog_var.reset(token)
+            session_registry.unregister(str(session.run_id))  # type: ignore[attr-defined]
+            perms.check_tool_permission = real_perm  # type: ignore[assignment]
+            ff.step_efficiency_mode = real_mode  # type: ignore[assignment]
+            subprocess.run = real_run  # type: ignore[assignment]
+        return session.repeat_guard, results  # type: ignore[attr-defined]
+
+    def test_the_clamp_really_moves_between_calls(self, tmp_path: Path) -> None:
+        """Assert the premise first, or the test below proves nothing."""
+        _guard_obj, results = self._six(tmp_path, moving=True)
+        notes = {r.get("timeout_note") for r in results if r.get("timeout_note")}
+        assert len(notes) > 1, notes
+
+    def test_six_identical_timeouts_are_noted_and_refused(self, tmp_path: Path) -> None:
+        guard, _results = self._six(tmp_path, moving=True)
+        assert guard is not None
+        assert guard.counters["exec:noted"] == 1, dict(guard.counters)
+        assert guard.counters["exec:refused"] >= 1, dict(guard.counters)
+
+    def test_a_frozen_clock_decides_identically(self, tmp_path: Path) -> None:
+        """Whether the wall clock moves may not change a single decision."""
+        moving, _ = self._six(tmp_path, moving=True)
+        frozen, _ = self._six(tmp_path, moving=False)
+        assert dict(moving.counters) == dict(frozen.counters)
+
+
+class TestARefusalIsNotProgressEither:
+    """A refusal is not a failure (C4) — and it is not a success.
+
+    `escalation.record_success()` and `checkpoint.record_success()` both fire on
+    any result with no `error` key, so making the refusal error-free moved it
+    from one wrong bucket to the other: the escalation manager would read a run
+    that had stopped doing anything as recovering, and the checkpoint would
+    record progress for a tool call that never ran.
+    """
+
+    def test_the_runner_treats_a_refusal_as_neither(self) -> None:
+        import pathlib
+
+        import robothor.engine.runner as m
+
+        body = pathlib.Path(m.__file__).read_text(encoding="utf-8")
+        start = body.index("# ── [ESCALATION] Record error/success ──")
+        block = body[start : body.index("# Track errors for this iteration", start)]
+        assert "_refused" in block
+        assert "elif not _refused:" in block
+        assert "not error_msg and not _refused" in block
+
+    def test_the_marker_the_runner_keys_on_is_on_every_refusal(self, tmp_path: Path) -> None:
+        """The runner reads `repeat_guard`; the guard must always set it."""
+        guard = _guard()
+        args = {"command": "python3 x.py"}
+        out = {"stdout": "same\n", "stderr": "", "exit_code": 1}
+        for _ in range(4):
+            _run(guard, "exec", args, out, tmp_path)
+        decision = guard.before("exec", args, workspace=tmp_path)
+        assert decision is not None and decision.result is not None
+        assert decision.result["repeat_guard"] == "refused"
+
+    def test_an_answered_read_is_marked_too(self, tmp_path: Path) -> None:
+        """A served read did not run the tool either, so it is not progress."""
+        target = tmp_path / "m.py"
+        target.write_text("x", encoding="utf-8")
+        args = {"path": str(target)}
+        guard = _guard()
+        _run(guard, "read_file", args, {"content": "x"}, tmp_path)
+        decision = guard.before("read_file", args, workspace=tmp_path)
+        assert decision is not None and decision.result is not None
+        assert decision.result["repeat_guard"] == "answered"
+
+    def test_an_ordinary_result_carries_no_marker(self, tmp_path: Path) -> None:
+        """So a real success is still a success."""
+        import asyncio
+        from types import SimpleNamespace
+
+        from robothor.engine.tools.handlers.filesystem import HANDLERS
+
+        result = asyncio.run(
+            HANDLERS["exec"](  # type: ignore[arg-type]
+                {"command": "echo hi"}, SimpleNamespace(workspace=str(tmp_path), run_id="")
+            )
+        )
+        assert "repeat_guard" not in result

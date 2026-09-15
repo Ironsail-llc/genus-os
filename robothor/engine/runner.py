@@ -53,7 +53,6 @@ from robothor.engine.context_budget import keep_context_within_budget
 # which is the right default and the wrong one here.
 from robothor.engine.deliverables import task_text_from  # noqa: E402
 from robothor.engine.error_actions import apply_error_recovery
-from robothor.engine.feature_flags import step_efficiency_mode  # noqa: E402
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
 from robothor.engine.journal_resume import maybe_prepend_journal_resume
@@ -96,7 +95,7 @@ from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import resolve_run_identity
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
-from robothor.engine.run_pacing import DeadlinePacer, checkin_note  # noqa: E402
+from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
 from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
@@ -1860,7 +1859,7 @@ class AgentRunner(
         _pre_iteration_msg_idx = len(session.messages)
         _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
         _guard_state = GuardState()  # carries the 500K alert's one-shot latch
-        _pacer = DeadlinePacer(mode=step_efficiency_mode())  # pace notes, one rung each
+        _pacer = DeadlinePacer(mode=mode_for_run(session.run_id))  # reads once, seeds the cache
         # ── [WALLCLOCK] the loop's own deadline — computed once, checked
         # every iteration. See the self-check below for why this exists.
         _wallclock_ceiling = effective_wallclock_ceiling(
@@ -1893,9 +1892,8 @@ class AgentRunner(
             # this for heartbeat + worker per operator directive 2026-04-20). The
             # check only fires when the cap is positive.
             # ── [DEADLINE] Tell the agent while it can still act ──
-            # Rungs, wording and ladder live in robothor/engine/run_pacing.py;
-            # this is the one place that knows the live watchdog, the task text
-            # and the workspace.
+            # Rungs, wording and ladder: robothor/engine/run_pacing.py. Here is
+            # the only place with the live watchdog, task text and workspace.
             _dl_note = _pacer.note_for(
                 self._active_watchdog,
                 iteration=_iteration,
@@ -2299,6 +2297,8 @@ class AgentRunner(
                         )
 
                 # ── [ESCALATION] Record error/success ──
+                # A refusal is neither: the tool never ran (see repeat_guard).
+                _refused = isinstance(result, dict) and bool(result.get("repeat_guard"))
                 if escalation:
                     if error_msg:
                         from robothor.engine.models import ErrorType
@@ -2306,19 +2306,18 @@ class AgentRunner(
                         escalation.record_error(error_type or ErrorType.UNKNOWN)
                         # Track per-kind (tool_name + error_msg_prefix) for STOP RETRYING hints
                         escalation.record_error_kind(tool_name, error_msg)
-                    else:
+                    elif not _refused:
                         escalation.record_success()
 
                 # ── [CHECKPOINT] Record success ──
-                if checkpoint and not error_msg:
+                if checkpoint and not error_msg and not _refused:
                     checkpoint.record_success()
 
                 # Track errors for this iteration
                 if error_msg:
                     iteration_errors.append((tool_name, error_msg, error_type))
 
-            # ── [REPEAT GUARD] Notes raised while the tools ran ──
-            # After every tool result, never between them: see drain_repeat_notes.
+            # ── [REPEAT GUARD] After every tool result, never between them ──
             for _rg_note in drain_repeat_notes(session):
                 session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _rg_note})
 

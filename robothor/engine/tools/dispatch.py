@@ -553,15 +553,18 @@ async def _execute_tool(
             from robothor.crm.dal import reset_benchmark_sandbox
 
             reset_benchmark_sandbox(sandbox_token)
+    # ── Repeat-call guard: remember what this call returned ──
+    # Deliberately BEFORE verification, so what the guard digests is the
+    # handler's own output and not something a later control annotated onto it.
+    if guard is not None:
+        await asyncio.to_thread(guard.after, name, args, result, workspace=workspace)
+
     # ── Post-condition verification (grade the environment, not the transcript) ──
     # The single choke point every tool call passes through, AFTER the handler
     # has returned successfully. Bookkeeping only: verify_tool_result never
     # raises and, below the enforce rung, returns the result untouched. The
     # try/except guards the import itself, so even a broken verification module
     # cannot fail an agent's real work.
-    if guard is not None:
-        await asyncio.to_thread(guard.after, name, args, result, workspace=workspace)
-
     try:
         from robothor.engine.tools import verification
 

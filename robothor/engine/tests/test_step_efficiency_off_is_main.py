@@ -101,10 +101,15 @@ class TestTheNoteIsMainsNote:
                 is None
             ), mode
 
-    def test_off_logs_mains_line_at_mains_level(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_off_logs_mains_line_at_mains_level_from_mains_logger(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Level, text AND logger name. A reader filtering the journal on
+        `robothor.engine.runner` would otherwise watch the line vanish from an
+        `off` box and read that as the control having been removed."""
         from robothor.engine.run_pacing import DeadlinePacer
 
-        caplog.set_level(logging.INFO, logger="robothor.engine.run_pacing")
+        caplog.set_level(logging.INFO)
         DeadlinePacer(mode="off").note_for(
             _watchdog(960.0), iteration=40, task_text="", workspace=None, run_id="r"
         )
@@ -112,6 +117,7 @@ class TestTheNoteIsMainsNote:
         assert len(issued) == 1
         assert issued[0].levelno == logging.INFO
         assert issued[0].getMessage() == MAIN_LOG_TEMPLATE.format(n=40)
+        assert issued[0].name == "robothor.engine.runner"
 
     def test_the_ladder_raises_that_line_to_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """Item 0: INFO is invisible in the container this is read from."""

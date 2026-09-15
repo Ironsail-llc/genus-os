@@ -40,6 +40,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: `off` has to look like the engine that shipped in the journal too, and main
+#: emitted its deadline line from the runner's logger. A reader filtering on
+#: `robothor.engine.runner` would otherwise see the line disappear from an `off`
+#: box and conclude the control had been removed.
+_MAIN_LOGGER = logging.getLogger("robothor.engine.runner")
+
 #: Where in the budget the agent is told about it. 80% is the rung that already
 #: shipped and is kept exactly where it was; 50% is early enough to change a
 #: plan rather than salvage one; 95% is the last moment a write can still land.
@@ -248,7 +254,7 @@ class DeadlinePacer:
             # fix and belongs to the ladder: `observe` is the default every
             # existing install gets, so the fix is live without `off` having to
             # stop being the baseline.
-            logger.info("Deadline warning issued at iteration %d", iteration)
+            _MAIN_LOGGER.info("Deadline warning issued at iteration %d", iteration)
             return note
         # The 80% rung is what already shipped, so it injects on every rung of
         # the ladder including `observe` — observe must not take away a control

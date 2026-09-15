@@ -143,6 +143,18 @@ not to the second: see [step efficiency](STEP_EFFICIENCY.md) for the controls,
 the log lines to grep, and what has to be true before it is promoted past
 `observe`.
 
+**The harness runs that flag at `enforce` while the fleet runs it at
+`observe`,** and that asymmetry is deliberate in the same way
+`ROBOTHOR_COMPLETION_CONTRACTS_MODE` above it is: the harness exists to measure
+the rung an operator is deciding about, and measuring the shipped default would
+report "no effect" for a control nobody had switched on. It is also the one
+asymmetry on this page that runs the *other* way — everywhere else the rule is
+that the container must match production — so it is written down here rather
+than left to be discovered in `_container_command`. Export
+`ROBOTHOR_STEP_EFFICIENCY_MODE` on the host to override it; `off` gives the
+baseline half of a differential sweep from the same image. When you report a
+number from this suite, say which rung produced it.
+
 ## Suite YAML keys added
 
 ```yaml

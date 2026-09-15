@@ -97,11 +97,29 @@ class TestTheHandlerUsesIt:
     @pytest.mark.asyncio
     async def test_the_timeout_error_reports_the_real_limit(self, monkeypatch, tmp_path):
         """A message that says 30 when the limit was 3 sends the agent hunting
-        for the wrong problem."""
+        for the wrong problem.
+
+        The number moved out of the sentence and into its own field. It had to:
+        the repeat guard digests `error` to decide whether a call is a repeat
+        (robothor/engine/repeat_guard.py), and when the run's remaining budget
+        is clamping this call the limit changes on EVERY call — so a limit baked
+        into the text put the wall clock back inside the digest and made six
+        identical timeouts look like six different results.
+
+        The invariant is unchanged: the agent still reads the real limit, and
+        `AgentSession.record_tool_call` serialises the whole result into the
+        conversation, so it reaches the model either way. The assertion follows
+        the number rather than the sentence.
+        """
+        import json
+
         from robothor.engine.tools.dispatch import ToolContext
         from robothor.engine.tools.handlers.filesystem import _exec
 
         result = await _exec(
             {"command": "sleep 30", "timeout": 3}, ToolContext(workspace=str(tmp_path))
         )
-        assert "3s" in str(result.get("error", "")), result
+        assert result.get("timeout_seconds") == 3, result
+        assert "3" in json.dumps(result, default=str), result
+        # ...and no OTHER number is claimed as the limit.
+        assert "30s" not in str(result.get("error", "")), result

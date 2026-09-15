@@ -41,11 +41,13 @@ scope for this control. `sam3_debug` is what it is for.
 Three things that all read as improvements belong to the ladder, not to the
 baseline: an operator turning this off has to get the previous engine back, and
 a sweep comparing `off` with `enforce` is only measuring the controls if `off`
-is what it claims to be. So under `off` the pace sentence is not appended, the
-deadline line stays `logger.info("Deadline warning issued at iteration N")`
-(raising it to WARNING is item 0's fix and lands at `observe`, which is the
-default every existing install gets), and a note at iteration 0 is not
-suppressed. `robothor/engine/tests/test_step_efficiency_off_is_main.py` runs
+is what it claims to be. So under `off`: the pace sentence is not appended; the
+deadline line stays `logger.info("Deadline warning issued at iteration N")`,
+emitted from main's own `robothor.engine.runner` logger so a journal filter on
+that name does not watch the line vanish from an `off` box (raising it to
+WARNING is item 0's fix and lands at `observe`, the default every existing
+install gets); and a note at iteration 0 is not suppressed.
+`robothor/engine/tests/test_step_efficiency_off_is_main.py` runs
 main's own `deadline_note` beside the pacer across a grid of inputs and pins the
 rest as snapshots taken from `origin/main`.
 
@@ -65,7 +67,7 @@ whole answer, so an identical call whose target has the same mtime and size as
 at the previous read is answered from what the run already has:
 
 ```json
-{"unchanged_since_step": 14, "note": "identical to your read at step 14; the content is unchanged on disk since then"}
+{"unchanged_since_step": 14, "note": "identical to your read at step 14; the content is unchanged on disk since then", "repeat_guard": "answered"}
 ```
 
 **The full content comes back instead** whenever the earlier result is no longer
@@ -88,9 +90,21 @@ call it would have saved.
 their **output** changed — the tool's own fields only (`stdout`, `stderr`,
 `exit_code`, `error`, …), never an engine annotation such as the clamp's
 `timeout_note`, whose remaining-seconds number shrinks with the clock and would
-otherwise reset the counter on every call. An identical **error** counts too:
-five identical clamped timeouts is ~1060s of a 1200s budget, the most expensive
-repeat a run can make.
+otherwise reset the counter on every call.
+
+**No engine-computed number may reach the digest by any route.** The clamp's
+note was the first to try; the second was the timeout message itself, which used
+to read *"Command timed out (5s limit)"* with the **clamped** seconds inside it —
+and `error` is in the projection, so the wall clock walked straight back in and
+six identical timeouts under a moving clock produced no note and no refusal. Both
+`exec` branches now return `{"error": "Command timed out…", "timeout_seconds": N}`
+with the number in its own field, which the allow-list does not name. The agent
+still reads it; the digest does not. A test asserts that a synthetic result
+carrying an extra engine field that differs on every call digests equal, so the
+rule holds for the next one rather than for today's two.
+
+An identical **error** counts too: five identical clamped timeouts is ~1060s of a
+1200s budget, the most expensive repeat a run can make.
 
 The third identical-output occurrence gets a note and **still runs** — a command
 may have side effects the engine cannot see. Only `exec` can be refused, only on
@@ -102,11 +116,16 @@ identical silences establish nothing about the fifth; those are noted and never
 refused. A different output resets the count, and any change to the arguments is
 a different key that runs immediately, so a refusal is never a trap.
 
-A refusal returns `{"refused": true, "reason": "…", "identical_runs": 4}` with
-**no** `error` key. `runner.py` reads `result.get("error")` straight into the
-per-tool circuit breaker, which appends *"Tool 'exec' has failed 3 times this
+A refusal returns
+`{"refused": true, "reason": "…", "identical_runs": 4, "repeat_guard": "refused"}`
+with **no** `error` key. `runner.py` reads `result.get("error")` straight into
+the per-tool circuit breaker, which appends *"Tool 'exec' has failed 3 times this
 run. Do NOT call it again"* at three — so a refusal shaped like an error would
-have told a Code-task agent to abandon its only way to run code.
+have told a Code-task agent to abandon its only way to run code. The
+`repeat_guard` marker (also `"answered"` on a served read) is what keeps the same
+result out of the *opposite* bucket: the runner skips `escalation.record_success`
+and `checkpoint.record_success` for it, because a tool that never ran is not
+progress either.
 
 `write_file`, `web_fetch`, `web_search`, `view_image` and everything else are
 untouched.
@@ -147,7 +166,7 @@ Grep `agent.log` (or the journal) for:
 | `Deadline warning issued at 50% of budget, iteration N, run R` | a pace note was injected |
 | `Deliverable check-in issued at iteration N, run R` | the 25-iteration check-in fired |
 | `Tool timeout clamped to Ns on run R` | a tool asked for more than the run had left |
-| `Deadline warning issued at iteration N` (INFO, no run id) | the run is at `off` — main's line, main's level |
+| `Deadline warning issued at iteration N` (INFO, no run id, logger `robothor.engine.runner`) | the run is at `off` — main's line, level and logger name |
 | `repeat guard answered a repeated read_file on run R` | a read was served from context |
 | `repeat guard refused a repeated exec on run R` | a fifth identical command was refused |
 | `step-efficiency observe: run R would ...` | `observe` — what `enforce` would have done |

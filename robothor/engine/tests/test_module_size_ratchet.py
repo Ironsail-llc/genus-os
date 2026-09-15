@@ -48,13 +48,13 @@ CAPS = {
     # independently, so the ratchet takes the merged actual rather than either
     # branch's number -- a cap carried over from one side would bank the other
     # side's savings as headroom.
-    # 2514 -> 2513 with the step-efficiency work. The repeat guard's drain and
-    # the pace-note call site cost less than the inlined deadline and check-in
-    # blocks returned when they left for run_pacing.py, so the cap follows the
-    # file down rather than banking the line as headroom — the whole point of a
-    # ratchet, and this one had quietly consumed its last line before the cap
-    # was re-read.
-    "robothor/engine/runner.py": 2513,
+    # 2514 -> 2512 with the step-efficiency work. The repeat guard's drain, the
+    # pace-note call site and the refusal-is-not-progress branch cost less than
+    # the inlined deadline and check-in blocks returned when they left for
+    # run_pacing.py, so the cap follows the file DOWN rather than banking the
+    # difference as headroom — the whole point of a ratchet, and this one had
+    # quietly consumed its last line before the cap was re-read.
+    "robothor/engine/runner.py": 2512,
     # 2545: a concurrent session ratcheted this to 2539 by lifting injection
     # screening and journal resume out of execute(); the deliverable guard's call
     # site adds the rest. Its 25 lines of logic went to loop_guards.py, so what

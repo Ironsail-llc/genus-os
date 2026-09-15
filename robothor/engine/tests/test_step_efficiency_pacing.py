@@ -295,8 +295,14 @@ class TestTheRunnerWiring:
             "messages[0] is the SYSTEM prompt — the note would read the wrong text"
         )
 
-    def test_the_pacer_is_built_from_the_flag(self) -> None:
+    def test_the_pacer_is_built_from_the_runs_cached_rung(self) -> None:
+        """`mode_for_run` resolves the flag once and caches it on the session,
+        so the clamp — called from `exec`, 41 times in the profiled run — does
+        not repeat a DB-backed flag read on the event loop."""
         import robothor.engine.runner as m
 
         body = Path(m.__file__).read_text(encoding="utf-8")
-        assert "DeadlinePacer(mode=step_efficiency_mode())" in body
+        assert "DeadlinePacer(mode=mode_for_run(session.run_id))" in body
+        assert "step_efficiency_mode()" not in body, (
+            "the runner resolves the rung through mode_for_run, which seeds the cache"
+        )
