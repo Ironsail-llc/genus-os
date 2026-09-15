@@ -168,40 +168,73 @@ class TestARouterMayOnlyClaimItsOwnPath:
 class TestAReceivingChannelIsHandedTheRuntime:
     """A plugin router has no way to reach the runner: the engine builds it, and
     `init_chat`-style wiring is a platform function a package cannot call. So a
-    channel that declares ``bind_runtime`` is handed the runner and the engine
-    config at mount time — the same handshake ``init_chat`` performs for the
-    built-in chat router, through a slot rather than an import."""
+    channel that declares ``bind_runtime`` is handed the runner and a NARROW
+    runtime object at mount time — the same handshake ``init_chat`` performs for
+    the built-in chat router, through a slot rather than an import, and carrying
+    a tenant id rather than the config object that holds the operator's Telegram
+    token."""
 
     def test_a_channel_that_declares_bind_runtime_is_given_the_runner(self, install, monkeypatch):
         bound: dict[str, Any] = {}
 
         class _Bindable(_PluginChannel):
-            def bind_runtime(self, *, runner: Any, config: Any) -> None:
+            def bind_runtime(self, *, runner: Any, runtime: Any) -> None:
                 bound["runner"] = runner
-                bound["config"] = config
+                bound["runtime"] = runtime
 
-        runner, config = object(), object()
+        runner = object()
         install({"teams": _Bindable(router=_Router("/api/channels/teams/messages"))})
         _arm(monkeypatch, "teams")
         app = _App()
-        mount_plugin_channel_routers(app, runner=runner, config=config)
+        mount_plugin_channel_routers(app, runner=runner, tenant_id="tenant-b")
 
         assert bound["runner"] is runner
-        assert bound["config"] is config
+        assert bound["runtime"].tenant_id == "tenant-b"
         assert len(app.mounted) == 1
+
+    def test_the_runtime_carries_no_credential_bag(self, install, monkeypatch):
+        """The slot hands over the narrowest thing that works. `EngineConfig`
+        carries the operator's Telegram bot token and default chat id; a plugin
+        could reach those through get_settings() anyway, so this crosses no
+        boundary that exists — but a DECLARED slot that hands over a credential
+        bag teaches the next channel the wrong lesson."""
+        from robothor.engine.channels.routers import ChannelRuntime
+
+        fields = set(ChannelRuntime.__dataclass_fields__)
+        assert fields == {"tenant_id"}, f"the runtime grew fields nobody needed: {fields}"
+
+    def test_a_channel_is_not_mounted_when_there_is_no_runner(self, install, monkeypatch):
+        """`create_health_app` builds an app with no runner for a CLI and for a
+        test, and the chat and IDE routers are already guarded that way. A
+        channel handed runner=None does not RAISE — it stores the None and then
+        answers 200 to every authenticated activity and drops it, which is
+        exactly the failure this refusal exists to prevent."""
+        bound: dict[str, Any] = {}
+
+        class _Bindable(_PluginChannel):
+            def bind_runtime(self, *, runner: Any, runtime: Any) -> None:
+                bound["runner"] = runner
+
+        install({"teams": _Bindable(router=_Router("/api/channels/teams/messages"))})
+        _arm(monkeypatch, "teams")
+        app = _App()
+        mount_plugin_channel_routers(app, runner=None)
+
+        assert app.mounted == [], "an endpoint with no runner was published"
+        assert bound == {}
 
     def test_a_channel_that_cannot_be_bound_is_not_mounted(self, install, monkeypatch):
         """Fail closed: an endpoint with no runner would answer 200 to every
         activity and drop it, which looks exactly like a working install."""
 
         class _Unbindable(_PluginChannel):
-            def bind_runtime(self, *, runner: Any, config: Any) -> None:
+            def bind_runtime(self, *, runner: Any, runtime: Any) -> None:
                 raise RuntimeError("the plugin refused the runtime")
 
         install({"teams": _Unbindable(router=_Router("/api/channels/teams/messages"))})
         _arm(monkeypatch, "teams")
         app = _App()
-        mount_plugin_channel_routers(app, runner=object(), config=object())
+        mount_plugin_channel_routers(app, runner=object())
         assert app.mounted == []
 
 
@@ -232,7 +265,7 @@ class TestABrokenPluginMustNotStopBoot:
 
         install({"teams": _PluginChannel(router=_Router("/api/channels/teams/messages"))})
         _arm(monkeypatch, "teams")
-        mount_plugin_channel_routers(_RefusingApp())
+        mount_plugin_channel_routers(_RefusingApp(), runner=object())
 
 
 class TestTheEngineActuallyMountsThem:

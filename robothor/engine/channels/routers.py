@@ -32,14 +32,68 @@ and checkable: only an armed channel is reachable, and only at its own address.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
+
+from robothor.constants import DEFAULT_TENANT
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CHANNEL_PATH_PREFIX", "channel_path_prefix", "mount_plugin_channel_routers"]
+__all__ = [
+    "CHANNEL_PATH_PREFIX",
+    "ChannelRuntime",
+    "channel_path_prefix",
+    "is_mounted",
+    "mount_plugin_channel_routers",
+    "mounted_channels",
+    "reset_mounted",
+]
 
 #: Every plugin channel's HTTP surface lives under this, namespaced by channel.
 CHANNEL_PATH_PREFIX = "/api/channels"
+
+#: Channels whose router is actually ON an app right now.
+#:
+#: Recorded because "mounted" is not the same claim as "the router object was
+#: built", and the doctor check that exists to catch "armed nowhere" was reading
+#: the second and printing the first — so it stayed green when the path-claim
+#: check refused the router, when ``include_router`` raised, and when the
+#: channel was skipped for having no runner. A check that cannot see the failure
+#: one layer above the one it watches is the shape of every inert control this
+#: platform has shipped.
+_mounted: set[str] = set()
+
+
+def mounted_channels() -> frozenset[str]:
+    """The plugin channels whose inbound router is mounted in this process."""
+    return frozenset(_mounted)
+
+
+def is_mounted(name: str) -> bool:
+    """Whether ``name``'s inbound router is mounted. The honest version of
+    "is there an endpoint" — ask the mounting, not the object."""
+    return name in _mounted
+
+
+def reset_mounted() -> None:
+    """Forget what is mounted. For tests, and for an app rebuilt in-process."""
+    _mounted.clear()
+
+
+@dataclass(frozen=True)
+class ChannelRuntime:
+    """What a receiving channel is handed, and deliberately no more.
+
+    The first cut passed ``EngineConfig``, which carries the operator's Telegram
+    bot token and their default chat id. A plugin is imported into the daemon and
+    could reach those anyway — this crosses no boundary that exists — but a slot
+    the platform *declares* should hand over the narrowest thing that works, or
+    the declaration teaches the wrong lesson to the next channel that uses it.
+
+    Grows a field when a channel needs one, and not before.
+    """
+
+    tenant_id: str = DEFAULT_TENANT
 
 
 def channel_path_prefix(name: str) -> str:
@@ -61,6 +115,14 @@ def _claims_only_its_own_path(router: Any, name: str) -> bool:
         return False
     for route in routes:
         path = str(getattr(route, "path", "") or "")
+        if ".." in path:
+            # A traversal segment cannot shadow a platform route (they are
+            # registered first and matched in order), so this is hygiene rather
+            # than a hole — but a claim check that accepts
+            # `/api/channels/teams/../admin/channels` is not checking the thing
+            # it says it checks.
+            logger.error("channel %r contributed a route containing '..'; refusing it", name)
+            return False
         if path != prefix and not path.startswith(prefix + "/"):
             logger.error(
                 "channel %r contributed a route outside %s; refusing the whole router",
@@ -71,19 +133,33 @@ def _claims_only_its_own_path(router: Any, name: str) -> bool:
     return True
 
 
-def _bind_runtime(channel: Any, name: str, runner: Any, config: Any) -> bool:
+def _bind_runtime(channel: Any, name: str, runner: Any, runtime: ChannelRuntime) -> bool:
     """Hand a receiving channel the runtime it cannot reach for itself.
 
-    True when the channel took it, or declared no interest. False only when it
-    declared ``bind_runtime`` and that call failed — and then the router is not
-    mounted, because failing closed is the difference between an endpoint that
-    is missing and one that silently swallows every message.
+    True when the channel took it, or declared no interest. False in two cases,
+    and both leave the router unmounted:
+
+    * the channel declared ``bind_runtime`` and the call **raised**;
+    * there is **no runner to give it**. ``create_health_app`` legitimately
+      builds an app without one (a CLI, a test), and the chat and IDE routers are
+      already guarded the same way. A channel handed ``runner=None`` does not
+      raise — it stores the ``None`` and then answers 200 to every authenticated
+      activity and drops it, which is verbatim the failure this function's
+      docstring claimed to prevent.
     """
     bind = getattr(channel, "bind_runtime", None)
     if bind is None:
         return True
+    if runner is None:
+        logger.warning(
+            "Channel %r receives but there is no runner in this process, so its "
+            "endpoint is NOT mounted. An endpoint that acknowledged messages and "
+            "dropped them would be indistinguishable from a working install.",
+            name,
+        )
+        return False
     try:
-        bind(runner=runner, config=config)
+        bind(runner=runner, runtime=runtime)
     except Exception as exc:  # noqa: BLE001 — a refusing plugin is not a dead engine
         logger.error(
             "Channel %r refused the runtime, so its endpoint is NOT mounted: %s", name, exc
@@ -93,17 +169,18 @@ def _bind_runtime(channel: Any, name: str, runner: Any, config: Any) -> bool:
 
 
 def mount_plugin_channel_routers(
-    app: Any, *, runner: Any | None = None, config: Any | None = None
+    app: Any, *, runner: Any | None = None, tenant_id: str = DEFAULT_TENANT
 ) -> list[str]:
     """Mount the inbound router of every armed plugin channel.
 
-    ``runner`` and ``config`` are handed to a channel that declares
-    ``bind_runtime(*, runner, config)`` — the handshake ``init_chat`` performs
-    for the built-in chat router, offered as a slot because a package cannot
-    call a platform function that takes the engine's own objects. A channel that
-    refuses the binding is **not mounted**: an endpoint with no runner answers
-    200 to every activity and drops it, which is indistinguishable from a
-    working install.
+    A channel that declares ``bind_runtime(*, runner, runtime)`` is handed the
+    runner and a :class:`ChannelRuntime` — the handshake ``init_chat`` performs
+    for the built-in chat router, offered as a slot because a package cannot call
+    a platform function that takes the engine's own objects, and narrowed to what
+    a channel actually needs rather than to the config object that happens to be
+    in scope. A channel that refuses the binding, or that there is no runner for,
+    is **not mounted**: an endpoint with no runner answers 200 to every activity
+    and drops it, which is indistinguishable from a working install.
 
     Returns the names mounted, for the caller that wants to log or report them.
     Never raises: a broken distribution must not stop the engine booting, which
@@ -130,15 +207,22 @@ def mount_plugin_channel_routers(
         if router is None:
             continue
         if not _claims_only_its_own_path(router, name):
+            _mounted.discard(name)
             continue
-        if not _bind_runtime(channel, name, runner, config):
+        if not _bind_runtime(channel, name, runner, ChannelRuntime(tenant_id=tenant_id)):
+            _mounted.discard(name)
             continue
         try:
             app.include_router(router)
         except Exception as exc:  # noqa: BLE001 — one bad router is not a dead engine
             logger.error("Channel %r router could not be mounted: %s", name, exc)
+            _mounted.discard(name)
             continue
         mounted.append(name)
+        # Recorded only HERE, after the include actually returned. Everything
+        # that asks "is there an endpoint" reads this rather than asking a
+        # channel whether it built a router object.
+        _mounted.add(name)
         logger.info(
             "Mounted the inbound router for channel %r at %s", name, channel_path_prefix(name)
         )

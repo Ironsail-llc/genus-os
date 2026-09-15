@@ -44,6 +44,7 @@ import asyncio
 import logging
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import jwt
@@ -52,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "ALGORITHMS",
+    "KEY_HOSTS",
     "ISSUER",
     "KEY_CACHE_SECONDS",
     "OPENID_METADATA_URL",
@@ -72,6 +74,21 @@ ISSUER = "https://api.botframework.com"
 #: Pinned. A list that included ``none`` or an HMAC algorithm would let a
 #: forger sign with the very key this module publishes.
 ALGORITHMS = ["RS256"]
+
+#: Hosts the published keys may be fetched from.
+#:
+#: The ``jwks_uri`` comes out of a document fetched over the network, and it was
+#: accepted on ``https://`` alone — so a metadata response naming an attacker's
+#: host would have this instance fetch signing keys from it and then trust tokens
+#: signed with them. Reaching that requires already having broken TLS to
+#: ``login.botframework.com``, at which point the document is the attacker's
+#: anyway; pinning costs one comparison and makes the discovered URL as trusted
+#: as the hard-coded one above it, which is what this module's docstring claims.
+#:
+#: Matched on the exact host or a dot-suffix of it, never ``endswith`` on the
+#: bare string: ``login.botframework.com.evil.example`` ends with the suffix and
+#: is not Microsoft.
+KEY_HOSTS = ("login.botframework.com", "login.microsoftonline.com")
 
 #: A day, which is what Microsoft's guidance asks clients to hold these for.
 KEY_CACHE_SECONDS = 24 * 60 * 60
@@ -123,6 +140,20 @@ def reset_key_cache() -> None:
     _unknown_kid_fetched_at = 0.0
 
 
+def _is_microsoft_key_host(uri: str) -> bool:
+    """Whether ``uri`` is an HTTPS URL on one of Microsoft's own key hosts.
+
+    Parsed rather than string-matched. ``urlparse().hostname`` drops any
+    ``user@`` prefix, which is how ``https://login.botframework.com@evil.example``
+    reads as Microsoft to a check written with ``in`` or ``startswith``.
+    """
+    parsed = urlparse(uri or "")
+    if parsed.scheme != "https":
+        return False
+    host = (parsed.hostname or "").lower()
+    return any(host == known or host.endswith("." + known) for known in KEY_HOSTS)
+
+
 async def _fetch_keys() -> dict[str, Any]:
     """The published keys, by ``kid``.
 
@@ -134,7 +165,11 @@ async def _fetch_keys() -> dict[str, Any]:
         metadata = await client.get(OPENID_METADATA_URL)
         metadata.raise_for_status()
         jwks_uri = str((metadata.json() or {}).get("jwks_uri") or "")
-        if not jwks_uri.startswith("https://"):
+        if not _is_microsoft_key_host(jwks_uri):
+            logger.error(
+                "Teams: the Bot Framework metadata named a key endpoint outside "
+                "Microsoft's own hosts; refusing to fetch signing keys from it"
+            )
             raise TokenRejectedError("the token could not be verified")
         document = await client.get(jwks_uri)
         document.raise_for_status()

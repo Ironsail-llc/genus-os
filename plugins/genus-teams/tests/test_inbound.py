@@ -198,7 +198,7 @@ def client(monkeypatch, recorded, sent):
 
     channel = TeamsChannel()
     runner = _Runner()
-    channel.bind_runtime(runner=runner, config=None)
+    channel.bind_runtime(runner=runner, runtime=None)
 
     app = FastAPI()
     app.include_router(channel.inbound_router)
@@ -335,6 +335,104 @@ class TestSizeAndRate:
         assert len(client.runner.calls) <= router_module.RATE_LIMIT_PER_MINUTE
 
 
+class TestAFloodCannotStarveGenuineTraffic:
+    """One bucket counted before the token was checked meant anyone who knew the
+    URL — and the URL is in the Azure Bot registration — could hold the channel
+    at 429 for two junk requests a second. The limit is now two limits: a cheap
+    pre-auth cap per client address for raw abuse, and the real per-source
+    budget counted only for callers that proved themselves."""
+
+    def test_an_unauthenticated_flood_does_not_lock_out_a_genuine_activity(
+        self, client, allow_everyone
+    ):
+        for _ in range(router_module.PRE_AUTH_RATE_LIMIT_PER_MINUTE + 50):
+            client.post(PATH, json=_activity(), headers={"Authorization": "Bearer junk"})
+
+        # The flood exhausted its own pre-auth budget for that address...
+        assert (
+            client.post(
+                PATH, json=_activity(), headers={"Authorization": "Bearer junk"}
+            ).status_code
+            == 429
+        )
+        # ...and a genuine activity, from Microsoft, still gets through.
+        assert _post(client).status_code == 200
+
+    def test_an_authenticated_flood_from_one_conversation_is_still_throttled(
+        self, client, allow_everyone
+    ):
+        codes = [_post(client).status_code for _ in range(router_module.RATE_LIMIT_PER_MINUTE + 5)]
+        assert codes[0] == 200
+        assert 429 in codes, "an authenticated caller could send without limit"
+
+    def test_one_conversations_budget_is_not_another_conversations(self, client, allow_everyone):
+        noisy = {"id": "19:the-noisy-room.thread.v2", "conversationType": "channel"}
+        for _ in range(router_module.RATE_LIMIT_PER_MINUTE + 5):
+            _post(client, activity=_activity(conversation=noisy))
+        assert _post(client).status_code == 200, (
+            "one conversation's flood spent every other conversation's budget"
+        )
+
+
+class TestTheKeysComeFromMicrosoft:
+    def test_a_jwks_uri_on_another_host_is_refused(self, client, monkeypatch):
+        """The one input to the whole chain that was not pinned. A metadata
+        document naming an attacker's host would have this instance fetch signing
+        keys from it and trust tokens signed with them — and the module's own
+        docstring calls itself the only thing between a public path and
+        runner.execute."""
+        import json as _json
+
+        from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+
+        evil_key = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+        def _serve(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if url == jwt_validation.OPENID_METADATA_URL:
+                return httpx.Response(200, json={"jwks_uri": "https://attacker.example.com/keys"})
+            import jwt as _jwt
+
+            public = _json.loads(_jwt.algorithms.RSAAlgorithm.to_jwk(evil_key.public_key()))
+            public.update({"kid": KID, "use": "sig", "alg": "RS256"})
+            return httpx.Response(200, json={"keys": [public]})
+
+        monkeypatch.setattr(
+            jwt_validation,
+            "build_client",
+            lambda: httpx.AsyncClient(transport=httpx.MockTransport(_serve)),
+        )
+        jwt_validation.reset_key_cache()
+
+        response = _post(client, token=_token(key=evil_key))
+        assert response.status_code == 401, (
+            "signing keys were fetched from a host outside Microsoft's and trusted"
+        )
+
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "https://login.botframework.com/v1/.well-known/keys",
+            "https://login.microsoftonline.com/common/discovery/keys",
+        ],
+    )
+    def test_microsofts_own_hosts_are_accepted(self, uri):
+        assert jwt_validation._is_microsoft_key_host(uri) is True
+
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "https://attacker.example.com/keys",
+            "https://login.botframework.com.evil.example/keys",
+            "https://notlogin.botframework.com/keys",
+            "http://login.botframework.com/keys",
+            "https://login.botframework.com@evil.example/keys",
+        ],
+    )
+    def test_everything_else_is_refused(self, uri):
+        assert jwt_validation._is_microsoft_key_host(uri) is False
+
+
 class TestAValidActivity:
     def test_it_is_acknowledged_immediately(self, client, allow_everyone):
         """Teams abandons a request after about 15 seconds. The run takes
@@ -381,7 +479,7 @@ class TestAValidActivity:
     def test_the_answer_goes_back_over_the_outbound_channel(self, client, sent, allow_everyone):
         _post(client)
         _drain(client)
-        assert sent == [(ALICE_AAD, "the answer")]
+        assert sent == [(CONVERSATION, "the answer")]
 
     def test_the_bots_own_mention_is_stripped_from_the_text(self, client, allow_everyone):
         activity = _activity(
@@ -534,7 +632,7 @@ class TestTheRealDeferralPath:
 
         channel = TeamsChannel()
         runner = _Runner()
-        channel.bind_runtime(runner=runner, config=None)
+        channel.bind_runtime(runner=runner, runtime=None)
         router_module.reset_rate_limit()
 
         app = FastAPI()
@@ -555,4 +653,120 @@ class TestTheRealDeferralPath:
             await asyncio.sleep(0.01)
 
         assert runner.calls, "the deferred run never happened — spawn() is inert"
-        assert sent == [(ALICE_AAD, "the answer")]
+        assert sent == [(CONVERSATION, "the answer")]
+
+
+class TestTheReplyGoesWhereTheQuestionWasAsked:
+    """A run takes minutes, and `record()` upserts the sender's reference on
+    every message. Replying to the SENDER resolves whichever conversation they
+    spoke in most recently — so an answer to a question asked in a shared room
+    lands in a 1:1 chat, or a private answer lands in a team channel. The
+    conversation an activity arrived in cannot move under it."""
+
+    def test_the_answer_is_addressed_to_the_conversation_not_the_sender(
+        self, client, sent, allow_everyone
+    ):
+        _post(client)
+        _drain(client)
+        assert sent == [(CONVERSATION, "the answer")]
+
+    def test_a_reference_that_moves_mid_run_does_not_move_the_reply(
+        self, client, sent, allow_everyone, monkeypatch
+    ):
+        """The race itself: the same person messages the bot somewhere else
+        while the first run is still going."""
+        _post(
+            client,
+            activity=_activity(conversation={"id": CONVERSATION, "conversationType": "channel"}),
+        )
+        # A second activity from the same sender, in a 1:1 chat, before the
+        # first run's reply goes out.
+        _post(
+            client,
+            activity=_activity(
+                text="hello again",
+                conversation={"id": "19:a-private-chat.thread.v2", "conversationType": "personal"},
+            ),
+        )
+        _drain(client)
+
+        targets = [target for target, _text in sent]
+        assert targets[0] == CONVERSATION, (
+            "the answer to the room was delivered into the private chat"
+        )
+        assert "19:a-private-chat.thread.v2" in targets
+
+
+class TestACardSubmitPassesTheGateFirst:
+    """Settling an ask resumes a run that is already going — the same decision
+    the access gate makes about starting one, through a different door. A sender
+    the gate would refuse must not get to press the button."""
+
+    def _pending_ask(self, client, addressee: str = ""):
+        import asyncio
+
+        from genus_teams import ask as ask_module
+
+        ask_module.reset_pending_asks()
+        loop = asyncio.new_event_loop()
+        future = loop.create_future()
+        ask_id = "test-ask-1"
+        ask_module._pending[ask_id] = ask_module._PendingAsk(
+            future=future,
+            conversation_id=CONVERSATION,
+            addressee=addressee,
+            options=("yes", "no"),
+        )
+        return ask_id, future, loop
+
+    def test_an_unpaired_stranger_cannot_settle_a_card(self, client, monkeypatch):
+        from robothor.engine.channels import access
+
+        async def _refuse(*_a: Any, **_kw: Any) -> access.AccessDecision:
+            return access.AccessDecision(allowed=False, refusal="")
+
+        monkeypatch.setattr(access, "evaluate", _refuse)
+        ask_id, future, loop = self._pending_ask(client)
+        try:
+            _post(
+                client,
+                activity=_activity(text="", value={"genus_ask": ask_id, "genus_choice": 0}),
+            )
+            _drain(client)
+            assert not future.done(), "a sender the gate refuses settled a pending question"
+        finally:
+            loop.close()
+
+    def test_a_revoked_addressee_cannot_settle_their_own_card(self, client, monkeypatch):
+        """The addressee binding alone is not the gate. Somebody paired when the
+        question went out and revoked or denied since is exactly who the gate
+        exists to stop, and a pending card is a live approval path."""
+        from robothor.engine.channels import access
+
+        async def _refuse(*_a: Any, **_kw: Any) -> access.AccessDecision:
+            return access.AccessDecision(allowed=False, refusal="")
+
+        monkeypatch.setattr(access, "evaluate", _refuse)
+        ask_id, future, loop = self._pending_ask(client, addressee=ALICE_AAD)
+        try:
+            _post(
+                client,
+                activity=_activity(text="", value={"genus_ask": ask_id, "genus_choice": 0}),
+            )
+            _drain(client)
+            assert not future.done(), "a sender the gate now refuses settled a pending question"
+        finally:
+            loop.close()
+
+    def test_a_card_submit_is_never_run_as_a_message(self, client, allow_everyone):
+        ask_id, future, loop = self._pending_ask(client, addressee=ALICE_AAD)
+        try:
+            _post(
+                client,
+                activity=_activity(text="", value={"genus_ask": ask_id, "genus_choice": 1}),
+            )
+            _drain(client)
+            assert client.runner.calls == [], "a card payload was handed to the agent as a sentence"
+            assert future.done() and future.result() == "no"
+        finally:
+            loop.close()

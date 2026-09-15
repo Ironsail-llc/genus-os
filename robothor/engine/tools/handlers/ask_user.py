@@ -69,7 +69,12 @@ MAX_OPTIONS = 6
 #: Triggers with a person on the other end. Everything else (cron, hooks,
 #: events, sub-agents, workflows, federation, webhooks) is a run nobody is
 #: watching.
-INTERACTIVE_TRIGGERS = frozenset({"telegram", "webchat", "slack", "ide"})
+#: ``channel`` is every PLUGIN channel that receives, as one member: the enum
+#: cannot grow one per installed distribution, and the run's trigger detail says
+#: which channel it actually was. Leaving it out made the first channel to ship
+#: as a plugin implement ``ask``, test it, document it — and be unreachable from
+#: the only caller ``ask`` exists for.
+INTERACTIVE_TRIGGERS = frozenset({"telegram", "webchat", "slack", "ide", "channel"})
 
 #: Which channel answers for which trigger. ``webchat`` joined with C9: the
 #: channel exists now, so a Helm run WAITS — the question goes out over the
@@ -77,6 +82,13 @@ INTERACTIVE_TRIGGERS = frozenset({"telegram", "webchat", "slack", "ide"})
 #: the channel learns by polling the row. Before that the row and the status
 #: event went out and only a later turn could see the answer.
 _CHANNEL_FOR_TRIGGER = {"telegram": "telegram", "slack": "slack", "webchat": "webchat"}
+
+#: How a run that arrived over a plugin channel names its own surface:
+#: ``channel:<channel name>:<reply target>``, written by
+#: ``channels.inbound.handle_message`` and by nothing else. Parsed rather than
+#: looked up in a table, so a channel this module has never heard of can still be
+#: asked — which is the point, and the reason no channel is named here.
+CHANNEL_DETAIL_PREFIX = "channel"
 
 #: ``trigger_detail`` prefixes that carry a Telegram chat id. Every interactive
 #: Telegram entry point writes one of these; see ``engine/telegram.py`` and
@@ -151,7 +163,28 @@ def _webchat_target(ctx: ToolContext, trigger_detail: str) -> str:
     return key.rsplit(_WEBCHAT_USER_SEGMENT, 1)[1]
 
 
-def _addressee(ctx: ToolContext, trigger: str) -> str:
+def _plugin_channel_route(trigger_detail: str) -> tuple[str, str]:
+    """``(channel name, target)`` for a run a plugin channel started.
+
+    ``("", "")`` when the detail names none: a ``channel`` run that did not come
+    through the shared inbound pipeline has no surface this tool can find, and
+    guessing one would aim a question at a conversation nobody chose.
+
+    Split at most twice, because a conversation id contains colons of its own
+    (``19:…@thread.v2``) and a target truncated at the first one addresses
+    nothing.
+    """
+    head = (trigger_detail or "").split("|", 1)[0]
+    parts = head.split(":", 2)
+    if len(parts) < 3 or parts[0] != CHANNEL_DETAIL_PREFIX:
+        return "", ""
+    name, target = parts[1].strip(), parts[2].strip()
+    if not name or not target:
+        return "", ""
+    return name, target
+
+
+def _addressee(ctx: ToolContext, channel_name: str) -> str:
     """The channel-native id of the person this run is talking to, or "".
 
     This is what the channel binds the pending ask to, so that the answer which
@@ -162,11 +195,17 @@ def _addressee(ctx: ToolContext, trigger: str) -> str:
     Empty for an unverified or absent identity, which is the safe direction: an
     unaddressed ask falls back to the platform's own authorization (for Telegram,
     the owner gate) rather than binding to an identity nobody proved.
+
+    Compared against the resolved CHANNEL NAME, never against the trigger. For
+    Telegram, Slack and webchat the two strings happen to be equal; for a plugin
+    channel the trigger is ``channel`` while the identity's channel is ``teams``,
+    so the old comparison could never match and **every** ask on the new surface
+    was unaddressed — which is the state that lets anyone in a room answer.
     """
     identity = getattr(ctx, "identity", None)
     if identity is None or not getattr(identity, "verified", False):
         return ""
-    if str(getattr(identity, "channel", "")) != trigger:
+    if str(getattr(identity, "channel", "")) != channel_name:
         return ""
     return str(getattr(identity, "identifier", "") or "")
 
@@ -207,7 +246,12 @@ async def _handle_ask_user(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
         target = _telegram_target(trigger_detail)
     elif channel_name == "webchat":
         target = _webchat_target(ctx, trigger_detail)
-    addressee = _addressee(ctx, trigger)
+    elif trigger == CHANNEL_DETAIL_PREFIX:
+        # A plugin channel names itself and its reply address in the detail, so
+        # this branch serves a channel that did not exist when it was written.
+        # No table to add a name to, and no name here to add.
+        channel_name, target = _plugin_channel_route(trigger_detail)
+    addressee = _addressee(ctx, channel_name)
     timeout = bounded_timeout(args.get("timeout_seconds"))
 
     from robothor.engine.channels import get_channel

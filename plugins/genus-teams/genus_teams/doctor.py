@@ -77,13 +77,21 @@ async def _endpoint(_ctx: Any) -> Any:
             "and restart robothor-engine. Until then a manifest naming it records "
             "failed:no_channel:teams."
         )
-    from genus_teams import CHANNEL
+    from robothor.engine.channels.routers import is_mounted
 
-    if CHANNEL.inbound_router is None:
+    # The MOUNTING, not the channel's own router attribute. The object exists as
+    # soon as anything asks for it, and the engine can still have refused it: a
+    # route outside /api/channels/teams, an include that raised, or no runner to
+    # bind. This check exists to catch "armed nowhere while the outbound side
+    # looks healthy", and reading the object made it blind to the layer above
+    # the one it watches.
+    if not is_mounted("teams"):
         return fail(
-            "the Teams channel is armed but has no messaging endpoint in this "
-            "process, so nobody can message the bot (the `api` extra provides "
-            "FastAPI; check the engine's log for why the router was not built)."
+            "the Teams channel is armed but its messaging endpoint is not mounted "
+            "in this process, so nobody can message the bot. Check the engine's "
+            "log at start: the router is refused when it claims a path outside "
+            "/api/channels/teams, when there is no runner to bind it to, or when "
+            "FastAPI (the `api` extra) is missing."
         )
     return ok(
         "armed, and the messaging endpoint is mounted at "

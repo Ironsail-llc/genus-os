@@ -61,6 +61,18 @@ def _clean():
     ask_module.reset_pending_asks()
 
 
+def _identity(*, role: str = "member", verified: bool = True):
+    from robothor.identity import IdentityContext
+
+    return IdentityContext(
+        tenant_id="00000000-0000-0000-0000-000000000000",
+        channel="teams",
+        identifier=BOB,
+        verified=verified,
+        role=role,
+    )
+
+
 def _submit(ask_id: str, **payload: Any) -> dict[str, Any]:
     return {"type": "message", "value": {ask_module.ASK_FIELD: ask_id, **payload}}
 
@@ -248,3 +260,111 @@ class TestTheChannelRefusesToAskWhenItCannotHear:
         monkeypatch.setattr(type(channel), "inbound_router", property(lambda self: None))
         with pytest.raises(NoListenerError):
             await channel.ask("Ship it?", ("yes", "no"), target=ALICE, addressee=ALICE)
+
+
+class TestAnUnaddressedAskFallsBackToAuthorization:
+    """``channels/base.py``: "An empty ``addressee`` means 'whoever the
+    platform's own authorization says may answer here', which for Telegram is
+    the operator." It does not mean *anyone*.
+
+    Teams read it as anyone, and in a Teams channel everyone can see the card and
+    press its buttons — so an escalation raised for the operator could be
+    answered by any member of the room it was posted in.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_member_cannot_settle_an_unaddressed_ask(self):
+        channel = _Channel()
+        task = asyncio.create_task(_ask(channel, addressee=""))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        ask_id = channel.cards[0]["actions"][0]["data"][ask_module.ASK_FIELD]
+
+        handled = ask_module.settle_from_activity(
+            _submit(ask_id, **{ask_module.CHOICE_FIELD: 0}),
+            conversation_id=CONVERSATION,
+            native_id=BOB,
+            identity=_identity(role="member"),
+        )
+        assert handled is True, "the submit was handed to the agent as a message"
+        assert not task.done(), "a member settled a question raised for the operator"
+        task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_a_stranger_with_no_identity_cannot_settle_it_either(self):
+        channel = _Channel()
+        task = asyncio.create_task(_ask(channel, addressee=""))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        ask_id = channel.cards[0]["actions"][0]["data"][ask_module.ASK_FIELD]
+
+        ask_module.settle_from_activity(
+            _submit(ask_id, **{ask_module.CHOICE_FIELD: 0}),
+            conversation_id=CONVERSATION,
+            native_id=BOB,
+            identity=None,
+        )
+        assert not task.done()
+        task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_the_operator_can(self):
+        """The fallback has to be a fallback, not a wall: an escalation raised
+        for the operator must be answerable by the operator."""
+        channel = _Channel()
+        task = asyncio.create_task(_ask(channel, addressee=""))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        ask_id = channel.cards[0]["actions"][0]["data"][ask_module.ASK_FIELD]
+
+        ask_module.settle_from_activity(
+            _submit(ask_id, **{ask_module.CHOICE_FIELD: 0}),
+            conversation_id=CONVERSATION,
+            native_id=BOB,
+            identity=_identity(role="owner"),
+        )
+        assert await task == "yes"
+
+    @pytest.mark.asyncio
+    async def test_an_unverified_identity_is_not_authorization(self):
+        channel = _Channel()
+        task = asyncio.create_task(_ask(channel, addressee=""))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        ask_id = channel.cards[0]["actions"][0]["data"][ask_module.ASK_FIELD]
+
+        ask_module.settle_from_activity(
+            _submit(ask_id, **{ask_module.CHOICE_FIELD: 0}),
+            conversation_id=CONVERSATION,
+            native_id=BOB,
+            identity=_identity(role="owner", verified=False),
+        )
+        assert not task.done()
+        task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_an_addressed_ask_ignores_the_identity_entirely(self):
+        """A bound addressee is the stronger claim: the person who was asked
+        answers, whatever role they hold, and an owner who was not asked does
+        not get to answer for them."""
+        channel = _Channel()
+        task = asyncio.create_task(_ask(channel, addressee=ALICE))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        ask_id = channel.cards[0]["actions"][0]["data"][ask_module.ASK_FIELD]
+
+        ask_module.settle_from_activity(
+            _submit(ask_id, **{ask_module.CHOICE_FIELD: 0}),
+            conversation_id=CONVERSATION,
+            native_id=BOB,
+            identity=_identity(role="owner"),
+        )
+        assert not task.done(), "an owner answered a question asked of somebody else"
+
+        ask_module.settle_from_activity(
+            _submit(ask_id, **{ask_module.CHOICE_FIELD: 0}),
+            conversation_id=CONVERSATION,
+            native_id=ALICE,
+            identity=_identity(role="viewer"),
+        )
+        assert await task == "yes"

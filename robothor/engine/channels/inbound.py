@@ -46,12 +46,19 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CHANNEL_DETAIL_PREFIX",
     "FAILED_REPLY",
     "NO_OUTPUT_REPLY",
     "InboundResult",
     "handle_message",
     "run_as",
 ]
+
+#: The trigger-detail namespace a plugin channel's run is recorded under:
+#: ``channel:<channel name>:<reply target>``. ``ask_user`` parses it back, which
+#: is what lets a channel the platform has never heard of be asked a question.
+#: Spelled here rather than in the tool because THIS is the writer.
+CHANNEL_DETAIL_PREFIX = "channel"
 
 #: What a run with no output text says. Not silence: a sender who typed
 #: something and got nothing back cannot tell "it worked and said nothing" from
@@ -111,6 +118,7 @@ async def handle_message(
     session_key: str,
     trigger_type: TriggerType = TriggerType.CHANNEL,
     agent_id: str = "main",
+    reply_target: str = "",
     display_name: str = "",
     surface: str = access.DIRECT_SURFACE,
     allowlist: Callable[[], bool] | None = None,
@@ -127,6 +135,12 @@ async def handle_message(
         runner: the :class:`~robothor.engine.runner.AgentRunner`.
         session_key: the shared-session key, so a conversation on one surface
             keeps its history. The channel owns its shape.
+        reply_target: where an answer to THIS message goes — the conversation it
+            arrived in, not the sender. Recorded as the run's trigger detail
+            (``channel:<name>:<target>``), which is how ``ask_user`` finds a
+            plugin channel and its address later, and how a question asked in a
+            shared room is answered in that room rather than wherever the sender
+            happens to have spoken most recently.
         surface: ``direct`` or ``group`` — see :mod:`robothor.engine.channels.
             access`. A pairing code is only ever minted on a direct one.
         allowlist: the channel's own membership test, called only in
@@ -154,11 +168,25 @@ async def handle_message(
     resolved_tenant = identity.tenant_id if identity else tenant_id
     session = get_shared_session(session_key)
 
+    # `channel:<name>:<target>` — the only place this string is written. A
+    # channel-triggered run cannot say which channel it was from the enum (there
+    # is one member for every plugin channel), so the detail carries it, and
+    # `ask_user` reads the channel and the reply address back out.
+    # Written for the CHANNEL trigger only. Slack passes none and keeps passing
+    # none: this refactor is required to leave the surface it extracted
+    # byte-identical, and a trigger detail is a row a dashboard renders.
+    detail = (
+        f"{CHANNEL_DETAIL_PREFIX}:{channel}:{reply_target}"
+        if reply_target and trigger_type == TriggerType.CHANNEL
+        else None
+    )
+
     try:
         run = await runner.execute(
             agent_id=agent_id,
             message=text,
             trigger_type=trigger_type,
+            trigger_detail=detail,
             tenant_id=resolved_tenant,
             user_id=run_as(identity, channel, native_id),
             user_role=(identity.role if identity else "") or "user",

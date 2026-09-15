@@ -48,6 +48,7 @@ from robothor.engine.channels.base import (
     SendReceipt,
     receipt_from,
 )
+from robothor.engine.channels.routers import is_mounted
 from robothor.engine.chunking import split_message
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -96,19 +97,28 @@ class TeamsChannel:
         #: that acknowledged messages and dropped them looks exactly like a
         #: working install.
         self.runner: Any | None = None
-        self.config: Any | None = None
+        self.runtime: Any | None = None
 
-    def bind_runtime(self, *, runner: Any, config: Any) -> None:
-        """Take the engine's runner and config.
+    def bind_runtime(self, *, runner: Any, runtime: Any = None) -> None:
+        """Take the engine's runner and the narrow runtime that comes with it.
 
         The handshake ``init_chat`` performs for the built-in chat router,
         offered as a slot: a plugin cannot call a platform function that takes
         the engine's own objects, and a channel that receives has no other way
         to reach the runner. ``robothor/engine/channels/routers.py`` calls this
-        at mount time and refuses to mount a channel that raises here.
+        at mount time, refuses to mount a channel that raises here, and refuses
+        to mount one at all when there is no runner to give.
+
+        ``runtime`` is a ``ChannelRuntime`` — a tenant id, and whatever a future
+        channel actually needs. Deliberately not ``EngineConfig``: that object
+        carries the operator's Telegram bot token, and a slot the platform
+        declares should hand over the narrowest thing that works.
         """
         self.runner = runner
-        self.config = config
+        self.runtime = runtime
+        tenant = str(getattr(runtime, "tenant_id", "") or "")
+        if tenant:
+            self.tenant_id = tenant
 
     # ── the receiving half ───────────────────────────────────────────────
 
@@ -166,7 +176,12 @@ class TeamsChannel:
                 "present": bool(credentials.directory_tenant_id),
                 "source": credentials.directory_tenant_source,
             },
-            "endpoint_mounted": self.inbound_router is not None,
+            # What is MOUNTED, not what was built. A router object exists as
+            # soon as anything asks for it; the engine may still have refused it
+            # (a route outside this channel's path, an include that raised, no
+            # runner to bind), and reporting the object would report health for
+            # a surface nobody can reach.
+            "endpoint_mounted": is_mounted(self.name),
         }
         if not credentials.can_send:
             report["token"] = self._tokens.last_attempt()

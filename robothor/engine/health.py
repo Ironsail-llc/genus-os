@@ -209,7 +209,7 @@ def _mount_subsystem_routers(
     # of that sentence is a security property and not tidiness.
     from robothor.engine.channels.routers import mount_plugin_channel_routers
 
-    mount_plugin_channel_routers(app, runner=runner, config=config)
+    mount_plugin_channel_routers(app, runner=runner, tenant_id=config.tenant_id)
 
 
 async def _fleet_readiness(config: EngineConfig, details: dict[str, Any]) -> str:

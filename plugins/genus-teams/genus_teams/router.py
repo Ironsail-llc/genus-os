@@ -45,6 +45,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response
 
+from genus_teams import ask as ask_module
 from genus_teams.credentials import teams_credentials
 from genus_teams.jwt_validation import TokenRejectedError, validate_activity_token
 from robothor.engine.channels import access, conversations
@@ -53,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "MAX_ACTIVITY_BYTES",
+    "PRE_AUTH_RATE_LIMIT_PER_MINUTE",
     "RATE_LIMIT_PER_MINUTE",
     "build_router",
     "reset_rate_limit",
@@ -69,31 +71,83 @@ PATH = "/api/channels/teams/messages"
 MAX_ACTIVITY_BYTES = 256 * 1024
 
 #: A conversation with a bot is a person typing. Anything past this is a script,
-#: and the platform's own retries stay well inside it.
+#: and the platform's own retries stay well inside it. Counted **per
+#: conversation**, and only for a caller whose token has already been verified.
 RATE_LIMIT_PER_MINUTE = 120
+
+#: How many REJECTED requests one client address may make in a minute before it
+#: is refused outright.
+#:
+#: A separate bucket, and — the part that matters — one that a caller carrying a
+#: valid token never touches. The first cut counted every request in one bucket
+#: before the token was checked, which was a denial of service that cost the
+#: attacker nothing: anyone who knows the URL (it is in the Azure Bot
+#: registration and in these docs) could hold the channel at 429 with junk while
+#: every genuine activity from Microsoft was refused. Behind an ingress the
+#: client address is the proxy's, so a bucket that refused BEFORE verifying
+#: would have refused Microsoft too — which is exactly the bug, moved.
+#:
+#: So: verify first (bounded work — a size-capped body and one RS256 check
+#: against a warm key cache), and spend this budget only on what failed. A flood
+#: then costs the attacker a connection and this instance a signature check, and
+#: costs a genuine activity nothing at all.
+PRE_AUTH_RATE_LIMIT_PER_MINUTE = 240
+
+#: How many distinct sources are tracked before the oldest are dropped. Bounded
+#: because the key is chosen by the caller (an address, a conversation id), and
+#: an unbounded dict keyed on something an attacker picks is a memory leak with
+#: a nice name.
+MAX_TRACKED_SOURCES = 4096
 
 #: In-process, like every other limiter on this appliance
 #: (``auth/local_login.py``, ``engine/channel_bus.py``). A shared counter would
 #: need Redis, which the engine has but a plugin should not assume.
-_hits: list[float] = []
+_hits: dict[str, list[float]] = {}
+_pre_auth_hits: dict[str, list[float]] = {}
 _clock = time.monotonic
 
 
 def reset_rate_limit() -> None:
-    """Empty the bucket. For tests, and for a reload."""
+    """Empty both buckets. For tests, and for a reload."""
     _hits.clear()
+    _pre_auth_hits.clear()
 
 
-def _rate_limited() -> bool:
-    """Whether this request is over the minute's budget."""
+def _over_budget(buckets: dict[str, list[float]], key: str, limit: int) -> bool:
+    """Whether ``key`` has spent its minute in ``buckets``. Prunes as it goes."""
     now = _clock()
     cutoff = now - 60.0
-    while _hits and _hits[0] < cutoff:
-        _hits.pop(0)
-    if len(_hits) >= RATE_LIMIT_PER_MINUTE:
+    window = [at for at in buckets.get(key, ()) if at >= cutoff]
+    if len(window) >= limit:
+        buckets[key] = window
         return True
-    _hits.append(now)
+    window.append(now)
+    buckets[key] = window
+    if len(buckets) > MAX_TRACKED_SOURCES:
+        # Drop the coldest sources rather than growing without bound. A source
+        # that is dropped simply starts its minute again, which is the right
+        # failure: this is a throttle, not an accounting record.
+        for stale in sorted(buckets, key=lambda k: buckets[k][-1])[: len(buckets) // 4]:
+            buckets.pop(stale, None)
     return False
+
+
+def _note_rejection(request: Request) -> bool:
+    """Charge one rejected request to its client address.
+
+    Returns True once that address is over :data:`PRE_AUTH_RATE_LIMIT_PER_MINUTE`
+    rejections in a minute, which turns its 401s into 429s. Nothing a verified
+    caller sends ever reaches here, so a flood cannot spend anybody else's
+    budget — including the budget of the proxy address it shares with Microsoft.
+    """
+    client = request.client
+    source = (client.host if client else "") or "unknown"
+    return _over_budget(_pre_auth_hits, f"ip:{source}", PRE_AUTH_RATE_LIMIT_PER_MINUTE)
+
+
+def _rate_limited(source: str) -> bool:
+    """Whether this verified source is over the minute's budget."""
+    return _over_budget(_hits, source or "unknown", RATE_LIMIT_PER_MINUTE)
 
 
 def spawn(coro: Any) -> Any:
@@ -196,9 +250,6 @@ def build_router(channel: Any) -> APIRouter:
         body = await _bounded_body(request)
         if body is None:
             return Response(status_code=413)
-        if _rate_limited():
-            logger.warning("Teams: refusing activities, over %d/min", RATE_LIMIT_PER_MINUTE)
-            return Response(status_code=429)
 
         credentials = teams_credentials(tenant_id=channel.tenant_id)
         try:
@@ -210,9 +261,20 @@ def build_router(channel: Any) -> APIRouter:
             )
         except TokenRejectedError:
             # No body, and the same answer for every reason: an error that told
-            # a caller WHICH check failed would be an oracle.
+            # a caller WHICH check failed would be an oracle. An address that
+            # keeps failing is answered 429 instead — it costs this instance a
+            # signature check per attempt and it should not get an unlimited
+            # number of them.
+            if _note_rejection(request):
+                logger.warning(
+                    "Teams: refusing rejected requests from one address, over %d/min",
+                    PRE_AUTH_RATE_LIMIT_PER_MINUTE,
+                )
+                return Response(status_code=429)
             return Response(status_code=401)
         except ValueError:
+            if _note_rejection(request):
+                return Response(status_code=429)
             return Response(status_code=400)
 
         if activity.get("type") != "message" or _is_from_the_bot(activity, credentials.app_id):
@@ -226,6 +288,16 @@ def build_router(channel: Any) -> APIRouter:
         if not native_id or not conversation_id:
             return Response(status_code=200)
 
+        # The real budget, spent per CONVERSATION and only by a caller that has
+        # proved itself. One noisy room cannot spend another room's minute, and
+        # junk cannot spend anybody's.
+        if _rate_limited(f"conversation:{conversation_id}"):
+            logger.warning(
+                "Teams: refusing activities from one conversation, over %d/min",
+                RATE_LIMIT_PER_MINUTE,
+            )
+            return Response(status_code=429)
+
         # Recorded BEFORE the gate: the pairing code this sender is about to be
         # sent has nowhere to go otherwise. A reference is routing, not a grant
         # — see the conversation store's own module docstring.
@@ -238,11 +310,20 @@ def build_router(channel: Any) -> APIRouter:
             display_name,
         )
 
-        if _settles_an_ask(channel, activity, native_id, conversation_id):
-            return Response(status_code=200)
-
-        spawn(
-            _handle(
+        # A card answer and a sentence are dispatched differently, but BOTH go
+        # through the access gate and both go after the acknowledgement: the
+        # gate costs an identity lookup, and Teams stops waiting at 15 seconds.
+        work = (
+            _settle(
+                channel,
+                activity,
+                native_id=native_id,
+                display_name=display_name,
+                conversation_id=conversation_id,
+                surface=_surface(activity),
+            )
+            if ask_module.is_ask_submit(activity)
+            else _handle(
                 channel,
                 text=_text(activity),
                 native_id=native_id,
@@ -251,6 +332,7 @@ def build_router(channel: Any) -> APIRouter:
                 surface=_surface(activity),
             )
         )
+        spawn(work)
         return Response(status_code=200)
 
     return router
@@ -290,14 +372,48 @@ def _record(
         logger.error("Teams: could not record a conversation reference: %s", type(exc).__name__)
 
 
-def _settles_an_ask(
-    channel: Any, activity: dict[str, Any], native_id: str, conversation_id: str
-) -> bool:
-    """Whether this activity answered a pending question. See :mod:`genus_teams.ask`."""
+async def _settle(
+    channel: Any,
+    activity: dict[str, Any],
+    *,
+    native_id: str,
+    display_name: str,
+    conversation_id: str,
+    surface: str,
+) -> None:
+    """Answer a pending card — but only for a sender the gate still allows.
+
+    Settling an ask **resumes a run that is already going**, which is the same
+    decision the access gate makes about starting one, arriving through a
+    different door. Somebody paired when the question went out and revoked or
+    denied since is exactly who that gate exists to stop, and a pending card is
+    a live approval path until it is answered.
+
+    The gate's own reply (a pairing code) is sent when it has one, so a stranger
+    who presses a button is told the same thing as a stranger who says hello,
+    rather than meeting a surface that silently does nothing for one input and
+    answers another.
+    """
     from genus_teams import ask as ask_module
 
-    return ask_module.settle_from_activity(
-        activity, conversation_id=conversation_id, native_id=native_id
+    decision = await access.evaluate(
+        channel.name,
+        native_id,
+        tenant_id=channel.tenant_id,
+        display_name=display_name,
+        surface=surface,
+    )
+    if not decision.allowed:
+        logger.info("Teams: a card answer arrived from a sender the access gate refused")
+        if decision.refusal:
+            await channel.send(conversation_id, decision.refusal)
+        return
+
+    ask_module.settle_from_activity(
+        activity,
+        conversation_id=conversation_id,
+        native_id=native_id,
+        identity=decision.identity,
     )
 
 
@@ -330,6 +446,7 @@ async def _handle(
         tenant_id=channel.tenant_id,
         session_key=f"agent:main:teams:{conversation_id}",
         trigger_type=TriggerType.CHANNEL,
+        reply_target=conversation_id,
         display_name=display_name,
         surface=surface,
     )
@@ -337,4 +454,9 @@ async def _handle(
     # a room who must not learn that anybody is listening.
     if not result.reply:
         return
-    await channel.send(native_id, result.reply)
+    # THE CONVERSATION, not the sender. `send(native_id)` resolves the sender's
+    # most recent reference, and a run takes minutes: a second message from the
+    # same person in a different chat moves that reference under the reply, so
+    # the answer to a question asked in a shared room lands in a 1:1 chat, or
+    # the other way round. The conversation an activity arrived in cannot move.
+    await channel.send(conversation_id, result.reply)

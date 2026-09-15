@@ -33,6 +33,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from robothor.identity.scope import PRIVILEGED_ROLES
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
 
@@ -40,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "MAX_ASK_OPTIONS",
+    "is_ask_submit",
     "ask_over_card",
     "build_card",
     "pending_ask_ids",
@@ -190,29 +193,71 @@ def _answer_from(pending: _PendingAsk, payload: dict[str, Any]) -> str | None:
     return text or None
 
 
-def settle_from_activity(activity: dict[str, Any], *, conversation_id: str, native_id: str) -> bool:
+def is_ask_submit(activity: dict[str, Any]) -> bool:
+    """Whether this activity carries one of our card payloads.
+
+    Cheap, and deliberately separate from settling: the endpoint has to decide
+    on the request path whether this is a card answer or a message, and the
+    decision about *who may answer it* costs an identity lookup that belongs
+    after the acknowledgement.
+    """
+    payload = activity.get("value")
+    return isinstance(payload, dict) and bool(str(payload.get(ASK_FIELD) or ""))
+
+
+def _may_settle(pending: _PendingAsk, native_id: str, identity: Any) -> bool:
+    """Whether this sender may settle this ask.
+
+    Two rules, and the second is the one Teams got wrong.
+
+    **A bound addressee is the stronger claim.** The person who was asked
+    answers, whatever role they hold — and an owner who was *not* asked does not
+    get to answer for them.
+
+    **An empty addressee is not "anybody".** ``channels/base.py`` states it: an
+    empty addressee means "whoever the platform's own authorization says may
+    answer here", which for Telegram is the operator gate. Teams read it as no
+    check at all, and a card in a Teams channel is visible to every member of
+    that channel — so an escalation raised for the operator could be settled by
+    whoever pressed the button first. The fallback is the same authorization the
+    rest of the platform uses: a verified identity holding a privileged role.
+    """
+    if pending.addressee:
+        return pending.addressee == native_id
+    if identity is None or not getattr(identity, "verified", False):
+        return False
+    return str(getattr(identity, "role", "")) in PRIVILEGED_ROLES
+
+
+def settle_from_activity(
+    activity: dict[str, Any],
+    *,
+    conversation_id: str,
+    native_id: str,
+    identity: Any = None,
+) -> bool:
     """Settle a pending ask from an inbound activity, if it answers one.
 
     Returns True when this activity WAS an answer — settled or refused — so the
     caller does not also hand it to the agent as a message. A card submit is not
     a sentence somebody typed, and running it as one would drive an agent with
     ``{"genus_ask": "…"}``.
+
+    ``identity`` is the sender's resolved Genus identity, which the caller has
+    because the access gate ran first. It is consulted only for an ask with no
+    addressee; see :func:`_may_settle`.
     """
-    payload = activity.get("value")
-    if not isinstance(payload, dict):
+    if not is_ask_submit(activity):
         return False
+    payload = activity["value"]
     ask_id = str(payload.get(ASK_FIELD) or "")
-    if not ask_id:
-        return False
 
     pending = _pending.get(ask_id)
     if pending is None or pending.future.done():
         # An ordinary race: a button pressed after the tool gave up, or twice.
         return True
 
-    if pending.conversation_id != conversation_id or (
-        pending.addressee and pending.addressee != native_id
-    ):
+    if pending.conversation_id != conversation_id or not _may_settle(pending, native_id, identity):
         # The refusal that matters. Counted, and named without naming anybody:
         # a card in a Teams channel is visible to everyone in it, so this is an
         # expected event and not necessarily an attack.

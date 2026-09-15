@@ -150,6 +150,59 @@ class TestTheDoctorChecks:
         reset_settings()
 
 
+class TestMountedMeansMounted:
+    """`endpoint_mounted` and the endpoint doctor check both used to read
+    `inbound_router is not None`, which only proves the object was built. The
+    check exists to catch "armed nowhere while the outbound side looks healthy",
+    and it could not see the layer it was written to watch: a router the engine
+    REFUSED (a route outside this channel's path, an include that raised, no
+    runner to bind to) still reported a mounted endpoint."""
+
+    @pytest.fixture(autouse=True)
+    def _armed_and_unmounted(self, monkeypatch):
+        from robothor.engine.channels.routers import reset_mounted
+        from robothor.settings import reset_settings
+
+        monkeypatch.setenv("ROBOTHOR_CHANNELS", "teams")
+        reset_settings()
+        reset_mounted()
+        yield
+        reset_mounted()
+        reset_settings()
+
+    @pytest.mark.asyncio
+    async def test_a_router_that_was_never_mounted_is_reported_as_a_failure(self):
+        result = await PLUGIN["checks"]["genus_teams_endpoint"].run(None)
+        assert result.status == "fail"
+        assert "not mounted" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_mounted_router_passes(self):
+        from robothor.engine.channels.routers import _mounted
+
+        _mounted.add("teams")
+        result = await PLUGIN["checks"]["genus_teams_endpoint"].run(None)
+        assert result.status == "pass"
+
+    @pytest.mark.asyncio
+    async def test_health_reports_the_mounting_and_not_the_object(self, monkeypatch):
+        from genus_teams import credentials as credentials_module
+        from genus_teams.channel import TeamsChannel
+
+        monkeypatch.setattr(
+            credentials_module,
+            "teams_credentials",
+            lambda **_kw: credentials_module.TeamsCredentials(),
+        )
+        channel = TeamsChannel()
+        # The object exists the moment anything asks for it.
+        assert channel.inbound_router is not None
+        report = await channel.health()
+        assert report["endpoint_mounted"] is False, (
+            "health reported an endpoint for a router the engine never mounted"
+        )
+
+
 class TestInstallingIsNotArming:
     @pytest.fixture
     def installed(self, monkeypatch):
