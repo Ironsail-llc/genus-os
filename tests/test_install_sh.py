@@ -362,7 +362,13 @@ def test_the_releases_api_is_asked_with_a_timeout(installer, tmp_path) -> None:
     assert result.returncode == 0, result.output
     api_calls = [line for line in result.calls.splitlines() if "api.github.com" in line]
     assert api_calls, "nothing asked the releases API for the latest tag"
-    assert any("--max-time" in line for line in api_calls), "the API call has no timeout"
+    # The value matters, not just the flag: a metadata refresh that can hang is
+    # the reason an install hangs, and curl's own default is no timeout at all.
+    seconds = [
+        int(match.group(1)) for line in api_calls if (match := re.search(r"--max-time (\d+)", line))
+    ]
+    assert seconds, "the API call has no timeout"
+    assert max(seconds) <= 15, f"the releases API may block for {max(seconds)}s"
     assert f"genusos=={API_TAG.lstrip('v')}" in result.stdout
 
 
