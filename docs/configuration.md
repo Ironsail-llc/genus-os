@@ -336,6 +336,30 @@ fingerprint. **Adding a channel's token is still `genus channel add` on the
 box** (and `genus init --telegram-token` for Telegram) — there is no API that
 writes channel credentials, by design.
 
+## Plugins
+
+`ROBOTHOR_PLUGIN_LOCKFILE` points at the plugin lockfile — the record of which
+installed distributions the operator accepted, what each one's manifest looked
+like when it was recorded, and which are disabled. Empty (the default) means
+`<workspace>/.robothor/plugins.lock`, beside `config.yaml`, and the file is
+written mode `0600`. **Give it an absolute path.** A relative value resolves
+against that same config directory rather than the working directory, because
+the engine runs under systemd's `WorkingDirectory` and you run `genus plugin
+disable` from wherever you happen to be standing — a CWD-relative path would
+mean the two read different files and the disable would never reach the daemon.
+
+Three things follow from it, and none of them is on until `genus plugin sync`
+has run once: an installed plugin can be turned off without uninstalling it, a
+manifest that changes underneath the engine is refused rather than imported,
+and `genus doctor` can tell you which of your plugins stopped loading. A
+distribution with no row loads exactly as it did before the lockfile existed,
+and a lockfile that does not parse is ignored rather than fatal.
+
+`ROBOTHOR_PLUGIN_MANIFEST_MODE` and `ROBOTHOR_PLUGIN_MANIFEST_ENABLED` are the
+separate, older ladder that decides whether a distribution shipping no
+`genus-plugin.yaml` is refused before import. Both, the verbs, the doctor
+checks and the four HTTP routes are in [Plugins](PLUGINS.md#disabling-and-the-lockfile).
+
 ## Authentication
 
 Three sign-in methods, and a deployment needs at least one. Local

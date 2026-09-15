@@ -67,6 +67,11 @@ CHECK_MODULES = (
     "identity",
     "memory",
     "secrets",
+    # Before the host, because a plugin is code this platform did not write and
+    # the engine imports it at boot: "what third-party code is running here, and
+    # did the operator mean it to" belongs with the instance's own state rather
+    # than after the thermal readings.
+    "plugins",
     "host",
 )
 

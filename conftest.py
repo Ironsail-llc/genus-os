@@ -207,6 +207,31 @@ def _hermetic_owner_config(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def plugin_lockfile(monkeypatch, tmp_path):
+    """Never let this machine's real plugin lockfile reach a platform test.
+
+    ``load_plugins()`` consults the lockfile on EVERY load, and its default
+    path resolves to ``<workspace>/.robothor/plugins.lock`` — a real file on
+    any box where the operator has run ``genus plugin sync``. Left alone, every
+    pre-existing plugin test (the hot-reload suite, the group-consumption
+    ratchet, the channel/guardrail/model registry tests) would start reading
+    that file, and a plugin disabled on the box would silently change what the
+    suite measures. That is instance data reaching a platform test (root
+    CLAUDE.md rule 1), and it is the same hazard ``_hermetic_owner_config``
+    solves one fixture up.
+
+    Returns the path, so a test that wants a lockfile can write one here
+    instead of inventing its own override.
+    """
+    path = tmp_path / "plugins.lock"
+    monkeypatch.setenv("ROBOTHOR_PLUGIN_LOCKFILE", str(path))
+    from robothor.plugins import lockfile
+
+    lockfile.forget_warnings()
+    return path
+
+
+@pytest.fixture(autouse=True)
 def _reset_validation_warning_log():
     """Never let one test's config warnings suppress the next test's.
 

@@ -18,7 +18,10 @@ import importlib
 import logging
 from dataclasses import dataclass, field
 from importlib import metadata
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +166,102 @@ def reload_plugins() -> int:
     return _generation
 
 
+#: Where the names core already owns come from, per group. Each value is a
+#: zero-argument callable returning an iterable of names, and every one of them
+#: is the SAME object the enforcing caller reads — ``dispatch`` really does pass
+#: ``builtin_handlers()``, ``guardrails`` really does pass ``_KNOWN_POLICIES``.
+#: That is the point: a second, hand-written list here is the defect
+#: `hardcoded-names-drift` documents, and `test_plugin_reserved_names.py`
+#: asserts each entry still equals what its caller passes.
+#:
+#: Groups absent from this table own no built-in names — ``genus.jobs``,
+#: ``genus.sandboxes`` and ``genus.memory`` are extension points with nothing
+#: in core to shadow, and all three of their production callers pass ``set()``.
+#: A registry that starts owning names in one of them must add itself here;
+#: ``test_plugin_reserved_names.py::TestNoDrift`` asserts one drift guard per
+#: entry, so a new entry without one fails.
+_BUILTIN_SOURCES: dict[str, str] = {
+    "genus.tools": "robothor.engine.tools.dispatch:builtin_handlers",
+    # NOT get_engine_schemas: `ToolRegistry` seeds `_schemas` from the MCP tool
+    # definitions as well, and reserves all of them. Pointing at half of that
+    # left 53 names (every CRM verb) reserved in production and derivable by
+    # nobody.
+    "genus.schemas": "robothor.engine.tools.registry:builtin_schema_names",
+    "genus.guardrails": "robothor.engine.guardrails:_KNOWN_POLICIES",
+    "genus.models": "robothor.engine.model_registry:_MODEL_REGISTRY",
+    "genus.services": "robothor.engine.services:_RESERVED",
+    "genus.channels": "robothor.engine.channels.registry:BUILTIN_CHANNELS",
+    "genus.commands": "robothor.cli:builtin_command_names",
+    "genus.doctor": "robothor.doctor.registry:builtin_ids",
+    "genus.hooks": "robothor.engine.hook_registry:builtin_hook_names",
+}
+
+#: Groups whose built-in names are NOT fixed for the life of the process, and
+#: so must never be cached.
+#:
+#: ``genus.hooks`` alone: every other source is a module constant or a table
+#: built at import, but lifecycle handlers are registered DURING daemon boot
+#: (``daemon.py`` registers three). A cached empty set taken before that — by a
+#: doctor check, a listing, anything that loads plugins early — would freeze in
+#: exactly the gap this table exists to close, and it would do so invisibly.
+_UNCACHEABLE = frozenset({"genus.hooks"})
+
+#: Resolved built-in names, per group. Built-ins do not change while the
+#: process runs — a plugin reload cannot add one — so this is a process cache
+#: rather than a generation-keyed one, and it keeps a listing from rebuilding
+#: the engine schema table on every request. See ``_UNCACHEABLE``.
+_builtin_cache: dict[str, set[str]] = {}
+
+#: Guards against a built-in source that itself reaches back into plugin
+#: discovery. None does today, and the cost of the guard is one boolean against
+#: a recursion that would present as a hung engine rather than as an error.
+_resolving: set[str] = set()
+
+
+def reset_builtin_names() -> None:
+    """Drop the built-in-name cache. For tests, and for nothing else."""
+    _builtin_cache.clear()
+
+
+def builtin_names(group: str) -> set[str]:
+    """Names the host already owns in ``group`` — what a plugin may not claim.
+
+    Derived from the live registry, never listed here. A plugin silently
+    replacing ``exec`` or ``web_fetch`` is a takeover rather than an extension,
+    and every enforcing caller already refuses it; this exists so the OPERATOR
+    surfaces (``genus plugin list``, ``GET /api/admin/plugins``, the reload
+    response, the ``plugins.load`` doctor check) refuse it too. They passed an
+    empty set, so a distribution the engine refused was reported as loaded and
+    a `required` check went green over it.
+
+    Never raises. A registry that will not import contributes no names, which
+    is the same posture the loader takes to everything else: a broken piece of
+    the platform must not stop plugin discovery from answering.
+    """
+    cached = _builtin_cache.get(group)
+    if cached is not None:
+        return set(cached)
+    target = _BUILTIN_SOURCES.get(group)
+    if target is None or group in _resolving:
+        return set()
+
+    module_path, _, attribute = target.partition(":")
+    _resolving.add(group)
+    try:
+        module = importlib.import_module(module_path)
+        source = getattr(module, attribute)
+        names = {str(name) for name in (source() if callable(source) else source)}
+    except Exception as exc:  # noqa: BLE001 - a broken registry is not a plugin fault
+        logger.warning("Built-in names for %s unavailable (%s)", group, type(exc).__name__)
+        return set()
+    finally:
+        _resolving.discard(group)
+
+    if group not in _UNCACHEABLE:
+        _builtin_cache[group] = names
+    return set(names)
+
+
 def _discover() -> list[Any]:
     found: list[Any] = []
     for group in _GROUPS:
@@ -176,6 +275,7 @@ def _discover() -> list[Any]:
 def load_plugins(
     entry_points: list[Any] | None = None,
     reserved_names: set[str] | None = None,
+    lockfile_path: Path | None = None,
 ) -> PluginSet:
     """Load every installed plugin, refusing anything that does not fit.
 
@@ -183,15 +283,59 @@ def load_plugins(
     registry. `reserved_names` are names the host already owns — a plugin
     silently replacing `exec` or `write_file` would be a takeover, not an
     extension.
+
+    **Omitting `reserved_names` means the built-in set for each group**, from
+    :func:`builtin_names`, not an empty one. An enforcing caller still passes
+    its own registry's names; the default exists so that the OPERATOR surfaces
+    — which have no registry of their own — measure what production measures.
+    They passed `set()`, and a distribution the engine refused for shadowing
+    `web_fetch` was reported as loaded by all three of them.
+
+    `lockfile_path` is likewise injectable, and it is what keeps a test off the
+    operator's real `plugins.lock`: the default resolves through the config-dir
+    setting to a file that exists on any box where `genus plugin sync` has run.
     """
     result = PluginSet()
+    per_group_reserved = reserved_names is None
     reserved = reserved_names or set()
     eps = _discover() if entry_points is None else entry_points
+
+    # The operator's record, read ONCE per load rather than per entry point:
+    # a distribution publishing into five groups must not cost five reads of
+    # the same file on the boot path. Read here rather than cached at module
+    # scope so that `genus plugin disable X` followed by a SIGHUP takes effect
+    # -- reload_plugins() invalidates every cache built on top of this, and
+    # each of them calls back in here, so a fresh read is the reload.
+    from robothor.plugins import lockfile as _lockfile
+
+    try:
+        lock = _lockfile.read_lockfile(lockfile_path)
+    except Exception as exc:  # noqa: BLE001 - governance must never block boot
+        logger.warning("Plugin lockfile could not be read (%s); ignoring it", type(exc).__name__)
+        lock = _lockfile.Lockfile()
+
+    # One manifest digest per DISTRIBUTION, not per entry point. `genus-hostinfo`
+    # publishes into three groups, so the un-memoized version read and hashed
+    # its manifest three times per load on top of the three the parse costs.
+    # Keyed on the distribution NAME: the metadata layer hands out a fresh
+    # `Distribution` object per group query, so an id()-keyed memo never hit.
+    digests: dict[str, str] = {}
 
     for ep in eps:
         group = getattr(ep, "group", "")
         name = getattr(ep, "name", "<unnamed>")
         if group not in _GROUPS:
+            continue
+
+        # THE LOCKFILE IS CONSULTED BEFORE `ep.load()`, for the reason the
+        # manifest gate below gives: after the import, "refused" means the code
+        # has already run. A distribution with no row is unconstrained -- the
+        # lockfile governs what it has been told about, and `genus plugin sync`
+        # is what tells it.
+        refusal = _lockfile.refusal_for(getattr(ep, "dist", None), lock, digests=digests)
+        if refusal is not None:
+            result.failures.append(PluginFailure(name, group, refusal))
+            logger.info("Plugin %r not loaded: %s", name, refusal)
             continue
 
         # GOVERNANCE BEFORE EXECUTION. `ep.load()` below imports the
@@ -276,7 +420,11 @@ def load_plugins(
             continue
 
         target = result._target(group)
-        clash = [k for k in contributions if k in reserved]
+        # The group's own built-in names when the caller named none. A caller
+        # that DID name a set is not second-guessed: each registry owns a
+        # different one, and the enforcing path must keep passing its own.
+        group_reserved = builtin_names(group) if per_group_reserved else reserved
+        clash = [k for k in contributions if k in group_reserved]
         if clash:
             result.failures.append(
                 PluginFailure(name, group, f"reserved name(s) {sorted(clash)} — refused")

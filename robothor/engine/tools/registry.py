@@ -27,6 +27,39 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def builtin_schemas() -> dict[str, Any]:
+    """Every tool schema CORE ships: the MCP definitions plus the engine's.
+
+    One expression, read by ``ToolRegistry._register_all`` (which seeds
+    ``_schemas`` with it, and then reserves those names against plugins) and by
+    ``loader.builtin_names("genus.schemas")``. Split out because the two had
+    drifted: the loader's table pointed at ``get_engine_schemas()`` alone, so
+    the 53 MCP tool names — ``create_person``, ``approve_task``, every CRM verb
+    — were reserved in production and derivable by nobody, and a plugin
+    shadowing one reported as loaded on every operator surface.
+    """
+    from robothor.api.mcp import get_tool_definitions
+
+    schemas: dict[str, Any] = {}
+    for defn in get_tool_definitions():
+        name = defn["name"]
+        schemas[name] = {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": defn["description"],
+                "parameters": defn["inputSchema"],
+            },
+        }
+    schemas.update(get_engine_schemas())
+    return schemas
+
+
+def builtin_schema_names() -> set[str]:
+    """The names :func:`builtin_schemas` provides — what a plugin may not claim."""
+    return set(builtin_schemas())
+
+
 # ── Tool search ranking ───────────────────────────────────────────────
 #
 # The first version scored `sum(haystack.count(term))` over the raw query
@@ -208,22 +241,7 @@ class ToolRegistry:
 
     def _register_all(self) -> None:
         """Register all tool schemas."""
-        from robothor.api.mcp import get_tool_definitions
-
-        # MCP tools
-        for defn in get_tool_definitions():
-            name = defn["name"]
-            self._schemas[name] = {
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": defn["description"],
-                    "parameters": defn["inputSchema"],
-                },
-            }
-
-        # Engine-specific tools
-        self._schemas.update(get_engine_schemas())
+        self._schemas.update(builtin_schemas())
 
         # Plugin-contributed schemas. Without this the seam is half-wired:
         # dispatch.py registers a plugin's HANDLER, so the tool can be

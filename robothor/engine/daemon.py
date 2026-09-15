@@ -891,8 +891,8 @@ def _schedule_provider_secrets_reload() -> bool:
     return True
 
 
-def _handle_plugin_reload_signal() -> int | None:
-    """Re-discover plugins on SIGHUP, without dropping in-flight work.
+def perform_plugin_reload() -> int | None:
+    """Re-discover plugins, without dropping in-flight work.
 
     Installing a plugin previously required restarting the engine, which
     cancels every running agent — on this fleet that shows up as a batch of
@@ -927,6 +927,13 @@ def _handle_plugin_reload_signal() -> int | None:
         except Exception as exc:  # noqa: BLE001 - keep the daemon up
             logger.warning("Plugin jobs could not be re-registered: %s", exc)
     return gen
+
+
+#: SIGHUP and ``POST /api/admin/plugins/reload`` are the same act, so they
+#: are the same function. This platform has shipped the opposite three
+#: times -- a correct function with a second caller that diverged from it --
+#: and both spellings looked like they worked.
+_handle_plugin_reload_signal = perform_plugin_reload
 
 
 def _install_plugin_reload_signal() -> bool:

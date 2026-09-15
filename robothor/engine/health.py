@@ -174,6 +174,13 @@ def _mount_subsystem_routers(
 
     register_admin_channels(app)
 
+    # Installed plugins, the lockfile, and the reload. Third-party code is
+    # imported into THIS process, so only this process knows what loaded and
+    # what it refused.
+    from robothor.engine.admin_plugins import register as register_admin_plugins
+
+    register_admin_plugins(app)
+
     # Scheduler reconcile + the registered tool list. The engine owns the job
     # registry, so a manifest written anywhere else only takes effect through
     # this route.

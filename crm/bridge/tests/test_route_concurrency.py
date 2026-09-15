@@ -73,6 +73,18 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         # hop per channel.
         ("GET", "/api/channels"),
         ("POST", "/api/channels/{name}/verify"),
+        # The four plugin routes await the engine over HTTP and do nothing
+        # else. A plugin is an object in the ENGINE process — what loaded,
+        # what was refused, and which discovery generation the caches are
+        # serving are facts only that process holds — so this side owns no
+        # blocking work at all: it does not read the lockfile, and a second
+        # implementation of "which plugins are installed" here would answer
+        # from a different view of site-packages.
+        ("GET", "/api/plugins"),
+        ("POST", "/api/plugins/sync"),
+        ("POST", "/api/plugins/reload"),
+        ("POST", "/api/plugins/{name}/enable"),
+        ("POST", "/api/plugins/{name}/disable"),
         # The doctor route awaits asyncio.to_thread and nothing else. Every
         # check underneath it is synchronous -- psycopg2, urllib, a subprocess
         # -- and run_sync opens its own event loop, which it cannot do on the

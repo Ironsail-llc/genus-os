@@ -42,12 +42,14 @@ class PluginManifest:
         return set(self.declared.get(kind) or set())
 
 
-def read_manifest(dist: Any) -> PluginManifest | None:
-    """The distribution's manifest, or None when it ships none.
+def read_manifest_text(dist: Any) -> str | None:
+    """The manifest's RAW TEXT, or None when the distribution ships none.
 
-    None means "refuse without importing". Reading is best-effort and never
-    raises: a malformed manifest is the same as no manifest, because both mean
-    the distribution has not said what it intends to do.
+    Split out of :func:`read_manifest` so that the lockfile's integrity hash
+    and the loader's parse read the same bytes from the same source. Hashing a
+    file located by a second, independently written search would pin whatever
+    THAT search found -- which is a pin on a different file every time the two
+    disagree, and a verification that cannot fail is not one.
     """
     if dist is None:
         return None
@@ -71,6 +73,21 @@ def read_manifest(dist: Any) -> PluginManifest | None:
                     break
         except Exception:  # noqa: BLE001
             raw = None
+    return raw or None
+
+
+def read_manifest(dist: Any) -> PluginManifest | None:
+    """The distribution's manifest, or None when it ships none.
+
+    None means "refuse without importing". Reading is best-effort and never
+    raises: a malformed manifest is the same as no manifest, because both mean
+    the distribution has not said what it intends to do.
+    """
+    return parse_manifest(read_manifest_text(dist))
+
+
+def parse_manifest(raw: str | None) -> PluginManifest | None:
+    """One manifest's text as a declaration, or None when it says nothing."""
     if not raw:
         return None
     try:

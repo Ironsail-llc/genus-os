@@ -147,8 +147,16 @@ def _cfg() -> Config:
     return get_config()
 
 
-def _collect_handlers() -> dict[str, Any]:
-    """Collect all HANDLERS dicts from handler modules."""
+def builtin_handlers() -> dict[str, Any]:
+    """Every tool CORE ships, with no plugin anywhere near it.
+
+    Split out of ``_collect_handlers`` so that "which tool names does the host
+    already own" has ONE answer. ``loader.builtin_names("genus.tools")`` reads
+    this, which is what lets the operator surfaces refuse a shadowing plugin
+    for the same reason production does; a second list of built-in tool names
+    is the drift `hardcoded-names-drift` documents. It must not consult the
+    plugin loader — that is what makes it safe for the loader to call.
+    """
     from robothor.engine.tools.handlers import (  # noqa: E501
         approvals,
         ask_user,
@@ -230,6 +238,13 @@ def _collect_handlers() -> dict[str, Any]:
         images,
     ]:
         all_handlers.update(mod.HANDLERS)
+
+    return all_handlers
+
+
+def _collect_handlers() -> dict[str, Any]:
+    """Every tool the engine can dispatch: core's, then the plugins'."""
+    all_handlers = builtin_handlers()
 
     # Third-party tools, last and never over the top of ours. `reserved_names`
     # is the built-in set: a plugin silently replacing `exec` or `write_file`

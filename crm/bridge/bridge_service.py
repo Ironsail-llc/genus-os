@@ -57,6 +57,7 @@ from routers.memory_facts import router as memory_facts_router
 from routers.notes_tasks import router as notes_tasks_router
 from routers.notifications import router as notifications_router
 from routers.people import router as people_router
+from routers.plugins import router as plugins_router
 from routers.providers import router as providers_router
 from routers.routines import router as routines_router
 from routers.runs import router as runs_router
@@ -213,6 +214,9 @@ app.include_router(approvals_router)
 # way a pairing code is ever spent over the network -- the channel that issued
 # it can never spend it.
 app.include_router(channel_access_router)
+# Installed plugins: the listing, enable/disable, and the reload. Operator-
+# gated end to end -- a reload re-imports third-party code into the daemon.
+app.include_router(plugins_router)
 # Accounts and roles. Operator-gated end to end, the reads included: the listing
 # enumerates every account on this appliance and what each of them may do.
 app.include_router(users_router)
