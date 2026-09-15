@@ -14,13 +14,28 @@ set -euo pipefail
 
 real_curl="$(PATH="$(echo "$PATH" | tr ':' '\n' | grep -v "$(dirname "$0")" | paste -sd:)" command -v curl)"
 
+# `-o PATH` matters: the quickstart's compose block uses -O and lands the file
+# in the current directory, while scripts/install.sh writes it into the install
+# directory. Serving one and ignoring the other would leave the installer
+# looking at a file that is not there.
+out=""
+prev=""
+for arg in "$@"; do
+  case "$prev" in
+    -o|--output) out="$arg" ;;
+  esac
+  prev="$arg"
+done
+
 for arg in "$@"; do
   case "$arg" in
     https://raw.githubusercontent.com/*/infra/docker-compose*.yml)
       name="$(basename "$arg")"
       source="${INSTALL_GATE_REPO:?INSTALL_GATE_REPO is not set}/infra/${name}"
+      target="${out:-./${name}}"
       echo "install-gate: serving ${name} from the checkout, not from main" >&2
-      cp "$source" "./${name}"
+      mkdir -p "$(dirname "$target")"
+      cp "$source" "$target"
       exit 0
       ;;
   esac

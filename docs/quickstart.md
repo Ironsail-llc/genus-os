@@ -16,7 +16,7 @@ gate described below. Each capability, with the command that exercises it:
 | **A doctor** | One command answers "is this instance actually working?", with severities, an exit code and two repairs | `genus doctor`, `genus doctor --fix` |
 | **Secrets backends** | The unit environment, a 0600 file, or SOPS + age — chosen at install time. SOPS is opt-in, no longer a prerequisite for starting | `genus init --secrets-backend file` |
 | **A browser setup wizard** | A single-use `/setup` link creates the operator account, takes one provider key and installs the first agents, with no terminal | `genus auth setup-link` |
-| **An install gate** | CI extracts the two marked blocks below and runs them on a clean runner every night, so a doc that stopped being true fails a build | `python scripts/extract_doc_commands.py --file docs/quickstart.md --block local` |
+| **An install gate** | CI extracts the three marked blocks below and runs them on a clean runner every night, so a doc that stopped being true fails a build | `python scripts/extract_doc_commands.py --file docs/quickstart.md --block local` |
 
 ## Prerequisites
 
@@ -42,6 +42,69 @@ Pick a substrate first; each needs a different machine.
 | Redis 7+ | Sessions and the event bus. Also required |
 | Ollama | *Optional.* Embeddings, reranking and local RAG generation. Without it, memory search has no embeddings and the wizard says so |
 | A provider API key | As above |
+
+## Option 0: one line
+
+`install.sh` is a thin wrapper around everything below: it fetches the two
+compose files **pinned to a release tag**, puts the CLI in a private
+virtualenv, and hands over to `genus init`. It decides nothing the wizard
+decides.
+
+```bash
+curl -fsSL https://ironsail-llc.github.io/genus-os/install.sh | bash -s -- --substrate compose
+```
+
+That line deliberately **installs nothing**. A pipe has no terminal on the
+other end, so there is nowhere to confirm a plan — the script prints what it
+would do and stops. Read it, then run it for real:
+
+```bash
+curl -fsSL https://ironsail-llc.github.io/genus-os/install.sh | bash -s -- \
+  --substrate compose --yes \
+  --owner-name "Ada Lovelace" --owner-email ada@example.com
+```
+
+| Flag | What it does |
+|------|--------------|
+| `--substrate compose\|pipx` | `compose` runs the whole stack in containers; `pipx` installs the CLI and runs the `local` substrate. Default: `compose` when Docker and the Compose v2 plugin are both present |
+| `--version vX.Y.Z` | The release to install. Default: `$GENUS_VERSION`, else the latest GitHub release, else the version the script shipped with |
+| `--dir DIR` | Where a compose install lives (default `~/genus`) |
+| `--owner-name`, `--owner-email` | The operator identity `owner.yaml` records. Required with `--yes`; `$GENUS_OWNER_NAME` and `$GENUS_OWNER_EMAIL` work too |
+| `--yes` | Run the plan instead of previewing it |
+| `--dry-run` | Print the plan and every command, execute nothing |
+
+A provider key is read from the environment and **never** prompted for —
+`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`
+or `GROQ_API_KEY`. Export one before the line above, or give the wizard one in
+the browser at the end.
+
+What the script will not do: run as root, run under `sh`, `sudo` anything,
+download from `main` rather than a release tag, or pipe anything else into a
+shell. Rather not pipe a URL into a shell at all? Download it, read it, run it:
+
+```bash
+curl -fsSLO https://ironsail-llc.github.io/genus-os/install.sh
+less install.sh
+bash install.sh --substrate compose --yes \
+  --owner-name "Ada Lovelace" --owner-email ada@example.com
+```
+
+From a checkout the same script is `scripts/install.sh`, which is what CI
+replays on a fresh machine every night — the site serves a copy of this file,
+not a second implementation:
+
+<!-- install-gate: install-sh -->
+```bash
+export ROBOTHOR_DB_PASSWORD=choose-a-password
+export OPENROUTER_API_KEY=sk-your-key
+bash scripts/install.sh --substrate compose --yes \
+  --dir ~/genus \
+  --owner-name "Ada Lovelace" --owner-email ada@example.com
+```
+<!-- /install-gate -->
+
+The rest of this page is what that script does, step by step, and the two
+substrates it chooses between.
 
 ## Option A: the whole stack in containers (`--substrate compose`)
 

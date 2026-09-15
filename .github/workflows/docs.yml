@@ -16,6 +16,7 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "requirements-docs.txt"
+      - "scripts/install.sh"
       - "README.md"
       - "CONTRIBUTING.md"
       - "SECURITY.md"
@@ -25,6 +26,7 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "requirements-docs.txt"
+      - "scripts/install.sh"
       - "CONTRIBUTING.md"
       - "SECURITY.md"
       - ".github/workflows/docs.yml"
@@ -50,6 +52,17 @@ jobs:
 
       - name: Install docs toolchain
         run: pip install -r requirements-docs.txt
+
+      # The documented one-liner is
+      # `curl -fsSL https://ironsail-llc.github.io/genus-os/install.sh | bash`,
+      # so the site must serve the script this repository lints and tests.
+      # Copied at build time rather than committed under docs/: two copies of
+      # an installer is one copy that silently stops matching.
+      - name: Publish the installer at the documented URL
+        run: |
+          cp scripts/install.sh docs/install.sh
+          chmod 0644 docs/install.sh
+          head -1 docs/install.sh
 
       - name: Build (strict — broken links fail)
         run: mkdocs build --strict

@@ -575,3 +575,44 @@ def test_ci_runs_shellcheck_over_the_shell_scripts() -> None:
     assert re.search(r"shellcheck[^\n]*scripts/\*\.sh", ci), (
         "the shellcheck step does not cover scripts/*.sh"
     )
+
+
+def test_the_docs_site_publishes_the_script_it_documents() -> None:
+    """The one-liner's URL must actually serve this file, not a stale copy."""
+    docs_workflow = (REPO_ROOT / ".github" / "workflows" / "docs.yml").read_text(encoding="utf-8")
+    assert re.search(r"cp\s+scripts/install\.sh\s+docs/install\.sh", docs_workflow), (
+        "the docs build does not copy scripts/install.sh into the site"
+    )
+    assert "scripts/install.sh" in docs_workflow.split("jobs:")[0], (
+        "a change to the installer does not rebuild the site"
+    )
+
+    mkdocs = (REPO_ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    assert "!/install.sh" in mkdocs, "the site allowlist strips install.sh before publishing"
+
+    ignored = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "docs/install.sh" in ignored, (
+        "docs/install.sh is a build artifact; a committed copy would drift from scripts/"
+    )
+
+
+def test_the_quickstart_documents_the_one_liner() -> None:
+    quickstart = (REPO_ROOT / "docs" / "quickstart.md").read_text(encoding="utf-8")
+    assert "https://ironsail-llc.github.io/genus-os/install.sh" in quickstart
+    assert "--substrate compose" in quickstart
+    assert "<!-- install-gate: install-sh -->" in quickstart, (
+        "the one-liner is documented but nothing replays it"
+    )
+
+
+def test_the_install_gate_replays_the_one_liner_block() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "install-gate.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "--block install-sh" in workflow, "the gate never extracts the install-sh block"
+    assert "scripts/install.sh" in workflow.split("jobs:")[0], (
+        "a change to the installer does not run the gate on its own pull request"
+    )
+    # The version the gate installs is the pull request's own, through the
+    # documented environment variable rather than an edited command.
+    assert "GENUS_VERSION" in workflow

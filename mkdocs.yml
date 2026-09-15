@@ -56,6 +56,11 @@ markdown_extensions:
 # Allowlist: everything under docs/ is excluded unless re-included here.
 # This keeps internal material (runbooks, benchmarks, plans, agent schemas,
 # workflow YAML) off the public site by default.
+# !/install.sh is not a page: it is scripts/install.sh, copied in by the docs
+# workflow so the documented one-liner
+# (https://ironsail-llc.github.io/genus-os/install.sh) serves the script this
+# repository actually tests. It is gitignored under docs/ — the copy is a build
+# artifact, and a committed one would drift.
 # !/assets/ re-includes the Material theme's own CSS/JS/search workers: they
 # register as docs files, so the /* catch-all strips them and the deployed
 # site renders unstyled without it. (docs/assets/ does not exist in the repo,
@@ -64,6 +69,7 @@ exclude_docs: |
   /*
   !/index.md
   !/quickstart.md
+  !/install.sh
   !/configuration.md
   !/deployment.md
   !/reference/cli.md
