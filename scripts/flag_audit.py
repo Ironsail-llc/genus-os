@@ -99,7 +99,10 @@ PANIC_KEY = "ROBOTHOR_DISABLE_ALL_RIPS"
 OPERATOR_ACTOR_PREFIXES: tuple[str, ...] = ("operator:",)
 OPERATOR_ACTORS: frozenset[str] = frozenset({"operator", "dashboard", "controls-api"})
 
-_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+#: The engine's set, imported rather than restated. This was the third copy;
+#: an audit that disagrees with the engine about what "on" means reports the
+#: wrong flags as dark.
+from robothor.flags.store import TRUE_VALUES as _TRUE_VALUES  # noqa: E402
 
 #: Pre-promotion modes, same definition guardrail_watch.overdue_flags uses.
 PENDING_MODES = ("observe", "alert")

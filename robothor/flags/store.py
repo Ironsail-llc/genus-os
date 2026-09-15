@@ -214,23 +214,51 @@ def default_value_for(name: str) -> str:
     return "false" if "false" in valid else "observe"
 
 
-def normalise(name: str, value: Any) -> str:
-    """One flag value, spelled the way this store and every page spell it.
+#: What the ENGINE counts as on. ``robothor/engine/feature_flags.py`` imports
+#: this rather than declaring its own, and so does ``scripts/flag_audit.py``:
+#: there were three copies, and the moment a page grew its own fourth reading
+#: of the same variable it reported a guardrail OFF while the engine ran it.
+#: ``feature_flags.py``'s own docstring tells operators to write
+#: ``systemctl set-environment ROBOTHOR_RIP_1_ENABLED=1``, so ``1`` is not an
+#: edge case — it is the documented spelling.
+TRUE_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on"})
 
-    The settings model types ``ROBOTHOR_RIP_1_ENABLED`` as a ``bool``, so its
-    declared default resolves to Python ``False`` — which is not a member of
-    ``valid_values_for`` and cannot be sent back in a PATCH. A surface that
-    serves a value its own enum rejects is a form that cannot save what it
-    displays. Anything that does not name a member of the value set falls back
-    to :func:`default_value_for`, which is what the engine runs.
+
+def normalise(name: str, value: Any) -> str:
+    """One flag value, spelled the way THE ENGINE reads one.
+
+    Two jobs, and both exist because a surface must never contradict the
+    process it is describing:
+
+    * **Spelling.** The settings model types ``ROBOTHOR_RIP_1_ENABLED`` as a
+      ``bool``, so its declared default resolves to Python ``False`` — not a
+      member of ``valid_values_for``, so a form cannot preselect it and a PATCH
+      of it is refused. A page that serves a value its own enum rejects is a
+      form that cannot save what it displays.
+    * **Parsing.** Every engine accessor does ``.strip().lower()`` before it
+      reads, and a boolean flag is ``raw in TRUE_VALUES`` — so ``1``, ``yes``,
+      ``on``, ``TRUE`` are all on, and ``Observe`` is ``observe``. Normalising
+      without those rules is how a guardrail an operator set to ``1`` was
+      reported as ``false`` on two pages at once.
+
+    Anything still outside the value set falls back to
+    :func:`default_value_for`, which mirrors what each accessor does with a
+    value it does not recognise: a typo in a variable must not appear to have
+    set a rung.
     """
     if value is True:
         text = "true"
     elif value is False:
         text = "false"
     else:
-        text = str(value if value is not None else "").strip()
-    return text if text in valid_values_for(name) else default_value_for(name)
+        text = str(value if value is not None else "").strip().lower()
+
+    valid = valid_values_for(name)
+    if valid == _BOOL_VALUES and text:
+        # The engine reads a boolean flag as membership of TRUE_VALUES, so
+        # everything it does not recognise is off -- not "unset".
+        return "true" if text in TRUE_VALUES else "false"
+    return text if text in valid else default_value_for(name)
 
 
 def set_flag(name: str, value: str, actor: str, reason: str) -> None:
