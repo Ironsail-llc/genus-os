@@ -202,6 +202,16 @@ export function AuditView({ visible = true, role, roleLoading = false }: AuditVi
   const [changesLoading, setChangesLoading] = useState(true);
   const [changesError, setChangesError] = useState<string | null>(null);
 
+  /**
+   * The bridge says these records are not this caller's. Not a failure — the
+   * rule `use-bridge-poll`'s header states for the whole Helm, which this view
+   * has to keep even though it hand-rolls its fetches. Reachable without any
+   * bridge change: `require_audit_reader` also demands the platform tenant and
+   * a human session, neither of which the session role in this browser knows
+   * anything about.
+   */
+  const [forbidden, setForbidden] = useState(false);
+
   const mayRead = isAuditReaderRole(role) || roleLoading;
   const reading = isAuditReaderRole(role);
 
@@ -213,9 +223,16 @@ export function AuditView({ visible = true, role, roleLoading = false }: AuditVi
         params.set("limit", String(limit));
         const res = await fetch(`${BRIDGE}/api/audit/events?${params.toString()}`);
         if (!res.ok) {
+          if (res.status === 403) {
+            setForbidden(true);
+            setEventsError(null);
+            setEvents([]);
+            return;
+          }
           setEventsError(await readBridgeReply(res));
           return;
         }
+        setForbidden(false);
         const body = (await res.json()) as Record<string, unknown>;
         // The route swallows a query failure into a 200. Read the body, not
         // the status: an empty list beside an `error` key is not "no events".
@@ -252,9 +269,16 @@ export function AuditView({ visible = true, role, roleLoading = false }: AuditVi
         if (cursor) params.set("cursor", cursor);
         const res = await fetch(`${BRIDGE}/api/controls/audit?${params.toString()}`);
         if (!res.ok) {
+          if (res.status === 403) {
+            setForbidden(true);
+            setChangesError(null);
+            setChanges([]);
+            return;
+          }
           setChangesError(await readBridgeReply(res));
           return;
         }
+        setForbidden(false);
         const body = (await res.json()) as Record<string, unknown>;
         const rows = Array.isArray(body.changes)
           ? body.changes.map(normalizeChange).filter((c): c is FlagChange => c !== null)
@@ -301,7 +325,7 @@ export function AuditView({ visible = true, role, roleLoading = false }: AuditVi
 
   const exportHref = useMemo(() => {
     const params = filterParams(filters);
-    return `${BRIDGE}/api/audit/events.csv${params.size ? `?${params.toString()}` : "?"}`;
+    return `${BRIDGE}/api/audit/events.csv${params.size ? `?${params.toString()}` : ""}`;
   }, [filters]);
 
   if (!visible) return null;
@@ -368,7 +392,16 @@ export function AuditView({ visible = true, role, roleLoading = false }: AuditVi
         ))}
       </div>
 
-      {tab === "events" ? (
+      {forbidden ? (
+        <p className="text-xs text-muted-foreground" data-testid="audit-forbidden">
+          The audit records are not this session&rsquo;s to read, so there is nothing to show here. A
+          role that looks like an operator or an auditor in this browser can still be refused by the
+          bridge — it also requires the platform tenant and a human session. Ask an owner or admin
+          on this instance.
+        </p>
+      ) : null}
+
+      {tab === "events" && !forbidden ? (
         <div className="flex min-w-0 flex-col gap-3" data-testid="audit-events">
           <div className="flex min-w-0 flex-wrap items-start gap-2">
             <Input
@@ -535,7 +568,7 @@ export function AuditView({ visible = true, role, roleLoading = false }: AuditVi
         </div>
       ) : null}
 
-      {tab === "flags" ? (
+      {tab === "flags" && !forbidden ? (
         <div className="flex min-w-0 flex-col gap-3" data-testid="audit-flags">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Input

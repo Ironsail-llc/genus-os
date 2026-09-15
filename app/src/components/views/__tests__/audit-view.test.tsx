@@ -260,6 +260,34 @@ describe("Observe › Audit — events", () => {
     expect(requests.some((u) => u.includes("events.csv"))).toBe(false);
   });
 
+  it("exports an unfiltered log without a dangling question mark", async () => {
+    bothRoutes();
+    render(<AuditView role="owner" />);
+
+    const link = await screen.findByTestId("audit-export");
+    expect(link.getAttribute("href")).toBe("/api/bridge/api/audit/events.csv");
+  });
+
+  /**
+   * The house rule, from `use-bridge-poll`'s own header: a 403 is the bridge
+   * saying the listing belongs to somebody else, and a member must not be
+   * shown red for it. The two views that hand-roll their fetch have to obey
+   * the rule the hook states, and this one is reachable without a bridge
+   * change — the Helm reads "operator" off the session role while the bridge
+   * also requires the platform tenant and a human session.
+   */
+  it("renders a 403 as a refusal in the house style, not as a failure", async () => {
+    respond([
+      [/\/api\/controls\/audit/, () => ({ body: CHANGES })],
+      [/\/api\/audit\/events/, () => ({ status: 403, body: { detail: "operator or auditor role required" } })],
+    ]);
+    render(<AuditView role="owner" />);
+
+    expect(await screen.findByTestId("audit-forbidden")).toBeTruthy();
+    expect(screen.queryByTestId("audit-events-error")).toBeNull();
+    expect(screen.queryByTestId("audit-events-empty")).toBeNull();
+  });
+
   it("says the export is appliance-wide, because audit_log has no tenant column", async () => {
     bothRoutes();
     render(<AuditView role="owner" />);
@@ -302,6 +330,19 @@ describe("Observe › Audit — flag changes", () => {
     expect(within(row).getByTestId("audit-old-6").textContent).toMatch(/unset/i);
     expect(row.textContent).not.toContain("None");
     expect(row.textContent).not.toContain("null");
+  });
+
+  it("renders a 403 on the change log as a refusal too", async () => {
+    respond([
+      [/\/api\/controls\/audit/, () => ({ status: 403, body: { detail: "auditor role required" } })],
+      [/\/api\/audit\/events/, () => ({ body: EVENTS })],
+    ]);
+    render(<AuditView role="owner" />);
+    fireEvent.click(screen.getByTestId("audit-tab-flags"));
+
+    expect(await screen.findByTestId("audit-forbidden")).toBeTruthy();
+    expect(screen.queryByTestId("audit-changes-error")).toBeNull();
+    expect(screen.queryByTestId("audit-changes-empty")).toBeNull();
   });
 
   it("filters by flag and pages with the keyset cursor", async () => {
