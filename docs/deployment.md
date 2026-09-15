@@ -811,6 +811,50 @@ for: membership of `systemd-journal` is enough for the system journal, and the
 route reports `available: false` rather than empty output if it is missing. In
 Kubernetes and Docker Compose, use the container runtime's own log stream.
 
+### Using the Observe pages
+
+The Helm's **Observe** group carries three screens over those routes. Memory
+and Logs are owner/admin; Audit also admits the read-only `auditor` role, and
+the navigation reflects that — an auditor sees Audit and not the other two.
+The gating in the Helm is a convenience; the bridge checks the caller's role on
+every request regardless of what the browser shows.
+
+**Observe › Memory** lists what the instance believes, newest first, with a
+search box, an entity filter and an active/inactive/all switch. Browsing pages
+with a cursor; searching does not — a relevance ranking has no place to resume
+from, so the page offers a wider ranking instead of a next page, and never
+reports "N of M" (a search filtered by entity returns a short page for reasons
+that have nothing to do with how many facts match).
+
+**Forget** shows its consequences first. The confirmation names how many
+episodes cite the fact and which always-in-context memory blocks quote its
+text, and it asks for a reason of 3–500 characters that goes into the audit
+record. What it does **not** do is the part worth reading: it bounds one row
+(`is_active=false`, `valid_to=now()`) and nothing else. Nothing is deleted, no
+supersession chain is followed, and **a memory block that quotes the text still
+quotes it** — an agent carrying that block keeps repeating the fact until the
+block is rewritten. For a fact under twelve characters the page says the text
+is too short to check against the blocks rather than claiming there are none.
+
+**Observe › Audit** has two tabs: the audit log itself, and the guardrail
+change log (every `PATCH /api/controls`, with the reason its operator typed).
+**Export CSV** is a plain download link carrying the same filters the table is
+showing, up to 5,000 rows. It is **appliance-wide** — `audit_log` has no tenant
+column, so it holds every tenant's rows, and the tenant in the filename names
+who exported it, not what is inside. The events tab has no cursor: "Load more"
+re-reads a larger window up to the route's 500-row ceiling, and anything bigger
+is an export.
+
+**Observe › Logs needs journald.** In a container there is none, and the page
+says so in the bridge's own words rather than showing an error — nothing is
+broken. Where journald is present, pick a unit from the derived allowlist,
+choose 50/200/1000 lines and a time window, and filter. Auto-refresh is off by
+default and beats every ten seconds when switched on: each read is one
+`journalctl` process on the box. The "window full" notice means the line limit
+was reached, not that there is nothing else to find, and the filter is applied
+to the **redacted** message — so the pane cannot be used to confirm a value it
+will not show.
+
 ## Health Endpoints
 
 | Service | Endpoint | Expected |
