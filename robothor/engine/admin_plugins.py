@@ -98,10 +98,18 @@ def plugin_listing() -> dict[str, Any]:
     from robothor.plugins.inventory import inventory
     from robothor.plugins.loader import generation
     from robothor.plugins.lockfile import lockfile_path, read_lockfile
+    from robothor.plugins.registry import configured_indexes
 
     lock = read_lockfile()
     return {
         "generation": generation(),
+        # The indexes this instance reads, in order, so an install form can
+        # offer a CHOICE between them rather than a free-text URL box. The
+        # route accepts an `index` and only an https one, but a browser that
+        # can type any URL is a browser that can make the engine fetch on a
+        # caller's say-so; these were configured out of band by the operator.
+        # URLs, never paths -- the same rule the rest of this response follows.
+        "indexes": list(configured_indexes()),
         "lockfile": {
             # Whether a path resolves at all, never which one. An instance with
             # no workspace has nowhere to put the file, and that is the only

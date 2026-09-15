@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 ENGINE_LISTING = {
     "generation": 3,
+    "indexes": ["https://example.invalid/index.json"],
     "lockfile": {
         "path_configured": True,
         "present": True,
@@ -243,6 +244,13 @@ def test_a_rows_source_survives_the_proxy(controls_client_as_operator, fake_engi
     fake_engine.listing = ENGINE_LISTING_DAMAGED
     hand_installed = controls_client_as_operator.get("/api/plugins").json()["plugins"][0]
     assert hand_installed["source"] is None
+
+
+def test_the_configured_indexes_survive_the_proxy(controls_client_as_operator, fake_engine):
+    """The install form offers a choice between these; a proxy that dropped them
+    would leave it with a free-text URL box or no index control at all."""
+    body = controls_client_as_operator.get("/api/plugins").json()
+    assert body["indexes"] == ["https://example.invalid/index.json"]
 
 
 def test_a_reload_failure_keeps_its_distribution(controls_client_as_operator, fake_engine):

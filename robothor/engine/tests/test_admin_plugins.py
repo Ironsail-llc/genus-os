@@ -209,6 +209,27 @@ class TestListing:
         row = client.get("/api/admin/plugins").json()["plugins"][0]
         assert row["source"] is None, "sync() records what somebody else installed"
 
+    def test_the_listing_names_the_indexes_this_instance_reads(self, client, one_plugin):
+        """The install form offers a CHOICE between configured indexes, never a
+        free-text URL box: a browser naming a URL is the engine fetching on a
+        caller's say-so, and the operator configured these out of band."""
+        from robothor.plugins import registry
+
+        body = client.get("/api/admin/plugins").json()
+        assert body["indexes"] == list(registry.configured_indexes())
+        assert all(url.startswith("https://") for url in body["indexes"])
+
+    def test_the_configured_indexes_are_carried_in_order(self, client, one_plugin, monkeypatch):
+        """First publishing a name wins, so the order is part of the answer."""
+        monkeypatch.setenv(
+            "ROBOTHOR_PLUGIN_INDEXES",
+            "https://example.invalid/first.json,https://example.invalid/second.json",
+        )
+        assert client.get("/api/admin/plugins").json()["indexes"] == [
+            "https://example.invalid/first.json",
+            "https://example.invalid/second.json",
+        ]
+
 
 class TestEnableDisable:
     def test_disable_flips_the_row_and_says_it_did_not_reload(self, client, one_plugin):

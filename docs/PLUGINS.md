@@ -513,6 +513,11 @@ acts with identifiers only.
 | `POST /api/plugins/install` | `POST /api/admin/plugins/install` | `{name, version?, index?, accept_review?, dry_run?}` → the install plan and its verdict; **422** for a blocked or unreviewed wheel, an unverifiable index, or a `name` that is not a distribution name |
 | `POST /api/plugins/{name}/remove` | `POST /api/admin/plugins/{name}/remove` | `{force?}` → `{name, removed, row_dropped, reload_hint, note}` |
 
+The listing also answers **`indexes`** — the index URLs this instance reads, in
+order — so an install form can offer a *choice* between what the operator
+configured rather than a free-text URL box. A browser that can type any URL is
+a browser that can make the engine fetch on a caller's say-so.
+
 The listing's `lockfile` block answers `path_configured`, `present`, `malformed`,
 `rows` and **`problem`** — the sentence the CLI and the doctor print, or `null`
 when the file is fine. `malformed` says *that* the file is damaged; `problem`
