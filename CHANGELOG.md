@@ -1,3 +1,9 @@
+## [1.86.0](https://github.com/Ironsail-llc/genus-os/compare/v1.85.0...v1.86.0) (2026-09-15)
+
+### Features
+
+* **bridge:** memory forget, flag audit, CSV export and logs API ([#565](https://github.com/Ironsail-llc/genus-os/issues/565)) ([31799ff](https://github.com/Ironsail-llc/genus-os/commit/31799ff13bdcb069e1c1971c0b4d8b020d2f6bfc))
+
 ## [1.85.0](https://github.com/Ironsail-llc/genus-os/compare/v1.84.0...v1.85.0) (2026-09-15)
 
 ### Features
