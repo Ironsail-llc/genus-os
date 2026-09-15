@@ -18,6 +18,7 @@ from robothor.engine.channels.slack_credentials import (
     slack_credentials,
 )
 from robothor.engine.chunking import split_message
+from robothor.engine.models import TriggerType
 
 logger = logging.getLogger(__name__)
 
@@ -262,72 +263,45 @@ class SlackBot:
         channel = event.get("channel", "")
         user_id = event.get("user", "")
 
-        # One gate, shared with Telegram. The lines this replaced logged the raw
-        # Slack user id on every refusal AND the first 100 characters of every
-        # message, which put a workspace's member ids and its conversations into
-        # every log shipper this instance has -- including the senders with the
-        # least reason to trust it. Nothing below logs an id or a message.
-        from robothor.engine.channels import access
+        # The gate, the identity, the session and the run all live in
+        # `channels/inbound.py` — one pipeline, shared with every channel that
+        # receives, including the ones that ship as plugins and could not copy
+        # this method even if they wanted to. What stays here is what is
+        # genuinely Slack's: the surface, the allowlist test, the mode (which
+        # carries a compatibility clause the gate cannot know about), and how a
+        # reply is chunked and said.
+        #
+        # Nothing below logs an id or a message. The lines this replaced logged
+        # the raw Slack user id on every refusal AND the first 100 characters of
+        # every message, which put a workspace's member ids and its
+        # conversations into every log shipper this instance has.
+        from robothor.engine.channels.inbound import handle_message
 
-        decision = await access.evaluate(
-            "slack",
-            user_id,
+        result = await handle_message(
+            channel="slack",
+            native_id=user_id,
+            text=text,
+            runner=self.runner,
             tenant_id=self.config.tenant_id,
+            session_key=f"agent:main:slack:{channel}",
+            trigger_type=TriggerType.SLACK,
             display_name=str((event.get("user_profile") or {}).get("display_name") or ""),
             surface=self._surface(event, channel),
             allowlist=lambda: self._authorized(user_id, channel),
-            # The mode THIS bot resolved, not the one the gate would read again.
-            # `_access_mode` carries the allowlist compatibility clause, so a
-            # second read would answer `pairing` where the bot answered
-            # `allowlist` -- and every allowlisted sender would be handed a
-            # pairing code by a gate that was also, separately, correct.
+            # The mode THIS bot resolved, not the one the gate would read
+            # again: a second read would answer `pairing` where the bot
+            # answered `allowlist`, and every allowlisted sender would be
+            # handed a pairing code by a gate that was also, separately,
+            # correct.
             mode=self._access_mode(),
         )
-        if not decision.allowed:
-            if decision.refusal:
-                await say(text=decision.refusal)
+
+        # "" is send nothing — a suppressed pairing reply, or an unknown sender
+        # in a room, who must not learn that anybody is listening.
+        if not result.reply:
             return
-
-        identity = decision.identity
-        tenant_id = identity.tenant_id if identity else self.config.tenant_id
-
-        # Use shared session system
-        from robothor.engine.chat import get_shared_session
-
-        session_key = f"agent:main:slack:{channel}"
-        session = get_shared_session(session_key)
-
-        # Run agent
-        try:
-            from robothor.engine.models import TriggerType
-
-            # A paired sender runs as the user the operator bound them to. An
-            # unpaired one only gets here in `open` or `allowlist` mode, and
-            # then carries the same synthetic id this always used -- named
-            # explicitly, because `f"slack:{user_id}"` with `user_role="user"`
-            # was an authorization decision about a string matching no row
-            # anywhere.
-            run = await self.runner.execute(
-                agent_id="main",
-                message=text,
-                trigger_type=TriggerType.SLACK,
-                tenant_id=tenant_id,
-                user_id=_run_as(identity, user_id),
-                user_role=(identity.role if identity else "") or "user",
-                identity=identity,
-                conversation_history=list(session.history) if session.history else None,
-            )
-
-            if run.output_text:
-                chunks = _split_text(run.output_text, MAX_SLACK_LENGTH)
-                for chunk in chunks:
-                    await say(text=chunk, mrkdwn=True)
-            else:
-                await say("I processed your request but have no output to share.")
-
-        except Exception:
-            logger.exception("Slack agent execution failed")
-            await say("Something went wrong. Please try again.")
+        for chunk in _split_text(result.reply, MAX_SLACK_LENGTH):
+            await say(text=chunk, mrkdwn=True)
 
 
 def _run_as(identity: Any, user_id: str) -> str:
@@ -338,9 +312,9 @@ def _run_as(identity: Any, user_id: str) -> str:
     ``slack:<id>`` only when nothing is bound keeps the pre-pairing behaviour
     intact for ``open`` mode instead of leaving those runs unattributed.
     """
-    if identity is None:
-        return f"slack:{user_id}"
-    return str(identity.tenant_user_id or identity.user_account_id or f"slack:{user_id}")
+    from robothor.engine.channels.inbound import run_as
+
+    return run_as(identity, "slack", user_id)
 
 
 def _split_text(text: str, max_length: int) -> list[str]:

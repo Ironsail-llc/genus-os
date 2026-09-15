@@ -206,6 +206,9 @@ _TRIGGER_TIMEOUTS = {
     TriggerType.TELEGRAM: "interactive",
     TriggerType.WEBCHAT: "interactive",
     TriggerType.SLACK: "interactive",
+    # A plugin channel's inbound message. Interactive for the same reason
+    # Slack is: somebody typed it and is watching for the reply.
+    TriggerType.CHANNEL: "interactive",
     TriggerType.CHANNEL_EVENT: "interactive",
     TriggerType.IDE: "interactive",
     TriggerType.MANUAL: "interactive",

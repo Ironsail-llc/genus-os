@@ -34,6 +34,14 @@ class TriggerType(StrEnum):
     WEBHOOK = "webhook"
     IDE = "ide"
     CHANNEL_EVENT = "channel_event"  # Main wakes after fleet surfaces to the channel
+    # An inbound message on a channel the platform does not own — every
+    # plugin channel. A member of its own rather than reusing SLACK or
+    # WEBHOOK: accounting reads this column to say where a run came from,
+    # and "a Teams message" recorded as "slack" is a wrong answer stated
+    # confidently. Plugin channels share one value because the enum cannot
+    # grow a member per installed distribution; the channel name is on the
+    # run's own session key and identity.
+    CHANNEL = "channel"
 
 
 class RunStatus(StrEnum):
