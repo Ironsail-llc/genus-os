@@ -24,6 +24,7 @@ from pathlib import Path  # noqa: TC003 - used in runtime annotations below
 import pytest
 import yaml
 
+from robothor.settings.config_file import write_top_level
 from robothor.settings.sources import write_setting, write_settings
 
 
@@ -322,3 +323,69 @@ def test_a_failed_batch_leaves_the_file_byte_identical(config_path: Path, monkey
 
     assert config_path.read_bytes() == original
     assert sorted(p.name for p in config_path.parent.iterdir()) == ["config.yaml"]
+
+
+# ── N4: the top-level writer takes the same lock ─────────────────────────────
+
+
+def test_a_top_level_write_and_a_settings_write_do_not_lose_each_other(
+    config_path: Path,
+) -> None:
+    """``write_top_level`` is the first-run wizard's ``setup_completed_at``, and
+    it edits the same document as a settings write through its own
+    read-modify-write. Unlocked, the wizard finishing while an operator saves
+    the Config form drops one of the two -- and the lock that was added for
+    ``write_settings`` did not cover it.
+    """
+    import threading
+
+    config_path.write_text("settings:\n", encoding="utf-8")
+    start = threading.Barrier(2, timeout=5)
+    errors: list[BaseException] = []
+
+    def _run(fn) -> None:
+        try:
+            start.wait(timeout=5)
+            fn()
+        except threading.BrokenBarrierError:
+            fn()  # the lock won the race; the work still has to happen
+        except BaseException as exc:  # noqa: BLE001 - reported below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(
+            target=_run,
+            args=(lambda: write_top_level("setup_completed_at", "2026-09-15", path=config_path),),
+        ),
+        threading.Thread(
+            target=_run,
+            args=(lambda: write_setting("paths", "log_dir", "/var/log/both", path=config_path),),
+        ),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not errors, errors
+    loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert loaded["setup_completed_at"] == "2026-09-15"
+    assert loaded["settings"]["paths"]["log_dir"] == "/var/log/both"
+
+
+def test_the_top_level_writer_holds_the_settings_lock(config_path: Path, monkeypatch) -> None:
+    """Asserted at the seam as well as by outcome: a barrier test can pass by
+    luck on a fast machine, and this cannot."""
+    from robothor.settings import config_file
+
+    held: list[bool] = []
+    real = config_file._write_atomically
+
+    def _spy(path, text):
+        held.append(config_file._WRITE_LOCK.locked())
+        return real(path, text)
+
+    monkeypatch.setattr(config_file, "_write_atomically", _spy)
+    write_top_level("setup_completed_at", "2026-09-15", path=config_path)
+
+    assert held == [True], "write_top_level replaced the file without holding the write lock"

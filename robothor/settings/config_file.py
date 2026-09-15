@@ -189,30 +189,36 @@ def write_top_level(key: str, value: Any, *, path: Path) -> Path:
     block is explicitly not the settings model's to validate (federation
     identity already lives there).
 
-    Same textual edit and same atomic replace as :func:`write_setting`, so an
-    operator's comments and the file's mode survive.
+    Same textual edit, same atomic replace and the SAME LOCK as
+    :func:`write_settings`, so an operator's comments and the file's mode
+    survive — and so the first-run wizard writing ``setup_completed_at`` cannot
+    race a settings write on the same file and drop one of the two. They edit
+    different regions of one document through one read-modify-write each; the
+    lock is what makes "different regions" true rather than lucky.
     """
     if not key or ":" in key or key.strip() != key:
         raise ValueError(f"{key!r} is not a usable top-level key")
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        text = ""
 
-    rendered = _render(value)
-    lines = text.splitlines()
-    for index, raw in enumerate(lines):
-        stripped = raw.strip()
-        if _indent_of(raw) == 0 and stripped.split(":", 1)[0] == key and ":" in stripped:
-            lines[index] = f"{key}: {rendered}{_inline_comment(stripped)}"
-            _write_atomically(path, "\n".join(lines) + "\n")
-            return path
+    with _exclusive(path):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
 
-    # Appended rather than prepended: a leading comment block in a
-    # hand-written file is the first thing an operator reads, and a machine
-    # line above it moves their own header down the page on every write.
-    prefix = lines + ([""] if lines and lines[-1].strip() else [])
-    _write_atomically(path, "\n".join([*prefix, f"{key}: {rendered}"]) + "\n")
+        rendered = _render(value)
+        lines = text.splitlines()
+        for index, raw in enumerate(lines):
+            stripped = raw.strip()
+            if _indent_of(raw) == 0 and stripped.split(":", 1)[0] == key and ":" in stripped:
+                lines[index] = f"{key}: {rendered}{_inline_comment(stripped)}"
+                _write_atomically(path, "\n".join(lines) + "\n")
+                return path
+
+        # Appended rather than prepended: a leading comment block in a
+        # hand-written file is the first thing an operator reads, and a machine
+        # line above it moves their own header down the page on every write.
+        prefix = lines + ([""] if lines and lines[-1].strip() else [])
+        _write_atomically(path, "\n".join([*prefix, f"{key}: {rendered}"]) + "\n")
     return path
 
 

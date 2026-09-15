@@ -101,8 +101,14 @@ class SettingsPatch(BaseModel):
     this, and why" has an answer six months later.
     """
 
-    changes: dict[str, Any] = Field(default_factory=dict, max_length=MAX_CHANGES)
-    note: str | None = Field(default=None, max_length=MAX_NOTE)
+    # Deliberately UNCONSTRAINED here, and bounded in the handler instead. A
+    # pydantic ``Field`` cap is enforced by FastAPI before the route runs, and
+    # its rejection is ``{"detail": [...]}`` -- a second body shape for a route
+    # whose contract says every 422 is ``{applied, pending_restart, errors}``.
+    # The UI was told ``resp.json().errors`` always works; a limit that quietly
+    # made that false in two cases is a worse bug than the limit is a fix.
+    changes: dict[str, Any] = Field(default_factory=dict)
+    note: str | None = None
 
 
 def _declared() -> list[dict[str, Any]]:
@@ -302,6 +308,17 @@ def _plan(
     """
     planned: list[tuple[dict[str, Any], Any]] = []
     errors: list[dict[str, str]] = []
+    if len(changes) > MAX_CHANGES:
+        return planned, [
+            {
+                "name": "changes",
+                "message": (
+                    f"a single request may carry at most {MAX_CHANGES} changes; "
+                    f"this one carries {len(changes)}."
+                ),
+            }
+        ]
+
     seen: dict[str, str] = {}
     unknown = 0
     for name, raw in changes.items():
@@ -369,6 +386,18 @@ def patch_settings(patch: SettingsPatch, request: Request) -> Any:
     operator.reset_db_rows()
 
     planned, errors = _plan(patch.changes)
+    if patch.note is not None and len(patch.note) > MAX_NOTE:
+        errors.insert(
+            0,
+            {
+                "name": "note",
+                "message": (
+                    f"the note may be at most {MAX_NOTE} characters; this one is "
+                    f"{len(patch.note)}. It is stored in the audit log and read by people."
+                ),
+            },
+        )
+        planned = []
     if errors:
         # Only names the REGISTRY knows. A rejected key is a string the client
         # chose, and an audit row is exported to a SIEM: logging it verbatim

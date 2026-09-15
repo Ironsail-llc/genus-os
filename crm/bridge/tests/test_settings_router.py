@@ -23,6 +23,7 @@ The contracts that matter, and why each is a test rather than a docstring:
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -762,3 +763,257 @@ def test_a_rejected_key_is_never_written_verbatim_into_the_audit_log(
     flat = _strings(audit_rows[-1])
     assert all(secretish not in s for s in flat)
     assert audit_rows[-1]["details"]["unknown_names"] == 1
+
+
+# ── N1: both pages against the ENGINE, not against each other ────────────────
+
+#: Spellings an operator actually types. ``feature_flags.py``'s own docstring
+#: tells them to use ``systemctl set-environment ROBOTHOR_RIP_1_ENABLED=1``,
+#: and the engine lowercases before it reads, so every one of these is a value
+#: the engine honours and a page must not contradict.
+ENV_SPELLINGS = [
+    "1",
+    "0",
+    "true",
+    "TRUE",
+    "True",
+    "yes",
+    "on",
+    "off",
+    "no",
+    "false",
+    "Observe",
+    "OBSERVE",
+    "observe",
+    "Enforce",
+    "ALERT",
+    "alert",
+    "  enforce  ",
+    "mostly",
+    "",
+]
+
+
+#: ``(flag, raw)`` pairs where the ENGINE itself disagrees with the value set
+#: its own API advertises. NOT a bug in these pages, and deliberately not fixed
+#: here: closing it means changing what a guardrail DOES.
+#:
+#: ``ROBOTHOR_RIP_7_MODE=off`` is the one. ``valid_values_for`` offers ``off``
+#: for every ``*_MODE`` flag, ``/api/controls`` accepts, persists and audits it,
+#: and ``rip_7_enforcement_mode()`` then reads it as ``observe`` -- the exact
+#: inert-de-escalation-lever defect that ``_generic_mode`` 's own comment says
+#: was fixed for the ladder flags. Honouring it would take a guardrail from
+#: observing to DARK, which is an operator's decision, not a fix round's.
+KNOWN_ENGINE_DISAGREEMENTS = {("ROBOTHOR_RIP_7_MODE", "off")}
+
+
+def _engine_says(name, reader, gate, raw, monkeypatch):
+    """What the ENGINE resolves for ``name`` with ``raw`` in the environment."""
+    from robothor.engine import feature_flags as ff
+
+    if raw is not None:
+        monkeypatch.setenv(name, raw)
+    else:
+        monkeypatch.delenv(name, raising=False)
+    if gate:
+        monkeypatch.setenv(gate, "1")
+    value = reader()
+    del ff
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return str(value)
+
+
+@pytest.mark.parametrize("raw", ENV_SPELLINGS)
+def test_both_pages_report_what_the_engine_resolves_for_every_flag(
+    raw, controls_client_as_operator, engine_readers, fake_verdict, monkeypatch
+):
+    """The third party is the engine. Two pages agreeing with each other proves
+    nothing -- ``normalise`` was wrong once and both pages were wrong together,
+    reporting a guardrail ``false`` while the engine ran it and a compliance
+    opt-out ``enforce`` while the engine only observed.
+
+    So each page is compared against the accessor the ENGINE calls, for every
+    governed flag, across the spellings an operator actually types. The flag
+    store is pinned to "no DB row" on both sides so the environment is the only
+    variable.
+    """
+    from robothor.flags import store
+
+    monkeypatch.setattr(store, "resolve", lambda name: os.environ.get(name))
+
+    wrong = []
+    for name, (reader, gate) in sorted(engine_readers.items()):
+        with monkeypatch.context() as m:
+            engine = _engine_says(name, reader, gate, raw, m)
+            values = controls_client_as_operator.get(SETTINGS).json()["values"]
+            controls = {
+                flag["name"]: flag["value"]
+                for flag in controls_client_as_operator.get("/api/controls").json()
+            }
+        if (name, raw) in KNOWN_ENGINE_DISAGREEMENTS:
+            continue
+        if values[name]["value"] != engine:
+            wrong.append(("settings", name, raw, values[name]["value"], engine))
+        if controls[name] != engine:
+            wrong.append(("controls", name, raw, controls[name], engine))
+    assert not wrong, wrong
+
+
+def test_the_known_engine_disagreements_are_still_exactly_these(engine_readers, monkeypatch):
+    """A skip list that is not itself pinned is a skip list that grows.
+
+    Each entry must STILL disagree; when the engine is fixed this test fails
+    and the entry is deleted, rather than sitting here forever describing a
+    defect that no longer exists.
+    """
+    from robothor.flags import store
+
+    monkeypatch.setattr(store, "resolve", lambda name: os.environ.get(name))
+    for name, raw in sorted(KNOWN_ENGINE_DISAGREEMENTS):
+        reader, gate = engine_readers[name]
+        with monkeypatch.context() as m:
+            engine = _engine_says(name, reader, gate, raw, m)
+            shown = store.normalise(name, raw)
+        assert shown != engine, (
+            f"{name}={raw!r} now agrees ({shown!r}) — delete it from "
+            "KNOWN_ENGINE_DISAGREEMENTS and from the report"
+        )
+
+
+def test_the_store_spells_a_value_the_way_the_engine_reads_one():
+    """``normalise`` is the one place both pages go through, so it carries the
+    engine's parsing rules -- case-insensitive, and the same truthy set."""
+    from robothor.flags import store
+
+    for raw in ("1", "TRUE", "True", "yes", "YES", "on", "  true  "):
+        assert store.normalise("ROBOTHOR_RIP_1_ENABLED", raw) == "true", raw
+    for raw in ("0", "false", "FALSE", "no", "off", "nonsense"):
+        assert store.normalise("ROBOTHOR_RIP_1_ENABLED", raw) == "false", raw
+    for raw, expected in (
+        ("Observe", "observe"),
+        ("ENFORCE", "enforce"),
+        ("  Alert ", "alert"),
+        ("off", "off"),
+    ):
+        assert store.normalise("ROBOTHOR_RBAC_MODE", raw) == expected, raw
+
+
+def test_the_engine_and_the_store_share_one_truthy_set():
+    """Identity, not equality: a second copy is a second answer waiting to
+    happen, and the third copy in ``scripts/flag_audit.py`` was exactly that."""
+    from robothor.engine import feature_flags as ff
+    from robothor.flags.store import TRUE_VALUES
+
+    assert ff._TRUE_VALUES is TRUE_VALUES
+
+
+# ── N5: what a page shows for a value outside the set ────────────────────────
+
+
+def test_a_value_the_flag_does_not_accept_is_masked_by_the_engines_default(
+    controls_client_as_operator, clean_env, monkeypatch
+):
+    """Not just "the two pages agree" -- what they agree ON. A typo in a
+    variable must read as the engine's own fallback, which for the compliance
+    opt-out means enforcing."""
+    monkeypatch.setenv(GOVERNED, "mostly")
+    monkeypatch.setenv("ROBOTHOR_DNC_MODE", "whatever")
+    values = controls_client_as_operator.get(SETTINGS).json()["values"]
+    assert values[GOVERNED]["value"] == "observe"
+    assert values["ROBOTHOR_DNC_MODE"]["value"] == "enforce"
+
+
+# ── N2: a failed config write stops the governed half ────────────────────────
+
+
+def test_a_failed_config_write_leaves_the_flag_store_untouched(
+    controls_client_as_operator, clean_env, env_workspace, monkeypatch
+):
+    """All-or-nothing across BOTH stores when the file is what failed.
+
+    A file and a table cannot be one transaction, so the file goes first and a
+    failure there must stop the batch. The fix notes claimed this; the code
+    caught the error and ran the governed loop anyway, so a 500 could still
+    flip a guardrail.
+    """
+    from pathlib import Path
+
+    writes: list[tuple] = []
+    monkeypatch.setattr("robothor.flags.store.set_flag", lambda *a, **k: writes.append(a))
+    _write_config(env_workspace, "settings:\n")
+
+    def _boom(self, target):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "replace", _boom)
+    r = controls_client_as_operator.patch(
+        SETTINGS, json={"changes": {HOT_INT: 8, GOVERNED: "enforce"}}
+    )
+    assert r.status_code == 500, r.text
+    assert r.json()["applied"] == []
+    assert writes == [], "a guardrail was flipped by a request that failed to write the file"
+
+
+# ── N3: every 422 from this route has the same flat body ─────────────────────
+
+
+def test_an_over_limit_batch_returns_the_same_flat_body_as_a_validation_error(
+    controls_client_as_operator, clean_env
+):
+    """The report tells B16b ``resp.json().errors`` works on the 422. A
+    pydantic ``Field`` cap returns FastAPI's ``{"detail": [...]}`` instead, so
+    the one shape the UI was promised had two exceptions in it."""
+    from routers.settings import MAX_CHANGES
+
+    changes = {f"ROBOTHOR_NOT_A_SETTING_{i}": "x" for i in range(MAX_CHANGES + 1)}
+    r = controls_client_as_operator.patch(SETTINGS, json={"changes": changes})
+    assert r.status_code == 422
+    body = r.json()
+    assert set(body) == {"applied", "pending_restart", "errors"}
+    assert body["applied"] == []
+    assert body["errors"] and "at most" in body["errors"][0]["message"]
+
+
+def test_an_over_limit_note_returns_the_same_flat_body(controls_client_as_operator, clean_env):
+    from routers.settings import MAX_NOTE
+
+    r = controls_client_as_operator.patch(
+        SETTINGS, json={"changes": {}, "note": "x" * (MAX_NOTE + 1)}
+    )
+    assert r.status_code == 422
+    body = r.json()
+    assert set(body) == {"applied", "pending_restart", "errors"}
+    assert body["errors"][0]["name"] == "note"
+
+
+def test_every_refusal_this_route_makes_has_the_same_three_keys(
+    controls_client_as_operator, clean_env, monkeypatch
+):
+    """One walker over every 422 this route can produce, so a new refusal
+    cannot quietly ship a fourth body shape."""
+    from routers.settings import MAX_CHANGES, MAX_NOTE
+
+    monkeypatch.setenv(HOT_INT, "9")
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    payloads = [
+        {"changes": {"ROBOTHOR_NOT_A_SETTING": "x"}},  # unknown name
+        {"changes": {SECRET: "t"}},  # secret
+        {"changes": {GOVERNED: "mostly"}},  # not a rung
+        {"changes": {HOT_INT: 4}},  # env override
+        {"changes": {RESTART_STR: object}},  # unserialisable -> bad type
+        {"changes": {"ROBOTHOR_CODEX_HOME": "/a", "CODEX_HOME": "/b"}},  # duplicate
+        {"changes": {f"ROBOTHOR_NOPE_{i}": "x" for i in range(MAX_CHANGES + 1)}},
+        {"changes": {}, "note": "x" * (MAX_NOTE + 1)},
+    ]
+    for payload in payloads:
+        if payload["changes"].get(RESTART_STR) is object:
+            payload = {"changes": {RESTART_STR: {"not": "a scalar"}}}
+        r = controls_client_as_operator.patch(SETTINGS, json=payload)
+        assert r.status_code == 422, (payload, r.status_code, r.text)
+        assert set(r.json()) == {"applied", "pending_restart", "errors"}, payload
+        assert r.json()["errors"], payload

@@ -474,8 +474,13 @@ def apply_batch(
         try:
             _write_config(config_changes)
         except SettingError as exc:
-            # None of them landed, so all of them are the error.
+            # None of them landed, so all of them are the error -- AND the
+            # governed half does not run. A file and a table are not one
+            # transaction, but the half that has not started yet can still be
+            # called off, and a request that failed to write a file must not
+            # flip a guardrail on its way out.
             errors.extend({"name": row["env"], "message": exc.message} for row, _ in config_changes)
+            return applied, sorted(pending), errors
         else:
             for row, _value in config_changes:
                 applied.append(row["env"])
