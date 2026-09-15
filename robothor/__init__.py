@@ -5,4 +5,4 @@ from robothor.settings.third_party import pin_litellm_offline as _pin_litellm_of
 # Before any module can import litellm: see robothor/settings/third_party.py.
 _pin_litellm_offline()
 
-__version__ = "1.82.0"
+__version__ = "1.82.1"

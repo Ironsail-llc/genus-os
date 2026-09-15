@@ -1,3 +1,9 @@
+## [1.82.1](https://github.com/Ironsail-llc/genus-os/compare/v1.82.0...v1.82.1) (2026-09-15)
+
+### Bug Fixes
+
+* **engine:** a running row that never produced a step is reaped in 15 min ([#559](https://github.com/Ironsail-llc/genus-os/issues/559)) ([a883c1f](https://github.com/Ironsail-llc/genus-os/commit/a883c1f5ae746f40cf94b1979ca4f9b7afc670d6))
+
 ## [1.82.0](https://github.com/Ironsail-llc/genus-os/compare/v1.81.0...v1.82.0) (2026-09-15)
 
 ### Features
