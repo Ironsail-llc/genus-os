@@ -127,6 +127,40 @@ def _owned_agent_files(repo_root: Path, agent_id: str) -> dict[str, Path]:
     return files
 
 
+def _instruction_claimant(repo_root: Path, destination: Path, agent_id: str) -> str | None:
+    """The OTHER agent whose manifest claims *destination*, or None.
+
+    Reads the canonical manifest directory rather than ``installed.yaml``:
+    install records are mutable state, and "whose file is this?" has to be
+    answered by the files the engine actually reads.
+    """
+    agents_dir = repo_root / "docs" / "agents"
+    if not agents_dir.is_dir():
+        return None
+    for path in sorted(agents_dir.glob("*.yaml")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            data = yaml.safe_load(path.read_text()) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        other = str(data.get("id") or path.stem)
+        if other == agent_id:
+            continue
+        declared = data.get("instruction_file")
+        if not isinstance(declared, str) or not declared:
+            continue
+        try:
+            claimed = _instruction_path(repo_root, declared)
+        except TemplateSecurityError:
+            continue
+        if claimed == destination:
+            return other
+    return None
+
+
 def install(
     template_path: str | Path,
     overrides: dict[str, Any] | None = None,
@@ -278,6 +312,26 @@ def install(
         if instr_path:
             instr_dest = _instruction_path(repo_root, instr_path)
             output_files["instruction"] = (instr_dest, instructions_content)
+
+    # An instruction file another agent's manifest claims is never written,
+    # whatever ``auto_yes`` says.
+    #
+    # ``auto_yes`` means "do not prompt", and it was being read as "overwrite
+    # anything". ``instruction_file`` is only constrained to live under
+    # ``brain/``, so a bundle (or a hub template) declaring
+    # ``brain/agents/main.md`` replaced the main agent's instructions while its
+    # own manifest stayed untouched — nothing in ``genus agent list`` looked
+    # wrong, and the most privileged agent on the appliance was running
+    # somebody else's prompt. The caller's own collision check is the first
+    # line; this is the one that holds for every caller.
+    if "instruction" in output_files:
+        claimant = _instruction_claimant(repo_root, output_files["instruction"][0], agent_id)
+        if claimant is not None:
+            raise TemplateSecurityError(
+                f"Refusing to write {output_files['instruction'][0].name}: it is the "
+                f"instruction file agent {claimant!r} declares. An agent only ever "
+                "writes its own files."
+            )
 
     # Write files atomically — temp files first, then validate, then move
     temp_files: dict[str, tuple[Path, Path]] = {}  # key -> (temp_path, final_path)

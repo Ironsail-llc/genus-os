@@ -416,3 +416,66 @@ class TestImport:
         with pytest.raises(TemplateSecurityError, match="instruction"):
             import_agent("bad-agent", output_dir=output, repo_root=tmp_repo)
         assert not output.exists()
+
+
+class TestInstructionOwnership:
+    """No install writes an instruction file another agent's manifest claims.
+
+    The bundle installer refuses a collision of its own; this is the layer under
+    it. ``install(auto_yes=True)`` read "yes" as licence to overwrite any
+    destination at all, so the hub path and a preset install had the same hole
+    with no second opinion behind them.
+    """
+
+    def _claim(self, workspace, agent_id, instruction):
+        (workspace / "docs" / "agents" / f"{agent_id}.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "id": agent_id,
+                    "name": agent_id,
+                    "description": "an installed agent",
+                    "version": "1.0.0",
+                    "department": "custom",
+                    "instruction_file": instruction,
+                }
+            )
+        )
+        path = workspace / instruction
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {agent_id}'s own instructions\n")
+
+    def test_another_agents_instruction_file_is_never_overwritten(
+        self, tmp_bundle, tmp_repo, tmp_instance_dir
+    ):
+        self._claim(tmp_repo, "victim", "brain/TEST_AGENT.md")
+
+        with pytest.raises(TemplateSecurityError, match="victim"):
+            install(
+                str(tmp_bundle),
+                overrides={"version": "1.0.0"},
+                auto_yes=True,
+                instance_dir=tmp_instance_dir,
+                repo_root=tmp_repo,
+            )
+
+        assert (tmp_repo / "brain" / "TEST_AGENT.md").read_text() == (
+            "# victim's own instructions\n"
+        )
+        assert not (tmp_repo / "docs" / "agents" / "test-agent.yaml").exists()
+
+    def test_reinstalling_over_your_own_instruction_file_is_still_allowed(
+        self, tmp_bundle, tmp_repo, tmp_instance_dir
+    ):
+        """An update is the installer's job; only a STRANGER's file is off limits."""
+        self._claim(tmp_repo, "test-agent", "brain/TEST_AGENT.md")
+
+        result = install(
+            str(tmp_bundle),
+            overrides={"version": "2.0.0"},
+            auto_yes=True,
+            instance_dir=tmp_instance_dir,
+            repo_root=tmp_repo,
+        )
+
+        assert result["agent_id"] == "test-agent"
+        assert "Test Agent" in (tmp_repo / "brain" / "TEST_AGENT.md").read_text()

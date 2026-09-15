@@ -117,7 +117,14 @@ class InstallPlan:
     skills: tuple[str, ...] = ()
     kept_skills: tuple[str, ...] = ()
     requires: tuple[RequireStatus, ...] = ()
-    collision: bool = False
+    #: ``(workspace-relative path, the agent that owns it or "")`` for every
+    #: destination that already exists. A tuple rather than a bool because
+    #: "which file, and whose" is the whole of what the operator needs.
+    collisions: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def collision(self) -> bool:
+        return bool(self.collisions)
 
     def unsatisfied(self) -> tuple[RequireStatus, ...]:
         return tuple(status for status in self.requires if not status.satisfied)
@@ -136,7 +143,15 @@ class InstallPlan:
             )
         lines.append("")
         lines.append("Files this would write:")
-        lines.extend(f"  {path}" for path in self.writes)
+        existing = dict(self.collisions)
+        for path in self.writes:
+            owner = existing.get(path)
+            if owner is None:
+                lines.append(f"  {path}")
+            elif owner:
+                lines.append(f"  {path}  EXISTS — owned by {owner}")
+            else:
+                lines.append(f"  {path}  EXISTS")
         lines.extend(f"  agents/skills/{skill}/" for skill in self.skills)
         lines.extend(
             f"  agents/skills/{skill}/ (already present — kept)" for skill in self.kept_skills
@@ -145,11 +160,11 @@ class InstallPlan:
             lines.append("")
             lines.append("Requirements:")
             lines.extend(f"  {status.describe()}" for status in self.requires)
-        if self.collision:
+        if self.collisions:
             lines.append("")
             lines.append(
-                f"REFUSED: {self.target_id} is already installed. Pass --id <new-id> to "
-                "install it alongside; nothing is ever overwritten."
+                "REFUSED: an install never overwrites a file. Pass --id <new-id> to "
+                "install this bundle alongside what is already there."
             )
         return "\n".join(lines)
 
@@ -463,50 +478,160 @@ def _requirement_statuses(
 # ---------------------------------------------------------------------------
 
 
-def _renamed_instruction(path: str, old_id: str, new_id: str) -> str:
-    """The instruction path an agent renamed *old_id* -> *new_id* should use.
+#: ``{{ variable }}`` — not a YAML scalar. ``timezone: {{ tz }}`` parses as a
+#: flow mapping whose key is a mapping, so a template has to be stood in for
+#: before it can be read at all.
+_TEMPLATE_PLACEHOLDER = re.compile(r"\{\{[^}]*\}\}")
 
-    Both spellings an instance uses are honoured: ``brain/agents/<id>.md`` and
-    the shouty ``brain/<ID>.md``. Anything else keeps its directory and takes
-    the new id as its stem — a renamed agent whose instruction file still
-    carried the old name is how two agents end up sharing one brain file.
+
+def read_manifest_template(text: str) -> dict[str, Any]:
+    """The staged manifest template, read as YAML with placeholders stood in for.
+
+    Every refusal here is a sentence. The first cut of the rename was a
+    line-anchored regex over this file, and a manifest spelling its id as
+    ``id: "gamma"`` or ``id: gamma  # the agent`` produced a Python traceback
+    out of ``genus agent install --id`` instead of an exit code — from the very
+    flag the collision refusal tells an operator to reach for.
+    """
+    stood_in = _TEMPLATE_PLACEHOLDER.sub("TEMPLATE_VALUE", text)
+    try:
+        data = yaml.safe_load(stood_in)
+    except yaml.YAMLError as exc:
+        raise BundleInstallError(
+            "The bundle's manifest.template.yaml is not readable as YAML "
+            f"({type(exc).__name__}). The bundle is malformed; ask whoever exported "
+            "it to re-export."
+        ) from exc
+    if not isinstance(data, dict):
+        raise BundleInstallError("The bundle's manifest.template.yaml is not a YAML mapping.")
+    return data
+
+
+def _set_top_level_scalar(text: str, key: str, value: str) -> str:
+    """Replace one top-level ``key: <scalar>`` line, keeping any trailing comment.
+
+    A targeted edit rather than a YAML round-trip, because dumping the parsed
+    document back would replace every ``{{ variable }}`` with the stand-in and
+    destroy the template. The caller re-parses afterwards and refuses if the
+    value did not actually change — an edit that silently did nothing is how a
+    renamed agent keeps the name it was renamed away from.
+    """
+    pattern = re.compile(rf"(?m)^{re.escape(key)}[ \t]*:[ \t]*(?P<rest>[^\n]*)$")
+
+    def replace(match: re.Match[str]) -> str:
+        comment = re.search(r"\s+#[^\n]*$", match.group("rest"))
+        return f"{key}: {value}{comment.group(0) if comment else ''}"
+
+    return pattern.sub(replace, text, count=1)
+
+
+def canonical_instruction(path: str, agent_id: str) -> str:
+    """The only instruction path an agent with this id may own.
+
+    **Derived, never taken verbatim.** A bundle declaring
+    ``instruction_file: brain/agents/main.md`` for an agent called
+    ``helpful-bot`` was, until this existed, an install that replaced the
+    operator's main agent's instructions while leaving ``main.yaml`` untouched —
+    so nothing in ``genus agent list`` or the Helm looked wrong and the most
+    privileged agent on the appliance was running a stranger's prompt.
+
+    The bundle still chooses its DIRECTORY (both conventions this platform uses
+    live in different ones), and the shouty ``brain/<ID>.md`` spelling is
+    preserved when that is what the bundle used. Only the leaf is pinned.
     """
     relative = safe_relative_path(path, label="instruction path")
     stem = Path(relative.name).stem
     suffix = Path(relative.name).suffix or ".md"
-    shouty = old_id.upper().replace("-", "_")
-    if stem == shouty:
-        leaf = new_id.upper().replace("-", "_") + suffix
-    else:
-        leaf = new_id + suffix
+    shouty = agent_id.upper().replace("-", "_")
+    leaf = (shouty if stem == shouty else agent_id) + suffix
     parent = relative.parent.as_posix()
     return f"{parent}/{leaf}" if parent not in ("", ".") else leaf
 
 
-def _rewrite_identity(staging: Path, old_id: str, new_id: str) -> None:
-    """Rename the agent inside the STAGED copy: setup, manifest, instruction path."""
+def _rewrite_identity(staging: Path, target_id: str) -> None:
+    """Pin the STAGED copy to *target_id*: setup, manifest, instruction path.
+
+    Runs on every install, not only under ``--id``. Canonicalising the
+    instruction path is what stops a bundle aiming its instructions at somebody
+    else's agent, and a rewrite that only ran when the operator renamed the
+    agent would leave the default path — the one nobody looks at — unprotected.
+    """
     setup_path = staging / "setup.yaml"
-    setup = yaml.safe_load(setup_path.read_text(encoding="utf-8")) or {}
+    try:
+        setup = yaml.safe_load(setup_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise BundleInstallError(
+            f"The bundle's setup.yaml could not be read ({type(exc).__name__})."
+        ) from exc
     if not isinstance(setup, dict):
         raise BundleInstallError("The bundle's setup.yaml is not a mapping.")
-    old_instruction = str(setup.get("instruction_file_path") or "")
-    new_instruction = (
-        _renamed_instruction(old_instruction, old_id, new_id) if old_instruction else ""
-    )
-    setup["agent_id"] = new_id
-    if new_instruction:
-        setup["instruction_file_path"] = new_instruction
-    setup_path.write_text(yaml.dump(setup, sort_keys=False, default_flow_style=False))
 
     manifest_path = staging / "manifest.template.yaml"
-    text = manifest_path.read_text(encoding="utf-8")
-    # Textual, not a YAML round-trip: the template is full of ``{{ var }}``
-    # placeholders that are not valid YAML scalars, so parsing it would either
-    # fail or silently rewrite them.
-    text = re.sub(rf"(?m)^id:\s*{re.escape(old_id)}\s*$", f"id: {new_id}", text)
-    if old_instruction and new_instruction:
-        text = text.replace(old_instruction, new_instruction)
+    try:
+        text = manifest_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise BundleInstallError(
+            f"The bundle's manifest.template.yaml could not be read ({type(exc).__name__})."
+        ) from exc
+    declared = read_manifest_template(text)
+
+    source = str(setup.get("instruction_file_path") or declared.get("instruction_file") or "")
+    try:
+        instruction = canonical_instruction(source, target_id) if source else ""
+    except TemplateSecurityError as exc:
+        raise BundleInstallError(str(exc)) from exc
+
+    setup["agent_id"] = target_id
+    if instruction:
+        setup["instruction_file_path"] = instruction
+    setup_path.write_text(yaml.dump(setup, sort_keys=False, default_flow_style=False))
+
+    text = _set_top_level_scalar(text, "id", target_id)
+    if instruction and "instruction_file" in declared:
+        text = _set_top_level_scalar(text, "instruction_file", instruction)
     manifest_path.write_text(text)
+
+    # Probe, do not trust the edit. A quoted or commented scalar the regex did
+    # not reach would otherwise install under the name it was supposed to leave.
+    rewritten = read_manifest_template(text)
+    if str(rewritten.get("id") or "") != target_id:
+        raise BundleInstallError(
+            f"The bundle's manifest could not be renamed to {target_id!r} — its id is "
+            "written in a form this installer cannot rewrite safely. Ask for a "
+            "re-export, or install it under its own id."
+        )
+    if instruction and str(rewritten.get("instruction_file") or "") != instruction:
+        raise BundleInstallError(
+            "The bundle's manifest declares its instruction_file in a form this "
+            "installer cannot rewrite safely. Ask for a re-export."
+        )
+
+
+def _instruction_owners(repo_root: Path) -> dict[str, str]:
+    """``{workspace-relative instruction path: the agent that claims it}``.
+
+    Read from the canonical manifest directory rather than from
+    ``installed.yaml``: install records are mutable state, and the question
+    being asked — "whose file is this?" — has to be answered by the files the
+    engine actually reads.
+    """
+    owners: dict[str, str] = {}
+    agents_dir = repo_root / "docs" / "agents"
+    if not agents_dir.is_dir():
+        return owners
+    for path in sorted(agents_dir.glob("*.yaml")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        instruction = data.get("instruction_file")
+        if isinstance(instruction, str) and instruction:
+            owners[instruction] = str(data.get("id") or path.stem)
+    return owners
 
 
 # ---------------------------------------------------------------------------
@@ -634,8 +759,7 @@ def install_bundle(
 
         staging = scratch / "staging"
         shutil.copytree(verified, staging, symlinks=False)
-        if target_id != manifest.id:
-            _rewrite_identity(staging, manifest.id, target_id)
+        _rewrite_identity(staging, target_id)
 
         instruction = _instruction_destination(staging)
         writes = [f"docs/agents/{target_id}.yaml"]
@@ -650,7 +774,18 @@ def install_bundle(
         already = tuple(
             name for name in carried if (repo_root / "agents" / "skills" / name).exists()
         )
-        collision = (repo_root / "docs" / "agents" / f"{target_id}.yaml").exists()
+
+        # Collision covers EVERY file the install would write, not just the
+        # manifest. Checking only ``docs/agents/<id>.yaml`` is what let a bundle
+        # replace another agent's instruction file while reporting no collision
+        # at all. A skill is not in this list because a skill already present is
+        # kept rather than written.
+        owners = _instruction_owners(repo_root)
+        collisions = tuple(
+            (relative, owners.get(relative, ""))
+            for relative in writes
+            if (repo_root / relative).exists()
+        )
 
         plan = InstallPlan(
             manifest=manifest,
@@ -668,7 +803,7 @@ def install_bundle(
                 environment=environment,
                 secret_lookup=secret_lookup,
             ),
-            collision=collision,
+            collisions=collisions,
         )
 
         # A refusal fires on the WRITE, never on the preview. An operator whose
@@ -677,10 +812,14 @@ def install_bundle(
         # would tell them only that something was wrong.
         if not yes:
             return plan, None
-        if collision:
+        if collisions:
+            detail = ", ".join(
+                f"{relative} (owned by {owner})" if owner else relative
+                for relative, owner in collisions
+            )
             raise BundleInstallError(
-                f"{target_id} is already installed on this instance. An install never "
-                "overwrites an agent — pass --id <new-id> to install this one alongside it."
+                f"An install never overwrites a file. These already exist: {detail}. "
+                "Pass --id <new-id> to install this bundle alongside what is there."
             )
         if strict and plan.unsatisfied():
             missing = ", ".join(f"{s.kind[:-1]} {s.name}" for s in plan.unsatisfied())
