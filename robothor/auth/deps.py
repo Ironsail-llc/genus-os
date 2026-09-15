@@ -15,9 +15,12 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
-from robothor.auth.tokens import TokenError, decode_token
+from robothor.auth.tokens import HUMAN_ROLES, TokenError, decode_token
 
-_HUMAN_ROLES = frozenset({"owner", "admin", "member", "user", "viewer", "auditor"})
+#: Imported, not re-spelled. This was a third copy of the literal, and a set
+#: that disagreed with ``tokens`` would reject a role the issuer had just put
+#: in a token — see ``robothor/auth/tests/test_roles_are_one_set.py``.
+_HUMAN_ROLES = HUMAN_ROLES
 
 
 @dataclass(frozen=True)

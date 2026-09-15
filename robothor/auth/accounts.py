@@ -124,6 +124,172 @@ def owner_account_exists(tenant_id: str | None = None) -> bool:
         return cur.fetchone() is not None
 
 
+# ── Administration (the Helm's Users & roles page, and `genus user`) ──
+#
+# Everything below projects an EXPLICIT column list. ``SELECT *`` is what the
+# rest of this module uses, correctly — sign-in needs the password hash and the
+# MFA secret — but these functions answer an administrator's browser, and a
+# projection is the only lock that survives somebody adding a column later.
+
+#: What an administration surface may see about an account. Notably absent, and
+#: deliberately: ``password_hash``, ``mfa_secret_enc`` and ``idp_subject``. The
+#: first two are credentials; the third is a third-party identity provider's own
+#: id for a person, which is not this platform's to hand out. ``sso_bound`` is
+#: computed instead, because "is this account attached to an IdP" is the whole
+#: of what an operator needs.
+_ADMIN_COLUMNS = (
+    "id, tenant_id, email, display_name, role, status, person_id, "
+    "mfa_enabled, last_login_at, created_at, updated_at, "
+    "(idp_issuer IS NOT NULL AND idp_subject IS NOT NULL) AS sso_bound"
+)
+
+#: The columns :func:`update_account` may write, mapped to their SQL fragment.
+#: A literal table rather than an f-string over caller-supplied names: this is
+#: the one statement on the administration surface whose shape depends on the
+#: request body.
+_UPDATABLE = {
+    "role": "role = %s",
+    "display_name": "display_name = %s",
+    "status": "status = %s",
+}
+
+
+def list_accounts(tenant_id: str) -> list[dict[str, Any]]:
+    """Every account in one tenant, without any of their credentials."""
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            f"SELECT {_ADMIN_COLUMNS} FROM user_accounts WHERE tenant_id = %s "  # noqa: S608
+            "ORDER BY created_at ASC, id ASC",
+            (tenant_id,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def get_admin_account(user_id: str, tenant_id: str) -> dict[str, Any] | None:
+    """One account, scoped to a tenant.
+
+    ``tenant_id`` is a required argument and not an option: an administration
+    read that could be called without it would answer for any account on the
+    appliance the moment one caller forgot, and "forgot" is what a
+    cross-tenant enumeration looks like from the code's side.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            f"SELECT {_ADMIN_COLUMNS} FROM user_accounts "  # noqa: S608
+            "WHERE id = %s AND tenant_id = %s",
+            (user_id, tenant_id),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def owner_count(
+    tenant_id: str, *, excluding_id: str | None = None, active_only: bool = True
+) -> int:
+    """How many owners a tenant has, optionally ignoring one account.
+
+    The question a demotion or a disable has to ask first. An appliance with no
+    owner has nobody who can administer it and no supported way back in —
+    ``bootstrap_owner_account`` runs from ``owner.yaml`` on the box, which is a
+    shell an operator locked out of the Helm may not have.
+
+    ``active_only=False`` counts owner ROWS whatever their status, and that is
+    the question the administration API asks. An ``invited`` or ``disabled``
+    owner still occupies migration 071's ``uq_user_accounts_owner`` slot — the
+    partial unique index is on ``tenant_id WHERE role = 'owner'`` and knows
+    nothing about status — so demoting one does not merely change a row, it
+    FREES THE SLOT for whoever asks next. Counting only active owners is what
+    let an admin take it (review round 1, C1), and ``invited`` is the state
+    ``genus user add --role owner`` leaves behind on every CLI-built instance.
+    """
+    # A literal fragment chosen by a boolean, never a caller's string — the
+    # same rule ``_UPDATABLE`` follows.
+    status_clause = " AND status = 'active'" if active_only else ""
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM user_accounts "  # noqa: S608
+            f"WHERE tenant_id = %s AND role = 'owner'{status_clause} "
+            "AND (%s::text IS NULL OR id <> %s::uuid)",
+            (tenant_id, excluding_id, excluding_id),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+
+def create_account(
+    *,
+    tenant_id: str,
+    email: str,
+    display_name: str,
+    role: str,
+    status: str,
+    person_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Create one account. ``None`` when the address is already taken.
+
+    The address is canonicalised here rather than trusted from the caller, for
+    the reason :func:`get_account_by_email` gives: a row written as
+    ``Alice@Example.com`` is a row the sign-in path cannot find.
+
+    ``None`` rather than an exception for the duplicate, because a duplicate is
+    an ordinary answer to "invite this person" and the caller turns it into a
+    409. Everything else — a role the column check refuses, a second owner —
+    raises, and the caller must not flatten those into the same answer.
+    """
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            f"""INSERT INTO user_accounts
+                    (tenant_id, email, display_name, role, status, person_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, email) DO NOTHING
+                RETURNING {_ADMIN_COLUMNS}""",  # noqa: S608
+            (tenant_id, canonical_email(email), display_name, role, status, person_id),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+
+
+def update_account(
+    user_id: str,
+    *,
+    tenant_id: str,
+    role: str | None = None,
+    display_name: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any] | None:
+    """Change one account, scoped to a tenant. ``None`` if it is not there.
+
+    The ``tenant_id`` predicate is in the UPDATE itself rather than in a read
+    the caller did first: a check-then-write leaves a window, and the window on
+    this statement is one where an account moves tenants between the two.
+    """
+    assignments: list[str] = []
+    values: list[Any] = []
+    for field, value in (("role", role), ("display_name", display_name), ("status", status)):
+        if value is not None:
+            assignments.append(_UPDATABLE[field])
+            values.append(value)
+    if not assignments:
+        return get_admin_account(user_id, tenant_id)
+
+    with get_connection() as conn:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(
+            f"""UPDATE user_accounts SET {", ".join(assignments)}, updated_at = NOW()
+                WHERE id = %s AND tenant_id = %s
+                RETURNING {_ADMIN_COLUMNS}""",  # noqa: S608
+            (*values, user_id, tenant_id),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+
+
 def get_account_by_idp(issuer: str, subject: str) -> dict[str, Any] | None:
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)

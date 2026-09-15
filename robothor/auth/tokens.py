@@ -32,7 +32,32 @@ REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 _ISSUER = "genus-os"
 DEFAULT_AUDIENCE = "genus-bridge"
 
-_HUMAN_ROLES = frozenset({"owner", "admin", "member", "user", "viewer", "auditor"})
+#: Every role a HUMAN account may hold. The one source of truth: ``cli/user.py``
+#: and ``auth/deps.py`` each used to carry their own copy of this literal, with
+#: a comment asking the next person to keep three lists in sync. A role the
+#: token layer accepts and the CLI refuses is an account an operator cannot
+#: create; a role the CLI accepts and the token layer refuses is an account that
+#: cannot sign in. Both were one edit away, so both now import this name.
+HUMAN_ROLES = frozenset({"owner", "admin", "member", "user", "viewer", "auditor"})
+
+#: One sentence per role, for the picker an operator chooses from. Beside the
+#: set rather than in the dashboard because a dropdown that explains ``auditor``
+#: differently from the scope table below will eventually explain it wrongly.
+ROLE_DESCRIPTIONS: dict[str, str] = {
+    "owner": "Runs this instance. Full access, and the only role the appliance "
+    "requires exactly one of.",
+    "admin": "Administers the instance: users, agents, credentials, settings.",
+    "member": "Everyday access — chat, the CRM, and the agents' output.",
+    "user": "Everyday access, the same as member. Kept for accounts created "
+    "before the two were distinguished.",
+    "viewer": "Read-only, plus chat. What a paired channel sender gets.",
+    "auditor": "Read-only, plus the audit log. For review, not operation.",
+}
+
+#: The private name this module was written around. Kept as an alias so the
+#: callers below read unchanged; it is the same object, which is what
+#: ``robothor/auth/tests/test_roles_are_one_set.py`` pins.
+_HUMAN_ROLES = HUMAN_ROLES
 _TOKEN_TYPES = frozenset({"user", "service"})
 
 #: The first-run wizard's claim token. Its own audience, so that the bridge's

@@ -215,6 +215,12 @@ EXPECTED_ROUTER_MODULES = frozenset(
         # this router silently stopped contributing routes, the gate assertions
         # on the approval endpoint would pass by being vacuous.
         "routers.channel_access",
+        # Accounts and roles: the only network-reachable way to create an
+        # account, change what it may do, or arm the one-shot grant that binds
+        # it to an identity provider. Named for the same reason as the three
+        # above — a mount that silently stopped contributing these routes would
+        # leave every gate assertion in test_users_router.py vacuously green.
+        "routers.users",
     }
 )
 
@@ -222,12 +228,14 @@ EXPECTED_ROUTER_MODULES = frozenset(
 def test_the_app_actually_exposes_mutation_routes() -> None:
     """Guard the guard: a partial enumeration would make every assertion vacuous."""
     # 35 -> 60 (actual 63) -> 66 with the three channel-access mutations
-    # (approve, deny, revoke). The floor's whole job is to notice an enumeration
-    # collapse, and one set 28 routes below reality would have let nearly half
-    # the mutation surface disappear silently. Raise it whenever routes are
-    # added, the same way the module ratchets are kept tight.
+    # (approve, deny, revoke) -> 71 with the channel verify proxy and the three
+    # account writes (invite, patch, arm a binding grant). The floor's whole job
+    # is to notice an enumeration collapse, and one set 28 routes below reality
+    # would have let nearly half the mutation surface disappear silently. Raise
+    # it whenever routes are added, the same way the module ratchets are kept
+    # tight.
     routes = _mutation_routes()
-    assert len(routes) >= 66, f"route enumeration collapsed — only found {len(routes)}"
+    assert len(routes) >= 71, f"route enumeration collapsed — only found {len(routes)}"
 
     seen = {route.endpoint.__module__ for route in routes}
     missing = EXPECTED_ROUTER_MODULES - seen

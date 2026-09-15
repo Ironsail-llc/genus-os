@@ -28,11 +28,13 @@ from robothor.cli import _invoked_name
 if TYPE_CHECKING:
     from argparse import Namespace
 
-# Mirrors robothor.auth.tokens._HUMAN_ROLES -- the single source of truth for
-# valid human roles (token scopes / role_permissions). Duplicated here (that
-# name is module-private) rather than imported; keep in sync if it changes --
-# see test_valid_roles_matches_platform_human_roles.
-VALID_ROLES = frozenset({"owner", "admin", "member", "user", "viewer", "auditor"})
+from robothor.auth.tokens import HUMAN_ROLES
+
+# THE set of valid human roles, not a copy of it. This was a duplicate of
+# ``tokens._HUMAN_ROLES`` carrying a comment asking the next person to keep the
+# two in sync; a role this command accepted and the token layer did not would
+# have created an account that could never sign in.
+VALID_ROLES = HUMAN_ROLES
 
 
 def cmd_user(args: Namespace) -> int:
