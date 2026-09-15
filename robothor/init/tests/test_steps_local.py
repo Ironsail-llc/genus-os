@@ -590,6 +590,46 @@ class TestTheLocalInstallCanBeSignedIntoAtAll:
         assert values["AUTH_SECRET"] != values["GENUS_BRIDGE_SSO_SECRET"]
         assert values["GENUS_LOCAL_LOGIN"] == "true"
 
+    def test_a_new_install_starts_with_the_exec_scrub_enforcing(self, tmp_path):
+        """The platform default is ``observe``, and a fresh install is not the
+        case it protects.
+
+        ``observe`` exists so that promoting the scrub under an EXISTING fleet
+        does not take away credentials agents were quietly using before their
+        operator had seen what would be lost. A new instance has no such
+        history, and starting it permissive means no agent's shell is protected
+        until somebody remembers to come back.
+        """
+        from robothor.secrets.env_file import instance_env_path, parse_env_file
+
+        ctx = _ctx(tmp_path)
+        ctx.workspace.mkdir(parents=True, exist_ok=True)
+        LocalSignInStep().apply(ctx)
+
+        values = parse_env_file(instance_env_path(ctx.workspace).read_text(encoding="utf-8"))
+        assert values["ROBOTHOR_EXEC_ENV_MODE"] == "enforce"
+
+    def test_an_operator_who_stepped_back_down_is_not_overruled(self, tmp_path):
+        """``setdefault``, not assignment: a re-run of ``genus init`` must not
+        re-assert a rung the operator deliberately left."""
+        from robothor.secrets.env_file import (
+            env_line,
+            instance_env_path,
+            parse_env_file,
+            write_private,
+        )
+
+        ctx = _ctx(tmp_path)
+        ctx.workspace.mkdir(parents=True, exist_ok=True)
+        path = instance_env_path(ctx.workspace)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_private(path, env_line("ROBOTHOR_EXEC_ENV_MODE", "observe") + "\n")
+
+        LocalSignInStep().apply(ctx)
+
+        values = parse_env_file(path.read_text(encoding="utf-8"))
+        assert values["ROBOTHOR_EXEC_ENV_MODE"] == "observe"
+
     def test_the_file_is_readable_only_by_its_owner(self, tmp_path):
         import stat
 
