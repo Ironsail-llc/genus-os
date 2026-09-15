@@ -48,6 +48,23 @@ class ModelLimits:
     # forces the answer regardless of the OpenRouter blanket-exclusion or
     # litellm's catalog, for cases we've specifically verified either way.
     supports_cache_control: bool | None = None
+    # Can this model be shown a picture?
+    #
+    # DECLARED, never probed: a probe costs a real call to a real provider and
+    # there is no offline way to ask. The default is False because that is the
+    # honest answer for a model nobody has stated anything about, and because
+    # the failure it prevents is the expensive one — `view_image` handing the
+    # agent content blocks that `llm_client.strip_image_blocks` then deletes,
+    # leaving an agent that believes it looked and saw nothing.
+    #
+    # Only a model whose multimodality is a defining, documented property of
+    # its family is marked True here (Anthropic Claude 4.x, Google Gemini,
+    # OpenAI GPT-5.x, z-ai GLM-5 — the last measured on this instance on
+    # 2026-08-25, see `tools/handlers/images.py`). Everything else stays False
+    # until somebody can say otherwise from evidence.
+    #
+    # `note_image_rejection` may revoke this at runtime; nothing grants it.
+    accepts_images: bool = False
     # Whether we still recommend this model.
     #
     #   current    — the pick. Offered first everywhere models are listed.
@@ -113,6 +130,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         cache_read_cost_per_token=0.000_000_3,  # $0.30/M (0.1x input)
         supports_thinking=True,
         ttft_hint_ms=1500,  # Anthropic via OpenRouter — fast
+        accepts_images=True,
     ),
     # Ox Alpha - stealth model on OpenRouter. Specs read from the live
     # OpenRouter catalog on 2026-08-21, not estimated: context 1,048,576,
@@ -200,6 +218,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_000_8,  # $0.80/M
         output_cost_per_token=0.000_002_56,  # $2.56/M
         ttft_hint_ms=4000,  # Variable via OpenRouter
+        accepts_images=True,
         # Superseded by GLM 5.3 Flash: 5x the context, cheaper output, native
         # thinking. Kept resolvable for manifests that still name it.
         status="deprecated",
@@ -267,6 +286,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         cache_read_cost_per_token=0.000_000_03,  # $0.03/M
         supports_thinking=True,
         ttft_hint_ms=900,
+        accepts_images=True,
     ),
     # DeepSeek V4 Flash "latest" floating alias via OpenRouter. The leading
     # "~" is part of the id, not a typo — OpenRouter's convention for an alias
@@ -343,6 +363,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_000_15,  # $0.15/M
         output_cost_per_token=0.000_000_6,  # $0.60/M
         ttft_hint_ms=1000,  # Google direct — fast
+        accepts_images=True,
         # Direct-Gemini path. Measured unreliable for tool use on this
         # instance (model fleet notes, 2026-04-25) and two generations behind.
         status="deprecated",
@@ -373,6 +394,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         cache_read_cost_per_token=0.000_000_5,  # $0.50/M (0.1x input)
         supports_thinking=True,
         ttft_hint_ms=3000,
+        accepts_images=True,
     ),
     # Gemini 3.1 Pro Preview via OpenRouter
     "openrouter/google/gemini-3.1-pro-preview": ModelLimits(
@@ -382,6 +404,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_002,  # $2/M
         output_cost_per_token=0.000_012,  # $12/M
         ttft_hint_ms=2500,
+        accepts_images=True,
     ),
     # GPT-5.4 via OpenRouter
     "openrouter/openai/gpt-5.4": ModelLimits(
@@ -391,6 +414,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_002_5,  # $2.50/M
         output_cost_per_token=0.000_015,  # $15/M
         ttft_hint_ms=2000,
+        accepts_images=True,
         status="legacy",
         replaced_by="openrouter/anthropic/claude-opus-4.7",
     ),
@@ -402,6 +426,7 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         input_cost_per_token=0.000_001_25,  # $1.25/M
         output_cost_per_token=0.000_01,  # $10/M
         ttft_hint_ms=2500,  # Google direct — moderate
+        accepts_images=True,
         # Same direct-Gemini path, same generation gap.
         status="deprecated",
         replaced_by="openrouter/google/gemini-3.1-pro-preview",
@@ -697,6 +722,101 @@ def model_status(model_id: str) -> str:
         if limits:
             return limits.status
     return "current"
+
+
+# ─── Vision capability ───────────────────────────────────────────────
+#
+# Three states, not two. "We have never established anything about this model"
+# is a different fact from "this model cannot see", and collapsing them is how
+# `view_image` would start withholding pictures from a multimodal model that
+# simply is not in the curated table. `unknown` keeps today's behaviour (send
+# the blocks, say so) while `rejects` switches to the local description.
+
+#: Models this process has WATCHED a provider refuse an image for, canonicalised
+#: so the request form and the response form are the same key. Process-local and
+#: deliberately not persisted: a provider adding vision to a model should not be
+#: overridden by something this box learned last month. It only ever grows
+#: within one process, and it only ever revokes.
+_image_rejectors: set[str] = set()
+
+#: The model the current task is actually dialling, so a tool handler can ask
+#: what its OWN caller can see. A ContextVar for the same reason the watchdog
+#: is one: one LLM client serves every concurrent run, and an instance attribute
+#: would hand one run's model to another run's tool call.
+_active_model: ContextVar[str] = ContextVar("robothor_active_model", default="")
+
+
+def note_active_model(model_id: str) -> Any:
+    """Record which model this task is calling. Returns a reset token."""
+    return _active_model.set(str(model_id or ""))
+
+
+def reset_active_model(token: Any) -> None:
+    """Undo a :func:`note_active_model`, ignoring a token from another context."""
+    with contextlib.suppress(ValueError, LookupError):
+        _active_model.reset(token)
+
+
+def active_model() -> str:
+    """The model this task is dialling, or ``""`` when nothing has said."""
+    return _active_model.get()
+
+
+def note_image_rejection(model_id: str) -> None:
+    """Remember that *model_id* refused an image, for the life of this process.
+
+    Called from ``llm_client._call_with_image_fallback`` at the one moment the
+    platform ever learns this for certain: a provider answered a real request
+    with a real refusal. Revocation only — there is no counterpart that grants
+    the capability, because "the call did not fail" is not evidence that the
+    model looked at anything.
+    """
+    canonical = canonical_model_id(model_id)
+    if canonical:
+        _image_rejectors.add(canonical)
+
+
+def reset_image_discoveries() -> None:
+    """Forget every runtime rejection. For tests; nothing in production calls it."""
+    _image_rejectors.clear()
+
+
+def image_capability(model_id: str) -> str:
+    """``"accepts"``, ``"rejects"`` or ``"unknown"`` for *model_id*.
+
+    Discovery first (it is the only evidence from a real provider), then the
+    curated/plugin declaration, then ``unknown`` — which is what a model nobody
+    has described gets, so a working multimodal model that simply is not in the
+    table keeps being shown pictures.
+    """
+    if not str(model_id or "").strip():
+        return "unknown"
+    if canonical_model_id(model_id) in _image_rejectors:
+        return "rejects"
+    declared = _declared_limits(model_id)
+    if declared is None:
+        return "unknown"
+    return "accepts" if declared.accepts_images else "rejects"
+
+
+def _declared_limits(model_id: str) -> ModelLimits | None:
+    """The curated or plugin entry for *model_id*, or None if nobody declared one.
+
+    Deliberately NOT :func:`get_model_limits`: that one always answers, falling
+    back to litellm's catalog and then to a conservative default whose
+    ``accepts_images`` is False by construction. Reading a capability off that
+    default would report every unknown model as blind.
+    """
+    for candidate in _registry_candidates(model_id):
+        limits = _MODEL_REGISTRY.get(candidate)
+        if limits:
+            return limits
+    plugin_models = _plugin_model_limits()
+    for candidate in _registry_candidates(model_id):
+        limits = plugin_models.get(candidate)
+        if limits:
+            return limits
+    return None
 
 
 def supports_cache_control(model_id: str) -> bool:

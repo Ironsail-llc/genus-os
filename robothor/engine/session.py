@@ -540,7 +540,14 @@ class AgentSession:
                 mime = tool_output.get("image_mime") or "image/png"
                 w = tool_output.get("width", "?")
                 h = tool_output.get("height", "?")
+                # The caption is what SURVIVES a strip: `strip_image_blocks`
+                # keeps the text blocks and drops the picture, so naming the
+                # file here is the difference between an agent that knows which
+                # image it failed to see and one that is left holding "Image
+                # (40x30)".
                 caption = f"Image ({w}x{h})"
+                if tool_output.get("path"):
+                    caption += f" from {tool_output['path']}"
                 if tool_output.get("note"):
                     caption += f" — {tool_output['note']}"
                 self.messages.append(
