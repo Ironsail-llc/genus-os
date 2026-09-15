@@ -231,8 +231,14 @@ def cmd_plugin_sync(force: bool = False) -> int:
 
     try:
         result = sync(force=force)
-    except OSError as exc:  # pragma: no cover - sync reports these itself
-        print(f"genus plugin sync: {type(exc).__name__}: {exc}", file=sys.stderr)
+    except OSError as exc:
+        # Distinct from a refusal: --force cannot fix a read-only filesystem,
+        # so the message must not offer it.
+        print(
+            "genus plugin sync: could not write the lockfile "
+            f"({type(exc).__name__}: {exc.strerror or exc}).",
+            file=sys.stderr,
+        )
         return 2
     if result.path is None:
         print(
@@ -247,6 +253,22 @@ def cmd_plugin_sync(force: bool = False) -> int:
         # succeeded, least of all in a script.
         print(f"genus plugin sync: {result.refused}", file=sys.stderr)
         return 2
+
+    # What a forced rebuild cost, before the list of what it wrote — an
+    # operator who has just discarded their own decisions should read that
+    # first, and `added` where they expected `unchanged` is not a signal.
+    if result.discarded_rows or result.discarded_disables or result.rejected_copy:
+        print(f"--force discarded {result.discarded_rows} unreadable row(s).")
+        if result.discarded_disables:
+            print(
+                "  these were recorded DISABLED and are now enabled again: "
+                + ", ".join(result.discarded_disables)
+            )
+        if result.rejected_copy:
+            print(f"  the unreadable file was kept as {result.rejected_copy}")
+        else:
+            print("  the unreadable file could not be preserved")
+        print()
 
     print(f"recorded {len(result.recorded)} plugin distribution(s)")
     for row in result.recorded:

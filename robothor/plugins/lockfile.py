@@ -163,6 +163,14 @@ class Lockfile:
     #: first version re-derived it and told an operator whose lockfile path was
     #: a DIRECTORY that their JSON did not parse.
     problem: str = ""
+    #: The OSError the read hit, when the PATH itself could not be read — a
+    #: directory where the file should be, a permission denial. Kept apart from
+    #: ``malformed`` because the two call for different answers: unreadable
+    #: CONTENT is "re-run with --force", which fixes it; an unreadable PATH is
+    #: an I/O fault, which --force cannot touch. Folding them together made
+    #: both a 409 and left B15b unable to tell them apart. Reads still never
+    #: raise — this is carried, and the WRITING callers re-raise it.
+    io_error: OSError | None = None
 
     def row(self, name: str) -> LockRow | None:
         return self.rows.get(name)
@@ -205,6 +213,21 @@ class SyncResult:
     #: retried: it means the file holds intent this command cannot read and
     #: would therefore destroy.
     refused: str = ""
+    #: How many rows a ``--force`` rebuild could not read, and therefore threw
+    #: away. Reported rather than left to the ``added`` marks to imply: the
+    #: whole reason the refusal exists is that an `added` where an operator
+    #: expected `unchanged` is not a signal anybody reads.
+    discarded_rows: int = 0
+    #: Distributions whose recorded DISABLE was lost to a forced rebuild, as
+    #: far as the damaged file could be made out. Best effort by construction:
+    #: a row with no readable ``name`` cannot be attributed to anything, which
+    #: is why the rejected file is kept rather than merely described.
+    discarded_disables: tuple[str, ...] = ()
+    #: Filename (never a path) the unreadable file was preserved as before a
+    #: forced rebuild overwrote it. A destructive command that leaves no
+    #: evidence is one an operator cannot recover from; this is cheaper than
+    #: any amount of salvage cleverness and it is always exact.
+    rejected_copy: str = ""
 
     @property
     def ok(self) -> bool:
@@ -337,7 +360,7 @@ def read_lockfile(path: Path | None = None) -> Lockfile:
     except OSError as exc:
         problem = f"cannot be read ({type(exc).__name__})"
         _warn_once(resolved, problem)
-        return Lockfile(path=resolved, present=True, malformed=True, problem=problem)
+        return Lockfile(path=resolved, present=True, malformed=True, problem=problem, io_error=exc)
 
     try:
         data = json.loads(raw)
@@ -459,6 +482,48 @@ def entry_point_groups() -> dict[str, set[str]]:
     return groups
 
 
+#: Suffix appended to a lockfile a forced rebuild is about to overwrite.
+REJECTED_SUFFIX = ".rejected"
+
+
+def _salvage(raw: str) -> list[tuple[str, bool]]:
+    """``(name, enabled)`` pairs recoverable from damaged lockfile text.
+
+    Used ONLY to tell an operator what a ``--force`` rebuild is costing them;
+    nothing salvaged here is ever written. ``raw_decode`` scanned from each
+    ``{`` recovers whole objects out of a torn write — the realistic corruption
+    — and quietly recovers nothing from text that is damaged beyond that, which
+    is why the rejected file is preserved as well.
+    """
+    decoder = json.JSONDecoder()
+    found: list[tuple[str, bool]] = []
+    index = 0
+    while True:
+        start = raw.find("{", index)
+        if start < 0:
+            return found
+        try:
+            obj, end = decoder.raw_decode(raw, start)
+        except ValueError:
+            index = start + 1
+            continue
+        index = end
+        if isinstance(obj, dict) and isinstance(obj.get("name"), str) and "enabled" in obj:
+            found.append((str(obj["name"]), obj["enabled"] is not False))
+
+
+def _preserve_rejected(path: Path) -> str:
+    """Keep the file a forced rebuild is about to destroy. Returns its name."""
+    target = path.with_name(path.name + REJECTED_SUFFIX)
+    try:
+        target.write_bytes(path.read_bytes())
+        target.chmod(0o600)
+    except OSError as exc:  # noqa: BLE001 - losing the copy must not fail the sync
+        logger.warning("Could not preserve the rejected lockfile (%s)", type(exc).__name__)
+        return ""
+    return target.name
+
+
 def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
     """Record every installed plugin distribution, keeping recorded intent.
 
@@ -483,6 +548,12 @@ def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
         return SyncResult(path=None, refused="no lockfile path resolves")
 
     lock = read_lockfile(resolved)
+    if lock.io_error is not None:
+        # The path itself will not read — a directory, a permission denial. It
+        # will not write either, and --force cannot change that, so this is an
+        # I/O fault rather than a refusal. Raised so the route answers 503 and
+        # the CLI exits 2 with a sentence that does not offer --force.
+        raise lock.io_error
     if not force and lock.present and not lock.trustworthy:
         return SyncResult(
             path=resolved,
@@ -493,6 +564,26 @@ def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
                 "from what is installed and accept losing those decisions."
             ),
         )
+    # A forced rebuild over a file this cannot read: say what it costs, and
+    # keep the evidence. `discarded_disables` is what the damaged text still
+    # gave up minus what is being carried forward — a row that parsed is not
+    # discarded, so forcing past ONE bad row does not report the readable
+    # disables beside it as lost.
+    discarded_rows = 0
+    discarded_disables: tuple[str, ...] = ()
+    rejected_copy = ""
+    if force and lock.present and not lock.trustworthy:
+        try:
+            raw = resolved.read_text(encoding="utf-8")
+        except OSError:
+            raw = ""
+        salvaged = _salvage(raw)
+        discarded_rows = len(lock.bad_rows) or max(len(salvaged) - len(lock.rows), 0)
+        discarded_disables = tuple(
+            sorted(name for name, enabled in salvaged if not enabled and name not in lock.rows)
+        )
+        rejected_copy = _preserve_rejected(resolved)
+
     existing = lock.rows
     groups = entry_point_groups()
     now = datetime.now(UTC).isoformat(timespec="seconds")
@@ -525,20 +616,23 @@ def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
     removed = sorted(set(existing) - set(rows))
     try:
         write_lockfile(rows, resolved)
-    except OSError as exc:
-        # A path that is a directory, a read-only filesystem, a full disk. The
-        # caller turns this into exit 2 or a 5xx with a sentence; a traceback
-        # out of `genus plugin sync` helps nobody.
-        return SyncResult(
-            path=resolved,
-            refused=f"could not write the lockfile ({type(exc).__name__}: {exc.strerror or exc})",
-        )
+    except OSError:
+        # A path that is a directory, a read-only filesystem, a full disk.
+        # RAISED rather than folded into `refused`: a caller has to be able to
+        # tell "your lockfile is unreadable, re-run with --force" — which
+        # --force fixes — from "the disk will not take a write", which it
+        # cannot. Both came back as one 409 and B15b could not distinguish
+        # them. The CLI catches it and exits 2 with a sentence.
+        raise
     return SyncResult(
         path=resolved,
         recorded=tuple(rows[name] for name in sorted(rows)),
         added=tuple(added),
         updated=tuple(updated),
         removed=tuple(removed),
+        discarded_rows=discarded_rows,
+        discarded_disables=discarded_disables,
+        rejected_copy=rejected_copy,
     )
 
 
@@ -554,6 +648,11 @@ def set_enabled(name: str, enabled: bool, path: Path | None = None) -> LockRow |
     if resolved is None:
         return None
     lock = read_lockfile(resolved)
+    if lock.io_error is not None:
+        # Not a 404. "No lockfile row for that plugin" would be a lie about
+        # WHY, and it points the operator at `genus plugin sync` — which is
+        # about to hit the same unreadable path.
+        raise lock.io_error
     row = lock.rows.get(name)
     if row is None:
         return None
@@ -575,7 +674,7 @@ def set_enabled(name: str, enabled: bool, path: Path | None = None) -> LockRow |
     return updated
 
 
-def refusal_for(dist: Any, lock: Lockfile, digests: dict[int, str] | None = None) -> str | None:
+def refusal_for(dist: Any, lock: Lockfile, digests: dict[str, str] | None = None) -> str | None:
     """Why this distribution must not be imported, or None.
 
     The loader's gate, kept here so that the rule and the record it reads have
@@ -583,9 +682,12 @@ def refusal_for(dist: Any, lock: Lockfile, digests: dict[int, str] | None = None
     its manifest has also drifted, because the operator's own decision is the
     more useful answer and re-syncing would not change it.
 
-    ``digests`` is an optional per-load memo keyed on the distribution object,
-    so a package publishing into five groups hashes its manifest once rather
-    than five times.
+    ``digests`` is an optional per-load memo keyed on the distribution NAME, so
+    a package publishing into five groups hashes its manifest once rather than
+    five times. Not on ``id(dist)``: ``importlib.metadata`` builds a fresh
+    ``Distribution`` object for every group query, so the object identity never
+    repeats and that memo had a 0% hit rate while looking like an optimisation.
+    A recycled id would also have handed back another distribution's digest.
     """
     if not lock.usable:
         return None
@@ -598,10 +700,11 @@ def refusal_for(dist: Any, lock: Lockfile, digests: dict[int, str] | None = None
     if digests is None:
         digest = manifest_digest(dist)
     else:
-        key = id(dist)
-        if key not in digests:
-            digests[key] = manifest_digest(dist)
-        digest = digests[key]
+        # `name` is non-empty here — a nameless distribution has no row and
+        # returned above.
+        if name not in digests:
+            digests[name] = manifest_digest(dist)
+        digest = digests[name]
     if row.manifest_sha256 != digest:
         return DRIFT_REASON
     return None

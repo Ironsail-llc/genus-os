@@ -123,6 +123,27 @@ class HookContext:
 # ─── Registry ────────────────────────────────────────────────────────
 
 
+def builtin_hook_names() -> set[str]:
+    """Lifecycle handler names the ENGINE owns, from the live registry.
+
+    Read by ``loader.builtin_names("genus.hooks")`` so that the operator
+    surfaces refuse a plugin claiming ``channel_bus.surface`` for the same
+    reason :func:`register_plugin_hooks` does. They passed an empty set, so a
+    package intercepting the engine's own channel plumbing was refused at boot
+    and reported as ``loaded`` by the listing, the reload response and the
+    ``required`` doctor check.
+
+    Empty when no registry has been initialised — a CLI process has none, and
+    "the engine owns nothing here" is the honest answer rather than a guess.
+    Unlike every other built-in source, these are registered DURING daemon
+    boot, which is why the loader does not cache this group.
+    """
+    registry = get_hook_registry()
+    if registry is None:
+        return set()
+    return set(getattr(registry, "_python_handlers", {}))
+
+
 def register_plugin_hooks(registry: Any) -> int:
     """Register lifecycle handlers contributed by installed plugins.
 

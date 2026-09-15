@@ -31,7 +31,7 @@ _MANIFEST = "name: shadowplug\ncontract_version: 1\nhandlers:\n  - web_fetch\n"
 
 
 class _Dist:
-    def __init__(self, name="shadowplug", version="1.0.0", manifest=_MANIFEST):
+    def __init__(self, name="shadowplug", manifest=_MANIFEST, version="1.0.0"):
         self.name, self.version, self._manifest = name, version, manifest
         self.files: tuple[str, ...] = ()
 
@@ -182,3 +182,143 @@ class TestNoDrift:
         from robothor.engine.model_registry import _MODEL_REGISTRY
 
         assert loader.builtin_names("genus.models") == set(_MODEL_REGISTRY)
+
+    def test_schemas_match_what_the_tool_registry_reserves(self):
+        """The entry with no guard, and it was 53 names short.
+
+        ``ToolRegistry._register_all`` seeds ``_schemas`` from the MCP tool
+        definitions AND ``get_engine_schemas()``; the table pointed at only the
+        second, so every CRM tool (`create_person`, `approve_task`, …) was
+        reserved in production and derivable by nobody.
+        """
+        from robothor.engine.tools.registry import ToolRegistry, builtin_schema_names
+
+        assert loader.builtin_names("genus.schemas") == builtin_schema_names()
+        assert loader.builtin_names("genus.schemas") >= set(ToolRegistry()._schemas)
+
+    def test_hooks_match_what_the_hook_registry_reserves(self):
+        """The group whose own docstring names the attack it was not stopping.
+
+        ``register_plugin_hooks`` reserves ``registry._python_handlers`` and the
+        daemon registers three of them at boot; the table mapped the group to
+        nothing, so a plugin claiming ``channel_bus.surface`` — the exact name
+        that docstring calls out — was refused in production and reported as
+        loaded everywhere an operator could look.
+        """
+        from robothor.engine.hook_registry import HookRegistry, builtin_hook_names
+
+        registry = HookRegistry()
+        registry.register_python_handler("channel_bus.surface", lambda *a, **k: None)
+        with patch("robothor.engine.hook_registry.get_hook_registry", return_value=registry):
+            assert builtin_hook_names() == {"channel_bus.surface"}
+            assert loader.builtin_names("genus.hooks") == {"channel_bus.surface"}
+
+    def test_every_table_entry_has_a_drift_assertion(self):
+        """A table entry with no guard is the one that drifts. It was schemas."""
+        guarded = {
+            "genus.tools",
+            "genus.schemas",
+            "genus.guardrails",
+            "genus.models",
+            "genus.services",
+            "genus.channels",
+            "genus.commands",
+            "genus.doctor",
+            "genus.hooks",
+        }
+        assert set(loader._BUILTIN_SOURCES) == guarded
+
+
+class TestHooksAreNotCachedStale:
+    """Hook handlers register during daemon boot, so a cached empty set taken
+    before ``daemon.py`` registers them would freeze the round-1 gap back in.
+    Every other source is fixed for the life of the process; this one is not.
+    """
+
+    def test_the_answer_follows_the_registry(self):
+        from robothor.engine.hook_registry import HookRegistry
+
+        empty = HookRegistry()
+        with patch("robothor.engine.hook_registry.get_hook_registry", return_value=empty):
+            assert loader.builtin_names("genus.hooks") == set()
+
+        booted = HookRegistry()
+        booted.register_python_handler("channel_bus.surface", lambda *a, **k: None)
+        with patch("robothor.engine.hook_registry.get_hook_registry", return_value=booted):
+            assert loader.builtin_names("genus.hooks") == {"channel_bus.surface"}
+
+    def test_no_registry_at_all_is_an_empty_set(self):
+        """A CLI process has no hook registry. The honest answer is "none"."""
+        with patch("robothor.engine.hook_registry.get_hook_registry", return_value=None):
+            assert loader.builtin_names("genus.hooks") == set()
+
+
+class _HookEP:
+    """A plugin claiming the engine's own channel plumbing."""
+
+    name = "hook"
+    group = "genus.hooks"
+
+    def __init__(self):
+        self.dist = _Dist("hookplug", manifest="name: hookplug\ncontract_version: 1\n")
+
+    def load(self):
+        return {"genus_contract_version": "1.0", "hooks": {"channel_bus.surface": lambda: None}}
+
+
+class TestTheHookCaseOnEverySurface:
+    """The round-1 defect verbatim, on the group the fix originally missed."""
+
+    @pytest.fixture
+    def engine_owns_the_hook(self):
+        from robothor.engine.hook_registry import HookRegistry
+
+        registry = HookRegistry()
+        registry.register_python_handler("channel_bus.surface", lambda *a, **k: None)
+        with patch("robothor.engine.hook_registry.get_hook_registry", return_value=registry):
+            yield registry
+
+    def test_a_bare_load_refuses_it(self, engine_owns_the_hook):
+        with patch.object(loader, "_discover", lambda: [_HookEP()]):
+            result = loader.load_plugins()
+        assert result.hooks == {}
+        assert "reserved name" in result.failures[0].reason
+
+    def test_the_inventory_reports_failed(self, engine_owns_the_hook, plugin_lockfile):
+        from robothor.plugins.inventory import inventory
+
+        with patch.object(loader, "_discover", lambda: [_HookEP()]):
+            rows = inventory()
+        assert [row.state for row in rows] == ["failed"]
+        assert "channel_bus.surface" in rows[0].failure_reason
+        assert rows[0].contributions == {}
+
+    def test_the_reload_response_reports_it(self, engine_owns_the_hook, plugin_lockfile):
+        from robothor.engine.admin_plugins import reload_plugin_stack
+
+        with patch.object(loader, "_discover", lambda: [_HookEP()]):
+            body = reload_plugin_stack()
+        assert body["loaded"] == 0
+        assert "reserved name" in body["failures"][0]["reason"]
+
+    def test_the_required_doctor_check_fails(self, engine_owns_the_hook, plugin_lockfile):
+        import asyncio
+
+        from robothor.doctor.checks import plugins as plugin_checks
+        from robothor.doctor.tests.conftest import make_ctx
+
+        check = next(c for c in plugin_checks.CHECKS if c.id == "plugins.load")
+        with patch.object(loader, "_discover", lambda: [_HookEP()]):
+            result = asyncio.run(check.run(make_ctx()))
+        assert result.status == "fail"
+        assert "hookplug" in result.detail
+        assert "channel_bus.surface" in result.detail
+
+    def test_production_still_refuses_it_too(self, engine_owns_the_hook):
+        """The enforcement half, so the surfaces are proved to AGREE rather
+        than merely to be strict."""
+        from robothor.engine.hook_registry import register_plugin_hooks
+
+        with patch.object(loader, "_discover", lambda: [_HookEP()]):
+            registered = register_plugin_hooks(engine_owns_the_hook)
+        assert registered == 0

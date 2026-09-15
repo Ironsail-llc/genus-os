@@ -219,13 +219,52 @@ class TestSyncRoute:
         assert str(Path.home()) not in raw
         assert str(plugin_lockfile) not in raw
 
-    def test_an_unwritable_path_is_a_5xx_not_a_traceback(self, client, tmp_path, monkeypatch):
+    def test_an_unwritable_path_is_503_not_409(self, client, tmp_path, monkeypatch):
+        """A read-only filesystem is not "re-run with --force".
+
+        Both used to come back 409, so a caller could not tell "your lockfile
+        has unreadable rows, force it" — which `--force` fixes — from "the
+        disk will not take a write", which it cannot. The status is the
+        contract; an accepting-any-5xx assertion pinned neither.
+        """
         occupied = tmp_path / "occupied.lock"
         occupied.mkdir()
         monkeypatch.setenv("ROBOTHOR_PLUGIN_LOCKFILE", str(occupied))
         with patch.object(loader, "_discover", lambda: [_EP()]):
             response = client.post("/api/admin/plugins/sync")
-        assert response.status_code in (409, 500, 503)
+        assert response.status_code == 503
+        assert "IsADirectoryError" in response.text
+        assert "--force" not in response.text, "force cannot fix a read-only path"
+
+    def test_the_two_failures_have_different_statuses(
+        self, client, one_plugin, plugin_lockfile, tmp_path, monkeypatch
+    ):
+        """409 and 503 must not both mean "sync did not happen"."""
+        lockfile.sync()
+        plugin_lockfile.write_text("{{{", encoding="utf-8")
+        unreadable = client.post("/api/admin/plugins/sync")
+        assert unreadable.status_code == 409
+        assert "--force" in unreadable.json()["detail"]
+
+        from robothor.settings import reset_settings
+
+        occupied = tmp_path / "occupied.lock"
+        occupied.mkdir()
+        monkeypatch.setenv("ROBOTHOR_PLUGIN_LOCKFILE", str(occupied))
+        reset_settings()  # the path is a cached setting; this test moves it
+        assert client.post("/api/admin/plugins/sync").status_code == 503
+
+    def test_disable_on_an_unreadable_path_is_503_not_404(
+        self, client, one_plugin, tmp_path, monkeypatch
+    ):
+        """404 would be a lie about WHY, and would send the operator to `sync`
+        — which is about to hit the same unreadable path."""
+        target = tmp_path / "ro"
+        target.mkdir()
+        (target / "plugins.lock").mkdir()
+        monkeypatch.setenv("ROBOTHOR_PLUGIN_LOCKFILE", str(target / "plugins.lock"))
+        response = client.post("/api/admin/plugins/acme-tools/disable")
+        assert response.status_code == 503
         assert "IsADirectoryError" in response.text
 
     def test_the_scope_is_engine_control(self):

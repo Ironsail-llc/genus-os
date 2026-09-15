@@ -173,13 +173,92 @@ class TestSyncRefuses:
         raw = json.loads(plugin_lockfile.read_text(encoding="utf-8"))
         assert raw["plugins"] == [[1]], "sync rewrote a file it could not read"
 
-    def test_force_rebuilds_and_says_nothing_was_carried(self, plugin_lockfile, one_plugin):
+    def test_force_rebuilds_from_what_is_installed(self, plugin_lockfile, one_plugin):
         lockfile.sync()
         plugin_lockfile.write_text("{{{", encoding="utf-8")
         result = lockfile.sync(force=True)
         assert result.ok is True
         assert result.added == ("acme-tools",)
         assert lockfile.read_lockfile().row("acme-tools").enabled is True
+
+    def test_force_names_the_disable_it_discarded(self, plugin_lockfile, one_plugin):
+        """``--force`` must NAME the cost, not leave `added` to imply it.
+
+        The corruption here is a torn write — the realistic one, and the one a
+        best-effort salvage can still read names out of.
+        """
+        lockfile.sync()
+        lockfile.set_enabled("acme-tools", False)
+        intact = plugin_lockfile.read_text(encoding="utf-8")
+        plugin_lockfile.write_text(intact[: intact.rindex("]")], encoding="utf-8")
+        assert lockfile.read_lockfile().malformed is True, "the fixture must really be broken"
+
+        result = lockfile.sync(force=True)
+        assert result.discarded_rows == 1
+        assert result.discarded_disables == ("acme-tools",)
+        assert lockfile.read_lockfile().row("acme-tools").enabled is True
+
+    def test_force_keeps_the_file_it_overwrote(self, plugin_lockfile, one_plugin):
+        """A destructive command that leaves no evidence is unrecoverable.
+
+        Salvage is best-effort by construction — text damaged past a torn write
+        gives up nothing — so the rejected bytes are preserved rather than
+        merely described.
+        """
+        lockfile.sync()
+        lockfile.set_enabled("acme-tools", False)
+        plugin_lockfile.write_text("{{{ hopeless", encoding="utf-8")
+
+        result = lockfile.sync(force=True)
+        assert result.rejected_copy == "plugins.lock.rejected"
+        kept = plugin_lockfile.with_name(result.rejected_copy)
+        assert kept.read_text(encoding="utf-8") == "{{{ hopeless"
+        assert kept.stat().st_mode & 0o077 == 0
+
+    def test_force_over_one_bad_row_keeps_the_readable_disables(self, plugin_lockfile):
+        eps = [
+            _EP("probe", dist=_Dist("acme-tools"), tool="probe"),
+            _EP("other", dist=_Dist("other-tools"), tool="other_probe"),
+        ]
+        with patch.object(loader, "_discover", lambda: eps):
+            lockfile.sync()
+            lockfile.set_enabled("acme-tools", False)
+            lockfile.set_enabled("other-tools", False)
+            _break_one_row(
+                plugin_lockfile,
+                lambda row: (
+                    {k: v for k, v in row.items() if k != "name"}
+                    if row["name"] == "other-tools"
+                    else row
+                ),
+            )
+            result = lockfile.sync(force=True)
+
+        assert result.discarded_rows == 1
+        # Only the unreadable row's decision is lost; the readable one rides.
+        assert result.discarded_disables == ()
+        assert lockfile.read_lockfile().row("acme-tools").enabled is False
+
+    def test_a_clean_force_discards_nothing(self, plugin_lockfile, one_plugin):
+        lockfile.sync()
+        result = lockfile.sync(force=True)
+        assert result.discarded_rows == 0
+        assert result.discarded_disables == ()
+
+    def test_the_cli_prints_what_force_discarded(self, plugin_lockfile, one_plugin, capsys):
+        import argparse
+
+        from robothor.cli.plugins import cmd_plugin
+
+        lockfile.sync()
+        lockfile.set_enabled("acme-tools", False)
+        plugin_lockfile.write_text("{{{", encoding="utf-8")
+        capsys.readouterr()
+
+        assert cmd_plugin(argparse.Namespace(plugin_command="sync", force=True)) == 0
+        out = capsys.readouterr().out
+        assert "discarded" in out
+        assert "acme-tools" in out
 
     def test_a_healthy_file_syncs_without_force(self, plugin_lockfile, one_plugin):
         assert lockfile.sync().ok is True
@@ -214,16 +293,32 @@ class TestRelativePath:
 
 
 class TestUnwritablePath:
-    def test_sync_reports_rather_than_raising(self, tmp_path, monkeypatch, one_plugin):
+    def test_an_unreadable_path_raises_rather_than_refusing(
+        self, tmp_path, monkeypatch, one_plugin
+    ):
+        """An I/O fault is not a refusal.
+
+        Both used to come back as ``SyncResult.refused``, so a caller could not
+        tell "your lockfile is unreadable, re-run with --force" — which
+        ``--force`` fixes — from "this path will not read or write", which it
+        cannot. The route turns the raise into 503 and the refusal into 409.
+        """
         occupied = tmp_path / "plugins.lock"
         occupied.mkdir()
         monkeypatch.setenv("ROBOTHOR_PLUGIN_LOCKFILE", str(occupied))
-        result = lockfile.sync()
-        assert result.ok is False
-        # Names what is actually wrong. The first version re-derived the
-        # problem at the refusal and told an operator whose path was a
-        # DIRECTORY that their JSON did not parse.
-        assert "IsADirectoryError" in result.refused
+        with pytest.raises(OSError, match="directory"):
+            lockfile.sync()
+
+    def test_the_read_path_still_never_raises(self, tmp_path, monkeypatch):
+        """Only the WRITING callers re-raise. Boot must still survive this."""
+        occupied = tmp_path / "plugins.lock"
+        occupied.mkdir()
+        monkeypatch.setenv("ROBOTHOR_PLUGIN_LOCKFILE", str(occupied))
+        lock = lockfile.read_lockfile()
+        assert lock.malformed is True
+        assert isinstance(lock.io_error, OSError)
+        with patch.object(loader, "_discover", lambda: [_EP()]):
+            assert "probe" in loader.load_plugins().tools
 
     def test_the_cli_exits_2_rather_than_printing_a_traceback(
         self, tmp_path, monkeypatch, one_plugin, capsys
@@ -251,6 +346,44 @@ class TestUnwritablePath:
         code = cmd_plugin(argparse.Namespace(plugin_command="disable", name="acme-tools"))
         assert code == 2
         assert "acme-tools" in capsys.readouterr().err
+
+
+# ── R2: the per-load digest memo actually memoizes ─────────────────────
+
+
+class TestTheDigestMemo:
+    """``importlib.metadata`` builds a NEW ``Distribution`` per group query.
+
+    The memo was keyed on ``id(dist)``, so the three entry points of one
+    distribution never shared a key and the hit rate was 0% — the optimisation
+    was inert while the report listed it as taken. ``id()`` is also the wrong
+    key on correctness grounds: a recycled id hands back another
+    distribution's digest.
+    """
+
+    def test_one_digest_per_distribution_not_per_entry_point(self, plugin_lockfile):
+        calls: list[str] = []
+        real = lockfile.manifest_digest
+
+        def _count(dist):
+            calls.append(lockfile.dist_name(dist))
+            return real(dist)
+
+        # A distinct Distribution object per entry point, exactly as the
+        # metadata layer hands them out.
+        eps = [
+            _EP("probe", "genus.tools", dist=_Dist("acme-tools")),
+            _EP("probe", "genus.schemas", dist=_Dist("acme-tools")),
+            _EP("probe", "genus.jobs", dist=_Dist("acme-tools")),
+        ]
+        assert len({id(ep.dist) for ep in eps}) == 3, "the fixture must not share objects"
+
+        with patch.object(loader, "_discover", lambda: eps):
+            lockfile.sync()
+            with patch.object(lockfile, "manifest_digest", _count):
+                loader.load_plugins()
+
+        assert calls == ["acme-tools"], calls
 
 
 # ── F5: no test reads the operator's real lockfile ─────────────────────

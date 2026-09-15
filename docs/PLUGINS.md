@@ -434,8 +434,16 @@ Two different cases, and they are handled differently on purpose:
 
 In both cases `genus plugin sync` **refuses**, because it carries `enabled`
 forward from what it reads and a file it cannot read is one whose disables it
-would erase. `--force` rebuilds from what is installed and accepts that loss;
-the doctor says so rather than sending you to a plain `sync`.
+would erase. `--force` rebuilds from what is installed and accepts that loss —
+it reports how many rows it could not read, names any disable it could still
+make out, and keeps the old bytes as `plugins.lock.rejected` so nothing is
+destroyed without a copy. The doctor points at `--force` and what it costs
+rather than at a plain `sync`.
+
+A third case is not a lockfile problem at all: if the *path* cannot be read (it
+is a directory, or permissions deny it), `sync`, `enable` and `disable` report
+an I/O error — exit 2 on the CLI, **503** over HTTP — rather than offering
+`--force`, which cannot fix a filesystem.
 
 ### The doctor
 
@@ -459,7 +467,7 @@ acts with identifiers only.
 | route (bridge) | engine | what it does |
 |---|---|---|
 | `GET /api/plugins` | `GET /api/admin/plugins` | generation, lockfile state, one row per distribution |
-| `POST /api/plugins/sync` | `POST /api/admin/plugins/sync` | record what is installed; 409 when the existing file cannot be read (`--force` is CLI-only) |
+| `POST /api/plugins/sync` | `POST /api/admin/plugins/sync` | record what is installed; **409** when the existing file's contents cannot be read (`--force` is CLI-only), **503** when the path itself cannot be written |
 | `POST /api/plugins/{name}/enable` | `POST /api/admin/plugins/{name}/enable` | flip the row; 404 if unrecorded; does **not** reload |
 | `POST /api/plugins/{name}/disable` | `POST /api/admin/plugins/{name}/disable` | as above |
 | `POST /api/plugins/reload` | `POST /api/admin/plugins/reload` | runs the SIGHUP body; returns `{generation, loaded, failures}` |

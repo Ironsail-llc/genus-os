@@ -174,24 +174,42 @@ def reload_plugins() -> int:
 #: `hardcoded-names-drift` documents, and `test_plugin_reserved_names.py`
 #: asserts each entry still equals what its caller passes.
 #:
-#: Groups absent from this table own no built-in names — ``genus.hooks``,
-#: ``genus.jobs``, ``genus.sandboxes`` and ``genus.memory`` are extension
-#: points with nothing in core to shadow.
+#: Groups absent from this table own no built-in names — ``genus.jobs``,
+#: ``genus.sandboxes`` and ``genus.memory`` are extension points with nothing
+#: in core to shadow, and all three of their production callers pass ``set()``.
+#: A registry that starts owning names in one of them must add itself here;
+#: ``test_plugin_reserved_names.py::TestNoDrift`` asserts one drift guard per
+#: entry, so a new entry without one fails.
 _BUILTIN_SOURCES: dict[str, str] = {
     "genus.tools": "robothor.engine.tools.dispatch:builtin_handlers",
-    "genus.schemas": "robothor.engine.tools.schemas:get_engine_schemas",
+    # NOT get_engine_schemas: `ToolRegistry` seeds `_schemas` from the MCP tool
+    # definitions as well, and reserves all of them. Pointing at half of that
+    # left 53 names (every CRM verb) reserved in production and derivable by
+    # nobody.
+    "genus.schemas": "robothor.engine.tools.registry:builtin_schema_names",
     "genus.guardrails": "robothor.engine.guardrails:_KNOWN_POLICIES",
     "genus.models": "robothor.engine.model_registry:_MODEL_REGISTRY",
     "genus.services": "robothor.engine.services:_RESERVED",
     "genus.channels": "robothor.engine.channels.registry:BUILTIN_CHANNELS",
     "genus.commands": "robothor.cli:builtin_command_names",
     "genus.doctor": "robothor.doctor.registry:builtin_ids",
+    "genus.hooks": "robothor.engine.hook_registry:builtin_hook_names",
 }
+
+#: Groups whose built-in names are NOT fixed for the life of the process, and
+#: so must never be cached.
+#:
+#: ``genus.hooks`` alone: every other source is a module constant or a table
+#: built at import, but lifecycle handlers are registered DURING daemon boot
+#: (``daemon.py`` registers three). A cached empty set taken before that — by a
+#: doctor check, a listing, anything that loads plugins early — would freeze in
+#: exactly the gap this table exists to close, and it would do so invisibly.
+_UNCACHEABLE = frozenset({"genus.hooks"})
 
 #: Resolved built-in names, per group. Built-ins do not change while the
 #: process runs — a plugin reload cannot add one — so this is a process cache
 #: rather than a generation-keyed one, and it keeps a listing from rebuilding
-#: the 3,400-line engine schema table on every request.
+#: the engine schema table on every request. See ``_UNCACHEABLE``.
 _builtin_cache: dict[str, set[str]] = {}
 
 #: Guards against a built-in source that itself reaches back into plugin
@@ -239,7 +257,8 @@ def builtin_names(group: str) -> set[str]:
     finally:
         _resolving.discard(group)
 
-    _builtin_cache[group] = names
+    if group not in _UNCACHEABLE:
+        _builtin_cache[group] = names
     return set(names)
 
 
@@ -298,7 +317,9 @@ def load_plugins(
     # One manifest digest per DISTRIBUTION, not per entry point. `genus-hostinfo`
     # publishes into three groups, so the un-memoized version read and hashed
     # its manifest three times per load on top of the three the parse costs.
-    digests: dict[int, str] = {}
+    # Keyed on the distribution NAME: the metadata layer hands out a fresh
+    # `Distribution` object per group query, so an id()-keyed memo never hit.
+    digests: dict[str, str] = {}
 
     for ep in eps:
         group = getattr(ep, "group", "")
