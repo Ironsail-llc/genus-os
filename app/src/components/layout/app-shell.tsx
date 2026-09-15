@@ -13,7 +13,7 @@ import { AgentsView } from "@/components/views/agents-view";
 import { MarketplaceView } from "@/components/views/marketplace-view";
 import { FleetView } from "@/components/views/fleet-view";
 import { RunsView } from "@/components/views/runs-view";
-import { WorkflowsView } from "@/components/views/workflows-view";
+import { AutomationsView } from "@/components/views/automations-view";
 import { HealthView } from "@/components/views/health-view";
 import { CanvasView } from "@/components/views/canvas-view";
 import { ComingSoonView } from "@/components/views/coming-soon-view";
@@ -220,7 +220,16 @@ export function AppShell() {
               <MarketplaceView visible={view === "marketplace"} />
               <FleetView visible={view === "fleet"} />
               <RunsView visible={view === "runs"} />
-              <WorkflowsView visible={view === "workflows"} />
+              {/*
+                Automations keeps the "workflows" view id: the sidebar, every
+                bookmark and the nav tests all address it by that name, and the
+                label has read "Automations" since B6. Only the contents changed.
+              */}
+              <AutomationsView
+                visible={view === "workflows"}
+                role={role}
+                roleLoading={roleLoading}
+              />
               <HealthView visible={view === "health"} />
               <SettingsView
                 visible={view === "settings"}

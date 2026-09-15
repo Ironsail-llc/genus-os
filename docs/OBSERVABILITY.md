@@ -107,6 +107,38 @@ strings marks *every* healthy run a fallback. A run that started on a fallback
 and later reached the primary counts as reached — the alert is about a primary
 that cannot be reached at all, not about one retry.
 
+## Run truth in the Helm — ran, delivered, completed
+
+The Helm's **Automations** view (`?v=workflows`) shows one card per scheduled
+agent and answers three independent questions about its last run, because
+collapsing them into one status pill is how a nightly briefing goes days
+without arriving behind a green badge:
+
+- **Ran** — `agent_runs.started_at` and `status`. "Never run" is its own answer
+  and the most actionable thing the view can say about a schedule just written.
+- **Delivered** — `delivery_status`, `delivered_at` and `delivery_channel`. A
+  run can finish and still fail to send. An agent whose `delivery.mode` is
+  `none` reads **none expected**, never as a failure: most worker agents are
+  deliberately silent and communicate through CRM tasks.
+- **Completed** — `verified_status` (the run verifier's verdict) falling back to
+  `outcome_assessment` (the agent's own rating). With neither, the cell reads
+  "not assessed" rather than borrowing the run status — a run that exited zero
+  is not a run that did the job.
+
+`GET /api/automations` composes each card from three sources: the manifest (what
+the automation is), `agent_schedules` (what the scheduler currently holds —
+`next_run_at`, `consecutive_errors`) and the newest `agent_runs` row (what
+happened). The same four run columns now come back from `GET /api/runs` and
+`GET /api/runs/{id}`, so the Runs view shows them too.
+
+**The circuit breaker.** The scheduler stops running an agent after
+`CIRCUIT_BREAKER_THRESHOLD` consecutive failures (`robothor/engine/scheduler.py`
+— the Helm imports that constant rather than copying it). A tripped automation
+carries a chip naming the count and the threshold, and **Reset breaker** — an
+audited `POST /api/automations/{id}/reset-breaker`, operator-only and
+tenant-scoped — zeroes `consecutive_errors` so it fires again on its next
+scheduled run. Before this the only way back was an `UPDATE` typed into psql.
+
 ## Notes
 
 - Export is best-effort (a 5s-timeout POST per run); a collector outage never

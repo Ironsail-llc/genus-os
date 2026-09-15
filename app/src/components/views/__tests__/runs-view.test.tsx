@@ -73,3 +73,53 @@ describe("RunsView states", () => {
     expect(await screen.findByTestId("runs-empty")).toBeTruthy();
   });
 });
+
+describe("RunsView run truth", () => {
+  const RUN = {
+    id: "r1",
+    agent_id: "main",
+    status: "completed",
+    delivery_status: "failed",
+    delivered_at: null,
+    delivery_channel: "telegram",
+    verified_status: "unverified_claims",
+  };
+
+  function mockRuns() {
+    vi.spyOn(global, "fetch").mockImplementation((url: string | URL | Request) =>
+      String(url).endsWith("/api/runs")
+        ? (Promise.resolve({ ok: true, json: async () => [RUN] } as Response) as never)
+        : (Promise.resolve({
+            ok: true,
+            json: async () => ({ run: RUN, steps: [], guardrail_events: [] }),
+          } as Response) as never)
+    );
+  }
+
+  it("says on the row whether the answer was delivered", async () => {
+    mockRuns();
+    render(<RunsView visible />);
+    // `completed` with a failed delivery is exactly the run the status pill
+    // alone reported as green.
+    const delivered = await screen.findByTestId("run-delivered-r1");
+    expect(delivered.textContent).toMatch(/failed/i);
+  });
+
+  it("shows the verification verdict on the detail", async () => {
+    mockRuns();
+    render(<RunsView visible />);
+    fireEvent.click(await screen.findByTestId("run-row-r1"));
+    const verified = await screen.findByTestId("run-verified-r1");
+    expect(verified.textContent).toMatch(/unverified claims/i);
+  });
+
+  it("a run with no delivery recorded does not claim one failed", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => [{ id: "r2", agent_id: "worker", status: "completed" }],
+    } as Response);
+    render(<RunsView visible />);
+    await screen.findByTestId("run-row-r2");
+    expect(screen.queryByTestId("run-delivered-r2")).toBeNull();
+  });
+});

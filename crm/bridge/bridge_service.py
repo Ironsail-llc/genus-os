@@ -42,6 +42,7 @@ from routers.approvals import router as approvals_router
 from routers.audit import router as audit_router
 from routers.auth import router as auth_router
 from routers.auth import sso_secret_present
+from routers.automations import router as automations_router
 from routers.channel_access import router as channel_access_router
 from routers.controls import router as controls_router
 from routers.conversations import router as conversations_router
@@ -175,6 +176,10 @@ app.include_router(fleet_router)
 app.include_router(runs_router)
 app.include_router(system_health_router)
 app.include_router(workflows_router)
+# Automations: the scheduled half of the fleet, joined to what its last run
+# actually did. Beside workflows because the Helm shows them on one screen --
+# a cron'd agent and a workflow are the same question to an operator.
+app.include_router(automations_router)
 # What is waiting on a person, of every kind. Beside workflows because a
 # workflow approval is one of the three things it answers; the other two are an
 # ask_user question (a row) and a permission escalation (a proxy to the engine,

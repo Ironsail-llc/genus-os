@@ -9,8 +9,28 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 const BRIDGE_URL = "/api/bridge";
 
+/** `delivery_status` values the delivery layer writes on success. */
+const DELIVERED = new Set(["delivered", "sent", "ok", "success"]);
+/** `verified_status` values that are not a finding — see run_verification.py. */
+const GOOD_VERDICT = new Set(["verified", "no_claims"]);
+
+/** A status token as a person reads it: `unverified_claims` → `unverified claims`. */
+function humanize(status: string): string {
+  return status.replace(/_/g, " ");
+}
+
+/*
+  `delivery_status`, `delivered_at`, `delivery_channel` and `verified_status`
+  arrive on every run row since the Automations work added them to the bridge's
+  `_RUN_COLUMNS`. They were being written by the engine and selected by nothing,
+  so a run that finished and failed to SEND read as plain green here. Shown
+  optionally: a run with no delivery recorded says nothing rather than claiming
+  a delivery failed.
+*/
 type Run = { id: string; agent_id?: string; status?: string; total_cost_usd?: number;
-  started_at?: string | null; duration_ms?: number | null };
+  started_at?: string | null; duration_ms?: number | null;
+  delivery_status?: string | null; delivered_at?: string | null;
+  delivery_channel?: string | null; verified_status?: string | null };
 type Step = { step_number: number; step_type?: string; tool_name?: string; error_message?: string | null };
 type GEvent = { guardrail_name?: string; action?: string; tool_name?: string; reason?: string };
 type Detail = { run: Run; steps: Step[]; guardrail_events: GEvent[] };
@@ -104,6 +124,13 @@ export function RunsView({ visible = true }: { visible?: boolean }) {
                 {typeof r.total_cost_usd === "number" && (
                   <span className="font-mono text-xs text-muted-foreground">${r.total_cost_usd.toFixed(4)}</span>
                 )}
+                {r.delivery_status && (
+                  <div data-testid={`run-delivered-${r.id}`}
+                    className={`text-xs ${DELIVERED.has(r.delivery_status) ? "text-muted-foreground" : "text-destructive"}`}>
+                    delivery {humanize(r.delivery_status)}
+                    {r.delivery_channel ? ` via ${r.delivery_channel}` : ""}
+                  </div>
+                )}
               </button>
             ))}
           </div>
@@ -113,6 +140,23 @@ export function RunsView({ visible = true }: { visible?: boolean }) {
             <div className="flex items-center gap-3">
               <span className="font-semibold text-foreground">{detail.run.agent_id}</span>
               <StatusBadge status={fromEngineStatus(detail.run.status)} label={detail.run.status ?? undefined} />
+            </div>
+            {/* Ran, delivered, verified — three facts, never collapsed into the
+                badge above. See views/automations-view.tsx for the long form. */}
+            <div className="mt-2 flex flex-wrap gap-3 text-xs">
+              {detail.run.delivery_status && (
+                <span data-testid={`run-delivered-detail-${detail.run.id}`}
+                  className={DELIVERED.has(detail.run.delivery_status) ? "text-muted-foreground" : "text-destructive"}>
+                  delivery {humanize(detail.run.delivery_status)}
+                  {detail.run.delivery_channel ? ` via ${detail.run.delivery_channel}` : ""}
+                </span>
+              )}
+              {detail.run.verified_status && (
+                <span data-testid={`run-verified-${detail.run.id}`}
+                  className={GOOD_VERDICT.has(detail.run.verified_status) ? "text-muted-foreground" : "text-warning"}>
+                  {humanize(detail.run.verified_status)}
+                </span>
+              )}
             </div>
             <ol className="mt-3 list-decimal pl-5 font-mono text-xs leading-6 text-muted-foreground">
               {detail.steps.map((s) => (
