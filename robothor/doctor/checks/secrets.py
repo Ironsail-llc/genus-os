@@ -16,8 +16,9 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from robothor.constants import DEFAULT_TENANT
 from robothor.doctor.model import Check, Result, fail, ok, skip
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -188,6 +189,70 @@ async def _bridge_sso(ctx: DoctorContext) -> Result:
     )
 
 
+async def _shadowed(ctx: DoctorContext) -> Result:
+    """No dead value in one store is hiding a live one in the other.
+
+    This is the 2026-09-15 incident as a check. An expired ``GH_TOKEN`` sat in
+    the process environment, loaded at boot from a root-owned SOPS file the
+    assistant cannot edit behind a unit it cannot restart. The assistant wrote
+    the replacement into the vault. The accessor read the environment first, so
+    every reader kept getting the dead one -- and nothing in the platform said
+    the two stores disagreed. The operator's only symptom was that the
+    assistant "could not" keep a token.
+
+    Application credentials now resolve vault-first, so the same disagreement
+    no longer breaks anything -- but it is still worth reporting, because a
+    stale copy in either store is a credential somebody will eventually read
+    and a rotation somebody will think they performed. It FAILS only for the
+    shape the old rule got wrong (an application credential in both stores,
+    disagreeing), because that is the one where an operator has a decision to
+    make; a bootstrap credential with a vault copy is a leftover from a
+    migration and is reported without failing. A check that failed on a tidy
+    box would be muted within a week.
+
+    Names and fingerprints only. Both fingerprints are given so an operator can
+    see which store is serving which value -- and can compare either against a
+    token they hold -- without reading a credential out of a diagnostic.
+    """
+
+    def _table() -> list[Any]:
+        from robothor.secrets.status import status_table
+
+        return status_table(tenant_id=ctx.settings.database.tenant_id or DEFAULT_TENANT)
+
+    try:
+        rows = await ctx.run_blocking(_table)
+    except Exception as exc:  # noqa: BLE001 - a diagnostic must not raise
+        return skip(f"the secret stores could not be compared ({type(exc).__name__})")
+
+    shadows = [row for row in rows if row.shadowed]
+    if not shadows:
+        return ok("no credential is configured differently in the environment and the vault")
+
+    lines = [
+        f"{row.name}: environment {row.env_fingerprint}, vault {row.vault_fingerprint} — "
+        f"readers are served the {row.source}"
+        + (" (bootstrap: environment-first by design)" if row.bootstrap else "")
+        for row in shadows
+    ]
+    application = [row for row in shadows if not row.bootstrap]
+    detail = (
+        f"{len(shadows)} credential(s) differ between the environment and the vault; "
+        + "; ".join(lines)
+    )
+    if not application:
+        return ok(
+            detail + ". All are bootstrap credentials, which are environment-first by design — "
+            "the vault rows are leftovers and can be deleted."
+        )
+    return fail(
+        detail + ". The vault wins for these, so the environment copies are dead weight that "
+        "would have shadowed the live value before this release: remove them from the "
+        "instance's secrets file, or delete the vault row if the environment holds the "
+        "one you meant to keep. `genus secrets status` shows the same table."
+    )
+
+
 CHECKS: tuple[Check, ...] = (
     Check(
         id="secrets.backend",
@@ -209,5 +274,12 @@ CHECKS: tuple[Check, ...] = (
         category="secrets",
         severity="required",
         run=_bridge_sso,
+    ),
+    Check(
+        id="secrets.shadowed",
+        title="No credential is configured differently in the two stores",
+        category="secrets",
+        severity="required",
+        run=_shadowed,
     ),
 )

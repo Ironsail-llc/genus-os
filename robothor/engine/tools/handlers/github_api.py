@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -28,7 +27,16 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 
 def _get_token() -> str:
-    return os.environ.get("GITHUB_TOKEN", "")
+    """The GitHub credential, vault first.
+
+    Through the accessor rather than the process environment, because the
+    environment is a snapshot of a root-owned file taken at boot: an expired
+    token in it used to shadow the replacement the assistant had just written
+    into the vault, and no amount of rotating fixed that without a restart.
+    """
+    from robothor.secrets import get_secret
+
+    return get_secret("GITHUB_TOKEN") or ""
 
 
 def _headers(token: str) -> dict[str, str]:

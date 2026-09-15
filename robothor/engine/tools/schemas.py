@@ -34,6 +34,108 @@ _ASK_USER_DESCRIPTION = (
 )
 
 
+#: The secrets vault's four tools, as one cluster.
+#:
+#: Lifted out of ``get_engine_schemas`` when ``vault_test`` was added: the
+#: size ratchet refuses growth, and the rule in that file is that a new tool
+#: pays for itself by extraction rather than by raising the cap. These four
+#: belong together anyway -- they are the operator-tier credential surface,
+#: gated as one in ``handlers/vault.py``.
+_VAULT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "vault_get": {
+        "type": "function",
+        "function": {
+            "name": "vault_get",
+            "description": (
+                "Report whether a credential is configured, WITHOUT returning its "
+                "value: {key, configured, fingerprint, source, updated_at}. The "
+                "fingerprint identifies which credential is stored (the same value "
+                "always fingerprints the same), so you can confirm a rotation landed "
+                "without ever reading the secret. `source` says which store a reader "
+                "would be served from. You never need the value: to USE a credential, "
+                "use the tool that holds it, or ask the operator to grant the name to "
+                "your manifest's `secrets:` list so your `exec` commands can read it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"key": {"type": "string", "description": "Secret key"}},
+                "required": ["key"],
+            },
+        },
+    },
+    "vault_set": {
+        "type": "function",
+        "function": {
+            "name": "vault_set",
+            "description": (
+                "Store a credential in the vault, encrypted. This is what you do "
+                "when the operator hands you a token: store it here, then prove it "
+                "with vault_test and answer with the fingerprint and the test "
+                "result. The vault beats the value the box booted with, and the "
+                "write takes effect immediately -- no restart. Never echo the value "
+                "back, and never write it to a memory block, a note or a file."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Secret key"},
+                    "value": {"type": "string", "description": "Secret value to encrypt and store"},
+                    "category": {
+                        "type": "string",
+                        "description": "Category: credential, oauth_token, api_key, certificate",
+                        "default": "credential",
+                    },
+                },
+                "required": ["key", "value"],
+            },
+        },
+    },
+    "vault_list": {
+        "type": "function",
+        "function": {
+            "name": "vault_list",
+            "description": "List secret keys in the vault (not values). Optionally filter by category.",
+            "parameters": {
+                "type": "object",
+                "properties": {"category": {"type": "string", "description": "Filter by category"}},
+            },
+        },
+    },
+    "vault_test": {
+        "type": "function",
+        "function": {
+            "name": "vault_test",
+            "description": (
+                "Prove a stored credential still works and say whose it is: "
+                "{ok, identity_hint, error_class}. The identity hint is the vendor's "
+                "own name for the account (a GitHub login, a Slack team) -- which is "
+                "what catches a token that authenticates as the WRONG account, the "
+                "failure a bare ok/failed hides. Returns no value and no vendor "
+                "message. Knows GitHub, OpenRouter, OpenAI, Anthropic, Brave, Slack, "
+                "Cloudflare, Twilio and Jira; other keys answer unknown_kind."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"key": {"type": "string", "description": "Vault key to test"}},
+                "required": ["key"],
+            },
+        },
+    },
+    "vault_delete": {
+        "type": "function",
+        "function": {
+            "name": "vault_delete",
+            "description": "Delete a secret from the vault.",
+            "parameters": {
+                "type": "object",
+                "properties": {"key": {"type": "string", "description": "Secret key to delete"}},
+                "required": ["key"],
+            },
+        },
+    },
+}
+
+
 #: Every tool whose job is to involve a person. Lifted out of
 #: ``get_engine_schemas`` as a cluster rather than added to it: that function is
 #: pinned by the function-size ratchet and larger on its own than most modules
@@ -532,62 +634,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    # ── Vault tools ──
-    schemas["vault_get"] = {
-        "type": "function",
-        "function": {
-            "name": "vault_get",
-            "description": "Retrieve a decrypted secret from the vault by key.",
-            "parameters": {
-                "type": "object",
-                "properties": {"key": {"type": "string", "description": "Secret key"}},
-                "required": ["key"],
-            },
-        },
-    }
-    schemas["vault_set"] = {
-        "type": "function",
-        "function": {
-            "name": "vault_set",
-            "description": "Store an encrypted secret in the vault.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "key": {"type": "string", "description": "Secret key"},
-                    "value": {"type": "string", "description": "Secret value to encrypt and store"},
-                    "category": {
-                        "type": "string",
-                        "description": "Category: credential, oauth_token, api_key, certificate",
-                        "default": "credential",
-                    },
-                },
-                "required": ["key", "value"],
-            },
-        },
-    }
-    schemas["vault_list"] = {
-        "type": "function",
-        "function": {
-            "name": "vault_list",
-            "description": "List secret keys in the vault (not values). Optionally filter by category.",
-            "parameters": {
-                "type": "object",
-                "properties": {"category": {"type": "string", "description": "Filter by category"}},
-            },
-        },
-    }
-    schemas["vault_delete"] = {
-        "type": "function",
-        "function": {
-            "name": "vault_delete",
-            "description": "Delete a secret from the vault.",
-            "parameters": {
-                "type": "object",
-                "properties": {"key": {"type": "string", "description": "Secret key to delete"}},
-                "required": ["key"],
-            },
-        },
-    }
+    schemas.update(_VAULT_SCHEMAS)
 
     # ── Knowledge Vault (verbatim memory store; RIP 12) ──
     # Distinct from the secrets vault above. Stores reference data the agent

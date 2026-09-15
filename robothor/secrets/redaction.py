@@ -32,8 +32,15 @@ downstream needs to know.
 from __future__ import annotations
 
 import re
+from typing import Any
 
-__all__ = ["PLACEHOLDER", "redact", "redact_unrecognized_arguments"]
+__all__ = [
+    "PLACEHOLDER",
+    "SECRET_TOOL_ARGUMENTS",
+    "redact",
+    "redact_tool_arguments",
+    "redact_unrecognized_arguments",
+]
 
 #: What a redacted run is replaced by. Visibly a redaction rather than a
 #: mangled value, so an operator reading an error knows something was removed
@@ -264,3 +271,63 @@ def redact_unrecognized_arguments(message: str) -> str:
         return message[: match.start(2)] + scrubbed
     except Exception:  # noqa: BLE001 - pragma: no cover - printing nothing beats a token
         return PLACEHOLDER
+
+
+# ── tool arguments ───────────────────────────────────────────────────────────
+
+#: Parameters that HOLD a credential without being NAMED like one. There is
+#: exactly one shape of these — a tool whose whole job is to store a secret,
+#: where the argument is honestly called ``value`` — and the guard in
+#: ``robothor/engine/tests/test_vault_set_is_redacted.py`` reads the engine's
+#: tool schemas and fails if a new tool declares such a parameter without
+#: appearing here. That guard is what keeps this from becoming the
+#: hand-maintained list that drifts away from what it describes.
+SECRET_TOOL_ARGUMENTS: dict[str, frozenset[str]] = {
+    "vault_set": frozenset({"value"}),
+}
+
+
+def _argument_reads_as_a_credential(name: str) -> bool:
+    """Whether a parameter NAME says it holds a credential.
+
+    Reuses the assignment matcher above rather than adding a second opinion: a
+    probe of ``<name>=<innocuous value>`` is redacted exactly when the name is
+    one this module already recognises.
+    """
+    probe = f"{name}=placeholder-value-1234567890"
+    return redact(probe) != probe
+
+
+def redact_tool_arguments(tool_name: str, arguments: Any) -> Any:
+    """A copy of ``arguments`` with any credential replaced by the placeholder.
+
+    ``session.record_tool_call`` writes tool arguments into
+    ``agent_run_steps.tool_input`` — a row that outlives the run and is read by
+    the verification pass, the guardrail engine and the run viewer. ``vault_set``
+    puts a credential in those arguments by design, so without this the one tool
+    whose job is to keep a secret would be the one tool that leaks it.
+
+    Redacts by ARGUMENT, never wholesale: the verification pass reads
+    ``tool_input`` to decide whether a run did what it claimed, and a step whose
+    every argument is ``<redacted>`` cannot be verified. The KEY a ``vault_set``
+    wrote stays readable for the same reason — an operator has to be able to see
+    which row changed.
+
+    Never mutates its input: the handler has already run by the time this is
+    called, but a redactor that edited in place would be one refactor away from
+    redacting a credential before the vault got it.
+    """
+    if not isinstance(arguments, dict):
+        return arguments
+    named = SECRET_TOOL_ARGUMENTS.get(tool_name, frozenset())
+    cleaned: dict[str, Any] = {}
+    for key, value in arguments.items():
+        if key in named or _argument_reads_as_a_credential(str(key)):
+            cleaned[key] = PLACEHOLDER
+        elif isinstance(value, str):
+            # A credential the model pasted into an ordinary argument still
+            # goes; this is the same pass every log line already gets.
+            cleaned[key] = redact(value)
+        else:
+            cleaned[key] = value
+    return cleaned

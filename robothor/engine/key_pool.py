@@ -31,7 +31,6 @@ which would print real key material.
 from __future__ import annotations
 
 import hashlib
-import hmac
 import logging
 import os
 import threading
@@ -187,21 +186,19 @@ def provider_for_var(var: str) -> ProviderSpec | None:
     return _PROVIDERS_BY_VAR.get(var)
 
 
-_FINGERPRINT_KEY = b"genus-key-fingerprint"
-
-
 def key_fingerprint(key: str) -> str:
     """A short, stable, non-reversible name for a key, for API responses.
 
-    ``sha256:`` prefixed so a reader can tell at a glance that this is a
-    digest and not a truncated credential — the last-four convention it
-    replaces prints real key material.
+    Delegates to :func:`robothor.secrets.fingerprint.fingerprint`, which is now
+    the one implementation: four surfaces print this digest (the provider API,
+    the settings API, the vault tools and ``genus secrets status``), and a
+    fingerprint whose value depends on which code path printed it answers
+    nothing. Kept as a name here because every existing caller spells it this
+    way.
     """
-    # Keyed (HMAC) so the digest cannot be matched against a table of leaked
-    # keys; still "sha256:" because that is the algorithm a reader sees.
-    return (
-        "sha256:" + hmac.new(_FINGERPRINT_KEY, key.encode("utf-8"), hashlib.sha256).hexdigest()[:8]
-    )
+    from robothor.secrets.fingerprint import fingerprint
+
+    return fingerprint(key)
 
 
 # ── Vault-backed credentials ────────────────────────────────────────

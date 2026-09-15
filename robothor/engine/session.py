@@ -463,7 +463,20 @@ class AgentSession:
         duration_ms: int = 0,
         error_message: str | None = None,
     ) -> RunStep:
-        """Record a tool call + result step."""
+        """Record a tool call + result step.
+
+        The arguments are redacted on the way in. ``tool_input`` is persisted to
+        ``agent_run_steps``, a row that outlives the run and is read by the
+        verification pass, the guardrail engine, the run viewer and any support
+        bundle — and ``vault_set`` carries a credential in its arguments by
+        design, because storing one is its whole job. Per-argument, so that the
+        key a write touched stays readable and the verification pass can still
+        tell what a run did.
+        """
+        from robothor.secrets.redaction import redact_tool_arguments
+
+        tool_input = redact_tool_arguments(tool_name, tool_input)
+
         self._step_counter += 1
         step = RunStep(
             run_id=self.run_id,
