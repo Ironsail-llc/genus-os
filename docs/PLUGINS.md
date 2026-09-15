@@ -514,18 +514,34 @@ acts with identifiers only.
 | `POST /api/plugins/{name}/remove` | `POST /api/admin/plugins/{name}/remove` | `{force?}` → `{name, removed, row_dropped, reload_hint, note}` |
 
 The listing also answers **`indexes`** — the index URLs this instance reads, in
-order — so an install form can offer a *choice* between what the operator
-configured rather than a free-text URL box. A browser that can type any URL is
-a browser that can make the engine fetch on a caller's say-so.
+order, **exactly as configured**, including one the install route would refuse.
+An install form offers a *choice* between them rather than a free-text URL box,
+because a browser that can type any URL is a browser that can make the engine
+fetch on a caller's say-so. Filtering to what is *usable* is the consumer's
+job: `install` refuses a non-`https` `index` with a 422, and a listing that
+dropped one silently would leave an operator with a setting that has no effect
+and no explanation. (The Helm filters, and names what it left out.)
 
 The listing's `lockfile` block answers `path_configured`, `present`, `malformed`,
 `rows` and **`problem`** — the sentence the CLI and the doctor print, or `null`
-when the file is fine. `malformed` says *that* the file is damaged; `problem`
-says *which* damage, and the four have different remedies (an unwritable path
-is not something `--force` can fix). Each plugin row carries **`source`** — the
-lock row's origin block, or `null` for anything this platform did not install,
-which is the only thing that distinguishes a plugin `remove` will act on from
-one it refuses.
+when the file is fine. `malformed` says *that* the whole file is unusable;
+`problem` says *which* fault, and there are **five**, with different remedies:
+
+| `problem` | `malformed` | what it means |
+|---|---|---|
+| `cannot be read (<OSError>)` | `true` | the PATH will not read — a directory, a permission denial. `--force` cannot fix a filesystem |
+| `is not readable text (<error>)` | `true` | the bytes are not decodable |
+| `is not valid JSON (<error>)` | `true` | the file does not parse |
+| `does not hold a 'plugins' list` | `true` | it parses, but it is not a lockfile |
+| `holds N row(s) that cannot be read (position(s) …)` | **`false`** | the file parses and the readable rows still govern; the unreadable ones are decisions that cannot be honoured |
+
+The last one is the reason `problem` must be read **independently of
+`malformed`**: it is the only signal that some rows govern nothing, `rows`
+counts only the readable ones, and every other field looks healthy.
+
+Each plugin row carries **`source`** — the lock row's origin block, or `null`
+for anything this platform did not install, which is the only thing that
+distinguishes a plugin `remove` will act on from one it refuses.
 
 #### Three namespaces, and the field that keeps them apart
 
@@ -856,15 +872,26 @@ and a word on the screen where third-party code is turned on reads as a
 judgement. (The install card is the opposite case and shows its verdict in
 full: that one is a measurement of the exact bytes about to be installed.) And
 it offers no `--force`, pointing at `genus plugin sync --force` on the box
-instead — and only when the engine's own refusal names it, since a 409 also
-answers "no lockfile path resolves", where there is nothing to force.
+instead — and only when the engine's own refusal names it.
 
-A file the engine found **unreadable** is reported as governing nothing at all,
-because that is what `usable` means: the page says every plugin that was turned
-off is loading again, leads with `lockfile.problem` — the same sentence the CLI
-and the doctor print, so the operator is told *which* of the four faults it is
-— and sends them to Record, whose refusal distinguishes damaged contents (409)
-from an unwritable path (503).
+The page renders `lockfile.problem` — the same sentence the CLI and the doctor
+print — **whenever it is non-null**, and the two faults get different cards
+because they have opposite consequences:
+
+- **`malformed: true`.** The file governs *nothing*: `usable = present and not
+  malformed`, and the loader opens with `if not lock.usable: return None`. The
+  card says every plugin that was turned off is loading again and sends the
+  operator to Record, whose refusal distinguishes damaged contents (409) from an
+  unwritable path (503).
+- **`malformed: false` with a `problem`.** Unreadable *rows*. The readable ones
+  still govern, so this is a warning rather than an alarm — but whatever the
+  unreadable rows turned off is loading right now and the page cannot say which
+  plugins those were, so it says that instead of showing a row count and a clean
+  bill. The header chip says so too.
+
+Neither card prescribes `--force`: the page offers it only when the server's own
+refusal names it, since a 409 also answers "no lockfile path resolves", where
+there is nothing to force.
 
 ## A worked example
 
