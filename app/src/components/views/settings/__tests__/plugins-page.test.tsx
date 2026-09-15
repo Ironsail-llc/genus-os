@@ -283,19 +283,113 @@ describe("Settings › Plugins — recording", () => {
     expect(screen.queryByTestId("plugins-record-force")).toBeNull();
   });
 
-  it("warns when rows in the lockfile could not be read", async () => {
+  /**
+   * `malformed: true` is WHOLE-FILE damage and nothing else — the path will not
+   * read, the bytes are not text, the JSON does not parse, or there is no
+   * `plugins` list (`robothor/plugins/lockfile.py::read_lockfile`). Unreadable
+   * ROWS leave the flag false, and this listing carries no signal for them at
+   * all. `Lockfile.usable = present and not malformed`, and the loader opens
+   * with `if not lock.usable: return None` — so in this state the engine is
+   * ignoring the file completely and every plugin the operator turned off is
+   * being imported right now.
+   */
+  it("says that a damaged lockfile governs NOTHING, which is the opposite of reassurance", async () => {
     mockBridge({
       listings: [
         {
           ...LISTING,
-          lockfile: { path_configured: true, present: true, malformed: true, rows: 2 },
+          lockfile: { path_configured: true, present: true, malformed: true, rows: 0 },
         },
       ],
     });
     render(<PluginsPage visible />);
 
     const warning = await screen.findByTestId("plugins-lockfile-malformed");
-    expect(warning.textContent).toContain("genus plugin sync --force");
+    expect(warning.textContent).toMatch(/every .*plugin .*(is|are) loading|loading again|nothing is refused/i);
+    expect(warning.textContent).toMatch(/turned off|disabled/i);
+    // The claim that made this a Critical: there is no per-row damage signal in
+    // this payload, and in this state no row governs anything.
+    expect(warning.textContent).not.toMatch(/still govern/i);
+    // `malformed` also covers the unreadable PATH, where sync answers 503 and
+    // --force cannot help. The card points at Record and lets the refusal say
+    // which case it is.
+    expect(warning.textContent).not.toContain("--force");
+    expect(warning.textContent).toMatch(/record/i);
+  });
+
+  it("does not report a damaged lockfile as a count of rows it recorded", async () => {
+    mockBridge({
+      listings: [
+        {
+          ...LISTING,
+          lockfile: { path_configured: true, present: true, malformed: true, rows: 0 },
+        },
+      ],
+    });
+    render(<PluginsPage visible />);
+
+    const chip = await screen.findByTestId("plugins-lockfile");
+    expect(chip.textContent).not.toMatch(/0 recorded rows/);
+    expect(chip.textContent).toMatch(/unreadable|could not be read/i);
+  });
+
+  /**
+   * `sync` refuses with a 409 for TWO reasons: the file cannot be read in full
+   * (`--force` rebuilds it), and no lockfile path resolves at all
+   * (`lockfile.py::sync` → `refused="no lockfile path resolves"`), where there
+   * is no file to force and nowhere to put one. The server's own sentence is
+   * what tells them apart: it names `--force` in the first case only.
+   */
+  it("offers the CLI escape only when the server's own refusal names it", async () => {
+    mockBridge({
+      listings: [LISTING],
+      sync: { status: 409, body: { detail: "no lockfile path resolves" } },
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-genus-hostinfo");
+    fireEvent.click(screen.getByTestId("plugins-record"));
+
+    expect((await screen.findByTestId("plugins-record-error")).textContent).toContain(
+      "no lockfile path resolves"
+    );
+    expect(screen.queryByTestId("plugins-record-force")).toBeNull();
+  });
+
+  it("does not promise a rejected copy the platform only makes when it can", async () => {
+    mockBridge({
+      listings: [LISTING],
+      sync: {
+        status: 409,
+        body: { detail: "the lockfile is not valid JSON; re-run with --force to rebuild it" },
+      },
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-genus-hostinfo");
+    fireEvent.click(screen.getByTestId("plugins-record"));
+
+    // `_preserve_rejected` logs and returns "" when the copy fails, and the CLI
+    // prints that line only when it succeeded.
+    const hint = await screen.findByTestId("plugins-record-force");
+    expect(hint.textContent).toMatch(/where it can|if it can|says so/i);
+  });
+
+  it("offers no working Record when no lockfile path resolves at all", async () => {
+    mockBridge({
+      listings: [
+        {
+          ...LISTING,
+          lockfile: { path_configured: false, present: false, malformed: false, rows: 0 },
+        },
+      ],
+    });
+    render(<PluginsPage visible />);
+
+    expect(await screen.findByTestId("plugins-lockfile-unconfigured")).toBeInTheDocument();
+    // One card, not two saying different things.
+    expect(screen.queryByTestId("plugins-record-empty")).toBeNull();
+    expect(screen.getByTestId("plugins-record")).toBeDisabled();
   });
 });
 
@@ -359,6 +453,35 @@ describe("Settings › Plugins — enabling and disabling", () => {
         "/api/bridge/api/plugins/genus-notes/enable"
       )
     );
+  });
+
+  it("says the engine is unreachable when a toggle answers 502", async () => {
+    mockBridge({
+      listings: [LISTING],
+      toggle: { status: 502, body: { error: "Bridge service unavailable" } },
+    });
+    render(<PluginsPage visible />);
+
+    fireEvent.click(await screen.findByTestId("plugin-switch-genus-notes"));
+    const error = await screen.findByTestId("plugin-error-genus-notes");
+    expect(error.textContent).toMatch(/engine/i);
+    expect(error.textContent).toMatch(/unreachable/i);
+    expect(error.textContent).not.toMatch(/502/);
+  });
+
+  it("keeps one default for a missing enabled: true, as the contract has it", async () => {
+    // `normalizePlugin` already reads a missing `enabled` as true (unrecorded
+    // is not off). The lock-row reader must agree, or a 200 with a field this
+    // build did not expect draws an enabled plugin as switched off.
+    mockBridge({
+      listings: [LISTING],
+      toggle: { status: 200, body: { name: "genus-notes", reloaded: false } },
+    });
+    render(<PluginsPage visible />);
+
+    const toggle = await screen.findByTestId("plugin-switch-genus-notes");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
   });
 
   it("lands a 404 on the row in the server's own words", async () => {
@@ -438,6 +561,180 @@ describe("Settings › Plugins — reloading", () => {
     // "Reload to apply it" under a row that has just been reloaded is the page
     // contradicting the report above it.
     await waitFor(() => expect(screen.queryByTestId("plugin-note-genus-notes")).toBeNull());
+  });
+
+  /**
+   * A `disabled by operator` refusal can only belong to a distribution whose
+   * lock row is off — that is the only thing that produces it. The listing says
+   * which those are, and the manifest names the entry points; a `-`/`_`-squashed
+   * suffix match on the DISTRIBUTION name is the weakest evidence in the
+   * payload and must not outrank either.
+   */
+  it("files the operator's own decision under the plugin they actually turned off", async () => {
+    const NOTES = { ...OFF, groups: ["genus.jobs"] };
+    const ACME = {
+      name: "acme-nightly-notes",
+      version: "3.0.0",
+      enabled: true,
+      recorded: true,
+      verdict: "unscanned",
+      state: "loaded",
+      drifted: false,
+      groups: ["genus.jobs"],
+      contributions: { jobs: 1 },
+      failure_reason: null,
+      manifest: null,
+    };
+    mockBridge({
+      listings: [
+        { ...LISTING, plugins: [NOTES, ACME] },
+        { ...LISTING, plugins: [NOTES, ACME] },
+      ],
+      reload: {
+        status: 200,
+        body: {
+          generation: 4,
+          loaded: 1,
+          failures: [{ name: "nightly_notes", group: "genus.jobs", reason: "disabled by operator" }],
+        },
+      },
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-acme-nightly-notes");
+    fireEvent.click(screen.getByTestId("plugins-reload"));
+
+    await screen.findByTestId("plugins-reload-intended-genus-notes");
+    expect(screen.queryByTestId("plugins-reload-intended-acme-nightly-notes")).toBeNull();
+    expect(screen.queryByTestId("plugins-reload-failure-acme-nightly-notes")).toBeNull();
+  });
+
+  /**
+   * `inventory()` skips distributions the metadata layer cannot name while
+   * `load_plugins` still loads — and still fails — their entry points, so a
+   * refusal with no row behind it is reachable in production. Being alone in a
+   * group is not evidence of having failed.
+   */
+  it("refuses to accuse the only distribution in a group when its manifest names something else", async () => {
+    const ONLY = { ...LOADED, groups: ["genus.tools"] };
+    mockBridge({
+      listings: [
+        { ...LISTING, plugins: [ONLY] },
+        { ...LISTING, plugins: [ONLY] },
+      ],
+      reload: {
+        status: 200,
+        body: {
+          generation: 5,
+          loaded: 1,
+          failures: [
+            {
+              name: "weather_now",
+              group: "genus.tools",
+              reason: "ImportError: No module named 'requests'",
+            },
+          ],
+        },
+      },
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-genus-hostinfo");
+    fireEvent.click(screen.getByTestId("plugins-reload"));
+
+    const unmatched = await screen.findByTestId("plugins-reload-unmatched");
+    expect(unmatched.textContent).toContain("weather_now");
+    expect(screen.queryByTestId("plugins-reload-failure-genus-hostinfo")).toBeNull();
+  });
+
+  it("prints the entry-point name and group beside an attributed line, so it can be checked", async () => {
+    mockBridge({
+      listings: [LISTING, LISTING],
+      reload: {
+        status: 200,
+        body: {
+          generation: 4,
+          loaded: 2,
+          failures: [
+            { name: "widget_list", group: "genus.tools", reason: "ImportError: no module named x" },
+          ],
+        },
+      },
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-genus-widgets");
+    fireEvent.click(screen.getByTestId("plugins-reload"));
+
+    const line = await screen.findByTestId("plugins-reload-failure-genus-widgets");
+    expect(line.textContent).toContain("widget_list");
+    expect(line.textContent).toContain("genus.tools");
+  });
+
+  it("marks a mixed bucket per failure, not by whether every one of them is intended", async () => {
+    // One distribution, two groups, one deliberate refusal and one real fault.
+    const BOTH = {
+      ...LOADED,
+      groups: ["genus.tools", "genus.services"],
+      manifest: {
+        contract_version: 1,
+        declared: { handlers: ["hostinfo"], services: ["hostinfo_probe"] },
+      },
+    };
+    mockBridge({
+      listings: [
+        { ...LISTING, plugins: [BOTH] },
+        { ...LISTING, plugins: [BOTH] },
+      ],
+      reload: {
+        status: 200,
+        body: {
+          generation: 6,
+          loaded: 0,
+          failures: [
+            { name: "hostinfo", group: "genus.tools", reason: "disabled by operator" },
+            { name: "hostinfo_probe", group: "genus.services", reason: "SyntaxError: bad code" },
+          ],
+        },
+      },
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-genus-hostinfo");
+    fireEvent.click(screen.getByTestId("plugins-reload"));
+
+    const intended = await screen.findByTestId("plugins-reload-intended-genus-hostinfo");
+    expect(intended.className).not.toContain("destructive");
+    const fault = screen.getByTestId("plugins-reload-failure-genus-hostinfo");
+    expect(fault.textContent).toContain("SyntaxError: bad code");
+    expect(fault.textContent).not.toContain("disabled by operator");
+  });
+
+  it("retires the recording report once a later act has its own answer", async () => {
+    mockBridge({
+      listings: [LISTING, LISTING, LISTING],
+      sync: {
+        status: 200,
+        body: {
+          recorded: ["genus-hostinfo"],
+          added: [],
+          updated: ["genus-hostinfo"],
+          removed: [],
+          reloaded: false,
+        },
+      },
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugin-genus-hostinfo");
+    fireEvent.click(screen.getByTestId("plugins-record"));
+    await screen.findByTestId("plugins-record-result");
+
+    fireEvent.click(screen.getByTestId("plugins-reload"));
+    await screen.findByTestId("plugins-reload-result");
+    // Two reports describing two different moments, side by side, is how a page
+    // ends up asserting a state that no longer exists.
+    expect(screen.queryByTestId("plugins-record-result")).toBeNull();
   });
 
   it("says the engine kept its previous plugins when the reload itself failed", async () => {
