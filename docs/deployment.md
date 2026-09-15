@@ -855,6 +855,11 @@ was reached, not that there is nothing else to find, and the filter is applied
 to the **redacted** message — so the pane cannot be used to confirm a value it
 will not show.
 
+**Settings › Plugins** is the fourth operator screen on those routes: it lists
+one card per installed distribution, records the lockfile on a box nobody has
+shelled into, turns a plugin off, and reloads the engine once afterwards — see
+[Disabling and the lockfile](PLUGINS.md#disabling-and-the-lockfile).
+
 ## Health Endpoints
 
 | Service | Endpoint | Expected |
