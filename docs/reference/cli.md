@@ -739,13 +739,14 @@ Usage: `genus secrets status [--tenant TENANT]`
 
 Move application credentials out of the environment and into the vault.
 
-Usage: `genus secrets migrate [--from-env] [--dry-run] [--only NAME] [--tenant TENANT]`
+Usage: `genus secrets migrate [--from-env] [--dry-run] [--only NAME] [--overwrite NAME] [--tenant TENANT]`
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--from-env` | — | off | Read candidates from this process's environment (required) |
 | `--dry-run` | — | off | List what would be stored; write nothing |
 | `--only` | `NAME` | — | Migrate only these names |
+| `--overwrite` | `NAME` | — | Replace the vault's value for these names with the environment's. Without it a differing vault row is KEPT and reported, because the vault wins for application credentials and a migration must never revert a rotation. Per name, never a blanket flag. |
 | `--tenant` | `TENANT` | — | Tenant id (default: this one) |
 
 ## `genus skills`

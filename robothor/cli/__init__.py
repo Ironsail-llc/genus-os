@@ -855,6 +855,18 @@ def _build_parser() -> argparse.ArgumentParser:
     secrets_migrate_p.add_argument(
         "--only", nargs="+", default=None, metavar="NAME", help="Migrate only these names"
     )
+    secrets_migrate_p.add_argument(
+        "--overwrite",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Replace the vault's value for these names with the environment's. "
+            "Without it a differing vault row is KEPT and reported, because the vault "
+            "wins for application credentials and a migration must never revert a "
+            "rotation. Per name, never a blanket flag."
+        ),
+    )
     secrets_migrate_p.add_argument("--tenant", default=None, help="Tenant id (default: this one)")
 
     # skills
