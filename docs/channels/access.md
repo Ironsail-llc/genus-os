@@ -92,7 +92,8 @@ genus channel access deny    slack ABC234
 genus channel access revoke  slack <identity-id>
 ```
 
-Or from the Helm, operator-gated and audited:
+Or from the Helm's **Settings › Channels** page, which drives these routes —
+operator-gated and audited:
 
 ```
 GET    /api/channels                                  the mode and pending count per channel
@@ -105,9 +106,13 @@ POST   /api/channels/{name}/verify                    {"target"?}
 ```
 
 `GET /pending` returns neither the code nor the native id — only that somebody is
-waiting, and when their code dies. `GET /identities` returns a sha256
-**fingerprint** of each native id rather than the id itself: telling two bindings
-apart is what an operator needs, and one leaked operator session should not be
+waiting, and when their code dies. That is why the Helm's pending list cannot
+offer a one-click approve: the operator types the six characters the sender was
+given, which is also the step where they check it is the person they think it is.
+
+`GET /identities` returns a sha256 **fingerprint** of each native id rather than
+the id itself: telling two bindings apart is what an operator needs, and one
+leaked operator session should not be
 able to enumerate a whole workspace. A malformed id is a 422, a code that is gone
 is a 404, a binding that collides with an existing one is a 409, and a database
 that is not answering is a 503 — never a 500.

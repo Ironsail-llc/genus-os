@@ -344,7 +344,11 @@ What the settings do not tell you:
 
 `genus user add` / `genus user list` are not the only way to administer
 accounts any more. Six operator-only Bridge routes, all scoped to the caller's
-own tenant — an account in another tenant answers 404, never 403:
+own tenant — an account in another tenant answers 404, never 403. The Helm's
+**Settings › Users & roles** page is built on exactly these, and adds nothing of
+its own: it shows an SSO grant's expiry and issuer once, because a binding grant
+carries no secret to re-read — the first verified sign-in for that address spends
+it. No mail is sent by any of this; the operator passes the invitation on.
 
 | Route | What it does |
 |-------|--------------|

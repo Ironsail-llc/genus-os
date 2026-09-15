@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { CalendarClock, Loader2, RefreshCw } from "lucide-react";
 
 import { EmptyState } from "@/components/business/empty-state";
@@ -12,8 +12,8 @@ import { WorkflowsSection } from "@/components/views/automations/workflows-secti
 import { describeTrigger } from "@/components/views/agents/agent-manifests";
 import { reconcileNote, warningLine, warningsOf } from "@/lib/agents/reconcile";
 import { normalizeAutomations, type Automation } from "@/lib/automations/run-truth";
-import { readBridgeReply } from "@/lib/bridge/read-reply";
 import { useRowActions } from "@/lib/bridge/row-actions";
+import { useBridgePoll } from "@/lib/bridge/use-bridge-poll";
 
 /**
  * Automations — every scheduled agent, and what its last run actually did.
@@ -38,7 +38,6 @@ import { useRowActions } from "@/lib/bridge/row-actions";
  */
 
 const BRIDGE = "/api/bridge";
-const POLL_MS = 60_000;
 
 export interface AutomationsViewProps {
   visible?: boolean;
@@ -54,11 +53,6 @@ export function AutomationsView({
   roleLoading = false,
 }: AutomationsViewProps) {
   const [automations, setAutomations] = useState<Automation[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // A 403 is the bridge saying this listing belongs to the operator, not the
-  // appliance saying it is broken. Told apart so a member is not shown red.
-  const [forbidden, setForbidden] = useState(false);
-  const [loading, setLoading] = useState(true);
   // The busy row, the per-row error and the per-row note, shared with the
   // Agents view's manifest list rather than forked from it.
   const { busyRow, rowErrors, rowNotes, setRowNote, act } = useRowActions();
@@ -69,40 +63,18 @@ export function AutomationsView({
   const canWrite = isOperatorRole(role);
   const readOnly = !roleLoading && !canWrite;
 
-  // The load function is re-created on every render-relevant change; the poll
-  // must not be, or the interval would be torn down and rebuilt each tick.
-  const loadRef = useRef<() => Promise<void>>(async () => {});
-
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(`${BRIDGE}/api/automations`);
-      if (!res.ok) {
-        if (res.status === 403) {
-          setForbidden(true);
-          setError(null);
-          return;
-        }
-        setError(await readBridgeReply(res));
-        return;
-      }
-      setForbidden(false);
-      setAutomations(normalizeAutomations(await res.json()));
-      setError(null);
-    } catch {
-      setError("The dashboard could not reach the bridge. Check that the service is running.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  loadRef.current = load;
-
-  useEffect(() => {
-    if (!visible) return;
-    void loadRef.current();
-    const timer = setInterval(() => void loadRef.current(), POLL_MS);
-    return () => clearInterval(timer);
-  }, [visible]);
+  // Poll-while-visible, the 403 that is not an error, and the one sentence for
+  // an unreachable bridge all live in `useBridgePoll` now — this block used to
+  // be one of three byte-near copies of them.
+  const absorbListing = useCallback(
+    (body: unknown) => setAutomations(normalizeAutomations(body)),
+    []
+  );
+  const { loading, error, forbidden, reload } = useBridgePoll({
+    visible,
+    url: `${BRIDGE}/api/automations`,
+    onData: absorbListing,
+  });
 
   /**
    * Read the engine's half of a write and say only what it supports.
@@ -137,10 +109,10 @@ export function AutomationsView({
           automation.enabled ? "Taken off its schedule." : "Back on its schedule."
         );
         absorb(automation.id, body);
-        void loadRef.current();
+        reload();
       });
     },
-    [act, absorb, setRowNote]
+    [act, absorb, reload, setRowNote]
   );
 
   const onRunNow = useCallback(
@@ -148,10 +120,10 @@ export function AutomationsView({
       await act(automation.id, manifestUrl(automation, "/run"), { method: "POST" }, (body) => {
         setRowNote(automation.id, describeTrigger((body as { triggered?: unknown })?.triggered));
         absorb(automation.id, body);
-        void loadRef.current();
+        reload();
       });
     },
-    [act, absorb, setRowNote]
+    [act, absorb, reload, setRowNote]
   );
 
   const onResetBreaker = useCallback(
@@ -165,10 +137,10 @@ export function AutomationsView({
           "The error count is back to zero — it runs again on its next scheduled fire."
         );
         absorb(automation.id, body);
-        void loadRef.current();
+        reload();
       });
     },
-    [act, absorb, setRowNote]
+    [act, absorb, reload, setRowNote]
   );
 
   const onSaveSchedule = useCallback(
@@ -196,11 +168,11 @@ export function AutomationsView({
               : "Schedule saved. The engine re-derived its jobs."
           );
           absorb(automation.id, body);
-          void loadRef.current();
+          reload();
         }
       );
     },
-    [act, absorb, setRowNote]
+    [act, absorb, reload, setRowNote]
   );
 
   const rows = automations ?? [];
@@ -224,7 +196,7 @@ export function AutomationsView({
           variant="outline"
           size="sm"
           data-testid="automations-refresh"
-          onClick={() => void loadRef.current()}
+          onClick={reload}
         >
           <RefreshCw aria-hidden />
           Refresh
@@ -263,7 +235,7 @@ export function AutomationsView({
           <p className="text-sm font-medium text-destructive">The automations listing failed</p>
           <p className="text-xs text-muted-foreground">{error}</p>
           <div>
-            <Button variant="outline" size="sm" onClick={() => void loadRef.current()}>
+            <Button variant="outline" size="sm" onClick={reload}>
               Try again
             </Button>
           </div>
