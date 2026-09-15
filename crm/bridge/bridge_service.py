@@ -51,6 +51,7 @@ from routers.health import router as health_router
 from routers.installed_agents import router as installed_agents_router
 from routers.integration import router as integration_router
 from routers.memory import router as memory_router
+from routers.memory_facts import router as memory_facts_router
 from routers.notes_tasks import router as notes_tasks_router
 from routers.notifications import router as notifications_router
 from routers.people import router as people_router
@@ -163,6 +164,11 @@ app.include_router(providers_router)
 app.include_router(conversations_router)
 app.include_router(notes_tasks_router)
 app.include_router(memory_router)
+# The operator's view of the memory_facts TABLE (list / forget preview /
+# forget). Its own router because its gate is not memory_router's: every route
+# is operator-only, where the subsystem proxy above is agent-reachable under
+# ``_memory_admin_scope``.
+app.include_router(memory_facts_router)
 app.include_router(routines_router)
 app.include_router(notifications_router)
 app.include_router(tenants_router)
