@@ -28,9 +28,14 @@ beforeEach(() => {
   // React re-throws into console.error on its way to the boundary. The noise
   // is expected here and would otherwise bury a real failure.
   vi.spyOn(console, "error").mockImplementation(() => {});
+  // Channels is a real page now and fetches on mount. A request that never
+  // settles leaves it in its loading state, which is what this suite wants:
+  // it is about the container recovering, not about that page's contents.
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 

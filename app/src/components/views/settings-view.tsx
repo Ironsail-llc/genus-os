@@ -5,7 +5,9 @@ import { PageHeader } from "@/components/business/page-header";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { ControlsView } from "@/components/views/controls-view";
+import { ChannelsPage } from "@/components/views/settings/channels-page";
 import { ProvidersPage } from "@/components/views/settings/providers-page";
+import { UsersPage } from "@/components/views/settings/users-page";
 import {
   isOperatorRole,
   settingsPages,
@@ -34,12 +36,28 @@ function groupPages(pages: SettingsPage[]): Array<{ label: string; pages: Settin
   return groups;
 }
 
-function PageBody({ page }: { page: SettingsPage }) {
+function PageBody({ page, role }: { page: SettingsPage; role?: string | null }) {
   if (page.id === "providers") {
     // The first real settings page. It renders only inside this container, so
     // the role gate above is the only one it needs on the client — and the
     // bridge checks the caller's role on every provider route regardless.
     return <ProvidersPage />;
+  }
+
+  if (page.id === "channels") {
+    // `visible` is not redundant with the container's own gate: this page
+    // polls, and an inactive page must not. It is only ever mounted for the
+    // active page of a visible Settings screen, so it is visible by
+    // construction — the prop exists so the poll can be proved off in a test
+    // and stays correct if this container ever starts keeping pages mounted.
+    return <ChannelsPage visible />;
+  }
+
+  if (page.id === "users") {
+    // The role travels because ownership cannot be handed over through the
+    // API: only an owner may be offered the owner role. UX only — the bridge
+    // refuses the same change independently, with a sentence this page prints.
+    return <UsersPage visible role={role} />;
   }
 
   if (page.id === "flags") {
@@ -187,7 +205,7 @@ export function SettingsView({
             like a broken Settings screen forever.
           */}
           <ErrorBoundary key={active.id} fallback={<PageFailed />}>
-            <PageBody page={active} />
+            <PageBody page={active} role={role} />
           </ErrorBoundary>
         </div>
       </div>

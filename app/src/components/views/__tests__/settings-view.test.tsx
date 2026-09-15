@@ -58,8 +58,8 @@ describe("SettingsView", () => {
   });
 
   it("says what will live on a placeholder page", () => {
-    renderSettings({ page: "channels" });
-    const page = screen.getByTestId("settings-page-channels");
+    renderSettings({ page: "plugins" });
+    const page = screen.getByTestId("settings-page-plugins");
     expect(page.textContent).toMatch(/soon/i);
     expect(page.textContent!.length).toBeGreaterThan(30);
   });
@@ -91,6 +91,23 @@ describe("SettingsView", () => {
     renderSettings({ page: "providers" });
     expect(screen.getByTestId("providers-page")).toBeInTheDocument();
     expect(screen.getByTestId("settings-page-providers").textContent).not.toMatch(/coming soon/i);
+  });
+
+  it("gives an operator the real Channels and Users pages, not placeholders", () => {
+    renderSettings({ page: "channels" });
+    expect(screen.getByTestId("channels-page")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-page-channels").textContent).not.toMatch(/coming soon/i);
+
+    renderSettings({ page: "users" });
+    expect(screen.getByTestId("users-page")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-page-users").textContent).not.toMatch(/coming soon/i);
+  });
+
+  it("keeps Channels and Users away from a non-operator, request and all", () => {
+    renderSettings({ page: "users", role: "member" });
+    expect(screen.queryByTestId("users-page")).toBeNull();
+    expect(screen.getByTestId("settings-restricted")).toBeInTheDocument();
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
   it("keeps the Providers page away from a non-operator", () => {
