@@ -9,9 +9,12 @@ the in-container path — the one every LLM-judged task takes — did not.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from bench.wildclaw import harness
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _env_written_by(tmp_path: Path, monkeypatch) -> dict[str, str]:
