@@ -174,6 +174,34 @@ class PathsSettings(SettingsGroup):
         "and an operator's shell must read the same file.",
         since="unreleased",
     )
+    plugin_indexes: str = declare(
+        "",
+        "ROBOTHOR_PLUGIN_INDEXES",
+        "Comma-separated URLs of signed plugin index files (index.json), read "
+        "in order — the first index publishing a name wins, so a company's own "
+        "index listed first shadows the platform's. Empty means the platform "
+        "index alone. Each index must be https and must be signed by a key "
+        "pinned through ROBOTHOR_PLUGIN_INDEX_KEYS.",
+        since="unreleased",
+    )
+    plugin_index_keys: str = declare(
+        "",
+        "ROBOTHOR_PLUGIN_INDEX_KEYS",
+        "Directory of PEM Ed25519 PUBLIC keys that may sign a plugin index. "
+        "Each file's stem is the key_id it pins, so a company running an "
+        "internal registry drops its key here rather than patching the "
+        "platform. Empty means only the keys the platform ships.",
+        since="unreleased",
+    )
+    plugin_dir: str = declare(
+        "",
+        "ROBOTHOR_PLUGIN_DIR",
+        "Directory `genus plugin install` installs into (pip --target), for "
+        "images whose site-packages is read-only. Empty installs into the "
+        "running interpreter's environment. The directory must also be on the "
+        "engine's PYTHONPATH or nothing installed there is ever discovered.",
+        since="unreleased",
+    )
     manifest_dir: str = declare(
         "",
         "ROBOTHOR_MANIFEST_DIR",
