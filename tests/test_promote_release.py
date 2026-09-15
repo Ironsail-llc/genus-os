@@ -63,6 +63,9 @@ def _seed(tmp_path: Path) -> tuple[Path, Path]:
     (work / "uv.lock").write_text('[[package]]\nname = "genusos"\nversion = "1.57.0"\n')
     scripts = work / "scripts"
     scripts.mkdir()
+    # The published one-liner carries the release it shipped with, and the
+    # consistency check reads that stamp like any other version site.
+    (scripts / "install.sh").write_text('INSTALL_SH_DEFAULT_VERSION="v1.57.0"\n')
     for name in ("promote-release-values.js", "check-version-consistency.js"):
         src = REPO_ROOT / "scripts" / name
         if src.exists():

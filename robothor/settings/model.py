@@ -2079,6 +2079,31 @@ class SubstrateSettings(SettingsGroup):
         "trails the released one. An escape hatch for a deliberate hold, not "
         "a way to stop noticing that a promotion was lost.",
     )
+    installer_version: str = declare(
+        "",
+        "GENUS_VERSION",
+        "Release the one-line installer (scripts/install.sh) installs when "
+        "--version is not given. Empty asks the GitHub releases API, and "
+        "falls back to the version the script was stamped with at release "
+        "time. Read by the installer only; nothing in the running platform "
+        "resolves its own version from the environment.",
+        since="unreleased",
+    )
+    installer_owner_name: str = declare(
+        "",
+        "GENUS_OWNER_NAME",
+        "Operator name the one-line installer passes to `genus init "
+        "--owner-name`. Required with --yes, because a non-interactive "
+        "install has nowhere to ask.",
+        since="unreleased",
+    )
+    installer_owner_email: str = declare(
+        "",
+        "GENUS_OWNER_EMAIL",
+        "Operator email the one-line installer passes to `genus init "
+        "--owner-email`. Required with --yes, for the same reason.",
+        since="unreleased",
+    )
 
 
 # ---------------------------------------------------------------------------
