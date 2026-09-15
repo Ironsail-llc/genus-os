@@ -54,18 +54,34 @@ def _vault_raises(monkeypatch, exc: Exception) -> None:
 
 
 def _vault_holds(monkeypatch, mapping: dict[str, str]) -> list[str]:
-    """Make the vault answer from *mapping*, recording every key asked for."""
+    """Make the vault answer from *mapping*, recording every key asked for.
+
+    ``mapping`` may be keyed by an ENVIRONMENT name or by a vault key; the
+    double translates the former through ``vault_keys_for_env_name``, which is
+    what the accessor searches with. It used to be keyed by environment name
+    and answer through ``export_env`` — a faithful double of the old
+    implementation, which decrypted every row the instance owns to answer a
+    question about one.
+    """
     from robothor import vault
+    from robothor.vault.naming import vault_keys_for_env_name
+
+    rows: dict[str, str] = {}
+    for key, value in mapping.items():
+        if "/" in key or key.islower():
+            rows[key] = value  # already a vault key (the explicit-vault_key tests)
+        else:
+            rows[vault_keys_for_env_name(key)[-1]] = value  # the literal spelling
 
     asked: list[str] = []
 
     def fake_get(key, **kwargs):
         asked.append(key)
-        return mapping.get(key)
+        return rows.get(key)
 
     def fake_export(**kwargs):
         asked.append("<export>")
-        return dict(mapping)
+        return {k.upper().replace("/", "_"): v for k, v in rows.items()}
 
     monkeypatch.setattr(vault, "get", fake_get)
     monkeypatch.setattr(vault, "export_env", fake_export)
@@ -107,17 +123,19 @@ def test_an_empty_variable_is_unset_not_empty(monkeypatch):
 # ── the vault ────────────────────────────────────────────────────────────────
 
 
-def test_the_vault_answers_under_the_exported_environment_name(monkeypatch):
-    """``vault/naming.env_name`` is the one env<->vault mapping.
+def test_the_vault_answers_under_the_keys_the_one_mapping_names(monkeypatch):
+    """``vault.naming.vault_keys_for_env_name`` is the one env→key mapping.
 
-    It upper-cases and swaps ``/`` for ``_``, which is not invertible, so the
-    accessor looks the ENVIRONMENT name up in the vault's own export instead of
-    inventing a second naming scheme that would drift from it.
+    The accessor searches its candidates ROW BY ROW. It used to ask
+    ``export_env()``, which decrypts every secret the instance owns to answer a
+    question about one — on a path ``build_exec_env`` walks once per grant per
+    ``exec``.
     """
     asked = _vault_holds(monkeypatch, {NAME: SENTINEL})
     assert get_secret(NAME) == SENTINEL
     assert secret_source(NAME) == "vault"
-    assert "<export>" in asked
+    assert asked, "the vault was never asked"
+    assert "<export>" not in asked, "one lookup decrypted the whole vault"
 
 
 def test_an_explicit_vault_key_is_read_directly(monkeypatch):

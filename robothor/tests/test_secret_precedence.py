@@ -57,10 +57,21 @@ def _clean(monkeypatch):
 
 
 def _vault_holds(monkeypatch, mapping: dict[str, str]) -> None:
-    from robothor import vault
+    """Stand the vault up holding *mapping*, keyed by ENVIRONMENT name.
 
-    monkeypatch.setattr(vault, "get", lambda key, **kw: mapping.get(key))
-    monkeypatch.setattr(vault, "export_env", lambda **kw: dict(mapping))
+    Translated through ``vault_keys_for_env_name`` — the one mapping — because
+    that is what the accessor searches with. Keying the double by environment
+    name directly would model an accessor that asks ``export_env()``, which is
+    the implementation this suite no longer has.
+    """
+    from robothor import vault
+    from robothor.vault.naming import vault_keys_for_env_name
+
+    rows = {vault_keys_for_env_name(env)[-1]: value for env, value in mapping.items()}
+    monkeypatch.setattr(vault, "get", lambda key, **kw: rows.get(key))
+    monkeypatch.setattr(
+        vault, "export_env", lambda **kw: {k.upper().replace("/", "_"): v for k, v in rows.items()}
+    )
 
 
 def _vault_down(monkeypatch) -> None:
