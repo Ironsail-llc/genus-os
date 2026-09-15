@@ -1,5 +1,6 @@
 import { getEngineClient } from "@/lib/engine/server-client";
 import { ensureCanvasPromptInjected } from "@/lib/engine/session-state";
+import { resolveChatAgent } from "@/lib/chat/agent-guard";
 
 export async function POST(req: Request) {
   const body = await req.json();
@@ -12,13 +13,34 @@ export async function POST(req: Request) {
     });
   }
 
+  // The browser names an AGENT, never a session key. An absent one produces no
+  // key — how the engine is told "the main session", exactly as this route has
+  // always told it. A NAMED one is checked against the caller's own fleet
+  // listing and refused outright if they may not address it; what must never
+  // happen is a dropped key falling through to "no key", because "no key" is
+  // the operator's shared conversation.
+  const chosen = await resolveChatAgent(body.agent);
+  if (!chosen.ok) {
+    return new Response(JSON.stringify({ error: chosen.error }), {
+      status: chosen.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  const sessionKey = chosen.key;
+
   const client = getEngineClient();
 
   try {
-    // Fire-and-forget — cached after first success, no need to block
-    ensureCanvasPromptInjected().catch(() => {});
+    // Fire-and-forget — cached after first success, no need to block.
+    //
+    // Main-only, deliberately. The canvas prompt teaches the agent about the
+    // dashboard's `[RENDER:…]` markers, and injecting it is a WRITE into
+    // whichever session the request names. Pushed into another agent's session
+    // it would hand a worker a capability its manifest never granted and a
+    // system message its instructions never mention.
+    if (!sessionKey) ensureCanvasPromptInjected().catch(() => {});
 
-    const engineRes = await client.chatSend(message);
+    const engineRes = await client.chatSend(message, sessionKey);
 
     if (!engineRes.body) {
       return new Response(

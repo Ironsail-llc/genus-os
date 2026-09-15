@@ -61,8 +61,10 @@ describe("GET /api/chat/history", () => {
     const req = new Request("http://localhost:3004/api/chat/history?limit=10");
     await GET(req);
 
-    // The limit, and nothing else: the session is the engine's to decide from
-    // the authenticated caller, so the route has no key to pass.
-    expect(mockChatHistory).toHaveBeenCalledWith(10);
+    // The limit, and an EMPTY key: nobody named an agent, so the session stays
+    // the engine's to decide from the authenticated caller. `""` and no key at
+    // all are the same thing to `_effective_session_key`, and the client turns
+    // the empty string into an omitted field before it reaches the wire.
+    expect(mockChatHistory).toHaveBeenCalledWith(10, "");
   });
 });
