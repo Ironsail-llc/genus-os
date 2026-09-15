@@ -1,3 +1,9 @@
+## [1.89.0](https://github.com/Ironsail-llc/genus-os/compare/v1.88.0...v1.89.0) (2026-09-15)
+
+### Features
+
+* **plugins:** signed registry index, install and remove, scan verdict ([#569](https://github.com/Ironsail-llc/genus-os/issues/569)) ([dfa54f0](https://github.com/Ironsail-llc/genus-os/commit/dfa54f09e41df837c2883eb173b0545ef2bd4b9a)), closes [#566](https://github.com/Ironsail-llc/genus-os/issues/566)
+
 ## [1.88.0](https://github.com/Ironsail-llc/genus-os/compare/v1.87.0...v1.88.0) (2026-09-15)
 
 ### Features
