@@ -162,15 +162,43 @@ export interface PluginInstallCardProps {
 }
 
 export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstallCardProps) {
+  /*
+    Only an index the route would accept may be offered.
+
+    `configured_indexes()` returns whatever `ROBOTHOR_PLUGIN_INDEXES` holds,
+    and both the bridge and the engine answer 422 to a non-https `index`. A
+    picker that listed one would be offering a choice that cannot work, so they
+    are filtered out here and named below instead of disappearing silently —
+    an operator whose only configured index is `http://` needs to know why the
+    control is missing, not to conclude the feature is broken.
+  */
+  const usable = indexes.filter((url) => url.startsWith("https://"));
+  const refused = indexes.filter((url) => !url.startsWith("https://"));
+
   const [name, setName] = useState("");
   const [version, setVersion] = useState("");
   const [index, setIndex] = useState("");
   const [plan, setPlan] = useState<InstallPlan | null>(null);
-  const [accepted, setAccepted] = useState(false);
+  /**
+   * The sha256 of the plan whose findings the operator accepted, or null.
+   *
+   * A BOOLEAN was the Critical: it survived a second Preview, so plan A's
+   * acceptance armed Install for plan B's findings — and re-Previewing is the
+   * likelier gesture, because `version` left blank means "latest" and a second
+   * look is how an operator re-checks before committing. Keyed on the hash, an
+   * acceptance cannot be spent on a different wheel even if some future path
+   * forgets to clear it: the checkbox, the button and the request body all ask
+   * the same question, "is this the plan that was accepted".
+   */
+  const [acceptedSha, setAcceptedSha] = useState<string | null>(null);
   const [busy, setBusy] = useState<"preview" | "install" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [row, setRow] = useState<InstalledRow | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [note, setNote] = useState("");
+  /** True once a real install has been ANSWERED, however it was answered. */
+  const [attempted, setAttempted] = useState(false);
+  /** Which hash is on the clipboard, so "copied" cannot outlive its plan. */
+  const [copiedSha, setCopiedSha] = useState<string | null>(null);
 
   /*
     Any edit to what would be POSTed retires the plan and the acceptance with
@@ -179,8 +207,11 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
   */
   const changed = useCallback(() => {
     setPlan(null);
-    setAccepted(false);
+    setAcceptedSha(null);
     setRow(null);
+    setNote("");
+    setAttempted(false);
+    setCopiedSha(null);
     setError(null);
   }, []);
 
@@ -189,6 +220,14 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
       setBusy(dryRun ? "preview" : "install");
       setError(null);
       setRow(null);
+      setNote("");
+      if (dryRun) {
+        // A new plan is a new question. The acceptance goes with the old one,
+        // and so does a "copied" label about the old one's hash.
+        setAcceptedSha(null);
+        setAttempted(false);
+        setCopiedSha(null);
+      }
       onAct();
       try {
         const res = await fetch(`${BRIDGE}/api/plugins/install`, {
@@ -197,11 +236,26 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
           body: JSON.stringify({
             name: name.trim(),
             version: version.trim() || undefined,
-            index: index || undefined,
-            accept_review: !dryRun && accepted,
+            // The index the PICKER is showing, whenever there is a choice to
+            // show. Omitting it is not equivalent: the installer searches the
+            // named index alone, and every configured index in order when none
+            // is named — so a select displaying one while the engine resolved
+            // the wheel from another would be a provenance claim that is not
+            // true.
+            index: usable.length > 1 ? index || usable[0] : undefined,
+            /*
+              Only on a real install, and only for THIS plan.
+
+              A dry run has nothing to accept — the findings do not exist yet —
+              so sending the field at all is a preview claiming a decision. And
+              the acceptance is bound to the plan's hash, so a stale one cannot
+              be spent on a wheel whose reasons were never displayed.
+            */
+            accept_review: dryRun ? undefined : plan !== null && acceptedSha === plan.sha256,
             dry_run: dryRun,
           }),
         });
+        if (!dryRun) setAttempted(true);
         if (!res.ok) {
           /*
             The server's own sentence, whatever the status.
@@ -221,6 +275,7 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
         setPlan(next);
         if (!dryRun) {
           setRow(normalizeRow(body.row));
+          setNote(typeof body.note === "string" ? body.note : "");
           // The row is written; the running engine is still serving the set it
           // discovered. The page's reload bar is what says so.
           onInstalled();
@@ -228,26 +283,28 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
       } catch {
         setError(BRIDGE_UNREACHABLE);
         if (dryRun) setPlan(null);
+        else setAttempted(true);
       } finally {
         setBusy(null);
       }
     },
-    [name, version, index, accepted, onAct, onInstalled]
+    [name, version, index, usable, plan, acceptedSha, onAct, onInstalled]
   );
 
   async function copySha(value: string) {
     try {
       await navigator.clipboard.writeText(value);
-      setCopied(true);
+      setCopiedSha(value);
     } catch {
       // A browser that refuses the clipboard is not worth a banner; the first
       // twelve characters are on screen and can be selected by hand.
-      setCopied(false);
+      setCopiedSha(null);
     }
   }
 
   const pill = plan ? verdictPill(plan.verdict) : null;
   const installable = plan !== null && (plan.verdict === "safe" || plan.verdict === "review");
+  const accepted = plan !== null && acceptedSha === plan.sha256;
 
   return (
     <div
@@ -297,19 +354,19 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
           decision, and a select with a single option is a control that asks a
           question with one answer.
         */}
-        {indexes.length > 1 ? (
+        {usable.length > 1 ? (
           <label className="flex min-w-0 basis-full flex-col gap-1 text-[11px] text-muted-foreground sm:basis-56">
             Index
             <select
               data-testid="plugins-install-index"
-              value={index || indexes[0]}
+              value={index || usable[0]}
               onChange={(event) => {
                 setIndex(event.target.value);
                 changed();
               }}
               className="min-w-0 rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
             >
-              {indexes.map((url) => (
+              {usable.map((url) => (
                 <option key={url} value={url}>
                   {url}
                 </option>
@@ -337,6 +394,19 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
         <code className="break-all font-mono">genus plugin install ./x.whl --sha256 …</code> on the
         box.
       </p>
+
+      {refused.length ? (
+        <p
+          data-testid="plugins-install-unusable-index"
+          className="break-words text-[11px] text-warning"
+        >
+          Not offered as a choice, because the engine refuses a plugin index that is not{" "}
+          <code className="font-mono">https</code> — its signature is the only thing standing
+          between this box and whatever a mirror serves:{" "}
+          <span className="break-all font-mono">{refused.join(", ")}</span>. Fix{" "}
+          <code className="font-mono">ROBOTHOR_PLUGIN_INDEXES</code> on the box.
+        </p>
+      ) : null}
 
       {error ? (
         <p
@@ -394,13 +464,30 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
                 className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground"
               >
                 <Copy aria-hidden className="size-3" />
-                {copied ? "copied" : "copy"}
+                {/*
+                  Keyed on the HASH, not on a boolean. The clipboard holds one
+                  specific hash, and on the one control whose purpose is
+                  comparing hashes, "copied" beside a different one is worse
+                  than no affordance at all.
+                */}
+                {copiedSha === plan.sha256 ? "copied" : "copy"}
               </button>
             </div>
             <div className="flex min-w-0 flex-wrap items-center gap-1">
               <dt className="shrink-0">Signed by</dt>
               <dd className="min-w-0 break-all font-mono text-foreground">
                 {plan.publisherKeyId || "no key recorded"}
+              </dd>
+            </div>
+            {/*
+              WHICH index answered. The picker names one and the engine is free
+              to search the others when none was posted, so this is the field
+              that makes the provenance claim checkable rather than assumed.
+            */}
+            <div className="flex min-w-0 flex-wrap items-center gap-1">
+              <dt className="shrink-0">From</dt>
+              <dd className="min-w-0 break-all font-mono text-foreground">
+                {plan.indexUrl || "a wheel, not an index"}
               </dd>
             </div>
             <div className="flex min-w-0 flex-wrap items-center gap-1">
@@ -456,7 +543,7 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
                 type="checkbox"
                 data-testid="plugins-install-accept"
                 checked={accepted}
-                onChange={(event) => setAccepted(event.target.checked)}
+                onChange={(event) => setAcceptedSha(event.target.checked ? plan.sha256 : null)}
                 className="mt-0.5 shrink-0"
               />
               <span className="min-w-0 break-words">
@@ -473,7 +560,17 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
               <Button
                 size="sm"
                 data-testid="plugins-install-submit"
-                disabled={busy !== null || (plan.verdict === "review" && !accepted)}
+                /*
+                  `attempted` is the terminal state, and it is set on EVERY
+                  answer rather than only on a recorded row. After a 200 the
+                  button used to revert from "Installing…" to "Install" with the
+                  plan and the acceptance both still set, so a second press ran
+                  pip a second time — and the only sign the first had worked was
+                  one line of text below the fold on a phone. A 504 is the worse
+                  half: it means the operation may still be running, so a retry
+                  is the exact thing not to offer. Preview again to try again.
+                */
+                disabled={busy !== null || attempted || (plan.verdict === "review" && !accepted)}
                 onClick={() => void post(false)}
               >
                 {busy === "install" ? "Installing…" : "Install"}
@@ -483,16 +580,35 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
         </div>
       ) : null}
 
-      {row ? (
+      {/*
+        `row` OR `note`: the route answers 200 with a null row when the install
+        succeeded and the lockfile row could not be written, and says so in
+        `note`. Gating on the row alone made that outcome silent.
+      */}
+      {row || (note && attempted) ? (
         <p
           data-testid="plugins-install-result"
           className="break-words rounded-lg border border-border bg-card p-2 text-[11px] text-muted-foreground"
         >
-          Recorded <span className="font-medium text-foreground">{row.name}</span> {row.version} in
-          the lockfile as <span className="font-mono">{row.verdict}</span>
-          {row.kinds.length ? `, contributing ${row.kinds.join(", ")}` : ""}
-          {row.membersAccounted ? ` · ${row.membersAccounted} wheel members accounted for` : ""}.
+          {row ? (
+            <>
+              Recorded <span className="font-medium text-foreground">{row.name}</span> {row.version}{" "}
+              in the lockfile as <span className="font-mono">{row.verdict}</span>
+              {row.kinds.length ? `, contributing ${row.kinds.join(", ")}` : ""}
+              {row.membersAccounted ? ` · ${row.membersAccounted} wheel members accounted for` : ""}
+              .{" "}
+            </>
+          ) : (
+            <>Nothing was recorded in the lockfile. </>
+          )}
           Installing is not loading — the engine is still running the set it discovered.
+          {/*
+            The route's own `note`, which is non-empty exactly when the outcome
+            was not clean — the distribution went in but its row could not be
+            recorded, say. Dropping it makes a partial install read as a
+            complete one, which is the one thing a governance record must not do.
+          */}
+          {note ? <span className="block pt-1 text-warning">{note}</span> : null}
         </p>
       ) : null}
     </div>
