@@ -52,6 +52,9 @@ plugins.push(
       'robothor/__init__.py',
       'app/package.json',
       'helm/genus-os/Chart.yaml',
+      // Stamped by prepareCmd above: the published installer must ship the
+      // version it was released with.
+      'scripts/install.sh',
     ],
     message: 'chore(release): ${nextRelease.version} [skip ci]',
   }],
