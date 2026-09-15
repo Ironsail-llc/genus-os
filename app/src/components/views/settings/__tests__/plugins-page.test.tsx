@@ -255,8 +255,12 @@ describe("Settings › Plugins — recording", () => {
   });
 
   it("points a 409 at the CLI, which is the only place --force exists", async () => {
+    // Verbatim shape of `robothor/plugins/lockfile.py::sync`'s refusal.
     const detail =
-      "the existing lockfile cannot be read in full; rewriting it would silently re-enable every disabled plugin";
+      "the lockfile is not valid JSON (JSONDecodeError), so which plugins you disabled cannot " +
+      "be read. Rewriting it now would silently re-enable every one of them. Repair the file, " +
+      "or re-run with --force to rebuild it from what is installed and accept losing those " +
+      "decisions.";
     mockBridge({ listings: [LISTING], sync: { status: 409, body: { detail } } });
     render(<PluginsPage visible />);
 
@@ -672,9 +676,20 @@ describe("Settings › Plugins — reloading", () => {
   });
 
   it("marks a mixed bucket per failure, not by whether every one of them is intended", async () => {
-    // One distribution, two groups, one deliberate refusal and one real fault.
+    /*
+      One distribution, two groups, one deliberate refusal and one real fault.
+
+      Synthetic on purpose: a clean engine refuses every entry point of a
+      disabled distribution the same way, so a mixed bucket does not arise from
+      it. It arises from a mis-attribution, which is exactly the case this page
+      must not render as "you turned this off" in destructive colour — so the
+      rendering is pinned for a payload the page can be handed rather than only
+      for the one it expects.
+    */
     const BOTH = {
       ...LOADED,
+      enabled: false,
+      state: "disabled",
       groups: ["genus.tools", "genus.services"],
       manifest: {
         contract_version: 1,

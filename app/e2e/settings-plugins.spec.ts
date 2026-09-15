@@ -231,8 +231,50 @@ test.describe("Settings › Plugins", () => {
     await expect(page.locator('[data-testid="plugins-reload-bar"]')).toHaveCount(0);
   });
 
+  /**
+   * The strings on this screen are not the page's own: a `failure_reason` is a
+   * Python exception, and those carry dotted module paths and `snake_case`
+   * names that no browser breaks by default. A 30-character fixture reason
+   * passes this case while a real one pushes the settings pane into 130 px of
+   * sideways scroll — so the operator has to drag the page to read the sentence
+   * the card exists to show. The fixture below is a realistic one.
+   */
+  const LONG_REASON =
+    "manifest changed since it was recorded; run genus plugin sync — " +
+    "ModuleNotFoundError: No module named " +
+    "'acme_observability_instrumentation_contrib_extensions.collector.backends.prometheus'";
+
   test("keeps every card and control usable on a 390 px screen", async ({ page }) => {
     await setupMocks(page);
+    // Registered last, so it wins: one card carrying the longest strings the
+    // engine can actually put in this payload.
+    await page.route("**/api/bridge/api/plugins", (route) =>
+      json(route, {
+        generation: 7,
+        lockfile: { path_configured: true, present: true, malformed: false, rows: 2 },
+        plugins: [
+          { ...HOSTINFO, recorded: true, verdict: "unscanned" },
+          {
+            ...LEDGER,
+            name: "acme-observability-instrumentation-contrib-extensions",
+            recorded: true,
+            verdict: "unscanned",
+            state: "failed",
+            drifted: true,
+            contributions: {},
+            failure_reason: LONG_REASON,
+            manifest: {
+              contract_version: 1,
+              declared: {
+                services: [
+                  "acme_observability_instrumentation_contrib_extensions.collector.backends.prometheus",
+                ],
+              },
+            },
+          },
+        ],
+      })
+    );
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(PLUGINS_URL, { waitUntil: "networkidle" });
 
@@ -241,6 +283,22 @@ test.describe("Settings › Plugins", () => {
     await expect(page.locator('[data-testid="plugins-record"]')).toBeVisible();
     await expect(page.locator('[data-testid="plugin-genus-hostinfo"]')).toBeVisible();
     await expect(page.locator('[data-testid="plugin-switch-genus-hostinfo"]')).toBeVisible();
+
+    const card = "plugin-acme-observability-instrumentation-contrib-extensions";
+    await expect(page.locator(`[data-testid="${card}"]`)).toBeVisible();
+    // The manifest is open, because its declared names are the longest single
+    // tokens on the card and a collapsed <details> hides the problem.
+    await page.locator(`[data-testid="plugin-manifest-${card.slice("plugin-".length)}"]`).evaluate(
+      (el) => ((el as HTMLDetailsElement).open = true)
+    );
+    const reason = page.locator(
+      `[data-testid="plugin-failure-${card.slice("plugin-".length)}"]`
+    );
+    await expect(reason).toContainText("ModuleNotFoundError");
+    // The paragraph itself must wrap, not merely be clipped by an ancestor.
+    expect(
+      await reason.evaluate((el) => el.scrollWidth - el.clientWidth)
+    ).toBeLessThanOrEqual(1);
 
     const worst = await page.evaluate(() => {
       let overflow = 0;

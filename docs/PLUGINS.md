@@ -492,8 +492,13 @@ that reload's failure list and is rendered as the operator's own decision, not
 as something to fix. Two things it deliberately does not do: it never renders
 `verdict`, because nothing scans a plugin yet and a placeholder printed on the
 screen where third-party code is turned on reads as a clearance; and it offers
-no `--force`, pointing at `genus plugin sync --force` on the box instead, so
-the cost of discarding recorded disables is read before it is paid.
+no `--force`, pointing at `genus plugin sync --force` on the box instead — and
+only when the engine's own refusal names it, since a 409 also answers "no
+lockfile path resolves", where there is nothing to force. A file the engine
+found **unreadable** is reported as governing nothing at all, because that is
+what `usable` means: the page says every plugin that was turned off is loading
+again, and sends the operator to Record, whose refusal distinguishes damaged
+contents (409) from an unwritable path (503).
 
 ## A worked example
 

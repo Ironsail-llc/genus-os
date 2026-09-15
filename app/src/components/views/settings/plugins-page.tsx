@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 import { Loader2, Puzzle, RefreshCw } from "lucide-react";
 
 import { PageHeader } from "@/components/business/page-header";
@@ -212,30 +212,63 @@ function squash(name: string): string {
   return name.toLowerCase().replace(/[-_.]/g, "");
 }
 
+/** Every name this distribution's manifest declares, squashed for comparison. */
+function declaredNames(plugin: Plugin): string[] {
+  return (plugin.manifest?.declared ?? []).flatMap((entry) => entry.names.map(squash));
+}
+
 /**
- * Which distribution a reload failure belongs to.
+ * Which distribution a reload failure belongs to, or `null` for "cannot tell".
  *
  * `failures[].name` is the ENTRY-POINT name, not the distribution's — one
- * distribution can appear in this list several times, once per group it
- * publishes into, and `genus-hostinfo` shows up as `hostinfo`. String equality
- * would silently drop most of them, so the listing is the index: narrow to the
- * distributions that publish into the failing group, and take the answer only
- * when it is unambiguous. Anything else is rendered as its own unattributed
- * line rather than filed under a guess — this page's whole job is saying what
- * is actually true about code the operator did not write.
+ * distribution appears here once per group it publishes into, and
+ * `genus-hostinfo` shows up as `hostinfo`. There is no join key in the payload,
+ * so this weighs the evidence that IS there, strongest first, and returns
+ * nothing rather than a guess. A wrong answer here is not a cosmetic slip: it
+ * reports a plugin the operator did not disable as one they did, beside a card
+ * drawing that same plugin as loaded.
+ *
+ * The order, and why each step outranks the next:
+ *
+ * 1. **The group.** An entry point that failed in `genus.jobs` belongs to a
+ *    distribution that publishes into `genus.jobs`. Nothing else is a candidate.
+ * 2. **`enabled`, for `disabled by operator` only.** That reason is produced by
+ *    exactly one thing — a lock row that is off — so a distribution the listing
+ *    draws as enabled cannot be its owner, whatever it is called. If precisely
+ *    one candidate is off, that is the owner; if none is, the page says nothing
+ *    rather than accusing a running plugin.
+ * 3. **`manifest.declared`.** The only field in the payload that names entry
+ *    points at all. It used to be consulted last, behind a squashed suffix match
+ *    on the DISTRIBUTION name, which is how `acme-nightly-notes` got reported as
+ *    the plugin somebody had turned off.
+ * 4. **The distribution's own name**, and only for candidates whose manifest
+ *    declares nothing — a manifest that names other entry points and not this
+ *    one is evidence AGAINST, so being alone in the group does not make a
+ *    distribution the culprit.
  */
 export function attributeFailure(failure: ReloadFailure, plugins: Plugin[]): string | null {
-  const candidates = plugins.filter((p) => p.groups.includes(failure.group));
-  if (candidates.length === 1) return candidates[0].name;
+  let candidates = plugins.filter((p) => p.groups.includes(failure.group));
+
+  if (failure.reason === BY_OPERATOR) {
+    const off = candidates.filter((p) => !p.enabled || p.state === "disabled");
+    if (off.length === 1) return off[0].name;
+    if (off.length === 0) return null;
+    candidates = off;
+  }
+
   const wanted = squash(failure.name);
-  const byName = candidates.filter(
-    (p) => squash(p.name) === wanted || squash(p.name).endsWith(wanted)
+  const byDeclared = candidates.filter((p) => declaredNames(p).includes(wanted));
+  if (byDeclared.length === 1) return byDeclared[0].name;
+  if (byDeclared.length > 1) return null;
+
+  const silent = candidates.filter((p) => declaredNames(p).length === 0);
+  const byName = silent.filter(
+    (p) =>
+      squash(p.name) === wanted ||
+      squash(p.name).endsWith(wanted) ||
+      wanted.endsWith(squash(p.name))
   );
-  if (byName.length === 1) return byName[0].name;
-  const byDeclared = candidates.filter((p) =>
-    (p.manifest?.declared ?? []).some((entry) => entry.names.some((n) => squash(n) === wanted))
-  );
-  return byDeclared.length === 1 ? byDeclared[0].name : null;
+  return byName.length === 1 ? byName[0].name : null;
 }
 
 function statePill(state: string): { label: string; className: string } {
@@ -276,7 +309,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
   /** A lock row was written and the engine has not been asked to act on it yet. */
   const [pending, setPending] = useState(false);
 
-  const { busyRow, rowErrors, rowNotes, act, setRowNote } = useRowActions();
+  const { busyRow, rowErrors, rowNotes, act, setRowNote, setRowError } = useRowActions();
 
   /*
     The notes a toggle leaves behind all say the same thing — "recorded, and
@@ -309,19 +342,46 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
   const engineDown = poll.status === 502;
   const listError = poll.forbidden ? null : engineDown ? ENGINE_UNREACHABLE : poll.error;
 
-  const record = useCallback(async () => {
-    setSyncing(true);
+  /**
+   * One act on screen at a time.
+   *
+   * Recording, toggling and reloading each answer about a different moment, and
+   * the reports used to stack: a sync report from two acts ago sat above a
+   * reload report describing a set the sync had not seen. A page whose job is
+   * saying what is true now cannot describe three moments at once, so every act
+   * retires the last one's answer before it starts.
+   */
+  const retireReports = useCallback(() => {
+    setSyncReport(null);
     setSyncError(null);
     setSyncForcible(false);
-    setSyncReport(null);
+    setReloadReport(null);
+    setReloadError(null);
+  }, []);
+
+  const record = useCallback(async () => {
+    setSyncing(true);
+    retireReports();
     try {
       const res = await fetch(`${BRIDGE}/api/plugins/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
       if (!res.ok) {
-        setSyncError(res.status === 502 ? ENGINE_UNREACHABLE : await readBridgeReply(res));
-        setSyncForcible(res.status === 409);
+        const message = res.status === 502 ? ENGINE_UNREACHABLE : await readBridgeReply(res);
+        setSyncError(message);
+        /*
+          A 409 is not one refusal.
+
+          `lockfile.py::sync` refuses with "no lockfile path resolves" when
+          there is no workspace at all — no file to rebuild, nowhere to put the
+          rejected copy — and that lands as a 409 too. So the status alone does
+          not earn the CLI escape; the server's own sentence does, because the
+          branch that `--force` fixes is the one whose text says "re-run with
+          --force". Printing it for the other branch promised an operator a
+          command that cannot help them and a backup copy that cannot exist.
+        */
+        setSyncForcible(res.status === 409 && message.includes("--force"));
         return;
       }
       setSyncReport(normalizeSync(await res.json()));
@@ -332,12 +392,11 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
     } finally {
       setSyncing(false);
     }
-  }, [poll]);
+  }, [poll, retireReports]);
 
   const reload = useCallback(async () => {
     setReloading(true);
-    setReloadError(null);
-    setReloadReport(null);
+    retireReports();
     try {
       const res = await fetch(`${BRIDGE}/api/plugins/reload`, {
         method: "POST",
@@ -359,7 +418,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
     } finally {
       setReloading(false);
     }
-  }, [poll, clearNotes]);
+  }, [poll, clearNotes, retireReports]);
 
   const toggle = useCallback(
     (plugin: Plugin) => {
@@ -370,7 +429,10 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
         { method: "POST" },
         (body) => {
           const row = (body ?? {}) as Record<string, unknown>;
-          const enabled = row.enabled === true;
+          // The same default `normalizePlugin` uses. Two readers of one field
+          // disagreeing about what its absence means is how a 200 this build
+          // did not fully expect draws an enabled plugin as switched off.
+          const enabled = row.enabled !== false;
           setListing((current) =>
             current === null
               ? current
@@ -400,10 +462,19 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
               : "Recorded as disabled. The engine is still running it — reload to stop it being imported."
           );
           setPending(true);
+        },
+        (res) => {
+          /*
+            `row-actions` prints the bridge's own words, which for a 502 are the
+            app proxy's "Bridge service unavailable" or a bare status line. The
+            page has one sentence for "the engine did not answer" and the row is
+            not the place to start using a second.
+          */
+          if (res.status === 502) setRowError(plugin.name, ENGINE_UNREACHABLE);
         }
       );
     },
-    [act, setRowNote]
+    [act, setRowNote, setRowError]
   );
 
   /** The reload report's failures, filed under the distribution each belongs to. */
@@ -469,7 +540,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
       {listError ? (
         <p
           data-testid="plugins-error"
-          className="max-w-3xl rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+          className="max-w-3xl break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
         >
           {listError}
         </p>
@@ -498,11 +569,13 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
               data-testid="plugins-lockfile"
               className="rounded-full border border-border bg-muted px-2 py-0.5"
             >
-              {data.lockfile.present
-                ? `lockfile: ${data.lockfile.rows} recorded ${
-                    data.lockfile.rows === 1 ? "row" : "rows"
-                  }`
-                : "lockfile: not written yet"}
+              {data.lockfile.malformed
+                ? "lockfile: unreadable"
+                : data.lockfile.present
+                  ? `lockfile: ${data.lockfile.rows} recorded ${
+                      data.lockfile.rows === 1 ? "row" : "rows"
+                    }`
+                  : "lockfile: not written yet"}
             </span>
           </div>
 
@@ -518,12 +591,15 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
             errand and becomes the thing the operator came to do.
           */}
           <div className="flex max-w-3xl flex-wrap items-center gap-2">
-            {data.lockfile.present ? (
+            {data.lockfile.present || !data.lockfile.pathConfigured ? (
               <Button
                 variant="outline"
                 size="sm"
                 data-testid="plugins-record"
-                disabled={syncing}
+                // Nowhere to write means there is nothing this button can do.
+                // It stays on screen, inert, rather than vanishing: an operator
+                // looking for the act needs to find it and read why it is off.
+                disabled={syncing || !data.lockfile.pathConfigured}
                 onClick={() => void record()}
               >
                 {syncing ? "Recording…" : "Record installed plugins"}
@@ -537,26 +613,50 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
               data-testid="plugins-lockfile-unconfigured"
               className="max-w-3xl rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
             >
-              No workspace resolves on this deployment, so there is nowhere to keep the lockfile.
-              Nothing can be recorded or turned off until that is fixed on the box; every installed
-              plugin loads, which is how the platform behaved before the lockfile existed.
+              No workspace resolves on this deployment, so there is nowhere to keep the lockfile and
+              nothing can be recorded or turned off from here. Every installed plugin loads, which
+              is how the platform behaved before the lockfile existed — fix the workspace on the box
+              and this screen becomes usable.
             </p>
           ) : null}
 
+          {/*
+            `malformed: true` is WHOLE-FILE damage and nothing else: the path
+            will not read, the bytes are not decodable text, the JSON does not
+            parse, or there is no `plugins` list
+            (`robothor/plugins/lockfile.py::read_lockfile`). Unreadable ROWS
+            leave the flag false and are not visible in this payload at all.
+
+            So the consequence is the opposite of a partial one.
+            `Lockfile.usable = present and not malformed`, and the loader opens
+            with `if not lock.usable: return None` — in this state the engine is
+            ignoring the file completely and every plugin the operator turned
+            off is being imported right now. This card used to print the
+            partial-damage paragraph under the flag that means the total one,
+            telling an operator their disables still held at the exact moment
+            none of them did.
+
+            It also does not prescribe `--force`: the same flag covers the
+            unreadable PATH, where `sync` raises and the route answers 503, and
+            forcing cannot fix a filesystem. Recording is what tells the two
+            apart, so the card sends the operator there and lets the refusal
+            name the case.
+          */}
           {data.lockfile.malformed ? (
             <p
               data-testid="plugins-lockfile-malformed"
-              className="max-w-3xl rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
+              className="max-w-3xl break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
             >
-              Some rows in the lockfile could not be read. The rows that do parse still govern —
-              they are not discarded, because that would put every disabled plugin straight back
-              into service — but recording will refuse until the file is rebuilt with{" "}
-              <code className="font-mono">genus plugin sync --force</code> on the box, which keeps
-              the old bytes and reports what it could not read.
+              The lockfile could not be read at all, so the engine is ignoring it: nothing is being
+              refused, and <strong>every installed plugin is loading, including any you turned
+              off</strong> and any whose manifest has drifted. Until it is repaired this screen can
+              show you what is installed but cannot govern it. Record installed plugins to find out
+              which fault it is — the refusal says whether the file&apos;s contents are damaged or
+              its path cannot be written, and those have different remedies.
             </p>
           ) : null}
 
-          {!data.lockfile.present ? (
+          {!data.lockfile.present && data.lockfile.pathConfigured ? (
             <div
               data-testid="plugins-record-empty"
               className="flex max-w-3xl flex-col gap-2 rounded-lg border border-primary/25 bg-primary/5 p-3"
@@ -586,7 +686,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
           {syncError ? (
             <p
               data-testid="plugins-record-error"
-              className="max-w-3xl rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+              className="max-w-3xl break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
             >
               {syncError}
             </p>
@@ -600,15 +700,16 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
               Rebuilding the file is a shell command, not a button:{" "}
               <code className="font-mono">genus plugin sync --force</code>. It is deliberately not
               offered over HTTP — it discards every disable it cannot read, and the CLI is where
-              that cost is printed before it happens. The old bytes are kept as{" "}
-              <code className="font-mono">plugins.lock.rejected</code>.
+              that cost is printed before it happens. It keeps the old bytes as{" "}
+              <code className="font-mono">plugins.lock.rejected</code> where it can, and says so
+              when it could not.
             </p>
           ) : null}
 
           {syncReport ? (
             <p
               data-testid="plugins-record-result"
-              className="max-w-3xl rounded-lg border border-border bg-card p-3 text-xs text-muted-foreground"
+              className="max-w-3xl break-words rounded-lg border border-border bg-card p-3 text-xs text-muted-foreground"
             >
               Recorded {syncReport.recorded.length}{" "}
               {syncReport.recorded.length === 1 ? "distribution" : "distributions"}
@@ -685,7 +786,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
 
                 <p
                   data-testid={`plugin-contributions-${plugin.name}`}
-                  className="text-[11px] text-muted-foreground"
+                  className="break-words text-[11px] text-muted-foreground"
                 >
                   {plugin.contributions.length === 0
                     ? "Contributing nothing to the running engine right now."
@@ -697,7 +798,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                 {plugin.failureReason ? (
                   <p
                     data-testid={`plugin-failure-${plugin.name}`}
-                    className={`text-[11px] ${
+                    className={`break-words text-[11px] ${
                       plugin.failureReason === BY_OPERATOR
                         ? "text-muted-foreground"
                         : "text-destructive"
@@ -709,7 +810,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
 
                 <details
                   data-testid={`plugin-manifest-${plugin.name}`}
-                  className="text-[11px] text-muted-foreground"
+                  className="break-words text-[11px] text-muted-foreground"
                 >
                   <summary className="cursor-pointer select-none">Manifest</summary>
                   {plugin.manifest === null ? (
@@ -729,9 +830,9 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                         <p>The manifest declares no names.</p>
                       ) : (
                         plugin.manifest.declared.map((entry) => (
-                          <p key={entry.kind}>
+                          <p key={entry.kind} className="break-words">
                             <span className="font-mono">{entry.kind}</span>:{" "}
-                            <span className="font-mono">{entry.names.join(", ")}</span>
+                            <span className="break-all font-mono">{entry.names.join(", ")}</span>
                           </p>
                         ))
                       )}
@@ -766,7 +867,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                   {!plugin.recorded ? (
                     <span
                       data-testid={`plugin-hint-${plugin.name}`}
-                      className="text-[11px] text-muted-foreground"
+                      className="break-words text-[11px] text-muted-foreground"
                     >
                       Record this instance&apos;s plugins first — there is no row to turn off yet,
                       and the engine answers a toggle on one with a 404.
@@ -777,7 +878,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                 {rowNotes[plugin.name] ? (
                   <p
                     data-testid={`plugin-note-${plugin.name}`}
-                    className="text-[11px] text-muted-foreground"
+                    className="break-words text-[11px] text-muted-foreground"
                   >
                     {rowNotes[plugin.name]}
                   </p>
@@ -786,7 +887,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                 {rowErrors[plugin.name] ? (
                   <p
                     data-testid={`plugin-error-${plugin.name}`}
-                    className="text-[11px] text-destructive"
+                    className="break-words text-[11px] text-destructive"
                   >
                     {rowErrors[plugin.name]}
                   </p>
@@ -798,7 +899,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
           {reloadError ? (
             <p
               data-testid="plugins-reload-error"
-              className="max-w-3xl rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+              className="max-w-3xl break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
             >
               {reloadError}
             </p>
@@ -823,24 +924,49 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                 Reloaded at generation {reloadReport.generation} — {reloadReport.loaded}{" "}
                 {reloadReport.loaded === 1 ? "plugin" : "plugins"} loaded.
               </p>
+              {/*
+                Marked per FAILURE, not per distribution. `every(...)` reported a
+                distribution with one deliberate refusal and one real fault as a
+                single red fault line quoting "disabled by operator" as the
+                problem — which is the operator's own decision printed back at
+                them as something to fix.
+
+                Every line carries `group/entry-point` beside the reason, so the
+                attribution below can be checked rather than believed: that is
+                the only evidence the payload gives for the match, and the match
+                is a judgement this page made, not one the engine sent.
+              */}
               {attributed.byPlugin.map(({ name, failures }) => {
-                const intended = failures.every((f) => f.reason === BY_OPERATOR);
+                const intended = failures.filter((f) => f.reason === BY_OPERATOR);
+                const faults = failures.filter((f) => f.reason !== BY_OPERATOR);
                 return (
-                  <p
-                    key={name}
-                    data-testid={`plugins-reload-${intended ? "intended" : "failure"}-${name}`}
-                    className={intended ? "text-muted-foreground" : "text-destructive"}
-                  >
-                    <span className="font-medium">{name}</span>
-                    {intended
-                      ? " — not loaded, because you turned it off. That is the decision arriving back, not a fault."
-                      : ` — ${failures.map((f) => `${f.group}: ${f.reason}`).join("; ")}`}
-                  </p>
+                  <Fragment key={name}>
+                    {intended.length ? (
+                      <p
+                        data-testid={`plugins-reload-intended-${name}`}
+                        className="break-words text-muted-foreground"
+                      >
+                        <span className="font-medium">{name}</span> — not loaded, because you
+                        turned it off ({intended.map((f) => `${f.group}/${f.name}`).join(", ")}).
+                        That is the decision arriving back, not a fault.
+                      </p>
+                    ) : null}
+                    {faults.length ? (
+                      <p
+                        data-testid={`plugins-reload-failure-${name}`}
+                        className="break-words text-destructive"
+                      >
+                        <span className="font-medium">{name}</span> —{" "}
+                        {faults.map((f) => `${f.group}/${f.name}: ${f.reason}`).join("; ")}
+                      </p>
+                    ) : null}
+                  </Fragment>
                 );
               })}
               {attributed.unmatched.length ? (
-                <p data-testid="plugins-reload-unmatched">
-                  Refusals this listing could not tie to an installed distribution:{" "}
+                <p data-testid="plugins-reload-unmatched" className="break-words">
+                  Refusals this listing could not tie to an installed distribution — the entry
+                  point failed, but nothing in the payload says whose it is:{" "}
                   {attributed.unmatched
                     .map((f) => `${f.group}/${f.name}: ${f.reason}`)
                     .join("; ")}
