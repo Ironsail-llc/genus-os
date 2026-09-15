@@ -47,6 +47,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.chat_history import ChatHistory
 from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
     clear_plan_state_async,
@@ -194,7 +195,11 @@ router = APIRouter(prefix="/chat", dependencies=[Depends(_require_chat_auth)])
 class ChatSession:
     """Per-session chat state."""
 
-    history: list[dict[str, Any]] = field(default_factory=list)
+    # A ChatHistory, not a list: it redacts every row on the way in, so every
+    # `session.history.append(...)` anywhere in the engine is covered without
+    # being edited — including the Telegram ones round 1 missed, and the next
+    # channel's. See robothor/engine/chat_history.py.
+    history: list[dict[str, Any]] = field(default_factory=ChatHistory)
     active_task: asyncio.Task[Any] | None = None
     model_override: str | None = None
     plan_mode: bool = False
