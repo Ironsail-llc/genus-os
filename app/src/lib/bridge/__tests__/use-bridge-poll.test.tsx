@@ -12,10 +12,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BRIDGE_UNREACHABLE, useBridgePoll } from "../use-bridge-poll";
 
-function Probe({ visible, url = "/api/bridge/api/things" }: { visible: boolean; url?: string }) {
+function Probe({
+  visible,
+  url = "/api/bridge/api/things",
+  paused,
+}: {
+  visible: boolean;
+  url?: string;
+  paused?: boolean;
+}) {
   const { loading, error, forbidden, reload } = useBridgePoll({
     visible,
     url,
+    paused,
     // Deliberately a fresh closure on every render: the hook must hold it in a
     // ref, or the interval below is rebuilt on each tick.
     onData: (body) => {
@@ -84,6 +93,41 @@ describe("useBridgePoll", () => {
     rerender(<Probe visible={false} />);
     await vi.advanceTimersByTimeAsync(180_000);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * `paused` is for a listing whose refresh is the operator's choice — the
+   * Logs pane, where auto-refresh is off by default because ten seconds of
+   * journald is a real read on the box and most of the time the operator is
+   * staring at one window, not watching a stream.
+   *
+   * It stops the BEAT, not the reader: the listing still loads when it comes
+   * on screen and still reloads when the URL changes, or a paused pane would
+   * be a blank pane.
+   */
+  it("still reads once while paused, and never ticks", async () => {
+    const fetchMock = mockFetch((n) => ({ status: 200, body: { count: n } }));
+    render(<Probe visible paused />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts ticking when the pause is lifted, and stops again when it returns", async () => {
+    const fetchMock = mockFetch((n) => ({ status: 200, body: { count: n } }));
+    const { rerender } = render(<Probe visible paused />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    rerender(<Probe visible paused={false} />);
+    await vi.advanceTimersByTimeAsync(60_000);
+    const whileRunning = fetchMock.mock.calls.length;
+    expect(whileRunning).toBeGreaterThan(1);
+
+    rerender(<Probe visible paused />);
+    const whenRepaused = fetchMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fetchMock).toHaveBeenCalledTimes(whenRepaused);
   });
 
   it("answers a refusal in the server's own words", async () => {

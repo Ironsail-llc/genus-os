@@ -44,6 +44,21 @@ export interface BridgePollOptions {
   /** The parsed body of a 2xx. Re-created per render; held in a ref. */
   onData: (body: unknown) => void;
   intervalMs?: number;
+  /**
+   * Stop the BEAT, not the reader.
+   *
+   * For a listing whose refresh is the operator's choice rather than the
+   * page's — the Logs pane, where auto-refresh is off by default because ten
+   * seconds of journald is a real read on the box and most of the time the
+   * operator is looking at one window, not watching a stream.
+   *
+   * The listing still loads when it comes on screen and still reloads when the
+   * URL changes; a paused pane that never read anything would just be a blank
+   * pane. Changing this re-runs the read as well as the interval, which is what
+   * an operator switching auto-refresh ON wants and costs one extra read when
+   * they switch it off.
+   */
+  paused?: boolean;
 }
 
 export interface BridgePoll {
@@ -53,6 +68,14 @@ export interface BridgePoll {
   error: string | null;
   /** The bridge says this listing is not this caller's. Not a failure. */
   forbidden: boolean;
+  /**
+   * The status of the last refusal, or `null` when the last attempt did not
+   * refuse. For the callers where the KIND of refusal decides where the
+   * sentence goes: a 422 from `GET /api/logs` names the query parameter the
+   * operator can fix, and belongs under that field rather than in a red banner
+   * over an empty pane.
+   */
+  status: number | null;
   /** Read it again now — for a Refresh button, or after a write. */
   reload: () => void;
 }
@@ -62,10 +85,12 @@ export function useBridgePoll({
   url,
   onData,
   intervalMs = POLL_MS,
+  paused = false,
 }: BridgePollOptions): BridgePoll {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
+  const [status, setStatus] = useState<number | null>(null);
 
   // Both refs exist for the same reason: neither the caller's handler nor the
   // loader may become a dependency of the interval effect.
@@ -77,6 +102,7 @@ export function useBridgePoll({
     try {
       const res = await fetch(url);
       if (!res.ok) {
+        setStatus(res.status);
         if (res.status === 403) {
           setForbidden(true);
           setError(null);
@@ -86,9 +112,11 @@ export function useBridgePoll({
         return;
       }
       setForbidden(false);
+      setStatus(null);
       onDataRef.current(await res.json());
       setError(null);
     } catch {
+      setStatus(null);
       setError(BRIDGE_UNREACHABLE);
     } finally {
       setLoading(false);
@@ -102,9 +130,10 @@ export function useBridgePoll({
   useEffect(() => {
     if (!visible) return;
     void loadRef.current();
+    if (paused) return;
     const timer = setInterval(() => void loadRef.current(), intervalMs);
     return () => clearInterval(timer);
-  }, [visible, url, intervalMs]);
+  }, [visible, url, intervalMs, paused]);
 
-  return { loading, error, forbidden, reload };
+  return { loading, error, forbidden, status, reload };
 }
