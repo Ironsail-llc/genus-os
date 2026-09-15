@@ -28,7 +28,6 @@ each is pinned here:
 from __future__ import annotations
 
 import json
-import os
 import stat
 from unittest.mock import patch
 
@@ -120,7 +119,7 @@ class TestSync:
         data = json.loads(lock_path.read_text(encoding="utf-8"))
         assert data["lockfile_version"] == lockfile.LOCKFILE_VERSION
         assert [p["name"] for p in data["plugins"]] == ["acme-tools"]
-        mode = stat.S_IMODE(os.stat(lock_path).st_mode)
+        mode = stat.S_IMODE(lock_path.stat().st_mode)
         assert mode == 0o600, f"lockfile is mode {mode:o}"
 
     def test_a_second_sync_keeps_the_recorded_enablement(self, lock_path):
