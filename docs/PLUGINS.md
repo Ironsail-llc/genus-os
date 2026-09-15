@@ -513,11 +513,39 @@ acts with identifiers only.
 | `POST /api/plugins/install` | `POST /api/admin/plugins/install` | `{name, version?, index?, accept_review?, dry_run?}` → the install plan and its verdict; **422** for a blocked or unreviewed wheel, an unverifiable index, or a `name` that is not a distribution name |
 | `POST /api/plugins/{name}/remove` | `POST /api/admin/plugins/{name}/remove` | `{force?}` → `{name, removed, row_dropped, reload_hint, note}` |
 
+The listing's `lockfile` block answers `path_configured`, `present`, `malformed`,
+`rows` and **`problem`** — the sentence the CLI and the doctor print, or `null`
+when the file is fine. `malformed` says *that* the file is damaged; `problem`
+says *which* damage, and the four have different remedies (an unwritable path
+is not something `--force` can fix). Each plugin row carries **`source`** — the
+lock row's origin block, or `null` for anything this platform did not install,
+which is the only thing that distinguishes a plugin `remove` will act on from
+one it refuses.
+
+#### Three namespaces, and the field that keeps them apart
+
+A reload answers `failures[]` of
+`{name, group, reason, distribution}`, and the first and last of those are
+**different namespaces**:
+
+| namespace | example | where it appears |
+|---|---|---|
+| distribution name | `genus-hostinfo` | `plugins[].name`, `failures[].distribution`, `enable`/`disable`/`remove` paths |
+| entry-point name | `hostinfo` | `failures[].name` |
+| contribution name | `host_state` | `manifest.declared` values, the keys of a loaded payload |
+
+`manifest.declared` holds **contribution** names. It therefore says nothing
+about which entry point a distribution publishes, and must never be read as a
+denial that it owns one. `failures[].distribution` is the join key: the loader
+has `ep.dist` in hand when it records the refusal, and `null` means only that
+the metadata layer could not name the distribution.
+
 No response carries a filesystem path. Which distributions are installed is a
 platform fact; where an instance keeps its files is not, so the listing answers
-`path_configured` and `present` and never *where* — and the install response
-omits the pip command, which holds a temp directory and the interpreter's
-location. The CLI prints it; HTTP does not.
+`path_configured` and `present` and never *where*, `problem` is built from the
+error class rather than the file — and the install response omits the pip
+command, which holds a temp directory and the interpreter's location. The CLI
+prints it; HTTP does not.
 
 `install` takes a distribution **name** and nothing that could become a path or
 a URL. A dashboard naming a filesystem path would be a file read on the
