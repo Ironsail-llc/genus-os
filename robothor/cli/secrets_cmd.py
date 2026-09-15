@@ -27,7 +27,6 @@ from, and it says so in its own name.
 from __future__ import annotations
 
 import argparse  # noqa: TC003
-import os
 
 from robothor.constants import DEFAULT_TENANT
 
@@ -40,7 +39,13 @@ _DEFAULT_CATEGORY = "credential"
 
 
 def _tenant(args: argparse.Namespace) -> str:
-    return getattr(args, "tenant", None) or os.environ.get("ROBOTHOR_TENANT_ID") or DEFAULT_TENANT
+    """Whose vault to act on: the flag, then the instance's configured tenant."""
+    from robothor.settings import get_settings
+
+    explicit = getattr(args, "tenant", None)
+    if explicit:
+        return str(explicit)
+    return get_settings().database.tenant_id or DEFAULT_TENANT
 
 
 def cmd_secrets(args: argparse.Namespace) -> int:
@@ -190,7 +195,9 @@ def value_for(name: str) -> str:
     contact with a credential is greppable — everything else in this module
     handles names and digests.
     """
-    return (os.environ.get(name) or "").strip()
+    from robothor.settings.env import process_env_get
+
+    return (process_env_get(name, None) or "").strip()
 
 
 def _reload_cached_readers() -> None:

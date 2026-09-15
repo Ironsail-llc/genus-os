@@ -16,7 +16,6 @@ with a credential it never returns; it is named to be conspicuous.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 
 from robothor.constants import DEFAULT_TENANT
@@ -183,10 +182,14 @@ def environment_credential_names() -> set[str]:
     """
     from robothor.engine.exec_env import looks_like_a_credential_name
     from robothor.secrets.classification import declared_secret_names
-    from robothor.settings.env import process_env_get  # noqa: F401 - import for symmetry
+    from robothor.settings.env import process_env_names
 
     declared = declared_secret_names()
-    return {name for name in os.environ if name in declared or looks_like_a_credential_name(name)}
+    return {
+        name
+        for name in process_env_names()
+        if name in declared or looks_like_a_credential_name(name)
+    }
 
 
 def status_table(*, tenant_id: str = DEFAULT_TENANT) -> list[SecretStatus]:
