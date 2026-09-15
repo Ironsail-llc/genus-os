@@ -74,11 +74,46 @@ PLACEHOLDER = "<redacted>"
 _AUTH_KEYWORD = r"AUTH\s+(?:PLAIN|LOGIN|XOAUTH2)"
 _AUTH_BLOB = r"(?:[A-Za-z0-9+/_-]{16,}={0,2}|[A-Za-z0-9+/_-]{4,}={1,2})"
 
+#: ``sk-``-prefixed API keys — OpenAI, OpenRouter and Anthropic all issue them,
+#: and the fleet's whole LLM spend rides on one. 16+ trailing characters,
+#: because the prefix alone is three letters that also begin ordinary words;
+#: the word boundary in front is what keeps ``risk-weighted-average`` and
+#: ``task-management-service`` out of the match.
+_API_KEY = r"\bsk-[A-Za-z0-9_-]{16,}"
+
+#: The credential words a NAME can end in. A password has no shape of its own —
+#: it is whatever the provider issued — so for a whole class of secrets the
+#: name on the left of the ``=`` is the only thing there is to match on.
+_CREDENTIAL_WORD = r"(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)"
+
+#: ``NAME=value``, where NAME ends in one of the words above. Deliberately
+#: narrow in three ways, each paid for by a false positive that would cost an
+#: operator their own log line:
+#:
+#: * the separator is ``=`` and only ``=``. ``TOKEN: expected`` in prose is a
+#:   sentence, and a ``:`` rule would eat the word after it.
+#: * the name is underscore/hyphen segments, so ``monkey=business`` does not
+#:   match: the ``\b`` before the name cannot land mid-word, and "monkey" is
+#:   not "…_key".
+#: * the VALUE stops at whitespace, a comma or a semicolon, so one assignment
+#:   in a line of many takes only its own value with it.
+#:
+#: The name is captured so the replacement can keep it: "which variable" is
+#: what the operator needs from the line, and "what its value was" is what they
+#: must not get.
+_ASSIGNMENT = re.compile(
+    rf"(?P<name>\b(?:[A-Za-z0-9]+[-_])*{_CREDENTIAL_WORD}\b)"
+    r"\s*=\s*"
+    r"(?P<value>\"[^\"]+\"|'[^']+'|[^\s,;]+)",
+    re.IGNORECASE,
+)
+
 _SHAPES = (
     r"xox[abceprs]-[\w-]+",
     r"xapp-[\w-]+",
     r"Bearer\s+\S+",
     r"\b\d{5,}:[A-Za-z0-9_-]{30,}",
+    _API_KEY,
     rf"{_AUTH_KEYWORD}(?:[ \t]+{_AUTH_BLOB})?(?:[ \t]*\r?\n{_AUTH_BLOB})+",
     rf"{_AUTH_KEYWORD}[ \t]+{_AUTH_BLOB}",
 )
@@ -89,6 +124,12 @@ _CREDENTIAL_SHAPED = re.compile("|".join(_SHAPES), re.IGNORECASE)
 def redact(text: str) -> str:
     """``text`` with every credential-shaped run replaced by :data:`PLACEHOLDER`.
 
+    Two passes, in this order. The named-assignment pass runs FIRST so that
+    ``OPENROUTER_API_KEY=sk-…`` keeps its variable name: the shape pass would
+    otherwise reach the ``sk-`` value on its own and produce the same safety
+    with less information. The shape pass then catches everything with a
+    credential shape of its own, assignment or not.
+
     Never raises and never returns ``None``: every caller is on a path that is
     already reporting a failure, and a redactor that could fail there would be
     the second bug in one line.
@@ -96,7 +137,8 @@ def redact(text: str) -> str:
     if not text:
         return text
     try:
-        return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, text)
+        named = _ASSIGNMENT.sub(lambda m: f"{m.group('name')}={PLACEHOLDER}", text)
+        return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
     except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail
         # If this ever somehow raises, printing nothing beats printing a token.
         return PLACEHOLDER

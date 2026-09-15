@@ -51,6 +51,7 @@ from routers.fleet import router as fleet_router
 from routers.health import router as health_router
 from routers.installed_agents import router as installed_agents_router
 from routers.integration import router as integration_router
+from routers.logs import router as logs_router
 from routers.memory import router as memory_router
 from routers.memory_facts import router as memory_facts_router
 from routers.notes_tasks import router as notes_tasks_router
@@ -193,6 +194,10 @@ app.include_router(settings_router)
 app.include_router(fleet_router)
 app.include_router(runs_router)
 app.include_router(system_health_router)
+# journald, for an operator who is not on the box. Beside system_health because
+# both answer "what is this appliance doing right now" — one as numbers, one as
+# the lines the processes actually printed.
+app.include_router(logs_router)
 app.include_router(workflows_router)
 # Automations: the scheduled half of the fleet, joined to what its last run
 # actually did. Beside workflows because the Helm shows them on one screen --

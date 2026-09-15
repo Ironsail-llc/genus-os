@@ -171,6 +171,61 @@ class TestARejectedFlagsValueIsNotPrinted:
             assert redact_unrecognized_arguments(innocent) == innocent
 
 
+class TestTheJournalLine:
+    """The shapes a LOG LINE carries, which is the third place the platform
+    does not build the string.
+
+    ``GET /api/logs`` serves journald to the Helm, and a journal line is
+    whatever a process wrote — including the environment it was started with.
+    ``OPENROUTER_API_KEY=sk-or-…`` in a traceback or a startup banner reaches
+    the browser of anyone who can open that page, which is a wider audience
+    than the box's shell.
+    """
+
+    #: Visibly fake. The prefix is real (OpenAI, OpenRouter and Anthropic all
+    #: issue ``sk-``-prefixed keys); the body is not a key.
+    API_KEY = "sk-or-notarealkey-000000000000"
+
+    def test_a_bare_api_key_goes(self) -> None:
+        cleaned = redact(f"calling openrouter with {self.API_KEY} failed")
+        assert self.API_KEY not in cleaned
+        assert PLACEHOLDER in cleaned
+
+    def test_an_environment_assignment_loses_its_value(self) -> None:
+        cleaned = redact(f"env: OPENROUTER_API_KEY={self.API_KEY}")
+        assert self.API_KEY not in cleaned
+        assert "OPENROUTER_API_KEY" in cleaned, "the NAME is what the operator needs to see"
+
+    @pytest.mark.parametrize(
+        "assignment",
+        [
+            "SMTP_PASSWORD=hunter2",
+            "--smtp-password=hunter2",
+            'GENUS_AUTH_SIGNING_KEY="hunter2"',
+            "webhook_secret=hunter2",
+            "SLACK_BOT_TOKEN=hunter2",
+        ],
+    )
+    def test_a_credential_shaped_name_takes_its_value_with_it(self, assignment: str) -> None:
+        """No shape of its own — an SMTP password is whatever the provider
+        issued — so the NAME is the only thing there is to match on."""
+        assert "hunter2" not in redact(assignment)
+
+    @pytest.mark.parametrize(
+        "innocent",
+        [
+            "monkey=business",
+            "ROBOTHOR_LOG_DIR=/srv/app/logs",
+            "ROBOTHOR_SLACK_BOT_TOKEN is set nowhere this instance reads",
+            "the API key was rejected",
+            "task-management-service started",
+            "risk-weighted-average-of-the-quarter",
+        ],
+    )
+    def test_ordinary_log_lines_are_untouched(self, innocent: str) -> None:
+        assert redact(innocent) == innocent
+
+
 class TestItIsSafeOnTheFailurePathItLivesOn:
     """Every caller is already reporting a failure. A redactor that could fail
     there would be the second bug in one line."""
