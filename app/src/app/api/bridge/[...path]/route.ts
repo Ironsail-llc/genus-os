@@ -60,6 +60,11 @@ async function proxy(
       const value = res.headers.get(name);
       if (value) passed.set(name, value);
     }
+    // Forwarding the bridge's own Content-Type is what makes the download work;
+    // it also means this same-origin path now renders whatever type the bridge
+    // names, to a browser that can navigate here directly. Nothing echoes a
+    // caller-influenced type today. One header keeps it that way.
+    passed.set("x-content-type-options", "nosniff");
     return new NextResponse(await res.text(), { status: res.status, headers: passed });
   } catch {
     return NextResponse.json(

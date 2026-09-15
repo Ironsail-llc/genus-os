@@ -31,6 +31,32 @@ describe("isIsoTimestamp", () => {
     }
   });
 
+  /**
+   * The bridge's check PARSES — `_params.iso_timestamp` hands the value to a
+   * real date, so `2026-13-01` is a 422 there. A shape-only check here left the
+   * page building a CSV export link out of a value the route was about to
+   * refuse, which is the one thing this module's header says it exists to
+   * prevent. These are calendar errors that pass the regex.
+   */
+  it("refuses a date the calendar does not have", () => {
+    for (const value of [
+      "2026-13-01",
+      "2026-00-10",
+      "2026-09-31",
+      "2026-02-30",
+      "2027-02-29",
+      "2026-09-00",
+      "2026-09-15T25:00",
+      "2026-09-15T12:60",
+    ]) {
+      expect(isIsoTimestamp(value)).toBe(false);
+    }
+  });
+
+  it("takes a leap day in a year that has one", () => {
+    expect(isIsoTimestamp("2028-02-29")).toBe(true);
+  });
+
   it("refuses a value with a trailing newline", () => {
     expect(isIsoTimestamp("2026-09-15\n")).toBe(false);
   });

@@ -23,13 +23,42 @@
 
 /** ISO-8601, as much of it as this appliance's callers write. */
 export const ISO_TIMESTAMP =
-  /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?)?(?:Z|[+-]\d{2}:?\d{2})?$/;
+  /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,6})?)?)?(?:Z|[+-]\d{2}:?\d{2})?$/;
 
 /** A relative age in journald's units — the half `--since` has and a column does not. */
 export const RELATIVE_AGE = /^\d{1,6}[smhd]$/;
 
+/**
+ * The shape AND the calendar.
+ *
+ * The bridge's check parses the value — `_params.iso_timestamp` hands it to a
+ * real date — so `2026-13-01` is a 422 there and a shape-only check here left
+ * this page building a request, and a CSV export LINK, out of a value the
+ * route was about to refuse. `Date.UTC` normalizes silently (February 31st
+ * becomes March 3rd), so the answer is compared back against what was typed
+ * rather than merely tested for NaN.
+ *
+ * The zone offset is left to the regex: it is bounded there, and an hour off
+ * either way is a question for the server's timezone rules, not this one.
+ */
 export function isIsoTimestamp(value: string): boolean {
-  return ISO_TIMESTAMP.test(value);
+  const match = ISO_TIMESTAMP.exec(value);
+  if (!match) return false;
+
+  const [, year, month, day, hour, minute, second] = match;
+  const probe = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (
+    probe.getUTCFullYear() !== Number(year) ||
+    probe.getUTCMonth() !== Number(month) - 1 ||
+    probe.getUTCDate() !== Number(day)
+  ) {
+    return false;
+  }
+
+  if (hour !== undefined && (Number(hour) > 23 || Number(minute) > 59)) return false;
+  // 60 is a leap second, which Postgres accepts and this has no business refusing.
+  if (second !== undefined && Number(second) > 60) return false;
+  return true;
 }
 
 /** What `GET /api/logs?since=` accepts: a relative age or an ISO-8601 stamp. */

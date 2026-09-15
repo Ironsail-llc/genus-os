@@ -154,6 +154,24 @@ describe("Bridge Proxy attachment headers", () => {
     expect(await res.text()).toContain("id,timestamp");
   });
 
+  /**
+   * Forwarding the bridge's `Content-Type` verbatim is what makes the download
+   * work; it also means a same-origin path a browser can navigate to now
+   * renders whatever type the bridge names. Nothing on the bridge echoes a
+   * caller-influenced type today — the CSV export is the only non-JSON
+   * producer — but `nosniff` costs one header and takes the question away.
+   */
+  it("tells the browser not to sniff a forwarded type", async () => {
+    mockFetch.mockResolvedValue(csvReply());
+
+    const res = await GET(
+      makeRequest("GET", "api/audit/events.csv"),
+      makeContext(["api", "audit", "events.csv"])
+    );
+
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
   it("does not pass the bridge's cookies back to the browser", async () => {
     mockFetch.mockResolvedValue(csvReply());
 
