@@ -1,3 +1,10 @@
+## [1.90.0](https://github.com/Ironsail-llc/genus-os/compare/v1.89.0...v1.90.0) (2026-09-15)
+
+### Features
+
+* **engine:** repeat-call guard, pace-aware deadline notes, and bounded tool timeouts ([#571](https://github.com/Ironsail-llc/genus-os/issues/571)) ([80120e1](https://github.com/Ironsail-llc/genus-os/commit/80120e18c4d970e2b246df54640e82572de2d2cf))
+* **plugins:** install from the registry in the Helm ([#572](https://github.com/Ironsail-llc/genus-os/issues/572)) ([b0cef1f](https://github.com/Ironsail-llc/genus-os/commit/b0cef1fe82d382ef6e4bcfcd625240d3996767f6)), closes [#569](https://github.com/Ironsail-llc/genus-os/issues/569) [#568](https://github.com/Ironsail-llc/genus-os/issues/568)
+
 ## [1.89.0](https://github.com/Ironsail-llc/genus-os/compare/v1.88.0...v1.89.0) (2026-09-15)
 
 ### Features
