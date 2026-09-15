@@ -71,8 +71,39 @@ def _claims_only_its_own_path(router: Any, name: str) -> bool:
     return True
 
 
-def mount_plugin_channel_routers(app: Any) -> list[str]:
+def _bind_runtime(channel: Any, name: str, runner: Any, config: Any) -> bool:
+    """Hand a receiving channel the runtime it cannot reach for itself.
+
+    True when the channel took it, or declared no interest. False only when it
+    declared ``bind_runtime`` and that call failed — and then the router is not
+    mounted, because failing closed is the difference between an endpoint that
+    is missing and one that silently swallows every message.
+    """
+    bind = getattr(channel, "bind_runtime", None)
+    if bind is None:
+        return True
+    try:
+        bind(runner=runner, config=config)
+    except Exception as exc:  # noqa: BLE001 — a refusing plugin is not a dead engine
+        logger.error(
+            "Channel %r refused the runtime, so its endpoint is NOT mounted: %s", name, exc
+        )
+        return False
+    return True
+
+
+def mount_plugin_channel_routers(
+    app: Any, *, runner: Any | None = None, config: Any | None = None
+) -> list[str]:
     """Mount the inbound router of every armed plugin channel.
+
+    ``runner`` and ``config`` are handed to a channel that declares
+    ``bind_runtime(*, runner, config)`` — the handshake ``init_chat`` performs
+    for the built-in chat router, offered as a slot because a package cannot
+    call a platform function that takes the engine's own objects. A channel that
+    refuses the binding is **not mounted**: an endpoint with no runner answers
+    200 to every activity and drops it, which is indistinguishable from a
+    working install.
 
     Returns the names mounted, for the caller that wants to log or report them.
     Never raises: a broken distribution must not stop the engine booting, which
@@ -99,6 +130,8 @@ def mount_plugin_channel_routers(app: Any) -> list[str]:
         if router is None:
             continue
         if not _claims_only_its_own_path(router, name):
+            continue
+        if not _bind_runtime(channel, name, runner, config):
             continue
         try:
             app.include_router(router)

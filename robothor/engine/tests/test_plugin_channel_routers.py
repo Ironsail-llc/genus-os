@@ -165,6 +165,48 @@ class TestARouterMayOnlyClaimItsOwnPath:
         assert app.mounted == []
 
 
+class TestAReceivingChannelIsHandedTheRuntime:
+    """A plugin router has no way to reach the runner: the engine builds it, and
+    `init_chat`-style wiring is a platform function a package cannot call. So a
+    channel that declares ``bind_runtime`` is handed the runner and the engine
+    config at mount time — the same handshake ``init_chat`` performs for the
+    built-in chat router, through a slot rather than an import."""
+
+    def test_a_channel_that_declares_bind_runtime_is_given_the_runner(
+        self, install, monkeypatch
+    ):
+        bound: dict[str, Any] = {}
+
+        class _Bindable(_PluginChannel):
+            def bind_runtime(self, *, runner: Any, config: Any) -> None:
+                bound["runner"] = runner
+                bound["config"] = config
+
+        runner, config = object(), object()
+        install({"teams": _Bindable(router=_Router("/api/channels/teams/messages"))})
+        _arm(monkeypatch, "teams")
+        app = _App()
+        mount_plugin_channel_routers(app, runner=runner, config=config)
+
+        assert bound["runner"] is runner
+        assert bound["config"] is config
+        assert len(app.mounted) == 1
+
+    def test_a_channel_that_cannot_be_bound_is_not_mounted(self, install, monkeypatch):
+        """Fail closed: an endpoint with no runner would answer 200 to every
+        activity and drop it, which looks exactly like a working install."""
+
+        class _Unbindable(_PluginChannel):
+            def bind_runtime(self, *, runner: Any, config: Any) -> None:
+                raise RuntimeError("the plugin refused the runtime")
+
+        install({"teams": _Unbindable(router=_Router("/api/channels/teams/messages"))})
+        _arm(monkeypatch, "teams")
+        app = _App()
+        mount_plugin_channel_routers(app, runner=object(), config=object())
+        assert app.mounted == []
+
+
 class TestABrokenPluginMustNotStopBoot:
     def test_a_channel_whose_router_raises_is_skipped(self, install, monkeypatch):
         class _Exploding:

@@ -91,6 +91,24 @@ class TeamsChannel:
         self._tokens = TokenSource()
         self._router: Any | None = None
         self._router_built = False
+        #: The engine's runner, handed over at mount time. ``None`` until then,
+        #: and the endpoint refuses to run anything while it is — an endpoint
+        #: that acknowledged messages and dropped them looks exactly like a
+        #: working install.
+        self.runner: Any | None = None
+        self.config: Any | None = None
+
+    def bind_runtime(self, *, runner: Any, config: Any) -> None:
+        """Take the engine's runner and config.
+
+        The handshake ``init_chat`` performs for the built-in chat router,
+        offered as a slot: a plugin cannot call a platform function that takes
+        the engine's own objects, and a channel that receives has no other way
+        to reach the runner. ``robothor/engine/channels/routers.py`` calls this
+        at mount time and refuses to mount a channel that raises here.
+        """
+        self.runner = runner
+        self.config = config
 
     # ── the receiving half ───────────────────────────────────────────────
 
@@ -420,6 +438,45 @@ class TeamsChannel:
         return (step, True, "a typing activity was accepted by the conversation's service URL")
 
     # ── transport ────────────────────────────────────────────────────────
+
+    async def reference_for(self, target: str) -> Any | None:
+        """The conversation reference for ``target``, or ``None``.
+
+        Public for :mod:`genus_teams.ask`, which has to know which conversation
+        an answer will arrive carrying before it sends the card.
+        """
+        return await self._reference(target)
+
+    async def send_card(self, target: str, card: dict[str, Any]) -> bool:
+        """Send one Adaptive Card. True only if Teams acknowledged it.
+
+        Separate from :meth:`send` because a card is not a delivery: no receipt,
+        no chunking, no ``agent_runs`` status. What it shares is the proof rule —
+        the platform acknowledged it or it did not happen — and an ask that
+        waited on a card nobody received would be a run hanging on a question
+        that was never asked.
+        """
+        reference = await self._reference(target)
+        if reference is None:
+            return False
+        try:
+            token = await self._tokens.token()
+        except TokenError as exc:
+            logger.error("Teams: no token, so a card was not sent: %s", exc)
+            return False
+        attachment = {
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": card,
+        }
+        try:
+            response = await self._post_one(
+                reference, token, {"type": "message", "attachments": [attachment]}
+            )
+        except Exception as exc:  # noqa: BLE001 — a card that did not go out is a
+            # question nobody was asked, reported rather than raised.
+            logger.error("Teams: a card could not be sent: %s", _describe(exc))
+            return False
+        return response is not None
 
     async def _reference(self, target: str) -> Any | None:
         """The conversation reference for ``target``, or ``None``.
