@@ -56,6 +56,8 @@ def cmd_agent(args: argparse.Namespace) -> int:
         return _cmd_agent_resolve(args)
     if sub == "import":
         return _cmd_agent_import(args)
+    if sub == "export":
+        return _cmd_agent_export(args)
     if sub == "setup":
         return _cmd_agent_setup()
     if sub == "search":
@@ -67,7 +69,7 @@ def cmd_agent(args: argparse.Namespace) -> int:
     if sub == "unbind":
         return _cmd_agent_unbind(args)
     print(
-        "Usage: robothor agent {scaffold|list|catalog|install|remove|update|resolve|import|setup|search|publish|bind|unbind}"
+        "Usage: robothor agent {scaffold|list|catalog|install|remove|update|resolve|import|export|setup|search|publish|bind|unbind}"
     )
     return 0
 
@@ -327,8 +329,154 @@ def install_preset(
     }
 
 
+def _cmd_agent_export(args: argparse.Namespace) -> int:
+    """Export an installed agent as a bundle another instance can install.
+
+    Exit codes are the contract: 0 wrote it, 1 there is no such agent, 2 a gate
+    refused. A refusal is 2 rather than 1 because it is the same "we looked and
+    said no" that ``genus plugin install`` uses, and an operator's CI needs to
+    tell "typo" apart from "your instruction file has a key in it".
+    """
+    from robothor.templates.bundle import describe_requires
+    from robothor.templates.exporter import ExportError, export_agent
+
+    try:
+        result = export_agent(
+            args.agent_id,
+            out=getattr(args, "out", None),
+            include_adapters=getattr(args, "include_adapters", False),
+        )
+    except FileNotFoundError as error:
+        print(f"Error: {error}")
+        return 1
+    except ExportError as error:
+        # str(error) carries file:line for every finding and never the text
+        # that triggered it — printing the credential here would publish it to
+        # the terminal and the shell history of the command trying to stop it.
+        print(f"Error: {error}")
+        return 2
+
+    manifest = result.manifest
+    kind = "archive" if result.is_archive else "directory"
+    print(f"Exported {manifest.name} ({manifest.id}) v{manifest.version}")
+    print(f"  {kind}: {result.path}")
+    print(f"  files: {len(manifest.files)}")
+    requirements = describe_requires(manifest.requires)
+    if requirements:
+        print("  requires:")
+        for line in requirements:
+            print(f"    {line}")
+    if manifest.requires.adapters and not getattr(args, "include_adapters", False):
+        print(
+            "  note: adapter definitions are NOT included. Pass --include-adapters to "
+            "carry them (credentials are collapsed to ${NAME} references)."
+        )
+    return 0
+
+
+def _looks_like_a_bundle_source(source: str) -> bool:
+    """Whether *source* names a bundle rather than an agent ID or template directory.
+
+    A URL or any existing FILE is a bundle source — including a wheel, which the
+    bundle path refuses by name rather than leaving to a confusing "template not
+    found". An existing directory counts only when it holds a ``bundle.yaml``,
+    so the old template-directory install is untouched.
+    """
+    from robothor.templates.bundle import BUNDLE_FILENAME
+
+    if source.startswith(("http://", "https://")):
+        return True
+    path = Path(source).expanduser()
+    if path.is_file():
+        return True
+    return path.is_dir() and (path / BUNDLE_FILENAME).is_file()
+
+
+def _install_from_bundle(
+    args: argparse.Namespace,
+    source: str,
+    *,
+    from_index: bool,
+    propagate_not_published: bool = False,
+) -> int:
+    """The bundle install: print the plan, then write only with --yes."""
+    from robothor.templates.bundle_installer import (
+        BundleInstallError,
+        BundleNotPublishedError,
+        install_bundle,
+    )
+
+    overrides = {}
+    for item in getattr(args, "set", []) or []:
+        if "=" in item:
+            key, _, value = item.partition("=")
+            overrides[key.strip()] = value.strip()
+
+    try:
+        plan, result = install_bundle(
+            source,
+            sha256=getattr(args, "sha256", None),
+            new_id=getattr(args, "new_id", None),
+            yes=getattr(args, "yes", False),
+            strict=getattr(args, "strict", False),
+            from_index=from_index,
+            index=getattr(args, "index", None),
+            overrides=overrides,
+        )
+    except BundleNotPublishedError:
+        if propagate_not_published:
+            raise
+        print("Error: no configured index publishes an agent bundle by that name.")
+        return 2
+    except BundleInstallError as error:
+        print(f"Error: {error}")
+        return 2
+
+    print(plan.describe())
+    if result is None:
+        print("\nNothing was written. Re-run with --yes to install.")
+        return 0
+
+    print(f"\nInstalled: {plan.target_id} (v{plan.manifest.version})")
+    for file_type, path in result.get("files", {}).items():
+        print(f"  {file_type}: {path}")
+    for message in result.get("validation", []) or []:
+        print(f"  {message}")
+    return 0
+
+
+def _install_from_signed_index(args: argparse.Namespace, slug: str) -> int | None:
+    """Try the configured signed indexes. None means "nobody publishes it, look elsewhere".
+
+    ONLY ``BundleNotPublishedError`` falls through. Every other refusal — a bad
+    signature, an unpinned key, a stale document — returns an exit code, because
+    quietly reaching for the hub after a verification failure would hand the
+    operator an unsigned copy of the very agent their index refused.
+
+    Skipped entirely unless the operator has configured an index. The platform's
+    DEFAULT index publishes plugins; consulting it on every catalog miss would
+    add a network round trip to an install that has nothing to do with it, and
+    an unreachable mirror would then break a hub install that used to work.
+    """
+    from robothor.templates.bundle_installer import BundleNotPublishedError
+
+    try:
+        from robothor.settings import get_settings
+
+        configured = str(get_settings().paths.plugin_indexes or "").strip()
+    except Exception:  # noqa: BLE001 - settings that do not resolve are not an index
+        configured = ""
+    if not configured:
+        return None
+
+    try:
+        return _install_from_bundle(args, slug, from_index=True, propagate_not_published=True)
+    except BundleNotPublishedError:
+        return None
+
+
 def _cmd_agent_install(args: argparse.Namespace) -> int:
-    """Install an agent from a template bundle or preset."""
+    """Install an agent from a template bundle, an agent bundle, or a preset."""
     from robothor.templates.catalog import Catalog
     from robothor.templates.installer import install
 
@@ -367,6 +515,17 @@ def _cmd_agent_install(args: argparse.Namespace) -> int:
             "Nothing to install: give a source (template path or agent ID) or use --preset <group>."
         )
         return 1
+    # A bundle somebody handed over — a path, a directory carrying bundle.yaml,
+    # or a URL. Checked BEFORE the catalog so a local file never has to survive
+    # a hub lookup that would refuse it as a malformed slug.
+    if _looks_like_a_bundle_source(source):
+        return _install_from_bundle(args, source, from_index=False)
+    if getattr(args, "index", None):
+        # An explicit --index means the operator has named where to look, so
+        # neither the catalog nor the hub is consulted: falling through would
+        # install something other than what they asked for.
+        return _install_from_bundle(args, source, from_index=True)
+
     source_path = Path(source)
     hub_source: tuple[str, str] | None = None
 
@@ -377,6 +536,9 @@ def _cmd_agent_install(args: argparse.Namespace) -> int:
         if template_path:
             source_path = template_path
         else:
+            published = _install_from_signed_index(args, source)
+            if published is not None:
+                return published
             try:
                 from robothor.templates.hub_client import HubClient, trusted_bundle_sha256
 

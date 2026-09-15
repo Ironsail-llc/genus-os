@@ -61,6 +61,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = [
     "BundleInstallError",
+    "BundleNotPublishedError",
     "InstallPlan",
     "RequireStatus",
     "install_bundle",
@@ -77,6 +78,16 @@ FETCH_TIMEOUT_SECONDS = 30.0
 
 class BundleInstallError(Exception):
     """A refusal, in the sentence the operator gets told."""
+
+
+class BundleNotPublishedError(BundleInstallError):
+    """No configured index publishes this slug.
+
+    Separate from every other refusal so the CLI may fall through to the hub on
+    this one alone. Falling through on a SIGNATURE failure would hand the
+    operator an unsigned copy of the agent their tampered index refused, and
+    say nothing.
+    """
 
 
 @dataclass(frozen=True)
@@ -248,6 +259,8 @@ def _from_index(
     try:
         loaded = registry.load_indexes(urls, keys=keys, client=client)
         entry, _source = registry.select(slug, version, indexes=loaded, kind=registry.BUNDLE_KIND)
+    except registry.NotPublishedError as exc:
+        raise BundleNotPublishedError(str(exc)) from exc
     except registry.RegistryError as exc:
         raise BundleInstallError(str(exc)) from exc
 

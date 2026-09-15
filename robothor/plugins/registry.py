@@ -67,6 +67,7 @@ __all__ = [
     "Artifact",
     "Index",
     "IndexEntry",
+    "NotPublishedError",
     "RegistryError",
     "ScanRecord",
     "canonical_bytes",
@@ -138,6 +139,17 @@ class RegistryError(Exception):
     Every raise site here states the reason and what to do about it. The CLI
     prints ``str(exc)`` and exits 2; the admin route turns it into a 4xx. A
     traceback out of ``genus plugin install`` helps nobody.
+    """
+
+
+class NotPublishedError(RegistryError):
+    """No index publishes this name — which is different from refusing it.
+
+    Its own class because a caller with a SECOND place to look (the hub, the
+    local catalog) may fall through on this and must never fall through on any
+    other registry refusal. An operator whose company index was tampered with
+    silently getting the hub's copy of an agent instead is the exact failure
+    :func:`load_indexes` refuses to be best-effort about.
     """
 
 
@@ -825,8 +837,10 @@ def select(
                 f"'{VERB_FOR_KIND[other]} {name}'."
             )
         if version is not None:
-            raise RegistryError(f"No index publishes {name} {version}. Indexes read: {where}.")
-        raise RegistryError(f"No index publishes a {kind} named {name!r}. Indexes read: {where}.")
+            raise NotPublishedError(f"No index publishes {name} {version}. Indexes read: {where}.")
+        raise NotPublishedError(
+            f"No index publishes a {kind} named {name!r}. Indexes read: {where}."
+        )
 
     # The SIGNING KEY is the identity, not the display string beside it.
     # Comparing only ``publisher_id`` meant a second pinned publisher could
