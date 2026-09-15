@@ -19,9 +19,10 @@
 #   * a run whose stdin is not a terminal and that was not given --yes is a
 #     PREVIEW: it prints the plan and writes nothing, so the bare one-liner
 #     above cannot install anything by accident;
-#   * no secret is ever read from stdin, and the values it does write are
-#     escaped so a shell that sources the file reproduces them and runs
-#     nothing.
+#   * no secret is ever read from stdin, and none is written: a provider key
+#     found in the environment is handed to `genus init`, which puts it in
+#     `genus.env` -- the instance's only copy on disk. The only thing this
+#     script writes into the install directory is the image tag.
 
 # POSIX prologue: this must still be able to say "use bash" when `sh` runs it,
 # so nothing bash-only may appear above the guard.
@@ -41,7 +42,7 @@ set -euo pipefail
 # Rewritten by scripts/update-helm-values.sh on every release, so the published
 # script defaults to the release it shipped with and the API call below is only
 # a refresh. Keep the exact shape: the updater and its test both match it.
-INSTALL_SH_DEFAULT_VERSION="v1.88.0"
+INSTALL_SH_DEFAULT_VERSION="v1.89.0"
 
 REPO_SLUG="Ironsail-llc/genus-os"
 RAW_BASE="https://raw.githubusercontent.com/${REPO_SLUG}"

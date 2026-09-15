@@ -19,9 +19,9 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import stat
 import subprocess
 from pathlib import Path
+from urllib.parse import SplitResult, urlsplit
 
 import pytest
 
@@ -242,6 +242,28 @@ def _tree(root: Path) -> set[str]:
     return {str(path.relative_to(root)) for path in root.rglob("*")}
 
 
+#: An absolute URL, as it appears in the script's source or in a recorded argv.
+#: Stops at whitespace and at the shell quoting around it.
+_URL_RE = re.compile(r"""https?://[^\s"'`|)<>]+""")
+
+
+def _urls(text: str) -> list[SplitResult]:
+    """Every absolute URL in `text`, parsed.
+
+    Parsed, never matched as a substring. A substring test for a host name is
+    satisfied by `https://github.com.example.net/` and by
+    `https://evil/?q=github.com` alike -- both the shape of an exfiltration
+    host -- which is what CodeQL's py/incomplete-url-substring-sanitization
+    says. Here the host is compared exactly and the scheme has to be https.
+    """
+    return [urlsplit(match.group(0)) for match in _URL_RE.finditer(text)]
+
+
+def _urls_for_host(text: str, host: str) -> list[SplitResult]:
+    """Every https URL in `text` whose host is exactly `host`."""
+    return [url for url in _urls(text) if url.scheme == "https" and url.hostname == host]
+
+
 # --------------------------------------------------------------------------
 # refusals
 # --------------------------------------------------------------------------
@@ -293,8 +315,25 @@ def test_never_sudos_and_never_pipes_into_a_shell() -> None:
 
 def test_every_download_is_pinned_to_a_tag_never_main() -> None:
     body = SCRIPT.read_text(encoding="utf-8")
-    assert "raw.githubusercontent.com" in body
+
+    raw = _urls_for_host(body, "raw.githubusercontent.com")
+    assert raw, "the script fetches the compose files from no recognisable host"
+    for url in raw:
+        assert "${VERSION}" in url.path or "${REPO_SLUG}" in url.path, (
+            f"{url.geturl()} is not interpolated with the release tag"
+        )
     assert "/main/" not in body, "a download from main is not pinned to a release"
+
+    # Everything else it reaches for, by exact host. A new host has to be added
+    # here deliberately rather than arriving with a copy-pasted line.
+    hosts = {url.hostname for url in _urls(body) if url.scheme in {"http", "https"}}
+    assert hosts <= {
+        "raw.githubusercontent.com",
+        "api.github.com",
+        "github.com",
+        "ironsail-llc.github.io",  # the documented one-liner, in the usage text
+    }, f"the installer names an unexpected host: {sorted(hosts)}"
+    assert not any(url.scheme == "http" for url in _urls(body)), "a plaintext URL"
 
 
 # --------------------------------------------------------------------------
@@ -397,8 +436,15 @@ def test_the_version_stamp_line_exists_and_is_a_release_tag() -> None:
 def test_the_releases_api_is_asked_with_a_timeout(installer, tmp_path) -> None:
     result = installer("--substrate", "pipx", "--dry-run")
     assert result.returncode == 0, result.output
-    api_calls = [line for line in result.calls.splitlines() if "api.github.com" in line]
+    api_calls = [
+        line for line in result.calls.splitlines() if _urls_for_host(line, "api.github.com")
+    ]
     assert api_calls, "nothing asked the releases API for the latest tag"
+    assert all(
+        url.path == "/repos/Ironsail-llc/genus-os/releases/latest"
+        for line in api_calls
+        for url in _urls_for_host(line, "api.github.com")
+    ), "the releases call is not this repository's latest-release endpoint"
     # The value matters, not just the flag: a metadata refresh that can hang is
     # the reason an install hangs, and curl's own default is no timeout at all.
     seconds = [
@@ -413,7 +459,9 @@ def test_the_environment_can_supply_the_version(installer) -> None:
     result = installer("--substrate", "pipx", "--dry-run", env={"GENUS_VERSION": PINNED})
     assert result.returncode == 0, result.output
     assert f"genusos=={PINNED.lstrip('v')}" in result.stdout
-    assert "api.github.com" not in result.calls, "an explicit version still called the API"
+    assert not _urls_for_host(result.calls, "api.github.com"), (
+        "an explicit version still called the releases API"
+    )
 
 
 def test_a_releases_api_that_fails_falls_back_to_the_stamp_and_says_so(installer) -> None:
@@ -513,9 +561,12 @@ def test_a_compose_install_downloads_pinned_files_and_runs_the_wizard(installer,
     assert result.returncode == 0, result.output
 
     calls = result.calls
+    fetched = {url.path for url in _urls_for_host(calls, "raw.githubusercontent.com")}
     for name in ("docker-compose.yml", "docker-compose.apps.yml"):
-        assert f"/Ironsail-llc/genus-os/{PINNED}/infra/{name}" in calls
-    assert "/main/infra/" not in calls
+        assert f"/Ironsail-llc/genus-os/{PINNED}/infra/{name}" in fetched, (
+            f"{name} was not fetched from the tag: {sorted(fetched)}"
+        )
+    assert not any(path.startswith("/Ironsail-llc/genus-os/main/") for path in fetched)
 
     assert "docker compose version" in calls, "compose v2 was never verified"
     assert "config -q" in calls, "the downloaded compose files were never parsed"
@@ -658,7 +709,10 @@ def test_pypi_without_the_release_falls_back_to_the_git_tag(installer, tmp_path)
     target = tmp_path / "genus"
     result = _install(installer, target, env={"SHIM_PYPI_MISSING": "1"})
     assert result.returncode == 0, result.output
-    assert f"git+https://github.com/Ironsail-llc/genus-os@{PINNED}" in result.calls
+    fallback = _urls_for_host(result.calls, "github.com")
+    assert any(url.path == f"/Ironsail-llc/genus-os@{PINNED}" for url in fallback), (
+        f"the git fallback did not target the tag: {[u.geturl() for u in fallback]}"
+    )
     assert "pypi" in result.output.lower(), "the fallback was silent"
 
 
@@ -733,7 +787,16 @@ def test_a_release_republishes_the_site_so_the_stamp_is_the_released_one() -> No
     triggers = workflow.get("on", workflow.get(True))
 
     assert "workflow_run" in triggers, "nothing republishes the site after a release"
-    assert "Release & Build" in triggers["workflow_run"]["workflows"]
+    # Read the name from the workflow itself: `workflow_run` matches on the
+    # `name:` string, so a rename there silently unhooks this and a hard-coded
+    # copy here would keep saying it was fine.
+    release_name = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "release-and-build.yml").read_text(encoding="utf-8")
+    )["name"]
+    assert release_name in triggers["workflow_run"]["workflows"], (
+        f"Docs listens for {triggers['workflow_run']['workflows']}, "
+        f"the release workflow is named {release_name!r}"
+    )
 
     checkout = next(
         step
