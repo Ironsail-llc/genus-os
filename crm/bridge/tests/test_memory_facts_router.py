@@ -111,6 +111,19 @@ def test_a_fact_id_that_is_not_an_id_is_422(controls_client_as_operator, no_db, 
     )
 
 
+def test_a_cursor_cannot_be_combined_with_a_query(controls_client_as_operator, no_db):
+    """There is no keyset over a relevance ranking, so there is no cursor.
+
+    Refused rather than ignored: the page that sends both would otherwise be
+    handed page one under the impression it asked for page two, and would go on
+    asking forever.
+    """
+    resp = controls_client_as_operator.get(f"{FACTS}?q=tea&cursor=99")
+    assert resp.status_code == 422
+    assert "cursor" in resp.json()["detail"]
+    assert "q" in resp.json()["detail"]
+
+
 @pytest.mark.parametrize("body", [{}, {"reason": ""}, {"reason": "  "}, {"reason": "ab"}])
 def test_a_forget_without_a_real_reason_is_422(controls_client_as_operator, no_db, body):
     resp = controls_client_as_operator.post(FORGET, json=body)

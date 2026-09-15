@@ -203,6 +203,53 @@ def test_a_query_reuses_the_search_ranking_rather_than_inventing_one(
     assert body["facts"][0]["fact_text"].startswith("Alice runs the standup")
 
 
+def test_a_query_still_honours_the_entity_filter(
+    controls_client_as_operator, live_db, make_fact, tenants, monkeypatch
+):
+    """A filter the page is still rendering must not be silently dropped.
+
+    The Memory page has an entity chip. Typing a query with the chip set used
+    to return facts from every entity under a filter that still looked applied
+    — the search arm never saw ``entity`` and the re-read did not filter on it.
+    """
+    platform, _ = tenants
+    marker = uuid.uuid4().hex
+    tagged = make_fact(f"Alice runs standup {marker}", tenant=platform, entities=["Alice"])
+    untagged = make_fact(f"Bob runs standup {marker}", tenant=platform, entities=["Bob"])
+
+    async def _fake_search(query, **kwargs):
+        return [{"id": tagged}, {"id": untagged}]
+
+    monkeypatch.setattr("robothor.memory.facts.search_facts", _fake_search)
+    body = controls_client_as_operator.get(f"{FACTS}?q=standup&entity=alice").json()
+
+    assert [f["id"] for f in body["facts"]] == [tagged]
+
+
+def test_a_query_still_honours_the_tenant_and_active_filters(
+    controls_client_as_operator, live_db, make_fact, tenants, monkeypatch
+):
+    """Whatever ``search_facts`` hands back, the re-read is the gate.
+
+    Asserted with a deliberately over-broad fake: a ranking that returned
+    another tenant's fact, or an inactive one under ``active=true``, must not
+    put either on the page.
+    """
+    platform, other = tenants
+    marker = uuid.uuid4().hex
+    mine = make_fact(f"Alice ships {marker}", tenant=platform)
+    inactive = make_fact(f"Alice shipped {marker}", tenant=platform, active=False)
+    theirs = make_fact(f"Bob ships {marker}", tenant=other)
+
+    async def _fake_search(query, **kwargs):
+        return [{"id": mine}, {"id": inactive}, {"id": theirs}]
+
+    monkeypatch.setattr("robothor.memory.facts.search_facts", _fake_search)
+    body = controls_client_as_operator.get(f"{FACTS}?q=ships").json()
+
+    assert [f["id"] for f in body["facts"]] == [mine]
+
+
 # ── preview ──────────────────────────────────────────────────────────────────
 
 
@@ -249,6 +296,40 @@ def test_preview_counts_what_cites_the_fact(
         assert body["references"]["entities"] == ["Alice"]
         assert body["references"]["episodes"] == 1
         assert body["references"]["blocks"] == [block]
+        assert body["references"]["blocks_scanned"] is True
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM agent_memory_blocks WHERE block_name = %s", (block,))
+        db_conn.commit()
+
+
+def test_a_fact_too_short_to_match_anything_meaningfully_is_not_scanned(
+    controls_client_as_operator, live_db, make_fact, tenants, db_conn
+):
+    """``strpos(content, '') > 0`` is TRUE for every row.
+
+    So an empty or near-empty ``fact_text`` reported every memory block on the
+    instance as citing it — and a two-word fact matched any block containing
+    those two words in any order of clauses. The module calls ``blocks`` the
+    reference an operator cannot find any other way, and a warning that cries
+    wolf is the one that gets ignored.
+    """
+    platform, _ = tenants
+    block = f"__b14a_block_{uuid.uuid4().hex[:8]}"
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO agent_memory_blocks (block_name, content, tenant_id) VALUES (%s, %s, %s)",
+            (block, "a block with some content in it", platform),
+        )
+    db_conn.commit()
+    try:
+        for text in ("", "   ", "tea"):
+            fact_id = make_fact(text, tenant=platform)
+            references = controls_client_as_operator.post(
+                f"{FACTS}/{fact_id}/forget/preview"
+            ).json()["references"]
+            assert references["blocks"] == [], text
+            assert references["blocks_scanned"] is False, text
     finally:
         with db_conn.cursor() as cur:
             cur.execute("DELETE FROM agent_memory_blocks WHERE block_name = %s", (block,))
@@ -348,3 +429,43 @@ def test_forgetting_a_fact_that_does_not_exist_is_404(controls_client_as_operato
         f"{FACTS}/2147483647/forget", json={"reason": "not there"}
     )
     assert resp.status_code == 404
+
+
+def test_the_forget_is_committed_and_visible_to_another_connection(
+    controls_client_as_operator, make_fact, tenants, db_conn
+):
+    """The one test in this file that does NOT bind ``live_db``.
+
+    Every other test here uses a non-committing stand-in, which is what makes
+    the double-forget 409 real — both requests then share one transaction. But
+    it also means a regression that dropped the commit would leave this whole
+    file green, and the commit is the most consequential statement in the
+    module. So this one goes through the module's OWN ``get_connection``, the
+    production seam that commits on a clean exit, and reads the row back on a
+    SECOND connection, where an uncommitted write is invisible by construction.
+
+    ``make_fact`` deletes the row by id afterwards, so the committed write is
+    cleaned up rather than left in the test database.
+    """
+    import psycopg2
+
+    platform, _ = tenants
+    fact_id = make_fact("Alice prefers tea, and the write must survive", tenant=platform)
+
+    assert (
+        controls_client_as_operator.post(
+            f"{FACTS}/{fact_id}/forget", json={"reason": "it must persist"}
+        ).status_code
+        == 200
+    )
+
+    elsewhere = psycopg2.connect(dbname=db_conn.get_dsn_parameters()["dbname"])
+    try:
+        with elsewhere.cursor() as cur:
+            cur.execute("SELECT is_active, valid_to FROM memory_facts WHERE id = %s", (fact_id,))
+            is_active, valid_to = cur.fetchone()
+        assert is_active is False
+        assert valid_to is not None
+    finally:
+        elsewhere.rollback()
+        elsewhere.close()

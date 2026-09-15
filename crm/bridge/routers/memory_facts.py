@@ -66,6 +66,14 @@ DEFAULT_LIMIT = 50
 MIN_REASON = 3
 MAX_REASON = 500
 
+#: Below this many characters, "which memory blocks quote this fact" stops
+#: being a question a substring test can answer. ``strpos(content, '')`` is 1
+#: for every row, so an empty fact reported EVERY block as citing it, and a
+#: two-word fact matched any block containing those two words anywhere. Twelve
+#: characters is about three words — short enough to still cover a real claim
+#: ("tea at 4pm"), long enough that a match means something.
+MIN_BLOCK_SCAN_CHARS = 12
+
 #: The three populations the page offers. Spelled as words rather than a
 #: boolean so ``all`` has a name — a tri-state squeezed into ``?active=`` with
 #: an empty string meaning "both" is the kind of contract a UI gets wrong once.
@@ -186,7 +194,26 @@ def _ranked_by_search(query: str, tenant_id: str, active: str, limit: int) -> li
     return [int(r["id"]) for r in results if r.get("id") is not None]
 
 
-def _facts_by_id(cur: Any, ids: list[int], tenant_id: str, active: str) -> list[dict[str, Any]]:
+def _entity_predicate(entity: str | None) -> tuple[str, list[Any]]:
+    """The entity filter, in the one spelling BOTH arms of the list route use.
+
+    ``lower_entities()`` is the expression migration 109 indexed, so this is the
+    case-insensitive form that uses the index rather than the one that reads the
+    table.
+
+    A function rather than a line inside the browse arm, because that is exactly
+    how it got lost: the search arm was written second, did not have it, and the
+    page went on rendering an entity chip over results from every entity. A
+    filter the UI is still showing must never be one an arm can forget.
+    """
+    if not entity:
+        return "", []
+    return " AND lower_entities(entities) @> ARRAY[lower(%s)]", [entity]
+
+
+def _facts_by_id(
+    cur: Any, ids: list[int], tenant_id: str, active: str, entity: str | None
+) -> list[dict[str, Any]]:
     """The named facts, in the order named, scoped to the caller's tenant.
 
     The re-read is not redundant. ``search_facts`` selects the columns ITS
@@ -195,13 +222,21 @@ def _facts_by_id(cur: Any, ids: list[int], tenant_id: str, active: str) -> list[
     fields the forget button depends on. The tenant predicate is repeated here
     too: defence in depth is cheap, and this is the query whose result is
     rendered.
+
+    It is also where ``entity`` is applied in search mode. ``search_facts``
+    takes no entity argument, so the filter has to be a predicate on the
+    re-read; the consequence, and it is the honest one, is that a
+    ``q``+``entity`` page can come back SHORTER than ``limit`` — the ranking
+    picks ``limit`` candidates and the filter then removes some of them.
     """
     if not ids:
         return []
-    clause, params = _active_predicate(active)
+    active_clause, active_params = _active_predicate(active)
+    entity_clause, entity_params = _entity_predicate(entity)
     cur.execute(
-        f"SELECT {_SELECT} FROM memory_facts WHERE id = ANY(%s) AND tenant_id = %s{clause}",  # noqa: S608 -- _SELECT is a module constant
-        [ids, tenant_id, *params],
+        f"SELECT {_SELECT} FROM memory_facts "  # noqa: S608 -- _SELECT is a module constant
+        f"WHERE id = ANY(%s) AND tenant_id = %s{active_clause}{entity_clause}",
+        [ids, tenant_id, *active_params, *entity_params],
     )
     found = {int(row[0]): _payload(row) for row in cur.fetchall()}
     return [found[fact_id] for fact_id in ids if fact_id in found]
@@ -223,10 +258,12 @@ def list_facts(
     over a table the ingestion pipeline is writing to would skip and repeat rows
     while the operator read it.
 
-    With ``q``, the order is the search path's and the page is a single one —
-    ``next_cursor`` is null. A keyset cursor over a relevance ranking would be a
-    cursor over an order the next request can recompute differently, which is a
-    pagination bug that only shows up once the corpus moves.
+    With ``q``, the order is the search path's and the page is a single one.
+    ``cursor`` is REFUSED rather than ignored in that mode: there is no keyset
+    over a relevance ranking (the next request can recompute the order), and a
+    page that sent one anyway would be handed page one believing it had asked
+    for page two, forever. ``entity`` still applies — a filter the UI is
+    rendering is never one this route silently drops.
     """
     require_operator(request)
     from deps import get_tenant_id
@@ -235,6 +272,11 @@ def list_facts(
     page = positive_int(limit, field="limit", maximum=MAX_LIMIT)
     if active not in ACTIVE_FILTERS:
         raise HTTPException(status_code=422, detail="active must be true, false or all")
+    if q and cursor is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="cursor cannot be combined with q; a relevance ranking has no keyset",
+        )
     after = _fact_id(cursor, field="cursor") if cursor is not None else None
 
     # BEFORE the connection below, deliberately: ``search_facts`` takes its own
@@ -247,19 +289,14 @@ def list_facts(
         cur = conn.cursor()
         if ranked is not None:
             return {
-                "facts": _facts_by_id(cur, ranked, tenant_id, active),
+                "facts": _facts_by_id(cur, ranked, tenant_id, active, entity),
                 "next_cursor": None,
             }
 
         clause, params = _active_predicate(active)
-        sql = f"SELECT {_SELECT} FROM memory_facts WHERE tenant_id = %s{clause}"  # noqa: S608 -- _SELECT is a module constant
-        args: list[Any] = [tenant_id, *params]
-        if entity:
-            # lower_entities() is the expression migration 109 indexed, so this
-            # is the case-insensitive form that uses the index rather than the
-            # one that reads the table.
-            sql += " AND lower_entities(entities) @> ARRAY[lower(%s)]"
-            args.append(entity)
+        entity_clause, entity_params = _entity_predicate(entity)
+        sql = f"SELECT {_SELECT} FROM memory_facts WHERE tenant_id = %s{clause}{entity_clause}"  # noqa: S608 -- _SELECT is a module constant
+        args: list[Any] = [tenant_id, *params, *entity_params]
         if after is not None:
             sql += " AND id < %s"
             args.append(after)
@@ -299,6 +336,13 @@ def preview_forget(fact_id: str, request: Request) -> dict[str, Any]:
       therefore keep telling agents the thing after it is forgotten. That is
       the one an operator cannot discover any other way, and the one that makes
       a forget look like it did not work.
+
+    ``blocks_scanned`` says whether that last question was asked at all. Below
+    :data:`MIN_BLOCK_SCAN_CHARS` the substring test stops meaning anything —
+    ``strpos(content, '')`` is 1 for EVERY row, so an empty fact reported every
+    block on the instance, and a two-word fact matched any block containing
+    those two words. A warning that cries wolf is the one that gets ignored, so
+    the short case returns an empty list and says it did not look.
     """
     require_operator(request)
     from deps import get_tenant_id
@@ -314,15 +358,19 @@ def preview_forget(fact_id: str, request: Request) -> dict[str, Any]:
             (tenant_id, identifier),
         )
         episodes = int(cur.fetchone()[0])
-        # strpos() rather than LIKE: the fact text is operator-visible content
-        # that routinely contains % and _, and escaping a LIKE pattern is a
-        # step somebody forgets.
-        cur.execute(
-            "SELECT block_name FROM agent_memory_blocks "
-            "WHERE tenant_id = %s AND strpos(content, %s) > 0 ORDER BY block_name",
-            (tenant_id, fact["fact_text"]),
-        )
-        blocks = [row[0] for row in cur.fetchall()]
+        needle = (fact["fact_text"] or "").strip()
+        blocks_scanned = len(needle) >= MIN_BLOCK_SCAN_CHARS
+        blocks: list[str] = []
+        if blocks_scanned:
+            # strpos() rather than LIKE: the fact text is operator-visible
+            # content that routinely contains % and _, and escaping a LIKE
+            # pattern is a step somebody forgets.
+            cur.execute(
+                "SELECT block_name FROM agent_memory_blocks "
+                "WHERE tenant_id = %s AND strpos(content, %s) > 0 ORDER BY block_name",
+                (tenant_id, needle),
+            )
+            blocks = [row[0] for row in cur.fetchall()]
 
     already_inactive = not fact["is_active"]
     return {
@@ -330,7 +378,12 @@ def preview_forget(fact_id: str, request: Request) -> dict[str, Any]:
         # Only ever this fact. Rule 2 in the module header — and the write path
         # asserts the same list, so the two cannot drift.
         "would_deactivate": [] if already_inactive else [fact["id"]],
-        "references": {"entities": fact["entities"], "episodes": episodes, "blocks": blocks},
+        "references": {
+            "entities": fact["entities"],
+            "episodes": episodes,
+            "blocks": blocks,
+            "blocks_scanned": blocks_scanned,
+        },
         "already_inactive": already_inactive,
     }
 
