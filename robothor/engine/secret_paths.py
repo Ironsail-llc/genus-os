@@ -73,7 +73,36 @@ _DOC_SUFFIXES = (".example", ".sample", ".template", ".md", ".txt", ".rst")
 #: deliberately NOT here: they hold operational state too (alert and SLO
 #: JSON, logs), and a replay of a week of real commands showed those reads
 #: were the only false refusals. Their credential files are caught by name.
-_SECRET_DIRS = frozenset({".ssh", ".aws", ".gnupg", ".kube", ".docker"})
+#:
+#: ``gcloud`` joined 2026-09-15 with the exec scrub, and ``.config/gh`` is
+#: handled by :data:`_SECRET_DIR_PAIRS` below: once ``GH_TOKEN`` stops being
+#: inherited, ``gh`` falls back to its own login file, so reading that file
+#: became the way to obtain the operator's personal credential instead.
+_SECRET_DIRS = frozenset({".ssh", ".aws", ".gnupg", ".kube", ".docker", "gcloud"})
+
+#: Directory names that are only a secrets directory under a particular parent.
+#: ``gh`` alone is far too common a path component to deny outright; ``.config/gh``
+#: is unambiguous.
+_SECRET_DIR_PAIRS = frozenset({(".config", "gh"), (".config", "gcloud")})
+
+#: Shell builtins that print the environment of the shell running them — which
+#: for an ``exec`` command is a child of the engine. Refused only in their
+#: printing form: ``set`` and ``declare``/``typeset`` print everything with no
+#: arguments or with ``-p``, while ``set -euo pipefail`` and ``declare -i n=3``
+#: are ordinary script lines. A denylist that ate ``set -e`` would break every
+#: agent script, and a control that breaks scripts gets turned off.
+_ENV_PRINTING_BUILTINS = frozenset({"set", "declare", "typeset"})
+
+#: ``/proc/<pid>/environ`` — the way around the exec scrub that involves no file
+#: on disk. A process may read another same-uid process's environment, and
+#: ``subprocess.run(shell=True)`` makes the ENGINE the parent of every ``exec``
+#: shell, so ``$PPID`` is the process holding the decrypted secrets file.
+#:
+#: This is a denylist and is worth what a denylist is worth: it raises the cost,
+#: it does not close the hole. What closes it is ``PR_SET_DUMPABLE`` in
+#: :mod:`robothor.engine.process_hardening`; what removes it is the SOPS shrink,
+#: after which the engine's environment holds only bootstrap credentials.
+_PROCFS_ENVIRON = re.compile(r"/proc/[^/\s]+/(environ|cmdline)\b")
 
 
 def is_secret_path(path: str | os.PathLike[str]) -> bool:
@@ -91,6 +120,8 @@ def is_secret_path(path: str | os.PathLike[str]) -> bool:
 
     parts = [part.lower() for part in p.parts]
     if any(part in _SECRET_DIRS for part in parts):
+        return True
+    if any(pair in _SECRET_DIR_PAIRS for pair in zip(parts, parts[1:], strict=False)):
         return True
     # A dot-directory the platform reserves for instance secrets: .robothor/secrets*
     for i, part in enumerate(parts[:-1]):
@@ -235,6 +266,19 @@ def exec_reads_secret(command: str) -> str | None:
     Allowed: sourcing the file, testing for it, listing its directory,
     counting its lines — anything that uses it without printing it.
     """
+    # Before the per-segment walk: a procfs environment read has no command word
+    # of its own to catch. ``tr '\0' '\n' < /proc/self/environ`` is a redirect,
+    # ``grep -a x /proc/$PPID/environ`` hides the path in an argument, and a
+    # Python one-liner names no printer at all. Matched on the whole command for
+    # that reason — see _PROCFS_ENVIRON for what this is and is not worth.
+    if _PROCFS_ENVIRON.search(command):
+        return (
+            "refused: reading /proc/<pid>/environ or /proc/<pid>/cmdline prints another "
+            "process's environment, which holds this instance's credentials. A "
+            "credential your agent needs is granted by name in its manifest's "
+            "`secrets:` list."
+        )
+
     for tokens in _segments(command):
         word, args = _command_word(tokens)
         if word is None:
@@ -243,6 +287,7 @@ def exec_reads_secret(command: str) -> str | None:
             word == "printenv"
             or (word == "env" and not args)
             or (word == "export" and args == ["-p"])
+            or (word in _ENV_PRINTING_BUILTINS and (not args or args == ["-p"]))
         ):
             return f"refused: `{word}` prints the process environment, which holds credentials"
         if word in _PRINTERS:
