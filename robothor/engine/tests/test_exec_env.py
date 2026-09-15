@@ -113,17 +113,40 @@ def test_enforce_drops_every_credential(boxlike_env):
         assert name in built.withheld, f"{name} was dropped without being reported"
 
 
-def test_gh_finds_no_token_and_falls_back_to_its_own_login(boxlike_env):
-    """Named explicitly because it changes what an operator sees.
+def test_an_ungranted_agent_does_not_inherit_the_operators_gh_login(boxlike_env):
+    """Review finding I6, and the first cut had this exactly backwards.
 
-    With neither ``GH_TOKEN`` nor ``GITHUB_TOKEN`` in the child environment,
-    ``gh`` uses its own login file instead of the engine's credential — which
-    is the point: the agent acts as whoever ``gh auth login`` authorised, not
-    as the instance.
+    Taking ``GH_TOKEN`` out of the child does not make ``gh`` fail — it makes
+    it fall back to ``~/.config/gh/hosts.yml``. The docs called that a feature
+    ("the agent acts as whoever ran `gh auth login`"), which is a WIDER
+    identity than the instance's token, not a narrower one: before this change
+    the dead ``GH_TOKEN`` made ``gh`` fail for every agent, and after it every
+    ungranted exec agent — sub-agents included — would have been running as the
+    operator personally.
+
+    So an ungranted agent gets an empty ``GH_CONFIG_DIR``: logged out, plainly.
     """
     built = build_exec_env(agent_id="researcher", mode=MODE_ENFORCE, base=boxlike_env)
     assert "GH_TOKEN" not in built.env
     assert "GITHUB_TOKEN" not in built.env
+    assert built.env.get("GH_CONFIG_DIR"), "gh was left to find the operator's own login file"
+
+
+def test_a_granted_agent_acts_as_the_instance(boxlike_env, granted_vault):
+    """Granted ``GITHUB_TOKEN``, ``gh`` uses it and needs no config redirect —
+    the agent acts as the instance, which is the identity an operator chose."""
+    built = build_exec_env(
+        agent_id="devops", mode=MODE_ENFORCE, base=boxlike_env, grants=("GITHUB_TOKEN",)
+    )
+    assert built.env["GITHUB_TOKEN"] == "ghp_FAKE2222_from_the_vault"
+    assert "GH_CONFIG_DIR" not in built.env
+
+
+def test_the_gh_redirect_is_not_applied_below_enforce(boxlike_env):
+    """``observe`` changes nothing. A config redirect is a behaviour change,
+    so it belongs on the rung that makes behaviour changes."""
+    built = build_exec_env(agent_id="researcher", mode=MODE_OBSERVE, base=boxlike_env)
+    assert "GH_CONFIG_DIR" not in built.env
 
 
 def test_an_undeclared_platform_variable_is_dropped(boxlike_env):
@@ -171,6 +194,9 @@ def test_observe_keeps_everything_and_names_what_enforce_would_take(boxlike_env,
 
 
 def test_observe_logs_the_names_for_the_agent_but_never_a_value(boxlike_env, caplog):
+    import robothor.engine.exec_env as exec_env
+
+    exec_env._observed_at.clear()
     with caplog.at_level(logging.INFO, logger="robothor.engine.exec_env"):
         build_exec_env(agent_id="researcher", mode=MODE_OBSERVE, base=boxlike_env)
     text = "\n".join(record.getMessage() for record in caplog.records)
@@ -297,3 +323,93 @@ def test_grants_are_honoured_even_at_off(boxlike_env, granted_vault):
         agent_id="devops", mode=MODE_OFF, base=boxlike_env, grants=("GITHUB_TOKEN",)
     )
     assert built.env["GITHUB_TOKEN"] == "ghp_FAKE2222_from_the_vault"
+
+
+# ── I4: a credential hiding in a setting nobody calls secret ─────────────────
+
+
+def test_a_dsn_with_a_password_in_a_non_secret_setting_is_dropped(boxlike_env):
+    """Review finding I4, and the hardest of the value cases.
+
+    ``ROBOTHOR_DB_HOST`` is declared non-secret and accepts a full DSN — the
+    settings package builds a connection pool from one. So an operator who
+    configured the database that way has put a password into a variable the
+    name gate is obliged to pass, and the prefix list cannot see it either: a
+    DSN starts with ``postgresql://``, not with a vendor token prefix.
+    """
+    base = dict(boxlike_env, ROBOTHOR_DB_HOST="postgresql://alice:FAKEhunter2@db/genus")
+    built = build_exec_env(agent_id="researcher", mode=MODE_ENFORCE, base=base)
+    assert "ROBOTHOR_DB_HOST" not in built.env
+    assert "ROBOTHOR_DB_HOST" in built.withheld
+
+
+def test_a_url_with_userinfo_anywhere_is_dropped(boxlike_env):
+    base = dict(boxlike_env, ROBOTHOR_SEARXNG_URL="https://user:FAKEpw0000@search.example/x")
+    built = build_exec_env(agent_id="researcher", mode=MODE_ENFORCE, base=base)
+    assert "ROBOTHOR_SEARXNG_URL" not in built.env
+
+
+def test_a_url_without_userinfo_survives(boxlike_env):
+    """The cost of a false positive here is an agent that cannot reach its own
+    services, so the gate takes the userinfo run and nothing else."""
+    base = dict(boxlike_env, ROBOTHOR_DB_HOST="postgresql://db.internal:5432/genus")
+    built = build_exec_env(agent_id="researcher", mode=MODE_ENFORCE, base=base)
+    assert built.env["ROBOTHOR_DB_HOST"] == "postgresql://db.internal:5432/genus"
+
+
+@pytest.mark.parametrize("name", ["TMPDIR", "HOME", "LC_PAPER", "LANG"])
+def test_even_the_always_allowed_names_are_checked_on_their_value(boxlike_env, name):
+    """``ALWAYS_ALLOWED`` and ``LC_*`` skipped the value gate entirely, so a
+    credential parked in ``LC_PAPER`` or ``TMPDIR`` travelled untouched. The
+    allowlist is about which names are STRUCTURALLY needed, not a promise about
+    what somebody put in them."""
+    base = dict(boxlike_env)
+    base[name] = "postgresql://alice:FAKEhunter2@db/genus"
+    built = build_exec_env(agent_id="researcher", mode=MODE_ENFORCE, base=base)
+    assert built.env.get(name) != base[name], f"{name} carried a credential through"
+
+
+def test_the_value_gate_is_the_redactor_not_a_second_opinion():
+    """One matcher, not two. A shape the redactor learns about must reach the
+    exec gate without anybody editing a second list."""
+    from robothor.engine.exec_env import looks_like_a_credential_value
+    from robothor.secrets.redaction import redact
+
+    for value in (
+        "ghp_FAKE0000aaaaaaaaaaaaaaaaaaaaaaaa",
+        "postgresql://alice:FAKEpw@db/genus",
+        "xoxb-FAKE-0000-0000-fakefakefake",
+    ):
+        assert looks_like_a_credential_value(value)
+        assert redact(value) != value, (
+            "the exec gate and the redactor disagree about this value, which "
+            "means there are two matchers again"
+        )
+
+
+def test_the_observe_line_is_rate_limited_per_agent(boxlike_env, caplog):
+    """~50 names on ~250 execs a day is not a count, it is a flood — and a
+    flood is how the credential pool logged one outage 452 times while paging
+    zero. One line per agent per hour is a count an operator can act on."""
+    import robothor.engine.exec_env as exec_env
+
+    exec_env._observed_at.clear()
+    with caplog.at_level(logging.INFO, logger="robothor.engine.exec_env"):
+        for _ in range(20):
+            build_exec_env(agent_id="researcher", mode=MODE_OBSERVE, base=boxlike_env)
+    lines = [r for r in caplog.records if "would lose" in r.getMessage()]
+    assert len(lines) == 1, f"{len(lines)} observe lines for 20 execs by one agent"
+    exec_env._observed_at.clear()
+
+
+def test_a_second_agent_still_gets_its_own_line(boxlike_env, caplog):
+    """Per AGENT, not global: the report is per-agent or it is not actionable."""
+    import robothor.engine.exec_env as exec_env
+
+    exec_env._observed_at.clear()
+    with caplog.at_level(logging.INFO, logger="robothor.engine.exec_env"):
+        build_exec_env(agent_id="researcher", mode=MODE_OBSERVE, base=boxlike_env)
+        build_exec_env(agent_id="devops", mode=MODE_OBSERVE, base=boxlike_env)
+    lines = [r for r in caplog.records if "would lose" in r.getMessage()]
+    assert len(lines) == 2
+    exec_env._observed_at.clear()

@@ -111,9 +111,18 @@ async def test_a_bootstrap_credential_in_both_stores_is_not_a_failure(ctx, monke
 
 
 @pytest.mark.asyncio
-async def test_an_unreadable_vault_cannot_report_a_shadow(ctx, monkeypatch):
-    """Nobody knows is not the same as nothing is wrong, and it is certainly
-    not a failure: a box with no vault at all would fail forever."""
+async def test_an_unreadable_vault_never_reports_green(ctx, monkeypatch):
+    """Review finding I2, and the inert-control shape exactly.
+
+    The check swallowed an unreadable vault and returned "no credential is
+    configured differently in the environment and the vault" — which is true
+    only in the sense that it compared nothing. A dead environment value could
+    be served while the control that exists to say so reported green.
+
+    ``skip`` rather than ``fail``: a box with no vault at all is a valid
+    instance and would otherwise fail forever. ``skip`` is never a silent pass
+    — the doctor reports it, and it says why.
+    """
     from robothor import vault
 
     def boom(*args, **kwargs):
@@ -124,4 +133,8 @@ async def test_an_unreadable_vault_cannot_report_a_shadow(ctx, monkeypatch):
     monkeypatch.setattr(vault, "get", boom)
     monkeypatch.setattr(vault, "list", boom)
     result = await _check().run(ctx)
-    assert result.status in {"pass", "skip"}
+    assert result.status == "skip", (
+        "an unreadable vault reported as a pass: the check compared nothing and "
+        "said nothing was wrong"
+    )
+    assert "vault" in result.detail.lower()

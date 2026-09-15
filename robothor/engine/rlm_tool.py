@@ -260,38 +260,67 @@ def _make_web_search_fn() -> Callable[..., str]:
     return web_search
 
 
-def _make_exec_fn(workspace: str) -> Callable[..., str]:
-    """Return a sync shell executor with 30s timeout and 4K truncation."""
+def _shell(command: str, *, workspace: str = "", agent_id: str = "", verbose: bool = False) -> str:
+    """Run one shell command for the inner reasoning model, scrubbed.
+
+    Named and module-level so the suite can drive it: this used to be a closure
+    running ``subprocess.run(shell=True)`` with no ``env=``, which put the
+    engine's whole credential set into a command the INNER model composed —
+    outside the exec ladder entirely, invisible under ``observe``, and available
+    to any agent holding ``deep_reason`` whether or not it held ``exec``.
+
+    No grants are passed. ``deep_reason`` is a reasoning aid, not a way to act
+    as the instance; an agent that needs a credential in a shell has ``exec``
+    and a manifest grant for the name.
+    """
     import subprocess
 
+    from robothor.engine.exec_env import build_exec_env
+
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=workspace or None,
+            env=build_exec_env(agent_id=agent_id, mode=None).env,
+        )
+    except subprocess.TimeoutExpired:
+        return "ERROR: Command timed out after 30 seconds"
+    except Exception as exc:  # noqa: BLE001 - reported to the model, never raised
+        return f"ERROR: {exc}"
+
+    stdout = result.stdout[:4000] if result.stdout else ""
+    stderr = result.stderr[:1000] if result.stderr else ""
+    if len(result.stdout or "") > 4000:
+        stdout += "\n... [truncated at 4KB]"
+    if not verbose:
+        if result.returncode != 0:
+            return f"exit {result.returncode}\n{stdout}\n{stderr}".strip()
+        return stdout or stderr or "(no output)"
+    parts = []
+    if stdout:
+        parts.append(f"STDOUT:\n{stdout}")
+    if stderr:
+        parts.append(f"STDERR:\n{stderr}")
+    if result.returncode != 0:
+        parts.append(f"EXIT CODE: {result.returncode}")
+    return "\n".join(parts) if parts else "(no output)"
+
+
+def _make_exec_fn(workspace: str, agent_id: str = "") -> Callable[..., str]:
+    """Return a sync shell executor with 30s timeout and 4K truncation.
+
+    A thin wrapper over :func:`_shell`, which is where the environment is
+    built. It used to be the implementation, with its own ``subprocess.run``
+    and no ``env=``; two copies of a shell-out is two places to forget the
+    scrub, and this one was the forgotten place.
+    """
+
     def exec_shell(command: str) -> str:
-        """Execute a shell command. 30s timeout, 4KB stdout limit. CWD is workspace root."""
-        cwd = workspace or None
-        try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                cwd=cwd,
-            )
-            stdout = result.stdout[:4000] if result.stdout else ""
-            stderr = result.stderr[:1000] if result.stderr else ""
-            if len(result.stdout or "") > 4000:
-                stdout += "\n... [truncated at 4KB]"
-            parts = []
-            if stdout:
-                parts.append(f"STDOUT:\n{stdout}")
-            if stderr:
-                parts.append(f"STDERR:\n{stderr}")
-            if result.returncode != 0:
-                parts.append(f"EXIT CODE: {result.returncode}")
-            return "\n".join(parts) if parts else "(no output)"
-        except subprocess.TimeoutExpired:
-            return "ERROR: Command timed out after 30 seconds"
-        except Exception as e:
-            return f"ERROR: {e}"
+        return _shell(command, workspace=workspace, agent_id=agent_id, verbose=True)
 
     return exec_shell
 
