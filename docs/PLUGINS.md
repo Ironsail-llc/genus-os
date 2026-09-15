@@ -352,6 +352,105 @@ it only says so. The pre-execution guarantee exists solely in `enforce`.
 > manifest — that would defeat the entire point. Use a normal install to test
 > under `enforce`.
 
+## Disabling and the lockfile
+
+`pip install` used to be the whole of plugin governance: a distribution that
+publishes a `genus.*` entry point became part of the engine, and the only way
+to stop it was to uninstall the package. `plugins.lock` is the record that was
+missing — what the operator accepted, what its manifest looked like at the
+time, and which distributions are turned off.
+
+It lives at `<workspace>/.robothor/plugins.lock` (override with
+`ROBOTHOR_PLUGIN_LOCKFILE`), is written mode `0600`, and holds one JSON object
+per **distribution** — not per entry point, because a distribution is what you
+install, what gets recorded, and what `enable`/`disable` act on:
+
+```json
+{
+  "lockfile_version": 1,
+  "plugins": [
+    {
+      "name": "genus-hostinfo",
+      "version": "0.1.0",
+      "manifest_sha256": "…",
+      "verdict": "unscanned",
+      "enabled": true,
+      "kinds": ["genus.schemas", "genus.services", "genus.tools"],
+      "recorded_at": "2026-09-15T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+`verdict` is always `unscanned` today. Nothing scans a plugin yet, and a field
+reading `safe` because no scanner ran would be worse than no field at all.
+
+### The verbs
+
+| command | what it does |
+|---|---|
+| `genus plugin list` | what is installed, what it contributes, what is disabled, what was refused |
+| `genus plugin info <name>` | one distribution: manifest, groups, contributions, lock row, load state |
+| `genus plugin sync` | upsert a row per installed distribution; drop rows for ones that are gone |
+| `genus plugin enable <name>` | let a recorded plugin load again |
+| `genus plugin disable <name>` | stop it being imported at all |
+| `genus plugin doctor [--json]` | the `plugins` category of `genus doctor` |
+
+`enable` and `disable` write the file and nothing else — the running engine is
+still serving the set it discovered until you reload it (SIGHUP, or `POST
+/api/plugins/reload`). An unknown name exits 2 rather than creating a row: a
+disable that invented a row for a typo would report success and change nothing.
+
+### What the loader does with it
+
+Consulted **before `ep.load()`**, which is the only point at which refusing
+means anything:
+
+* a row with `"enabled": false` → refused, `disabled by operator`, never imported;
+* a row whose `manifest_sha256` no longer matches the manifest on disk → refused,
+  `manifest changed since it was recorded; run genus plugin sync`. This is the
+  rule `verify_adapter_integrity` applies to a pinned stdio command, one layer
+  up: a declaration that updates itself is self-approving, and "it used to be
+  fine" is not a verification;
+* a distribution with **no row** → loads exactly as it does today.
+
+That last one is the important one. **The lockfile is opt-in**: it constrains
+what it has been told about, so a fresh install behaves as it always has and
+`genus plugin sync` is what turns the control on. A lockfile that does not
+parse is treated as absent, logged once, and reported by the doctor — a
+governance file that could brick an engine would be deleted by the first
+operator it bricked.
+
+### The doctor
+
+| check | severity | what it asks |
+|---|---|---|
+| `plugins.lockfile` | recommended | present, parseable, mode 0600 |
+| `plugins.load` | required | every installed plugin loaded, or is disabled on purpose |
+| `plugins.drift` | required | no recorded manifest differs from what is on disk |
+
+`plugins.load` accepts exactly one refusal — `disabled by operator`, which is
+the operator's own decision arriving back at them. `plugins.drift` overlaps it
+deliberately: both go red for a drifted plugin, and this is the one that names
+`genus plugin sync`.
+
+### Over HTTP
+
+The engine owns all four answers, because a plugin is an object in *that*
+process; the bridge proxies them behind `require_operator` and audits the three
+acts with identifiers only.
+
+| route (bridge) | engine | what it does |
+|---|---|---|
+| `GET /api/plugins` | `GET /api/admin/plugins` | generation, lockfile state, one row per distribution |
+| `POST /api/plugins/{name}/enable` | `POST /api/admin/plugins/{name}/enable` | flip the row; 404 if unrecorded; does **not** reload |
+| `POST /api/plugins/{name}/disable` | `POST /api/admin/plugins/{name}/disable` | as above |
+| `POST /api/plugins/reload` | `POST /api/admin/plugins/reload` | runs the SIGHUP body; returns `{generation, loaded, failures}` |
+
+No response carries a filesystem path. Which distributions are installed is a
+platform fact; where an instance keeps its files is not, so the listing answers
+`path_configured` and `present` and never *where*.
+
 ## A worked example
 
 `plugins/genus-hostinfo` is a first-party plugin carried in this repo: host
