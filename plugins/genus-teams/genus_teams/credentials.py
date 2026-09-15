@@ -117,11 +117,25 @@ def _setting(field: str) -> str:
     ``genus channel add teams`` wrote to ``config.yaml`` is found, the setting
     appears in ``genus config`` and in the configuration reference, and the
     platform's env-read ratchet keeps counting call sites elsewhere.
+
+    Spelled out field by field rather than reached with ``getattr(settings,
+    field)``, because the platform's plugin scanner **blocks** a wheel that
+    resolves an attribute by a name computed at runtime — that is how ``exec``
+    and ``os.system`` get called without being named, and a scanner cannot tell
+    this use from that one. It is right to refuse it, and two branches are a
+    small price for a distribution an operator can actually install.
     """
     try:
         from robothor.settings import get_settings
 
-        return str(getattr(get_settings().channels, field, "") or "").strip()
+        channels = get_settings().channels
+        if field == "teams_app_id":
+            value = channels.teams_app_id
+        elif field == "teams_tenant_id":
+            value = channels.teams_tenant_id
+        else:  # pragma: no cover - there is no third non-secret value
+            return ""
+        return str(value or "").strip()
     except Exception:  # noqa: BLE001 — unrelated bad config must not make a
         # configured channel look unconfigured; the secrets layer still answers.
         return ""
