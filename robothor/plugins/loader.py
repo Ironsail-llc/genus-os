@@ -188,10 +188,35 @@ def load_plugins(
     reserved = reserved_names or set()
     eps = _discover() if entry_points is None else entry_points
 
+    # The operator's record, read ONCE per load rather than per entry point:
+    # a distribution publishing into five groups must not cost five reads of
+    # the same file on the boot path. Read here rather than cached at module
+    # scope so that `genus plugin disable X` followed by a SIGHUP takes effect
+    # -- reload_plugins() invalidates every cache built on top of this, and
+    # each of them calls back in here, so a fresh read is the reload.
+    from robothor.plugins import lockfile as _lockfile
+
+    try:
+        lock = _lockfile.read_lockfile()
+    except Exception as exc:  # noqa: BLE001 - governance must never block boot
+        logger.warning("Plugin lockfile could not be read (%s); ignoring it", type(exc).__name__)
+        lock = _lockfile.Lockfile()
+
     for ep in eps:
         group = getattr(ep, "group", "")
         name = getattr(ep, "name", "<unnamed>")
         if group not in _GROUPS:
+            continue
+
+        # THE LOCKFILE IS CONSULTED BEFORE `ep.load()`, for the reason the
+        # manifest gate below gives: after the import, "refused" means the code
+        # has already run. A distribution with no row is unconstrained -- the
+        # lockfile governs what it has been told about, and `genus plugin sync`
+        # is what tells it.
+        refusal = _lockfile.refusal_for(getattr(ep, "dist", None), lock)
+        if refusal is not None:
+            result.failures.append(PluginFailure(name, group, refusal))
+            logger.info("Plugin %r not loaded: %s", name, refusal)
             continue
 
         # GOVERNANCE BEFORE EXECUTION. `ep.load()` below imports the

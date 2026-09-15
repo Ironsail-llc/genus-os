@@ -163,6 +163,15 @@ class PathsSettings(SettingsGroup):
         "ROBOTHOR_ADAPTER_DIR",
         "Directory scanned for LoRA/model adapters. Empty means ~/.config/robothor/adapters.",
     )
+    plugin_lockfile: str = declare(
+        "",
+        "ROBOTHOR_PLUGIN_LOCKFILE",
+        "Path of the plugin lockfile: which installed distributions the "
+        "operator accepted, what their manifest looked like when they were "
+        "recorded, and which are disabled. Empty means "
+        "<workspace>/.robothor/plugins.lock.",
+        since="unreleased",
+    )
     manifest_dir: str = declare(
         "",
         "ROBOTHOR_MANIFEST_DIR",
