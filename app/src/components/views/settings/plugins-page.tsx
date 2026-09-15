@@ -278,6 +278,18 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
 
   const { busyRow, rowErrors, rowNotes, act, setRowNote } = useRowActions();
 
+  /*
+    The notes a toggle leaves behind all say the same thing — "recorded, and
+    the engine has not been told yet" — so the reload that tells it is what
+    retires them. Leaving them up would put "reload to apply it" under a row
+    the operator has just reloaded, which is the page contradicting the report
+    directly above it. The row ERRORS are not touched: a refusal is a fact
+    about a write that did not happen, and a reload does not answer it.
+  */
+  const clearNotes = useCallback(() => {
+    for (const name of Object.keys(rowNotes)) setRowNote(name, null);
+  }, [rowNotes, setRowNote]);
+
   const onData = useCallback((body: unknown) => {
     setListing(normalizeListing(body));
   }, []);
@@ -340,13 +352,14 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
       // and asking it a second time would not change the answer. A reload that
       // failed reports itself below, in its own words.
       setPending(false);
+      clearNotes();
       poll.reload();
     } catch {
       setReloadError(BRIDGE_UNREACHABLE);
     } finally {
       setReloading(false);
     }
-  }, [poll]);
+  }, [poll, clearNotes]);
 
   const toggle = useCallback(
     (plugin: Plugin) => {

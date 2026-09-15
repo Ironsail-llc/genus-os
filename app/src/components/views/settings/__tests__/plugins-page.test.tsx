@@ -423,6 +423,23 @@ describe("Settings › Plugins — reloading", () => {
     await waitFor(() => expect(recorded.listReads).toBeGreaterThan(1));
   });
 
+  it("retires the row notes the toggle left, once the reload they asked for has run", async () => {
+    mockBridge({
+      listings: [LISTING, LISTING],
+      toggle: { status: 200, body: { name: "genus-notes", enabled: true, reloaded: false } },
+    });
+    render(<PluginsPage visible />);
+
+    fireEvent.click(await screen.findByTestId("plugin-switch-genus-notes"));
+    await screen.findByTestId("plugin-note-genus-notes");
+
+    fireEvent.click(screen.getByTestId("plugins-reload"));
+    await screen.findByTestId("plugins-reload-result");
+    // "Reload to apply it" under a row that has just been reloaded is the page
+    // contradicting the report above it.
+    await waitFor(() => expect(screen.queryByTestId("plugin-note-genus-notes")).toBeNull());
+  });
+
   it("says the engine kept its previous plugins when the reload itself failed", async () => {
     mockBridge({
       listings: [LISTING],
