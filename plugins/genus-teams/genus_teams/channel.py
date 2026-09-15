@@ -42,6 +42,7 @@ from urllib.parse import quote
 from genus_teams.credentials import (
     APP_ID_ENV,
     APP_PASSWORD_ENV,
+    CREDENTIAL_ENV_SUMMARY,
     missing_credential_names,
     teams_credentials,
 )
@@ -235,16 +236,23 @@ class TeamsChannel:
 
         credentials = teams_credentials(tenant_id=self.tenant_id)
         if not credentials.can_send:
-            # The NAMES of what is missing, resolved by the credentials module,
-            # and nothing else from the credentials object. Not a masked value
-            # and not a length: a log line is the wrong place for a secret in
-            # every form, and the safe way to guarantee that is for the value
-            # never to be an argument to a log call.
+            # NOTHING in this call comes from `credentials`. Not the value, not
+            # a mask of it, not a length, and not a list of names computed by
+            # reading its attributes — which is what the previous version did,
+            # and which a data-flow analyser is right to call logging the
+            # secret: "the names of what is missing" is derived from the values,
+            # and the derivation is one edit away from carrying them.
+            #
+            # So the only interpolation is the agent id, and the setting names
+            # are a module constant assembled from other constants.
+            # `genus channel verify teams` and the `genus_teams_credentials`
+            # doctor check say precisely WHICH of the two is missing; neither is
+            # a log sink, and that is where the precision belongs.
             logger.warning(
-                "Agent %s announces on Teams but %s is set neither in the "
-                "environment nor in the vault",
+                "Agent %s announces on Teams, but this instance has no Teams "
+                "credentials: %s must be set in the environment or in the vault",
                 getattr(config, "id", "?"),
-                ", ".join(missing_credential_names(credentials)),
+                CREDENTIAL_ENV_SUMMARY,
             )
             return SendReceipt(
                 acknowledged=0, expected=1, status="failed:teams_not_configured", target=clean

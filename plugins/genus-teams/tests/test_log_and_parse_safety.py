@@ -80,9 +80,20 @@ class TestNoCredentialReachesALogLine:
     def test_the_send_path_passes_no_credential_value_to_a_logger(self):
         """AST: the warning takes the credential NAMES, never a value off the
         credentials object. A test that only reads captured output would pass on
-        a line that logs a value which happened to be empty."""
+        a line that logs a value which happened to be empty.
+
+        The rule is the analyser's, and it is stricter than "no secret in the
+        string": **nothing data-flow-derived from the credentials may reach a log
+        call.** A list of "which names are missing" is computed by reading the
+        values, so it counts — and rightly, because a computation that reads a
+        secret to produce a string is one edit from producing the secret. What
+        may be logged is a module constant assembled from other constants.
+        """
         import ast
         from pathlib import Path
+
+        derived = {"app_password", "app_id", "token", "directory_tenant_id"}
+        deriving_calls = {"missing_credential_names"}
 
         source = Path(channel_module.__file__).read_text(encoding="utf-8")
         for node in ast.walk(ast.parse(source)):
@@ -94,14 +105,70 @@ class TestNoCredentialReachesALogLine:
             if func.value.id != "logger":
                 continue
             for argument in ast.walk(node):
-                if isinstance(argument, ast.Attribute) and argument.attr in {
-                    "app_password",
-                    "app_id",
-                    "token",
-                }:
+                if isinstance(argument, ast.Attribute) and argument.attr in derived:
                     raise AssertionError(
                         f"a credential value is passed to logger.{func.attr} at line {node.lineno}"
                     )
+                if isinstance(argument, ast.Name) and argument.id == "credentials":
+                    raise AssertionError(
+                        f"the credentials object reaches logger.{func.attr} at "
+                        f"line {node.lineno}; log a constant instead"
+                    )
+                if (
+                    isinstance(argument, ast.Call)
+                    and isinstance(argument.func, ast.Name)
+                    and argument.func.id in deriving_calls
+                ):
+                    raise AssertionError(
+                        f"logger.{func.attr} at line {node.lineno} interpolates a value "
+                        "derived from the credentials; that is still logging the secret "
+                        "as far as data flow is concerned"
+                    )
+
+
+class TestTheTokenErrorPathIsIndependentOfTheSecret:
+    """The same finding one module over: the Entra error path used to scrub the
+    secret out of ``error_description`` by comparing against the value this
+    instance holds. That is derived-from-the-secret, which is what the analyser
+    reports — and it is a real fragility, because a scrub that stops matching
+    (a rotation mid-flight, a value the server re-encoded) becomes a passthrough
+    with nothing nearby changing."""
+
+    def test_describe_takes_no_credential_argument(self):
+        import inspect
+
+        from genus_teams import tokens as tokens_module
+
+        parameters = set(inspect.signature(tokens_module._describe).parameters)
+        assert parameters == {"payload", "status"}, (
+            f"_describe still takes a credential: {sorted(parameters)}"
+        )
+
+    def test_the_description_is_not_carried_at_all(self):
+        """Not "carried after scrubbing" — not carried. The proof is a
+        description with no secret in it that still does not survive."""
+        from genus_teams import tokens as tokens_module
+
+        detail = tokens_module._describe(
+            {
+                "error": "invalid_client",
+                "error_description": "AADSTS7000215: Invalid client secret provided. [abc]",
+            },
+            401,
+        )
+        assert "invalid_client" in detail
+        assert "AADSTS7000215" in detail, "the operator lost the identifier that names the fix"
+        assert "Invalid client secret provided" not in detail
+        assert "abc" not in detail
+
+    def test_a_secret_shaped_description_cannot_reach_the_result(self):
+        from genus_teams import tokens as tokens_module
+
+        detail = tokens_module._describe(
+            {"error": "invalid_client", "error_description": f"rejected {FIXTURE_SECRET}"}, 401
+        )
+        assert FIXTURE_SECRET not in detail
+        assert detail == "invalid_client"
 
 
 class TestLogInjection:

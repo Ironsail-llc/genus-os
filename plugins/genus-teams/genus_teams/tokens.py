@@ -16,11 +16,13 @@ laptop, a container migrated) makes a live token look expired forever, or worse,
 an expired one look live.
 
 **Never logged, never returned, never in an error.** Entra's own
-``error_description`` quotes the secret it rejected back at you, verbatim — and
-the platform's pattern-based ``redact`` cannot catch it, because a client secret
-has no shape to match. So :func:`_describe` scrubs the value this instance holds
-by identity first and runs the pattern pass after it, and what survives is the
-``error`` code, which is the word that tells an operator what to fix.
+``error_description`` quotes the secret it rejected back at you, verbatim. The
+answer is not to scrub it — a scrub is computed FROM the secret, which is still
+the secret as far as data flow is concerned, and a scrub that stops matching
+becomes a passthrough with nothing nearby changing. :func:`_describe` does not
+carry the description at all: it keeps Entra's ``error`` code and the
+``AADSTSnnnnn`` identifier, which are the two halves that name the fix and
+neither of which can express a secret.
 :meth:`TokenSource.last_attempt` exists so ``health()`` can report *whether* the
 last fetch worked without anything nearby holding the token.
 """
@@ -29,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -81,42 +84,41 @@ def build_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=TIMEOUT_SECONDS)
 
 
-#: What a scrubbed credential is replaced with. Visible on purpose: an operator
-#: who can see that something was removed knows the message was edited, where a
-#: silently truncated sentence just looks like a bad error message.
-REDACTED = "<client secret>"
+#: Entra's own error identifier inside ``error_description``. Fixed shape,
+#: bounded length, no alternation: it cannot match a secret and it cannot
+#: backtrack.
+_AADSTS_CODE = re.compile(r"AADSTS\d{4,7}")
 
 
-def _describe(payload: Any, status: int, secret: str | None = None) -> str:
+def _describe(payload: Any, status: int) -> str:
     """What went wrong, in words safe to print.
 
-    Two passes, and the first is the one that matters. Entra quotes the secret
-    it rejected back at you, in full, inside ``error_description``:
+    **Nothing that could contain the secret is carried forward.** Entra quotes
+    the rejected secret back at you, in full, inside ``error_description``:
 
         AADSTS7000215: Invalid client secret provided. [<the secret>]
 
-    ``robothor.secrets.redaction.redact`` cannot help with that — it matches the
-    SHAPES of known credentials (``xoxb-``, ``sk-``, a bot token), and an Entra
-    client secret is an arbitrary string with no shape at all. So the value this
-    instance holds is scrubbed by identity first, and the pattern pass runs
-    after to catch anything else the response carried.
+    The first version scrubbed that string by comparing it against the value
+    this instance holds. That worked, and it was still wrong: the result was
+    *derived from the secret*, which is what a data-flow analyser reports as
+    logging the credential — correctly, because a scrub that stops matching (a
+    rotation mid-flight, a value Entra re-encoded) silently becomes a passthrough
+    and nothing nearby changes.
 
-    The ``error`` code (``invalid_client``, ``unauthorized_client``) is kept
-    because it is the half that names the fix.
+    So the description is not carried at all. What survives is Entra's own
+    ``error`` code (``invalid_client``, ``unauthorized_client``) and the
+    ``AADSTSnnnnn`` identifier lifted out of the description by a fixed pattern —
+    the two halves that name the fix, neither of which can express a secret.
     """
     from robothor.secrets.redaction import redact
 
-    def _safe(text: str) -> str:
-        cleaned = text.replace(secret, REDACTED) if secret and secret in text else text
-        return redact(cleaned)
-
     if isinstance(payload, dict):
         code = str(payload.get("error") or "")
-        description = str(payload.get("error_description") or "")
-        if code:
-            return _safe(f"{code}: {description}" if description else code)
-        if description:
-            return _safe(description)
+        found = _AADSTS_CODE.search(str(payload.get("error_description") or ""))
+        identifier = found.group(0) if found else ""
+        detail = ": ".join(part for part in (code, identifier) if part)
+        if detail:
+            return redact(detail)
     return f"HTTP {status}"
 
 
@@ -201,7 +203,7 @@ class TokenSource:
             raise TokenError(f"the token request failed: {detail}") from None
 
         if response.status_code != 200:
-            detail = _describe(_json(response), response.status_code, credentials.app_password)
+            detail = _describe(_json(response), response.status_code)
             self._record(False, detail)
             # `from None`: the httpx exception chain would carry the request,
             # and the request body is the client secret.

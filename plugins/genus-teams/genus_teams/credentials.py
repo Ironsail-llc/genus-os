@@ -37,6 +37,8 @@ from robothor.vault.naming import channel_field
 CredentialSource = Literal["env", "vault", "settings", "missing", "unavailable"]
 
 __all__ = [
+    "CREDENTIAL_ENV_NAMES",
+    "CREDENTIAL_ENV_SUMMARY",
     "CredentialSource",
     "APP_ID_ENV",
     "APP_ID_VAULT_KEY",
@@ -111,16 +113,29 @@ class TeamsCredentials:
         return (self.directory_tenant_id or "").strip() or BOTFRAMEWORK_TENANT
 
 
+#: The two settings a send needs, and a ready-made sentence naming them.
+#:
+#: Both are assembled from other constants and from nothing else, so a caller
+#: can put ``CREDENTIAL_ENV_SUMMARY`` in a log line and the analyser can see —
+#: not be told — that no credential VALUE flows into it. That distinction is the
+#: whole point: a list of "which names are missing" is computed by reading the
+#: values, and a computation that reads a secret to produce a string is one edit
+#: away from producing the secret. The precise answer belongs in ``verify`` and
+#: in the doctor, which report to an operator who asked rather than to a file.
+CREDENTIAL_ENV_NAMES: tuple[str, ...] = (APP_ID_ENV, APP_PASSWORD_ENV)
+CREDENTIAL_ENV_SUMMARY = " and ".join(CREDENTIAL_ENV_NAMES)
+
+
 def missing_credential_names(credentials: TeamsCredentials) -> list[str]:
     """The environment names of the credentials this instance does NOT hold.
 
-    Names, never values, and the reason it lives here rather than at the call
-    site is the reason ``slack_credentials`` exists at all: one module spells
-    the credential names, and the surfaces that report on them take a list of
-    strings. A caller that assembled its own list would have the credential
-    object in the same expression as the message it is building — one edit from
-    a log line carrying the secret, which is the finding that put this function
-    here.
+    Names, never values — but the names are chosen by READING the values, and
+    that is a distinction with consequences: the result is derived from a
+    secret, so it must not reach a log line even though every string in it is a
+    constant. Use it where an operator has asked a direct question and is
+    waiting for the answer — ``genus channel verify teams``, the
+    ``genus_teams_credentials`` doctor check — and use
+    :data:`CREDENTIAL_ENV_SUMMARY` anywhere the destination is a log.
 
     Empty when the instance can send.
     """
