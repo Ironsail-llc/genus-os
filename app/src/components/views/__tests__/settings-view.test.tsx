@@ -66,10 +66,25 @@ describe("SettingsView", () => {
   });
 
   it("says what will live on a placeholder page", () => {
-    renderSettings({ page: "plugins" });
-    const page = screen.getByTestId("settings-page-plugins");
+    // Secrets is still a placeholder; Plugins stopped being one when the real
+    // screen landed, and the assertion moved rather than being deleted.
+    renderSettings({ page: "secrets" });
+    const page = screen.getByTestId("settings-page-secrets");
     expect(page.textContent).toMatch(/soon/i);
     expect(page.textContent!.length).toBeGreaterThan(30);
+  });
+
+  it("gives an operator the real Plugins page, not a placeholder", () => {
+    renderSettings({ page: "plugins" });
+    expect(screen.getByTestId("settings-page-plugins").textContent).not.toMatch(/coming soon/i);
+    expect(screen.getByTestId("plugins-refresh")).toBeInTheDocument();
+  });
+
+  it("keeps the Plugins page away from a non-operator, request and all", () => {
+    renderSettings({ page: "plugins", role: "member" });
+    expect(screen.queryByTestId("plugins-refresh")).toBeNull();
+    expect(screen.getByTestId("settings-restricted")).toBeInTheDocument();
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
   it("changes page on click", () => {
