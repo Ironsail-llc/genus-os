@@ -187,42 +187,80 @@ def _env_name_for(adapter: str, key: str) -> str:
     return slug.upper()
 
 
+def _is_opaque(value: str) -> bool:
+    """Whether *value* reads as an issued identifier rather than as a setting.
+
+    Long, unbroken, and mixing letters with digits. ``live``, ``http`` and
+    ``2026-07-28`` are settings; ``s3ss10n-abcdefghijklmnop`` is something a
+    server handed this instance, and the far side must get its own.
+
+    Deliberately a heuristic, and deliberately only used where a false positive
+    is cheap: it turns one adapter value into a ``${NAME}`` the receiver has to
+    fill in. Guessing at entropy anywhere the cost is an unreadable error is
+    what :mod:`robothor.secrets.redaction` refuses to do, and rightly.
+    """
+    return (
+        len(value) >= 16
+        and not any(character.isspace() for character in value)
+        and any(character.isdigit() for character in value)
+        and any(character.isalpha() for character in value)
+    )
+
+
 def _looks_like_a_credential(key: str, value: str) -> bool:
-    from robothor.secrets.redaction import redact
+    from robothor.templates.bundle import credential_shape
 
     if _CREDENTIAL_KEY.search(key):
         return True
-    return redact(value) != value
+    return credential_shape(value) is not None
 
 
 def _collapse_adapter(name: str, data: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
-    """A copy of *data* with credential values replaced by ``${NAME}`` references."""
+    """A copy of *data* with credential values replaced by ``${NAME}`` references.
+
+    Three rules, widened after a hostile review exported an adapter carrying a
+    password in its ``url``, a GitHub token in its ``command`` and an opaque
+    session id in a header — while declaring ``requires.secrets: []``.
+
+    * **Every value under ``headers:``** is parameterised, not just the ones
+      that look like a credential. A header is authentication or it is routing;
+      both belong to the receiving instance, and an opaque session id is not
+      distinguishable from a bearer token by shape.
+    * **Under ``env:``**, and for any top-level string**, a value is
+      parameterised when its key names a credential, its value carries a known
+      credential shape, or it reads as an issued identifier. ``MODE: live``
+      survives, because turning every setting into a required variable would
+      make the bundle unusable rather than safe.
+    * **``command:`` is never rewritten.** Rewriting an argv element would
+      break the command, so a credential there is left where it is — and the
+      export gate then refuses the whole bundle, naming the file and line. That
+      is the honest answer: the operator has to take it out.
+    """
     collapsed: dict[str, Any] = {}
     needed: set[str] = set()
+
+    def parameterise(section: str, key: str, raw: Any, *, always: bool) -> Any:
+        text = str(raw)
+        if _ENV_REFERENCE.fullmatch(text):
+            needed.update(_env_references([text]))
+            return text
+        if not isinstance(raw, str):
+            return raw
+        if always or _looks_like_a_credential(key, text) or _is_opaque(text):
+            env = _env_name_for(section, key)
+            needed.add(env)
+            return "${" + env + "}"
+        return raw
+
     for key, value in data.items():
         if key in _ADAPTER_SECRET_SECTIONS and isinstance(value, dict):
-            section: dict[str, Any] = {}
-            for inner, raw in value.items():
-                text = str(raw)
-                if _ENV_REFERENCE.fullmatch(text):
-                    section[inner] = text
-                    needed.update(_env_references([text]))
-                elif _looks_like_a_credential(str(inner), text):
-                    env = _env_name_for(name, str(inner))
-                    section[inner] = "${" + env + "}"
-                    needed.add(env)
-                else:
-                    section[inner] = raw
-            collapsed[key] = section
+            collapsed[key] = {
+                inner: parameterise(name, str(inner), raw, always=key == "headers")
+                for inner, raw in value.items()
+            }
             continue
-        if isinstance(value, str) and _looks_like_a_credential(str(key), value):
-            if _ENV_REFERENCE.fullmatch(value):
-                collapsed[key] = value
-                needed.update(_env_references([value]))
-            else:
-                env = _env_name_for(name, str(key))
-                collapsed[key] = "${" + env + "}"
-                needed.add(env)
+        if isinstance(value, str):
+            collapsed[key] = parameterise(name, str(key), value, always=False)
             continue
         collapsed[key] = value
     return collapsed, needed

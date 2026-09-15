@@ -8,6 +8,7 @@ export that produces one and the install that consumes one are tested next door.
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import pytest
 import yaml
@@ -141,6 +142,97 @@ class TestSecretScan:
     def test_leaves_ordinary_prose_alone(self):
         text = "Use the key-value store. Sort key ordering matters. Ask for a token.\n"
         assert scan_secret_literals(text, "brain/AGENT.md") == []
+
+
+#: Every case the hostile review exported cleanly. Assembled from pieces so the
+#: test file itself carries no credential-shaped run — gitleaks and the gate
+#: under test are looking at the same bytes, and a fixture that tripped either
+#: would be a fixture nobody could commit.
+_GH = "ghp_" + "A" * 36
+_GH_PAT = "github_pat_" + "B" * 22 + "_" + "C" * 59
+_GITLAB = "glpat-" + "D" * 20
+_AWS = "AKIA" + "IOSFODNN7EXAMPL"
+_GOOGLE = "AIza" + "E" * 35
+_PEM = "-----BEGIN RSA PRIVATE" + " KEY-----\nMIIEow…\n-----END RSA PRIVATE KEY-----"
+_JWT = "eyJhbGciOiJIUzI1NiJ9." + "F" * 24 + "." + "G" * 43
+
+
+class TestCredentialShapes:
+    """The value-shape half of the gate. Each case is a review finding."""
+
+    @pytest.mark.parametrize(
+        ("label", "line"),
+        [
+            ("url userinfo", f"endpoint: https://user:{_GH}@host/x"),
+            ("url userinfo, plain password", "url: https://svc:S3cretP4ssw0rdLong@b.example/_mcp"),
+            ("github token", f"github_pat: {_GH}"),
+            ("github fine-grained", f"token: {_GH_PAT}"),
+            ("gitlab token", f"Authenticate with {_GITLAB} before calling."),
+            ("aws access key", f"access_key_id: {_AWS}"),
+            ("google api key", f"Call the maps API with key {_GOOGLE}."),
+            ("pem private key", _PEM),
+            ("jwt", f"session: {_JWT}"),
+            ("inside a command", f'command: ["curl", "-H", "X-Key: {_GH}", "https://x"]'),
+        ],
+    )
+    def test_the_shape_is_refused_wherever_it_appears(self, label, line):
+        hits = scan_secret_literals(line + "\n", "manifest.template.yaml")
+        assert hits, f"{label} exported cleanly"
+        assert all(part not in hits[0].describe() for part in (_GH, _AWS, _GOOGLE, _GITLAB))
+
+    def test_a_credential_word_inside_a_longer_key_still_counts(self):
+        """``access_key_id:`` missed: the word had to TERMINATE the key name."""
+        assert scan_secret_literals("access_key_id: AKIAsomethingelse\n", "adapters/b.yaml")
+
+    def test_a_password_stated_in_prose_is_refused(self):
+        hits = scan_secret_literals("# the billing password is hunter2hunter2\n", "setup.yaml")
+        assert [h.line for h in hits] == [1]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "Read the API docs before you change the password handling.",
+            "The token is described below; the secret is stored in the vault.",
+            "url: https://billing.example.com/_mcp",
+            "repo: ssh://git@github.com/acme/agents",
+            "protocol: 2026-07-28",
+            "status_file: brain/memory/agent-status.md",
+            "Sort key ordering matters, and the partition key is not a secret.",
+            "  - GET /api/conversations",
+            "model:\n  primary: openrouter/xiaomi/mimo-v2-pro",
+            "token_path: /run/secrets/agent",
+            "max_tokens: 4096",
+        ],
+    )
+    def test_ordinary_platform_text_is_left_alone(self, line):
+        assert scan_secret_literals(line + "\n", "manifest.template.yaml") == []
+
+
+class TestTheShippedCorpus:
+    """Nothing legitimate is blocked — measured, not asserted.
+
+    The hostile review ran both gates over every tracked template artefact and
+    found zero hits; widening the gate is only safe while that stays true, so
+    the measurement lives here rather than in a scratch script that ran once.
+    """
+
+    def test_no_shipped_template_artefact_trips_either_gate(self):
+        root = Path(__file__).resolve().parents[3] / "templates"
+        members = [
+            path
+            for pattern in ("*.yaml", "*.yml", "*.md", "*.json")
+            for path in root.rglob(pattern)
+            if path.is_file()
+        ]
+        assert len(members) > 50, f"corpus collapsed to {len(members)} files"
+
+        findings = []
+        for path in members:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            relative = path.relative_to(root).as_posix()
+            findings.extend(scan_secret_literals(text, relative))
+            findings.extend(scan_instance_leaks(text, relative))
+        assert not findings, [f.describe() for f in findings]
 
 
 #: The fixtures below are the exact shape the leak gate refuses, so they are

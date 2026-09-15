@@ -236,6 +236,83 @@ class TestAdapters:
         assert "adapters/billing.yaml" in result.manifest.file_paths()
         verify_bundle_files(out, result.manifest)
 
+    def test_every_header_value_is_collapsed_and_declared(self, tmp_repo, tmp_path):
+        """The review's probe7: three credentials shipped, ``requires.secrets`` empty.
+
+        A header is either authentication or routing. Both are the receiving
+        instance's to supply, and an opaque session id is not distinguishable
+        from a bearer token by shape — so the whole section is parameterised
+        rather than guessed at value by value.
+        """
+        adapters = _adapter_dir(
+            tmp_path,
+            "billing",
+            {
+                "name": "billing",
+                "transport": "http",
+                "url": "https://svc:S3cretP4ssw0rdLong@billing.example.com/_mcp",
+                "headers": {"X-Tenant": "acme", "X-Session": "s3ss10n-abcdefghijklmnop"},
+                "env": {"BILLING_ENDPOINT": "https://u:p4ssword@host/x", "MODE": "live"},
+                "agents": ["test-agent"],
+            },
+        )
+        _install_agent(tmp_repo)
+        out = tmp_path / "out"
+
+        result = export_agent(
+            "test-agent",
+            out=out,
+            repo_root=tmp_repo,
+            adapter_dir=adapters,
+            include_adapters=True,
+        )
+
+        copied = yaml.safe_load((out / "adapters" / "billing.yaml").read_text())
+        assert copied["url"] == "${BILLING_URL}"
+        assert copied["headers"]["X-Tenant"] == "${BILLING_X_TENANT}"
+        assert copied["headers"]["X-Session"] == "${BILLING_X_SESSION}"
+        assert copied["env"]["BILLING_ENDPOINT"] == "${BILLING_ENDPOINT}"
+        assert copied["env"]["MODE"] == "live", "a plain setting is not a secret"
+
+        secrets = result.manifest.requires.secrets
+        for name in ("BILLING_URL", "BILLING_X_TENANT", "BILLING_X_SESSION", "BILLING_ENDPOINT"):
+            assert name in secrets, f"{name} collapsed but not declared"
+        assert "BILLING_MODE" not in secrets
+
+    def test_a_credential_inside_a_command_refuses_the_export(self, tmp_repo, tmp_path):
+        """``command:`` is never collapsed — rewriting it would break the command.
+
+        So a credential there is a hard refusal, which is the same answer the
+        gate gives everywhere else and is the only honest one: the operator has
+        to take it out themselves.
+        """
+        adapters = _adapter_dir(
+            tmp_path,
+            "billing",
+            {
+                "name": "billing",
+                "transport": "stdio",
+                "command": ["curl", "-H", "X-Key: ghp_" + "A" * 36, "https://x"],
+                "agents": ["test-agent"],
+            },
+        )
+        _install_agent(tmp_repo)
+        out = tmp_path / "out"
+
+        with pytest.raises(ExportError) as excinfo:
+            export_agent(
+                "test-agent",
+                out=out,
+                repo_root=tmp_repo,
+                adapter_dir=adapters,
+                include_adapters=True,
+            )
+
+        message = str(excinfo.value)
+        assert "adapters/billing.yaml" in message
+        assert "A" * 36 not in message
+        assert not out.exists()
+
     def test_ignores_an_adapter_that_serves_every_agent(self, tmp_repo, tmp_path):
         adapters = _adapter_dir(
             tmp_path,

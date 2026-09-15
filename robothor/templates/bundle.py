@@ -58,6 +58,7 @@ __all__ = [
     "Finding",
     "Requires",
     "bundle_document",
+    "credential_shape",
     "file_digest",
     "parse_bundle",
     "parse_requires",
@@ -106,16 +107,70 @@ _ENV_REFERENCE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]{0,63}\}")
 #: Collapsing the space is what takes the shape away.
 _BEARER_REFERENCE = re.compile(r"(?i)\bbearer\s+\$\{[A-Za-z_][A-Za-z0-9_]{0,63}\}")
 
+#: Credential shapes recognised by their VALUE, wherever the value sits — in a
+#: URL, inside a ``command:`` array, in the middle of an English sentence.
+#:
+#: This list exists because the first cut of this gate was
+#: :func:`robothor.secrets.redaction.redact` plus a key-name rule, and a hostile
+#: review exported a GitHub PAT, a GitLab PAT, an AWS access key, a Google API
+#: key, a PEM private key and a password embedded in a URL — cleanly, with the
+#: literals verbatim in the published bundle. ``redact`` is not at fault: its
+#: job is keeping a credential out of a LOG LINE this platform is writing, and
+#: it is deliberately narrow so an operator can still read their own error. A
+#: bundle is a distribution artefact going to a stranger, and the cost of a
+#: false positive here is one refused export with a sentence naming the line.
+#: Different job, different list.
+#:
+#: Every entry is a PREFIXED, self-identifying token family — the kind that can
+#: be recognised without guessing at entropy — plus the two structural shapes
+#: (URL userinfo, PEM armour) that mean "credential" by construction.
+_VALUE_SHAPES: tuple[tuple[str, str], ...] = (
+    # ``scheme://user:password@host``. The password half must be present: a bare
+    # ``ssh://git@host`` is a username and is left alone. Neither half may
+    # contain ``/``, so ``https://h:8080/a@b`` is a port and a path, not a
+    # credential.
+    (r"://[^/\s:@]{1,256}:[^/\s@]{1,256}@", "credentials embedded in a URL"),
+    (r"\bgh[pousr]_[A-Za-z0-9]{16,}", "a GitHub token"),
+    (r"\bgithub_pat_[A-Za-z0-9_]{20,}", "a GitHub fine-grained token"),
+    (r"\bglpat-[A-Za-z0-9_-]{16,}", "a GitLab token"),
+    (r"\b(?:AKIA|ASIA)[0-9A-Z]{15,16}\b", "an AWS access key id"),
+    (r"\bAIza[0-9A-Za-z_-]{35}\b", "a Google API key"),
+    (r"-----BEGIN [A-Z ]{0,32}PRIVATE KEY-----", "a PEM private key"),
+    (r"\bnpm_[A-Za-z0-9]{36}\b", "an npm token"),
+    (r"\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}\b", "a Shopify token"),
+    # A JSON Web Token: three base64url runs. The header segment is anchored on
+    # ``eyJ`` (``{"`` in base64) so an ordinary hyphenated identifier with two
+    # dots in it cannot match.
+    (r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{16,}", "a JSON Web Token"),
+)
+
+_CREDENTIAL_SHAPED = tuple((re.compile(pattern), reason) for pattern, reason in _VALUE_SHAPES)
+
 #: Names that mean "credential" wherever one appears. Used for the ``key: value``
 #: form, which :func:`redact` deliberately does not cover: its rule is ``=`` and
 #: only ``=``, because ``TOKEN: expected`` in an English sentence is a sentence.
 #: A bundle is not prose, though — it is YAML — so ``api_key: hunter2`` inside an
 #: adapter is exactly the literal this gate exists to catch, and the ``=`` rule
 #: would walk straight past it.
+#:
+#: ``[_-]PAT`` with a letter lookahead rather than a bare ``PAT``: ``github_pat``
+#: is a credential, and ``path``, ``patch``, ``pattern`` and — the one that
+#: actually fired on the shipped corpus — ``instruction_file_path`` are not.
 _CREDENTIAL_NAME = (
     r"(?:SECRET|SECRETS|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|CREDENTIALS"
     r"|API[_-]?KEY|ACCESS[_-]?KEY|SECRET[_-]?KEY|PRIVATE[_-]?KEY|AUTH[_-]?KEY"
-    r"|TOKEN|BOT[_-]?TOKEN|CLIENT[_-]?SECRET)"
+    r"|TOKEN|BOT[_-]?TOKEN|CLIENT[_-]?SECRET|[_-]PAT(?![A-Za-z]))"
+)
+
+#: Trailing words that turn a credential name into a name ABOUT credentials.
+#: ``token_path`` is a filename, ``max_tokens`` a count, ``secret_backend`` a
+#: choice of vault. Borrowed in spirit from ``redaction._ABOUT_NOT_THE_THING``;
+#: ``ID`` is deliberately NOT here, because ``access_key_id`` carrying a literal
+#: AWS key is one of the cases this gate was widened for.
+_ABOUT_NOT_THE_THING = (
+    r"(?:PATH|FILE|DIR|NAME|ENV|VAR|COUNT|LEN|LENGTH|ENABLED|DISABLED|TTL|SIZE"
+    r"|PREFIX|SUFFIX|FORMAT|ALG|ALGO|ALGORITHM|SOURCE|BACKEND|PROVIDER|HEADER"
+    r"|REQUIRED|POOL|MODE|COLUMN|FIELD|ORDER|TYPE|S)"
 )
 
 #: One ``name: value`` line whose name means credential and whose value is a
@@ -127,12 +182,30 @@ _CREDENTIAL_NAME = (
 #: variable NAMES, so a rule that read it as a credential would make every
 #: correctly declared bundle unexportable. A credential is a scalar — no
 #: provider has ever issued a list.
+#:
+#: The credential word need only APPEAR in the key name, not terminate it:
+#: ``access_key_id:`` walked straight past a rule that required the word at the
+#: end. What follows it is bounded by the deny-list above so ``token_path`` and
+#: ``max_tokens`` do not become credentials by acquiring a suffix.
 _MAPPING_CREDENTIAL = re.compile(
-    rf"^\s*(?:-\s*)?[\"']?[A-Za-z0-9_-]{{0,40}}{_CREDENTIAL_NAME}[\"']?\s*:\s*"
-    r"(?![\"']?(?:null|~|EnvRef|BearerEnvRef)[\"']?\s*$)"
+    rf"^\s*(?:-\s*)?[\"']?[A-Za-z0-9_-]{{0,40}}{_CREDENTIAL_NAME}"
+    rf"(?:[_-]?(?!{_ABOUT_NOT_THE_THING}\b)[A-Za-z0-9]{{1,20}}){{0,2}}[\"']?\s*:\s*"
+    r"(?![\"']?(?:null|~|EnvRef|BearerEnvRef|true|false)[\"']?\s*$)"
     r"(?![\[{|>&*#])"
     r"[\"']?\S",
     re.IGNORECASE,
+)
+
+#: A credential stated in prose: ``the billing password is hunter2hunter2``.
+#: The value must look like a VALUE rather than like the next English word — it
+#: carries a digit and a letter, or is long and non-alphabetic. Without that
+#: test "the token is described below" is a credential and an operator cannot
+#: write a sentence about authentication in an instruction file.
+_PROSE_CREDENTIAL = re.compile(
+    r"(?i)\b(?:password|passphrase|passwd|secret|api[ _-]?key|access[ _-]?key|token"
+    r"|credential)s?\s+(?:is|was|are|were|=|:)\s+[\"']?"
+    r"(?=[A-Za-z0-9+/=_.-]{8,})(?=[A-Za-z0-9+/=_.-]*\d)(?=[A-Za-z0-9+/=_.-]*[A-Za-z])"
+    r"[A-Za-z0-9+/=_.-]{8,}"
 )
 
 #: The leak gate's own patterns (``scripts/check_instance_leak.py``), applied at
@@ -172,23 +245,53 @@ def _neutralize_env_references(text: str) -> str:
     return _ENV_REFERENCE.sub("EnvRef", _BEARER_REFERENCE.sub("BearerEnvRef", text))
 
 
+def credential_shape(value: str) -> str | None:
+    """The name of the credential family *value* carries, or None.
+
+    Exposed because the exporter needs the same answer when it decides which
+    adapter values to collapse to ``${NAME}``. One list, asked twice: a second
+    opinion about what a credential looks like is how ``--include-adapters``
+    shipped three of them while reporting ``requires.secrets: []``.
+    """
+    neutral = _neutralize_env_references(value)
+    for pattern, reason in _CREDENTIAL_SHAPED:
+        if pattern.search(neutral):
+            return reason
+    if redact(neutral) != neutral:
+        return "a credential-shaped literal"
+    return None
+
+
 def scan_secret_literals(text: str, path: str) -> list[Finding]:
     """Every line of *text* that carries a credential VALUE rather than a reference.
 
-    Two rules, because one is not enough. :func:`redact` knows the shapes this
-    platform actually handles (``sk-…``, Slack tokens, ``NAME=value``) and is the
-    authority on them — duplicating its patterns here would give the platform two
-    definitions of "credential" that drift. The second rule covers the ``name:
-    value`` form that redaction deliberately leaves alone in prose and that a
-    bundle, being YAML, is made of.
+    Four rules, in decreasing confidence:
+
+    1. :data:`_VALUE_SHAPES` — self-identifying token families and the two
+       structural shapes (URL userinfo, PEM armour). These need no context at
+       all, which is why they catch a key inside a ``command:`` array.
+    2. :func:`redact` — the shapes this platform already knows, asked rather
+       than re-implemented, so the two cannot drift.
+    3. :data:`_MAPPING_CREDENTIAL` — a credential-named YAML key with a literal
+       value, the form redaction deliberately leaves alone in prose.
+    4. :data:`_PROSE_CREDENTIAL` — "the password is <something value-shaped>",
+       which is how a credential ends up in an instruction file's prose.
     """
     findings: list[Finding] = []
     for number, line in enumerate(text.splitlines(), start=1):
         neutral = _neutralize_env_references(line)
-        if redact(neutral) != neutral:
+        shaped = next(
+            (reason for pattern, reason in _CREDENTIAL_SHAPED if pattern.search(neutral)),
+            None,
+        )
+        if shaped is not None:
+            findings.append(Finding(path, number, shaped))
+        elif redact(neutral) != neutral:
             findings.append(Finding(path, number, "a credential-shaped literal"))
         elif _MAPPING_CREDENTIAL.search(neutral):
             findings.append(Finding(path, number, "a credential-named field with a literal value"))
+        elif _PROSE_CREDENTIAL.search(neutral):
+            findings.append(Finding(path, number, "a credential stated in prose"))
     if findings:
         return findings
 
