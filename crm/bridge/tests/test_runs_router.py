@@ -72,3 +72,12 @@ def test_detail_404(controls_client_as_operator, fake_runs):
 def test_runs_router_is_read_only():
     methods = {m for route in runs.router.routes for m in getattr(route, "methods", set())}
     assert methods <= {"GET", "HEAD", "OPTIONS"}
+
+
+def test_run_columns_carry_the_delivery_and_verification_truth():
+    """The engine has been writing these four columns for months and the Runs
+    list did not select them, so "completed" on screen could mean a run whose
+    answer never left the box. Asserted on the column list because that is the
+    single place the omission happened."""
+    for column in ("delivered_at", "delivery_channel", "delivery_mode", "verified_status"):
+        assert column in runs._RUN_COLUMNS

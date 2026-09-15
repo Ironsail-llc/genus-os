@@ -2,17 +2,36 @@
 
 import { useEffect, useState } from "react";
 import { Workflow } from "lucide-react";
-import { PageHeader } from "@/components/business/page-header";
 import { EmptyState } from "@/components/business/empty-state";
 import { StatusBadge, fromEngineStatus } from "@/components/business/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
 
-const BRIDGE_URL = "/api/bridge";
+/**
+ * Workflows — the multi-agent flows, below the scheduled agents.
+ *
+ * Lifted verbatim out of `workflows-view.tsx` when Automations took over the
+ * `?v=workflows` route. Unchanged in substance, including the honesty
+ * limitation in the footer: `GET /api/workflows` groups `workflow_runs`, so a
+ * workflow that has been DEFINED and never RUN is not in this list and the copy
+ * says so rather than implying full registry coverage.
+ *
+ * It keeps its own fetch rather than being fed by the page above it: the two
+ * halves come from two different bridge routes with two different failure
+ * modes, and a workflow listing that is down must not take the automations with
+ * it.
+ */
 
-type WorkflowRow = { workflow_id: string; runs?: number; last_run_at?: string | null;
-  last_status?: string | null; failures?: number };
+const BRIDGE = "/api/bridge";
 
-export function WorkflowsView({ visible = true }: { visible?: boolean }) {
+export type WorkflowRow = {
+  workflow_id: string;
+  runs?: number;
+  last_run_at?: string | null;
+  last_status?: string | null;
+  failures?: number;
+};
+
+export function WorkflowsSection({ visible = true }: { visible?: boolean }) {
   const [workflows, setWorkflows] = useState<WorkflowRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -23,7 +42,7 @@ export function WorkflowsView({ visible = true }: { visible?: boolean }) {
     (async () => {
       setLoading(true);
       try {
-        const res = await fetch(`${BRIDGE_URL}/api/workflows`);
+        const res = await fetch(`${BRIDGE}/api/workflows`);
         if (!active) return;
         if (!res.ok) {
           setError(res.status === 403 ? "Operator access required." : `Error ${res.status}`);
@@ -31,7 +50,7 @@ export function WorkflowsView({ visible = true }: { visible?: boolean }) {
         }
         const data = await res.json();
         if (!active) return;
-        setWorkflows(data);
+        setWorkflows(Array.isArray(data) ? data : []);
         setError(null);
       } catch {
         if (active) setError("Could not reach the bridge.");
@@ -45,12 +64,16 @@ export function WorkflowsView({ visible = true }: { visible?: boolean }) {
   }, [visible]);
 
   return (
-    <div data-testid="workflows-view" className="flex-col gap-3 p-4"
-      style={{ display: visible ? "flex" : "none" }}>
-      <PageHeader
-        title="Workflows"
-        description={workflows.length > 0 ? `${workflows.length} with run history` : undefined}
-      />
+    <section className="flex flex-col gap-2" data-testid="workflows-section">
+      <div>
+        <h3 className="text-sm font-medium text-foreground">Workflows</h3>
+        <p className="text-xs text-muted-foreground">
+          {workflows.length > 0
+            ? `${workflows.length} with run history`
+            : "Multi-agent flows, and what they have run."}
+        </p>
+      </div>
+
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       {loading && workflows.length === 0 && !error && (
@@ -77,11 +100,16 @@ export function WorkflowsView({ visible = true }: { visible?: boolean }) {
         {workflows.map((w) => {
           const failed = (w.failures ?? 0) > 0;
           return (
-            <div key={w.workflow_id} data-testid={`workflow-row-${w.workflow_id}`}
+            <div
+              key={w.workflow_id}
+              data-testid={`workflow-row-${w.workflow_id}`}
               className={`rounded-lg border p-3 transition-colors ${
-                failed ? "border-warning/40 bg-warning/5" : "border-border bg-card hover:border-ring/25"
-              }`}>
-              <div className="flex items-center justify-between gap-3">
+                failed
+                  ? "border-warning/40 bg-warning/5"
+                  : "border-border bg-card hover:border-ring/25"
+              }`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-sm font-semibold text-foreground">{w.workflow_id}</span>
                 <StatusBadge
                   status={failed ? "degraded" : fromEngineStatus(w.last_status)}
@@ -97,13 +125,13 @@ export function WorkflowsView({ visible = true }: { visible?: boolean }) {
       </div>
 
       {workflows.length > 0 && (
-        <p className="mt-2 text-xs text-muted-foreground/70">
-          Shows workflows that have run at least once. A defined-but-never-run workflow
-          will not appear here.
+        <p className="text-xs text-muted-foreground/70">
+          Shows workflows that have run at least once. A defined-but-never-run workflow will not
+          appear here.
         </p>
       )}
-    </div>
+    </section>
   );
 }
 
-export default WorkflowsView;
+export default WorkflowsSection;

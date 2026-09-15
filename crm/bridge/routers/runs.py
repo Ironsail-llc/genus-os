@@ -16,10 +16,20 @@ router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 _MAX_LIMIT = 200
 
+#: The columns every run row carries, list and detail alike.
+#:
+#: ``delivered_at``, ``delivery_channel``, ``delivery_mode`` and
+#: ``verified_status`` joined the list late. The engine had been writing all
+#: four since migration 100, and nothing selected them — so a run could show
+#: ``completed`` on screen while its answer never left the box, and the
+#: verification verdict that would have said so was a column nobody read.
+#: "Ran" and "delivered" and "verified" are three different facts and the
+#: listing now carries all three.
 _RUN_COLUMNS = (
     "id, tenant_id, agent_id, trigger_type, status, started_at, completed_at, "
     "duration_ms, model_used, input_tokens, output_tokens, total_cost_usd, "
-    "error_message, delivery_status, outcome_assessment"
+    "error_message, delivery_status, delivered_at, delivery_channel, "
+    "delivery_mode, verified_status, outcome_assessment"
 )
 
 

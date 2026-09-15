@@ -107,6 +107,64 @@ strings marks *every* healthy run a fallback. A run that started on a fallback
 and later reached the primary counts as reached — the alert is about a primary
 that cannot be reached at all, not about one retry.
 
+## Run truth in the Helm — ran, delivered, completed
+
+The Helm's **Automations** view (`?v=workflows`) shows one card per scheduled
+agent and answers three independent questions about its last run, because
+collapsing them into one status pill is how a nightly briefing goes days
+without arriving behind a green badge:
+
+- **Ran** — `agent_runs.started_at` and `status`. "Never run" is its own answer
+  and the most actionable thing the view can say about a schedule just written.
+- **Delivered** — `delivery_status`, `delivered_at` and `delivery_channel`. A
+  run can finish and still fail to send. An agent whose `delivery.mode` is
+  `none` reads **none expected**, never as a failure: most worker agents are
+  deliberately silent and communicate through CRM tasks.
+- **Completed** — `verified_status` (the run verifier's verdict) falling back to
+  `outcome_assessment` (the agent's own rating). With neither, the cell reads
+  "not assessed" rather than borrowing the run status — a run that exited zero
+  is not a run that did the job.
+
+`GET /api/automations` composes each card from three sources: the manifest (what
+the automation is), `agent_schedules` (what the scheduler currently holds —
+`next_run_at`, `consecutive_errors`) and the newest `agent_runs` row (what
+happened). Both queries are scoped to the platform tenant *in the statement*,
+not only by RLS. The same four run columns now come back from `GET /api/runs`
+and `GET /api/runs/{id}`, so the Runs view shows them too.
+
+**One card per job, not per agent.** The scheduler derives up to three jobs from
+one manifest and keys `agent_schedules` — and the circuit breaker — by the job
+id it built: `<agent>` from `schedule.cron`, `<agent>:heartbeat` from
+`heartbeat.cron`, `<agent>:worker` from `worker.cron`
+(`robothor/engine/schedule_reconcile.py`). Automations uses the same ids, so an
+agent scheduled only by a heartbeat and a worker — the shape of the primary
+agent on a typical instance — gets a card per job rather than none at all. The
+card's **Enabled** toggle and **Run now** address the *manifest* (one
+`schedule.enabled` covers all three jobs); **Reset breaker** addresses the *job*,
+because that is what trips. **Edit schedule** appears only on an `agent` job:
+the manifest PATCH owns `schedule.cron` and `schedule.timezone` and nothing
+else, so heartbeat and worker crons are edited in the YAML.
+
+Where the manifest and the schedule row disagree, the manifest wins for
+anything the operator can change (cron, timezone, enabled) — it is what the
+engine re-derives from on its next reconcile. Two honesty rules follow from
+that: a card whose manifest will not parse is still rendered, from the schedule
+row alone and marked as such (the engine keeps firing a job it already holds, so
+a YAML typo must not make a running automation disappear); and a disabled or
+breaker-tripped card prints "not scheduled — disabled" / "held — reset the
+breaker to resume" rather than a cron-arithmetic instant it will not fire on.
+Likewise, a write is reported as reconciled only when the response's
+`reconcile.applied` says so — an engine that is down answers 200 and changes
+nothing.
+
+**The circuit breaker.** The scheduler stops running an agent after
+`CIRCUIT_BREAKER_THRESHOLD` consecutive failures (`robothor/engine/scheduler.py`
+— the Helm imports that constant rather than copying it). A tripped automation
+carries a chip naming the count and the threshold, and **Reset breaker** — an
+audited `POST /api/automations/{id}/reset-breaker`, operator-only and
+tenant-scoped — zeroes `consecutive_errors` so it fires again on its next
+scheduled run. Before this the only way back was an `UPDATE` typed into psql.
+
 ## Notes
 
 - Export is best-effort (a 5s-timeout POST per run); a collector outage never

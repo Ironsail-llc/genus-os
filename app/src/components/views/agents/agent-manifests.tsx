@@ -14,7 +14,9 @@ import {
   type ManifestSummary,
   type ModelEntry,
 } from "@/lib/agents/manifests";
+import { reconcileNote } from "@/lib/agents/reconcile";
 import { readBridgeReply } from "@/lib/bridge/read-reply";
+import { useRowActions } from "@/lib/bridge/row-actions";
 
 import { AgentPanel } from "./agent-panel";
 
@@ -113,9 +115,12 @@ export function AgentManifests({
 
   const [models, setModels] = useState<ModelEntry[]>([]);
 
-  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
-  const [rowNotes, setRowNotes] = useState<Record<string, string>>({});
-  const [busyRow, setBusyRow] = useState<string | null>(null);
+  // The busy row, the per-row error and the per-row note. One implementation,
+  // shared with the Automations view — these were two byte-near copies, right
+  // down to "Taken off its schedule.", and the reconcile fix below landed in
+  // only one of them the first time round.
+  const { busyRow, rowErrors, rowNotes, setRowNote, act: performRowAction } = useRowActions();
+  const [rowReconcile, setRowReconcile] = useState<Record<string, string>>({});
   const [retiring, setRetiring] = useState<{ id: string; typed: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [panel, setPanel] = useState<{ agentId: string | null } | null>(null);
@@ -168,48 +173,30 @@ export function AgentManifests({
     void loadModels();
   }, [visible, loadAgents, loadModels]);
 
-  function setRowError(id: string, message: string | null) {
-    setRowErrors((prev) => {
-      const next = { ...prev };
-      if (message) next[id] = message;
-      else delete next[id];
-      return next;
-    });
-  }
-
-  function setRowNote(id: string, message: string | null) {
-    setRowNotes((prev) => {
-      const next = { ...prev };
-      if (message) next[id] = message;
-      else delete next[id];
-      return next;
-    });
+  /**
+   * The engine's half of a write, which a 2xx alone does not settle.
+   *
+   * `enable`/`disable` reconcile like a PATCH does, and answer
+   * `{"reconcile": {"applied": false, …}}` with a 200 when the engine is
+   * unreachable. Same reader as the agent panel and the Automations view.
+   */
+  function absorbReconcile(id: string, body: unknown) {
+    setRowReconcile((prev) => ({ ...prev, [id]: reconcileNote(body) ?? "" }));
   }
 
   async function act(id: string, path: string, init: RequestInit, onOk: (body: unknown) => void) {
-    setBusyRow(id);
-    setRowError(id, null);
-    setRowNote(id, null);
-    try {
-      const res = await fetch(`${BRIDGE}/api/agent-manifests/${encodeURIComponent(id)}${path}`, {
-        headers: { "Content-Type": "application/json" },
-        ...init,
-      });
-      if (!res.ok) {
-        setRowError(id, await readBridgeReply(res));
-        return;
-      }
-      onOk(await res.json());
-    } catch {
-      setRowError(id, "The dashboard could not reach the bridge to do that.");
-    } finally {
-      setBusyRow(null);
-    }
+    await performRowAction(
+      id,
+      `${BRIDGE}/api/agent-manifests/${encodeURIComponent(id)}${path}`,
+      init,
+      onOk
+    );
   }
 
   async function toggle(agent: ManifestSummary) {
-    await act(agent.id, agent.enabled ? "/disable" : "/enable", { method: "POST" }, () => {
+    await act(agent.id, agent.enabled ? "/disable" : "/enable", { method: "POST" }, (body) => {
       setRowNote(agent.id, agent.enabled ? "Taken off its schedule." : "Back on its schedule.");
+      absorbReconcile(agent.id, body);
       void loadAgents();
     });
   }
@@ -526,6 +513,14 @@ export function AgentManifests({
                             data-testid={`agent-note-${agent.id}`}
                           >
                             {rowNote}
+                          </span>
+                        ) : null}
+                        {rowReconcile[agent.id] ? (
+                          <span
+                            className="text-xs text-warning"
+                            data-testid={`agent-reconcile-${agent.id}`}
+                          >
+                            {rowReconcile[agent.id]}
                           </span>
                         ) : null}
                         {rowError ? (
