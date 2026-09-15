@@ -176,6 +176,20 @@ _DB_ENV = {
 }
 
 
+#: The containers the harness needs inside the pod, besides the infra one.
+_MEMBERS = ("gb-pg", "gb-redis")
+
+
+def _member_running(name: str) -> bool:
+    """True only when podman says the container exists AND is running."""
+    probe = subprocess.run(
+        ["podman", "container", "inspect", name, "--format", "{{.State.Running}}"],
+        capture_output=True,
+        text=True,
+    )
+    return probe.returncode == 0 and probe.stdout.strip() == "true"
+
+
 def ensure_pod() -> None:
     """Build the bench pod if it is not running.
 
@@ -189,8 +203,19 @@ def ensure_pod() -> None:
 
     probe = subprocess.run(["podman", "pod", "exists", POD], capture_output=True)
     if probe.returncode == 0:
-        return
-    print(f"bench pod {POD!r} missing — building it")
+        missing = [name for name in _MEMBERS if not _member_running(name)]
+        if not missing:
+            return
+        # A pod can outlive its members: after a reboot the infra container
+        # came back and gb-pg / gb-redis did not (2026-08-31). "Pod exists"
+        # then ran twelve nightly benchmarks against no database — every tool
+        # permission check failed closed and every score was 0 for a platform
+        # that had not changed. A member that is not running is a pod that
+        # does not exist for our purposes.
+        print(f"bench pod {POD!r} is missing {', '.join(missing)} — rebuilding it")
+        subprocess.run(["podman", "pod", "rm", "-f", POD], capture_output=True)
+    else:
+        print(f"bench pod {POD!r} missing — building it")
     subprocess.run(["podman", "pod", "create", "--name", POD], check=True)
     pg_env = [f"-e{k}={v}" for k, v in _DB_ENV.items()]
     subprocess.run(

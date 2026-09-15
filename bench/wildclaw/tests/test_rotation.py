@@ -112,7 +112,10 @@ class TestEnsurePod:
     """The pod does not survive a reboot; a nightly unit that pages every
     morning after one is decoration. The rotation provisions what it needs."""
 
-    def _record(self, monkeypatch, pod_exists: bool):
+    def _record(self, monkeypatch, pod_exists: bool, members_running=None):
+        members_running = (
+            {"gb-pg": True, "gb-redis": True} if members_running is None else members_running
+        )
         import subprocess as sp
 
         from bench.wildclaw import rotation
@@ -123,6 +126,14 @@ class TestEnsurePod:
             calls.append(list(cmd))
             if cmd[:3] == ["podman", "pod", "exists"]:
                 return sp.CompletedProcess(cmd, 0 if pod_exists else 1)
+            if cmd[:3] == ["podman", "container", "inspect"]:
+                name = cmd[3]
+                running = members_running.get(name)
+                if running is None:
+                    return sp.CompletedProcess(cmd, 125, stdout="", stderr="no such container")
+                return sp.CompletedProcess(
+                    cmd, 0, stdout="true\n" if running else "false\n", stderr=""
+                )
             return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         monkeypatch.setattr(rotation.subprocess, "run", fake_run)
@@ -131,6 +142,32 @@ class TestEnsurePod:
     def test_an_existing_pod_is_left_alone(self, monkeypatch):
         rotation, calls = self._record(monkeypatch, pod_exists=True)
         rotation.ensure_pod()
+        assert not any(c[:3] == ["podman", "pod", "create"] for c in calls)
+
+    def test_a_pod_whose_database_is_gone_is_rebuilt(self, monkeypatch):
+        """Live, 2026-08-31 → 09-12: the pod's infra container survived a reboot
+        but gb-pg and gb-redis did not. ``pod exists`` said yes, every tool
+        permission check inside the benchmark failed closed, and twelve nightly
+        runs recorded scores of 0 for a platform that had not changed."""
+        rotation, calls = self._record(monkeypatch, pod_exists=True, members_running={})
+        rotation.ensure_pod()
+        assert any(c[:3] == ["podman", "pod", "rm"] for c in calls), "the hollow pod is removed"
+        assert any(c[:3] == ["podman", "pod", "create"] for c in calls)
+        started = " ".join(" ".join(c) for c in calls)
+        assert "gb-pg" in started and "gb-redis" in started
+        assert "robothor.cli migrate" in started
+
+    def test_a_pod_with_a_stopped_member_is_rebuilt(self, monkeypatch):
+        rotation, calls = self._record(
+            monkeypatch, pod_exists=True, members_running={"gb-pg": False, "gb-redis": True}
+        )
+        rotation.ensure_pod()
+        assert any(c[:3] == ["podman", "pod", "create"] for c in calls)
+
+    def test_a_healthy_pod_is_probed_not_rebuilt(self, monkeypatch):
+        rotation, calls = self._record(monkeypatch, pod_exists=True)
+        rotation.ensure_pod()
+        assert any(c[:3] == ["podman", "container", "inspect"] for c in calls), "members are probed"
         assert not any(c[:3] == ["podman", "pod", "create"] for c in calls)
 
     def test_a_missing_pod_is_built_and_migrated(self, monkeypatch):
