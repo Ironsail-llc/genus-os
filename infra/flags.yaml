@@ -673,3 +673,38 @@ flags:
       BLOCKER: a box upgrading into enforce must first have zero unknown keys.
       `genus config validate` reports them; promote once it is clean here and
       `genus init` has been writing config.yaml for a full release.
+  - name: ROBOTHOR_STEP_EFFICIENCY_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-10-01"
+    soak: >
+      NEW 2026-09-15. One rung for four controls that all answer "this run has
+      a fixed wall-clock budget — is it spending steps on anything": pace-aware
+      deadline notes at 50/80/95% of the ceiling, a repeat-call guard, tool
+      timeouts bounded by the run's remaining budget, and a progress check-in
+      every 25 iterations.
+
+      THE MEASUREMENT: on the 2026-09-15 WildClawBench sweep five of twelve
+      Code tasks and one Productivity task spent their whole budget and scored
+      ZERO, while every Code task that finished scored 0.9-1.0. Two profiled
+      runs: `sam3_debug` made 79 LLM calls (584s) and 86 tool calls (435s), ran
+      the SAME `exec` nine times and re-read one file six times, and was killed
+      at 1200s with nothing written; `connect_the_dots_medium` had no exact
+      repeats and was provider-throughput bound. Context was never the problem
+      (p50 41k tokens — compaction works).
+
+      NOTE THE UNUSUAL DEFAULT: observe, not off — the honesty-suite reasoning.
+      Observe changes nothing an agent sees; it keeps the single 80% note that
+      already shipped and logs what enforce would additionally have done, with
+      the run id, AT WARNING. The WARNING level is load-bearing rather than
+      stylistic: the benchmark container installs no logging configuration, so
+      Python's `lastResort` handler drops every record below WARNING, and the
+      pre-existing deadline note's `logger.info` line was unreadable in
+      `agent.log` for exactly that reason.
+
+      BLOCKER for enforce on the fleet: a re-measured WildClawBench 02_Code and
+      01_Productivity sweep in the sandbox showing timed-out tasks falling,
+      plus `agent_guardrail_events` rows with guardrail_name = 'repeat_guard'
+      proving the guard fired on a real repeat rather than on nothing. Enforce
+      changes what the model sees mid-run and can REFUSE a fifth identical
+      `exec`, so it is a behaviour change, not bookkeeping.

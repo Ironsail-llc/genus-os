@@ -57,6 +57,11 @@ HISTORICAL_GOVERNED_FLAGS: frozenset[str] = frozenset(
         # editing /etc and restarting — which is what you want of a switch that
         # decides who can read whose conversation.
         "ROBOTHOR_PER_USER_SESSIONS",
+        # Added 2026-09-15 with the step-efficiency controls. Governed from the
+        # start rather than after the fact: the rung it sits on decides whether
+        # a run's `exec` can be refused mid-task, and an operator watching a
+        # sweep needs to move that from Controls, not from /etc plus a restart.
+        "ROBOTHOR_STEP_EFFICIENCY_MODE",
     }
 )
 

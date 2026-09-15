@@ -1586,6 +1586,16 @@ class FlagSettings(SettingsGroup):
         "it has no 'alert' rung and no separate enabled switch.",
         governed=True,
     )
+    step_efficiency_mode: str = declare(
+        "observe",
+        "ROBOTHOR_STEP_EFFICIENCY_MODE",
+        "Step-efficiency ladder position: 'off' keeps the single 80% deadline "
+        "note, 'observe' (default) keeps it and logs what enforce would do at "
+        "WARNING, 'enforce' adds pace notes at 50/80/95%, the repeat-call "
+        "guard, tool timeouts bounded by the run's remaining budget, and a "
+        "progress check-in every 25 iterations.",
+        governed=True,
+    )
     judge_enabled: bool = declare(
         False,
         "ROBOTHOR_JUDGE_ENABLED",

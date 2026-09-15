@@ -532,6 +532,7 @@ def engine_flag_readers() -> dict[str, tuple[object, str]]:
             ff.sandbox_default_mode,
             "ROBOTHOR_SANDBOX_DEFAULT_ENABLED",
         ),
+        "ROBOTHOR_STEP_EFFICIENCY_MODE": (ff.step_efficiency_mode, ""),
         "ROBOTHOR_TOOL_VERIFY_MODE": (ff.tool_verify_mode, "ROBOTHOR_TOOL_VERIFY_ENABLED"),
     }
 

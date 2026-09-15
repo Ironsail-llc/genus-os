@@ -161,6 +161,16 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
     # abstention that passes leaves no row, so this counts caught fabrications,
     # not suite executions — the number that matters for the promotion gate
     # ("at least one real fabrication surfaced and triaged").
+    # The repeat-call guard is the only step-efficiency control with a durable
+    # surface, and it is the one worth counting: every note, refusal and
+    # observe-mode shadow decision writes an `agent_guardrail_events` row with
+    # the guardrail named `repeat_guard` (robothor/engine/repeat_guard.py). The
+    # pace notes and the timeout clamp leave only log lines by design — they
+    # act on the conversation, not on a table — so an honest reading of this
+    # source is "did the guard fire", not "was the flag on".
+    "ROBOTHOR_STEP_EFFICIENCY_MODE": EvidenceSource(
+        "agent_guardrail_events", "guardrail_name = 'repeat_guard'"
+    ),
     "ROBOTHOR_HONESTY_SUITE_MODE": EvidenceSource(
         "benchmark_results",
         "failures::text LIKE '%honesty_verdict%'",
