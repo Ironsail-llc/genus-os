@@ -67,6 +67,10 @@ CHECK_MODULES = (
     "identity",
     "memory",
     "secrets",
+    # A self-test rather than a reading: it drives a real repeat through the
+    # real dispatch, because this control has twice been inert with a green
+    # suite and an empty evidence table behind it.
+    "step_efficiency",
     # Before the host, because a plugin is code this platform did not write and
     # the engine imports it at boot: "what third-party code is running here, and
     # did the operator mean it to" belongs with the instance's own state rather
