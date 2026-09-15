@@ -86,28 +86,35 @@ const LEVEL_CLASS: Record<Level, string> = {
 };
 
 /**
- * Which field a refusal is about.
+ * Whether a refusal belongs under the one field that has a slot for it.
  *
- * `routers/_params.py` writes every one of these as "<field> must be …", so the
- * first word of the bridge's own sentence names the input that produced it.
- * Anything that does not start with a field name is not a field problem and
- * belongs in the banner.
+ * `routers/_params.py` writes every refusal as "<field> must be …", so the
+ * first word of the bridge's own sentence names the input that produced it —
+ * and `since` is the ONLY input on this page with a place to put a message
+ * under it. That asymmetry used to be a hole: the page recognised `lines` and
+ * `unit` too, routed them at slots that do not exist, rendered them nowhere,
+ * AND suppressed the empty state on the way past, so a `lines` 422 came back
+ * as a blank screen.
+ *
+ * So there is one name here, and everything else — including a reworded
+ * `unit must be one of: …` — falls through to the banner. Adding a name to
+ * this list without adding the slot beside the input is the bug again.
  */
-const REFUSAL_FIELDS: Array<[RegExp, "since" | "lines" | "unit"]> = [
-  [/^since\b/i, "since"],
-  [/^lines\b/i, "lines"],
-  [/^unit\b/i, "unit"],
-];
+const SINCE_REFUSAL = /^since\b/i;
 
-function fieldOfRefusal(message: string): "since" | "lines" | "unit" | null {
-  for (const [pattern, field] of REFUSAL_FIELDS) {
-    if (pattern.test(message.trim())) return field;
-  }
-  return null;
+export function isSinceRefusal(message: string): boolean {
+  return SINCE_REFUSAL.test(message.trim());
 }
 
+/**
+ * A fixed-width stand-in, not blank space: eight spaces collapse in HTML and
+ * take the column with them, so the message jumps left and the pane stops
+ * lining up at exactly the lines journald recorded least about.
+ */
+const NO_TIME = "--:--:--";
+
 function timeOf(value: string | null): string {
-  if (!value) return "        ";
+  if (!value) return NO_TIME;
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleTimeString("en-US", { hour12: false });
@@ -209,20 +216,39 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
     );
   }, []);
 
+  /**
+   * Whether a read is even possible. It is also the gate on the read's
+   * spinner: `useBridgePoll.loading` starts `true` and only settles when a
+   * request actually happens, so a page that renders "Reading the journal…"
+   * whenever `loading` is true spins for ever on every state where no read is
+   * issued — a refused catalog, an empty one, a deployment with no journald.
+   */
+  const canRead = visible && operator && unitsAvailable && units.length > 0 && unit !== "";
+
   const linesPoll = useBridgePoll({
-    visible: visible && operator && unitsAvailable && unit !== "",
+    visible: canRead,
     url: linesUrl,
     onData: onLines,
     intervalMs: LOGS_POLL_MS,
     paused: !autoRefresh,
   });
 
-  // A 422 names the parameter it refused; put it under that input. Anything
-  // else is a banner, because there is nothing on the form to correct.
-  const refusalField =
-    linesPoll.status === 422 && linesPoll.error ? fieldOfRefusal(linesPoll.error) : null;
-  const bannerError = linesPoll.error && !refusalField ? linesPoll.error : unitsPoll.error;
-  const sinceMessage = sinceError ?? (refusalField === "since" ? linesPoll.error : null);
+  /**
+   * Where each answer goes. The rule is that every one of them goes SOMEWHERE.
+   *
+   * A 422 naming `since` has a slot under that input; every other refusal —
+   * `lines`, a reworded `unit`, a 500, anything — goes in the banner. A 403 is
+   * neither: it is the bridge saying this is not yours, and it is rendered the
+   * way the rest of the Helm renders one (muted, not red) rather than as a
+   * claim about the journal.
+   */
+  const forbidden = unitsPoll.forbidden || linesPoll.forbidden;
+  const sinceRefused =
+    linesPoll.status === 422 && linesPoll.error !== null && isSinceRefusal(linesPoll.error);
+  const bannerError = forbidden
+    ? null
+    : (unitsPoll.error ?? (sinceRefused ? null : linesPoll.error));
+  const sinceMessage = sinceError ?? (sinceRefused ? linesPoll.error : null);
 
   const onSinceDraft = useCallback((value: string) => {
     setSinceDraft(value);
@@ -271,6 +297,25 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
       ? (paneReason ?? "journald could not be read on this deployment.")
       : null;
 
+  /**
+   * journalctl is here and the catalog is empty. A real answer from
+   * `routers/logs.py`, not a transient: the allowlist is derived from the
+   * `robothor-*.service` files the installer renders, and a dev checkout with
+   * no units installed and no `infra/systemd` fallback produces exactly this.
+   * It used to spin for ever, because there is no unit to read and therefore
+   * no read to settle the loading flag.
+   */
+  const noUnits =
+    !forbidden &&
+    unitsPoll.error === null &&
+    !unitsPoll.loading &&
+    unitsAvailable &&
+    units.length === 0;
+
+  // Only the phase that is actually in flight may show a spinner.
+  const catalogLoading = unitsPoll.loading && !forbidden && unitsPoll.error === null;
+  const readLoading = canRead && linesPoll.loading && pane.length === 0;
+
   return (
     <div className="flex h-full min-w-0 flex-col gap-3 overflow-hidden p-4" data-testid="logs-view">
       <PageHeader title="Logs" description="The journal of the units this instance runs.">
@@ -293,12 +338,40 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
         </Button>
       </PageHeader>
 
-      {unavailableReason ? (
+      {forbidden ? (
+        <p className="text-xs text-muted-foreground" data-testid="logs-forbidden">
+          The journal is operator-only on this appliance, so there is nothing to show here. A role
+          that looks like an operator in this browser can still be refused by the bridge — it also
+          requires the platform tenant and a human session. Ask an owner or admin on this instance.
+        </p>
+      ) : catalogLoading ? (
+        <div
+          className="flex items-center gap-2 p-6 text-xs text-muted-foreground"
+          data-testid="logs-loading"
+        >
+          <Loader2 aria-hidden className="size-4 animate-spin" />
+          Reading the units this instance runs…
+        </div>
+      ) : bannerError && units.length === 0 ? (
+        <p
+          data-testid="logs-error"
+          className="max-w-3xl rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+        >
+          {bannerError}
+        </p>
+      ) : unavailableReason ? (
         <EmptyState
           testId="logs-unavailable"
           icon={FileText}
           title="Logs are not available on this deployment"
           description={`${unavailableReason} Nothing is broken — a container has no journald. On a systemd install, the bridge's service user also has to be able to read the journals it is asked for.`}
+        />
+      ) : noUnits ? (
+        <EmptyState
+          testId="logs-no-units"
+          icon={FileText}
+          title="journald is here, but no unit is installed"
+          description="The followable units are derived from the robothor-*.service files the installer renders, and this deployment has none. Install the units (scripts/install-units.sh) and refresh; nothing else about this instance is wrong."
         />
       ) : (
         <>
@@ -411,7 +484,7 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
             </p>
           ) : null}
 
-          {linesPoll.loading && pane.length === 0 ? (
+          {readLoading ? (
             <div
               className="flex items-center gap-2 p-6 text-xs text-muted-foreground"
               data-testid="logs-loading"
@@ -421,7 +494,13 @@ export function LogsView({ visible = true, role, roleLoading = false }: LogsView
             </div>
           ) : null}
 
-          {!linesPoll.loading && pane.length === 0 && !bannerError && !refusalField ? (
+          {/*
+            An empty pane is only "nothing matched" when the read SUCCEEDED.
+            Any refusal — banner or field — means the page has no idea what is
+            in that window, and saying it is empty would be a claim the server
+            never made.
+          */}
+          {!readLoading && pane.length === 0 && !bannerError && !sinceMessage ? (
             <EmptyState
               testId="logs-empty"
               icon={FileText}

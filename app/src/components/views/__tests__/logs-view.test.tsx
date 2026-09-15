@@ -190,6 +190,87 @@ describe("Observe › Logs", () => {
     expect(screen.queryByTestId("logs-error")).toBeNull();
   });
 
+  /**
+   * There is exactly one field slot on this page, under the custom `since`
+   * box. A refusal routed at a field that has no slot used to be recognised,
+   * placed nowhere, and silently suppress the empty state as well — so the
+   * page answered a 422 with a blank screen. Every server answer has to land
+   * SOMEWHERE, and the banner is where the ones with no field go.
+   */
+  it("puts a 422 with no field slot in the banner rather than nowhere", async () => {
+    respond([
+      [/\/api\/logs\/units/, () => ({ body: UNITS })],
+      [
+        /\/api\/logs\?/,
+        () => ({ status: 422, body: { detail: "lines must be between 1 and 1000" } }),
+      ],
+    ]);
+    render(<LogsView role="owner" />);
+
+    expect((await screen.findByTestId("logs-error")).textContent).toContain("lines must be");
+    expect(screen.queryByTestId("logs-empty")).toBeNull();
+  });
+
+  it("puts a refusal naming the unit in the banner too", async () => {
+    respond([
+      [/\/api\/logs\/units/, () => ({ body: UNITS })],
+      [
+        /\/api\/logs\?/,
+        () => ({ status: 422, body: { detail: "unit must be one of: robothor-engine" } }),
+      ],
+    ]);
+    render(<LogsView role="owner" />);
+
+    expect((await screen.findByTestId("logs-error")).textContent).toContain("unit must be one of");
+  });
+
+  /**
+   * The Helm decides "operator" from the session role; the bridge ALSO requires
+   * the platform tenant and a human session, so an owner outside that tenant is
+   * an operator here and a 403 there. The page must not answer that with a
+   * claim about the journal.
+   */
+  it("says a 403 on the read is a refusal, not an empty journal", async () => {
+    respond([
+      [/\/api\/logs\/units/, () => ({ body: UNITS })],
+      [/\/api\/logs\?/, () => ({ status: 403, body: { detail: "operator role required" } })],
+    ]);
+    render(<LogsView role="owner" />);
+
+    expect(await screen.findByTestId("logs-forbidden")).toBeTruthy();
+    expect(screen.queryByTestId("logs-empty")).toBeNull();
+    expect(screen.queryByTestId("logs-error")).toBeNull();
+    expect(screen.queryByTestId("logs-pane")).toBeNull();
+  });
+
+  it("stops the spinner when the unit list itself is refused", async () => {
+    respond([
+      [/\/api\/logs\/units/, () => ({ status: 403, body: { detail: "operator role required" } })],
+    ]);
+    render(<LogsView role="owner" />);
+
+    expect(await screen.findByTestId("logs-forbidden")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByTestId("logs-loading")).toBeNull());
+    expect(screen.queryByTestId("logs-unit")).toBeNull();
+    // Nothing to read, so nothing is asked for.
+    expect(requests.filter((u) => /\/api\/logs\?/.test(u))).toHaveLength(0);
+  });
+
+  /**
+   * `{"units": [], "available": true}` is what the bridge answers when
+   * journalctl exists but no `robothor-*.service` is installed — a real state
+   * on a dev checkout, and one that used to spin for ever.
+   */
+  it("says journald is here but no unit is installed, rather than spinning", async () => {
+    respond([[/\/api\/logs\/units/, () => ({ body: { units: [], available: true } })]]);
+    render(<LogsView role="owner" />);
+
+    expect(await screen.findByTestId("logs-no-units")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByTestId("logs-loading")).toBeNull());
+    expect(screen.queryByTestId("logs-unavailable")).toBeNull();
+    expect(requests.filter((u) => /\/api\/logs\?/.test(u))).toHaveLength(0);
+  });
+
   it("renders no journald as an honest empty state, never as an error", async () => {
     respond([[/\/api\/logs/, () => ({ body: NO_JOURNALD })]]);
     render(<LogsView role="owner" />);
@@ -222,6 +303,17 @@ describe("Observe › Logs", () => {
 
     expect((await screen.findByTestId("logs-unavailable")).textContent).toContain("timed out");
     expect(screen.queryByTestId("logs-error")).toBeNull();
+  });
+
+  it("gives a line with no timestamp a placeholder rather than a collapsed gap", async () => {
+    healthy();
+    render(<LogsView role="owner" />);
+    await screen.findByTestId("logs-pane");
+
+    // The line journald gave no metadata for. Eight spaces collapse in HTML and
+    // take the column with them, so the message jumps left out of alignment.
+    const line = screen.getByTestId("logs-line-3");
+    expect(line.textContent).toMatch(/--:--:--/);
   });
 
   it("keeps auto-refresh off until it is asked for, then beats every 10 seconds", async () => {
