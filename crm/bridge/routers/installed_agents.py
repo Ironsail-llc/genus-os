@@ -9,10 +9,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 from deps import get_tenant_id
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from robothor.engine.sanitize import sanitize_log
@@ -275,6 +276,129 @@ def _remove_installed(agent_id: str, request: Request) -> dict[str, object]:
         logger.error("Remove failed for %s: %s", sanitize_log(agent_id), sanitize_log(e))
         audited(request, "helm.agent.remove", action=agent_id, status="error")
         raise HTTPException(status_code=500, detail="internal error") from e
+
+
+def _safe_agent_id(agent_id: str) -> str:
+    try:
+        return validate_identifier(agent_id, label="installed agent ID")
+    except TemplateSecurityError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def _build_export(agent_id: str, destination: Path) -> object:
+    """Export *agent_id* into *destination*, translating refusals into HTTP.
+
+    ``include_adapters`` is hard-coded off and is not a parameter. An adapter
+    declares a COMMAND the engine will run and the credentials to run it with;
+    deciding to hand that to somebody is not a decision a download button
+    should be able to make on an operator's behalf. The CLI carries them,
+    where the operator has typed the flag.
+    """
+    from robothor.templates.exporter import ExportError, export_agent
+
+    try:
+        return export_agent(agent_id, out=destination, include_adapters=False)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=f"Agent not installed: {agent_id}") from error
+    except ExportError as error:
+        # 409, not 500: nothing is broken — the agent's own files carry
+        # something that must not leave. str(error) names file:line for every
+        # finding and never the text that triggered it, which is why it is safe
+        # to put in a response body at all.
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.post("/{agent_id}/export")
+async def export_installed_agent(agent_id: str, request: Request) -> Response:
+    """Download an installed agent as a bundle. Operator-only, audited.
+
+    Audited with the agent id and nothing else: the interesting content of an
+    export is the agent's instructions, and an audit store read by auditors and
+    shipped to a SIEM is the last place any of it should appear.
+    """
+    require_operator(request)
+    return await asyncio.to_thread(_export_archive, agent_id, request)
+
+
+def _export_archive(agent_id: str, request: Request) -> Response:
+    safe_agent_id = _safe_agent_id(agent_id)
+    from robothor.templates.exporter import archive_name
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="genus-helm-export-") as scratch:
+            # A fixed temp name, renamed only in the Content-Disposition: the
+            # version is not known until the export has read the manifest, and
+            # a filename assembled from an unvalidated id is a path.
+            destination = Path(scratch) / "bundle.tar.gz"
+            result = _build_export(safe_agent_id, destination)
+            payload = destination.read_bytes()
+    except HTTPException:
+        audited(request, "helm.agent.export", action=safe_agent_id, status="denied")
+        raise
+    except Exception as error:
+        logger.error("Export failed for %s: %s", sanitize_log(safe_agent_id), sanitize_log(error))
+        audited(request, "helm.agent.export", action=safe_agent_id, status="error")
+        raise HTTPException(status_code=500, detail="internal error") from error
+
+    audited(request, "helm.agent.export", action=safe_agent_id)
+    filename = archive_name(safe_agent_id, str(getattr(result, "version", "0.0.0")))
+    return Response(
+        content=payload,
+        media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{agent_id}/export/plan")
+async def export_installed_agent_plan(agent_id: str, request: Request) -> dict[str, object]:
+    """What an export WOULD contain, so the Helm can show it before downloading.
+
+    Built by running the real export into a temporary directory and throwing the
+    bytes away, rather than by predicting it. A plan derived from a second,
+    cheaper code path is a plan that can disagree with the thing it describes —
+    and the one field that must never disagree is the secret gate's verdict.
+    """
+    require_operator(request)
+    return await asyncio.to_thread(_export_plan, agent_id, request)
+
+
+def _export_plan(agent_id: str, request: Request) -> dict[str, object]:
+    safe_agent_id = _safe_agent_id(agent_id)
+    from robothor.templates.bundle import BUNDLE_KIND, BUNDLE_SCHEMA
+    from robothor.templates.exporter import archive_name
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="genus-helm-plan-") as scratch:
+            result = _build_export(safe_agent_id, Path(scratch) / "bundle")
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.error(
+            "Export plan failed for %s: %s", sanitize_log(safe_agent_id), sanitize_log(error)
+        )
+        raise HTTPException(status_code=500, detail="internal error") from error
+
+    manifest = result.manifest  # type: ignore[attr-defined]
+    return {
+        "agent_id": manifest.id,
+        "kind": BUNDLE_KIND,
+        "schema": BUNDLE_SCHEMA,
+        "name": manifest.name,
+        "version": manifest.version,
+        "platform_version": manifest.platform_version,
+        "filename": archive_name(manifest.id, manifest.version),
+        "requires": manifest.requires.as_document(),
+        "files": [{"path": f.path, "sha256": f.sha256} for f in manifest.files],
+        # Stated rather than implied. A Share dialog that does not say this
+        # leaves an operator assuming their MCP connections travelled with the
+        # agent, and the far side wondering why nothing works.
+        "include_adapters": False,
+        "note": (
+            "Adapter definitions are never included over HTTP — an adapter names a "
+            "command to run. Use 'genus agent export --include-adapters' if you mean "
+            "to carry them. Installing from a path or a URL is CLI-only."
+        ),
+    }
 
 
 @router.get("/{agent_id}/readiness")
