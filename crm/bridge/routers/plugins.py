@@ -71,7 +71,8 @@ _DIST_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 #: request, and because the two surfaces must not disagree about what a plugin
 #: name is.
 _INSTALL_SPEC = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(?:==[A-Za-z0-9][A-Za-z0-9._+!-]{0,63})?$"
+    r"^(?!.*\.whl(?:==|$))[A-Za-z0-9][A-Za-z0-9._-]{0,127}"
+    r"(?:==[A-Za-z0-9][A-Za-z0-9._+!-]{0,63})?$"
 )
 
 

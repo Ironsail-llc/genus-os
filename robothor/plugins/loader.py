@@ -262,6 +262,23 @@ def builtin_names(group: str) -> set[str]:
     return set(names)
 
 
+def _platform_installed(dist: Any, lock: Any) -> bool:
+    """Whether ``genus plugin install`` put this distribution here.
+
+    Reads the lock row's ``source``, which only that command writes. Never
+    raises: a lockfile this cannot read constrains nothing, which is the same
+    posture every other reader here takes.
+    """
+    try:
+        from robothor.plugins.lockfile import dist_name
+
+        name = dist_name(dist)
+        row = lock.rows.get(name) if name else None
+    except Exception:  # noqa: BLE001 - governance must never block boot
+        return False
+    return bool(row is not None and row.source is not None)
+
+
 def _discover() -> list[Any]:
     found: list[Any] = []
     for group in _GROUPS:
@@ -407,9 +424,19 @@ def load_plugins(
         # necessarily post-import — a module's exports cannot be read without
         # executing it — but the manifest is what makes them reviewable BEFORE
         # install, and undeclared names are never registered.
+        # ENFORCE unconditionally for a distribution THIS PLATFORM installed.
+        # `manifest_mode` defaults to `observe` because requiring a manifest is
+        # a breaking change for everything published before manifests existed —
+        # but that grandfathering has no claim on a plugin that arrived through
+        # `genus plugin install`, which could not have been installed at all
+        # without a manifest the index had pinned. Leaving those on the shipped
+        # default meant nothing compared declared names to actual surface at ANY
+        # stage, while the scan's group-level trade was being defended by
+        # pointing at this very check.
+        _enforced = _mode == "enforce" or _platform_installed(getattr(ep, "dist", None), lock)
         undeclared = (
             sorted(k for k in contributions if k not in _declared)
-            if (_declared is not None and _mode == "enforce")
+            if (_declared is not None and _enforced)
             else []
         )
         if undeclared:

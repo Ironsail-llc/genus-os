@@ -32,6 +32,7 @@ import hashlib
 import json
 import zipfile
 from datetime import UTC, datetime
+from pathlib import Path  # noqa: TC003 - fixtures build real files
 from types import SimpleNamespace
 
 import httpx
@@ -42,7 +43,18 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from robothor.plugins import installer, lockfile, registry
 
 KEY_ID = "test-key-1"
-_MANIFEST = "name: acme-tools\ncontract_version: 1\nhandlers:\n  - probe\n"
+#: The canonical manifest: it declares the contributed tool AND the entry
+#: point that carries it, which is what lets the scan compare the wheel's
+#: surface to the declaration by NAME rather than only by group.
+_MANIFEST = (
+    "name: acme-tools\n"
+    "contract_version: 1\n"
+    "handlers:\n"
+    "  - probe\n"
+    "entry_points:\n"
+    "  genus.tools:\n"
+    "    - acme\n"
+)
 _CODE = 'PLUGIN = {"genus_contract_version": "1.0", "handlers": {"probe": lambda: None}}\n'
 
 
@@ -458,6 +470,246 @@ def test_a_version_the_index_does_not_publish_is_refused(registry_fixture) -> No
         _install(registry_fixture, version="9.9.9")
 
 
+def test_the_wheel_cap_is_enforced_while_streaming_not_after_buffering(
+    registry_fixture, monkeypatch
+) -> None:
+    """50 MB was reported, not enforced. The download ran inside the engine's
+    admin thread, so a hostile mirror could OOM the daemon with one request the
+    operator initiated."""
+    produced = {"bytes": 0}
+    chunk = b"x" * (64 * 1024)
+    total = 300 * 1024 * 1024
+
+    def body():
+        while produced["bytes"] < total:
+            produced["bytes"] += len(chunk)
+            yield chunk
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith(".sig"):
+            return httpx.Response(200, content=registry_fixture.served["sig"])
+        if path.endswith(".whl"):
+            return httpx.Response(200, content=body())
+        return httpx.Response(200, content=registry_fixture.served["index"])
+
+    registry_fixture.client = httpx.Client(transport=httpx.MockTransport(handler))
+    # The signed `size` pre-check would refuse first; this is about the byte
+    # counter, so lift that gate and leave only the counter standing.
+    monkeypatch.setattr(installer, "MAX_DOWNLOAD_BYTES", 1024 * 1024)
+    pip = _Pip()
+    with pytest.raises(installer.InstallError) as excinfo:
+        installer.install(
+            "acme-tools",
+            indexes=(INDEX_URL,),
+            keys=registry_fixture.keys,
+            client=registry_fixture.client,
+            lock_path=registry_fixture.lock,
+            pip=pip,
+        )
+    assert "too large" in str(excinfo.value)
+    assert produced["bytes"] <= installer.MAX_DOWNLOAD_BYTES * 2, (
+        f"read {produced['bytes']} bytes for a {installer.MAX_DOWNLOAD_BYTES}-byte cap"
+    )
+    assert pip.calls == []
+
+
+def test_a_declared_content_length_over_the_wheel_cap_is_refused_first(
+    registry_fixture, monkeypatch
+) -> None:
+    sent = {"bytes": 0}
+
+    def body():
+        sent["bytes"] += 1
+        yield b"x" * 4096
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith(".sig"):
+            return httpx.Response(200, content=registry_fixture.served["sig"])
+        if path.endswith(".whl"):
+            return httpx.Response(200, headers={"content-length": str(10**12)}, content=body())
+        return httpx.Response(200, content=registry_fixture.served["index"])
+
+    monkeypatch.setattr(installer, "MAX_DOWNLOAD_BYTES", 1024 * 1024)
+    with pytest.raises(installer.InstallError) as excinfo:
+        installer.install(
+            "acme-tools",
+            indexes=(INDEX_URL,),
+            keys=registry_fixture.keys,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            lock_path=registry_fixture.lock,
+            pip=_Pip(),
+        )
+    assert "too large" in str(excinfo.value)
+    assert sent["bytes"] == 0
+
+
+# --------------------------------------------------------------------------
+# I2 — the pip argv is built from validated metadata
+# --------------------------------------------------------------------------
+
+
+def _hostile_metadata_wheel(tmp_path, *, name="acme-tools", version="1.2.3") -> tuple[Path, str]:
+    import io
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("acme_tools/__init__.py", _CODE)
+        zf.writestr("acme_tools/genus-plugin.yaml", _MANIFEST)
+        zf.writestr(
+            "acme_tools-1.2.3.dist-info/METADATA",
+            f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\nSummary: A probe\n",
+        )
+        zf.writestr(
+            "acme_tools-1.2.3.dist-info/entry_points.txt",
+            "[genus.tools]\nacme = acme_tools:PLUGIN\n",
+        )
+    data = buffer.getvalue()
+    path = tmp_path / "acme_tools-1.2.3-py3-none-any.whl"
+    path.write_bytes(data)
+    return path, hashlib.sha256(data).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("name", "version"),
+    [
+        ("--find-links=https://evil.example.org/", "1.0"),
+        ("--index-url=https://evil.example.org/simple", "1.0"),
+        ("acme-tools", "1.0 --pre"),
+        ("acme tools", "1.0"),
+        ("-r/etc/passwd", "1.0"),
+        ("acme-tools", "--extra-index-url=https://evil.example.org/"),
+        ("acme-tools", "not a version"),
+    ],
+)
+def test_hostile_wheel_metadata_never_reaches_pip(tmp_path, name, version) -> None:
+    """The requirement token was built straight out of the downloaded wheel's
+    METADATA. The module's own docstring says pip "never sees a URL, never an
+    --index-url, and never --pre"; three of these made that false, and the test
+    that was supposed to catch it asserted exact token membership, which
+    '--index-url=https://…==1.0' is not."""
+    path, digest = _hostile_metadata_wheel(tmp_path, name=name, version=version)
+    pip = _Pip()
+    with pytest.raises(installer.InstallError) as excinfo:
+        installer.install(str(path), sha256=digest, lock_path=tmp_path / "plugins.lock", pip=pip)
+    message = str(excinfo.value)
+    assert "METADATA" in message
+    assert pip.calls == []
+
+
+def test_no_pip_token_after_our_own_flags_can_look_like_an_option(tmp_path) -> None:
+    """The invariant stated positively: whatever the wheel called itself, the
+    only token after --find-links <dir> and our own switches is a requirement."""
+    path, digest = _hostile_metadata_wheel(tmp_path)
+    pip = _Pip()
+    installer.install(str(path), sha256=digest, lock_path=tmp_path / "plugins.lock", pip=pip)
+    command = pip.calls[0]
+    ours = {
+        "--no-deps",
+        "--no-index",
+        "--find-links",
+        "--disable-pip-version-check",
+        "--no-input",
+        "--target",
+        "--upgrade",
+    }
+    tail = command[command.index("--find-links") + 2 :]
+    assert [t for t in tail if t.startswith("-") and t not in ours] == []
+    assert tail[-1] == "acme-tools==1.2.3"
+
+
+def test_a_registry_installed_plugin_is_name_enforced_whatever_the_mode(
+    tmp_path, monkeypatch
+) -> None:
+    """The group-granularity trade was defended by pointing at the loader's
+    post-import name check -- which only enforces under
+    ROBOTHOR_PLUGIN_MANIFEST_MODE=enforce, and the shipped default is
+    `observe`. A plugin THIS PLATFORM installed has no claim on that
+    grandfathering: it could not have been installed without a manifest the
+    index pinned."""
+    from unittest.mock import patch
+
+    from robothor.plugins import loader
+
+    monkeypatch.setenv("ROBOTHOR_PLUGIN_MANIFEST_MODE", "observe")
+    lock = tmp_path / "plugins.lock"
+    lockfile.record_install(
+        "acme-tools",
+        version="1.2.3",
+        # The REAL digest: a mismatch would be refused as drift before the
+        # name check this test is about could run.
+        manifest_sha256=hashlib.sha256(_MANIFEST.encode()).hexdigest(),
+        kinds=("genus.tools",),
+        verdict="safe",
+        dist_sha256="b" * 64,
+        source=lockfile.LockSource(origin="registry", installed_at="2026-09-15T00:00:00+00:00"),
+        path=lock,
+    )
+
+    class _Dist:
+        name, version, files = "acme-tools", "1.2.3", ()
+
+        def read_text(self, filename):
+            return _MANIFEST if filename == "genus-plugin.yaml" else None
+
+    class _EP:
+        name, group = "acme", "genus.tools"
+        dist = _Dist()
+
+        def load(self):
+            # Contributes a tool the manifest never declared.
+            return {
+                "genus_contract_version": "1.0",
+                "handlers": {"probe": lambda: None, "undeclared": lambda: None},
+            }
+
+    with patch.object(loader, "_discover", lambda: [_EP()]):
+        result = loader.load_plugins(lockfile_path=lock)
+    assert not result.loaded
+    assert any("undeclared" in f.reason for f in result.failures), result.failures
+
+
+def test_a_hand_installed_plugin_keeps_the_observe_grandfathering(tmp_path, monkeypatch) -> None:
+    """The other half: a distribution with no lock source is one somebody
+    pip-installed, and `observe` exists so that upgrading Genus does not refuse
+    every plugin published before manifests did."""
+    from unittest.mock import patch
+
+    from robothor.plugins import loader
+
+    monkeypatch.setenv("ROBOTHOR_PLUGIN_MANIFEST_MODE", "observe")
+    lock = tmp_path / "plugins.lock"
+    lockfile.write_lockfile({}, lock)
+
+    class _Dist:
+        name, version, files = "acme-tools", "1.2.3", ()
+
+        def read_text(self, filename):
+            return _MANIFEST if filename == "genus-plugin.yaml" else None
+
+    class _EP:
+        name, group = "acme", "genus.tools"
+        dist = _Dist()
+
+        def load(self):
+            return {
+                "genus_contract_version": "1.0",
+                "handlers": {"probe": lambda: None, "undeclared": lambda: None},
+            }
+
+    with patch.object(loader, "_discover", lambda: [_EP()]):
+        result = loader.load_plugins(lockfile_path=lock, reserved_names=set())
+    assert result.loaded
+
+
+def test_a_valid_pep440_local_version_is_accepted(tmp_path) -> None:
+    path, digest = _hostile_metadata_wheel(tmp_path, version="1.0+acme1")
+    pip = _Pip()
+    installer.install(str(path), sha256=digest, lock_path=tmp_path / "plugins.lock", pip=pip)
+    assert pip.calls[0][-1] == "acme-tools==1.0+acme1"
+
+
 # --------------------------------------------------------------------------
 # dry run
 # --------------------------------------------------------------------------
@@ -579,6 +831,23 @@ def test_remove_force_goes_ahead(tmp_path) -> None:
     result = installer.remove("acme-tools", force=True, lock_path=lock, pip=pip)
     assert result["removed"] is True
     assert pip.calls
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["--requirement=/etc/passwd", "-r/etc/passwd", "acme tools", "../../etc/passwd", ""],
+)
+def test_remove_validates_the_name_before_pip_sees_it(tmp_path, name) -> None:
+    """Both HTTP surfaces validated; the CLI did not, and both callers share
+    this function. ``genus plugin remove -- --requirement=/path/reqs.txt``
+    reached pip as an option."""
+    lock = tmp_path / "plugins.lock"
+    lockfile.write_lockfile({}, lock)
+    pip = _Pip()
+    with pytest.raises(installer.InstallError) as excinfo:
+        installer.remove(name, force=True, lock_path=lock, pip=pip)
+    assert "distribution name" in str(excinfo.value)
+    assert pip.calls == []
 
 
 def test_remove_of_an_unknown_name_is_a_refusal(tmp_path) -> None:

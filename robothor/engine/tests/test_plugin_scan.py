@@ -32,7 +32,18 @@ import pytest
 from robothor.plugins import scan, wheel
 from robothor.plugins.loader import CONTRACT_VERSION
 
-_MANIFEST = "name: acme-tools\ncontract_version: 1\nhandlers:\n  - probe\n"
+#: The canonical manifest: it declares the contributed tool AND the entry
+#: point that carries it, which is what lets the scan compare the wheel's
+#: surface to the declaration by NAME rather than only by group.
+_MANIFEST = (
+    "name: acme-tools\n"
+    "contract_version: 1\n"
+    "handlers:\n"
+    "  - probe\n"
+    "entry_points:\n"
+    "  genus.tools:\n"
+    "    - acme\n"
+)
 
 _METADATA = """Metadata-Version: 2.1
 Name: acme-tools
@@ -237,7 +248,11 @@ def test_the_shipped_contract_version_spellings_still_match(tmp_path, spelling) 
     manifest parser keeps only an int, so a float arrived as "declared
     nothing"."""
     result = _scanned(
-        tmp_path, manifest=f"name: acme-tools\ncontract_version: {spelling}\nhandlers:\n  - probe\n"
+        tmp_path,
+        manifest=(
+            f"name: acme-tools\ncontract_version: {spelling}\nhandlers:\n  - probe\n"
+            "entry_points:\n  genus.tools:\n    - acme\n"
+        ),
     )
     assert result.verdict == "safe", _reasons(result)
 
@@ -628,3 +643,60 @@ def test_an_alias_of_a_safe_module_stays_safe(tmp_path) -> None:
     code = "import json as j\nPLUGIN = {'handlers': {'probe': lambda: j.dumps({})}}\n"
     result = _scanned(tmp_path, code=code)
     assert result.verdict == "safe", _reasons(result)
+
+
+# ==========================================================================
+# I5 — undeclared surface at entry-point NAME granularity
+#
+# A wheel publishing two entry points into genus.tools against a manifest
+# declaring one tool graded `safe`. The mitigation offered for that -- the
+# loader's post-import name check -- only enforces under
+# ROBOTHOR_PLUGIN_MANIFEST_MODE=enforce, and the shipped default is `observe`.
+# So on a default instance nothing compared declared names to actual surface at
+# any stage.
+# ==========================================================================
+
+
+#: The same declaration as ``_MANIFEST``; named separately where a test is
+#: ABOUT the entry_points field rather than merely using it.
+_EP_MANIFEST = _MANIFEST
+
+
+def test_an_exactly_declared_entry_point_set_is_safe(tmp_path) -> None:
+    result = _scanned(tmp_path, manifest=_EP_MANIFEST)
+    assert result.verdict == "safe", _reasons(result)
+
+
+def test_an_entry_point_the_manifest_does_not_name_is_blocked(tmp_path) -> None:
+    result = _scanned(
+        tmp_path,
+        manifest=_EP_MANIFEST,
+        entry_points="[genus.tools]\nacme = acme_tools:PLUGIN\nsneaky = acme_tools:OTHER\n",
+    )
+    assert result.verdict == "blocked", _reasons(result)
+    assert "sneaky" in _reasons(result)
+
+
+def test_more_entry_points_than_declared_names_is_at_least_review(tmp_path) -> None:
+    """Without the optional field, name equality is impossible (an entry-point
+    name is not a tool name) -- but CARDINALITY is not, and two entry points
+    against one declared tool is a thing the operator should see."""
+    result = _scanned(
+        tmp_path,
+        manifest=_COARSE_MANIFEST,
+        entry_points="[genus.tools]\nacme = acme_tools:PLUGIN\nsneaky = acme_tools:OTHER\n",
+    )
+    assert result.verdict == "review", _reasons(result)
+    assert "sneaky" in _reasons(result)
+
+
+_COARSE_MANIFEST = "name: acme-tools\ncontract_version: 1\nhandlers:\n  - probe\n"
+
+
+def test_a_manifest_without_entry_points_is_never_safe(tmp_path) -> None:
+    """ "Nobody declared the surface at this granularity" is not the same as
+    "the surface matches", and the first must not render as the second."""
+    result = _scanned(tmp_path, manifest=_COARSE_MANIFEST)
+    assert result.verdict == "review", _reasons(result)
+    assert "entry_points" in _reasons(result)
+    assert "GROUP granularity" in _reasons(result)

@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import subprocess
 import sys
 import tempfile
@@ -57,6 +58,7 @@ from robothor.plugins import registry, scan, wheel
 from robothor.plugins.lockfile import LockSource
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    import threading
     from collections.abc import Callable, Sequence
 
     import httpx
@@ -79,9 +81,15 @@ MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
 #: Seconds allowed for one artifact download.
 DOWNLOAD_TIMEOUT_SECONDS = 60.0
 
-#: Seconds allowed for one pip invocation. A pip that hangs must not own the
-#: operator's terminal or an HTTP handler forever.
-PIP_TIMEOUT_SECONDS = 300.0
+#: Seconds allowed for one pip invocation.
+#:
+#: Deliberately BELOW the engine route's own cap. It was 300 s against a 60 s
+#: route cap, which meant the one step that cannot be interrupted was allowed to
+#: run five times the budget -- the handler then answered "did not finish within
+#: 60s" several minutes late, having let the install complete anyway.
+#: ``test_pip_cannot_outlive_the_route_cap`` pins the ordering so the two
+#: numbers cannot drift back apart.
+PIP_TIMEOUT_SECONDS = 45.0
 
 #: Printed and returned by everything that changes what is installed. The
 #: engine re-reads the plugin set on SIGHUP (``robothor/engine/daemon.py``) or
@@ -96,6 +104,20 @@ class InstallError(Exception):
     where this instance keeps its files is not a platform fact. The one
     exception is a path the OPERATOR typed at the CLI, echoed back so they can
     see the typo.
+    """
+
+
+class InstallCancelledError(InstallError):
+    """The caller's deadline passed at a checkpoint. Nothing was installed.
+
+    Raised only BEFORE pip starts, which is what makes cancellation safe: a
+    cancelled install either never ran pip, or ran it and recorded its row.
+    A cancel landing between "pip succeeded" and "the row was written" would
+    produce exactly the state this module exists to prevent -- a distribution
+    the engine will load and the lockfile has never heard of.
+
+    A subclass of :class:`InstallError` so every caller that already handles a
+    refusal handles this one too, rather than turning it into a 500.
     """
 
 
@@ -209,6 +231,55 @@ def _plugin_target_dir() -> str:
         return ""
 
 
+#: PEP 503's name grammar. The requirement token handed to pip is built from
+#: this value, so it is validated rather than trusted.
+_PEP503_NAME = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$")
+
+
+def _validated_requirement(name: str, version: str) -> tuple[str, str]:
+    """The distribution name and version, or a refusal naming METADATA.
+
+    Both come straight out of the DOWNLOADED wheel's ``METADATA``, which is the
+    attacker's file. Unvalidated, they reached the pip argv: a hostile review
+    produced wheels whose ``Name:`` was ``--index-url=https://evil.example.org/simple``
+    and whose ``Version:`` was ``1.0 --pre``, and watched them land in the
+    command this module's own docstring promises never sees either. Neither was
+    exploitable -- each arrives as ONE argv token, so pip consumes it as an
+    option value and then errors with nothing to install -- but the invariant
+    the module is built on has to be checked rather than asserted, and the check
+    is two lines.
+
+    PEP 440 through ``packaging`` rather than a regex of our own: a local
+    version like ``1.0+acme1`` is legitimate and a hand-rolled pattern would
+    either refuse it or admit a space.
+    """
+    clean_name = (name or "").strip()
+    clean_version = (version or "").strip()
+    if not _PEP503_NAME.match(clean_name):
+        raise InstallError(
+            f"The wheel's METADATA names the distribution {clean_name!r}, which is not "
+            "a valid package name (PEP 503). Refusing: that value would be handed to "
+            "pip as part of a requirement."
+        )
+    try:
+        from packaging.version import InvalidVersion, Version
+
+        Version(clean_version)
+    except ImportError:  # pragma: no cover - packaging ships with pip
+        if " " in clean_version or clean_version.startswith("-"):
+            raise InstallError(
+                f"The wheel's METADATA declares version {clean_version!r}, which is not "
+                "a version. Refusing."
+            ) from None
+    except InvalidVersion as exc:
+        raise InstallError(
+            f"The wheel's METADATA declares version {clean_version!r}, which is not a "
+            "valid version (PEP 440). Refusing: that value would be handed to pip as "
+            "part of a requirement."
+        ) from exc
+    return clean_name, clean_version
+
+
 def _pip_install_command(name: str, version: str, find_links: Path) -> list[str]:
     """The exact command, and nothing that could turn into another one.
 
@@ -242,6 +313,15 @@ def _pip_install_command(name: str, version: str, find_links: Path) -> list[str]
 
 
 def _download(url: str, *, client: httpx.Client | None) -> bytes:
+    """Fetch one artifact, bounded while reading rather than after.
+
+    Through :func:`robothor.plugins.registry.bounded_get` rather than a second
+    loop that looks similar: the index fetch and this one must not drift apart
+    on the property that has to hold when the mirror is hostile, and the first
+    version of both buffered the whole body before checking its length -- a
+    hostile review measured a 315 MB peak allocation refusing a 300 MB body
+    against a 50 MB cap, inside the engine's admin thread.
+    """
     import httpx as _httpx
 
     if not url.startswith("https://"):
@@ -249,37 +329,14 @@ def _download(url: str, *, client: httpx.Client | None) -> bytes:
     owned = client is None
     active = client or _httpx.Client(follow_redirects=False, timeout=DOWNLOAD_TIMEOUT_SECONDS)
     try:
-        current = url
-        for _ in range(registry.MAX_REDIRECTS + 1):
-            try:
-                response = active.get(
-                    current, timeout=DOWNLOAD_TIMEOUT_SECONDS, follow_redirects=False
-                )
-            except _httpx.HTTPError as exc:
-                raise InstallError(
-                    f"The plugin artifact could not be downloaded ({type(exc).__name__})."
-                ) from exc
-            if response.status_code in (301, 302, 303, 307, 308):
-                location = response.headers.get("location", "")
-                target = str(_httpx.URL(current).join(location)) if location else ""
-                if not target or not registry._same_origin(url, target):
-                    raise InstallError(
-                        "The plugin artifact redirected off its origin. The index pins "
-                        "the URL and the hash; following a redirect elsewhere would "
-                        "unpin the URL."
-                    )
-                current = target
-                continue
-            if response.status_code != 200:
-                raise InstallError(f"The plugin artifact answered HTTP {response.status_code}.")
-            content = response.content
-            if len(content) > MAX_DOWNLOAD_BYTES:
-                raise InstallError(
-                    f"The plugin artifact is too large ({len(content)} bytes > "
-                    f"{MAX_DOWNLOAD_BYTES})."
-                )
-            return content
-        raise InstallError("The plugin artifact redirected too many times.")
+        return registry.bounded_get(
+            active,
+            url,
+            label="plugin artifact",
+            cap=MAX_DOWNLOAD_BYTES,
+            timeout=DOWNLOAD_TIMEOUT_SECONDS,
+            error=InstallError,
+        )
     finally:
         if owned:
             active.close()
@@ -331,6 +388,7 @@ def install(
     client: httpx.Client | None = None,
     lock_path: Path | None = None,
     pip: Callable[..., Any] | None = None,
+    cancel: threading.Event | None = None,
 ) -> InstallOutcome:
     """Install one plugin. Every failure is an :class:`InstallError` sentence.
 
@@ -338,11 +396,26 @@ def install(
     resolve through the configured indexes, or the path or https URL of a wheel
     -- which requires ``sha256``, because an explicit wheel has no signed index
     vouching for it and "trust me" is not a verification.
+
+    ``cancel`` is the caller's deadline. It is checked BETWEEN pipeline steps
+    and never once pip has started, which is what makes cancellation safe: a
+    cancelled install either never ran pip, or ran it and recorded its row.
+    There is no third state. The engine route sets this when its cap fires,
+    because ``asyncio.wait_for`` around ``to_thread`` cancels the await and
+    leaves the thread running -- a hostile review measured a 504 arriving 3 s
+    into a 0.5 s cap with the work completing happily afterwards.
     """
     runner = pip or _run_pip
     name, inline_version = _split_spec(spec)
     version = version or inline_version
 
+    def checkpoint(step: str) -> None:
+        if cancel is not None and cancel.is_set():
+            raise InstallCancelledError(
+                f"The install was cancelled before {step}; nothing was installed."
+            )
+
+    checkpoint("it started")
     with tempfile.TemporaryDirectory(prefix="genus-plugin-") as staging_name:
         staging = Path(staging_name)
         if _looks_like_wheel(spec):
@@ -357,16 +430,21 @@ def install(
                 client=client,
             )
 
+        checkpoint("the wheel was opened")
         artifact = staging / filename
         artifact.write_bytes(data)
         artifact.chmod(0o600)
 
         contents = _open_and_check(artifact, staging / "unpacked", plan_base)
+        # BEFORE the argv, and before anything else believes these two values:
+        # they came out of the downloaded wheel's METADATA, which is the
+        # attacker's file.
+        dist_name, dist_version = _validated_requirement(contents.name, contents.version)
         verdict = scan.scan_wheel(contents, scan_prompts=scan_prompts)
 
         plan = InstallPlan(
-            name=contents.name,
-            version=contents.version,
+            name=dist_name,
+            version=dist_version,
             origin=plan_base["origin"],
             index_url=plan_base.get("index_url", ""),
             publisher_key_id=plan_base.get("publisher_key_id", ""),
@@ -379,10 +457,15 @@ def install(
             prompt_scan=verdict.prompt_scan,
             groups=contents.genus_groups(),
             accept_review=accept_review,
-            pip_command=tuple(_pip_install_command(contents.name, contents.version, staging)),
+            pip_command=tuple(_pip_install_command(dist_name, dist_version, staging)),
         )
 
         _enforce_verdict(plan, accept_review=accept_review)
+        # THE LAST CHECKPOINT. Past here pip runs, and pip's own timeout (below
+        # the route's cap, pinned by a test) is what bounds it -- interrupting
+        # between "pip succeeded" and "the row was written" would leave the
+        # engine loading a distribution the lockfile has never heard of.
+        checkpoint("pip ran")
 
         if dry_run:
             # Nothing is written and nothing is run. A dry run that left a row
@@ -612,6 +695,15 @@ def remove(
     from robothor.plugins import lockfile
 
     runner = pip or _run_pip
+    # HERE rather than only at the two HTTP surfaces, because both callers
+    # share this function and the CLI did not check: `genus plugin remove --
+    # --requirement=/path/reqs.txt` reached pip as an option. Operator-typed,
+    # but the guard belongs where every caller passes.
+    if not _PEP503_NAME.match((name or "").strip()):
+        raise InstallError(
+            f"{name!r} is not a distribution name. `genus plugin list` shows what is installed."
+        )
+    name = name.strip()
     lock = lockfile.read_lockfile(lock_path)
     row = lock.row(name)
     if row is None and not force:

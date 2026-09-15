@@ -502,38 +502,93 @@ def _same_origin(a: str, b: str) -> bool:
     return (left.scheme, left.hostname, left.port) == (right.scheme, right.hostname, right.port)
 
 
-def _get(client: httpx.Client, url: str, *, label: str) -> bytes:
-    """One bounded, non-redirecting GET that stays on its own origin."""
+def bounded_get(
+    client: httpx.Client,
+    url: str,
+    *,
+    label: str,
+    cap: int,
+    timeout: float,
+    error: type[Exception],
+) -> bytes:
+    """One bounded, non-redirecting GET that stays on its own origin.
+
+    **The cap is enforced while reading, never after.** The first version did
+    ``content = response.content`` and then compared its length, which meant the
+    1 MB and 50 MB numbers were REPORTED rather than enforced: a hostile review
+    fetched a lazily produced 300 MB body and measured a 315 MB peak allocation
+    before the refusal. This runs inside the engine's admin thread, so that is a
+    mirror OOM-ing the daemon through a request the operator initiated — the
+    exact threat model this module opens with.
+
+    Two gates, cheapest first: a declared ``Content-Length`` over the cap is
+    refused before a byte is read, and the streamed body is counted as it
+    arrives and abandoned the moment the count passes.
+
+    Shared with :mod:`robothor.plugins.installer` rather than copied, so the
+    index fetch and the artifact download cannot drift apart on the one property
+    that has to hold when the mirror is not honest.
+    """
     import httpx as _httpx
 
     current = url
     for _ in range(MAX_REDIRECTS + 1):
         try:
-            response = client.get(current, timeout=INDEX_TIMEOUT_SECONDS, follow_redirects=False)
+            with client.stream("GET", current, timeout=timeout, follow_redirects=False) as response:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("location", "")
+                    target = str(_httpx.URL(current).join(location)) if location else ""
+                    if not target or not _same_origin(url, target):
+                        raise error(
+                            f"The {label} redirected off its origin (to "
+                            f"{location or '(nothing)'!r}). A pinned URL that can be "
+                            "redirected elsewhere is not pinned; refusing to follow."
+                        )
+                    current = target
+                    continue
+                if response.status_code != 200:
+                    raise error(f"The {label} at {current} answered HTTP {response.status_code}.")
+
+                declared = response.headers.get("content-length")
+                if declared is not None:
+                    try:
+                        if int(declared) > cap:
+                            raise error(
+                                f"The {label} is too large: it declares {int(declared)} "
+                                f"bytes, over the {cap}-byte limit."
+                            )
+                    except ValueError:
+                        # A header that is not a number tells us nothing; the
+                        # running count below is the gate that actually holds.
+                        pass
+
+                chunks: list[bytes] = []
+                read = 0
+                for chunk in response.iter_bytes():
+                    read += len(chunk)
+                    if read > cap:
+                        raise error(
+                            f"The {label} is too large (over the {cap}-byte limit); "
+                            "the download was abandoned."
+                        )
+                    chunks.append(chunk)
+                return b"".join(chunks)
         except _httpx.HTTPError as exc:
-            raise RegistryError(
+            raise error(
                 f"The {label} at {current} could not be fetched ({type(exc).__name__})."
             ) from exc
-        if response.status_code in (301, 302, 303, 307, 308):
-            location = response.headers.get("location", "")
-            target = str(_httpx.URL(current).join(location)) if location else ""
-            if not target or not _same_origin(url, target):
-                raise RegistryError(
-                    f"The {label} redirected off its origin (to {location or '(nothing)'!r}). "
-                    "A pinned index URL that can be redirected elsewhere is not pinned; "
-                    "refusing to follow."
-                )
-            current = target
-            continue
-        if response.status_code != 200:
-            raise RegistryError(f"The {label} at {current} answered HTTP {response.status_code}.")
-        content = response.content
-        if len(content) > MAX_INDEX_BYTES:
-            raise RegistryError(
-                f"The {label} is too large ({len(content)} bytes > {MAX_INDEX_BYTES})."
-            )
-        return content
-    raise RegistryError(f"The {label} redirected more than {MAX_REDIRECTS} times.")
+    raise error(f"The {label} redirected more than {MAX_REDIRECTS} times.")
+
+
+def _get(client: httpx.Client, url: str, *, label: str) -> bytes:
+    return bounded_get(
+        client,
+        url,
+        label=label,
+        cap=MAX_INDEX_BYTES,
+        timeout=INDEX_TIMEOUT_SECONDS,
+        error=RegistryError,
+    )
 
 
 def fetch_index(
@@ -682,12 +737,21 @@ def select(
             raise RegistryError(f"No index publishes {name} {version}. Indexes read: {where}.")
         raise RegistryError(f"No index publishes a plugin named {name!r}. Indexes read: {where}.")
 
-    publishers = {index.publisher_id for index, _ in found}
-    if len(publishers) > 1:
+    # The SIGNING KEY is the identity, not the display string beside it.
+    # Comparing only ``publisher_id`` meant a second pinned publisher could
+    # squat the platform's name in their own document and shadow its entry with
+    # no warning at all -- and the whole point of pinning a key is that the key
+    # is who the publisher is. Both are compared, and the refusal names both
+    # key ids so the operator can see which pin to remove.
+    identities = {(index.publisher_id, index.key_id) for index, _ in found}
+    if len(identities) > 1:
+        detail = ", ".join(
+            f"{publisher or '(unnamed)'} signed by {key_id}"
+            for publisher, key_id in sorted(identities)
+        )
         raise RegistryError(
-            f"{name} is published by more than one publisher "
-            f"({', '.join(sorted(publishers))}). Name the one you meant with "
-            "--index <url>."
+            f"{name} is published by more than one publisher ({detail}). Name the one "
+            "you meant with --index <url>."
         )
     index, entry = found[0]
     assert entry is not None  # narrowed by the filter above

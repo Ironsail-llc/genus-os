@@ -821,6 +821,7 @@ def _declaration_reasons(contents: WheelContents) -> tuple[list[str], list[str]]
             f"{declared_contract!r}; this engine speaks {CONTRACT_VERSION!r}."
         )
 
+    names_declared = False
     for group in groups:
         kind = _GROUPS.get(group)
         if kind is None:
@@ -843,6 +844,42 @@ def _declaration_reasons(contents: WheelContents) -> tuple[list[str], list[str]]
                 f"{MANIFEST_NAME} claims the built-in name(s) {', '.join(reserved)} in "
                 f"{group}. Shadowing a built-in is a takeover, not an extension."
             )
+
+        # NAME granularity, when the manifest opted into it. A wheel publishing
+        # two entry points into genus.tools against a manifest declaring one
+        # tool used to be `safe`, and the mitigation offered for that -- the
+        # loader's post-import name check -- only enforces under
+        # ROBOTHOR_PLUGIN_MANIFEST_MODE=enforce, which is NOT the shipped
+        # default. So on a default instance nothing compared declared names to
+        # actual surface at any stage.
+        published = set(contents.entry_points.get(group, {}))
+        expected = manifest.declares_entry_points(group)
+        if expected is None:
+            extra = len(published) - len(declared)
+            if extra > 0:
+                review.append(
+                    f"The wheel publishes {len(published)} entry point(s) into {group} "
+                    f"({', '.join(sorted(published))}) but {MANIFEST_NAME} declares "
+                    f"{len(declared)} {kind}. An entry-point name is not a tool name, so "
+                    "this cannot be matched exactly — declare `entry_points:` in the "
+                    "manifest to make it exact."
+                )
+        else:
+            names_declared = True
+            undeclared = sorted(published - expected)
+            if undeclared:
+                blocked.append(
+                    f"The wheel publishes the entry point(s) {', '.join(undeclared)} in "
+                    f"{group}, which {MANIFEST_NAME}'s entry_points does not declare. "
+                    "Undeclared surface is refused."
+                )
+
+    if groups and not names_declared:
+        review.append(
+            f"{MANIFEST_NAME} does not declare `entry_points:`, so what this wheel "
+            "publishes is only compared at GROUP granularity. Name-level matching "
+            "needs that field, or ROBOTHOR_PLUGIN_MANIFEST_MODE=enforce at load time."
+        )
 
     ambient = sorted(set(groups) & _AMBIENT_GROUPS)
     if ambient:

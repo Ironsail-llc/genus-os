@@ -29,7 +29,18 @@ import pytest
 from robothor.cli.plugins import cmd_plugin
 from robothor.plugins import installer, lockfile
 
-_MANIFEST = "name: acme-tools\ncontract_version: 1\nhandlers:\n  - probe\n"
+#: The canonical manifest: it declares the contributed tool AND the entry
+#: point that carries it, which is what lets the scan compare the wheel's
+#: surface to the declaration by NAME rather than only by group.
+_MANIFEST = (
+    "name: acme-tools\n"
+    "contract_version: 1\n"
+    "handlers:\n"
+    "  - probe\n"
+    "entry_points:\n"
+    "  genus.tools:\n"
+    "    - acme\n"
+)
 _CODE = 'PLUGIN = {"genus_contract_version": "1.0", "handlers": {"probe": lambda: None}}\n'
 
 

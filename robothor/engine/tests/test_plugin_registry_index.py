@@ -292,6 +292,66 @@ def test_fetch_refuses_an_index_bigger_than_the_cap() -> None:
     assert "too large" in str(excinfo.value)
 
 
+def test_a_declared_content_length_over_the_cap_is_refused_before_a_byte_is_read() -> None:
+    """The cheapest refusal there is. A mirror that announces 300 MB never gets
+    to send any of it."""
+    _, public_pem = _keypair()
+    sent = {"bytes": 0}
+
+    def body():
+        sent["bytes"] += 1
+        yield b"x" * 4096
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-length": str(registry.MAX_INDEX_BYTES * 300)},
+            content=body(),
+        )
+
+    with pytest.raises(registry.RegistryError) as excinfo:
+        registry.fetch_index(
+            "https://example.invalid/index.json",
+            keys={KEY_ID: public_pem},
+            client=_client(handler),
+        )
+    assert "too large" in str(excinfo.value)
+    assert sent["bytes"] == 0, "the body was read despite a declared size over the cap"
+
+
+def test_the_index_cap_is_enforced_while_streaming_not_after_buffering() -> None:
+    """The 1 MB number was reported, not enforced: the whole body was in memory
+    before ``len()`` was taken, so a hostile mirror could OOM the daemon with
+    one request the operator initiated. This produces 300 MB lazily and asserts
+    the fetch aborts having held only a small multiple of the cap."""
+    _, public_pem = _keypair()
+    produced = {"bytes": 0}
+    chunk = b"x" * (64 * 1024)
+    total = 300 * 1024 * 1024
+
+    def body():
+        while produced["bytes"] < total:
+            produced["bytes"] += len(chunk)
+            yield chunk
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # No content-length: the only thing that can stop this is the running
+        # byte count.
+        return httpx.Response(200, content=body())
+
+    with pytest.raises(registry.RegistryError) as excinfo:
+        registry.fetch_index(
+            "https://example.invalid/index.json",
+            keys={KEY_ID: public_pem},
+            client=_client(handler),
+        )
+    assert "too large" in str(excinfo.value)
+    assert produced["bytes"] <= registry.MAX_INDEX_BYTES * 2, (
+        f"read {produced['bytes']} bytes for a {registry.MAX_INDEX_BYTES}-byte cap — "
+        "the body is still being buffered before the check"
+    )
+
+
 def test_fetch_refuses_a_redirect_to_another_origin() -> None:
     _, public_pem = _keypair()
 
@@ -354,13 +414,18 @@ def test_a_missing_index_is_a_sentence_not_a_traceback() -> None:
 
 
 def _index(
-    publisher: str, name: str, version: str = "1.0.0", url: str = "https://a.invalid/index.json"
+    publisher: str,
+    name: str,
+    version: str = "1.0.0",
+    url: str = "https://a.invalid/index.json",
+    key_id: str = KEY_ID,
 ):
     private_pem, public_pem = _keypair()
     payload = _payload(plugins=[dict(_payload()["plugins"][0], name=name, version=version)])
-    payload["publisher"] = {"id": publisher, "key_id": KEY_ID}
-    raw, sig = _signed(payload, private_pem)
-    return registry.parse_index(raw, sig, keys={KEY_ID: public_pem}, url=url)
+    payload["publisher"] = {"id": publisher, "key_id": key_id}
+    raw = registry.canonical_bytes(payload)
+    sig = registry.signature_document(payload, private_pem, key_id=key_id).encode()
+    return registry.parse_index(raw, sig, keys={key_id: public_pem}, url=url)
 
 
 def test_the_first_index_that_has_the_name_wins() -> None:
@@ -377,6 +442,24 @@ def test_two_publishers_offering_one_name_is_refused() -> None:
     with pytest.raises(registry.RegistryError) as excinfo:
         registry.select("acme-tools", indexes=[first, second])
     assert "--index" in str(excinfo.value)
+
+
+def test_the_same_publisher_name_under_a_different_key_is_refused() -> None:
+    """The key is the identity; ``publisher.id`` is a display string INSIDE the
+    document, so a second pinned publisher could squat the platform's name and
+    shadow its entry silently. It needs the operator to have pinned the rogue
+    key -- a company registry alongside the platform's is the normal case --
+    which is exactly when it matters."""
+    theirs = _index(
+        "genus", "acme-tools", "9.9.9", "https://evil.invalid/index.json", key_id="other-2026"
+    )
+    ours = _index("genus", "acme-tools", "1.0.0", "https://a.invalid/index.json")
+    with pytest.raises(registry.RegistryError) as excinfo:
+        registry.select("acme-tools", indexes=[theirs, ours])
+    message = str(excinfo.value)
+    assert "other-2026" in message
+    assert KEY_ID in message
+    assert "--index" in message
 
 
 def test_an_explicit_version_that_is_not_published_is_refused() -> None:

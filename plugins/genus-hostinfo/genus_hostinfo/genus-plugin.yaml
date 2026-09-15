@@ -8,3 +8,17 @@ schemas:
   - host_state
 services:
   - host_state
+
+# What this distribution publishes into each group, by ENTRY-POINT name. An
+# entry-point name is not a contribution name (this one publishes `hostinfo`
+# and contributes `host_state`), so the two are declared separately -- and
+# declaring this is what lets `genus plugin install` compare the wheel's actual
+# surface to the declaration exactly, before anything is imported. Omitting it
+# is allowed and caps the install verdict at `review`.
+entry_points:
+  genus.tools:
+    - hostinfo
+  genus.schemas:
+    - hostinfo
+  genus.services:
+    - hostinfo
