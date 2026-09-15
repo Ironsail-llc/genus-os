@@ -107,6 +107,82 @@ describe("Bridge Proxy", () => {
   });
 });
 
+/**
+ * The audit CSV export is a plain `<a href download>` on the Helm's Audit page,
+ * which means the BROWSER, not the app, decides what to do with the reply — and
+ * it decides from the headers. This proxy read the body and rebuilt the
+ * response, so `Content-Type: text/csv` and the `Content-Disposition` naming
+ * `audit-<tenant>-<date>.csv` were both dropped: the export opened as a wall of
+ * text in a tab instead of saving as a file, on a route whose entire purpose is
+ * handing an auditor a file.
+ *
+ * Forwarded by allowlist, not wholesale: `Set-Cookie` and the bridge's own auth
+ * headers have no business crossing back into the browser.
+ */
+describe("Bridge Proxy attachment headers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function csvReply() {
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers({
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": 'attachment; filename="audit-acme-2026-09-15.csv"',
+        "set-cookie": "bridge_session=secret; Path=/",
+      }),
+      text: () => Promise.resolve("id,timestamp\r\n1,2026-09-15T12:00:00+00:00\r\n"),
+      json: () => Promise.reject(new Error("not json")),
+    };
+  }
+
+  it("passes Content-Disposition and Content-Type through for a CSV export", async () => {
+    mockFetch.mockResolvedValue(csvReply());
+
+    const res = await GET(
+      makeRequest("GET", "api/audit/events.csv"),
+      makeContext(["api", "audit", "events.csv"])
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toBe(
+      'attachment; filename="audit-acme-2026-09-15.csv"'
+    );
+    expect(res.headers.get("content-type")).toContain("text/csv");
+    expect(await res.text()).toContain("id,timestamp");
+  });
+
+  it("does not pass the bridge's cookies back to the browser", async () => {
+    mockFetch.mockResolvedValue(csvReply());
+
+    const res = await GET(
+      makeRequest("GET", "api/audit/events.csv"),
+      makeContext(["api", "audit", "events.csv"])
+    );
+
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("leaves a JSON reply exactly as it was", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: () => Promise.resolve({ units: [], available: false }),
+    });
+
+    const res = await GET(
+      makeRequest("GET", "api/logs/units"),
+      makeContext(["api", "logs", "units"])
+    );
+
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.json()).toEqual({ units: [], available: false });
+  });
+});
+
 // This proxy forwards ANY bridge path under the operator's own session, so a
 // vault read reached the browser through it. The bridge now refuses human
 // sessions on /api/vault/get, and the browser has no business asking: deny the

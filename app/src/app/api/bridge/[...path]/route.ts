@@ -42,13 +42,25 @@ async function proxy(
     });
 
     const contentType = res.headers.get("content-type") || "";
-    const body = contentType.includes("json")
-      ? await res.json()
-      : await res.text();
+    if (contentType.includes("json")) {
+      return NextResponse.json(await res.json(), { status: res.status });
+    }
 
-    return contentType.includes("json")
-      ? NextResponse.json(body, { status: res.status })
-      : new NextResponse(body as string, { status: res.status });
+    // A non-JSON reply is rebuilt rather than streamed, so the headers that
+    // decide what the BROWSER does with it have to be carried across by hand.
+    // `/api/audit/events.csv` is served as an attachment named
+    // `audit-<tenant>-<date>.csv`; without these two the export opened as a
+    // wall of text in a tab instead of saving as a file, on a route whose
+    // entire purpose is handing an auditor a file.
+    //
+    // An allowlist, not the whole header set: `Set-Cookie` and the bridge's own
+    // auth headers have no business crossing back into the browser.
+    const passed = new Headers();
+    for (const name of ["content-type", "content-disposition"]) {
+      const value = res.headers.get(name);
+      if (value) passed.set(name, value);
+    }
+    return new NextResponse(await res.text(), { status: res.status, headers: passed });
   } catch {
     return NextResponse.json(
       { error: "Bridge service unavailable" },
