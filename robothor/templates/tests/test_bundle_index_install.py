@@ -42,7 +42,7 @@ schedule:
 delivery:
   mode: none
 
-tools_allowed: []
+tools_allowed: [read_file]
 instruction_file: brain/agents/test-agent.md
 """
 
@@ -123,7 +123,12 @@ def _keypair() -> tuple[str, str]:
 
 
 def _publish(
-    body: bytes, *, name: str = "test-agent", kind: str = "agent-bundle", serve: bytes | None = None
+    body: bytes,
+    *,
+    name: str = "test-agent",
+    kind: str = "agent-bundle",
+    serve: bytes | None = None,
+    size: int | None = None,
 ):
     private_pem, public_pem = _keypair()
     entry: dict = {
@@ -136,7 +141,7 @@ def _publish(
                 "filename": "agent.tar.gz",
                 "url": "https://example.invalid/agent.tar.gz",
                 "sha256": hashlib.sha256(body).hexdigest(),
-                "size": len(body),
+                "size": len(body) if size is None else size,
             }
         ],
     }
@@ -185,8 +190,27 @@ def test_a_plugin_entry_is_refused_by_the_agent_verb(archive, target):
 
 
 def test_an_artifact_swapped_after_signing_is_refused(archive, target):
+    """Refused for the RIGHT reason — a loose regex would pass on any refusal."""
     client, keys = _publish(archive.read_bytes(), serve=archive.read_bytes() + b"tampered")
-    with pytest.raises(BundleInstallError, match="SHA-256|checksum|hash|too large"):
+    with pytest.raises(BundleInstallError) as excinfo:
+        plan_install("test-agent", keys=keys, client=client, **_kwargs(target))
+    assert "the signed index declares" in str(excinfo.value)
+
+
+def test_an_artifact_the_index_mis_sizes_is_refused(archive, target):
+    """The signed size is a fact an operator was shown; nobody was checking it."""
+    body = archive.read_bytes()
+    client, keys = _publish(body, size=10)
+    with pytest.raises(BundleInstallError, match="bytes"):
+        plan_install("test-agent", keys=keys, client=client, **_kwargs(target))
+
+
+def test_a_correctly_sized_artifact_whose_bytes_changed_fails_the_hash(archive, tmp_path, target):
+    """Same length, different bytes: the size passes and the SHA-256 catches it."""
+    body = archive.read_bytes()
+    swapped = body[:-1] + bytes([body[-1] ^ 0xFF])
+    client, keys = _publish(body, serve=swapped)
+    with pytest.raises(BundleInstallError, match="not the one you pinned"):
         plan_install("test-agent", keys=keys, client=client, **_kwargs(target))
 
 

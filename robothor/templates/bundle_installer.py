@@ -31,7 +31,7 @@ import hashlib
 import re
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +44,12 @@ from robothor.templates.bundle import (
     read_bundle,
     verify_bundle_files,
 )
+from robothor.templates.bundle_scan import (
+    BundleScanError,
+    BundleVerdict,
+    enforce_verdict,
+    scan_bundle,
+)
 from robothor.templates.safety import (
     TemplateSecurityError,
     default_workspace_root,
@@ -55,7 +61,7 @@ from robothor.templates.safety import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Iterable, Mapping, Sequence
 
     import httpx
 
@@ -90,6 +96,93 @@ class BundleNotPublishedError(BundleInstallError):
     """
 
 
+#: Tools whose presence changes what a stranger's agent can do TO an instance
+#: rather than merely on it: run a command, reach the network, write a file,
+#: send something to a person. Named individually rather than inferred, because
+#: a plan that guessed would be a plan an operator learns to skim.
+HIGH_RISK_TOOLS = frozenset(
+    {
+        "exec",
+        "shell",
+        "bash",
+        "run_command",
+        "write_file",
+        "edit_file",
+        "delete_file",
+        "web_fetch",
+        "browser",
+        "http_request",
+        "send_message",
+        "create_message",
+        "make_call",
+        "send_notification",
+        "invoke_skill",
+        "spawn_agent",
+    }
+)
+
+#: Prefixes that mean the same thing for a tool this platform has not met —
+#: a plugin or adapter tool the flagging table cannot know about by name.
+HIGH_RISK_PREFIXES = ("exec", "send_", "write_", "delete_", "post_", "gws_", "push_")
+
+
+def is_high_risk(tool: str) -> bool:
+    name = tool.strip().lower()
+    return name in HIGH_RISK_TOOLS or name.startswith(HIGH_RISK_PREFIXES)
+
+
+@dataclass(frozen=True)
+class Capability:
+    """What the agent in a bundle would be ALLOWED to do, once installed.
+
+    Two file paths is not a plan. A bundle is a prompt plus a tool grant plus a
+    schedule, and an operator deciding whether to trust a stranger's agent is
+    deciding about the grant — so the grant is in the preview, with the tools
+    that can act on the world marked.
+    """
+
+    tools: tuple[str, ...] = ()
+    flagged: tuple[str, ...] = ()
+    unrestricted_tools: bool = False
+    delivery: str = ""
+    cron: str = ""
+    timezone: str = ""
+    guardrails: tuple[str, ...] = ()
+    can_spawn_agents: bool = False
+    instruction_path: str = ""
+    instruction_bytes: int = 0
+    instruction_preview: tuple[str, ...] = ()
+    unreadable: str = ""
+
+    def describe(self) -> list[str]:
+        if self.unreadable:
+            return [f"  (the bundle's manifest could not be read: {self.unreadable})"]
+        lines: list[str] = []
+        if self.unrestricted_tools:
+            lines.append("  tools:        every tool this fleet allows (no tools_allowed list)")
+        elif self.tools:
+            rendered = ", ".join(f"{t} (!)" if t in self.flagged else t for t in self.tools)
+            lines.append(f"  tools:        {rendered}")
+        else:
+            lines.append("  tools:        none")
+        if self.delivery:
+            lines.append(f"  delivery:     {self.delivery}")
+        if self.cron:
+            lines.append(
+                f"  schedule:     {self.cron}{f' ({self.timezone})' if self.timezone else ''}"
+            )
+        if self.guardrails:
+            lines.append(f"  guardrails:   {', '.join(self.guardrails)}")
+        if self.can_spawn_agents:
+            lines.append("  can spawn sub-agents: yes")
+        if self.instruction_path:
+            lines.append(
+                f"  instructions: {self.instruction_path} ({self.instruction_bytes} bytes)"
+            )
+            lines.extend(f"      {line}" for line in self.instruction_preview)
+        return lines
+
+
 @dataclass(frozen=True)
 class RequireStatus:
     """One requirement, and whether this instance meets it."""
@@ -121,6 +214,10 @@ class InstallPlan:
     #: destination that already exists. A tuple rather than a bool because
     #: "which file, and whose" is the whole of what the operator needs.
     collisions: tuple[tuple[str, str], ...] = ()
+    capability: Capability = field(default_factory=Capability)
+    #: What :mod:`robothor.templates.bundle_scan` made of the bundle. Shown in
+    #: the plan and enforced on the write, the way a wheel's verdict is.
+    verdict: BundleVerdict = field(default_factory=BundleVerdict)
 
     @property
     def collision(self) -> bool:
@@ -156,6 +253,12 @@ class InstallPlan:
         lines.extend(
             f"  agents/skills/{skill}/ (already present — kept)" for skill in self.kept_skills
         )
+        lines.append("")
+        lines.append("What this agent would be allowed to do:")
+        lines.extend(self.capability.describe())
+        lines.append("")
+        lines.append(f"Scan:     {self.verdict.verdict}")
+        lines.extend(f"  - {reason}" for reason in self.verdict.reasons)
         if self.requires:
             lines.append("")
             lines.append("Requirements:")
@@ -289,6 +392,15 @@ def _from_index(
             f"{artifact.size} bytes, over the {MAX_DOWNLOAD_BYTES}-byte limit."
         )
     content = _fetch(artifact.url, client=client)
+    if len(content) != artifact.size:
+        # The SHA-256 already pins the contents, so this is not an exposure —
+        # it is the mirror disagreeing with the signed document about a fact
+        # the operator was shown before the download, and a size the index
+        # declares but nobody checks is a field that means nothing.
+        raise BundleInstallError(
+            f"{entry.name} {entry.version} is {len(content)} bytes, but the signed "
+            f"index declares {artifact.size}. Refusing a body the index does not describe."
+        )
     digest = _verify_digest(content, artifact.sha256)
     return _extract(content, scratch), digest, entry.name
 
@@ -484,8 +596,14 @@ def _requirement_statuses(
 _TEMPLATE_PLACEHOLDER = re.compile(r"\{\{[^}]*\}\}")
 
 
-def read_manifest_template(text: str) -> dict[str, Any]:
+def read_manifest_template(text: str, variables: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """The staged manifest template, read as YAML with placeholders stood in for.
+
+    *variables* are ``setup.yaml``'s declared defaults. Passing them is what
+    makes the plan show the CRON THIS INSTALL WOULD GET rather than the word
+    ``TEMPLATE_VALUE``: ``import_agent`` templatises the schedule, the model and
+    the delivery mode on the way out, so those are exactly the fields a preview
+    reading the raw template would lose.
 
     Every refusal here is a sentence. The first cut of the rename was a
     line-anchored regex over this file, and a manifest spelling its id as
@@ -493,7 +611,14 @@ def read_manifest_template(text: str) -> dict[str, Any]:
     out of ``genus agent install --id`` instead of an exit code — from the very
     flag the collision refusal tells an operator to reach for.
     """
-    stood_in = _TEMPLATE_PLACEHOLDER.sub("TEMPLATE_VALUE", text)
+
+    def stand_in(match: re.Match[str]) -> str:
+        name = match.group(0).strip("{} \t")
+        if variables and name in variables:
+            return str(variables[name])
+        return "TEMPLATE_VALUE"
+
+    stood_in = _TEMPLATE_PLACEHOLDER.sub(stand_in, text)
     try:
         data = yaml.safe_load(stood_in)
     except yaml.YAMLError as exc:
@@ -607,6 +732,98 @@ def _rewrite_identity(staging: Path, target_id: str) -> None:
         )
 
 
+#: How much of the instruction file the plan shows. Enough to see what the
+#: agent is told to do, short enough that nobody scrolls past it.
+INSTRUCTION_PREVIEW_LINES = 6
+
+
+def _section(declared: dict[str, Any], key: str) -> dict[str, Any]:
+    """One nested mapping from a manifest, or an empty one.
+
+    A manifest is untrusted input: ``delivery:`` may be a string, a list, or
+    absent. Every reader here goes through this so a malformed block degrades to
+    "nothing declared" instead of raising out of a preview.
+    """
+    value = declared.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _setup_defaults(staging: Path) -> dict[str, Any]:
+    """``{variable: default}`` from the bundle's ``setup.yaml``, best effort."""
+    try:
+        setup = yaml.safe_load((staging / "setup.yaml").read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    if not isinstance(setup, dict):
+        return {}
+    variables = setup.get("variables")
+    if not isinstance(variables, dict):
+        return {}
+    defaults: dict[str, Any] = {"version": setup.get("version", "")}
+    for name, definition in variables.items():
+        if isinstance(definition, dict) and "default" in definition:
+            defaults[str(name)] = definition["default"]
+    return defaults
+
+
+def _read_capability(staging: Path, instruction: str) -> Capability:
+    """What the staged bundle's manifest grants, for the preview.
+
+    Never raises: a plan that could not be shown because a manifest was odd is
+    a plan the operator does not get, and "could not be read" is itself a fact
+    worth putting in front of them before they say yes.
+    """
+    try:
+        declared = read_manifest_template(
+            (staging / "manifest.template.yaml").read_text(encoding="utf-8"),
+            _setup_defaults(staging),
+        )
+    except (OSError, BundleInstallError) as exc:
+        return Capability(unreadable=type(exc).__name__)
+
+    raw_tools = declared.get("tools_allowed")
+    tools = tuple(str(t) for t in raw_tools) if isinstance(raw_tools, list) else ()
+    delivery = _section(declared, "delivery")
+    schedule = _section(declared, "schedule")
+    v2 = _section(declared, "v2")
+    raw_guardrails = v2.get("guardrails")
+    guardrails = raw_guardrails if isinstance(raw_guardrails, list) else []
+
+    mode = str(delivery.get("mode") or "")
+    channel = str(delivery.get("channel") or "")
+    target = str(delivery.get("to") or "")
+    described = " → ".join(
+        part for part in (f"{mode}/{channel}" if channel else mode, target) if part
+    )
+
+    preview: tuple[str, ...] = ()
+    size = 0
+    instructions = staging / "instructions.template.md"
+    if instructions.is_file():
+        text = instructions.read_text(encoding="utf-8", errors="replace")
+        size = len(text.encode("utf-8"))
+        preview = tuple(
+            line.rstrip() for line in text.splitlines()[:INSTRUCTION_PREVIEW_LINES] if line.strip()
+        )
+
+    return Capability(
+        tools=tools,
+        flagged=tuple(tool for tool in tools if is_high_risk(tool)),
+        # An ABSENT or empty ``tools_allowed`` is not "no tools" — the engine
+        # reads it as "whatever the fleet allows". Reporting it as "none" would
+        # be the plan's most dangerous sentence.
+        unrestricted_tools=not tools,
+        delivery=described,
+        cron=str(schedule.get("cron") or ""),
+        timezone=str(schedule.get("timezone") or ""),
+        guardrails=tuple(str(g) for g in guardrails),
+        can_spawn_agents=bool(v2.get("can_spawn_agents")),
+        instruction_path=instruction,
+        instruction_bytes=size,
+        instruction_preview=preview,
+    )
+
+
 def _instruction_owners(repo_root: Path) -> dict[str, str]:
     """``{workspace-relative instruction path: the agent that claims it}``.
 
@@ -683,6 +900,26 @@ def _write_skills(
     return tuple(written), tuple(kept)
 
 
+def _remove_skills(repo_root: Path, names: Iterable[str]) -> None:
+    """Undo :func:`_write_skills` for *names*. Only ever called on a failed install.
+
+    Safe because ``_write_skills`` returns the skills it CREATED, never the ones
+    it kept — rolling back can therefore not delete a skill the operator already
+    had.
+    """
+    for name in names:
+        try:
+            destination = workspace_path(
+                repo_root,
+                f"agents/skills/{name}",
+                allowed_prefix="agents/skills",
+                label="skill destination",
+            )
+        except TemplateSecurityError:  # pragma: no cover - it passed the same check going in
+            continue
+        shutil.rmtree(destination, ignore_errors=True)
+
+
 def install_bundle(
     source: str | Path,
     *,
@@ -690,6 +927,7 @@ def install_bundle(
     new_id: str | None = None,
     yes: bool = False,
     strict: bool = False,
+    accept_review: bool = False,
     from_index: bool = False,
     version: str | None = None,
     index: str | None = None,
@@ -804,6 +1042,12 @@ def install_bundle(
                 secret_lookup=secret_lookup,
             ),
             collisions=collisions,
+            capability=_read_capability(staging, instruction),
+            # Scanned on the STAGED copy — the bytes that would actually be
+            # installed, after the id rewrite — rather than on whatever a
+            # publisher's index claimed. The publisher's own verdict is
+            # advisory here for the same reason it is advisory for a wheel.
+            verdict=scan_bundle(staging),
         )
 
         # A refusal fires on the WRITE, never on the preview. An operator whose
@@ -821,6 +1065,10 @@ def install_bundle(
                 f"An install never overwrites a file. These already exist: {detail}. "
                 "Pass --id <new-id> to install this bundle alongside what is there."
             )
+        try:
+            enforce_verdict(plan.verdict, accept_review=accept_review)
+        except BundleScanError as exc:
+            raise BundleInstallError(str(exc)) from exc
         if strict and plan.unsatisfied():
             missing = ", ".join(f"{s.kind[:-1]} {s.name}" for s in plan.unsatisfied())
             raise BundleInstallError(
@@ -830,17 +1078,34 @@ def install_bundle(
 
         from robothor.templates.installer import install
 
-        result = install(
-            staging,
-            overrides=overrides or {},
-            auto_yes=True,
-            instance_dir=instance_dir,
-            repo_root=repo_root,
-            source="bundle",
-            source_ref=target_id,
-            source_sha256=digest or None,
-        )
-        _write_skills(staging, repo_root, plan.skills)
+        # Skills FIRST, so a failure has something to roll back to. The
+        # installer's own temp-and-rename covers the manifest and the
+        # instruction file; a copytree that ran after it returned would leave an
+        # installed agent beside a half-written skill with nothing to undo it.
+        written: tuple[str, ...] = ()
+        try:
+            written, _kept = _write_skills(staging, repo_root, plan.skills)
+            result = install(
+                staging,
+                overrides=overrides or {},
+                auto_yes=True,
+                instance_dir=instance_dir,
+                repo_root=repo_root,
+                source="bundle",
+                source_ref=target_id,
+                source_sha256=digest or None,
+            )
+        except TemplateSecurityError as exc:
+            _remove_skills(repo_root, written)
+            # The installer's refusals are sentences too; without this one they
+            # reached the CLI as an unhandled exception and printed a traceback
+            # from the verb whose whole job is to refuse politely.
+            raise BundleInstallError(str(exc)) from exc
+        except Exception as exc:
+            _remove_skills(repo_root, written)
+            raise BundleInstallError(
+                f"The install failed and was rolled back ({type(exc).__name__}): {exc}"
+            ) from exc
         return plan, result
     finally:
         shutil.rmtree(scratch, ignore_errors=True)

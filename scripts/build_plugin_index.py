@@ -56,7 +56,9 @@ def _fail(message: str) -> int:
     return 2
 
 
-def _bundle_entry(path: Path, *, base_url: str, yanked: dict[str, str]) -> dict[str, Any]:
+def _bundle_entry(
+    path: Path, *, base_url: str, yanked: dict[str, str]
+) -> tuple[dict[str, Any], str]:
     """One agent-bundle entry, read entirely out of the tarball.
 
     Same rule as a wheel: the name, the version and the requirement list come
@@ -90,6 +92,14 @@ def _bundle_entry(path: Path, *, base_url: str, yanked: dict[str, str]) -> dict[
         manifest = bundle_envelope.read_bundle(root)
         bundle_envelope.verify_bundle_files(root, manifest)
 
+        # Scanned here for the same reason a wheel is: so an operator can read
+        # the verdict before downloading, and so a publisher cannot ship an
+        # entry every installer will refuse. Advisory only — the installer
+        # re-runs the scan on what it actually received.
+        from robothor.templates.bundle_scan import scan_bundle
+
+        verdict = scan_bundle(root)
+
     entry: dict[str, Any] = {
         "kind": "agent-bundle",
         "name": manifest.id,
@@ -105,12 +115,17 @@ def _bundle_entry(path: Path, *, base_url: str, yanked: dict[str, str]) -> dict[
                 "size": len(data),
             }
         ],
+        "scan": {
+            "verdict": verdict.verdict,
+            "reasons": list(verdict.reasons),
+            "scanned_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        },
     }
     key = f"{manifest.id}=={manifest.version}"
     if key in yanked:
         entry["yanked"] = True
         entry["yank_reason"] = yanked[key]
-    return entry
+    return entry, verdict.verdict
 
 
 def _entry(path: Path, *, base_url: str, yanked: dict[str, str]) -> tuple[dict[str, Any], str]:
@@ -205,7 +220,9 @@ def main(argv: list[str] | None = None) -> int:
     if not directory.is_dir():
         return _fail(f"{args.directory!r} is not a directory.")
     wheels = sorted(directory.glob("*.whl"))
-    bundles = sorted(p for p in directory.iterdir() if p.name.endswith((".tar.gz", ".tgz")))
+    bundles = sorted(
+        p for p in directory.iterdir() if p.is_file() and p.name.endswith((".tar.gz", ".tgz"))
+    )
     if not wheels and not bundles:
         # An index with no entries is a valid signed document that silently
         # removes everything the previous one published.
@@ -248,9 +265,22 @@ def main(argv: list[str] | None = None) -> int:
 
     for path in bundles:
         try:
-            entries.append(_bundle_entry(path, base_url=base_url, yanked=yanked))
+            entry, verdict = _bundle_entry(path, base_url=base_url, yanked=yanked)
         except BundleError as exc:
             return _fail(str(exc))
+        except OSError as exc:
+            # A DIRECTORY named ``x.tar.gz`` reached read_bytes() and raised
+            # IsADirectoryError past every handler. The listing filters those
+            # out now; this is the belt.
+            return _fail(f"{path.name} could not be read ({type(exc).__name__}).")
+        if verdict == scan.BLOCKED and not args.allow_blocked:
+            reasons = "\n  - ".join(entry["scan"]["reasons"])
+            return _fail(
+                f"{path.name} is blocked by the bundle scan and will be refused by "
+                f"every installer:\n  - {reasons}\n"
+                "Fix it, or pass --allow-blocked to publish the entry anyway."
+            )
+        entries.append(entry)
 
     seen: set[str] = set()
     for entry in entries:

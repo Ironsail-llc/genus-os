@@ -33,7 +33,7 @@ schedule:
 delivery:
   mode: none
 
-tools_allowed: []
+tools_allowed: [read_file]
 instruction_file: brain/agents/test-agent.md
 """
 
@@ -172,3 +172,45 @@ class TestInstall:
     def test_a_url_without_a_sha256_exits_two(self, workspace, capsys):
         assert main(["agent", "install", "https://example.invalid/a.tar.gz"]) == 2
         assert "--sha256" in capsys.readouterr().out
+
+    def test_the_plan_says_what_the_agent_would_be_allowed_to_do(
+        self, installed, tmp_path, capsys, monkeypatch
+    ):
+        (installed / "docs" / "agents" / "test-agent.yaml").write_text(
+            MANIFEST.replace("tools_allowed: [read_file]", "tools_allowed: [read_file, exec]")
+        )
+        archive = self._exported(installed, tmp_path)
+        target = _workspace(tmp_path / "target")
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(target))
+
+        assert main(["agent", "install", str(archive)]) == 0
+
+        out = capsys.readouterr().out
+        assert "exec" in out
+        assert "Scan:" in out
+
+    def test_a_reviewed_bundle_needs_accept_review(self, installed, tmp_path, capsys, monkeypatch):
+        (installed / "docs" / "agents" / "test-agent.yaml").write_text(
+            MANIFEST.replace("tools_allowed: [read_file]", "tools_allowed: [exec]")
+        )
+        archive = self._exported(installed, tmp_path)
+        target = _workspace(tmp_path / "target")
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(target))
+
+        assert main(["agent", "install", str(archive), "--yes"]) == 2
+        assert "--accept-review" in capsys.readouterr().out
+        assert not (target / "docs" / "agents" / "test-agent.yaml").exists()
+
+        assert main(["agent", "install", str(archive), "--yes", "--accept-review"]) == 0
+        assert (target / "docs" / "agents" / "test-agent.yaml").is_file()
+
+    def test_a_bundle_that_would_overwrite_another_agent_exits_two(
+        self, installed, tmp_path, capsys, monkeypatch
+    ):
+        archive = self._exported(installed, tmp_path)
+        target = _workspace(tmp_path / "target")
+        (target / "brain" / "agents" / "test-agent.md").write_text("# not yours\n")
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(target))
+
+        assert main(["agent", "install", str(archive), "--yes"]) == 2
+        assert (target / "brain" / "agents" / "test-agent.md").read_text() == "# not yours\n"

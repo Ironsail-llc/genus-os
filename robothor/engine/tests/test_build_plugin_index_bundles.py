@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -142,6 +143,53 @@ def test_the_index_it_writes_verifies_with_the_shipped_parser(exported, tmp_path
     index = registry.parse_index(raw, signature, keys={key_id: public})
     entry, _ = registry.select("triage-bot", indexes=[index], kind="agent-bundle")
     assert entry.bundle() is not None
+
+
+def test_the_entry_carries_a_scan_verdict_like_a_wheels(exported, tmp_path):
+    """A wheel from this index is scanned; so is an agent bundle."""
+    code, output, out = _build(exported, tmp_path)
+    assert code == 0, output
+
+    entry = next(e for e in json.loads(out.read_bytes())["plugins"] if e["name"] == "triage-bot")
+    assert entry["scan"]["verdict"] in ("safe", "review", "blocked")
+    assert entry["scan"]["scanned_at"]
+
+
+def test_a_bundle_carrying_a_credential_is_refused_at_publish(exported, tmp_path):
+    """The publisher does not get to sign an entry every installer will refuse."""
+    import tarfile as _tarfile
+
+    archive = next(exported.glob("*.tar.gz"))
+    unpacked = tmp_path / "unpacked"
+    with _tarfile.open(archive, "r:gz") as handle:
+        handle.extractall(unpacked, filter="data")  # noqa: S202 - our own bytes
+    root = unpacked / "triage-bot"
+    (root / "instructions.template.md").write_text(
+        "# Triage Bot\n\nAuthenticate with ghp_" + "A" * 36 + "\n"
+    )
+
+    from robothor.templates.bundle import bundle_document, files_for, read_bundle
+
+    manifest = read_bundle(root)
+    (root / "bundle.yaml").write_text(
+        bundle_document(replace(manifest, files=files_for(root, manifest.file_paths())))
+    )
+    archive.unlink()
+    with _tarfile.open(archive, "w:gz") as handle:
+        handle.add(root, arcname="triage-bot")
+
+    code, output, _ = _build(exported, tmp_path)
+
+    assert code == 2
+    assert "blocked by the bundle scan" in output
+    assert "A" * 36 not in output
+
+
+def test_a_directory_named_like_an_archive_is_skipped(exported, tmp_path):
+    """``iterdir()`` filtered on suffix alone handed a DIRECTORY to read_bytes()."""
+    (exported / "decoy.tar.gz").mkdir()
+    code, output, _ = _build(exported, tmp_path)
+    assert code == 0, output
 
 
 def test_a_directory_with_neither_wheels_nor_bundles_is_refused(tmp_path):

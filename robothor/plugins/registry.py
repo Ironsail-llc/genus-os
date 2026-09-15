@@ -142,6 +142,12 @@ class RegistryError(Exception):
     """
 
 
+def _article(word: str) -> str:
+    """``a`` or ``an``. An operator-facing sentence that says "an plugin" reads
+    as machine output, and machine output is what people stop reading."""
+    return "an" if word[:1].lower() in "aeiou" else "a"
+
+
 class NotPublishedError(RegistryError):
     """No index publishes this name — which is different from refusing it.
 
@@ -833,7 +839,8 @@ def select(
             # and ends the search.
             other = any_kind[-1][1].kind
             raise RegistryError(
-                f"{name} is published as an {other}, not as a {kind}. Install it with "
+                f"{name} is published as {_article(other)} {other}, not as "
+                f"{_article(kind)} {kind}. Install it with "
                 f"'{VERB_FOR_KIND[other]} {name}'."
             )
         if version is not None:

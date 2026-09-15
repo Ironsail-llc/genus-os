@@ -800,14 +800,40 @@ command the engine will run; carrying one is a decision worth typing.
 | a credential **value** anywhere in the bundle | exit 2, naming `file:line`; the value itself is never printed. Replace it with `${NAME}` and list the name under `requires.secrets`. |
 | `/home/<someone>/…`, `/Users/<someone>/…`, or this instance's workspace path | the same rule `scripts/check_instance_leak.py` enforces on a commit, applied where the file leaves. Use workspace-relative paths. |
 
-With `--include-adapters`, credential-shaped adapter values are collapsed to
-`${NAME}` references and the names are added to `requires.secrets` — so the far
-side supplies its own, and yours never travels.
+What "a credential value" means, precisely — every member of the bundle is read
+as text and checked for:
+
+- **self-identifying token families**: `ghp_`/`gho_`/`ghs_`/`github_pat_`,
+  `glpat-`, `AKIA…`/`ASIA…`, `AIza…`, `sk-`/`sk-or-`, `xox[abceprs]-`/`xapp-`,
+  `npm_`, `shpat_`, and a JWT's three base64 segments
+- **URL userinfo** — `https://user:password@host` — anywhere at all, including
+  inside a `command:` array
+- **PEM armour** — `-----BEGIN … PRIVATE KEY-----`
+- a **credential word anywhere in a key name** (`api_key`, `access_key_id`,
+  `client_secret`, `github_pat`) with a literal scalar value
+- a credential **stated in prose** — "the billing password is hunter2hunter2" —
+  where the value looks like a value rather than like the next English word
+
+`${NAME}` references are substituted out first, so an adapter that authenticates
+correctly exports cleanly.
+
+With `--include-adapters`: every value under `headers:` is replaced by a
+`${NAME}` reference, and a value under `env:` or a top-level string is replaced
+when its key names a credential, its value carries one of the shapes above, or
+it reads as an issued identifier (long, unbroken, letters and digits). Every
+name introduced this way is added to `requires.secrets`, so the far side
+supplies its own. `command:` is **never** rewritten — an argv element cannot be
+parameterised without breaking the command — so a credential there refuses the
+export instead.
 
 **Reproducible.** The same agent exports to the same bytes: members are written
 in sorted order with fixed mode, ownership and mtime, and the gzip header's
 timestamp is zeroed. The only field that changes between two exports of an
-unchanged agent is `exported_at`; set `SOURCE_DATE_EPOCH` to pin it.
+unchanged agent is `exported_at` — pin it with `--exported-at`:
+
+```bash
+genus agent export email-classifier --exported-at 2026-09-15T00:00:00+00:00
+```
 
 ### Declaring requirements
 
@@ -844,10 +870,26 @@ Files this would write:
   brain/agents/email-classifier.md
   agents/skills/triage/
 
+What this agent would be allowed to do:
+  tools:        read_file, web_fetch (!), gws_gmail_send (!)
+  delivery:     none
+  schedule:     0 6-22/4 * * * (America/New_York)
+  instructions: brain/agents/email-classifier.md (2104 bytes)
+      # Email Classifier
+      Triage the inbox and route each message.
+
+Scan:     review
+  - tools that act on the world: gws_gmail_send, web_fetch
+
 Requirements:
         ok  secret BILLING_API_KEY
    MISSING  plugin genus-billing — not installed; 'genus plugin install genus-billing'
 ```
+
+The capability block is the point of the preview. A bundle is a prompt plus a
+tool grant plus a schedule, and `(!)` marks a tool that can execute, write, send
+or reach the network. An **absent or empty `tools_allowed`** reads as *every
+tool this fleet has* — which is what the engine does with it — never as "none".
 
 | Flag | Effect |
 |------|--------|
@@ -856,10 +898,31 @@ Requirements:
 | `--id NEW_ID` | install under a different id. Renames the manifest id, `instruction_file` and the brain file together. |
 | `--strict` | refuse unless every requirement is already satisfied. Without it, a missing one is listed and the install proceeds. |
 | `--index URL` | resolve the name through that signed index instead of the hub. |
+| `--accept-review` | install a bundle the scan marked `review`. Never one it `blocked`. |
 
-**Never overwrites.** An id that is already installed is refused; `--id` installs
-alongside. A skill the bundle carries that you already have is **kept**, not
-replaced — your `triage` may be three months of tuning.
+**The scan.** Every bundle is scanned on install, the way a plugin wheel is —
+on the staged copy, not on whatever a publisher's index claimed.
+
+| Verdict | Means | What happens |
+|---------|-------|--------------|
+| `safe` | nothing to flag | installs |
+| `review` | a capability grant a human should see: a tool that acts on the world, no `tools_allowed` list, or `can_spawn_agents` | refused until `--accept-review` |
+| `blocked` | a credential literal or a foreign home path — something no `genus agent export` would have produced | refused, always; `--accept-review` does not cover it |
+
+**Never overwrites anything.** Not just the manifest: **every** file the install
+would write is checked, and one that already exists refuses the install and is
+named in the plan with its owner. `--id` installs alongside. A skill the bundle
+carries that you already have is **kept**, not replaced — your `triage` may be
+three months of tuning.
+
+**A bundle only ever writes its own files.** The instruction path is *derived*
+from the agent's id, never taken from the manifest verbatim. Say a bundle
+declares `instruction_file: brain/agents/main.md` (an instance-local path) for
+an agent called `helpful-bot`. What it gets instead is
+`brain/agents/helpful-bot.md` — instance-local, and named after the agent that
+asked. The bundle chooses the directory; the filename is the platform's.
+Underneath that, `installer.install` refuses outright to write an instruction
+file another agent's manifest claims.
 
 **Verified before anything is read.** `files[]` hashes must match *and* the
 bundle must carry nothing `files[]` does not list; the archive is extracted by

@@ -93,6 +93,28 @@ class TestExportLayout:
         assert "skills/triage/reference.md" in manifest.file_paths()
         verify_bundle_files(out, manifest)
 
+    def test_a_binary_skill_member_is_carried_and_hashed(self, tmp_repo, tmp_path):
+        """A diagram in a skill is not a reason to refuse the whole export."""
+        skill = _add_skill(tmp_repo, "triage")
+        (skill / "diagram.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe binary \x00 bytes")
+        _install_agent(tmp_repo, manifest=MANIFEST + "\nrequires:\n  skills: [triage]\n")
+        out = tmp_path / "out"
+
+        manifest = export_agent("test-agent", out=out, repo_root=tmp_repo).manifest
+
+        assert "skills/triage/diagram.png" in manifest.file_paths()
+        verify_bundle_files(out, manifest)
+        assert (out / "skills" / "triage" / "diagram.png").read_bytes().startswith(b"\x89PNG")
+
+    def test_a_credential_hidden_in_a_binary_member_is_still_refused(self, tmp_repo, tmp_path):
+        """The gate reads every member. One stray byte must not switch it off."""
+        skill = _add_skill(tmp_repo, "triage")
+        (skill / "blob.bin").write_bytes(b"\xff\xfe ghp_" + b"A" * 36 + b" \x00")
+        _install_agent(tmp_repo, manifest=MANIFEST + "\nrequires:\n  skills: [triage]\n")
+
+        with pytest.raises(ExportError, match="skills/triage/blob.bin"):
+            export_agent("test-agent", out=tmp_path / "out", repo_root=tmp_repo)
+
     def test_refuses_a_skill_the_instance_does_not_have(self, tmp_repo, tmp_path):
         _install_agent(tmp_repo, manifest=MANIFEST + "\nrequires:\n  skills: [missing]\n")
         with pytest.raises(ExportError, match="missing"):
@@ -250,7 +272,7 @@ class TestAdapters:
             {
                 "name": "billing",
                 "transport": "http",
-                "url": "https://svc:S3cretP4ssw0rdLong@billing.example.com/_mcp",
+                "url": "https://svc:S3cretP4ssw0rdLong@example.com/_mcp",
                 "headers": {"X-Tenant": "acme", "X-Session": "s3ss10n-abcdefghijklmnop"},
                 "env": {"BILLING_ENDPOINT": "https://u:p4ssword@host/x", "MODE": "live"},
                 "agents": ["test-agent"],

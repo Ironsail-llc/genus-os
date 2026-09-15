@@ -862,6 +862,11 @@ def _build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument(
         "--index", default=None, help="Install from this signed index URL instead of the hub"
     )
+    install_parser.add_argument(
+        "--accept-review",
+        action="store_true",
+        help="Install a bundle the scan marked 'review' (never one it blocked)",
+    )
 
     export_parser = agent_sub.add_parser(
         "export", help="Export an installed agent as a portable bundle"

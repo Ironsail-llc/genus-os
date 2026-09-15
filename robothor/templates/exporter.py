@@ -293,7 +293,17 @@ def _copy_skill(repo_root: Path, staging: Path, skill: str) -> None:
 
 
 def _staged_texts(staging: Path) -> list[tuple[str, str]]:
-    """Every staged file as (relative path, text). A binary member is refused."""
+    """Every staged file as (relative path, text), for the gates to read.
+
+    A member that is not valid UTF-8 is decoded with replacement and scanned
+    anyway, rather than refused. Two reasons, and the second is the important
+    one: a skill legitimately carries a diagram or a screenshot, and a gate that
+    declined to look at a file because of one stray byte would be a gate an
+    attacker could switch off by appending one.
+
+    The bundle's hashes are computed from the BYTES (:func:`file_digest`), so
+    the lossy decode here never reaches what is pinned or what is shipped.
+    """
     texts: list[tuple[str, str]] = []
     for path in sorted(staging.rglob("*")):
         if path.is_symlink():
@@ -305,12 +315,9 @@ def _staged_texts(staging: Path) -> list[tuple[str, str]]:
             continue
         relative = path.relative_to(staging).as_posix()
         try:
-            texts.append((relative, path.read_text(encoding="utf-8")))
-        except (OSError, UnicodeDecodeError) as exc:
-            raise ExportError(
-                f"{relative} could not be read as text ({type(exc).__name__}). An agent "
-                "bundle carries manifests, instructions and skills — all text."
-            ) from exc
+            texts.append((relative, path.read_text(encoding="utf-8", errors="replace")))
+        except OSError as exc:
+            raise ExportError(f"{relative} could not be read ({type(exc).__name__}).") from exc
     return texts
 
 

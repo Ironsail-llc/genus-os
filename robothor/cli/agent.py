@@ -420,6 +420,7 @@ def _install_from_bundle(
             new_id=getattr(args, "new_id", None),
             yes=getattr(args, "yes", False),
             strict=getattr(args, "strict", False),
+            accept_review=getattr(args, "accept_review", False),
             from_index=from_index,
             index=getattr(args, "index", None),
             overrides=overrides,

@@ -768,7 +768,7 @@ Usage: `genus agent catalog [--department DEPARTMENT]`
 
 Install agent from template or bundle.
 
-Usage: `genus agent install [source] [--preset PRESET] [--yes] [--set SET] [--sha256 SHA256] [--id NEW_ID] [--strict] [--index INDEX]`
+Usage: `genus agent install [source] [--preset PRESET] [--yes] [--set SET] [--sha256 SHA256] [--id NEW_ID] [--strict] [--index INDEX] [--accept-review]`
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -783,6 +783,7 @@ Usage: `genus agent install [source] [--preset PRESET] [--yes] [--set SET] [--sh
 | `--id` | `NEW_ID` | — | Install under a different agent ID |
 | `--strict` | — | off | Refuse the install unless every requirement is already satisfied |
 | `--index` | `INDEX` | — | Install from this signed index URL instead of the hub |
+| `--accept-review` | — | off | Install a bundle the scan marked 'review' (never one it blocked) |
 
 ### `genus agent export`
 

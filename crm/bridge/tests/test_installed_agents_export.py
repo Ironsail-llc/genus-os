@@ -154,7 +154,13 @@ class TestExport:
         assert "note-taker" in payload
         assert "brain/" not in payload
 
-    def test_the_bytes_are_the_same_bundle_the_cli_writes(self, workspace, audit, tmp_path):
+    def test_every_member_is_byte_for_byte_the_cli_export(self, workspace, audit, tmp_path):
+        """Not "the same hash list" — the same BYTES, member by member.
+
+        The two archives cannot be identical files: ``exported_at`` is the one
+        field that moves and the route has no way to pin it. Everything the
+        bundle actually carries can be, and is.
+        """
         from robothor.templates.bundle import read_bundle
         from robothor.templates.exporter import export_agent
 
@@ -167,9 +173,23 @@ class TestExport:
         with tarfile.open(fileobj=io.BytesIO(response.content), mode="r:gz") as archive:
             extracted = tmp_path / "http"
             archive.extractall(extracted, filter="data")  # noqa: S202 - our own bytes
-        served = read_bundle(extracted / "note-taker")
+        served_root = extracted / "note-taker"
+        served = read_bundle(served_root)
 
         assert served.files == cli.manifest.files
+        assert [f.path for f in served.files]
+        for entry in served.files:
+            assert (served_root / entry.path).read_bytes() == (out / entry.path).read_bytes(), (
+                f"{entry.path} differs between the route and the CLI"
+            )
+
+    def test_the_plan_route_is_audited_too(self, workspace, audit):
+        """It renders the agent's instructions; the read half of an audited act."""
+        response = _client("owner").get("/api/installed-agents/note-taker/export/plan")
+
+        assert response.status_code == 200
+        assert audit.call_args.args[0] == "helm.agent.export.plan"
+        assert audit.call_args.kwargs["action"] == "note-taker"
 
     def test_a_credential_literal_is_a_409_naming_the_file(self, workspace, audit):
         (workspace / "brain" / "agents" / "note-taker.md").write_text(

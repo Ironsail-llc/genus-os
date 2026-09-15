@@ -194,7 +194,7 @@ class TestCredentialShapes:
             "Read the API docs before you change the password handling.",
             "The token is described below; the secret is stored in the vault.",
             "url: https://billing.example.com/_mcp",
-            "repo: ssh://git@github.com/acme/agents",
+            "repo: ssh://alice@example.com/acme/agents",
             "protocol: 2026-07-28",
             "status_file: brain/memory/agent-status.md",
             "Sort key ordering matters, and the partition key is not a secret.",

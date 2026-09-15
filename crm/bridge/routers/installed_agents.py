@@ -371,12 +371,20 @@ def _export_plan(agent_id: str, request: Request) -> dict[str, object]:
         with tempfile.TemporaryDirectory(prefix="genus-helm-plan-") as scratch:
             result = _build_export(safe_agent_id, Path(scratch) / "bundle")
     except HTTPException:
+        audited(request, "helm.agent.export.plan", action=safe_agent_id, status="denied")
         raise
     except Exception as error:
         logger.error(
             "Export plan failed for %s: %s", sanitize_log(safe_agent_id), sanitize_log(error)
         )
+        audited(request, "helm.agent.export.plan", action=safe_agent_id, status="error")
         raise HTTPException(status_code=500, detail="internal error") from error
+
+    # Audited although it writes nothing. It performs the identical export —
+    # rendering the agent's instructions into a temp directory — and it is the
+    # read half of an act whose write half is audited; an operator asking "who
+    # looked at this agent's contents" gets half an answer otherwise.
+    audited(request, "helm.agent.export.plan", action=safe_agent_id)
 
     manifest = result.manifest  # type: ignore[attr-defined]
     return {
