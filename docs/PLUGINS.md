@@ -320,6 +320,16 @@ name: genus-acme-tools
 contract_version: 1
 handlers:
   - coin_flip
+# Optional, and worth adding: the ENTRY-POINT names you publish into each
+# group. An entry-point name is not a contribution name — genus-hostinfo
+# publishes `hostinfo` and contributes `host_state` — so the two are declared
+# separately. Declaring this is what lets `genus plugin install` compare your
+# wheel's actual surface to your declaration exactly, before importing
+# anything. Omit it and the comparison is only at group granularity, which
+# caps the install verdict at `review`.
+entry_points:
+  genus.tools:
+    - acme
 ```
 
 ```toml
@@ -344,6 +354,14 @@ Controlled by `ROBOTHOR_PLUGIN_MANIFEST_MODE`:
 `observe` is the default because requiring a manifest is a breaking change for
 plugins published before it existed. **It does not protect** — it still imports,
 it only says so. The pre-execution guarantee exists solely in `enforce`.
+
+**One exception, and it is deliberate.** A distribution `genus plugin install`
+put there — one with a `source` on its lockfile row — is held to its declared
+contribution names **whatever the mode says**. That grandfathering exists for
+plugins published before manifests did, and a plugin that arrived through the
+installer could not have been installed at all without a manifest the index had
+pinned; letting it through `observe` would mean nothing compared declared names
+to actual surface at any stage.
 
 > **Editable installs (`pip install -e .`) cannot ship a manifest.** They expose
 > only a `.pth` shim to the packaging layer, so the file is invisible to it and
@@ -615,20 +633,51 @@ docstring reading "never call `eval()`" must not block an install, and
 `getattr(builtins, "ex" + "ec")` must. A text scan gets both backwards, and a
 scanner that cries wolf is one whose verdict gets waved through every time.
 
+### Every member is accounted for
+
+The scan classifies **every file in the wheel**, not just the Python. Code is
+parsed, prompt text is named, inert data (yaml, json, markdown, text, images,
+fonts) is allowed *by type*, and **anything else is refused with the file
+named**. This installer accepts pure-Python wheels only.
+
+That rule exists because the first version of this scanner had no such rule,
+and four wheels whose entire payload was a non-`.py` file came back `safe` with
+zero reasons — including a `.pth`, which `site.py` executes at **every**
+interpreter start, before the loader, before the manifest gate, and before a
+`enabled: false` row is ever read. The plugin never had to load, or even be
+enabled, to run.
+
 **`blocked` — the install cannot proceed at all:**
 
 | finding | why |
 |---|---|
+| a `.pth` file anywhere | `site.py` runs it at every interpreter start, before anything can refuse it |
+| a `.so` / `.pyd` / `.dylib` / `.exe` | nothing here can read machine code |
+| a `.sh` / `.ps1` / `.js` / other non-Python script | same, and it is not what a plugin contributes through |
+| anything under `*.data/scripts/`, `*.data/data/` or `*.data/headers/` | pip installs these OUTSIDE the package — onto `PATH`, under `sys.prefix` |
+| a member shipping with the execute bit set | a plugin contributes through entry points, never as a program |
+| any other file type the scan cannot read | "we did not look" is never `safe` |
+| two `genus-plugin.yaml` files | which declaration the engine would enforce is ambiguous |
 | a `genus.*` group the manifest declares nothing for | undeclared surface: the loader would import it before anything could compare the two |
+| an entry point the manifest's `entry_points:` does not name | undeclared surface, exactly |
 | a manifest claiming a built-in name | shadowing `exec` or `web_fetch` is a takeover, not an extension |
 | a `contract_version` this engine does not speak | third-party code expecting a different tool-calling contract |
-| `os.system(...)`, `shell=True`, `os.popen` | a string handed to a shell |
+| `os.system`, `os.popen`, `os.exec*`, `os.spawn*` | a program is executed directly |
+| any `subprocess.*` call | a plugin runs inside the daemon; spawning is outside every guardrail applied to it |
+| `shell=True` | a string handed to a shell |
 | `eval` / `exec` / `compile` on non-literal input | what runs cannot be read |
 | a decoder (`b64decode`, `unhexlify`, …) feeding `exec` | code hidden from review inside encoded data |
-| `getattr(builtins, …)` | how `exec` is reached without naming it |
+| **dynamic name resolution** — a non-literal `getattr`, `__import__` or `importlib.import_module`, or a `globals()` / `locals()` / `vars()` lookup | a name this cannot read is a name it cannot judge |
 | `import ctypes` / `cffi` | native code outside every guardrail the engine applies to Python |
 | a raw socket | egress the engine's rules never see |
 | a write under `/etc`, an SSH directory, or a credentials path | persistence and credential theft |
+
+The code rules follow **names, not spellings**. A per-module binding table is
+built from the imports and straight-line assignments, so
+`from os import system`, `import subprocess as s`, `builtins.exec`, `e = exec`,
+`__import__("os").system` and `importlib.import_module("sub" + "process").run`
+all reach the same rule as the literal spelling. Eight one-line renames of that
+kind used to grade `safe`.
 
 **`review` — refused unless you pass `--accept-review`:**
 
@@ -637,17 +686,44 @@ scanner that cries wolf is one whose verdict gets waved through every time.
   call, on a schedule or on every turn, so installing one changes what the
   engine does by itself
 - it imports `requests` / `httpx` / `urllib` — it reaches off the box
+- it imports `os`, `subprocess`, `socket`, `importlib`, `shutil`, `pty` or
+  `multiprocessing` — named with the line, whatever the call sites look like
 - it reads `os.environ` directly rather than through the settings accessor
-- it ships prompt text (`*.md`, `SKILL.md`, `instructions*`) — text a model
-  reads is an instruction channel
+- it ships prompt text — a `*.prompt` file, a `SKILL.md`, an `instructions*`,
+  or anything under a `skills/`, `prompts/` or `instructions/` directory.
+  A plain `README.md` is documentation and does **not** count: matching every
+  `*.md` meant a plugin that merely vendored one needed `--accept-review`
+  forever, which is how a verdict stops meaning anything
+- its manifest declares no `entry_points:`, so the surface is only compared at
+  group granularity
+- it publishes more entry points into a group than the manifest declares names
+  for
 - **anything the scan could not read**: a file that would not parse, one over
-  the size cap, or a wheel with more files than the scan bound. "We did not
-  look" is never reported as "safe".
+  the size cap, or a wheel with more files than the scan bound
 
-Every reason names a `file:line` inside the wheel. Prompt text is reported as
-`static-only` — the bytes were noticed, not read. `--scan-prompts` additionally
-runs the platform's injection screen over them; a screen that cannot run says
-`static-only` with a sentence rather than reporting clean.
+Every reason names a `file:line` inside the wheel, and `members_accounted` in
+the result says how many files were classified, so the claim is checkable
+rather than asserted.
+
+**Expect `review` to be the common verdict.** `safe` means "contributes tools,
+and touches nothing outside this process" — a genuinely narrow plugin. Anything
+that imports `os` is `review`, and that is the intended shape: the operator
+says yes once, having read what they are saying yes to.
+
+### Prompt text and `--scan-prompts`
+
+Prompt text is reported as `static-only` by default: the bytes were noticed,
+not read. `--scan-prompts` runs the platform's existing injection screen over
+the wheel's prompt text *and* its documentation, and a finding becomes a
+`review` reason — so on a wheel that would otherwise be `safe`, the flag can
+change the verdict.
+
+Two honest caveats. The screen is the one built for **assembled agent prompts**,
+so it is noisy over ordinary operations documentation: measured over five real
+documents it flagged three, including a runbook containing `rm -rf /var/cache/…`
+and a scheduling doc containing `cron('0 3 * * *')`. And its findings are never
+`blocked` — they are reasons under a `review`. A screen that cannot run at all
+reports `static-only` with a sentence rather than reporting clean.
 
 **The scan is not a sandbox and does not claim to be.** A plugin that passes
 still runs with the daemon's privileges once it is imported. What the scan buys

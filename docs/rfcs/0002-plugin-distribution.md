@@ -207,22 +207,63 @@ lockfile, is the platform reaching outside what it owns.
 
 ## Relationship to RFC #267
 
-RFC #267 proposed tiers, a signing bar, per-tenant enablement and a lockfile as
-one design. It was held — blocked on five open operator questions and on a
-second plugin author existing — and its lockfile half shipped separately as
-`robothor/plugins/lockfile.py`.
+RFC #267 (*plugin architecture v1 — governed plugins on open standards*) is a
+design-only pull request, still open, proposing a much wider surface than this
+one. Its RFC document has never been merged, so it exists only on that branch.
+Being precise about the difference matters, because closing it on a vague
+summary would lose the design without saying so.
 
-This RFC supersedes it. What #267 got right and this keeps: a manifest, a
-lockfile, and signing. What it drops: tiers (one bar, applied to everything,
-is a bar people can reason about), per-tenant enablement (one engine runs one
-set of plugins; a second tenant disabling one would be acting on somebody
-else's instance), and a curated marketplace (the index is a file; anybody can
-host one).
+**What #267 proposed:**
+
+| | status here |
+|---|---|
+| tool plugins = **MCP servers**, formalising the existing `adapters.py` / `mcp_client.py` mount path | **not delivered.** Adapters stay exactly as they are; nothing here installs, signs or scans an MCP server |
+| skill plugins = **agentskills.io `SKILL.md` directories**, packaged and namespaced, `tools_required` never exceeding the agent's grants | **not delivered.** The only thing this touches is that a wheel shipping prompt text is a `review` reason |
+| engine plugins = Python entry points (group `genusos.plugins`) | **shipped, differently.** The seam that exists uses twelve `genus.*` groups, and this RFC is its distribution half |
+| a fail-closed `genus-plugin.yaml` **permission manifest**, each clause mapped to an existing enforcing subsystem | **partly.** `genus-plugin.yaml` ships and is enforced, but it declares *contributions*, not permissions. There are no permission clauses |
+| **three sandbox tiers** (trusted / subprocess / rootless-podman) | **deferred.** See "no sandbox" above: a plugin that passes the scan runs with the daemon's privileges |
+| a versioning contract and zero-break grandfathering of all three extension surfaces | **shipped for the entry-point surface** (`CONTRACT_VERSION`, `manifest_mode`'s observe ladder) |
+| an **OpenClaw importer** | **dropped.** No importer, and none planned |
+| a lockfile with hash pinning and explicit operator enable | **shipped** (`robothor/plugins/lockfile.py`, #566) |
+
+**Its five open questions, answered as they were asked:**
+
+1. **Tenancy of enablement** — *dropped, deliberately.* One engine process runs
+   one set of plugins, so there is nothing per-tenant to enable. `/api/plugins`
+   refuses a non-primary tenant outright rather than pretending otherwise: a
+   second tenant disabling a plugin would be taking a capability out of
+   somebody else's instance.
+2. **The trusted-tier signing bar** — *answered by removing the tiers.* There
+   is one bar and it applies to everything: the index is Ed25519-signed and the
+   key is pinned out of band. "Who is trusted" is therefore whose key the
+   operator put in `ROBOTHOR_PLUGIN_INDEX_KEYS` — an operator decision, not a
+   platform curation decision, which is also why the platform ships no key.
+3. **Skill self-improvement scope** — *not answered; deferred with the skill
+   plugins themselves.* Nothing here packages, installs or governs a
+   `SKILL.md`. This question comes back whole the day skill plugins do.
+4. **The guardrail-relaxation ban** — *partly answered, and worth being blunt.*
+   No manifest clause can relax a guardrail, because there are no permission
+   clauses in this design at all. But a distribution can still contribute to
+   `genus.guardrails`, and once imported that policy runs inside the engine.
+   That is precisely why contributing to `guardrails`, `hooks`, `sandboxes`,
+   `channels`, `memory` or `jobs` is a `review` verdict the operator has to
+   accept out loud. The surface is named and gated; it is not banned.
+5. **OpenClaw importer phasing** — *dropped.* There is no importer.
+
+So this RFC supersedes #267's **distribution** half and defers or drops the
+rest. #267 should be closed pointing here, with the four undelivered pieces
+(MCP tool plugins, `SKILL.md` skills, sandbox tiers, the importer) named — each
+is a separate piece of work, and none of them is blocked by anything shipped
+here.
 
 ## Open, and whose
 
 - Create the `genus-plugins` repository, mint the production Ed25519 key, add
   its public half to `registry_keys.py`. **Operator.**
 - The Helm's install UI reads the plan and verdict shapes above. **C6b.**
-- A `--scan-prompts` screen tuned for documentation rather than for an
-  assembled agent prompt. **Later, if the current one proves noisy.**
+- MCP tool plugins, `SKILL.md` skill plugins and the sandbox tiers, if they are
+  still wanted. **Separate work, from #267.**
+- A prompt screen tuned for documentation rather than for an assembled agent
+  prompt. `--scan-prompts` reuses the unattended-run screen, which is measurably
+  noisy over ops documentation (see PLUGINS.md); its findings are `review`
+  reasons, never blocks.
