@@ -88,21 +88,30 @@ _API_KEY = r"\bsk-[A-Za-z0-9_-]{16,}"
 #: English; a name ending in either is not describing anything else.
 _UNAMBIGUOUS_WORD = r"(?:SECRET|SECRETS|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|CREDENTIALS)"
 
-#: ``KEY`` and ``TOKEN`` are ORDINARY WORDS, and this is the correction that
-#: matters most. ``sort_key``, ``primary_key``, ``Cache-Key``,
-#: ``idempotency-key``, ``partition_key`` and a bare ``key=`` are all ordinary
-#: log lines, and ``/api/logs`` redacts every line of every unit — third-party
-#: libraries whose ``key=`` idiom this platform does not control included. The
-#: worst of the set is ``public_key=``: a public key is not a secret, and a rule
-#: that ate only its first token left half the key visible, which is redaction
-#: that neither protects nor informs.
+#: The compounds in which ``KEY`` is an ordinary English noun rather than a
+#: credential. A DENY-list, and the direction matters — it was an allow-list of
+#: "authority qualifiers" (``API``, ``AUTH``, ``SIGNING``, …) for exactly one
+#: round, and that made ``GITHUB_TOKEN``, ``VAULT_TOKEN``, ``DEPLOY_KEY``,
+#: ``SSH_KEY`` and a dozen more invisible: a real credential name usually has no
+#: qualifier at all. Tuning against false positives alone produces that every
+#: time, so the rule is now "a key is a credential unless it is one of these",
+#: and the positive list in ``tests/test_secret_redaction.py`` is what keeps the
+#: other direction honest.
 #:
-#: So ``KEY``/``TOKEN`` count only behind a qualifier that is itself about
-#: authority. The list is closed and each entry is a credential name this
-#: platform, or something it talks to, actually issues.
-_QUALIFIER = (
-    r"(?:API|AUTH|ACCESS|REFRESH|SIGNING|SECRET|PRIVATE|SESSION|BEARER"
-    r"|BOT|APP|CLIENT|ENCRYPTION|MASTER|ADMIN|ROOT|WEBHOOK|LICENSE|SUBSCRIPTION)"
+#: Every entry is a false positive observed in a real log line. ``public_key``
+#: is the one that mattered most: a public key is not a secret, and a rule that
+#: ate only its first token left half of it visible — redaction that neither
+#: protects nor informs.
+_KEY_IS_A_NOUN = (
+    r"(?:SORT|PRIMARY|FOREIGN|PARTITION|SHARD|ROW|GROUP|CACHE|IDEMPOTENCY|PUBLIC|COMPOSITE|NATURAL)"
+)
+
+#: Trailing words that turn a credential name into a name ABOUT credentials.
+#: ``ROBOTHOR_KEY_POOL_SIZE`` is a count, not a key; ``*_TOKEN_PATH`` is a
+#: filename. Without this the rotation suffix below would swallow them.
+_ABOUT_NOT_THE_THING = (
+    r"(?:POOL|SIZE|COUNT|LEN|LENGTH|PREFIX|SUFFIX|PATH|FILE|DIR|NAME|ID|TYPE|ALG|ALGO"
+    r"|FORMAT|ENABLED|DISABLED|MODE|TTL|COLUMN|FIELD|ORDER|SOURCE|BACKEND|PROVIDER)"
 )
 
 #: At most eight segments, at most forty characters each. NOT a taste: an
@@ -112,6 +121,32 @@ _QUALIFIER = (
 #: has to be, because ``/api/logs`` runs it over up to 1000 journal lines per
 #: request.
 _NAME_PREFIX = r"(?:[A-Za-z0-9]{1,40}[-_]){0,8}"
+_KEY_PREFIX = r"(?:[A-Za-z0-9]{1,40}[-_]){0,7}"
+
+#: ``PGPASSWORD`` is libpq's own spelling and has no separator at all, so the
+#: word may be glued to a short prefix. Bounded to keep the pass linear.
+_GLUED = r"[A-Za-z]{0,12}"
+
+#: A rotated or superseded slot: ``OPENROUTER_API_KEY_2``, ``GITHUB_TOKEN_OLD``.
+#: The trailing segment used to defeat the word boundary and the whole name
+#: missed. Guarded by :data:`_ABOUT_NOT_THE_THING` so ``…_KEY_POOL_SIZE`` does
+#: not become a key by acquiring a suffix. The inner lookahead is
+#: ``(?![A-Za-z0-9])`` rather than ``\b`` because ``\b`` does not fire between a
+#: letter and an underscore — which is precisely the ``_POOL_SIZE`` case.
+_ROTATION_SUFFIX = rf"(?:[-_](?!{_ABOUT_NOT_THE_THING}(?![A-Za-z0-9]))[A-Za-z0-9]{{1,8}})?"
+
+#: ``TOKEN`` takes no qualifier and no deny-list. Round 0 produced eleven
+#: ``*_KEY`` false positives and not one ``*_TOKEN`` — "token" in isolation is
+#: not an English noun the way "key" is, and every ``X_TOKEN`` this platform or
+#: its CI has ever set is a credential.
+_TOKEN_NAME = rf"{_NAME_PREFIX}TOKEN"
+
+#: ``KEY`` needs at least one leading segment, so a bare ``key=value`` is prose,
+#: and that segment must not be one of the ordinary nouns above.
+_KEY_NAME = rf"{_KEY_PREFIX}(?!{_KEY_IS_A_NOUN}[-_]KEY)[A-Za-z0-9]{{1,40}}[-_]KEY"
+
+#: ``SECRET``/``PASSWORD`` stay unqualified, and may be glued (``PGPASSWORD``).
+_UNAMBIGUOUS_NAME = rf"{_NAME_PREFIX}{_GLUED}{_UNAMBIGUOUS_WORD}"
 
 #: Where a VALUE ends. Whitespace, a comma or a semicolon separate one
 #: assignment from the next; the quote/bracket/angle characters are structural,
@@ -129,7 +164,7 @@ _VALUE_END = r"\s,;\"'}\]>)"
 #: quotes and all, leaving the surrounding JSON or shell line structurally
 #: intact.
 _ASSIGNMENT = re.compile(
-    rf"(?P<name>\b{_NAME_PREFIX}(?:{_UNAMBIGUOUS_WORD}|{_QUALIFIER}[-_](?:KEY|TOKEN))\b)"
+    rf"(?P<name>\b(?:{_KEY_NAME}|{_TOKEN_NAME}|{_UNAMBIGUOUS_NAME}){_ROTATION_SUFFIX}\b)"
     r"\s*=\s*"
     rf"(?:(?P<quote>[\"'])(?P<quoted>[^\"'\n]{{1,4096}})(?P=quote)"
     rf"|(?P<value>[^{_VALUE_END}]{{1,4096}}))",

@@ -53,6 +53,23 @@ def _journal(*messages: str) -> str:
     )
 
 
+@pytest.fixture(autouse=True)
+def _fresh_unit_catalog():
+    """The unit catalog is cached for 30s in module state.
+
+    Autouse, and on both sides of the test: a cache that outlives one test is a
+    test reading another test's answer. ``test_the_allowlist_is_the_set_of_
+    installed_units`` reads the REAL filesystem and the rest of this module
+    patches ``unit_catalog`` wholesale, so without this the order they run in
+    would decide what the first of them sees.
+    """
+    from routers import logs
+
+    logs.reset_unit_catalog_cache()
+    yield
+    logs.reset_unit_catalog_cache()
+
+
 @pytest.fixture
 def journal(monkeypatch):
     """A fake ``journalctl``: records argv, answers with canned output."""
@@ -137,7 +154,6 @@ def test_the_catalog_is_not_rebuilt_on_every_request(monkeypatch):
     somebody runs the installer, not between two clicks."""
     from routers import logs
 
-    logs.reset_unit_catalog_cache()
     calls: list = []
     real = logs._catalog_from
 

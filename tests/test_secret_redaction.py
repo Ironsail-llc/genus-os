@@ -196,19 +196,115 @@ class TestTheJournalLine:
         assert self.API_KEY not in cleaned
         assert "OPENROUTER_API_KEY" in cleaned, "the NAME is what the operator needs to see"
 
+    #: Forty credential names this platform, its CI, or something it talks to
+    #: actually issues — the POSITIVE list. Every one is checked with a
+    #: SHAPELESS value ("hunter2"), because a value with a shape of its own is
+    #: caught by the other patterns and would make this list pass for the wrong
+    #: reason.
+    #:
+    #: The list exists because the first narrowing overshot in the opposite
+    #: direction: requiring an "authority qualifier" before KEY/TOKEN made
+    #: GITHUB_TOKEN, VAULT_TOKEN, DEPLOY_KEY and a dozen others invisible. A
+    #: rule tuned against false positives alone will do that every time, so the
+    #: two lists are kept side by side and both are asserted.
+    REAL_CREDENTIAL_NAMES = [
+        # CI, registries and forges — none of these carry a qualifier.
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "HF_TOKEN",
+        "NPM_TOKEN",
+        "GITLAB_TOKEN",
+        "ARGOCD_TOKEN",
+        "NATS_TOKEN",
+        "VAULT_TOKEN",
+        "TELEGRAM_TOKEN",
+        "GHCR_TOKEN",
+        "PYPI_TOKEN",
+        "CODECOV_TOKEN",
+        # Keys whose first word is a noun, not an authority word.
+        "DEPLOY_KEY",
+        "SSH_KEY",
+        "SOPS_AGE_KEY",
+        # No separator at all. libpq's own spelling.
+        "PGPASSWORD",
+        # A rotated slot: the trailing _2 used to defeat the word boundary.
+        "OPENROUTER_API_KEY_2",
+        "GITHUB_TOKEN_OLD",
+        # Provider keys.
+        "OPENROUTER_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "BRAVE_SEARCH_API_KEY",
+        # This platform's own.
+        "AUTH_SECRET",
+        "GENUS_BRIDGE_SSO_SECRET",
+        "GENUS_AUTH_SIGNING_KEY",
+        "ROBOTHOR_TELEGRAM_BOT_TOKEN",
+        "ROBOTHOR_DB_PASSWORD",
+        "REDIS_PASSWORD",
+        # Channels and mail.
+        "SLACK_BOT_TOKEN",
+        "SLACK_APP_TOKEN",
+        "SMTP_PASSWORD",
+        "--smtp-password",
+        "webhook_secret",
+        # OIDC / OAuth.
+        "CLIENT_SECRET",
+        "OIDC_CLIENT_SECRET",
+        "ACCESS_TOKEN",
+        "REFRESH_TOKEN",
+        # Cloud.
+        "AWS_SECRET_ACCESS_KEY",
+    ]
+
+    @pytest.mark.parametrize("name", REAL_CREDENTIAL_NAMES)
+    def test_a_real_credential_name_takes_its_value_with_it(self, name: str) -> None:
+        """No shape of its own — a GitHub PAT or an SMTP password is whatever
+        the provider issued — so the NAME is the only thing there is to match
+        on, and it has to match the names that are actually in use."""
+        cleaned = redact(f"{name}=hunter2")
+
+        assert "hunter2" not in cleaned, name
+        assert name.lstrip("-").split("=")[0] in cleaned, "the NAME must survive"
+
+    def test_the_positive_list_is_the_size_it_claims(self) -> None:
+        """A list that silently shrank would take its coverage with it."""
+        assert len(self.REAL_CREDENTIAL_NAMES) == 40
+        assert len(set(self.REAL_CREDENTIAL_NAMES)) == 40
+
+    @pytest.mark.parametrize("name", ["token", "MY_KEY", "x-api-key", "REGISTRY_PASSWORD_2"])
+    def test_a_credential_name_needs_no_qualifier(self, name: str) -> None:
+        """The shape of the rule, not just its current list.
+
+        A qualifier requirement is what made the round-1 misses, so this pins
+        the general case: any ``*_KEY`` that is not an ordinary noun, any
+        ``*TOKEN``, any ``*PASSWORD``, with or without a rotation suffix.
+        """
+        assert "hunter2" not in redact(f"{name}=hunter2")
+
     @pytest.mark.parametrize(
-        "assignment",
+        "innocent",
         [
-            "SMTP_PASSWORD=hunter2",
-            "--smtp-password=hunter2",
-            'GENUS_AUTH_SIGNING_KEY="hunter2"',
-            "webhook_secret=hunter2",
-            "SLACK_BOT_TOKEN=hunter2",
+            # A name ABOUT a credential is not the credential.
+            "ROBOTHOR_TOKEN_PATH=/run/robothor/token",
+            "API_KEY_PREFIX=sk-",
+            "KEY_COUNT=3",
+            "SIGNING_KEY_FILE=/etc/robothor/key.pem",
+            "ACCESS_TOKEN_TTL=900",
+            # Two more compounds where "key" is the English noun.
+            "composite_key=a+b",
+            "natural_key=email",
         ],
     )
-    def test_a_credential_shaped_name_takes_its_value_with_it(self, assignment: str) -> None:
-        """No shape of its own — an SMTP password is whatever the provider
-        issued — so the NAME is the only thing there is to match on."""
+    def test_a_name_about_a_credential_is_not_one(self, innocent: str) -> None:
+        """The rotation suffix (``…_KEY_2``) must not turn ``…_KEY_POOL_SIZE``
+        into a key by giving it something to end with."""
+        assert redact(innocent) == innocent
+
+    @pytest.mark.parametrize("assignment", ['GENUS_AUTH_SIGNING_KEY="hunter2"'])
+    def test_a_quoted_credential_goes_too(self, assignment: str) -> None:
         assert "hunter2" not in redact(assignment)
 
     @pytest.mark.parametrize(
@@ -238,16 +334,23 @@ class TestTheJournalLine:
             "public_key=ssh-rsa AAAAB3Nza",
             "partition_key=tenant",
             "row_key=42",
+            "group_key=tenant_id",
+            "shard_key=7",
+            "https://example.invalid/v1/token/abc?page=2 returned 404",
         ],
     )
     def test_an_ambiguous_key_is_not_a_credential(self, innocent: str) -> None:
-        """``KEY`` and ``TOKEN`` are ordinary words; ``API_KEY`` is not.
+        """``KEY`` is an ordinary word in a dozen ordinary compounds.
 
         ``/api/logs`` redacts every line of every unit, third-party libraries
         included, and this repo does not control their ``key=`` idiom. The
         worst of the set is ``public_key=``: a public key is not a secret, and
         a rule that ate only its first token would leave half of it visible —
         redaction that neither protects nor informs.
+
+        Every one of these is a ``*_KEY`` name. Round 0 produced NO ``*_TOKEN``
+        false positive, which is why ``TOKEN`` needs no qualifier and ``KEY``
+        is filtered by a deny-list of the nouns that actually collide.
         """
         assert redact(innocent) == innocent
 
