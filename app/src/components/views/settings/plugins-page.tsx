@@ -422,7 +422,11 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
       className="flex min-w-0 flex-col gap-4 p-4 pb-20"
       data-testid="settings-page-plugins"
     >
-      <PageHeader title="Plugins" description="What this instance loads, and what it refuses.">
+      <PageHeader
+        title="Plugins"
+        description="What this instance loads, and what it refuses."
+        className="flex-wrap"
+      >
         <Button
           variant="outline"
           size="sm"
@@ -432,18 +436,6 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
           <RefreshCw aria-hidden className={poll.loading ? "animate-spin" : undefined} />
           Refresh
         </Button>
-        {!poll.forbidden && data.lockfile.present ? (
-          <Button
-            variant="outline"
-            size="sm"
-            data-testid="plugins-record"
-            disabled={syncing}
-            onClick={() => void record()}
-          >
-            {syncing ? "Recording…" : "Record installed plugins"}
-          </Button>
-        ) : null}
-        {!poll.forbidden && !pending ? reloadButton : null}
       </PageHeader>
 
       <p className="max-w-3xl text-xs text-muted-foreground">
@@ -499,6 +491,32 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                   }`
                 : "lockfile: not written yet"}
             </span>
+          </div>
+
+          {/*
+            The acts, on their own wrapping row rather than in the header: a
+            phone cannot take three buttons on one baseline, and the header's
+            action slot is a single non-wrapping line by design.
+
+            Each of them appears in exactly ONE place at a time. Record lives
+            here once the lockfile exists and in the empty-state card before
+            that; Reload lives here until a row has been written and in the
+            sticky bar after, because that is the moment it stops being an
+            errand and becomes the thing the operator came to do.
+          */}
+          <div className="flex max-w-3xl flex-wrap items-center gap-2">
+            {data.lockfile.present ? (
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="plugins-record"
+                disabled={syncing}
+                onClick={() => void record()}
+              >
+                {syncing ? "Recording…" : "Record installed plugins"}
+              </Button>
+            ) : null}
+            {!pending ? reloadButton : null}
           </div>
 
           {!data.lockfile.pathConfigured ? (
@@ -820,7 +838,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
         </>
       ) : null}
 
-      {pending && !poll.forbidden ? (
+      {pending && !poll.forbidden && listing !== null ? (
         <div
           data-testid="plugins-reload-bar"
           className="sticky bottom-0 -mx-4 -mb-20 flex flex-wrap items-center gap-3 border-t border-border bg-card/95 px-4 py-3 backdrop-blur"
